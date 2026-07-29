@@ -543,7 +543,10 @@ pub(crate) fn with_state_file_lock_for_load<T>(
 }
 
 pub(crate) fn durable_store_identity() -> Result<DurableStoreIdentity, EngineError> {
-    with_state_file_lock(|store| store.identity())
+    // Store identity is deliberately available before state classification.
+    // Use the load-safe structural path so a malformed image can still reach
+    // the configured quarantine-and-reset policy during the subsequent load.
+    with_state_file_lock_for_load(|store| store.identity_for_load())
 }
 
 pub(crate) fn state_corruption_policy() -> CorruptStatePolicy {

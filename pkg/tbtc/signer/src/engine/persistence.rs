@@ -1375,12 +1375,13 @@ pub(crate) fn decode_persisted_state_storage_format(
 pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineError> {
     ensure_state_file_lock_for_load()?;
     let path = active_state_file_path()?;
-    let Some(mut bytes) = with_state_file_lock_for_load(|store| store.read_state_for_load())?
-    else {
+    let loaded_image = with_state_file_lock_for_load(|store| store.read_state_for_load())?;
+    let loaded_digest = loaded_image.digest;
+    let Some(mut bytes) = loaded_image.bytes else {
         // Absence is itself an authenticated state image. A removed live state
         // file must not silently become a clean signer merely because there are
         // no bytes to decode.
-        with_state_file_lock_for_load(|store| store.validate_state_image())?;
+        validate_loaded_state_image(&path, loaded_digest)?;
         return Ok(EngineState::default());
     };
     if bytes.is_empty() {
@@ -1436,14 +1437,7 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
     // only after decoding so malformed images retain the explicit corruption
     // policy, but never let that policy reset authenticated rollback evidence.
     if !recovered_from_corruption {
-        if let Err(error) = with_state_file_lock_for_load(|store| store.validate_state_image()) {
-            return Err(EngineError::Internal(format!(
-                "signer state file [{}] does not match its committed state witness: {error}; \
-                 authenticated rollback evidence is always fail-closed and cannot be handled by \
-                 the generic corruption reset policy",
-                path.display()
-            )));
-        }
+        validate_loaded_state_image(&path, loaded_digest)?;
     }
 
     // Quarantine-and-reset intentionally renames the corrupt file away. Do not
@@ -1461,6 +1455,20 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
     }
 
     Ok(engine_state)
+}
+
+fn validate_loaded_state_image(path: &Path, loaded_digest: [u8; 32]) -> Result<(), EngineError> {
+    if let Err(error) =
+        with_state_file_lock_for_load(|store| store.validate_loaded_state_image(loaded_digest))
+    {
+        return Err(EngineError::Internal(format!(
+            "signer state file [{}] does not match its committed state witness: {error}; \
+             authenticated rollback evidence is always fail-closed and cannot be handled by \
+             the generic corruption reset policy",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

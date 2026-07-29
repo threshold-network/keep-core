@@ -6040,6 +6040,40 @@ fn corrupt_state_file_quarantines_and_resets_when_enabled() {
 }
 
 #[test]
+fn identity_preflight_preserves_configured_corruption_recovery() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("identity_preflight_corruption_recovery");
+    reset_for_tests();
+
+    std::env::set_var(
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_QUARANTINE_AND_RESET,
+    );
+    std::fs::write(&state_path, b"{invalid-state-after-identity")
+        .expect("write corrupt state file");
+
+    let identity =
+        durable_store_identity().expect("identity preflight must remain structural and available");
+    assert_ne!(identity.store_id, [0u8; 32]);
+
+    let loaded = load_engine_state_from_storage()
+        .expect("state load after identity preflight must apply corruption policy");
+    assert!(loaded.sessions.is_empty());
+    assert!(!state_path.exists());
+    let backups =
+        sorted_corrupted_state_backups(&state_path).expect("list corrupted state backups");
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        std::fs::read(&backups[0]).expect("read quarantined state"),
+        b"{invalid-state-after-identity"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn authenticated_state_rollback_fails_closed_even_when_corruption_reset_is_enabled() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("authenticated_rollback_fail_closed");
@@ -6083,6 +6117,61 @@ fn authenticated_state_rollback_fails_closed_even_when_corruption_reset_is_enabl
             .expect("enumerate corrupt-state backups")
             .is_empty(),
         "authenticated rollback was routed through generic corruption backup handling"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn startup_validation_binds_the_exact_decoded_state_image() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("exact_loaded_image_validation");
+    reset_for_tests();
+
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.refresh_epoch_counter = 1;
+        persist_engine_state_to_storage(&guard).expect("persist rollback candidate");
+    }
+    let rolled_back_bytes = std::fs::read(&state_path).expect("read rollback candidate");
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.refresh_epoch_counter = 2;
+        persist_engine_state_to_storage(&guard).expect("persist current state");
+    }
+    let current_bytes = std::fs::read(&state_path).expect("read current state");
+
+    simulate_process_restart_for_tests();
+    std::fs::write(&state_path, &rolled_back_bytes).expect("serve rollback candidate to loader");
+    let loaded_image =
+        with_state_file_lock_for_load(|store| store.read_state_for_load()).expect("stable load");
+    let loaded_bytes = loaded_image.bytes.as_ref().expect("loaded state bytes");
+    let loaded_state: EngineState = match decode_persisted_state_storage_format(loaded_bytes)
+        .expect("old image remains a valid authenticated envelope")
+    {
+        PersistedStateStorageFormat::EncryptedEnvelope { persisted, .. }
+        | PersistedStateStorageFormat::LegacyPlaintext(persisted) => persisted
+            .try_into()
+            .expect("old image remains semantically valid"),
+    };
+    assert_eq!(loaded_state.refresh_epoch_counter, 1);
+
+    // Restore the current image before validation. A fresh descriptor reread
+    // now passes, reproducing the former time-of-check/time-of-use bypass.
+    std::fs::write(&state_path, &current_bytes).expect("restore current bytes before validation");
+    with_state_file_lock_for_load(|store| store.validate_state_image())
+        .expect("fresh reread sees the current committed image");
+
+    let error = with_state_file_lock_for_load(|store| {
+        store.validate_loaded_state_image(loaded_image.digest)
+    })
+    .expect_err("the exact bytes supplied to the decoder must fail witness validation");
+    expect_internal_error_contains(
+        error,
+        "signer state image does not match the committed witness tip",
     );
 
     reset_for_tests();

@@ -276,6 +276,11 @@ pub(crate) struct StateWitness {
     pub(crate) state_image_digest: [u8; 32],
 }
 
+pub(crate) struct LoadedStateImage {
+    pub(crate) bytes: Option<Vec<u8>>,
+    pub(crate) digest: [u8; 32],
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct StateWitnessSegmentHeader {
     store_fingerprint: [u8; 32],
@@ -1320,6 +1325,27 @@ impl StateFileLock {
         Ok(self.identity.clone())
     }
 
+    /// Returns the stable store identity without classifying the state image.
+    ///
+    /// Identity is a startup preflight and state freshness is a separate
+    /// contract. Keeping this path structural lets the subsequent loader apply
+    /// the configured corruption policy to malformed state while still
+    /// validating every held descriptor and the witness journal.
+    #[cfg(unix)]
+    pub(crate) fn identity_for_load(&mut self) -> Result<DurableStoreIdentity, EngineError> {
+        self.reconcile_pending_witness()?;
+        self.settle_pending_state_witness_rotation()?;
+        self.revalidate_store_entries()?;
+        Ok(self.identity.clone())
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn identity_for_load(&mut self) -> Result<DurableStoreIdentity, EngineError> {
+        Err(EngineError::Internal(
+            "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
+        ))
+    }
+
     #[cfg(all(test, unix))]
     pub(crate) fn read_state(&mut self) -> Result<Option<Vec<u8>>, EngineError> {
         self.reconcile_pending_witness()?;
@@ -1336,18 +1362,39 @@ impl StateFileLock {
     /// use the explicit corruption policy, from a valid-but-rolled-back image,
     /// which always fails closed.
     #[cfg(unix)]
-    pub(crate) fn read_state_for_load(&mut self) -> Result<Option<Vec<u8>>, EngineError> {
+    pub(crate) fn read_state_for_load(&mut self) -> Result<LoadedStateImage, EngineError> {
         self.reconcile_pending_witness()?;
         self.settle_pending_state_witness_rotation()?;
         self.revalidate_store_entries()?;
         let Some(state_file) = self.current_state_file.as_ref() else {
-            return Ok(None);
+            // Revalidate the absent live entry across the observation. The
+            // digest is carried through decoding and compared directly with
+            // the witness tip, so a later restoration cannot authenticate
+            // this observed absence as some other image.
+            self.revalidate_store_entries()?;
+            return Ok(LoadedStateImage {
+                bytes: None,
+                digest: state_image_digest(None),
+            });
         };
-        read_file_at(state_file, "signer state file").map(Some)
+        let before = file_change_stamp(state_file, "signer state file")?;
+        let bytes = read_file_at(state_file, "signer state file")?;
+        let after = file_change_stamp(state_file, "signer state file")?;
+        if before != after || after.size != bytes.len() as u64 {
+            return Err(EngineError::Internal(
+                "signer state file changed while its startup image was being read".to_string(),
+            ));
+        }
+        let digest = state_image_digest(Some(&bytes));
+        self.revalidate_store_entries()?;
+        Ok(LoadedStateImage {
+            bytes: Some(bytes),
+            digest,
+        })
     }
 
     #[cfg(not(unix))]
-    pub(crate) fn read_state_for_load(&mut self) -> Result<Option<Vec<u8>>, EngineError> {
+    pub(crate) fn read_state_for_load(&mut self) -> Result<LoadedStateImage, EngineError> {
         Err(EngineError::Internal(
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
@@ -2040,10 +2087,27 @@ impl StateFileLock {
         self.settle_pending_state_witness_rotation()?;
         self.revalidate_store_entries()?;
         let current_digest = current_state_image_digest(self.current_state_file.as_ref())?;
+        self.validate_state_image_digest(current_digest)
+    }
+
+    /// Validates the digest captured from the exact stable-read bytes supplied
+    /// to the state decoder. This must not reread the state descriptor: doing
+    /// so would let an older valid snapshot be decoded and then swapped back to
+    /// the current bytes before witness validation.
+    #[cfg(unix)]
+    pub(crate) fn validate_loaded_state_image(
+        &mut self,
+        loaded_digest: [u8; 32],
+    ) -> Result<(), EngineError> {
+        self.revalidate_store_entries()?;
+        self.validate_state_image_digest(loaded_digest)
+    }
+
+    fn validate_state_image_digest(&self, image_digest: [u8; 32]) -> Result<(), EngineError> {
         let history = &self.witness_history;
         if history
             .last()
-            .map(|tip| tip.state_image_digest != current_digest)
+            .map(|tip| tip.state_image_digest != image_digest)
             .unwrap_or(true)
         {
             return Err(EngineError::Internal(
@@ -2068,6 +2132,16 @@ impl StateFileLock {
 
     #[cfg(not(unix))]
     pub(crate) fn validate_state_image(&mut self) -> Result<(), EngineError> {
+        Err(EngineError::Internal(
+            "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
+        ))
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn validate_loaded_state_image(
+        &mut self,
+        _loaded_digest: [u8; 32],
+    ) -> Result<(), EngineError> {
         Err(EngineError::Internal(
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
@@ -3407,7 +3481,16 @@ impl StateFileLock {
             ));
         }
         if let Some(threshold) = self.witness_rotation_threshold {
-            if self.witness_record_count()? >= threshold {
+            let record_count = self.witness_record_count()?;
+            let completion_limit = threshold.checked_add(2).ok_or_else(|| {
+                EngineError::Internal(
+                    "signer state witness rotation completion limit overflowed".to_string(),
+                )
+            })?;
+            if record_count
+                .checked_add(2)
+                .is_none_or(|required| required > completion_limit)
+            {
                 return Err(EngineError::Internal(
                     "signer state witness rotation threshold reached; a fresh manifest-pinned, \
                      authority-signed acknowledgement of the current tip is required before \
@@ -8502,6 +8585,70 @@ mod witness_transcript_tests {
         store
             .replace_state(b"write after exact-replay compaction")
             .expect("writes resume");
+        drop(store);
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_record_reservation_allows_a_multi_snapshot_call_to_finish() {
+        let _guard = lock_test_state();
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let state_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-anchor-multi-snapshot-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let signing_key = SigningKey::from_bytes(&[0x07; 32]);
+        let configured_spki_hash =
+            configure_anchor_store_fixture(&state_path, &signing_key, [0x44; 32]);
+        let mut store = StateFileLock::acquire(&state_path).expect("open anchored store");
+        let genesis = store.state_witness_tip().expect("genesis tip");
+        let acknowledgement = signed_acknowledgement_for_tip(
+            &signing_key,
+            configured_spki_hash,
+            store.identity.fingerprint,
+            &genesis,
+        );
+        assert!(
+            store
+                .acknowledge_state_witness_checkpoint(
+                    acknowledgement.clone(),
+                    2,
+                    false,
+                    acknowledgement.expires_at_unix_ms,
+                )
+                .expect("anchor and rotate genesis")
+                .rotated
+        );
+        assert_eq!(store.witness_record_count().expect("empty segment"), 0);
+
+        // Model one FFI call that first persists an expiry sweep and then its
+        // requested mutation. The first snapshot reaches the rotation
+        // threshold; the second must be able to consume the two terminal
+        // records reserved below the hard ceiling.
+        store
+            .replace_state(b"expiry sweep snapshot")
+            .expect("first snapshot reaches threshold");
+        assert_eq!(store.witness_record_count().expect("threshold count"), 2);
+        store
+            .replace_state(b"requested mutation snapshot")
+            .expect("second snapshot uses terminal reservation");
+        assert_eq!(store.witness_record_count().expect("terminal count"), 4);
+        assert_eq!(
+            store.read_state().expect("completed multi-snapshot state"),
+            Some(b"requested mutation snapshot".to_vec())
+        );
+
+        let rejected = store
+            .replace_state(b"unacknowledged third snapshot")
+            .expect_err("a later snapshot still requires checkpoint rotation");
+        assert!(!rejected.replaced());
+        assert!(rejected
+            .into_engine_error()
+            .to_string()
+            .contains("rotation threshold reached"));
         drop(store);
         cleanup_anchor_store_fixture(&state_path);
     }
