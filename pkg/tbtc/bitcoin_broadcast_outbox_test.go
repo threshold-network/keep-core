@@ -327,6 +327,115 @@ func TestBitcoinBroadcastOutbox_ExclusiveOwnershipAndStaleLock(t *testing.T) {
 	defer second.close()
 }
 
+func TestBitcoinBroadcastOutbox_CloseRetainsLockUntilBroadcastFinishes(
+	t *testing.T,
+) {
+	directory := t.TempDir()
+	broadcastStarted := make(chan struct{})
+	broadcastRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseBroadcast := func() {
+		releaseOnce.Do(func() {
+			close(broadcastRelease)
+		})
+	}
+	defer releaseBroadcast()
+
+	chain := &blockingBroadcastOutboxTestBitcoinChain{
+		outboxTestBitcoinChain: newOutboxTestBitcoinChain(),
+		broadcastStarted:       broadcastStarted,
+		broadcastRelease:       broadcastRelease,
+	}
+	outbox := openTestBitcoinBroadcastOutbox(t, directory, chain)
+	defer outbox.close()
+	tx := testOutboxTransaction(0x3a, 7000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		tx,
+		testBitcoinBroadcastAuthorization(0x3b, 0x3c, 1),
+	)
+
+	broadcastResult := make(chan error, 1)
+	go func() {
+		broadcastResult <- outbox.broadcastTransaction(
+			context.Background(),
+			tx.Hash(),
+		)
+	}()
+	select {
+	case <-broadcastStarted:
+	case <-time.After(time.Second):
+		t.Fatal("broadcast did not reach the blocking Bitcoin call")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- outbox.close()
+	}()
+	closingDeadline := time.After(time.Second)
+	for {
+		outbox.mutex.Lock()
+		closing := outbox.closing
+		outbox.mutex.Unlock()
+		if closing {
+			break
+		}
+		select {
+		case <-closingDeadline:
+			releaseBroadcast()
+			<-broadcastResult
+			t.Fatal("outbox close did not begin")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	select {
+	case err := <-closeResult:
+		releaseBroadcast()
+		<-broadcastResult
+		t.Fatalf(
+			"outbox close returned before the in-flight broadcast finished: [%v]",
+			err,
+		)
+	default:
+	}
+
+	if replacement, err := newTestBitcoinBroadcastOutbox(
+		directory,
+		chain,
+	); err == nil {
+		_ = replacement.close()
+		releaseBroadcast()
+		<-broadcastResult
+		<-closeResult
+		t.Fatal("replacement outbox acquired the in-flight owner's lock")
+	}
+
+	releaseBroadcast()
+	select {
+	case err := <-broadcastResult:
+		if err != nil {
+			t.Fatalf("in-flight broadcast did not persist during shutdown: [%v]", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-flight broadcast did not finish after release")
+	}
+	select {
+	case err := <-closeResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("outbox close did not finish after the broadcast drained")
+	}
+
+	restarted := openTestBitcoinBroadcastOutbox(t, directory, chain)
+	defer restarted.close()
+	if restarted.records[tx.Hash()].BroadcastAttempts != 1 {
+		t.Fatal("in-flight broadcast attempt was not durable before unlock")
+	}
+}
+
 func TestBitcoinBroadcastOutbox_StorageHardening(t *testing.T) {
 	newOutbox := func(directory string) (*bitcoinBroadcastOutbox, error) {
 		return newBitcoinBroadcastOutbox(
@@ -1560,6 +1669,23 @@ type blockingOutboxTestBitcoinChain struct {
 	statusStarted chan struct{}
 	statusRelease <-chan struct{}
 	statusOnce    sync.Once
+}
+
+type blockingBroadcastOutboxTestBitcoinChain struct {
+	*outboxTestBitcoinChain
+	broadcastStarted chan struct{}
+	broadcastRelease <-chan struct{}
+	broadcastOnce    sync.Once
+}
+
+func (bbotbc *blockingBroadcastOutboxTestBitcoinChain) BroadcastTransaction(
+	tx *bitcoin.Transaction,
+) error {
+	bbotbc.broadcastOnce.Do(func() {
+		close(bbotbc.broadcastStarted)
+	})
+	<-bbotbc.broadcastRelease
+	return bbotbc.outboxTestBitcoinChain.BroadcastTransaction(tx)
 }
 
 func (botbc *blockingOutboxTestBitcoinChain) GetCanonicalTransactionStatus(

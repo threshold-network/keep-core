@@ -237,9 +237,11 @@ type bitcoinBroadcastOutbox struct {
 	now                       func() time.Time
 
 	replaySemaphore *semaphore.Weighted
+	closeMutex      sync.Mutex
 	mutex           sync.Mutex
 	records         map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord
 	lockFile        *os.File
+	closing         bool
 	closed          bool
 	recovered       bool
 
@@ -423,11 +425,29 @@ func openSecureBitcoinBroadcastFile(
 }
 
 func (bbo *bitcoinBroadcastOutbox) close() error {
+	bbo.closeMutex.Lock()
+	defer bbo.closeMutex.Unlock()
+
 	bbo.mutex.Lock()
-	defer bbo.mutex.Unlock()
 	if bbo.closed {
+		bbo.mutex.Unlock()
 		return nil
 	}
+	bbo.closing = true
+	bbo.mutex.Unlock()
+
+	if bbo.replaySemaphore != nil {
+		if err := bbo.replaySemaphore.Acquire(context.Background(), 1); err != nil {
+			return fmt.Errorf(
+				"cannot drain Bitcoin broadcast outbox replay: [%w]",
+				err,
+			)
+		}
+		defer bbo.replaySemaphore.Release(1)
+	}
+
+	bbo.mutex.Lock()
+	defer bbo.mutex.Unlock()
 	bbo.closed = true
 	if bbo.lockFile == nil {
 		return nil
@@ -503,7 +523,7 @@ func (bbo *bitcoinBroadcastOutbox) enqueue(
 
 	bbo.mutex.Lock()
 	defer bbo.mutex.Unlock()
-	if bbo.closed {
+	if bbo.closing || bbo.closed {
 		return fmt.Errorf("Bitcoin broadcast outbox is closed")
 	}
 	if existing, ok := bbo.records[transactionHash]; ok {
@@ -633,7 +653,7 @@ func (bbo *bitcoinBroadcastOutbox) start(ctx context.Context) error {
 		)
 	}
 	bbo.mutex.Lock()
-	if bbo.closed {
+	if bbo.closing || bbo.closed {
 		bbo.mutex.Unlock()
 		return fmt.Errorf("Bitcoin broadcast outbox is closed")
 	}
@@ -675,7 +695,7 @@ func (bbo *bitcoinBroadcastOutbox) activationSnapshot() (
 ) {
 	bbo.mutex.Lock()
 	defer bbo.mutex.Unlock()
-	if bbo.closed {
+	if bbo.closing || bbo.closed {
 		return bitcoinBroadcastOutboxActivationSnapshot{},
 			fmt.Errorf("Bitcoin broadcast outbox is closed")
 	}
@@ -694,7 +714,7 @@ func (bbo *bitcoinBroadcastOutbox) withUnchangedActivationSnapshot(
 	}
 	bbo.mutex.Lock()
 	defer bbo.mutex.Unlock()
-	if bbo.closed {
+	if bbo.closing || bbo.closed {
 		return fmt.Errorf("Bitcoin broadcast outbox is closed")
 	}
 	if bbo.activationSnapshotLocked() != expected {
@@ -1242,11 +1262,24 @@ func (bbo *bitcoinBroadcastOutbox) acquireReplaySemaphore(
 	if bbo == nil || bbo.replaySemaphore == nil {
 		return fmt.Errorf("Bitcoin broadcast replay semaphore is unavailable")
 	}
+	bbo.mutex.Lock()
+	unavailable := bbo.closing || bbo.closed
+	bbo.mutex.Unlock()
+	if unavailable {
+		return fmt.Errorf("Bitcoin broadcast outbox is closed")
+	}
 	if err := bbo.replaySemaphore.Acquire(ctx, 1); err != nil {
 		return fmt.Errorf(
 			"cannot acquire Bitcoin broadcast replay semaphore: [%w]",
 			err,
 		)
+	}
+	bbo.mutex.Lock()
+	unavailable = bbo.closing || bbo.closed
+	bbo.mutex.Unlock()
+	if unavailable {
+		bbo.replaySemaphore.Release(1)
+		return fmt.Errorf("Bitcoin broadcast outbox is closed")
 	}
 	return nil
 }
