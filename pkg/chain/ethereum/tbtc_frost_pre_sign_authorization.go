@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	geth "github.com/ethereum/go-ethereum"
@@ -779,12 +780,70 @@ func (reader *frostPreSignCanonicalHashReader) callContext(
 	args ...interface{},
 ) error {
 	if reader.rpcLimiter != nil {
-		if err := reader.rpcLimiter.AcquirePermit(); err != nil {
+		if err := acquireFrostPreSignEthereumRPCPermit(
+			ctx,
+			reader.rpcLimiter,
+		); err != nil {
 			return fmt.Errorf("cannot acquire Ethereum RPC rate limiter permit: [%w]", err)
 		}
 		defer reader.rpcLimiter.ReleasePermit()
 	}
 	return reader.rpcClient.CallContext(ctx, result, method, args...)
+}
+
+func acquireFrostPreSignEthereumRPCPermit(
+	ctx context.Context,
+	limiter interface {
+		AcquirePermit() error
+		ReleasePermit()
+	},
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	const (
+		acquisitionPending uint32 = iota
+		acquisitionCanceled
+		acquisitionDelivered
+	)
+	var acquisitionState atomic.Uint32
+	acquisitionResult := make(chan error, 1)
+	go func() {
+		err := limiter.AcquirePermit()
+		if acquisitionState.CompareAndSwap(
+			acquisitionPending,
+			acquisitionDelivered,
+		) {
+			acquisitionResult <- err
+			return
+		}
+
+		// The caller stopped waiting before the legacy limiter completed.
+		// Return any permit acquired after cancellation instead of leaking it.
+		if err == nil {
+			limiter.ReleasePermit()
+		}
+	}()
+
+	select {
+	case err := <-acquisitionResult:
+		return err
+	case <-ctx.Done():
+		if acquisitionState.CompareAndSwap(
+			acquisitionPending,
+			acquisitionCanceled,
+		) {
+			return ctx.Err()
+		}
+
+		// Acquisition won the race with cancellation. Drain the delivered
+		// result and return a successfully acquired permit before exiting.
+		if err := <-acquisitionResult; err == nil {
+			limiter.ReleasePermit()
+		}
+		return ctx.Err()
+	}
 }
 
 func (reader *frostPreSignCanonicalHashReader) requestContext(

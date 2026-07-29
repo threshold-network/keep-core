@@ -2,6 +2,7 @@ package ethereum
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"testing"
@@ -26,6 +27,22 @@ type testFrostPreSignEvidenceReader struct {
 	receiptCall       int
 }
 
+type testBlockingEthereumRPCLimiter struct {
+	acquisitionStarted chan struct{}
+	allowAcquisition   chan struct{}
+	permitReleased     chan struct{}
+}
+
+func (limiter *testBlockingEthereumRPCLimiter) AcquirePermit() error {
+	close(limiter.acquisitionStarted)
+	<-limiter.allowAcquisition
+	return nil
+}
+
+func (limiter *testBlockingEthereumRPCLimiter) ReleasePermit() {
+	close(limiter.permitReleased)
+}
+
 func TestNewFrostPreSignPrimaryEthereumReaderAcceptsWrappedClient(
 	t *testing.T,
 ) {
@@ -47,6 +64,79 @@ func TestNewFrostPreSignPrimaryEthereumReaderAcceptsWrappedClient(
 	}
 	if reader == nil {
 		t.Fatal("wrapped primary Ethereum reader is nil")
+	}
+}
+
+func TestFrostPrimaryEthereumRPCLimiterWaitHonorsContext(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		requestTimeout time.Duration
+		cancelRequest  bool
+		expectedError  error
+	}{
+		{
+			name:          "caller cancellation",
+			cancelRequest: true,
+			expectedError: context.Canceled,
+		},
+		{
+			name:           "request timeout",
+			requestTimeout: 25 * time.Millisecond,
+			expectedError:  context.DeadlineExceeded,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			limiter := &testBlockingEthereumRPCLimiter{
+				acquisitionStarted: make(chan struct{}),
+				allowAcquisition:   make(chan struct{}),
+				permitReleased:     make(chan struct{}),
+			}
+			reader := &frostPreSignCanonicalHashReader{
+				requestTimeout: test.requestTimeout,
+				rpcLimiter:     limiter,
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				_, err := reader.CodeAtHash(
+					ctx,
+					common.HexToAddress(
+						"0x1111111111111111111111111111111111111111",
+					),
+					common.HexToHash("0x1234"),
+				)
+				result <- err
+			}()
+
+			select {
+			case <-limiter.acquisitionStarted:
+			case <-time.After(time.Second):
+				t.Fatal("rate limiter acquisition did not start")
+			}
+			if test.cancelRequest {
+				cancel()
+			}
+
+			select {
+			case err := <-result:
+				if !errors.Is(err, test.expectedError) {
+					t.Fatalf(
+						"unexpected rate limiter cancellation error: [%v]",
+						err,
+					)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("rate limiter wait ignored the request context")
+			}
+
+			close(limiter.allowAcquisition)
+			select {
+			case <-limiter.permitReleased:
+			case <-time.After(time.Second):
+				t.Fatal("permit acquired after cancellation was not released")
+			}
+		})
 	}
 }
 
