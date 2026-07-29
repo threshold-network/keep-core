@@ -505,6 +505,14 @@ func ValidateDepositSweepProposal(
 		minSweepTxFee := big.NewInt(int64(MinSweepTxSatPerVByteFee) * sweepTxSize)
 
 		switch {
+		// This branch is defense-in-depth for test/mock chain implementations
+		// and is not expected to be reachable on the real production path: by
+		// the time control reaches this point, chain.ValidateDepositSweepProposal
+		// above has already ABI-packed proposal.SweepTxFee to call the on-chain
+		// WalletProposalValidator, which panics on a nil *big.Int before this
+		// code ever runs. Likewise, a proposal decoded off the wire
+		// (DepositSweepProposal.Unmarshal in marshaling.go) always constructs
+		// SweepTxFee via new(big.Int).SetBytes(...), which never yields nil.
 		case proposal.SweepTxFee == nil:
 			validateProposalLogger.Warnf(
 				"proposal has no sweep tx fee set; expected at least the safe "+
