@@ -733,6 +733,15 @@ func validateFrostRetainedGroupLiftCertificateShape(
 				signature.AuthorityID,
 			)
 		}
+		if err := validateFrostRetainedGroupPrimeOrderEd25519PublicKey(
+			publicKey,
+		); err != nil {
+			return [32]byte{}, fmt.Errorf(
+				"FROST quarantine lift authority [%s] key is not a nonidentity prime-order Ed25519 point: [%w]",
+				signature.AuthorityID,
+				err,
+			)
+		}
 		signatureBytes, err := base64.StdEncoding.Strict().DecodeString(
 			signature.Signature,
 		)

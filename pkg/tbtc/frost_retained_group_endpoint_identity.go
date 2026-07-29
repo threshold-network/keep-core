@@ -1521,8 +1521,10 @@ func (roundTripper *frostRetainedGroupAttestedRoundTripper) RoundTrip(
 	if request.Body != nil {
 		_ = request.Body.Close()
 	}
-	request.Body = io.NopCloser(bytes.NewReader(body))
-	request.ContentLength = int64(len(body))
+	outbound := request.Clone(request.Context())
+	outbound.Header = request.Header.Clone()
+	outbound.Body = io.NopCloser(bytes.NewReader(body))
+	outbound.ContentLength = int64(len(body))
 	requestDigest := sha256.Sum256(body)
 	var challenge [32]byte
 	randomSource := roundTripper.random
@@ -1532,11 +1534,11 @@ func (roundTripper *frostRetainedGroupAttestedRoundTripper) RoundTrip(
 	if _, err := io.ReadFull(randomSource, challenge[:]); err != nil {
 		return nil, fmt.Errorf("cannot create retained-group transport challenge: [%w]", err)
 	}
-	request.Header.Set(
+	outbound.Header.Set(
 		frostRetainedGroupTransportChallengeHeader,
 		hex.EncodeToString(challenge[:]),
 	)
-	request.Header.Set("Accept-Encoding", "identity")
+	outbound.Header.Set("Accept-Encoding", "identity")
 
 	var remote net.Addr
 	trace := &httptrace.ClientTrace{
@@ -1546,10 +1548,10 @@ func (roundTripper *frostRetainedGroupAttestedRoundTripper) RoundTrip(
 			}
 		},
 	}
-	request = request.WithContext(
-		httptrace.WithClientTrace(request.Context(), trace),
+	outbound = outbound.WithContext(
+		httptrace.WithClientTrace(outbound.Context(), trace),
 	)
-	response, err := roundTripper.base.RoundTrip(request)
+	response, err := roundTripper.base.RoundTrip(outbound)
 	if err != nil {
 		return nil, err
 	}
@@ -1578,7 +1580,7 @@ func (roundTripper *frostRetainedGroupAttestedRoundTripper) RoundTrip(
 		roundTripper.endpoint,
 		roundTripper.identity,
 		challenge,
-		request.Method,
+		outbound.Method,
 		target,
 		requestDigest,
 		responseDigest,
@@ -1616,7 +1618,7 @@ func (roundTripper *frostRetainedGroupAttestedRoundTripper) RoundTrip(
 		challenge:      challenge,
 	}
 	if response.Request == nil {
-		response.Request = request
+		response.Request = outbound
 	}
 	response.Request = response.Request.Clone(
 		context.WithValue(

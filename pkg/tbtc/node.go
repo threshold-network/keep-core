@@ -254,11 +254,28 @@ func newNode(
 					"cannot enable production FROST pre-sign authorization without an activation manifest",
 				)
 			}
+			verifierSource, ok := config.FrostRetainedGroupHistorySource.(FrostPreSignEthereumEvidenceVerifierSource)
+			if !ok {
+				return nil, fmt.Errorf(
+					"cannot enable production FROST pre-sign authorization without an independent Ethereum evidence verifier",
+				)
+			}
+			ethereumEvidenceVerifier, err :=
+				verifierSource.FrostPreSignEthereumEvidenceVerifier(
+					context.Background(),
+				)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot obtain independent FROST Ethereum evidence verifier: [%w]",
+					err,
+				)
+			}
 			configuredProfile, err := configurator.ConfigureFrostPreSignAuthorization(
 				context.Background(),
 				config.FrostPreSignActivationManifestPath,
 				config.FrostPreSignActivationEnvelopeSignerKeyHash,
 				config.FrostPreSignLinkedLibraryDescriptorSetHash,
+				ethereumEvidenceVerifier,
 			)
 			if err != nil {
 				return nil, fmt.Errorf(

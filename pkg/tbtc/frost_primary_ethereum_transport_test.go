@@ -215,6 +215,12 @@ func TestFrostPrimaryEthereumTransportWSSAppliesRequestTimeout(
 		t.Fatal(err)
 	}
 	defer transport.Close()
+	if transport.ChainID() != 1 {
+		t.Fatalf(
+			"guarded transport did not retain probed chain ID: [%d]",
+			transport.ChainID(),
+		)
+	}
 
 	result := make(chan error, 1)
 	go func() {

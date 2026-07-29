@@ -221,7 +221,7 @@ func start(cmd *cobra.Command) error {
 				ctx,
 				clientConfig.Tbtc.FrostRetainedGroupHistory,
 				primaryEthereumTransport,
-				uint64(clientConfig.Ethereum.Network.ChainID()),
+				primaryEthereumTransport.ChainID(),
 			)
 			if err != nil {
 				return fmt.Errorf(

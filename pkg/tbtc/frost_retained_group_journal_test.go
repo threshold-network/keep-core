@@ -2623,6 +2623,85 @@ func TestFrostRetainedGroupJournal_LiftCertificateRejectsBypasses(
 	})
 }
 
+func TestFrostRetainedGroupJournal_LiftRejectsNonPrimeOrderAuthorityKeys(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	journal, quarantine := fixture.openActiveQuarantine(
+		t,
+		filepath.Join(t.TempDir(), "journal"),
+	)
+	defer journal.close()
+	lift := fixture.liftMutation(
+		t,
+		journal,
+		quarantine,
+		FrostRetainedGroupEventPoint{
+			BlockNumber:      15,
+			BlockHash:        [32]byte{0x0f},
+			TransactionHash:  [32]byte{0xaf},
+			TransactionIndex: 2,
+			LogIndex:         3,
+		},
+	)
+
+	identityKey := make(ed25519.PublicKey, ed25519.PublicKeySize)
+	identityKey[0] = 1
+	identityKeyDER, err := x509.MarshalPKIXPublicKey(identityKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := journal.liftPolicy
+	policy.Authorities = append(
+		[]FrostRetainedGroupAuthority{},
+		policy.Authorities...,
+	)
+	policy.Authorities[0].PublicKeySPKIHash =
+		sha256.Sum256(identityKeyDER)
+	policy.AuthoritySetHash, err = frostRetainedGroupLiftAuthoritySetHash(
+		policy.AuthorityThreshold,
+		policy.Authorities,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lift.LiftCertificate.Body.AuthoritySetHash = policy.AuthoritySetHash
+	fixture.resignLiftMutation(t, &lift, []int{0, 1})
+	signatureHash := frostRetainedGroupLiftSignatureHash(
+		lift.LiftCertificate.BodyHash,
+	)
+	trivialSignature := make([]byte, ed25519.SignatureSize)
+	trivialSignature[0] = 1 // R is the identity; S is zero.
+	if !ed25519.Verify(
+		identityKey,
+		signatureHash[:],
+		trivialSignature,
+	) {
+		t.Fatal("test runtime no longer accepts the identity-key Ed25519 forgery")
+	}
+	lift.LiftCertificate.Signatures[0] =
+		FrostRetainedGroupQuarantineLiftSignature{
+			AuthorityID: policy.Authorities[0].AuthorityID,
+			SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(
+				identityKeyDER,
+			),
+			Signature: base64.StdEncoding.EncodeToString(
+				trivialSignature,
+			),
+		}
+	refreshJournalTestLiftCertificateHash(t, &lift)
+
+	if _, err := validateFrostRetainedGroupLiftCertificateShape(
+		policy,
+		lift.LiftCertificate,
+	); err == nil || !strings.Contains(
+		err.Error(),
+		"nonidentity prime-order",
+	) {
+		t.Fatalf("identity lift authority key was not rejected: [%v]", err)
+	}
+}
+
 func TestFrostRetainedGroupJournal_LiftAuthorityStrictMajority(
 	t *testing.T,
 ) {

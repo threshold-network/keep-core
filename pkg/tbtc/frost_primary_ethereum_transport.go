@@ -27,6 +27,7 @@ const (
 	frostPrimaryEthereumTLSExporterLabel         = "EXPORTER-tbtc-frost-primary-ethereum-v1"
 	frostPrimaryEthereumTLSExporterContextDomain = "tbtc-frost-primary-ethereum-tls-exporter-context/v1\x00"
 	frostPrimaryEthereumPeerIdentityDomain       = "tbtc-frost-primary-ethereum-peer-identity/v1\x00"
+	frostPrimaryEthereumPeerChannelDomain        = "tbtc-frost-primary-ethereum-peer-channel/v1\x00"
 	frostPrimaryEthereumMaximumSeenPeers         = 4096
 )
 
@@ -51,6 +52,7 @@ type FrostPrimaryEthereumTransport struct {
 	rootCAs       *x509.CertPool
 	rpcClient     *rpc.Client
 	client        FrostPrimaryEthereumClient
+	chainID       uint64
 	httpTransport *http.Transport
 	seenPeers     map[[32]byte]frostTransportPeerIdentity
 	livePeers     map[[32]byte]uint64
@@ -233,6 +235,9 @@ func newFrostPrimaryEthereumTransport(
 			"guarded primary Ethereum endpoint returned an invalid chain ID",
 		)
 	}
+	transport.mutex.Lock()
+	transport.chainID = chainID.Uint64()
+	transport.mutex.Unlock()
 	transport.mutex.RLock()
 	hasPeer := len(transport.seenPeers) > 0
 	transport.mutex.RUnlock()
@@ -243,6 +248,18 @@ func newFrostPrimaryEthereumTransport(
 		)
 	}
 	return transport, nil
+}
+
+// ChainID returns the positive chain ID authenticated during the guarded
+// transport's startup probe. It remains available after Close so startup
+// wiring never falls back to the static Developer network sentinel.
+func (transport *FrostPrimaryEthereumTransport) ChainID() uint64 {
+	if transport == nil {
+		return 0
+	}
+	transport.mutex.RLock()
+	defer transport.mutex.RUnlock()
+	return transport.chainID
 }
 
 // Client returns the exact client whose connections are guarded by this
@@ -410,12 +427,15 @@ func (transport *FrostPrimaryEthereumTransport) dialTLSContext(
 			_ = tlsConnection.Close()
 			return nil, peerErr
 		}
-		peerKey := frostTransportPeerIdentityKey(peer)
-		if recordErr := transport.recordPeer(peerKey, peer); recordErr != nil {
+		identityKey := frostTransportPeerIdentityKey(peer)
+		if recordErr := transport.recordPeer(
+			identityKey,
+			peer,
+		); recordErr != nil {
 			_ = tlsConnection.Close()
 			return nil, recordErr
 		}
-		tracked.activate(peerKey)
+		tracked.activate(frostTransportPeerChannelKey(peer))
 		return tlsConnection, nil
 	}
 	if lastErr == nil {
@@ -544,6 +564,19 @@ func frostTransportPeerIdentityKey(
 			authority,
 		)
 	}
+	return transcript.sum()
+}
+
+func frostTransportPeerChannelKey(
+	peer frostTransportPeerIdentity,
+) [32]byte {
+	transcript := frostRetainedGroupIdentityTranscript(
+		frostPrimaryEthereumPeerChannelDomain,
+	)
+	transcript.bytes32(
+		"peerIdentityKey",
+		frostTransportPeerIdentityKey(peer),
+	)
 	transcript.bytes32(
 		"tlsExporterValueHash",
 		peer.tlsExporterValueHash,
@@ -551,26 +584,46 @@ func frostTransportPeerIdentityKey(
 	return transcript.sum()
 }
 
+func frostTransportStablePeerIdentity(
+	peer frostTransportPeerIdentity,
+) frostTransportPeerIdentity {
+	peer.spiffeAuthorities = append([]string{}, peer.spiffeAuthorities...)
+	peer.tlsExporterValueHash = [32]byte{}
+	return peer
+}
+
 func (transport *FrostPrimaryEthereumTransport) recordPeer(
 	key [32]byte,
 	peer frostTransportPeerIdentity,
 ) error {
+	identityKey := frostTransportPeerIdentityKey(peer)
+	if key != identityKey {
+		return fmt.Errorf("primary Ethereum peer identity key mismatch")
+	}
+	channelKey := frostTransportPeerChannelKey(peer)
+	stablePeer := frostTransportStablePeerIdentity(peer)
+
 	transport.mutex.Lock()
 	defer transport.mutex.Unlock()
 	if transport.closed {
 		return fmt.Errorf("primary Ethereum transport is closed")
 	}
-	if _, exists := transport.seenPeers[key]; !exists &&
+	if _, exists := transport.seenPeers[identityKey]; !exists &&
 		len(transport.seenPeers) >= frostPrimaryEthereumMaximumSeenPeers {
-		return fmt.Errorf("primary Ethereum peer history limit exceeded")
+		return fmt.Errorf(
+			"primary Ethereum peer history limit exceeded",
+		)
 	}
-	transport.seenPeers[key] = peer
+	transport.seenPeers[identityKey] = stablePeer
 	if transport.policy != nil {
-		if err := transport.policy.registerPrimaryPeer(key, peer); err != nil {
+		if err := transport.policy.registerPrimaryPeer(
+			identityKey,
+			stablePeer,
+		); err != nil {
 			return err
 		}
 	}
-	transport.livePeers[key]++
+	transport.livePeers[channelKey]++
 	return nil
 }
 
@@ -619,14 +672,16 @@ func (roundTripper *frostPrimaryEthereumHTTPRoundTripper) RoundTrip(
 		request.Header.Get("Accept-Encoding") != "" {
 		return nil, fmt.Errorf("primary Ethereum HTTP request escaped its pinned target")
 	}
-	connection := make(chan net.Conn, 1)
+	var (
+		connectionMutex sync.Mutex
+		connection      net.Conn
+	)
 	trace := &httptrace.ClientTrace{
 		GotConn: func(info httptrace.GotConnInfo) {
 			if info.Conn != nil {
-				select {
-				case connection <- info.Conn:
-				default:
-				}
+				connectionMutex.Lock()
+				connection = info.Conn
+				connectionMutex.Unlock()
 			}
 		},
 	}
@@ -637,10 +692,10 @@ func (roundTripper *frostPrimaryEthereumHTTPRoundTripper) RoundTrip(
 	if err != nil {
 		return nil, err
 	}
-	var actual net.Conn
-	select {
-	case actual = <-connection:
-	default:
+	connectionMutex.Lock()
+	actual := connection
+	connectionMutex.Unlock()
+	if actual == nil {
 		_ = response.Body.Close()
 		return nil, fmt.Errorf(
 			"primary Ethereum response has no exact connection observation",
@@ -670,7 +725,7 @@ func (roundTripper *frostPrimaryEthereumHTTPRoundTripper) RoundTrip(
 		return nil, err
 	}
 	if err := roundTripper.transport.verifySeenPeer(
-		frostTransportPeerIdentityKey(peer),
+		peer,
 	); err != nil {
 		_ = response.Body.Close()
 		return nil, err
@@ -687,14 +742,18 @@ func (roundTripper *frostPrimaryEthereumHTTPRoundTripper) RoundTrip(
 }
 
 func (transport *FrostPrimaryEthereumTransport) verifySeenPeer(
-	key [32]byte,
+	peer frostTransportPeerIdentity,
 ) error {
+	identityKey := frostTransportPeerIdentityKey(peer)
+	channelKey := frostTransportPeerChannelKey(peer)
+
 	transport.mutex.RLock()
 	defer transport.mutex.RUnlock()
 	if transport.closed {
 		return fmt.Errorf("primary Ethereum transport is closed")
 	}
-	if _, exists := transport.seenPeers[key]; !exists {
+	if _, exists := transport.seenPeers[identityKey]; !exists ||
+		transport.livePeers[channelKey] == 0 {
 		return fmt.Errorf(
 			"primary Ethereum request used an unauthenticated TLS channel",
 		)
@@ -865,6 +924,7 @@ func (policy *frostPrimaryRetainedSeparationPolicy) registerRetainedPeer(
 	}
 	peers := policy.retainedPeers[role]
 	key := frostTransportPeerIdentityKey(peer)
+	stablePeer := frostTransportStablePeerIdentity(peer)
 	if _, exists := peers[key]; !exists &&
 		len(peers) >= frostPrimaryEthereumMaximumSeenPeers {
 		policy.failure = fmt.Errorf(
@@ -873,11 +933,11 @@ func (policy *frostPrimaryRetainedSeparationPolicy) registerRetainedPeer(
 		)
 		return policy.failure
 	}
-	peers[key] = peer
-	if !frostAddressSetContains(retained.endpoint.addresses, peer.remoteIP) ||
-		peer.leafSPKIHash != retained.identity.TLSLeafSPKIHash ||
+	peers[key] = stablePeer
+	if !frostAddressSetContains(retained.endpoint.addresses, stablePeer.remoteIP) ||
+		stablePeer.leafSPKIHash != retained.identity.TLSLeafSPKIHash ||
 		!frostStringSetContains(
-			peer.spiffeAuthorities,
+			stablePeer.spiffeAuthorities,
 			retained.identity.TrustDomainID,
 		) {
 		policy.failure = fmt.Errorf(
@@ -886,7 +946,7 @@ func (policy *frostPrimaryRetainedSeparationPolicy) registerRetainedPeer(
 		)
 		return policy.failure
 	}
-	if frostAddressSetContains(policy.primary.addresses, peer.remoteIP) {
+	if frostAddressSetContains(policy.primary.addresses, stablePeer.remoteIP) {
 		policy.failure = fmt.Errorf(
 			"%s actual peer aliases the primary Ethereum frozen address set",
 			role,
@@ -896,7 +956,7 @@ func (policy *frostPrimaryRetainedSeparationPolicy) registerRetainedPeer(
 	for _, primaryPeer := range policy.primaryPeers {
 		if err := frostTransportPeersIndependent(
 			role,
-			peer,
+			stablePeer,
 			"primary Ethereum",
 			primaryPeer,
 		); err != nil {

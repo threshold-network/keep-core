@@ -85,14 +85,30 @@ type FrostRetainedGroupHistorySourceConfig struct {
 	Resolver                          *net.Resolver  `mapstructure:"-"`
 }
 
-type frostRetainedGroupEthereumVerifier interface {
+// FrostPreSignEthereumEvidenceVerifier is the read-only Ethereum view used to
+// independently authenticate security-sensitive FROST authorization evidence.
+// Exact-hash methods must use EIP-1898 with requireCanonical=true.
+type FrostPreSignEthereumEvidenceVerifier interface {
 	ChainID(context.Context) (*big.Int, error)
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 	HeaderByHash(context.Context, common.Hash) (*types.Header, error)
 	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
+	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
 	CodeAtHash(context.Context, common.Address, common.Hash) ([]byte, error)
 	StorageAtHash(context.Context, common.Address, common.Hash, common.Hash) ([]byte, error)
 	CallContractAtHash(context.Context, ethereum.CallMsg, common.Hash) ([]byte, error)
+}
+
+// FrostPreSignEthereumEvidenceVerifierSource exposes an independently
+// identity-bound Ethereum verifier to the production authorization adapter.
+type FrostPreSignEthereumEvidenceVerifierSource interface {
+	FrostPreSignEthereumEvidenceVerifier(
+		context.Context,
+	) (FrostPreSignEthereumEvidenceVerifier, error)
+}
+
+type frostRetainedGroupEthereumVerifier interface {
+	FrostPreSignEthereumEvidenceVerifier
 	Close()
 }
 
@@ -215,6 +231,7 @@ type signedFrostRetainedGroupHistorySource struct {
 }
 
 var _ FrostRetainedGroupHistorySource = (*signedFrostRetainedGroupHistorySource)(nil)
+var _ FrostPreSignEthereumEvidenceVerifierSource = (*signedFrostRetainedGroupHistorySource)(nil)
 
 type frostRetainedGroupSignedEnvelope struct {
 	Schema              string          `json:"schema"`
@@ -601,6 +618,24 @@ func (source *signedFrostRetainedGroupHistorySource) Close() {
 			transport.CloseIdleConnections()
 		}
 	}
+}
+
+func (source *signedFrostRetainedGroupHistorySource) FrostPreSignEthereumEvidenceVerifier(
+	ctx context.Context,
+) (FrostPreSignEthereumEvidenceVerifier, error) {
+	if source == nil || ctx == nil || source.verifier == nil ||
+		source.independenceMonitor == nil {
+		return nil, fmt.Errorf(
+			"independent FROST Ethereum verifier is unavailable",
+		)
+	}
+	if err := source.independenceMonitor.verify(ctx); err != nil {
+		return nil, fmt.Errorf(
+			"independent FROST Ethereum verifier lost endpoint separation: [%w]",
+			err,
+		)
+	}
+	return source.verifier, nil
 }
 
 func (source *signedFrostRetainedGroupHistorySource) requestContext(

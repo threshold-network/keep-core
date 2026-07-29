@@ -228,16 +228,27 @@ SHA-256 of the exact JSON response-attestation object:
 An independently implemented endpoint must reproduce these values before it is
 eligible for activation.
 
-== Primary-endpoint independence limitation
+== Primary-endpoint independence enforcement
 
-The retained export and verifier transports are channel-bound as specified
-above. The current keep-core primary Ethereum client does not expose its actual
-connected peer or TLS identity to this component. The retained-history client
-therefore re-resolves the primary URL at every verification boundary and
-rejects DNS/CNAME/IP overlap, but cannot cryptographically bind that observation
-to the primary client's existing connection.
+A FROST-enabled node creates its primary Ethereum client through
+`FrostPrimaryEthereumTransport`. The transport freezes the first complete DNS
+answer, disables proxies and redirects, requires TLS 1.3, and records the
+certificate, SPKI, SPIFFE authority, remote IP, and TLS-exporter identity of
+every live HTTPS connection or WSS reconnect before that connection can carry
+an RPC response.
 
-Production activation remains no-go until the primary client exposes a
-manifest-bound connected-peer identity (or is created through a shared pinned
-transport) so split-horizon DNS, proxies, and persistent-connection drift can
-also be excluded.
+The retained-history source binds its export and verifier endpoint identities
+to that same transport. Construction rejects overlap in the frozen DNS/CNAME/IP
+sets and in the manifest-pinned role identities. Every subsequently observed
+primary, export, or verifier TLS peer is registered with the shared separation
+policy; an address, certificate, SPKI, or SPIFFE-authority alias poisons the
+policy fail closed. Verification boundaries also re-resolve the primary name
+and require the result to equal the frozen answer, excluding split-horizon DNS
+or later DNS drift.
+
+The primary and retained clients therefore enforce independence against the
+connections that actually carry their responses. This replaces the earlier
+URL-only observation limitation. Operational activation still requires three
+genuinely independent endpoint identities and network paths satisfying these
+checks; deploying distinct hostnames in front of shared TLS or backend
+identity is intentionally rejected.

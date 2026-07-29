@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -914,6 +915,36 @@ func TestFrostRetainedGroupAttestedTransport_RejectsHostAndPathAmbiguity(
 		serverRequest,
 	); err == nil {
 		t.Fatal("server accepted a Host header outside the manifest endpoint")
+	}
+}
+
+func TestFrostRetainedGroupAttestedTransport_DoesNotMutateCallerRequest(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	client := fixture.source.httpClient.(*http.Client)
+	request, err := http.NewRequest(
+		http.MethodPost,
+		fixture.server.URL+"/operator-id",
+		strings.NewReader("{}"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Caller-Header", "preserved")
+	originalHeader := request.Header.Clone()
+
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("attested request failed: [%v]", err)
+	}
+	_ = response.Body.Close()
+	if !reflect.DeepEqual(request.Header, originalHeader) {
+		t.Fatalf(
+			"attested transport mutated caller headers: before [%v], after [%v]",
+			originalHeader,
+			request.Header,
+		)
 	}
 }
 

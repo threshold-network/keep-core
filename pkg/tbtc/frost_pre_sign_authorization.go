@@ -1283,6 +1283,7 @@ type FrostPreSignAuthorizationConfigurator interface {
 		string,
 		string,
 		string,
+		FrostPreSignEthereumEvidenceVerifier,
 	) (*FrostPreSignActivationProfile, error)
 }
 

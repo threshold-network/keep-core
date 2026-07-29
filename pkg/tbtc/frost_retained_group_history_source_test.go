@@ -203,6 +203,13 @@ func (verifier *frostRetainedGroupHistoryTestVerifier) TransactionReceipt(
 	return receipt, nil
 }
 
+func (verifier *frostRetainedGroupHistoryTestVerifier) FilterLogs(
+	context.Context,
+	ethereum.FilterQuery,
+) ([]types.Log, error) {
+	return nil, nil
+}
+
 func (verifier *frostRetainedGroupHistoryTestVerifier) CodeAtHash(
 	_ context.Context,
 	address common.Address,
