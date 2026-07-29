@@ -166,6 +166,37 @@ func TestCanonicalTransactionStatus(t *testing.T) {
 			t.Fatal("incomplete canonical transaction index reported absence")
 		}
 	})
+
+	t.Run("inconsistent output indexes", func(t *testing.T) {
+		transaction := testCanonicalStatusTransaction()
+		transaction.Outputs = append(
+			transaction.Outputs,
+			&bitcoin.TransactionOutput{
+				Value:           2000,
+				PublicKeyScript: []byte{0x52},
+			},
+		)
+		transactionHash := transaction.Hash()
+		txID := transactionHash.Hex(bitcoin.ReversedByteOrder)
+		reader := &canonicalTransactionStatusTestReader{
+			rawTransaction: hex.EncodeToString(transaction.Serialize()),
+			found:          true,
+			histories: map[string][]*electrumclient.GetMempoolResult{
+				hex.EncodeToString(
+					transaction.Outputs[0].PublicKeyScript,
+				): {{Hash: txID, Height: 0}},
+				hex.EncodeToString(
+					transaction.Outputs[1].PublicKeyScript,
+				): {{Hash: txID, Height: 100}},
+			},
+		}
+		if _, err := canonicalTransactionStatus(
+			reader,
+			transactionHash,
+		); err == nil {
+			t.Fatal("inconsistent canonical output indexes were accepted")
+		}
+	})
 }
 
 func TestVerifyCanonicalTransactionMerkleProof(t *testing.T) {

@@ -205,6 +205,8 @@ func canonicalTransactionBlockHeight(
 		)
 	}
 	seenScripts := make(map[string]bool)
+	matched := false
+	var matchedHeight uint
 	for _, output := range transaction.Outputs {
 		if output == nil {
 			return 0, fmt.Errorf(
@@ -227,8 +229,6 @@ func canonicalTransactionBlockHeight(
 				err,
 			)
 		}
-		matched := false
-		var matchedHeight uint
 		for _, item := range history {
 			if item == nil || item.Hash != txID {
 				continue
@@ -248,12 +248,12 @@ func canonicalTransactionBlockHeight(
 			matched = true
 			matchedHeight = height
 		}
-		if matched {
-			// A matching indexed output establishes the candidate height.
-			// Confirmed candidates are independently checked against the block
-			// header and Merkle proof by canonicalTransactionStatus.
-			return matchedHeight, nil
-		}
+	}
+	if matched {
+		// Every unique output index agreed on the candidate height. Confirmed
+		// candidates are independently checked against the block header and
+		// Merkle proof by canonicalTransactionStatus.
+		return matchedHeight, nil
 	}
 	return 0, fmt.Errorf(
 		"canonical transaction [%s] is missing from all output-script histories",

@@ -446,7 +446,8 @@ func (transport *FrostPrimaryEthereumTransport) dialTLSContext(
 		)
 		if peerErr != nil {
 			_ = tlsConnection.Close()
-			return nil, peerErr
+			lastErr = peerErr
+			continue
 		}
 		identityKey := frostTransportPeerIdentityKey(peer)
 		if recordErr := transport.recordPeer(

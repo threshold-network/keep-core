@@ -327,6 +327,82 @@ func TestFrostPrimaryEthereumTransportTriesNextAddressAfterTLSProfileRejection(
 	}
 }
 
+func TestFrostPrimaryEthereumTransportTriesNextAddressAfterPeerIdentityRejection(
+	t *testing.T,
+) {
+	server, _, roots := newFrostRetainedGroupHistoryTLSTestServer(
+		t,
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		"spiffe://primary.example/rpc",
+	)
+	identityMismatchServer, identityMismatchLeaf, _ :=
+		newFrostRetainedGroupHistoryTLSTestServer(
+			t,
+			http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+			"spiffe://Primary.example/rpc",
+		)
+	roots.AddCert(identityMismatchLeaf)
+	endpoint, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(endpoint.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	identityMismatchListener, err := net.Listen(
+		"tcp6",
+		net.JoinHostPort("::1", port),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityMismatchDone := make(chan struct{})
+	go func() {
+		defer close(identityMismatchDone)
+		raw, acceptErr := identityMismatchListener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		connection := tls.Server(raw, identityMismatchServer.TLS.Clone())
+		defer connection.Close()
+		_ = connection.Handshake()
+	}()
+	t.Cleanup(func() {
+		_ = identityMismatchListener.Close()
+		<-identityMismatchDone
+	})
+
+	transport := &FrostPrimaryEthereumTransport{
+		endpoint: frostRetainedGroupResolvedEndpoint{
+			endpoint:  endpoint,
+			canonical: endpoint.String(),
+			addresses: []netip.Addr{
+				netip.MustParseAddr("::1"),
+				netip.MustParseAddr("127.0.0.1"),
+			},
+		},
+		timeout:   time.Second,
+		rootCAs:   roots,
+		seenPeers: make(map[[32]byte]frostTransportPeerIdentity),
+		livePeers: make(map[[32]byte]uint64),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	connection, err := transport.dialTLSContext(ctx, "tcp", endpoint.Host)
+	if err != nil {
+		t.Fatalf(
+			"healthy pinned address was ignored after peer identity rejection: [%v]",
+			err,
+		)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFrostPrimaryEthereumTransportWSSAppliesRequestTimeout(
 	t *testing.T,
 ) {
