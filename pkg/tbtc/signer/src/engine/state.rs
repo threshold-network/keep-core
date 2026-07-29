@@ -542,6 +542,43 @@ pub(crate) fn with_state_file_lock_for_load<T>(
     operation(store)
 }
 
+/// Applies a checkpoint acknowledgement before a mandatory startup rewrite.
+///
+/// Once the engine is initialized, preserve the ordinary ENGINE_STATE ->
+/// durable-store lock order. Before initialization, the initialization mutex
+/// excludes every stateful caller, so the exact-tip acknowledgement can rotate
+/// a full witness segment through the load-safe structural store path. Only
+/// then is the state loaded and any required migration persisted.
+pub(crate) fn with_state_file_lock_before_startup_rewrite<T>(
+    operation: impl FnOnce(&mut StateFileLock) -> Result<T, EngineError>,
+) -> Result<T, EngineError> {
+    if let Some(engine) = ENGINE_STATE.get() {
+        let _guard = engine
+            .lock()
+            .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+        return with_state_file_lock(operation);
+    }
+
+    let initialization_guard = ENGINE_STATE_INITIALIZATION_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(engine) = ENGINE_STATE.get() {
+        let _guard = engine
+            .lock()
+            .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+        return with_state_file_lock(operation);
+    }
+
+    let outcome = with_state_file_lock_for_load(operation)?;
+    drop(initialization_guard);
+
+    // Loading after the acknowledgement is the security boundary: a segment
+    // at its terminal limit is rotated before a legacy-envelope or bounded
+    // session-registry rewrite attempts to append its own witness records.
+    state()?;
+    Ok(outcome)
+}
+
 pub(crate) fn durable_store_identity() -> Result<DurableStoreIdentity, EngineError> {
     // Store identity is deliberately available before state classification.
     // Use the load-safe structural path so a malformed image can still reach

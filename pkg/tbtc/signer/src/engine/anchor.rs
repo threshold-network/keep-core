@@ -209,15 +209,17 @@ pub(crate) fn configured_state_anchor() -> Result<Option<StateAnchorConfiguratio
         TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
     )?;
     let maximum_records = state_witness_max_records()?;
-    let threshold_with_terminal = rotation_threshold_records.checked_add(2).ok_or_else(|| {
-        EngineError::Validation(
-            "state witness rotation threshold overflows its terminal-record reservation"
-                .to_string(),
-        )
-    })?;
+    let threshold_with_terminal = rotation_threshold_records
+        .checked_add(TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION)
+        .ok_or_else(|| {
+            EngineError::Validation(
+                "state witness rotation threshold overflows its terminal-record reservation"
+                    .to_string(),
+            )
+        })?;
     if rotation_threshold_records < 2 || threshold_with_terminal > maximum_records {
         return Err(EngineError::Validation(format!(
-            "{} must be at least 2 and leave two records below {} [{}]; got [{}]",
+            "{} must be at least 2 and leave four records below {} [{}]; got [{}]",
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
             maximum_records,
@@ -358,12 +360,8 @@ pub(crate) fn acknowledge_state_witness_checkpoint(
         )
     })?;
     let acknowledgement = validate_acknowledgement_request(request, &configuration, true)?;
-    let engine = state()?;
-    let _guard = engine
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
     let admission_expires_at_unix_ms = acknowledgement.expires_at_unix_ms;
-    let outcome = with_state_file_lock(|store| {
+    let outcome = with_state_file_lock_before_startup_rewrite(|store| {
         store.acknowledge_state_witness_checkpoint(
             acknowledgement,
             configuration.rotation_threshold_records,
@@ -406,11 +404,7 @@ pub(crate) fn recover_state_witness_checkpoint(
     })?;
     let (acknowledgement, wrapper_expires_at_unix_ms) =
         validate_recovery_request(request, &configuration)?;
-    let engine = state()?;
-    let _guard = engine
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    let outcome = with_state_file_lock(|store| {
+    let outcome = with_state_file_lock_before_startup_rewrite(|store| {
         store.acknowledge_state_witness_checkpoint(
             acknowledgement,
             configuration.rotation_threshold_records,
@@ -1755,6 +1749,41 @@ mod tests {
         );
         let error = configured_state_anchor().expect_err("zero binding hash");
         assert!(error.to_string().contains("must be nonzero"));
+    }
+
+    #[test]
+    fn configured_anchor_reserves_four_terminal_witness_records() {
+        let _guard = lock_test_state();
+        let signing_key = SigningKey::from_bytes(&[0x01; 32]);
+        let public_key = signing_key.verifying_key().to_bytes();
+        std::env::set_var(
+            TBTC_SIGNER_STATE_ANCHOR_BINDING_HASH_ENV,
+            bytes32_hex([0x11; 32]),
+        );
+        std::env::set_var(
+            TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_ENV,
+            bytes32_hex(public_key),
+        );
+        std::env::set_var(
+            TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_SPKI_SHA256_ENV,
+            bytes32_hex(ed25519_spki_sha256(&public_key)),
+        );
+        std::env::set_var(
+            TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
+            "2",
+        );
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "5");
+        let error = configured_state_anchor().expect_err("three records are insufficient");
+        assert!(error.to_string().contains("leave four records"));
+
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "6");
+        assert_eq!(
+            configured_state_anchor()
+                .expect("six records satisfy the configured reservation")
+                .expect("anchor configuration")
+                .rotation_threshold_records,
+            2
+        );
     }
 
     #[test]

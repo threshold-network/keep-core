@@ -69,6 +69,11 @@ pub(crate) const TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH: usize = 472;
 /// tests build on-disk fixtures from this geometry, so it is part of the
 /// crate-visible store contract.
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH: usize = 105;
+/// A mutating interactive request can persist two expiry-sweep repairs before
+/// persisting its requested mutation. If the first snapshot reaches the
+/// rotation threshold, the other two snapshots still need four records to
+/// finish the in-flight request before a checkpoint can be acknowledged.
+pub(crate) const TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION: usize = 4;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE: u8 = 1;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT: u8 = 2;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_ABORT: u8 = 3;
@@ -3482,11 +3487,13 @@ impl StateFileLock {
         }
         if let Some(threshold) = self.witness_rotation_threshold {
             let record_count = self.witness_record_count()?;
-            let completion_limit = threshold.checked_add(2).ok_or_else(|| {
-                EngineError::Internal(
-                    "signer state witness rotation completion limit overflowed".to_string(),
-                )
-            })?;
+            let completion_limit = threshold
+                .checked_add(TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION)
+                .ok_or_else(|| {
+                    EngineError::Internal(
+                        "signer state witness rotation completion limit overflowed".to_string(),
+                    )
+                })?;
             if record_count
                 .checked_add(2)
                 .is_none_or(|required| required > completion_limit)
@@ -7586,7 +7593,7 @@ mod witness_transcript_tests {
         spki_digest.update(response_public_key);
         let configured_spki_hash: [u8; 32] = spki_digest.finalize().into();
         std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, state_path);
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "6");
         std::env::set_var(
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             "2",
@@ -7642,6 +7649,42 @@ mod witness_transcript_tests {
     }
 
     #[cfg(unix)]
+    fn acknowledgement_wire_for_store_tests(
+        acknowledgement: &StateAnchorAcknowledgement,
+    ) -> crate::api::AcknowledgeStateWitnessCheckpointRequest {
+        crate::api::AcknowledgeStateWitnessCheckpointRequest {
+            schema: TBTC_SIGNER_STATE_WITNESS_CHECKPOINT_ACK_SCHEMA.to_string(),
+            binding_hash: bytes32_hex(acknowledgement.binding_hash),
+            request_digest: bytes32_hex(acknowledgement.request_digest),
+            nonce: bytes32_hex(acknowledgement.nonce),
+            status: match acknowledgement.status {
+                1 => "applied",
+                2 => "already-applied",
+                _ => panic!("invalid fixture status"),
+            }
+            .to_string(),
+            service_epoch: acknowledgement.service_epoch.to_string(),
+            revision: acknowledgement.revision.to_string(),
+            previous_event_root: bytes32_hex(acknowledgement.previous_event_root),
+            event_root: bytes32_hex(acknowledgement.event_root),
+            checkpoint: crate::api::StateWitnessCheckpointRequest {
+                store_fingerprint: bytes32_hex(acknowledgement.checkpoint_store_fingerprint),
+                generation: acknowledgement.checkpoint_generation.to_string(),
+                previous_state_commitment: bytes32_hex(
+                    acknowledgement.checkpoint_previous_commitment,
+                ),
+                state_image_digest: bytes32_hex(acknowledgement.checkpoint_state_image_digest),
+                state_commitment: bytes32_hex(acknowledgement.checkpoint_state_commitment),
+            },
+            operation_id: bytes32_hex(acknowledgement.operation_id),
+            transition_digest: bytes32_hex(acknowledgement.transition_digest),
+            committed_at_unix_ms: acknowledgement.committed_at_unix_ms.to_string(),
+            expires_at_unix_ms: acknowledgement.expires_at_unix_ms.to_string(),
+            signature: format!("0x{}", hex::encode(acknowledgement.signature)),
+        }
+    }
+
+    #[cfg(unix)]
     fn cleanup_anchor_store_fixture(state_path: &Path) {
         let witness_path = state_witness_file_path(state_path);
         let mut witness_next = witness_path.as_os_str().to_os_string();
@@ -7683,7 +7726,7 @@ mod witness_transcript_tests {
         state_path: &Path,
     ) -> (VerifiedStateAnchorTrustTransition, StateWitness) {
         std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, state_path);
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "6");
         let mut initial = StateFileLock::acquire(state_path).expect("open unanchored store");
         let tip = initial.state_witness_tip().expect("unanchored genesis tip");
         let store_fingerprint = initial.identity.fingerprint;
@@ -8406,7 +8449,7 @@ mod witness_transcript_tests {
             hex::encode(random)
         ));
         std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "6");
         std::env::set_var(
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             "2",
@@ -8624,25 +8667,31 @@ mod witness_transcript_tests {
         );
         assert_eq!(store.witness_record_count().expect("empty segment"), 0);
 
-        // Model one FFI call that first persists an expiry sweep and then its
-        // requested mutation. The first snapshot reaches the rotation
-        // threshold; the second must be able to consume the two terminal
-        // records reserved below the hard ceiling.
+        // Model one FFI call that first repairs an InteractiveState
+        // persistence-pending marker, then retires the newly unprotected
+        // expired session, and finally persists its requested mutation. The
+        // first snapshot reaches the rotation threshold; the other two must
+        // be able to consume the four terminal records reserved below the
+        // hard ceiling.
         store
-            .replace_state(b"expiry sweep snapshot")
+            .replace_state(b"persistence-pending repair snapshot")
             .expect("first snapshot reaches threshold");
         assert_eq!(store.witness_record_count().expect("threshold count"), 2);
         store
-            .replace_state(b"requested mutation snapshot")
-            .expect("second snapshot uses terminal reservation");
+            .replace_state(b"expired session retirement snapshot")
+            .expect("second snapshot uses the first terminal record pair");
         assert_eq!(store.witness_record_count().expect("terminal count"), 4);
+        store
+            .replace_state(b"requested mutation snapshot")
+            .expect("third snapshot uses the second terminal record pair");
+        assert_eq!(store.witness_record_count().expect("terminal count"), 6);
         assert_eq!(
             store.read_state().expect("completed multi-snapshot state"),
             Some(b"requested mutation snapshot".to_vec())
         );
 
         let rejected = store
-            .replace_state(b"unacknowledged third snapshot")
+            .replace_state(b"unacknowledged fourth snapshot")
             .expect_err("a later snapshot still requires checkpoint rotation");
         assert!(!rejected.replaced());
         assert!(rejected
@@ -8651,6 +8700,135 @@ mod witness_transcript_tests {
             .contains("rotation threshold reached"));
         drop(store);
         cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn checkpoint_rotation_precedes_mandatory_startup_state_rewrite() {
+        let _guard = lock_test_state();
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let state_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-anchor-startup-rewrite-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let signing_key = SigningKey::from_bytes(&[0x07; 32]);
+        let configured_spki_hash =
+            configure_anchor_store_fixture(&state_path, &signing_key, [0x44; 32]);
+        let mut store = StateFileLock::acquire(&state_path).expect("open anchored store");
+
+        let legacy_state = PersistedEngineState::try_from(&EngineState::default())
+            .expect("encode valid legacy state");
+        let mut plaintext = serde_json::to_vec(&legacy_state).expect("serialize legacy state");
+        let key_material = state_encryption_key_material().expect("load test state key");
+        let cipher = XChaCha20Poly1305::new_from_slice(&key_material.key[..])
+            .expect("initialize test cipher");
+        let nonce_bytes = [7u8; TBTC_SIGNER_STATE_ENVELOPE_NONCE_BYTES];
+        let nonce = XNonce::from_slice(&nonce_bytes);
+        let mut ciphertext_and_tag = cipher
+            .encrypt(nonce, plaintext.as_ref())
+            .expect("encrypt legacy v2 envelope fixture");
+        plaintext.zeroize();
+        let mut authentication_tag = ciphertext_and_tag
+            .split_off(ciphertext_and_tag.len() - TBTC_SIGNER_STATE_ENVELOPE_AUTH_TAG_BYTES);
+        let legacy_envelope = PersistedEncryptedEngineStateEnvelope {
+            schema_version: PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V2,
+            encryption_algorithm: TBTC_SIGNER_STATE_ENCRYPTION_ALGORITHM_XCHACHA20POLY1305
+                .to_string(),
+            key_provider: TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT.to_string(),
+            key_id: TBTC_SIGNER_STATE_KEY_ID_LEGACY_ENV_HEX.to_string(),
+            nonce: hex::encode(nonce_bytes),
+            ciphertext: hex::encode(&ciphertext_and_tag),
+            authentication_tag: hex::encode(&authentication_tag),
+        };
+        ciphertext_and_tag.zeroize();
+        authentication_tag.zeroize();
+        let legacy_bytes =
+            serde_json::to_vec(&legacy_envelope).expect("serialize legacy v2 envelope");
+        store
+            .replace_state(b"first pre-rewrite snapshot")
+            .expect("consume first terminal record pair");
+        store
+            .replace_state(&legacy_bytes)
+            .expect("install legacy image at the terminal record limit");
+        assert_eq!(
+            store.witness_record_count().expect("terminal record count"),
+            6
+        );
+
+        let tip = store.state_witness_tip().expect("legacy image tip");
+        let acknowledgement = signed_acknowledgement_for_tip(
+            &signing_key,
+            configured_spki_hash,
+            store.identity.fingerprint,
+            &tip,
+        );
+        let request_json =
+            serde_json::to_string(&acknowledgement_wire_for_store_tests(&acknowledgement))
+                .expect("serialize acknowledgement request");
+        drop(store);
+
+        let output =
+            std::process::Command::new(std::env::current_exe().expect("current test binary path"))
+                .arg("--exact")
+                .arg(
+                    "engine::store::witness_transcript_tests::checkpoint_rotation_before_startup_rewrite_helper",
+                )
+                .arg("--ignored")
+                .arg("--nocapture")
+                .env("TBTC_SIGNER_STARTUP_REWRITE_ACK_HELPER", "1")
+                .env("TBTC_SIGNER_STARTUP_REWRITE_ACK_REQUEST", request_json)
+                .output()
+                .expect("spawn isolated startup acknowledgement helper");
+        assert!(
+            output.status.success(),
+            "startup acknowledgement helper failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "startup acknowledgement helper did not execute exactly one test\nstdout:\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[ignore = "isolated subprocess helper"]
+    #[cfg(unix)]
+    fn checkpoint_rotation_before_startup_rewrite_helper() {
+        if std::env::var("TBTC_SIGNER_STARTUP_REWRITE_ACK_HELPER").as_deref() != Ok("1") {
+            return;
+        }
+        assert!(ENGINE_STATE.get().is_none());
+        assert!(state_file_lock_slot().lock().expect("store slot").is_none());
+        let request: crate::api::AcknowledgeStateWitnessCheckpointRequest = serde_json::from_str(
+            &std::env::var("TBTC_SIGNER_STARTUP_REWRITE_ACK_REQUEST")
+                .expect("startup acknowledgement request"),
+        )
+        .expect("decode startup acknowledgement request");
+
+        let result = crate::engine::acknowledge_state_witness_checkpoint(request)
+            .expect("rotate checkpoint before rewriting legacy state");
+        assert!(result.rotated);
+        assert!(ENGINE_STATE.get().is_some());
+
+        let state_path = state_file_path().expect("configured state path");
+        let rewritten: PersistedEncryptedEngineStateEnvelope =
+            serde_json::from_slice(&fs::read(&state_path).expect("read rewritten encrypted state"))
+                .expect("startup rewrite must replace the legacy encrypted envelope");
+        assert_eq!(
+            rewritten.schema_version,
+            PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION
+        );
+        assert_eq!(
+            with_state_file_lock(|store| store.witness_record_count())
+                .expect("post-rewrite witness count"),
+            2,
+            "the migrated snapshot must be appended to the newly rotated segment"
+        );
     }
 
     #[test]
