@@ -14,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	commonethereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
-	"github.com/keep-network/keep-common/pkg/rate"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -263,13 +262,15 @@ func TestFrostPreSignExactHashReader_WrappedProductionClient(t *testing.T) {
 		RequestsPerSecondLimit: 10,
 		ConcurrencyLimit:       2,
 	}
+	wrappedClient := wrapClientAddons(config, client)
+	rpcLimiter, err := sharedEthereumRPCLimiter(config, wrappedClient)
+	if err != nil {
+		t.Fatal(err)
+	}
 	chain := &baseChain{
-		client:    wrapClientAddons(config, client),
-		rpcClient: client.Client(),
-		rpcLimiter: rate.NewLimiter(&rate.LimiterConfig{
-			RequestsPerSecondLimit: config.RequestsPerSecondLimit,
-			ConcurrencyLimit:       config.ConcurrencyLimit,
-		}),
+		client:     wrappedClient,
+		rpcClient:  client.Client(),
+		rpcLimiter: rpcLimiter,
 	}
 	evidenceReader, err := newFrostPreSignPrimaryEthereumReader(
 		chain.client,

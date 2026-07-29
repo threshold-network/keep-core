@@ -50,6 +50,53 @@ func TestNewFrostPreSignPrimaryEthereumReaderAcceptsWrappedClient(
 	}
 }
 
+func TestFrostPrimaryEthereumRPCSharesConfiguredLimiter(t *testing.T) {
+	server := rpc.NewServer()
+	rpcClient := rpc.DialInProc(server)
+	defer rpcClient.Close()
+	client := ethclient.NewClient(rpcClient)
+	config := ethereumConfig.Config{ConcurrencyLimit: 1}
+	wrapped := wrapClientAddons(config, client)
+	limiter, err := sharedEthereumRPCLimiter(config, wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limiter == nil {
+		t.Fatal("shared Ethereum RPC limiter is nil")
+	}
+	if err := limiter.AcquirePermit(); err != nil {
+		t.Fatal(err)
+	}
+	permitHeld := true
+	defer func() {
+		if permitHeld {
+			limiter.ReleasePermit()
+		}
+	}()
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := wrapped.HeaderByNumber(context.Background(), nil)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf(
+			"ordinary Ethereum RPC bypassed the limiter held by the raw FROST path: [%v]",
+			err,
+		)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	limiter.ReleasePermit()
+	permitHeld = false
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("ordinary Ethereum RPC did not resume after the shared permit was released")
+	}
+}
+
 func (reader *testFrostPreSignEvidenceReader) ChainID(
 	context.Context,
 ) (*big.Int, error) {

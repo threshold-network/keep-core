@@ -38,7 +38,7 @@ type baseChain struct {
 	key                                *keystore.Key
 	client                             ethutil.EthereumClient
 	rpcClient                          *rpc.Client
-	rpcLimiter                         *rate.Limiter
+	rpcLimiter                         ethereumRPCLimiter
 	chainID                            *big.Int
 	frostPrimaryEthereumRequestTimeout time.Duration
 
@@ -69,6 +69,11 @@ type EthereumClient interface {
 	ethutil.EthereumClient
 	ChainID(context.Context) (*big.Int, error)
 	Client() *rpc.Client
+}
+
+type ethereumRPCLimiter interface {
+	AcquirePermit() error
+	ReleasePermit()
 }
 
 // Connect creates Random Beacon and TBTC Ethereum chain handles.
@@ -296,10 +301,10 @@ func newBaseChain(
 	}
 
 	clientWithAddons := wrapClientAddons(config, client)
-	rpcLimiter := rate.NewLimiter(&rate.LimiterConfig{
-		RequestsPerSecondLimit: config.RequestsPerSecondLimit,
-		ConcurrencyLimit:       config.ConcurrencyLimit,
-	})
+	rpcLimiter, err := sharedEthereumRPCLimiter(config, clientWithAddons)
+	if err != nil {
+		return nil, err
+	}
 	var frostPrimaryEthereumRequestTimeout time.Duration
 	if timeoutSource, ok := client.(interface {
 		FrostPrimaryEthereumRequestTimeout() time.Duration
@@ -576,6 +581,24 @@ func wrapClientAddons(
 	}
 
 	return loggingClient
+}
+
+func sharedEthereumRPCLimiter(
+	config ethereum.Config,
+	client ethutil.EthereumClient,
+) (ethereumRPCLimiter, error) {
+	if config.RequestsPerSecondLimit <= 0 && config.ConcurrencyLimit <= 0 {
+		return nil, nil
+	}
+
+	limiter, ok := client.(ethereumRPCLimiter)
+	if !ok {
+		return nil, fmt.Errorf(
+			"configured Ethereum rate-limited client does not expose its shared limiter",
+		)
+	}
+
+	return limiter, nil
 }
 
 // decryptKey decrypts the chain key pointed by the config.
