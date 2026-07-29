@@ -49,6 +49,12 @@ type NativeTBTCSignerDistributedDKGRetirementEngine interface {
 	RetireDistributedDKGKeyPackages(keyGroup string) error
 }
 
+type distributedDKGSeatOutcome struct {
+	member  group.MemberIndex
+	persist *NativeTBTCSignerDKGResult
+	err     error
+}
+
 // CanonicalFROSTIdentifier returns the canonical FROST identifier string for a
 // participant: the identifier as a 32-byte big-endian scalar (value in the
 // least-significant byte), hex-encoded and JSON-quoted. It matches the engine's
@@ -149,19 +155,14 @@ func RunDistributedDKGForSeats(
 		prebuffer.DrainAndForward(bus.Deliver)
 	}
 
-	type seatOutcome struct {
-		member  group.MemberIndex
-		persist *NativeTBTCSignerDKGResult
-		err     error
-	}
-	outcomes := make(chan seatOutcome, len(runners))
+	outcomes := make(chan distributedDKGSeatOutcome, len(runners))
 	for seat, runner := range runners {
 		seat := seat
 		runner := runner
 		go func() {
 			dkgResult, err := runner.Run(ctx)
 			if err != nil {
-				outcomes <- seatOutcome{member: seat, err: fmt.Errorf("distributed DKG for seat [%v] failed: [%w]", seat, err)}
+				outcomes <- distributedDKGSeatOutcome{member: seat, err: fmt.Errorf("distributed DKG for seat [%v] failed: [%w]", seat, err)}
 				return
 			}
 			// dkgResult.KeyPackage.Data is this seat's long-term SECRET share. The engine
@@ -182,17 +183,24 @@ func RunDistributedDKGForSeats(
 				dkgResult.PublicKeyPackage,
 			)
 			if err != nil {
-				outcomes <- seatOutcome{member: seat, err: fmt.Errorf("cannot persist the key package for seat [%v]: [%w]", seat, err)}
+				outcomes <- distributedDKGSeatOutcome{member: seat, err: fmt.Errorf("cannot persist the key package for seat [%v]: [%w]", seat, err)}
 				return
 			}
-			outcomes <- seatOutcome{member: seat, persist: persisted}
+			outcomes <- distributedDKGSeatOutcome{member: seat, persist: persisted}
 		}()
 	}
 
-	persistBySeat := make(map[group.MemberIndex]*NativeTBTCSignerDKGResult, len(runners))
+	return collectDistributedDKGSeatOutcomes(outcomes, len(runners))
+}
+
+func collectDistributedDKGSeatOutcomes(
+	outcomes <-chan distributedDKGSeatOutcome,
+	count int,
+) (map[group.MemberIndex]*NativeTBTCSignerDKGResult, error) {
+	persistBySeat := make(map[group.MemberIndex]*NativeTBTCSignerDKGResult, count)
 	var keyGroup string
 	var firstErr error
-	for range runners {
+	for range count {
 		outcome := <-outcomes
 		if outcome.err != nil {
 			// Keep draining so no goroutine blocks on the channel, but remember the
@@ -202,6 +210,10 @@ func RunDistributedDKGForSeats(
 			}
 			continue
 		}
+		// Record every successful durable write before checking agreement.
+		// A mismatching handle is precisely the case where the caller needs all
+		// persisted outcomes in order to retire every orphaned key group.
+		persistBySeat[outcome.member] = outcome.persist
 		if keyGroup == "" {
 			keyGroup = outcome.persist.KeyGroup
 		} else if outcome.persist.KeyGroup != keyGroup {
@@ -213,7 +225,6 @@ func RunDistributedDKGForSeats(
 			}
 			continue
 		}
-		persistBySeat[outcome.member] = outcome.persist
 	}
 	if firstErr != nil {
 		// Return successful durable writes alongside the error. The caller must

@@ -280,6 +280,26 @@ func (wr *walletRegistry) getWalletIDByPublicKeyHash(
 	return [32]byte{}, false
 }
 
+func (wr *walletRegistry) isFrostWalletByPublicKeyHash(
+	walletPublicKeyHash [20]byte,
+) (bool, error) {
+	wr.mutex.Lock()
+	defer wr.mutex.Unlock()
+
+	for _, value := range wr.walletCache {
+		if value.walletPublicKeyHash != walletPublicKeyHash {
+			continue
+		}
+		_, isFrostWallet, err := frostKeyGroupFromWalletCacheValue(value)
+		if err != nil {
+			return false, err
+		}
+		return isFrostWallet, nil
+	}
+
+	return false, fmt.Errorf("wallet not found in the wallet cache")
+}
+
 // getWalletByID gets the given wallet by its 32-byte wallet ID. Second boolean
 // return value denotes whether the wallet was found in the registry or not.
 func (wr *walletRegistry) getWalletByID(walletID [32]byte) (wallet, bool) {

@@ -233,6 +233,21 @@ func executeFrostDKGIfPossible(
 			if resultRetained {
 				return
 			}
+			canRetire, resolutionErr := canRetireFailedFrostDKG(
+				frostChain,
+				executionResult.outputKey,
+			)
+			if resolutionErr != nil {
+				dkgLogger.Errorf(
+					"preserving unresolved FROST DKG key packages because "+
+						"the on-chain attempt outcome could not be proven: [%v]",
+					resolutionErr,
+				)
+				return
+			}
+			if !canRetire {
+				return
+			}
 			if err := retireFailedFrostDKG(
 				retirementEngine,
 				node.walletRegistry,
@@ -478,27 +493,11 @@ func executeDistributedFrostDKG(
 		prebuffer,
 	)
 	if err != nil {
-		for _, persisted := range persistBySeat {
-			if persisted == nil || persisted.KeyGroup == "" {
-				continue
-			}
-			retirementEngine, ok := nativeEngine.(frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine)
-			if !ok {
-				return nil, fmt.Errorf(
-					"%w; native signer cannot retire partially persisted DKG material",
-					err,
-				)
-			}
-			if retirementErr := retirementEngine.
-				RetireDistributedDKGKeyPackages(persisted.KeyGroup); retirementErr != nil {
-				return nil, fmt.Errorf(
-					"%w; cannot retire partially persisted DKG key group [%s]: [%v]",
-					err,
-					persisted.KeyGroup,
-					retirementErr,
-				)
-			}
-			break
+		if retirementErr := retirePersistedFrostDKGKeyGroups(
+			nativeEngine,
+			persistBySeat,
+		); retirementErr != nil {
+			return nil, fmt.Errorf("%w; %v", err, retirementErr)
 		}
 		return nil, err
 	}
@@ -920,6 +919,85 @@ func sameFrostDKGWalletResult(first, second *registry.Result) bool {
 			first.MisbehavedMembersIndices,
 			second.MisbehavedMembersIndices,
 		)
+}
+
+func canRetireFailedFrostDKG(
+	frostChain FrostDKGChain,
+	outputKey frost.OutputKey,
+) (bool, error) {
+	if frostChain == nil {
+		return false, fmt.Errorf("FROST DKG chain is nil")
+	}
+	state, err := frostChain.GetFrostDKGState()
+	if err != nil {
+		return false, fmt.Errorf("cannot read FROST DKG state: [%w]", err)
+	}
+	if state == AwaitingResult || state == Challenge {
+		return false, nil
+	}
+
+	registrationChain, ok := frostChain.(frostWalletRegistrationChain)
+	if !ok {
+		return false, fmt.Errorf(
+			"chain does not expose FROST wallet registration",
+		)
+	}
+	registered, err := registrationChain.IsFrostWalletRegistered(
+		[32]byte(outputKey),
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"cannot check failed FROST DKG wallet registration: [%w]",
+			err,
+		)
+	}
+	return !registered, nil
+}
+
+func retirePersistedFrostDKGKeyGroups(
+	nativeEngine frostsigning.NativeTBTCSignerEngine,
+	persistBySeat map[group.MemberIndex]*frostsigning.NativeTBTCSignerDKGResult,
+) error {
+	keyGroupSet := make(map[string]struct{})
+	for _, persisted := range persistBySeat {
+		if persisted == nil || persisted.KeyGroup == "" {
+			continue
+		}
+		keyGroupSet[persisted.KeyGroup] = struct{}{}
+	}
+	if len(keyGroupSet) == 0 {
+		return nil
+	}
+
+	retirementEngine, ok :=
+		nativeEngine.(frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine)
+	if !ok {
+		return fmt.Errorf(
+			"native signer cannot retire partially persisted DKG material",
+		)
+	}
+
+	keyGroups := make([]string, 0, len(keyGroupSet))
+	for keyGroup := range keyGroupSet {
+		keyGroups = append(keyGroups, keyGroup)
+	}
+	slices.Sort(keyGroups)
+
+	retirementErrors := make([]error, 0)
+	for _, keyGroup := range keyGroups {
+		if err := retirementEngine.
+			RetireDistributedDKGKeyPackages(keyGroup); err != nil {
+			retirementErrors = append(
+				retirementErrors,
+				fmt.Errorf(
+					"cannot retire partially persisted DKG key group [%s]: [%w]",
+					keyGroup,
+					err,
+				),
+			)
+		}
+	}
+	return errors.Join(retirementErrors...)
 }
 
 func retireFailedFrostDKG(

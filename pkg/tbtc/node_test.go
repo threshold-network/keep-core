@@ -470,7 +470,7 @@ func TestNode_KeepsLiveBridgeWalletWithoutLegacyRegistration(t *testing.T) {
 	}
 }
 
-func TestNode_KeepsPendingFrostWalletWithoutBridgeRegistration(t *testing.T) {
+func TestNode_ArchivesLegacyWalletMissingFromEveryRegistry(t *testing.T) {
 	groupParameters := &GroupParameters{
 		GroupSize:       5,
 		GroupQuorum:     4,
@@ -500,8 +500,18 @@ func TestNode_KeepsPendingFrostWalletWithoutBridgeRegistration(t *testing.T) {
 	}
 
 	_, ok := n.walletRegistry.getWalletByPublicKeyHash(walletPublicKeyHash)
-	if !ok {
-		t.Fatal("pending FROST wallet should not be archived")
+	if ok {
+		t.Fatal("unregistered legacy wallet was not archived")
+	}
+
+	localChain.walletRegistrationChecksMutex.Lock()
+	frostChecks := localChain.frostWalletRegistrationChecks
+	localChain.walletRegistrationChecksMutex.Unlock()
+	if frostChecks != 0 {
+		t.Fatalf(
+			"legacy wallet cleanup queried the FROST registry [%d] times",
+			frostChecks,
+		)
 	}
 }
 

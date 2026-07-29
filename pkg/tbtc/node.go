@@ -2162,36 +2162,48 @@ func (n *node) archiveClosedWallets() error {
 			}
 
 			if !isRegistered && n.frostWalletRegistryAvailable() {
-				frostChain, ok := n.chain.(frostWalletRegistrationChain)
-				if !ok {
-					return fmt.Errorf(
-						"FROST wallet registration is available but the chain " +
-							"does not expose registration checks",
-					)
-				}
-				isFrostRegistered, err :=
-					frostChain.IsFrostWalletRegistered(walletID)
+				isFrostWallet, err := n.walletRegistry.
+					isFrostWalletByPublicKeyHash(walletPublicKeyHash)
 				if err != nil {
 					return fmt.Errorf(
-						"could not check FROST registration for wallet with ID "+
+						"could not classify local wallet with public key hash "+
 							"[0x%x]: [%v]",
-						walletID,
+						walletPublicKeyHash,
 						err,
 					)
 				}
-				if isFrostRegistered {
+				if isFrostWallet {
+					frostChain, ok := n.chain.(frostWalletRegistrationChain)
+					if !ok {
+						return fmt.Errorf(
+							"FROST wallet registration is available but the chain " +
+								"does not expose registration checks",
+						)
+					}
+					isFrostRegistered, err :=
+						frostChain.IsFrostWalletRegistered(walletID)
+					if err != nil {
+						return fmt.Errorf(
+							"could not check FROST registration for wallet with ID "+
+								"[0x%x]: [%v]",
+							walletID,
+							err,
+						)
+					}
+					if isFrostRegistered {
+						continue
+					}
+					logger.Infof(
+						"FROST wallet with ID [0x%x] and public key hash [0x%x] "+
+							"was not found in Bridge or the FROST registry; "+
+							"deferring its material to anchored retained-history "+
+							"reconciliation so a valid pending DKG can be "+
+							"distinguished from an orphan",
+						walletID,
+						walletPublicKeyHash,
+					)
 					continue
 				}
-				logger.Infof(
-					"wallet with ECDSA ID [0x%x] and public key hash [0x%x] "+
-						"was not found in Bridge or the legacy ECDSA registry; "+
-						"deferring unregistered FROST material to anchored "+
-						"retained-history reconciliation so a valid pending "+
-						"DKG can be distinguished from an orphan",
-					walletID,
-					walletPublicKeyHash,
-				)
-				continue
 			}
 
 			archiveWallet = !isRegistered

@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
@@ -143,12 +145,19 @@ type currentFrostDKGResultTestChain struct {
 	state  DKGState
 	events []*FrostDKGResultSubmittedEvent
 	valid  bool
+
+	stateErr        error
+	registered      bool
+	registrationErr error
 }
 
 func (chain *currentFrostDKGResultTestChain) GetFrostDKGState() (
 	DKGState,
 	error,
 ) {
+	if chain.stateErr != nil {
+		return 0, chain.stateErr
+	}
 	return chain.state, nil
 }
 
@@ -162,6 +171,12 @@ func (chain *currentFrostDKGResultTestChain) IsFrostDKGResultValid(
 	*registry.Result,
 ) (bool, string, error) {
 	return chain.valid, "", nil
+}
+
+func (chain *currentFrostDKGResultTestChain) IsFrostWalletRegistered(
+	[32]byte,
+) (bool, error) {
+	return chain.registered, chain.registrationErr
 }
 
 func TestCurrentFrostDKGResultMatchesExactPendingWallet(t *testing.T) {
@@ -201,6 +216,72 @@ func TestCurrentFrostDKGResultMatchesExactPendingWallet(t *testing.T) {
 	}
 	if matches {
 		t.Fatal("a different pending wallet result was accepted")
+	}
+}
+
+func TestCanRetireFailedFrostDKGRequiresResolvedUnregisteredAttempt(
+	t *testing.T,
+) {
+	outputKey := frost.OutputKey{1}
+	testCases := map[string]struct {
+		chain         *currentFrostDKGResultTestChain
+		expected      bool
+		errorExpected bool
+	}{
+		"awaiting result": {
+			chain: &currentFrostDKGResultTestChain{
+				state: AwaitingResult,
+			},
+		},
+		"challenge": {
+			chain: &currentFrostDKGResultTestChain{
+				state: Challenge,
+			},
+		},
+		"resolved registered wallet": {
+			chain: &currentFrostDKGResultTestChain{
+				state:      Idle,
+				registered: true,
+			},
+		},
+		"resolved unregistered wallet": {
+			chain: &currentFrostDKGResultTestChain{
+				state: Idle,
+			},
+			expected: true,
+		},
+		"ambiguous state": {
+			chain: &currentFrostDKGResultTestChain{
+				stateErr: errors.New("state unavailable"),
+			},
+			errorExpected: true,
+		},
+		"ambiguous registration": {
+			chain: &currentFrostDKGResultTestChain{
+				state:           Idle,
+				registrationErr: errors.New("registration unavailable"),
+			},
+			errorExpected: true,
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			actual, err := canRetireFailedFrostDKG(
+				test.chain,
+				outputKey,
+			)
+			if (err != nil) != test.errorExpected {
+				t.Fatalf("unexpected retirement proof error: [%v]", err)
+			}
+			if actual != test.expected {
+				t.Fatalf(
+					"unexpected retirement decision\nexpected: [%t]\nactual:   [%t]",
+					test.expected,
+					actual,
+				)
+			}
+		})
 	}
 }
 
@@ -250,6 +331,48 @@ func registerFrostDKGReadinessTestEngine(t *testing.T) {
 			}
 		}
 	})
+}
+
+type frostDKGRetirementRecordingEngine struct {
+	frostDKGReadinessTestEngine
+	retired []string
+	fail    map[string]error
+}
+
+func (engine *frostDKGRetirementRecordingEngine) RetireDistributedDKGKeyPackages(
+	keyGroup string,
+) error {
+	engine.retired = append(engine.retired, keyGroup)
+	return engine.fail[keyGroup]
+}
+
+func TestRetirePersistedFrostDKGKeyGroupsRetiresEveryDistinctGroup(
+	t *testing.T,
+) {
+	engine := &frostDKGRetirementRecordingEngine{
+		fail: map[string]error{
+			"key-group-a": errors.New("injected retirement failure"),
+		},
+	}
+	err := retirePersistedFrostDKGKeyGroups(
+		engine,
+		map[group.MemberIndex]*frostsigning.NativeTBTCSignerDKGResult{
+			1: {KeyGroup: "key-group-b"},
+			2: {KeyGroup: "key-group-a"},
+			3: {KeyGroup: "key-group-b"},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "key-group-a") {
+		t.Fatalf("unexpected retirement result: [%v]", err)
+	}
+	if len(engine.retired) != 2 ||
+		engine.retired[0] != "key-group-a" ||
+		engine.retired[1] != "key-group-b" {
+		t.Fatalf(
+			"not every distinct key group was retired after a failure: [%v]",
+			engine.retired,
+		)
+	}
 }
 
 func TestLowestLocalActiveMemberIndex(t *testing.T) {
