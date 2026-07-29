@@ -340,13 +340,6 @@ func (se *signingExecutor) bitcoinOutbox() *bitcoinBroadcastOutbox {
 	return se.broadcastOutbox
 }
 
-func (se *signingExecutor) currentSigningBlock() (uint64, error) {
-	if se.getCurrentBlockFn == nil {
-		return 0, fmt.Errorf("current signing block source is nil")
-	}
-	return se.getCurrentBlockFn()
-}
-
 // signBatch performs the signing process for each message from the given
 // messages batch, one after another. If at least one message cannot be signed,
 // this function returns an error. If all messages were signed successfully,

@@ -1183,7 +1183,7 @@ func TestWalletTransactionExecutor_SignTransaction_ReorgDuringNativeSigningCance
 	}
 }
 
-func TestWalletTransactionExecutor_SignTransaction_UsesFreshPostFinalityBlockAndPersistsBeforeReturn(
+func TestWalletTransactionExecutor_SignTransaction_UsesSharedFinalityBlockAndPersistsBeforeReturn(
 	t *testing.T,
 ) {
 	unsignedTx, privateKey := buildTaprootKeyPathUnsignedTxForTest(t)
@@ -1219,10 +1219,16 @@ func TestWalletTransactionExecutor_SignTransaction_UsesFreshPostFinalityBlockAnd
 	}
 	if signingExecutor.authorizedCalls != 1 ||
 		len(signingExecutor.authorizedStarts) != 1 ||
-		signingExecutor.authorizedStarts[0] != 520 {
+		signingExecutor.authorizedStarts[0] != 500 {
 		t.Fatalf(
-			"signing did not use the fresh post-finality block: [%v]",
+			"signing did not use the shared authorization finality block: [%v]",
 			signingExecutor.authorizedStarts,
+		)
+	}
+	if signingExecutor.currentBlockCalls != 0 {
+		t.Fatalf(
+			"signing consulted the node-local head [%d] times",
+			signingExecutor.currentBlockCalls,
 		)
 	}
 	if gate.revalidateCalls < 6 {
@@ -1781,6 +1787,7 @@ type deterministicSchnorrSigningExecutorForTaproot struct {
 	beforePolicyBinding     func() error
 	duringAuthorizedSigning func(context.Context) error
 	currentBlock            uint64
+	currentBlockCalls       int
 	authorizedCalls         int
 	signatureCalls          int
 	authorizedStarts        []uint64
@@ -1894,6 +1901,7 @@ func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatchWithAuthor
 }
 
 func (dsseft *deterministicSchnorrSigningExecutorForTaproot) currentSigningBlock() (uint64, error) {
+	dsseft.currentBlockCalls++
 	if dsseft.currentBlock == 0 {
 		return 20, nil
 	}

@@ -332,10 +332,6 @@ type frostTransactionSafetyProvider interface {
 	bitcoinOutbox() *bitcoinBroadcastOutbox
 }
 
-type signingCurrentBlockProvider interface {
-	currentSigningBlock() (uint64, error)
-}
-
 // walletTransactionExecutor is a component allowing to sign and broadcast
 // wallet Bitcoin transactions.
 type walletTransactionExecutor struct {
@@ -565,12 +561,6 @@ func (wte *walletTransactionExecutor) signTransaction(
 				"FROST signing is disabled: durable Bitcoin broadcast outbox is unavailable",
 			)
 		}
-		currentBlockProvider, ok := wte.signingExecutor.(signingCurrentBlockProvider)
-		if !ok {
-			return nil, fmt.Errorf(
-				"FROST signing is disabled: current anchoring block source is unavailable",
-			)
-		}
 
 		preSignTransaction, buildErr := newFrostPreSignTransaction(
 			wte.action,
@@ -614,16 +604,14 @@ func (wte *walletTransactionExecutor) signTransaction(
 			)
 		}
 
-		effectiveSigningStartBlock, err = currentBlockProvider.currentSigningBlock()
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot determine fresh post-authorization signing block: [%w]",
-				err,
-			)
-		}
-		if effectiveSigningStartBlock < authorization.Finality.BlockNumber {
-			effectiveSigningStartBlock = authorization.Finality.BlockNumber
-		}
+		// The relay finality point is part of the finalized authorization all
+		// signers revalidate. Use it as the common protocol epoch for both ROAST
+		// session derivation and retry scheduling. A local head observed after
+		// authorization may differ between honest operators and would partition
+		// them into permanently offset signing sessions. The retry loop already
+		// skips elapsed windows when finality confirmation puts this epoch in the
+		// past.
+		effectiveSigningStartBlock = authorization.Finality.BlockNumber
 		if effectiveSigningStartBlock >= signingTimeoutBlock {
 			return nil, fmt.Errorf(
 				"FROST authorization finalized at/after signing timeout block [%d]",
