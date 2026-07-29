@@ -128,13 +128,40 @@ func canonicalTransactionStatus(
 			latestBlockHeight,
 		)
 	}
+
+	// Bind the proof and tip observations to one canonical chain snapshot.
+	// A reorganization can replace the block after the proof is verified but
+	// before the tip is read. Re-reading the header after observing the tip
+	// detects that race instead of reporting the old branch as canonical.
+	revalidatedHeader, err := reader.GetBlockHeader(blockHeight)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to revalidate canonical block header at height [%d]: [%w]",
+			blockHeight,
+			err,
+		)
+	}
+	if revalidatedHeader == nil {
+		return nil, fmt.Errorf(
+			"revalidated canonical block header at height [%d] is nil",
+			blockHeight,
+		)
+	}
 	serializedHeader := header.Serialize()
+	revalidatedSerializedHeader := revalidatedHeader.Serialize()
+	if serializedHeader != revalidatedSerializedHeader {
+		return nil, fmt.Errorf(
+			"canonical block header at height [%d] changed while "+
+				"transaction status was read",
+			blockHeight,
+		)
+	}
 
 	return &bitcoin.CanonicalTransactionStatus{
 		Found:         true,
 		Confirmations: latestBlockHeight - blockHeight + 1,
 		BlockHeight:   blockHeight,
-		BlockHash:     bitcoin.ComputeHash(serializedHeader[:]),
+		BlockHash:     bitcoin.ComputeHash(revalidatedSerializedHeader[:]),
 	}, nil
 }
 

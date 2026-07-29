@@ -265,6 +265,21 @@ func (wr *walletRegistry) getWalletByPublicKeyHash(
 	return wallet{}, false
 }
 
+func (wr *walletRegistry) getWalletIDByPublicKeyHash(
+	walletPublicKeyHash [20]byte,
+) ([32]byte, bool) {
+	wr.mutex.Lock()
+	defer wr.mutex.Unlock()
+
+	for _, value := range wr.walletCache {
+		if value.walletPublicKeyHash == walletPublicKeyHash {
+			return value.walletID, true
+		}
+	}
+
+	return [32]byte{}, false
+}
+
 // getWalletByID gets the given wallet by its 32-byte wallet ID. Second boolean
 // return value denotes whether the wallet was found in the registry or not.
 func (wr *walletRegistry) getWalletByID(walletID [32]byte) (wallet, bool) {

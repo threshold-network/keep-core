@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -288,6 +289,27 @@ func Initialize(
 	}
 	node.frostGroupParameters = frostGroupParameters
 
+	var closeFrostResourcesOnce sync.Once
+	closeFrostResources := func() {
+		closeFrostResourcesOnce.Do(func() {
+			if node.frostActivationHandshakeExporter != nil {
+				_ = node.frostActivationHandshakeExporter.close()
+			}
+			if node.frostRetainedGroupJournal != nil {
+				_ = node.frostRetainedGroupJournal.close()
+			}
+			if node.bitcoinBroadcastOutbox != nil {
+				_ = node.bitcoinBroadcastOutbox.close()
+			}
+		})
+	}
+	initializationComplete := false
+	defer func() {
+		if !initializationComplete {
+			closeFrostResources()
+		}
+	}()
+
 	// Note: the FROST signing-backend guard runs inside newNode above (right
 	// after the backend is configured and before the legacy pre-params pool is
 	// started), so an invalid backend fails Initialize with no protocol or
@@ -295,16 +317,12 @@ func Initialize(
 
 	if node.bitcoinBroadcastOutbox != nil {
 		if err := node.bitcoinBroadcastOutbox.start(ctx); err != nil {
-			_ = node.frostRetainedGroupJournal.close()
-			_ = node.bitcoinBroadcastOutbox.close()
 			return fmt.Errorf(
 				"cannot replay durable Bitcoin broadcast outbox before coordination: [%w]",
 				err,
 			)
 		}
 		if err := node.frostActivationHandshakeExporter.start(ctx); err != nil {
-			_ = node.frostRetainedGroupJournal.close()
-			_ = node.bitcoinBroadcastOutbox.close()
 			return fmt.Errorf(
 				"cannot start FROST activation handshake exporter: [%w]",
 				err,
@@ -312,23 +330,12 @@ func Initialize(
 		}
 		go func() {
 			<-ctx.Done()
-			_ = node.frostActivationHandshakeExporter.close()
-			_ = node.frostRetainedGroupJournal.close()
-			_ = node.bitcoinBroadcastOutbox.close()
+			closeFrostResources()
 		}()
 	}
 
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
-		if node.frostActivationHandshakeExporter != nil {
-			_ = node.frostActivationHandshakeExporter.close()
-		}
-		if node.frostRetainedGroupJournal != nil {
-			_ = node.frostRetainedGroupJournal.close()
-		}
-		if node.bitcoinBroadcastOutbox != nil {
-			_ = node.bitcoinBroadcastOutbox.close()
-		}
 		return fmt.Errorf("cannot run coordination layer: [%w]", err)
 	}
 
@@ -634,6 +641,7 @@ func Initialize(
 		}()
 	})
 
+	initializationComplete = true
 	return nil
 }
 

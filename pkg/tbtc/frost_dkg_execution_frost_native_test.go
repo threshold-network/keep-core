@@ -101,10 +101,11 @@ func TestReserveAndAnnounceFrostDKGReadiness_ReservesEverySelectedLocalSeat(
 			admission.activeMemberIndexes,
 		)
 	}
-	if controller.reserved.Revisions != uint64(len(localMemberIndexes)) ||
-		controller.reserved.Generations != uint64(len(localMemberIndexes)) {
+	expectedPersistenceCalls := uint64(len(localMemberIndexes) + 1)
+	if controller.reserved.Revisions != expectedPersistenceCalls ||
+		controller.reserved.Generations != expectedPersistenceCalls {
 		t.Fatalf(
-			"DKG did not reserve every selected local seat: [%+v]",
+			"DKG did not reserve every selected local seat and retirement: [%+v]",
 			controller.reserved,
 		)
 	}
@@ -137,7 +138,79 @@ func TestExecuteFrostDKGIfPossible_RequiresRoastRetryReadiness(t *testing.T) {
 	}
 }
 
+type currentFrostDKGResultTestChain struct {
+	FrostDKGChain
+	state  DKGState
+	events []*FrostDKGResultSubmittedEvent
+	valid  bool
+}
+
+func (chain *currentFrostDKGResultTestChain) GetFrostDKGState() (
+	DKGState,
+	error,
+) {
+	return chain.state, nil
+}
+
+func (chain *currentFrostDKGResultTestChain) PastFrostDKGResultSubmittedEvents(
+	*FrostDKGResultSubmittedEventFilter,
+) ([]*FrostDKGResultSubmittedEvent, error) {
+	return chain.events, nil
+}
+
+func (chain *currentFrostDKGResultTestChain) IsFrostDKGResultValid(
+	*registry.Result,
+) (bool, string, error) {
+	return chain.valid, "", nil
+}
+
+func TestCurrentFrostDKGResultMatchesExactPendingWallet(t *testing.T) {
+	expected := &registry.Result{
+		XOnlyOutputKey:           [32]byte{1},
+		MembersHash:              [32]byte{2},
+		Members:                  registry.FullMembers{10, 20, 30},
+		MisbehavedMembersIndices: registry.MisbehavedMemberIndices{2},
+		Signatures:               []byte{1},
+	}
+	peerSubmission := *expected
+	peerSubmission.SubmitterMemberIndex = 3
+	peerSubmission.Signatures = []byte{2, 3}
+	peerSubmission.SigningMembersIndices = []uint64{1, 3}
+	chain := &currentFrostDKGResultTestChain{
+		state: Challenge,
+		events: []*FrostDKGResultSubmittedEvent{{
+			BlockNumber: 10,
+			Result:      &peerSubmission,
+		}},
+		valid: true,
+	}
+
+	matches, err := currentFrostDKGResultMatches(chain, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !matches {
+		t.Fatal("the same valid pending wallet result was not recognized")
+	}
+
+	other := *expected
+	other.XOnlyOutputKey[0]++
+	matches, err = currentFrostDKGResultMatches(chain, &other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matches {
+		t.Fatal("a different pending wallet result was accepted")
+	}
+}
+
 type frostDKGReadinessTestEngine struct{}
+
+func (*frostDKGReadinessTestEngine) RetireDistributedDKGKeyPackages(
+	string,
+) error {
+	return nil
+}
 
 func (*frostDKGReadinessTestEngine) BuildTaprootTx(
 	string,

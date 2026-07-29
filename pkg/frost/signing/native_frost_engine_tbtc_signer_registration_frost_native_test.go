@@ -283,6 +283,54 @@ func TestDecodeBuildTaggedTBTCSignerRunDKGResponse(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesPayloadAndResponse(
+	t *testing.T,
+) {
+	const keyGroup = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+	payload, err :=
+		buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequestPayload(
+			keyGroup,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.KeyGroup != keyGroup {
+		t.Fatalf("unexpected retirement key group: [%s]", request.KeyGroup)
+	}
+
+	for _, response := range [][]byte{
+		[]byte(
+			`{"key_group":"` + keyGroup +
+				`","retired":true,"retired_key_package_count":2}`,
+		),
+		[]byte(
+			`{"key_group":"` + keyGroup +
+				`","retired":false,"retired_key_package_count":0}`,
+		),
+	} {
+		if err := decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
+			response,
+			keyGroup,
+		); err != nil {
+			t.Fatalf("valid retirement response was rejected: [%v]", err)
+		}
+	}
+
+	if err := decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
+		[]byte(
+			`{"key_group":"`+keyGroup+
+				`","retired":false,"retired_key_package_count":1}`,
+		),
+		keyGroup,
+	); err == nil {
+		t.Fatal("inconsistent retirement response was accepted")
+	}
+}
+
 func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload(t *testing.T) {
 	scriptTreeHex := "deadbeef"
 

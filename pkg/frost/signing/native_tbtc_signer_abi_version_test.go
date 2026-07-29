@@ -94,9 +94,10 @@ func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	// commitments bind only the stable `.store-id` and no longer break when a
 	// benign filesystem change alters the lock file, directory inode, or device.
 	// Minor 3 adds the trust transition/head and bootstrap-facts surface used
-	// before production signing can start. The matching library version is
-	// compatible; ABI 4.2 and a different major are not.
-	if requiredTBTCSignerABIMajor != 4 || requiredTBTCSignerABIMinMinor != 3 {
+	// before production signing can start. Minor 4 adds durable distributed-DKG
+	// retirement. The matching library version is compatible; ABI 4.3 and a
+	// different major are not.
+	if requiredTBTCSignerABIMajor != 4 || requiredTBTCSignerABIMinMinor != 4 {
 		t.Fatalf(
 			"unexpected required tbtc-signer ABI: [%d.%d]",
 			requiredTBTCSignerABIMajor,
@@ -114,6 +115,9 @@ func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 2); err == nil {
 		t.Fatal("ABI 4.2 without trust transition and bootstrap-facts symbols must be incompatible")
+	}
+	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 3); err == nil {
+		t.Fatal("ABI 4.3 without distributed-DKG retirement must be incompatible")
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor+1, requiredTBTCSignerABIMinMinor); err == nil {
 		t.Fatal("a higher major must be incompatible")

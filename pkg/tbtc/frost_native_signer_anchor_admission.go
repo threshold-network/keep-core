@@ -123,9 +123,10 @@ func (controller *frostNativeSignerAnchorAdmissionController) reservePreSign(
 	)
 }
 
-// reserveDKG accounts for one request-taking persistence call per local seat.
-// DKG has no interactive sweep prologue, so each call advances at most one
-// service revision and one Rust generation.
+// reserveDKG accounts for one request-taking persistence call per local seat
+// plus one worst-case retirement call if the persisted DKG result is rejected
+// or cannot be submitted. DKG has no interactive sweep prologue, so each call
+// advances at most one service revision and one Rust generation.
 func (controller *frostNativeSignerAnchorAdmissionController) reserveDKG(
 	ctx context.Context,
 	localSeatCount uint64,
@@ -135,13 +136,41 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserveDKG(
 			"FROST native DKG anchor admission controls no local seats",
 		)
 	}
+	if localSeatCount == ^uint64(0) {
+		return nil, fmt.Errorf(
+			"FROST native DKG anchor admission seat count overflows",
+		)
+	}
+	maximumPersistenceCalls := localSeatCount + 1
 	cost := frostNativeSignerAnchorCapacity{
-		Revisions:   localSeatCount,
-		Generations: localSeatCount,
+		Revisions:   maximumPersistenceCalls,
+		Generations: maximumPersistenceCalls,
 	}
 
 	return controller.reserve(
 		"FROST native DKG",
+		cost,
+		func() (frostNativeSignerAnchorCapacity, error) {
+			return controller.currentRestartableHeadroom(ctx)
+		},
+	)
+}
+
+func (controller *frostNativeSignerAnchorAdmissionController) reserveDKGRetirement(
+	ctx context.Context,
+	keyGroupCount uint64,
+) (*frostNativeSignerAnchorRevisionReservation, error) {
+	if keyGroupCount == 0 {
+		return nil, fmt.Errorf(
+			"FROST native DKG retirement controls no key groups",
+		)
+	}
+	cost := frostNativeSignerAnchorCapacity{
+		Revisions:   keyGroupCount,
+		Generations: keyGroupCount,
+	}
+	return controller.reserve(
+		"FROST native DKG retirement",
 		cost,
 		func() (frostNativeSignerAnchorCapacity, error) {
 			return controller.currentRestartableHeadroom(ctx)

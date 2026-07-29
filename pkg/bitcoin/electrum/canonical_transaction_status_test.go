@@ -16,6 +16,8 @@ type canonicalTransactionStatusTestReader struct {
 	historyError   error
 	latestHeight   uint
 	header         *bitcoin.BlockHeader
+	headers        []*bitcoin.BlockHeader
+	headerCalls    int
 	headerError    error
 	proof          *bitcoin.TransactionMerkleProof
 	proofError     error
@@ -43,6 +45,12 @@ func (reader *canonicalTransactionStatusTestReader) GetLatestBlockHeight() (
 func (reader *canonicalTransactionStatusTestReader) GetBlockHeader(
 	uint,
 ) (*bitcoin.BlockHeader, error) {
+	if reader.headerCalls < len(reader.headers) {
+		header := reader.headers[reader.headerCalls]
+		reader.headerCalls++
+		return header, reader.headerError
+	}
+	reader.headerCalls++
 	return reader.header, reader.headerError
 }
 
@@ -130,6 +138,47 @@ func TestCanonicalTransactionStatus(t *testing.T) {
 			status.BlockHeight != blockHeight ||
 			status.BlockHash != expectedBlockHash {
 			t.Fatalf("unexpected confirmed transaction status: [%+v]", status)
+		}
+		if reader.headerCalls != 2 {
+			t.Fatalf(
+				"expected the canonical header to be read twice; got [%d] reads",
+				reader.headerCalls,
+			)
+		}
+	})
+
+	t.Run("reorganization while reading tip", func(t *testing.T) {
+		const blockHeight = 100
+		header := &bitcoin.BlockHeader{
+			Version:        1,
+			MerkleRootHash: transactionHash,
+			Time:           1234,
+			Bits:           0x1d00ffff,
+			Nonce:          10,
+		}
+		reorganizedHeader := *header
+		reorganizedHeader.Nonce++
+		reader := &canonicalTransactionStatusTestReader{
+			rawTransaction: rawTransaction,
+			found:          true,
+			histories: map[string][]*electrumclient.GetMempoolResult{
+				scriptKey: {{Hash: txID, Height: blockHeight}},
+			},
+			latestHeight: 120,
+			headers: []*bitcoin.BlockHeader{
+				header,
+				&reorganizedHeader,
+			},
+			proof: &bitcoin.TransactionMerkleProof{
+				BlockHeight: blockHeight,
+				Position:    0,
+			},
+		}
+		if _, err := canonicalTransactionStatus(
+			reader,
+			transactionHash,
+		); err == nil {
+			t.Fatal("reorganized canonical block was accepted")
 		}
 	})
 

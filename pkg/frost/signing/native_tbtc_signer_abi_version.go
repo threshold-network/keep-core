@@ -38,7 +38,10 @@ const (
 	// Minor 3 adds the durable state-anchor trust-head/transition and bootstrap
 	// facts symbols. Production startup and offline provisioning require that
 	// complete surface and must reject an ABI-4.2 library before dlsym.
-	requiredTBTCSignerABIMinMinor uint32 = 3
+	//
+	// Minor 4 adds durable distributed-DKG key-package retirement. Failed DKG
+	// reconciliation must reject ABI 4.3 rather than preserving orphaned keys.
+	requiredTBTCSignerABIMinMinor uint32 = 4
 )
 
 // ErrTBTCSignerABIIncompatible marks a linked libfrost_tbtc whose FFI contract version

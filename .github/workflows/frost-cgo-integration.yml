@@ -86,6 +86,7 @@ jobs:
           missing=0
           for sym in \
             frost_tbtc_persist_distributed_dkg_key_package \
+            frost_tbtc_retire_distributed_dkg_key_packages \
             frost_tbtc_dkg_part1 \
             frost_tbtc_derive_interactive_attempt_context \
             frost_tbtc_interactive_session_open \

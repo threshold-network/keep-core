@@ -995,6 +995,7 @@ type frostRetainedGroupJournal struct {
 	checkpointState              frostRetainedGroupCheckpointJournalState
 	checkpointCertificates       map[uint64]FrostRetainedGroupCheckpointCertificate
 	checkpointHashes             map[uint64][32]byte
+	orphanedDKGReconciler        func(context.Context, map[[32]byte]struct{}) error
 	persistFailureHook           func(string) error
 	checkpointPersistFailureHook func(string) error
 	closed                       bool
@@ -3817,6 +3818,18 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 			)
 		}
 		return nil, withCheckpointRecoveryProgress(nil)
+	}
+	if frgj.orphanedDKGReconciler != nil {
+		canonicalWallets := make(map[[32]byte]struct{}, len(frgj.state.Wallets))
+		for _, wallet := range frgj.state.Wallets {
+			canonicalWallets[wallet.WalletID] = struct{}{}
+		}
+		if err := frgj.orphanedDKGReconciler(ctx, canonicalWallets); err != nil {
+			return nil, fmt.Errorf(
+				"cannot retire orphaned native FROST DKG material: [%w]",
+				err,
+			)
+		}
 	}
 	localSessionCount, err := frgj.reconcileLocalSessions(ctx, target)
 	if err != nil {

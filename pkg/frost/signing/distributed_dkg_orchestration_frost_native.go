@@ -41,6 +41,14 @@ type NativeTBTCSignerDistributedDKGEngine interface {
 	) (*NativeTBTCSignerDKGResult, error)
 }
 
+// NativeTBTCSignerDistributedDKGRetirementEngine durably removes every local
+// key package for an exact DKG key group. It is intentionally separate from the
+// execution interface so callers cannot silently assume an older native signer
+// can clean up a failed DKG.
+type NativeTBTCSignerDistributedDKGRetirementEngine interface {
+	RetireDistributedDKGKeyPackages(keyGroup string) error
+}
+
 // CanonicalFROSTIdentifier returns the canonical FROST identifier string for a
 // participant: the identifier as a 32-byte big-endian scalar (value in the
 // least-significant byte), hex-encoded and JSON-quoted. It matches the engine's
@@ -208,7 +216,11 @@ func RunDistributedDKGForSeats(
 		persistBySeat[outcome.member] = outcome.persist
 	}
 	if firstErr != nil {
-		return nil, firstErr
+		// Return successful durable writes alongside the error. The caller must
+		// retire their shared key group before abandoning the DKG; discarding the
+		// partial map here would strand an orphan when one local seat persists
+		// before a sibling fails.
+		return persistBySeat, firstErr
 	}
 
 	return persistBySeat, nil

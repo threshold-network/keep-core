@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// TestRealCgoSignerReadinessReadbacks exercises every ABI-4.2 readiness
-// readback against the actually linked libfrost_tbtc. Pure Go decoder tests
+// TestRealCgoSignerReadinessReadbacks exercises the ABI-4.4 readiness and DKG
+// retirement surfaces against the actually linked libfrost_tbtc. Pure Go decoder tests
 // cannot detect a stale library that reports a compatible-looking ABI version
 // while omitting a symbol or emitting a different transcript.
 func TestRealCgoSignerReadinessReadbacks(t *testing.T) {
@@ -85,5 +85,19 @@ func TestRealCgoSignerReadinessReadbacks(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("real persisted key group [%s] is absent from inventory", keyGroup)
+	}
+
+	if err := engine.RetireDistributedDKGKeyPackages(keyGroup); err != nil {
+		t.Fatalf("cannot retire real distributed-DKG key packages: [%v]", err)
+	}
+	afterRetirement, err := ReadNativeTBTCSignerRetainedKeyPackageInventory()
+	skipFrostUnavailable(t, "retained key-package inventory after retirement", err)
+	for _, entry := range afterRetirement.Entries {
+		if entry.KeyGroup == keyGroup {
+			t.Fatalf("retired real key group [%s] remains in inventory", keyGroup)
+		}
+	}
+	if err := engine.RetireDistributedDKGKeyPackages(keyGroup); err != nil {
+		t.Fatalf("idempotent real DKG retirement failed: [%v]", err)
 	}
 }

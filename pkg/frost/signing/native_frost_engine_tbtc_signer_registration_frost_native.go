@@ -39,6 +39,10 @@ typedef TbtcSignerResult (*tbtc_persist_distributed_dkg_key_package_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_retire_distributed_dkg_key_packages_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_new_signing_package_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -161,6 +165,19 @@ static TbtcSignerResult tbtc_signer_persist_distributed_dkg_key_package(const ui
   }
 
   return persist(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_retire_distributed_dkg_key_packages(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_retire_distributed_dkg_key_packages_fn retire =
+    (tbtc_retire_distributed_dkg_key_packages_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_retire_distributed_dkg_key_packages"
+    );
+  if (retire == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return retire(request_ptr, request_len);
 }
 
 static TbtcSignerResult tbtc_signer_new_signing_package(const uint8_t* request_ptr, size_t request_len) {
@@ -340,6 +357,7 @@ var _ interactiveSigningEngine = (*buildTaggedTBTCSignerEngine)(nil)
 // the registered engine to it to classify interactive aggregate share-verification
 // culprits. Compile-check it here against the real engine.
 var _ Round2ShareVerifyingEngine = (*buildTaggedTBTCSignerEngine)(nil)
+var _ NativeTBTCSignerDistributedDKGRetirementEngine = (*buildTaggedTBTCSignerEngine)(nil)
 
 type buildTaggedTBTCSignerRunDKGResponse struct {
 	SessionID        string `json:"session_id"`
@@ -409,6 +427,16 @@ type buildTaggedTBTCSignerPersistDistributedDKGKeyPackageRequest struct {
 	ParticipantCount      uint16                                            `json:"participant_count"`
 	KeyPackage            *buildTaggedTBTCSignerNativeFROSTKeyPackage       `json:"key_package"`
 	PublicKeyPackage      *buildTaggedTBTCSignerNativeFROSTPublicKeyPackage `json:"public_key_package"`
+}
+
+type buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequest struct {
+	KeyGroup string `json:"key_group"`
+}
+
+type buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse struct {
+	KeyGroup               string `json:"key_group"`
+	Retired                bool   `json:"retired"`
+	RetiredKeyPackageCount uint16 `json:"retired_key_package_count"`
 }
 
 type buildTaggedTBTCSignerNativeFROSTCommitment struct {
@@ -638,6 +666,25 @@ func (bttse *buildTaggedTBTCSignerEngine) PersistDistributedDKGKeyPackage(
 	}
 
 	return decodeBuildTaggedTBTCSignerRunDKGResponse(responsePayload)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) RetireDistributedDKGKeyPackages(
+	keyGroup string,
+) error {
+	requestPayload, err :=
+		buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequestPayload(keyGroup)
+	if err != nil {
+		return err
+	}
+	responsePayload, err :=
+		callBuildTaggedTBTCSignerRetireDistributedDKGKeyPackages(requestPayload)
+	if err != nil {
+		return err
+	}
+	return decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
+		responsePayload,
+		keyGroup,
+	)
 }
 
 func (bttse *buildTaggedTBTCSignerEngine) NewSigningPackage(
@@ -1020,6 +1067,51 @@ func buildTaggedTBTCSignerPersistDistributedDKGKeyPackageRequestPayload(
 			},
 		},
 	)
+}
+
+func buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequestPayload(
+	keyGroup string,
+) ([]byte, error) {
+	const op = "RetireDistributedDKGKeyPackages"
+	if keyGroup == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"key group is empty",
+		)
+	}
+	return buildTaggedTBTCSignerMarshalRequest(
+		op,
+		buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequest{
+			KeyGroup: keyGroup,
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
+	responsePayload []byte,
+	expectedKeyGroup string,
+) error {
+	const op = "RetireDistributedDKGKeyPackages"
+	var response buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return buildTaggedTBTCSignerOperationError(
+			op,
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+	if response.KeyGroup != expectedKeyGroup {
+		return buildTaggedTBTCSignerOperationError(
+			op,
+			"response key group does not match request",
+		)
+	}
+	if response.Retired != (response.RetiredKeyPackageCount > 0) {
+		return buildTaggedTBTCSignerOperationError(
+			op,
+			"response retirement status and key-package count disagree",
+		)
+	}
+	return nil
 }
 
 func decodeBuildTaggedTBTCSignerDKGPart3Response(
@@ -1694,6 +1786,21 @@ func callBuildTaggedTBTCSignerPersistDistributedDKGKeyPackage(
 		requestPayload,
 		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
 			return C.tbtc_signer_persist_distributed_dkg_key_package(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerRetireDistributedDKGKeyPackages(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"RetireDistributedDKGKeyPackages",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_retire_distributed_dkg_key_packages(
+				requestPtr,
+				requestLen,
+			)
 		},
 	)
 }
