@@ -1431,18 +1431,18 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
         ),
     };
 
-    // A syntactically and cryptographically valid old image is still a
-    // rollback unless it matches the committed witness tip. Check only after
-    // decoding so malformed images retain the explicit quarantine policy.
+    // A syntactically and cryptographically valid old image is authenticated
+    // rollback evidence unless it matches the committed witness tip. Check
+    // only after decoding so malformed images retain the explicit corruption
+    // policy, but never let that policy reset authenticated rollback evidence.
     if !recovered_from_corruption {
         if let Err(error) = with_state_file_lock_for_load(|store| store.validate_state_image()) {
-            return recover_or_fail_from_corrupted_state_file(
-                &path,
-                format!(
-                    "signer state file [{}] does not match its committed state witness: {error}",
-                    path.display()
-                ),
-            );
+            return Err(EngineError::Internal(format!(
+                "signer state file [{}] does not match its committed state witness: {error}; \
+                 authenticated rollback evidence is always fail-closed and cannot be handled by \
+                 the generic corruption reset policy",
+                path.display()
+            )));
         }
     }
 

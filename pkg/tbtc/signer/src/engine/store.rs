@@ -533,6 +533,11 @@ pub(crate) struct StateFileLock {
     /// read-back and to anchor the cached prefix.
     #[cfg(unix)]
     last_appended_record: [u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
+    /// Exact file stamp captured immediately after the appended record was
+    /// fsynced. The append read-back must observe this stamp before adopting a
+    /// new verified-prefix baseline.
+    #[cfg(unix)]
+    last_appended_stamp: Option<FileChangeStamp>,
     current_state_file: Option<fs::File>,
     current_state_identity: Option<OpenedObjectIdentity>,
     identity: DurableStoreIdentity,
@@ -1234,16 +1239,17 @@ impl StateFileLock {
             witness_segment_header: opened_witness.parsed.segment_header,
             witness_prefix: None,
             last_appended_record: [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
+            last_appended_stamp: None,
             current_state_file,
             current_state_identity,
             identity,
             lock_held: true,
         };
         store.reconcile_pending_witness()?;
-        // Startup loading must be able to inspect a malformed or stale state
-        // image and apply the explicit corruption policy. Validate every held
-        // descriptor and the journal itself here; the state-image commitment
-        // is checked before a decoded state is admitted.
+        // Startup loading must be able to inspect a malformed state image and
+        // apply the explicit corruption policy. Validate every held descriptor
+        // and the journal itself here; the state-image commitment is checked
+        // separately and authenticated rollback evidence always fails closed.
         match mode {
             StateFileLockAcquireMode::Ordinary | StateFileLockAcquireMode::TrustHeadInspection => {
                 store.revalidate_store_entries()?
@@ -1322,8 +1328,9 @@ impl StateFileLock {
 
     /// Reads the exact held state descriptor during startup after structural
     /// store validation, but before validating the image against the witness.
-    /// This narrow path lets the loader distinguish malformed state from a
-    /// valid-but-rolled-back image and honor the explicit corruption policy.
+    /// This narrow path lets the loader distinguish malformed state, which may
+    /// use the explicit corruption policy, from a valid-but-rolled-back image,
+    /// which always fails closed.
     #[cfg(unix)]
     pub(crate) fn read_state_for_load(&mut self) -> Result<Option<Vec<u8>>, EngineError> {
         self.reconcile_pending_witness()?;
@@ -1956,9 +1963,16 @@ impl StateFileLock {
     #[cfg(unix)]
     fn extend_witness_prefix(&mut self) -> Result<(), EngineError> {
         const LABEL: &str = "signer state witness journal";
+        let appended_stamp = self.last_appended_stamp.take();
         let Some(previous) = self.witness_prefix.clone() else {
             // Nothing verified yet; the next access parses the whole journal.
             return Ok(());
+        };
+        let Some(appended_stamp) = appended_stamp else {
+            self.witness_prefix = None;
+            return Err(EngineError::Internal(
+                "signer state witness append has no post-sync change stamp".to_string(),
+            ));
         };
         let appended_offset = previous.verified_length;
         if appended_offset.checked_add(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH)
@@ -1971,10 +1985,10 @@ impl StateFileLock {
             ));
         }
         let before = witness_change_stamp(&self.witness_file)?;
-        if before.size != self.witness_length as u64 {
+        if before != appended_stamp || before.size != self.witness_length as u64 {
             self.witness_prefix = None;
             return Err(EngineError::Internal(
-                "signer state witness journal size changed during append read-back".to_string(),
+                "signer state witness journal changed after the append was synced".to_string(),
             ));
         }
         let header = read_file_range_at(&self.witness_file, 0, self.witness_header_length, LABEL)?;
@@ -2591,11 +2605,18 @@ impl StateFileLock {
                 "state-anchor trust journal",
             )?
         };
-        let stamp = file_change_stamp(&file, "state-anchor trust journal")?;
+        let before = file_change_stamp(&file, "state-anchor trust journal")?;
+        let published_bytes = read_file_at(&file, "state-anchor trust journal")?;
+        let after = file_change_stamp(&file, "state-anchor trust journal")?;
+        if before != after || published_bytes != bytes {
+            return Err(EngineError::Internal(
+                "state-anchor trust journal changed during publication verification".to_string(),
+            ));
+        }
         self.trust_file = Some(file);
         self.trust_identity = Some(identity);
         self.trust_journal = Some(parsed);
-        self.trust_stamp = Some(stamp);
+        self.trust_stamp = Some(after);
         self.trust_bytes = Some(bytes.to_vec());
         Ok(())
     }
@@ -3070,6 +3091,7 @@ impl StateFileLock {
         self.witness_segment_header = opened.parsed.segment_header;
         self.witness_prefix = None;
         self.last_appended_record = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
+        self.last_appended_stamp = None;
         self.verify_state_witness_journal_fully()?;
         self.normalize_published_pending_anchor()?;
         if revalidate_steady_store {
@@ -3240,6 +3262,7 @@ impl StateFileLock {
         self.witness_segment_header = parsed.segment_header;
         self.witness_prefix = None;
         self.last_appended_record = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
+        self.last_appended_stamp = None;
 
         // The new name and complete signed header are durable and verified.
         // Only now may the previous segment be retired.
@@ -3452,8 +3475,10 @@ impl StateFileLock {
                 "failed to sync signer state witness journal: {error}"
             ))
         })?;
+        let appended_stamp = witness_change_stamp(&self.witness_file)?;
         self.witness_length += record.len();
         self.last_appended_record.copy_from_slice(&record);
+        self.last_appended_stamp = Some(appended_stamp);
         Ok(())
     }
 
@@ -4076,14 +4101,20 @@ fn open_state_anchor_trust_journal(
         )));
     }
     let identity = descriptor_identity(&file, LABEL)?;
+    let before = file_change_stamp(&file, LABEL)?;
     let bytes = read_file_at(&file, LABEL)?;
     let parsed = parse_state_anchor_trust_journal(&bytes, store_fingerprint)?;
-    let stamp = file_change_stamp(&file, LABEL)?;
+    let after = file_change_stamp(&file, LABEL)?;
+    if before != after {
+        return Err(EngineError::Internal(
+            "state-anchor trust journal changed while it was being opened".to_string(),
+        ));
+    }
     Ok((
         Some(file),
         Some(identity),
         Some(parsed),
-        Some(stamp),
+        Some(after),
         Some(bytes),
     ))
 }
@@ -7184,6 +7215,180 @@ mod witness_transcript_tests {
         let parsed = parse_state_witness_segment_header(&header, &[0x11; 32], Some(&metadata))
             .expect("parse frozen segment header");
         assert_eq!(parsed.base.generation, 42);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn incomplete_witness_repair_covers_both_headers_and_fails_closed_elsewhere() {
+        let store_id = [0x24; 32];
+        let store_fingerprint = durable_store_fingerprint(&store_id);
+        let state_digest = [0x33; 32];
+        let previous_commitment = state_witness_genesis(&store_fingerprint);
+        let genesis = StateWitness {
+            generation: 1,
+            previous_commitment,
+            state_image_digest: state_digest,
+            commitment: state_commitment(
+                &store_fingerprint,
+                1,
+                &previous_commitment,
+                &state_digest,
+            ),
+        };
+        let mut genesis_journal = Vec::new();
+        genesis_journal.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
+        genesis_journal.extend_from_slice(&store_id);
+        genesis_journal.extend_from_slice(&encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &genesis,
+        ));
+        genesis_journal.extend_from_slice(&encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+            &genesis,
+        ));
+
+        let acknowledgement = fixture_acknowledgement();
+        let segment_header = encode_state_witness_segment_header(
+            &acknowledgement.checkpoint_store_fingerprint,
+            &acknowledgement,
+        )
+        .expect("encode segment header fixture");
+        let anchor = StateAnchorMetadata {
+            latest: acknowledgement.clone(),
+            witness_base: Some(acknowledgement.clone()),
+            pending_witness_base: None,
+        };
+        let next_digest = [0x34; 32];
+        let segment_next = StateWitness {
+            generation: acknowledgement.checkpoint_generation + 1,
+            previous_commitment: acknowledgement.checkpoint_state_commitment,
+            state_image_digest: next_digest,
+            commitment: state_commitment(
+                &acknowledgement.checkpoint_store_fingerprint,
+                acknowledgement.checkpoint_generation + 1,
+                &acknowledgement.checkpoint_state_commitment,
+                &next_digest,
+            ),
+        };
+        let segment_record =
+            encode_state_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &segment_next);
+
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let fixture_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-witness-repair-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&fixture_path)
+            .expect("create witness repair fixture");
+        let install = |bytes: &[u8]| {
+            write_file_at(&file, bytes, "witness repair fixture")
+                .expect("write witness repair fixture");
+            file.sync_all().expect("sync witness repair fixture");
+        };
+
+        for partial_length in [1, TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 1] {
+            let mut torn = genesis_journal.clone();
+            torn.extend_from_slice(&segment_record[..partial_length]);
+            install(&torn);
+            let repaired =
+                truncate_incomplete_witness_record(&file, &store_id, &store_fingerprint, None)
+                    .expect("repair torn genesis-journal append");
+            assert_eq!(repaired, genesis_journal.len());
+            assert_eq!(
+                usize::try_from(file.metadata().expect("stat repaired journal").len())
+                    .expect("journal length fits usize"),
+                genesis_journal.len()
+            );
+            read_state_witness_journal_streaming(&file, &store_id, &store_fingerprint, 8, None)
+                .expect("repaired genesis journal verifies");
+        }
+
+        for partial_length in [1, TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 1] {
+            let mut torn = segment_header.clone();
+            torn.extend_from_slice(&segment_record[..partial_length]);
+            install(&torn);
+            let repaired = truncate_incomplete_witness_record(
+                &file,
+                &store_id,
+                &acknowledgement.checkpoint_store_fingerprint,
+                Some(&anchor),
+            )
+            .expect("repair torn signed-segment append");
+            assert_eq!(repaired, TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH);
+            read_state_witness_journal_streaming(
+                &file,
+                &store_id,
+                &acknowledgement.checkpoint_store_fingerprint,
+                8,
+                Some(&anchor),
+            )
+            .expect("repaired signed segment verifies");
+        }
+
+        for short_length in [
+            0,
+            TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH - 1,
+            TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH,
+            TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+        ] {
+            let mut short = genesis_journal.clone();
+            short.truncate(short_length);
+            install(&short);
+            let retained =
+                truncate_incomplete_witness_record(&file, &store_id, &store_fingerprint, None)
+                    .expect("short journal is inspected without repair");
+            assert_eq!(retained, short_length);
+            assert_eq!(
+                usize::try_from(file.metadata().expect("stat short journal").len())
+                    .expect("journal length fits usize"),
+                short_length
+            );
+            let error = match read_state_witness_journal_streaming(
+                &file,
+                &store_id,
+                &store_fingerprint,
+                8,
+                None,
+            ) {
+                Ok(_) => panic!("short or uncommitted genesis journal must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("shorter")
+                    || error.to_string().contains("missing")
+                    || error.to_string().contains("no committed genesis"),
+                "unexpected short-journal error: {error}"
+            );
+        }
+
+        let retired =
+            encode_v1_state_witness_genesis_journal(&store_id, &[0x11; 32], &state_digest);
+        install(&retired);
+        let retained =
+            truncate_incomplete_witness_record(&file, &store_id, &store_fingerprint, None)
+                .expect("retired journal is left untouched");
+        assert_eq!(retained, retired.len());
+        let error = match read_state_witness_journal_streaming(
+            &file,
+            &store_id,
+            &store_fingerprint,
+            8,
+            None,
+        ) {
+            Ok(_) => panic!("retired v1 journal must fail closed in production reader"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("retired v1 state-commitment transcript"));
+        drop(file);
+        fs::remove_file(fixture_path).expect("remove witness repair fixture");
     }
 
     #[test]

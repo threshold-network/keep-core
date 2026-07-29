@@ -6040,6 +6040,57 @@ fn corrupt_state_file_quarantines_and_resets_when_enabled() {
 }
 
 #[test]
+fn authenticated_state_rollback_fails_closed_even_when_corruption_reset_is_enabled() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("authenticated_rollback_fail_closed");
+    reset_for_tests();
+
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.refresh_epoch_counter = 1;
+        persist_engine_state_to_storage(&guard).expect("persist rollback candidate");
+    }
+    let rolled_back_bytes = std::fs::read(&state_path).expect("read rollback candidate");
+
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.refresh_epoch_counter = 2;
+        persist_engine_state_to_storage(&guard).expect("advance committed witness");
+    }
+    simulate_process_restart_for_tests();
+    std::fs::write(&state_path, &rolled_back_bytes).expect("restore valid old state image");
+    std::env::set_var(
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_QUARANTINE_AND_RESET,
+    );
+
+    let error = match load_engine_state_from_storage() {
+        Ok(_) => panic!("authenticated rollback evidence must not reset signer state"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("authenticated rollback evidence is always fail-closed"),
+        "unexpected rollback error: {error}"
+    );
+    assert!(
+        state_path.exists(),
+        "rolled-back evidence was quarantined away"
+    );
+    assert!(
+        sorted_corrupted_state_backups(&state_path)
+            .expect("enumerate corrupt-state backups")
+            .is_empty(),
+        "authenticated rollback was routed through generic corruption backup handling"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn empty_state_file_quarantines_and_resets_when_enabled() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("empty_state_quarantine_reset");
