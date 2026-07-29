@@ -74,6 +74,7 @@ use crate::api::{
     PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest, PromoteCanaryResult,
     QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
     RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
+    RetireDistributedDkgKeyPackagesRequest, RetireDistributedDkgKeyPackagesResult,
     RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState, SecretHex,
     SignatureResult, SignerHardeningMetricsResult, StateAnchorBootstrapFactsResult,
     StateAnchorTrustCertificate, StateAnchorTrustCheckpoint, StateAnchorTrustEndpoint,

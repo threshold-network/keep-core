@@ -129,6 +129,22 @@ pub struct PersistDistributedDkgKeyPackageRequest {
     pub public_key_package: NativeFrostPublicKeyPackage,
 }
 
+/// Durably removes all locally retained key packages for an exact distributed
+/// DKG key group. The operation is idempotent so startup reconciliation can
+/// safely repeat it after a crash between native retirement and Go registry
+/// archival.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct RetireDistributedDkgKeyPackagesRequest {
+    pub key_group: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct RetireDistributedDkgKeyPackagesResult {
+    pub key_group: String,
+    pub retired: bool,
+    pub retired_key_package_count: u16,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostCommitment {
     pub identifier: String,
