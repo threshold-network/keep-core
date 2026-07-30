@@ -403,6 +403,144 @@ func TestFrostPrimaryEthereumTransportTriesNextAddressAfterPeerIdentityRejection
 	}
 }
 
+// TestFrostPrimaryEthereumTransportHTTPSRoundTripFreezesPeerIdentity drives a
+// real JSON-RPC exchange through the guarded HTTPS round tripper against a live
+// TLS server, then replays the exact same request over a second TLS server that
+// serves the same SPIFFE identity from a rotated key at the same pinned address.
+// Both directions matter: the frozen peer must round-trip, and a peer that never
+// passed the guarded dialer must be refused even though it satisfies PKIX, the
+// TLS profile, the hostname, and the frozen address set.
+func TestFrostPrimaryEthereumTransportHTTPSRoundTripFreezesPeerIdentity(
+	t *testing.T,
+) {
+	rpcServer := rpc.NewServer()
+	if err := rpcServer.RegisterName(
+		"eth",
+		&testFrostPrimaryEthereumChainIDRPC{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	server, _, roots := newFrostRetainedGroupHistoryTLSTestServer(
+		t,
+		rpcServer,
+		"spiffe://primary.example/rpc",
+	)
+	transport, err := NewFrostPrimaryEthereumTransport(
+		context.Background(),
+		FrostPrimaryEthereumTransportConfig{
+			URL:            server.URL,
+			RequestTimeout: time.Second,
+			TLSRootCAs:     roots,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+
+	requestContext, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
+	defer cancel()
+	chainID, err := transport.Client().ChainID(requestContext)
+	if err != nil {
+		t.Fatalf("guarded HTTPS round trip rejected the frozen peer: [%v]", err)
+	}
+	if chainID == nil || chainID.Uint64() != 1 {
+		t.Fatalf("guarded HTTPS round trip returned chain ID [%v]", chainID)
+	}
+	if seen, live := transport.peerCounts(); seen != 1 || live == 0 {
+		t.Fatalf(
+			"guarded HTTPS round trip left peer counts [%d, %d]",
+			seen,
+			live,
+		)
+	}
+
+	rotatedServer, rotatedLeaf, _ := newFrostRetainedGroupHistoryTLSTestServer(
+		t,
+		rpcServer,
+		"spiffe://primary.example/rpc",
+	)
+	rotatedEndpoint, err := url.Parse(rotatedServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedRoots := roots.Clone()
+	rotatedRoots.AddCert(rotatedLeaf)
+	rotatedTLSConfig := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		MaxVersion: tls.VersionTLS13,
+		ServerName: transport.endpoint.endpoint.Hostname(),
+		RootCAs:    rotatedRoots,
+		NextProtos: []string{"http/1.1"},
+	}
+	rotated := &frostPrimaryEthereumHTTPRoundTripper{
+		base: &http.Transport{
+			Proxy:              nil,
+			DisableCompression: true,
+			ForceAttemptHTTP2:  false,
+			DialTLSContext: func(
+				ctx context.Context,
+				network string,
+				_ string,
+			) (net.Conn, error) {
+				dialer := &net.Dialer{}
+				raw, dialErr := dialer.DialContext(
+					ctx,
+					network,
+					rotatedEndpoint.Host,
+				)
+				if dialErr != nil {
+					return nil, dialErr
+				}
+				connection := tls.Client(raw, rotatedTLSConfig)
+				if handshakeErr := connection.HandshakeContext(
+					ctx,
+				); handshakeErr != nil {
+					_ = connection.Close()
+					return nil, handshakeErr
+				}
+				return connection, nil
+			},
+		},
+		transport: transport,
+		endpoint:  transport.endpoint,
+	}
+	defer rotated.base.CloseIdleConnections()
+
+	rotatedRequest, err := http.NewRequestWithContext(
+		requestContext,
+		http.MethodPost,
+		transport.endpoint.canonical,
+		strings.NewReader(
+			`{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}`,
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedRequest.Header.Set("Content-Type", "application/json")
+	response, err := rotated.RoundTrip(rotatedRequest)
+	if err == nil {
+		_ = response.Body.Close()
+		t.Fatal("rotated TLS identity round-tripped through the frozen transport")
+	}
+	if response != nil {
+		t.Fatal("rejected round trip returned a response")
+	}
+	if !strings.Contains(err.Error(), "unauthenticated TLS channel") {
+		t.Fatalf("rotated TLS identity was rejected for [%v]", err)
+	}
+	if seen, _ := transport.peerCounts(); seen != 1 {
+		t.Fatalf(
+			"rejected round trip recorded the rotated identity; seen [%d]",
+			seen,
+		)
+	}
+}
+
 func TestFrostPrimaryEthereumTransportWSSAppliesRequestTimeout(
 	t *testing.T,
 ) {
@@ -469,6 +607,15 @@ func TestFrostPrimaryEthereumTransportWSSAppliesRequestTimeout(
 			err,
 		)
 	}
+}
+
+type testFrostPrimaryEthereumChainIDRPC struct{}
+
+func (service *testFrostPrimaryEthereumChainIDRPC) ChainId(
+	context.Context,
+) (*hexutil.Big, error) {
+	value := hexutil.Big(*big.NewInt(1))
+	return &value, nil
 }
 
 type testFrostPrimaryEthereumStalledRPC struct {
