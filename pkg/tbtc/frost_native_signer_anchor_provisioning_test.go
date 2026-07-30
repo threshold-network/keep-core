@@ -1226,3 +1226,81 @@ func TestFrostNativeSignerAnchorBootstrapOutputBundleDecode(t *testing.T) {
 		})
 	}
 }
+
+// TestFrostNativeSignerAnchorRejectsRustInvalidWitnessGeometry pins every Go
+// intake that pre-verifies a witness geometry against the exact bound the
+// native signer enforces. Go mints the offline-authority-signed trust
+// certificate from the operator plan, so a geometry only Go accepts survives
+// the entire offline ceremony and is first rejected by the signer at node
+// startup, which can only be undone by re-running the ceremony. The listed
+// geometries are the ones the retired two-record reserve accepted and the
+// signer's six-record terminal reserve does not.
+func TestFrostNativeSignerAnchorRejectsRustInvalidWitnessGeometry(t *testing.T) {
+	var geometries = map[string]struct {
+		maximumRecords           uint64
+		rotationThresholdRecords uint64
+	}{
+		"threshold inside the terminal reserve": {
+			maximumRecords:           64,
+			rotationThresholdRecords: 60,
+		},
+		"threshold one record inside the terminal reserve": {
+			maximumRecords:           1000,
+			rotationThresholdRecords: 995,
+		},
+		"maximum below the terminal reserve": {
+			maximumRecords:           4,
+			rotationThresholdRecords: 2,
+		},
+	}
+
+	for geometryName, geometry := range geometries {
+		t.Run(geometryName, func(t *testing.T) {
+			fixture := newBootstrapProvisioningTestFixture()
+			identity := fixture.plan.Identity
+			identity.WitnessMaximumRecords = geometry.maximumRecords
+			identity.WitnessRotationThresholdRecords =
+				geometry.rotationThresholdRecords
+			identity.StreamID = ComputeFrostNativeSignerAnchorStreamID(identity)
+
+			// The operator plan is the ceremony input; rejecting it here is what
+			// keeps an unusable geometry from ever reaching the offline
+			// authority's signature.
+			plan := *fixture.plan
+			plan.Identity = identity
+			if err := validateFrostNativeSignerAnchorBootstrapPlan(
+				&plan,
+			); err == nil || !strings.Contains(err.Error(), "witness geometry") {
+				t.Fatalf(
+					"bootstrap plan with a signer-invalid geometry was accepted: [%v]",
+					err,
+				)
+			}
+
+			// The certificate endpoint is verified again on every trust-chain
+			// intake, including the one that installs an already-signed
+			// certificate, so it must reject the same geometry.
+			certificate, _ := trustTestBootstrapCertificate(t)
+			certificate.To.WitnessMaximumRecords = geometry.maximumRecords
+			certificate.To.WitnessRotationThresholdRecords =
+				geometry.rotationThresholdRecords
+			if err := frostNativeSignerAnchorTrustValidateEndpoint(
+				&certificate.To,
+				certificate.SignerStoreFingerprint,
+				"target",
+			); err == nil || !strings.Contains(err.Error(), "witness geometry") {
+				t.Fatalf(
+					"trust certificate endpoint with a signer-invalid geometry was accepted: [%v]",
+					err,
+				)
+			}
+
+			if err := frostsigning.ValidateNativeTBTCSignerStateWitnessGeometry(
+				geometry.maximumRecords,
+				geometry.rotationThresholdRecords,
+			); err == nil {
+				t.Fatal("shared witness geometry bound accepted a signer-invalid geometry")
+			}
+		})
+	}
+}

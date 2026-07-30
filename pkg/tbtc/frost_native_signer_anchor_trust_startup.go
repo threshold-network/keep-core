@@ -776,13 +776,13 @@ func validateFrostNativeSignerAnchorTrustRuntimePins(
 			"native signer anchor online response key aliases the offline authority",
 		)
 	}
-	if anchorManifest.WitnessMaximumRecords < 4 ||
-		anchorManifest.WitnessMaximumRecords > 1_000_000 ||
-		anchorManifest.WitnessRotationThresholdRecords < 2 ||
-		anchorManifest.WitnessRotationThresholdRecords >
-			anchorManifest.WitnessMaximumRecords-2 {
+	if err := frostsigning.ValidateNativeTBTCSignerStateWitnessGeometry(
+		anchorManifest.WitnessMaximumRecords,
+		anchorManifest.WitnessRotationThresholdRecords,
+	); err != nil {
 		return fmt.Errorf(
-			"native signer anchor witness geometry is invalid",
+			"native signer anchor witness geometry is invalid: %w",
+			err,
 		)
 	}
 	return nil

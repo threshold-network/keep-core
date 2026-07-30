@@ -1133,14 +1133,15 @@ func validateFrostNativeSignerAnchorIdentity(
 		)
 	}
 	if identity.ActivationManifestSequence == 0 ||
-		identity.WitnessMaximumRecords < 2 ||
-		identity.WitnessMaximumRecords > 1_000_000 ||
-		identity.WitnessRotationThresholdRecords < 2 ||
-		identity.WitnessRotationThresholdRecords >
-			identity.WitnessMaximumRecords-2 ||
 		!frostNativeSignerAnchorCanonicalIdentityString(identity.TrustDomainID, 256) ||
 		!frostNativeSignerAnchorCanonicalIdentityString(identity.HistoryStoreID, 256) {
 		return fmt.Errorf("anchor identity strings or manifest sequence are invalid")
+	}
+	if err := frostsigning.ValidateNativeTBTCSignerStateWitnessGeometry(
+		identity.WitnessMaximumRecords,
+		identity.WitnessRotationThresholdRecords,
+	); err != nil {
+		return fmt.Errorf("anchor identity witness geometry is invalid: %w", err)
 	}
 	if ComputeFrostNativeSignerAnchorStreamID(identity) != identity.StreamID {
 		return fmt.Errorf("anchor stream ID does not match its stable identity")

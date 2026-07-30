@@ -299,3 +299,101 @@ func uint64ToCanonicalString(value uint64) string {
 	}
 	return string(buffer[index:])
 }
+
+// TestValidateNativeTBTCSignerStateWitnessGeometry pins the exact bound the
+// native signer enforces in configured_state_anchor (engine/anchor.rs) and
+// parse_endpoint (engine/anchor_trust.rs). Both reject a rotation threshold
+// below two or one that does not leave
+// TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION records below
+// the maximum. Raising that reservation in Rust must fail this test so the Go
+// validators are updated in the same change instead of silently accepting
+// geometries the signer refuses at node startup.
+func TestValidateNativeTBTCSignerStateWitnessGeometry(t *testing.T) {
+	if NativeTBTCSignerStateWitnessRotationTerminalRecordReservation != 6 {
+		t.Fatalf(
+			"terminal-record reservation [%d] no longer mirrors the signer's six",
+			NativeTBTCSignerStateWitnessRotationTerminalRecordReservation,
+		)
+	}
+
+	var tests = map[string]struct {
+		maximumRecords           uint64
+		rotationThresholdRecords uint64
+		valid                    bool
+	}{
+		"production geometry": {
+			maximumRecords:           4096,
+			rotationThresholdRecords: 1024,
+			valid:                    true,
+		},
+		"smallest geometry the signer accepts": {
+			maximumRecords:           8,
+			rotationThresholdRecords: 2,
+			valid:                    true,
+		},
+		"threshold exactly at the terminal reserve": {
+			maximumRecords:           1024,
+			rotationThresholdRecords: 1018,
+			valid:                    true,
+		},
+		"threshold one record inside the terminal reserve": {
+			maximumRecords:           1024,
+			rotationThresholdRecords: 1019,
+			valid:                    false,
+		},
+		"threshold leaving only the retired two-record reserve": {
+			maximumRecords:           64,
+			rotationThresholdRecords: 60,
+			valid:                    false,
+		},
+		"maximum below the terminal reserve": {
+			maximumRecords:           7,
+			rotationThresholdRecords: 2,
+			valid:                    false,
+		},
+		"threshold below the signer minimum": {
+			maximumRecords:           4096,
+			rotationThresholdRecords: 1,
+			valid:                    false,
+		},
+		"zero maximum": {
+			maximumRecords:           0,
+			rotationThresholdRecords: 2,
+			valid:                    false,
+		},
+		"maximum above the signer hard maximum": {
+			maximumRecords:           NativeTBTCSignerStateWitnessHardMaximumRecords + 1,
+			rotationThresholdRecords: 2,
+			valid:                    false,
+		},
+		"threshold at the top of the unsigned range": {
+			maximumRecords:           4096,
+			rotationThresholdRecords: ^uint64(0),
+			valid:                    false,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			err := ValidateNativeTBTCSignerStateWitnessGeometry(
+				test.maximumRecords,
+				test.rotationThresholdRecords,
+			)
+			if test.valid && err != nil {
+				t.Fatalf(
+					"geometry [%d/%d] the signer accepts was rejected: %v",
+					test.maximumRecords,
+					test.rotationThresholdRecords,
+					err,
+				)
+			}
+			if !test.valid && err == nil {
+				t.Fatalf(
+					"geometry [%d/%d] the signer rejects was accepted",
+					test.maximumRecords,
+					test.rotationThresholdRecords,
+				)
+			}
+		})
+	}
+}

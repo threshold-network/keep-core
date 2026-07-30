@@ -1112,14 +1112,14 @@ func frostNativeSignerAnchorTrustValidateEndpoint(
 			err,
 		)
 	}
-	if endpoint.WitnessMaximumRecords < 4 ||
-		endpoint.WitnessMaximumRecords > 1_000_000 ||
-		endpoint.WitnessRotationThresholdRecords < 2 ||
-		endpoint.WitnessRotationThresholdRecords >
-			endpoint.WitnessMaximumRecords-2 {
+	if err := frostsigning.ValidateNativeTBTCSignerStateWitnessGeometry(
+		endpoint.WitnessMaximumRecords,
+		endpoint.WitnessRotationThresholdRecords,
+	); err != nil {
 		return fmt.Errorf(
-			"native signer anchor trust %s witness geometry is invalid",
+			"native signer anchor trust %s witness geometry is invalid: %w",
 			name,
+			err,
 		)
 	}
 	if err := validateFrostNativeSignerAnchorCheckpoint(

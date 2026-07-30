@@ -13,7 +13,66 @@ const (
 	// shared Go-side admission bound for Rust's startup transition FFI.
 	NativeTBTCSignerStateAnchorTrustTransitionMaximumRequestBytes            = 16 * 1024 * 1024
 	NativeTBTCSignerStateAnchorTrustTransitionMaximumCertificateCount uint64 = 64
+
+	// NativeTBTCSignerStateWitnessRotationTerminalRecordReservation mirrors the
+	// native signer's TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION
+	// (pkg/tbtc/signer/src/engine/store.rs). Reconciliation can commit an
+	// interrupted write at the rotation threshold before a mutating interactive
+	// retry persists two expiry-sweep repairs and its requested mutation; those
+	// three snapshots need six PREPARE/COMMIT records to finish the in-flight
+	// request before a checkpoint can be acknowledged.
+	NativeTBTCSignerStateWitnessRotationTerminalRecordReservation uint64 = 6
+	// NativeTBTCSignerStateWitnessMinimumRotationThresholdRecords mirrors the
+	// signer's lower bound on the rotation threshold: the terminal reserve is
+	// entered only after at least one complete PREPARE/COMMIT pair.
+	NativeTBTCSignerStateWitnessMinimumRotationThresholdRecords uint64 = 2
+	// NativeTBTCSignerStateWitnessHardMaximumRecords mirrors the signer's
+	// TBTC_SIGNER_HARD_MAX_STATE_WITNESS_MAX_RECORDS.
+	NativeTBTCSignerStateWitnessHardMaximumRecords uint64 = 1_000_000
 )
+
+// ValidateNativeTBTCSignerStateWitnessGeometry is the single Go copy of the
+// witness-record geometry the native signer enforces at both of its own
+// intakes: configured_state_anchor behind frost_tbtc_init_signer_config, and
+// parse_endpoint behind frost_tbtc_transition_state_witness_anchor. Go mints
+// and pre-verifies the offline-authority-signed trust certificates and
+// validates the installed init configuration, so a geometry Go accepts must be
+// exactly a geometry Rust accepts; anything looser lets an operator complete
+// the whole offline ceremony against a plan the signer rejects at node startup,
+// which can only be undone by re-running the ceremony.
+//
+// The bound is deliberately expressed as one helper over one exported
+// reservation constant. Every previous copy of this arithmetic drifted
+// independently when the reservation grew from two records to six.
+func ValidateNativeTBTCSignerStateWitnessGeometry(
+	maximumRecords uint64,
+	rotationThresholdRecords uint64,
+) error {
+	if maximumRecords == 0 ||
+		maximumRecords > NativeTBTCSignerStateWitnessHardMaximumRecords {
+		return fmt.Errorf(
+			"witnessMaximumRecords [%d] is outside [1,%d]",
+			maximumRecords,
+			NativeTBTCSignerStateWitnessHardMaximumRecords,
+		)
+	}
+	reserved := rotationThresholdRecords +
+		NativeTBTCSignerStateWitnessRotationTerminalRecordReservation
+	if rotationThresholdRecords <
+		NativeTBTCSignerStateWitnessMinimumRotationThresholdRecords ||
+		reserved < rotationThresholdRecords ||
+		reserved > maximumRecords {
+		return fmt.Errorf(
+			"witnessRotationThresholdRecords [%d] must be at least %d and "+
+				"reserve %d terminal records below witnessMaximumRecords [%d]",
+			rotationThresholdRecords,
+			NativeTBTCSignerStateWitnessMinimumRotationThresholdRecords,
+			NativeTBTCSignerStateWitnessRotationTerminalRecordReservation,
+			maximumRecords,
+		)
+	}
+	return nil
+}
 
 var ErrNativeTBTCSignerStateAnchorTrustHeadAbsent = errors.New(
 	"native tbtc signer state-anchor trust head is absent",
@@ -242,13 +301,21 @@ func decodeNativeTBTCSignerStateAnchorTrustHeadWire(
 		result.ActivationManifestSequence == 0 ||
 		result.ServiceEpoch == 0 ||
 		result.ServiceEpoch != result.CertifiedFloor.ServiceEpoch ||
-		result.CertifiedFloor.Revision != 1 ||
-		result.WitnessMaximumRecords < 2 ||
-		result.WitnessMaximumRecords > 1_000_000 ||
-		result.WitnessRotationThresholdRecords < 2 ||
-		result.WitnessRotationThresholdRecords >
-			result.WitnessMaximumRecords-2 {
+		result.CertifiedFloor.Revision != 1 {
 		return nil, fmt.Errorf("native signer state-anchor trust head is incomplete")
+	}
+	// The head is emitted from an endpoint the signer itself parsed through the
+	// same geometry rule, so decoding at exactly that rule cannot reject a head
+	// the signer can produce. Decoding any looser would let a readback the
+	// signer would refuse to install look installable to the Go startup path.
+	if err := ValidateNativeTBTCSignerStateWitnessGeometry(
+		result.WitnessMaximumRecords,
+		result.WitnessRotationThresholdRecords,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"native signer state-anchor trust head witness geometry is invalid: %w",
+			err,
+		)
 	}
 	return result, nil
 }

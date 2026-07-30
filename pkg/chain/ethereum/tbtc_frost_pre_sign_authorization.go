@@ -32,6 +32,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -1341,13 +1342,13 @@ func frostPreSignNativeSignerAnchorManifest(
 		return result, err
 	}
 	anchor := manifest.FrostSigner.NativeSignerAnchor
-	if anchor.WitnessMaximumRecords < 2 ||
-		anchor.WitnessMaximumRecords > 1_000_000 ||
-		anchor.WitnessRotationThresholdRecords < 2 ||
-		anchor.WitnessRotationThresholdRecords >
-			anchor.WitnessMaximumRecords-2 {
+	if err := frostsigning.ValidateNativeTBTCSignerStateWitnessGeometry(
+		anchor.WitnessMaximumRecords,
+		anchor.WitnessRotationThresholdRecords,
+	); err != nil {
 		return result, fmt.Errorf(
-			"FROST native signer witness geometry is invalid",
+			"FROST native signer witness geometry is invalid: %w",
+			err,
 		)
 	}
 	result.Identity = identity

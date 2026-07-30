@@ -213,10 +213,18 @@ func recordNativeTBTCSignerInstalledStateAnchorConfig(
 		nativeTBTCSignerEd25519SPKISHA256(offlineAuthorityPublicKey) !=
 			offlineAuthoritySPKIHash ||
 		*wire.StateAnchorTrustCertificateSequence == 0 ||
-		trustCertificateDigest == [32]byte{} ||
-		maximum < 2 || maximum > 1_000_000 || threshold < 2 ||
-		threshold > maximum-2 {
+		trustCertificateDigest == [32]byte{} {
 		return fmt.Errorf("installed signer witness geometry is invalid")
+	}
+	// This config is handed to the signer's own init-config intake, which
+	// re-validates the geometry against its terminal-record reservation. Reject
+	// here at exactly that rule so an unusable pin is reported by the installer
+	// instead of by the signer at node startup.
+	if err := ValidateNativeTBTCSignerStateWitnessGeometry(
+		maximum,
+		threshold,
+	); err != nil {
+		return fmt.Errorf("installed signer witness geometry is invalid: %w", err)
 	}
 	value := &NativeTBTCSignerInstalledStateAnchorConfig{
 		ProtocolID:                      protocolID,

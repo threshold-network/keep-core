@@ -472,13 +472,17 @@ func (client *FrostNativeSignerAnchorBootstrapHTTPClient) validateBootstrapAutho
 	endpoint := certificate.To
 	if endpoint.ActivationManifestHash == [32]byte{} ||
 		endpoint.ActivationManifestSequence == 0 ||
-		endpoint.BindingHash == [32]byte{} ||
-		endpoint.WitnessMaximumRecords < 2 ||
-		endpoint.WitnessMaximumRecords > 1_000_000 ||
-		endpoint.WitnessRotationThresholdRecords < 2 ||
-		endpoint.WitnessRotationThresholdRecords >
-			endpoint.WitnessMaximumRecords-2 {
+		endpoint.BindingHash == [32]byte{} {
 		return fmt.Errorf("bootstrap authorization endpoint pins are invalid")
+	}
+	if err := frostsigning.ValidateNativeTBTCSignerStateWitnessGeometry(
+		endpoint.WitnessMaximumRecords,
+		endpoint.WitnessRotationThresholdRecords,
+	); err != nil {
+		return fmt.Errorf(
+			"bootstrap authorization endpoint witness geometry is invalid: %w",
+			err,
+		)
 	}
 	if endpoint.ResponsePublicKey != client.responseKeyRaw ||
 		endpoint.ResponsePublicKeySPKISHA256 != client.responseKeyPin {
