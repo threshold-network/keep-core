@@ -636,13 +636,14 @@ func TestFrostOrphanedDKGReconcilerArchivesSessionWithoutNativeMaterial(
 		3,
 		persistenceHandle,
 	)
+	anchorAdmission, headroomReads := frostDKGTestAnchorAdmissionWithReadCount()
 	reconciler := &frostOrphanedDKGReconciler{
 		snapshotChain: &orphanedDKGSnapshotTestChain{
 			state:      Idle,
 			registered: make(map[[32]byte]bool),
 		},
 		walletRegistry:   registry,
-		anchorAdmission:  orphanedDKGTestAnchorAdmission(),
+		anchorAdmission:  anchorAdmission,
 		retirementEngine: &orphanedDKGOrderedTestEngine{operations: &operations},
 		readInventory: func() (
 			*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
@@ -670,13 +671,168 @@ func TestFrostOrphanedDKGReconcilerArchivesSessionWithoutNativeMaterial(
 	if len(registry.walletCache) != 0 {
 		t.Fatal("half-retired orphan kept its local session")
 	}
-	// No native inventory means nothing to charge the anchor for.
-	if reconciler.anchorAdmission.reserved !=
-		(frostNativeSignerAnchorCapacity{}) {
+	// No native inventory means nothing to charge the anchor for, so the
+	// controller must never even be asked for headroom. Asserting on
+	// anchorAdmission.reserved instead would prove nothing: reconcile releases
+	// every reservation it takes before it returns, so that field reads zero
+	// whether or not a reservation was made.
+	if *headroomReads != 0 {
 		t.Fatalf(
-			"session-only retirement charged anchor capacity: [%+v]",
-			reconciler.anchorAdmission.reserved,
+			"session-only retirement charged anchor capacity: reads=[%d]",
+			*headroomReads,
 		)
+	}
+}
+
+// TestFrostOrphanedDKGReconcilerPreservesLocalSessionsItMayNotRetire covers the
+// PRESERVING half of the classification for candidates that own durable local
+// material - the half that actually protects key shares. Since the eager
+// retirement was dropped from the DKG error exits, this reconciler is the only
+// thing that ever destroys a FROST wallet's material, so "registered" and
+// "the DKG is still unresolved" must both leave a wallet completely untouched.
+//
+// Every case therefore asserts the ABSENCE of the destructive calls - no engine
+// retirement, no archive, the session still in the cache, no retained key-group
+// binding written, and no anchor capacity charged - and also asserts that the
+// finalized snapshot WAS read, so a reconciler that bailed out before
+// classifying anything cannot pass by doing nothing.
+func TestFrostOrphanedDKGReconcilerPreservesLocalSessionsItMayNotRetire(
+	t *testing.T,
+) {
+	walletID := frostBindingWalletID(t)
+	testCases := map[string]struct {
+		state              DKGState
+		registered         bool
+		hasNativeInventory bool
+	}{
+		"registered wallet with a local session": {
+			state:      Idle,
+			registered: true,
+		},
+		"registered wallet with a local session and native inventory": {
+			state:              Idle,
+			registered:         true,
+			hasNativeInventory: true,
+		},
+		"unresolved DKG with a local session": {
+			state: AwaitingResult,
+		},
+		"unresolved DKG with a local session and native inventory": {
+			state:              AwaitingResult,
+			hasNativeInventory: true,
+		},
+		"challenged DKG with a local session and native inventory": {
+			state:              Challenge,
+			hasNativeInventory: true,
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			operations := make([]string, 0)
+			persistenceHandle := &orphanedDKGOrderedTestPersistence{
+				mockPersistenceHandle: &mockPersistenceHandle{},
+				operations:            &operations,
+			}
+			registry := orphanedDKGTestSessionRegistry(
+				t,
+				90,
+				frostBindingEvenKey,
+				3,
+				persistenceHandle,
+			)
+			registered := make(map[[32]byte]bool)
+			if test.registered {
+				registered[walletID] = true
+			}
+			snapshotChain := &orphanedDKGSnapshotTestChain{
+				state:      test.state,
+				registered: registered,
+			}
+			entries := make(
+				[]frostsigning.NativeTBTCSignerRetainedKeyGroup,
+				0,
+				1,
+			)
+			if test.hasNativeInventory {
+				entries = append(
+					entries,
+					frostsigning.NativeTBTCSignerRetainedKeyGroup{
+						WalletID:         walletID,
+						KeyGroup:         frostBindingEvenKey,
+						ParticipantCount: 3,
+					},
+				)
+			}
+			anchorAdmission, headroomReads :=
+				frostDKGTestAnchorAdmissionWithReadCount()
+			reconciler := &frostOrphanedDKGReconciler{
+				snapshotChain:   snapshotChain,
+				walletRegistry:  registry,
+				anchorAdmission: anchorAdmission,
+				retirementEngine: &orphanedDKGOrderedTestEngine{
+					operations: &operations,
+				},
+				readInventory: func() (
+					*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
+					error,
+				) {
+					return &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
+						Entries: entries,
+					}, nil
+				},
+			}
+
+			target := orphanedDKGTestPoint()
+			if err := reconciler.reconcile(
+				context.Background(),
+				target,
+				map[[32]byte]struct{}{},
+			); err != nil {
+				t.Fatal(err)
+			}
+			// The wallet must have been classified, not skipped: without this
+			// the assertions below would also pass for a reconciler that
+			// returned before reading the finalized snapshot at all.
+			if len(snapshotChain.points) != 1 ||
+				snapshotChain.points[0] != target {
+				t.Fatalf(
+					"the preserved wallet was never classified against the "+
+						"finalized point: [%+v]",
+					snapshotChain.points,
+				)
+			}
+			if len(operations) != 0 {
+				t.Fatalf(
+					"preserved FROST DKG material was retired or archived: [%v]",
+					operations,
+				)
+			}
+			if len(registry.walletCache) != 1 {
+				t.Fatalf(
+					"preserved wallet lost its local session: [%d]",
+					len(registry.walletCache),
+				)
+			}
+			if len(registry.retainedFrostKeyGroups) != 0 {
+				t.Fatalf(
+					"preserved wallet was recorded as an archived orphan: [%v]",
+					registry.retainedFrostKeyGroups,
+				)
+			}
+			if len(persistenceHandle.archived) != 0 {
+				t.Fatalf(
+					"preserved wallet was archived on disk: [%v]",
+					persistenceHandle.archived,
+				)
+			}
+			if *headroomReads != 0 {
+				t.Fatalf(
+					"preserved wallet charged retirement anchor capacity: reads=[%d]",
+					*headroomReads,
+				)
+			}
+		})
 	}
 }
 
@@ -862,15 +1018,30 @@ func orphanedDKGTestPoint() FrostPreSignFinality {
 }
 
 func orphanedDKGTestAnchorAdmission() *frostNativeSignerAnchorAdmissionController {
+	controller, _ := frostDKGTestAnchorAdmissionWithReadCount()
+	return controller
+}
+
+// frostDKGTestAnchorAdmissionWithReadCount returns an admission controller and
+// the number of times a reservation asked it for headroom. That count is the
+// only way a test can tell "the anchor was never charged" from "the anchor was
+// charged and the reservation released": every reservation is released before
+// the workflow returns, so controller.reserved is back to zero either way.
+func frostDKGTestAnchorAdmissionWithReadCount() (
+	*frostNativeSignerAnchorAdmissionController,
+	*int,
+) {
+	headroomReads := 0
 	return &frostNativeSignerAnchorAdmissionController{
 		readHeadroom: func(
 			context.Context,
 		) (frostNativeSignerAnchorCapacity, error) {
+			headroomReads++
 			return frostNativeSignerAnchorCapacity{
 				Revisions: FrostNativeSignerAnchorRotationWarningHeadroom + 10,
 				Generations: FrostNativeSignerAnchorRotationWarningHeadroom +
 					10,
 			}, nil
 		},
-	}
+	}, &headroomReads
 }

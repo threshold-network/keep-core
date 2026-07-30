@@ -14,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
+	"github.com/keep-network/keep-core/pkg/generator"
 	netlocal "github.com/keep-network/keep-core/pkg/net/local"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
@@ -477,6 +479,218 @@ func TestAdmitFrostDKGAttempt_UnrecordedBoundaryBlocksAdmission(t *testing.T) {
 	}
 	if len(dkgNode.walletRegistry.frostDKGRetirementBoundaries) != 0 {
 		t.Fatal("a failed boundary persistence left an in-memory boundary")
+	}
+}
+
+// frostDKGAdmissionProbeChain reports the first moment the spawned DKG attempt
+// goroutine touches the chain. executeFrostDKGIfPossible reads Signing() on its
+// synchronous path but never BlockCounter(); the first BlockCounter() call comes
+// from the attempt goroutine (its block-timeout context and the readiness
+// announcement both need one), so closing a channel there is a live signal that
+// the goroutine started. The positive control below proves the probe fires, so
+// the negative case is a real absence rather than a broken detector.
+type frostDKGAdmissionProbeChain struct {
+	Chain
+	spawned   chan struct{}
+	spawnOnce sync.Once
+}
+
+func (probe *frostDKGAdmissionProbeChain) BlockCounter() (
+	chain.BlockCounter,
+	error,
+) {
+	probe.spawnOnce.Do(func() { close(probe.spawned) })
+	return probe.Chain.BlockCounter()
+}
+
+type frostDKGParametersTestChain struct {
+	FrostDKGChain
+}
+
+func (*frostDKGParametersTestChain) FrostDKGParameters() (
+	*DKGParameters,
+	error,
+) {
+	return &DKGParameters{SubmissionTimeoutBlocks: 1000}, nil
+}
+
+type frostDKGAdmissionFixture struct {
+	node                 *node
+	frostChain           FrostDKGChain
+	event                *FrostDKGStartedEvent
+	memberIndexes        []group.MemberIndex
+	groupSelectionResult *GroupSelectionResult
+	headroomReads        *int
+	spawned              chan struct{}
+}
+
+// newFrostDKGAdmissionFixture assembles the smallest node that lets
+// executeFrostDKGIfPossible run its whole synchronous prologue, so the caller's
+// own handling of a failed attempt-boundary record is what the test observes.
+func newFrostDKGAdmissionFixture(
+	t *testing.T,
+	seed *big.Int,
+	persistenceHandle persistence.ProtectedHandle,
+) *frostDKGAdmissionFixture {
+	t.Helper()
+	registerFrostDKGReadinessTestEngine(t)
+	// Step past the interactive-signing gate; see the seam's comment in
+	// frost_dkg_execution_frost_native.go for why no test can satisfy the real
+	// predicate from outside pkg/frost/signing.
+	previousReadiness := frostDKGInteractiveSigningReady
+	frostDKGInteractiveSigningReady = func() bool { return true }
+	t.Cleanup(func() {
+		frostDKGInteractiveSigningReady = previousReadiness
+	})
+
+	localChain := Connect()
+	_, operatorPublicKey, err := localChain.OperatorKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatorAddress := localChain.Signing().PublicKeyBytesToAddress(
+		operator.MarshalUncompressed(operatorPublicKey),
+	)
+
+	anchorAdmission, headroomReads := frostDKGTestAnchorAdmissionWithReadCount()
+	probeChain := &frostDKGAdmissionProbeChain{
+		Chain:   localChain,
+		spawned: make(chan struct{}),
+	}
+
+	return &frostDKGAdmissionFixture{
+		node: &node{
+			chain:       probeChain,
+			netProvider: netlocal.ConnectWithKey(operatorPublicKey),
+			walletRegistry: &walletRegistry{
+				walletCache:                  make(map[string]*walletCacheValue),
+				walletStorage:                newWalletStorage(persistenceHandle),
+				frostDKGRetirementBoundaries: make(map[string]uint64),
+			},
+			frostGroupParameters: &GroupParameters{
+				GroupSize:       3,
+				GroupQuorum:     2,
+				HonestThreshold: 2,
+			},
+			frostNativeSignerAnchorAdmission: anchorAdmission,
+			protocolLatch:                    generator.NewProtocolLatch(),
+		},
+		frostChain:    &frostDKGParametersTestChain{},
+		event:         &FrostDKGStartedEvent{Seed: seed, BlockNumber: 101},
+		memberIndexes: []group.MemberIndex{1},
+		groupSelectionResult: &GroupSelectionResult{
+			OperatorsIDs: chain.OperatorIDs{1, 2, 3},
+			OperatorsAddresses: chain.Addresses{
+				operatorAddress,
+				operatorAddress,
+				operatorAddress,
+			},
+		},
+		headroomReads: headroomReads,
+		spawned:       probeChain.spawned,
+	}
+}
+
+func (fixture *frostDKGAdmissionFixture) execute(ctx context.Context) bool {
+	return executeFrostDKGIfPossible(
+		ctx,
+		fixture.node,
+		fixture.frostChain,
+		fixture.event,
+		fixture.memberIndexes,
+		fixture.groupSelectionResult,
+	)
+}
+
+// TestExecuteFrostDKGIfPossible_UnrecordedAttemptBoundaryStopsTheAttempt pins
+// the CALLER side of the boundary-before-execution ordering. Every later
+// protection against a stale retirement snapshot rests on the attempt boundary
+// being durable before any key package can exist, so a boundary that cannot be
+// persisted must stop executeFrostDKGIfPossible itself: it must report the event
+// unhandled, must not reserve anchor capacity, and must not start the attempt
+// goroutine that would announce readiness and run the DKG.
+func TestExecuteFrostDKGIfPossible_UnrecordedAttemptBoundaryStopsTheAttempt(
+	t *testing.T,
+) {
+	fixture := newFrostDKGAdmissionFixture(
+		t,
+		big.NewInt(0x5eed01),
+		&failingFrostDKGAttemptPersistence{
+			mockPersistenceHandle: &mockPersistenceHandle{},
+		},
+	)
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
+	if fixture.execute(ctx) {
+		t.Fatal("an unrecorded attempt boundary was reported as handled")
+	}
+	if *fixture.headroomReads != 0 {
+		t.Fatalf(
+			"an unrecorded attempt boundary reached anchor admission: reads=[%d]",
+			*fixture.headroomReads,
+		)
+	}
+	if fixture.node.frostNativeSignerAnchorAdmission.reserved !=
+		(frostNativeSignerAnchorCapacity{}) {
+		t.Fatalf(
+			"anchor capacity was reserved for an unrecorded attempt: [%+v]",
+			fixture.node.frostNativeSignerAnchorAdmission.reserved,
+		)
+	}
+	if len(fixture.node.walletRegistry.frostDKGRetirementBoundaries) != 0 {
+		t.Fatal("a failed boundary persistence left an in-memory boundary")
+	}
+	select {
+	case <-fixture.spawned:
+		t.Fatal(
+			"the FROST DKG attempt goroutine ran behind an unrecorded boundary",
+		)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if fixture.node.protocolLatch.IsExecuting() {
+		t.Fatal("an unrecorded attempt boundary still took the protocol latch")
+	}
+}
+
+// TestExecuteFrostDKGIfPossible_RecordedAttemptBoundaryStartsTheAttempt is the
+// positive control for the test above: the same fixture, the same call, only the
+// attempt boundary now persists. It proves the fixture really does reach
+// admission and really does start the attempt goroutine, so the absence of both
+// in the failing case is caused by the unrecorded boundary and not by the
+// prologue stopping somewhere earlier.
+func TestExecuteFrostDKGIfPossible_RecordedAttemptBoundaryStartsTheAttempt(
+	t *testing.T,
+) {
+	fixture := newFrostDKGAdmissionFixture(
+		t,
+		big.NewInt(0x5eed02),
+		&mockPersistenceHandle{},
+	)
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
+	if !fixture.execute(ctx) {
+		t.Fatal("a recorded attempt boundary did not start the attempt")
+	}
+	if *fixture.headroomReads != 1 {
+		t.Fatalf(
+			"the admitted attempt did not consult anchor admission exactly once: reads=[%d]",
+			*fixture.headroomReads,
+		)
+	}
+	if len(fixture.node.walletRegistry.frostDKGRetirementBoundaries) != 1 {
+		t.Fatalf(
+			"the admitted attempt recorded no boundary: [%v]",
+			fixture.node.walletRegistry.frostDKGRetirementBoundaries,
+		)
+	}
+	select {
+	case <-fixture.spawned:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the admitted FROST DKG attempt goroutine never started")
 	}
 }
 

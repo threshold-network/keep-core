@@ -30,6 +30,21 @@ var errFrostDKGSubmissionOutcomeUncertain = errors.New(
 	"FROST DKG submission outcome is uncertain",
 )
 
+// frostDKGInteractiveSigningReady is the process-wide interactive-signing gate
+// executeFrostDKGIfPossible evaluates before it may run an attempt. Production
+// never reassigns it; it is a variable solely so tests in this package can
+// reach the code BELOW the gate.
+//
+// That seam is needed because the real predicate additionally requires a
+// registered interactive engine provider, and the provider registration takes
+// an unexported pkg/frost/signing interface, so no package outside
+// pkg/frost/signing can install one. Without the seam every unit test of
+// executeFrostDKGIfPossible stops at this gate and the attempt-admission
+// ordering below it - persist the DKG attempt boundary BEFORE anything can
+// create a key package - would be exercised only through its extracted helper,
+// never through the caller that has to honour its failure.
+var frostDKGInteractiveSigningReady = frostsigning.InteractiveSigningReady
+
 func executeFrostDKGIfPossible(
 	ctx context.Context,
 	node *node,
@@ -64,7 +79,7 @@ func executeFrostDKGIfPossible(
 	// without the ROAST readiness opt-in or a build containing the transition
 	// producer, orchestration takes its static fallback and reaches the removed
 	// coarse primitive. Refuse to run rather than create an unsignable wallet.
-	if !frostsigning.InteractiveSigningReady() {
+	if !frostDKGInteractiveSigningReady() {
 		logger.Errorf(
 			"FROST DKG with seed [0x%x] selected this operator, but the distributed "+
 				"DKG requires the complete interactive ROAST signing path (%s=true, "+
