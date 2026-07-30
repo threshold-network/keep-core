@@ -7,13 +7,18 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
+	netlocal "github.com/keep-network/keep-core/pkg/net/local"
+	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -227,44 +232,207 @@ func registerFrostDKGReadinessTestEngine(t *testing.T) {
 	})
 }
 
-type frostDKGRetirementRecordingEngine struct {
+// frostDKGPartialPersistTestEngine drives a complete distributed DKG for two
+// co-located local seats with opaque round payloads - the smallest engine that
+// can reach the persist stage, which is the only place a DURABLE key package can
+// exist. Persist then fails for one seat, reproducing exactly the partial-persist
+// failure whose local key groups must survive.
+type frostDKGPartialPersistTestEngine struct {
 	frostDKGReadinessTestEngine
-	retired []string
-	fail    map[string]error
+	keyGroup           string
+	failPersistForSeat uint16
+
+	mutex     sync.Mutex
+	persisted []uint16
+	retired   []string
 }
 
-func (engine *frostDKGRetirementRecordingEngine) RetireDistributedDKGKeyPackages(
+func (engine *frostDKGPartialPersistTestEngine) Part1(
+	participantIdentifier string,
+	_ uint16,
+	_ uint16,
+) (*frostsigning.NativeFROSTDKGPart1Result, error) {
+	return &frostsigning.NativeFROSTDKGPart1Result{
+		SecretPackage: &frostsigning.NativeFROSTDKGRound1SecretPackage{
+			Data: []byte("round1-secret-" + participantIdentifier),
+		},
+		Package: &frostsigning.NativeFROSTDKGRound1Package{
+			Identifier: participantIdentifier,
+			Data:       []byte("round1-" + participantIdentifier),
+		},
+	}, nil
+}
+
+func (engine *frostDKGPartialPersistTestEngine) Part2(
+	_ *frostsigning.NativeFROSTDKGRound1SecretPackage,
+	round1Packages []*frostsigning.NativeFROSTDKGRound1Package,
+) (*frostsigning.NativeFROSTDKGPart2Result, error) {
+	// One round-2 package per OTHER member, addressed by that member's
+	// identifier - the shape the runner routes and seals by.
+	packages := make(
+		[]*frostsigning.NativeFROSTDKGRound2Package,
+		0,
+		len(round1Packages),
+	)
+	for _, round1Package := range round1Packages {
+		packages = append(
+			packages,
+			&frostsigning.NativeFROSTDKGRound2Package{
+				Identifier: round1Package.Identifier,
+				Data:       []byte("round2-for-" + round1Package.Identifier),
+			},
+		)
+	}
+	return &frostsigning.NativeFROSTDKGPart2Result{
+		SecretPackage: &frostsigning.NativeFROSTDKGRound2SecretPackage{
+			Data: []byte("round2-secret"),
+		},
+		Packages: packages,
+	}, nil
+}
+
+func (engine *frostDKGPartialPersistTestEngine) Part3(
+	_ *frostsigning.NativeFROSTDKGRound2SecretPackage,
+	_ []*frostsigning.NativeFROSTDKGRound1Package,
+	_ []*frostsigning.NativeFROSTDKGRound2Package,
+) (*frostsigning.NativeFROSTDKGResult, error) {
+	return &frostsigning.NativeFROSTDKGResult{
+		KeyPackage: &frostsigning.NativeFROSTKeyPackage{
+			Data: []byte("key-package"),
+		},
+		PublicKeyPackage: &frostsigning.NativeFROSTPublicKeyPackage{
+			VerifyingKey: engine.keyGroup,
+		},
+	}, nil
+}
+
+func (engine *frostDKGPartialPersistTestEngine) PersistDistributedDKGKeyPackage(
+	sessionID string,
+	participantIdentifier uint16,
+	threshold uint16,
+	participantCount uint16,
+	_ *frostsigning.NativeFROSTKeyPackage,
+	_ *frostsigning.NativeFROSTPublicKeyPackage,
+) (*frostsigning.NativeTBTCSignerDKGResult, error) {
+	if participantIdentifier == engine.failPersistForSeat {
+		return nil, errors.New("injected key-package persistence failure")
+	}
+	engine.mutex.Lock()
+	engine.persisted = append(engine.persisted, participantIdentifier)
+	engine.mutex.Unlock()
+	return &frostsigning.NativeTBTCSignerDKGResult{
+		SessionID:        sessionID,
+		KeyGroup:         engine.keyGroup,
+		ParticipantCount: participantCount,
+		Threshold:        threshold,
+	}, nil
+}
+
+func (engine *frostDKGPartialPersistTestEngine) RetireDistributedDKGKeyPackages(
 	keyGroup string,
 ) error {
+	engine.mutex.Lock()
+	defer engine.mutex.Unlock()
 	engine.retired = append(engine.retired, keyGroup)
-	return engine.fail[keyGroup]
+	return nil
 }
 
-func TestRetirePersistedFrostDKGKeyGroupsRetiresEveryDistinctGroup(
+func (engine *frostDKGPartialPersistTestEngine) outcome() ([]uint16, []string) {
+	engine.mutex.Lock()
+	defer engine.mutex.Unlock()
+	return append([]uint16{}, engine.persisted...),
+		append([]string{}, engine.retired...)
+}
+
+// TestExecuteDistributedFrostDKG_PreservesPartiallyPersistedKeyGroups pins the
+// invariant that a LOCAL distributed-DKG failure must never destroy durable
+// secret shares. A seat only reaches the persist stage after its runner finished
+// part 3, so it already broadcast every round package; the other members can
+// finish the DKG and register a wallet that still lists this operator. Retiring
+// the persisted key group here would leave that live wallet permanently short of
+// this node's share, so the node preserves it and leaves retirement to
+// reconciliation rooted in finalized retained history.
+func TestExecuteDistributedFrostDKG_PreservesPartiallyPersistedKeyGroups(
 	t *testing.T,
 ) {
-	engine := &frostDKGRetirementRecordingEngine{
-		fail: map[string]error{
-			"key-group-a": errors.New("injected retirement failure"),
-		},
+	const keyGroup = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+	localChain := Connect()
+	_, operatorPublicKey, err := localChain.OperatorKeyPair()
+	if err != nil {
+		t.Fatal(err)
 	}
-	err := retirePersistedFrostDKGKeyGroups(
-		engine,
-		map[group.MemberIndex]*frostsigning.NativeTBTCSignerDKGResult{
-			1: {KeyGroup: "key-group-b"},
-			2: {KeyGroup: "key-group-a"},
-			3: {KeyGroup: "key-group-b"},
-		},
+	operatorAddress := localChain.Signing().PublicKeyBytesToAddress(
+		operator.MarshalUncompressed(operatorPublicKey),
 	)
-	if err == nil || !strings.Contains(err.Error(), "key-group-a") {
-		t.Fatalf("unexpected retirement result: [%v]", err)
+
+	sessionID := fmt.Sprintf(
+		"frost-dkg-partial-persist-%d",
+		time.Now().UnixNano(),
+	)
+	channel, err := netlocal.ConnectWithKey(operatorPublicKey).
+		BroadcastChannelFor(sessionID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(engine.retired) != 2 ||
-		engine.retired[0] != "key-group-a" ||
-		engine.retired[1] != "key-group-b" {
+
+	engine := &frostDKGPartialPersistTestEngine{
+		keyGroup: keyGroup,
+		// Seat 2 fails to persist AFTER seat 1 has durably persisted the very
+		// same key group.
+		failPersistForSeat: 2,
+	}
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelCtx()
+
+	executionResult, err := executeDistributedFrostDKG(
+		ctx,
+		engine,
+		&node{
+			chain: localChain,
+			frostGroupParameters: &GroupParameters{
+				GroupSize:       3,
+				GroupQuorum:     2,
+				HonestThreshold: 2,
+			},
+		},
+		channel,
+		[]group.MemberIndex{1, 2},
+		[]group.MemberIndex{1, 2},
+		[]group.MemberIndex{1, 2},
+		&GroupSelectionResult{
+			OperatorsAddresses: chain.Addresses{
+				operatorAddress,
+				operatorAddress,
+				operatorAddress,
+			},
+		},
+		2,
+		sessionID,
+		nil,
+	)
+	if err == nil || executionResult != nil {
 		t.Fatalf(
-			"not every distinct key group was retired after a failure: [%v]",
-			engine.retired,
+			"partially persisted FROST DKG reported success: [%+v]",
+			executionResult,
+		)
+	}
+	if !strings.Contains(err.Error(), "cannot persist the key package") {
+		t.Fatalf("unexpected FROST DKG execution failure: [%v]", err)
+	}
+
+	persisted, retired := engine.outcome()
+	if len(persisted) != 1 || persisted[0] != 1 {
+		t.Fatalf(
+			"the run did not reach a partial-persist state: persisted=[%v]",
+			persisted,
+		)
+	}
+	if len(retired) != 0 {
+		t.Fatalf(
+			"a local DKG failure destroyed durably persisted key groups: [%v]",
+			retired,
 		)
 	}
 }

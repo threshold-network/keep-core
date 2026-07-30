@@ -50,7 +50,9 @@ func executeFrostDKGIfPossible(
 	if _, ok := nativeTBTCSignerEngine.(frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine); !ok {
 		logger.Errorf(
 			"FROST DKG with seed [0x%x] selected this operator, but the native "+
-				"tbtc-signer engine cannot durably retire partially persisted DKG packages",
+				"tbtc-signer engine cannot durably retire orphaned DKG packages, "+
+				"so key material this attempt creates could never be reclaimed "+
+				"if the attempt resolves without this wallet",
 			event.Seed,
 		)
 		return false
@@ -447,11 +449,28 @@ func executeDistributedFrostDKG(
 		prebuffer,
 	)
 	if err != nil {
-		if retirementErr := retirePersistedFrostDKGKeyGroups(
-			nativeEngine,
-			persistBySeat,
-		); retirementErr != nil {
-			return nil, fmt.Errorf("%w; %v", err, retirementErr)
+		// Every seat that reached the persist stage owns a DURABLE secret share,
+		// and it broadcast all of its round-1 and round-2 packages before that:
+		// persistence runs strictly after the runner completed part 3. A local
+		// failure here - a sibling seat's persist I/O, an anchor briefly
+		// unreachable between two anchored persists - therefore proves nothing
+		// about the DISTRIBUTED outcome. The remaining members can still collect
+		// HonestThreshold result signatures without this node and register a
+		// wallet whose member list is the full sortition group, this operator
+		// included. Retiring the persisted key groups from this error exit would
+		// irreversibly destroy the shares of a wallet that goes live, so it is
+		// deliberately not done - the same rule the caller applies to every
+		// error exit after this function returns. The attempt boundary recorded
+		// before this run keeps the orphaned key group visible to orphan
+		// reconciliation, which retires it only once finalized retained history
+		// proves the attempt resolved without this wallet.
+		if len(persistBySeat) > 0 {
+			logger.Warnf(
+				"preserving [%d] durably persisted FROST DKG key package(s) "+
+					"from a failed local DKG run; only finalized reconciliation "+
+					"may retire them",
+				len(persistBySeat),
+			)
 		}
 		return nil, err
 	}
@@ -872,52 +891,6 @@ func sameFrostDKGWalletResult(first, second *registry.Result) bool {
 			first.MisbehavedMembersIndices,
 			second.MisbehavedMembersIndices,
 		)
-}
-
-func retirePersistedFrostDKGKeyGroups(
-	nativeEngine frostsigning.NativeTBTCSignerEngine,
-	persistBySeat map[group.MemberIndex]*frostsigning.NativeTBTCSignerDKGResult,
-) error {
-	keyGroupSet := make(map[string]struct{})
-	for _, persisted := range persistBySeat {
-		if persisted == nil || persisted.KeyGroup == "" {
-			continue
-		}
-		keyGroupSet[persisted.KeyGroup] = struct{}{}
-	}
-	if len(keyGroupSet) == 0 {
-		return nil
-	}
-
-	retirementEngine, ok :=
-		nativeEngine.(frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine)
-	if !ok {
-		return fmt.Errorf(
-			"native signer cannot retire partially persisted DKG material",
-		)
-	}
-
-	keyGroups := make([]string, 0, len(keyGroupSet))
-	for keyGroup := range keyGroupSet {
-		keyGroups = append(keyGroups, keyGroup)
-	}
-	slices.Sort(keyGroups)
-
-	retirementErrors := make([]error, 0)
-	for _, keyGroup := range keyGroups {
-		if err := retirementEngine.
-			RetireDistributedDKGKeyPackages(keyGroup); err != nil {
-			retirementErrors = append(
-				retirementErrors,
-				fmt.Errorf(
-					"cannot retire partially persisted DKG key group [%s]: [%w]",
-					keyGroup,
-					err,
-				),
-			)
-		}
-	}
-	return errors.Join(retirementErrors...)
 }
 
 func frostOutputKeyToECDSAPublicKey(

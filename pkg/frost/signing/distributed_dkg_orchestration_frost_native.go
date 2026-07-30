@@ -212,7 +212,8 @@ func collectDistributedDKGSeatOutcomes(
 		}
 		// Record every successful durable write before checking agreement.
 		// A mismatching handle is precisely the case where the caller needs all
-		// persisted outcomes in order to retire every orphaned key group.
+		// persisted outcomes in order to know every key group this run left
+		// behind.
 		persistBySeat[outcome.member] = outcome.persist
 		if keyGroup == "" {
 			keyGroup = outcome.persist.KeyGroup
@@ -227,10 +228,14 @@ func collectDistributedDKGSeatOutcomes(
 		}
 	}
 	if firstErr != nil {
-		// Return successful durable writes alongside the error. The caller must
-		// retire their shared key group before abandoning the DKG; discarding the
-		// partial map here would strand an orphan when one local seat persists
-		// before a sibling fails.
+		// Return successful durable writes alongside the error. Those seats
+		// finished part 3, so they already broadcast every round package and the
+		// group they belong to may still be completed and registered by the
+		// other members: the caller must PRESERVE this material, not retire it
+		// from local failure information. The map is returned so the caller can
+		// account for exactly what a failed run left durable; discarding it here
+		// would hide an orphan created when one local seat persists before a
+		// sibling fails.
 		return persistBySeat, firstErr
 	}
 
