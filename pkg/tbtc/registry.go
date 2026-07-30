@@ -39,15 +39,17 @@ type walletRegistry struct {
 	// to identify itself.
 	retainedFrostKeyGroups map[[32]byte]string
 
-	// frostDKGAttemptStartBlocks is an append-only durable ledger of every DKG
-	// this node admitted before native package persistence. Orphan retirement
-	// uses its newest block to reject finalized snapshots that predate locally
-	// held packages.
-	frostDKGAttemptStartBlocks map[string]uint64
+	// frostDKGRetirementBoundaries is an append-only durable ledger of every
+	// DKG this node admitted before native package persistence, plus the
+	// one-time upgrade boundary for packages created before the ledger
+	// existed. Orphan retirement rejects finalized snapshots older than its
+	// newest block.
+	frostDKGRetirementBoundaries map[string]uint64
 
-	// revision advances after each successful DKG-attempt admission,
-	// active-session registration, or archive. Readiness pins it across its
-	// Go/Rust reconciliation so relevant durable state cannot change mid-check.
+	// revision advances after each successful DKG retirement-boundary
+	// persistence, active-session registration, or archive. Readiness pins it
+	// across its Go/Rust reconciliation so relevant durable state cannot change
+	// mid-check.
 	revision uint64
 
 	// calculateWalletIdFunc calculates the ECDSA wallet ID based on the
@@ -80,11 +82,11 @@ func newWalletRegistry(
 			err,
 		)
 	}
-	frostDKGAttemptStartBlocks, err :=
-		walletStorage.loadFrostDKGAttemptStartBlocks()
+	frostDKGRetirementBoundaries, err :=
+		walletStorage.loadFrostDKGRetirementBoundaries()
 	if err != nil {
 		return nil, fmt.Errorf(
-			"could not load durable FROST DKG attempts: [%w]",
+			"could not load durable FROST DKG retirement boundaries: [%w]",
 			err,
 		)
 	}
@@ -155,11 +157,11 @@ func newWalletRegistry(
 	}
 
 	return &walletRegistry{
-		walletCache:                walletCache,
-		walletStorage:              walletStorage,
-		retainedFrostKeyGroups:     retainedFrostKeyGroups,
-		frostDKGAttemptStartBlocks: frostDKGAttemptStartBlocks,
-		calculateWalletIdFunc:      calculateWalletIdFunc,
+		walletCache:                  walletCache,
+		walletStorage:                walletStorage,
+		retainedFrostKeyGroups:       retainedFrostKeyGroups,
+		frostDKGRetirementBoundaries: frostDKGRetirementBoundaries,
+		calculateWalletIdFunc:        calculateWalletIdFunc,
 	}, nil
 }
 

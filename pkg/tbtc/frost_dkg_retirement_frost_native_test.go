@@ -327,30 +327,43 @@ func TestFrostOrphanedDKGReconcilerPreservesMaterialBeforeAttemptFinality(
 	}
 }
 
-func TestFrostOrphanedDKGReconcilerPreservesMaterialWithoutAttemptBoundary(
+func TestFrostOrphanedDKGReconcilerBackfillsLegacyInventoryBoundary(
 	t *testing.T,
 ) {
 	walletID := [32]byte{5}
+	const keyGroup = "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 	engine := &orphanedDKGRetirementTestEngine{}
 	snapshotChain := &orphanedDKGSnapshotTestChain{
 		state:      Idle,
 		registered: make(map[[32]byte]bool),
 	}
+	persistenceHandle := &mockPersistenceHandle{}
+	walletRegistry := &walletRegistry{
+		walletCache:                  make(map[string]*walletCacheValue),
+		walletStorage:                newWalletStorage(persistenceHandle),
+		frostDKGRetirementBoundaries: make(map[string]uint64),
+	}
+	currentBlockReads := 0
+	operationOrder := make([]string, 0)
 	reconciler := &frostOrphanedDKGReconciler{
-		snapshotChain: snapshotChain,
-		walletRegistry: &walletRegistry{
-			walletCache: make(map[string]*walletCacheValue),
-		},
+		snapshotChain:    snapshotChain,
+		walletRegistry:   walletRegistry,
 		anchorAdmission:  orphanedDKGTestAnchorAdmission(),
 		retirementEngine: engine,
+		readCurrentBlock: func() (uint64, error) {
+			currentBlockReads++
+			operationOrder = append(operationOrder, "head")
+			return 120, nil
+		},
 		readInventory: func() (
 			*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
 			error,
 		) {
+			operationOrder = append(operationOrder, "inventory")
 			return &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
 				Entries: []frostsigning.NativeTBTCSignerRetainedKeyGroup{{
 					WalletID: walletID,
-					KeyGroup: "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+					KeyGroup: keyGroup,
 				}},
 			}, nil
 		},
@@ -364,7 +377,85 @@ func TestFrostOrphanedDKGReconcilerPreservesMaterialWithoutAttemptBoundary(
 		t.Fatal(err)
 	}
 	if len(snapshotChain.points) != 0 || len(engine.retired) != 0 {
-		t.Fatal("material without a durable attempt boundary was not preserved")
+		t.Fatal("legacy material was evaluated before migration finality")
+	}
+	if currentBlockReads != 1 || len(persistenceHandle.saved) != 1 {
+		t.Fatalf(
+			"legacy migration boundary was not persisted exactly once: reads=%d saves=%d",
+			currentBlockReads,
+			len(persistenceHandle.saved),
+		)
+	}
+	if len(operationOrder) != 2 ||
+		operationOrder[0] != "inventory" ||
+		operationOrder[1] != "head" {
+		t.Fatalf(
+			"migration boundary was not observed after inventory: [%v]",
+			operationOrder,
+		)
+	}
+
+	reopened, err := newWalletRegistry(
+		persistenceHandle,
+		Connect().CalculateWalletID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler.walletRegistry = reopened
+	beforeBoundary := FrostPreSignFinality{
+		BlockNumber: 119,
+		BlockHash:   [32]byte{0xbb},
+	}
+	if err := reconciler.reconcile(
+		context.Background(),
+		beforeBoundary,
+		map[[32]byte]struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshotChain.points) != 0 || len(engine.retired) != 0 {
+		t.Fatal("legacy material was evaluated before the migration boundary")
+	}
+
+	atBoundary := FrostPreSignFinality{
+		BlockNumber: 120,
+		BlockHash:   [32]byte{0xcc},
+	}
+	if err := reconciler.reconcile(
+		context.Background(),
+		atBoundary,
+		map[[32]byte]struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshotChain.points) != 0 || len(engine.retired) != 0 {
+		t.Fatal("legacy material was evaluated at the migration boundary")
+	}
+
+	afterBoundary := FrostPreSignFinality{
+		BlockNumber: 121,
+		BlockHash:   [32]byte{0xdd},
+	}
+	if err := reconciler.reconcile(
+		context.Background(),
+		afterBoundary,
+		map[[32]byte]struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshotChain.points) != 1 ||
+		snapshotChain.points[0] != afterBoundary ||
+		len(engine.retired) != 1 ||
+		engine.retired[0] != keyGroup {
+		t.Fatalf(
+			"legacy orphan was not retired after migration finality: points=%+v retired=%v",
+			snapshotChain.points,
+			engine.retired,
+		)
+	}
+	if currentBlockReads != 1 {
+		t.Fatalf("migration head was read again: [%d]", currentBlockReads)
 	}
 }
 
@@ -392,8 +483,12 @@ func orphanedDKGTestWalletRegistry(
 	}
 	return &walletRegistry{
 		walletCache: make(map[string]*walletCacheValue),
-		frostDKGAttemptStartBlocks: map[string]uint64{
-			seed: attemptStartBlock,
+		frostDKGRetirementBoundaries: map[string]uint64{
+			frostDKGRetirementBoundaryIdentity(
+				frostDKGRetirementBoundaryKindAttempt,
+				seed,
+				attemptStartBlock,
+			): attemptStartBlock,
 		},
 	}
 }

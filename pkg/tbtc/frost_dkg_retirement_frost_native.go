@@ -17,6 +17,7 @@ type frostOrphanedDKGReconciler struct {
 	anchorAdmission  *frostNativeSignerAnchorAdmissionController
 	retirementEngine frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine
 	readInventory    func() (*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory, error)
+	readCurrentBlock func() (uint64, error)
 }
 
 type frostDKGRetirementCandidate struct {
@@ -53,6 +54,13 @@ func newFrostOrphanedDKGReconciler(
 			"native signer does not support durable distributed-DKG retirement",
 		)
 	}
+	blockCounter, err := chain.BlockCounter()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot initialize orphaned FROST DKG migration boundary: [%w]",
+			err,
+		)
+	}
 	reconciler := &frostOrphanedDKGReconciler{
 		snapshotChain:    snapshotChain,
 		walletRegistry:   walletRegistry,
@@ -60,6 +68,7 @@ func newFrostOrphanedDKGReconciler(
 		retirementEngine: retirementEngine,
 		readInventory: frostsigning.
 			ReadNativeTBTCSignerRetainedKeyPackageInventory,
+		readCurrentBlock: blockCounter.CurrentBlock,
 	}
 	return reconciler.reconcile, nil
 }
@@ -87,7 +96,7 @@ func (reconciler *frostOrphanedDKGReconciler) reconcile(
 	if inventory == nil {
 		return fmt.Errorf("native key-package inventory is nil")
 	}
-	sessions, latestAttemptStartBlock, hasAttemptBoundary, err :=
+	sessions, latestRetirementBoundary, hasRetirementBoundary, err :=
 		reconciler.walletRegistry.frostDKGRetirementMaterialSnapshot()
 	if err != nil {
 		return err
@@ -146,12 +155,40 @@ func (reconciler *frostOrphanedDKGReconciler) reconcile(
 	}
 
 	// Native package persistence is ordered after the durable attempt marker.
-	// If no marker exists, or the retained journal point predates the newest
-	// admitted attempt, the snapshot cannot prove that every candidate's DKG
-	// had even started. Preserve all material rather than infer orphanhood from
-	// a pre-DKG Idle/AwaitingSeed state.
-	if !hasAttemptBoundary ||
-		target.BlockNumber < latestAttemptStartBlock {
+	// Packages created by older binaries have no marker, so observe and
+	// persist the latest canonical head after reading their inventory. A later
+	// finalized point covering that head can prove those pre-existing
+	// packages' attempts are no longer hidden beyond the journal cursor.
+	if !hasRetirementBoundary {
+		if reconciler.readCurrentBlock == nil {
+			return fmt.Errorf(
+				"FROST DKG migration boundary source is unavailable",
+			)
+		}
+		migrationBoundary, err := reconciler.readCurrentBlock()
+		if err != nil {
+			return fmt.Errorf(
+				"cannot read FROST DKG migration boundary: [%w]",
+				err,
+			)
+		}
+		if migrationBoundary < target.BlockNumber {
+			return fmt.Errorf(
+				"FROST DKG migration boundary is behind finalized history",
+			)
+		}
+		if err := reconciler.walletRegistry.recordFrostDKGMigrationBoundary(
+			migrationBoundary,
+		); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Require finality to advance beyond the boundary, not merely equal it.
+	// This also makes the one-time migration fail closed if reconciliation is
+	// repeated at the same finalized point immediately after persisting it.
+	if target.BlockNumber <= latestRetirementBoundary {
 		return nil
 	}
 
