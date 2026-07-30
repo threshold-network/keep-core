@@ -117,6 +117,20 @@ func executeFrostDKGIfPossible(
 	fullMembers := frostFullMembers(groupSelectionResult)
 	dkgTimeoutBlock := event.BlockNumber + params.SubmissionTimeoutBlocks
 
+	// Persist the attempt boundary before readiness or native DKG execution can
+	// create key packages. Orphan reconciliation is intentionally unable to
+	// retire packages until its finalized snapshot covers this block.
+	if err := node.walletRegistry.recordFrostDKGAttempt(
+		event.Seed,
+		event.BlockNumber,
+	); err != nil {
+		logger.Errorf(
+			"failed to persist FROST DKG attempt boundary: [%v]",
+			err,
+		)
+		return false
+	}
+
 	// Acquire the reversible capacity reservation before crossing the
 	// goroutine boundary. A transient admission failure must be visible to the
 	// coordinator so it releases the event lease and a replay can retry.

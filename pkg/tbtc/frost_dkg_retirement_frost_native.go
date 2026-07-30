@@ -87,7 +87,8 @@ func (reconciler *frostOrphanedDKGReconciler) reconcile(
 	if inventory == nil {
 		return fmt.Errorf("native key-package inventory is nil")
 	}
-	sessions, err := reconciler.walletRegistry.frostLocalSessionSnapshot()
+	sessions, latestAttemptStartBlock, hasAttemptBoundary, err :=
+		reconciler.walletRegistry.frostDKGRetirementMaterialSnapshot()
 	if err != nil {
 		return err
 	}
@@ -143,6 +144,17 @@ func (reconciler *frostOrphanedDKGReconciler) reconcile(
 	if len(noncanonicalWalletIDs) == 0 {
 		return nil
 	}
+
+	// Native package persistence is ordered after the durable attempt marker.
+	// If no marker exists, or the retained journal point predates the newest
+	// admitted attempt, the snapshot cannot prove that every candidate's DKG
+	// had even started. Preserve all material rather than infer orphanhood from
+	// a pre-DKG Idle/AwaitingSeed state.
+	if !hasAttemptBoundary ||
+		target.BlockNumber < latestAttemptStartBlock {
+		return nil
+	}
+
 	snapshot, err := reconciler.snapshotChain.FrostDKGRetirementSnapshot(
 		ctx,
 		target,

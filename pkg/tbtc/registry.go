@@ -39,9 +39,15 @@ type walletRegistry struct {
 	// to identify itself.
 	retainedFrostKeyGroups map[[32]byte]string
 
-	// revision advances after each successful active-session registration or
-	// archive. Readiness pins it across its Go/Rust reconciliation so a wallet
-	// cannot disappear or gain a local seat mid-check.
+	// frostDKGAttemptStartBlocks is an append-only durable ledger of every DKG
+	// this node admitted before native package persistence. Orphan retirement
+	// uses its newest block to reject finalized snapshots that predate locally
+	// held packages.
+	frostDKGAttemptStartBlocks map[string]uint64
+
+	// revision advances after each successful DKG-attempt admission,
+	// active-session registration, or archive. Readiness pins it across its
+	// Go/Rust reconciliation so relevant durable state cannot change mid-check.
 	revision uint64
 
 	// calculateWalletIdFunc calculates the ECDSA wallet ID based on the
@@ -71,6 +77,14 @@ func newWalletRegistry(
 	if err != nil {
 		return nil, fmt.Errorf(
 			"could not load retained FROST key-group bindings: [%w]",
+			err,
+		)
+	}
+	frostDKGAttemptStartBlocks, err :=
+		walletStorage.loadFrostDKGAttemptStartBlocks()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"could not load durable FROST DKG attempts: [%w]",
 			err,
 		)
 	}
@@ -141,10 +155,11 @@ func newWalletRegistry(
 	}
 
 	return &walletRegistry{
-		walletCache:            walletCache,
-		walletStorage:          walletStorage,
-		retainedFrostKeyGroups: retainedFrostKeyGroups,
-		calculateWalletIdFunc:  calculateWalletIdFunc,
+		walletCache:                walletCache,
+		walletStorage:              walletStorage,
+		retainedFrostKeyGroups:     retainedFrostKeyGroups,
+		frostDKGAttemptStartBlocks: frostDKGAttemptStartBlocks,
+		calculateWalletIdFunc:      calculateWalletIdFunc,
 	}, nil
 }
 
@@ -454,7 +469,8 @@ func (ws *walletStorage) loadSigners() map[string][]*signer {
 	go func() {
 		for descriptor := range descriptorsChan {
 			if descriptor.Directory() ==
-				frostRetainedKeyGroupBindingDirectory {
+				frostRetainedKeyGroupBindingDirectory ||
+				descriptor.Directory() == frostDKGAttemptDirectory {
 				continue
 			}
 			content, err := descriptor.Content()

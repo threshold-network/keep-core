@@ -5,6 +5,7 @@ package tbtc
 import (
 	"context"
 	"encoding/hex"
+	"math/big"
 	"testing"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -53,10 +54,8 @@ func TestFrostOrphanedDKGReconcilerRetiresNativeOnlyOrphan(t *testing.T) {
 		registered: make(map[[32]byte]bool),
 	}
 	reconciler := &frostOrphanedDKGReconciler{
-		snapshotChain: snapshotChain,
-		walletRegistry: &walletRegistry{
-			walletCache: make(map[string]*walletCacheValue),
-		},
+		snapshotChain:  snapshotChain,
+		walletRegistry: orphanedDKGTestWalletRegistry(t, 90),
 		anchorAdmission: &frostNativeSignerAnchorAdmissionController{
 			readHeadroom: func(
 				context.Context,
@@ -118,9 +117,7 @@ func TestFrostOrphanedDKGReconcilerPreservesCanonicalAndRegistered(t *testing.T)
 			state:      Idle,
 			registered: map[[32]byte]bool{registeredWalletID: true},
 		},
-		walletRegistry: &walletRegistry{
-			walletCache: make(map[string]*walletCacheValue),
-		},
+		walletRegistry:   orphanedDKGTestWalletRegistry(t, 90),
 		anchorAdmission:  &frostNativeSignerAnchorAdmissionController{},
 		retirementEngine: engine,
 		readInventory: func() (
@@ -162,9 +159,7 @@ func TestFrostOrphanedDKGReconcilerPreservesAwaitingResultMaterial(t *testing.T)
 			state:      AwaitingResult,
 			registered: make(map[[32]byte]bool),
 		},
-		walletRegistry: &walletRegistry{
-			walletCache: make(map[string]*walletCacheValue),
-		},
+		walletRegistry:   orphanedDKGTestWalletRegistry(t, 90),
 		anchorAdmission:  &frostNativeSignerAnchorAdmissionController{},
 		retirementEngine: engine,
 		readInventory: func() (
@@ -203,9 +198,7 @@ func TestFrostOrphanedDKGReconcilerPreservesMaterialDuringChallenge(
 			state:      Challenge,
 			registered: make(map[[32]byte]bool),
 		},
-		walletRegistry: &walletRegistry{
-			walletCache: make(map[string]*walletCacheValue),
-		},
+		walletRegistry:   orphanedDKGTestWalletRegistry(t, 90),
 		anchorAdmission:  orphanedDKGTestAnchorAdmission(),
 		retirementEngine: engine,
 		readInventory: func() (
@@ -251,9 +244,7 @@ func TestFrostOrphanedDKGReconcilerPreservesEveryKeyEncodingDuringChallenge(
 					state:      Challenge,
 					registered: make(map[[32]byte]bool),
 				},
-				walletRegistry: &walletRegistry{
-					walletCache: make(map[string]*walletCacheValue),
-				},
+				walletRegistry:   orphanedDKGTestWalletRegistry(t, 90),
 				anchorAdmission:  orphanedDKGTestAnchorAdmission(),
 				retirementEngine: engine,
 				readInventory: func() (
@@ -288,6 +279,95 @@ func TestFrostOrphanedDKGReconcilerPreservesEveryKeyEncodingDuringChallenge(
 	}
 }
 
+func TestFrostOrphanedDKGReconcilerPreservesMaterialBeforeAttemptFinality(
+	t *testing.T,
+) {
+	walletID := [32]byte{4}
+	engine := &orphanedDKGRetirementTestEngine{}
+	snapshotChain := &orphanedDKGSnapshotTestChain{
+		state:      Idle,
+		registered: make(map[[32]byte]bool),
+	}
+	reconciler := &frostOrphanedDKGReconciler{
+		snapshotChain:    snapshotChain,
+		walletRegistry:   orphanedDKGTestWalletRegistry(t, 101),
+		anchorAdmission:  orphanedDKGTestAnchorAdmission(),
+		retirementEngine: engine,
+		readInventory: func() (
+			*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
+			error,
+		) {
+			return &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
+				Entries: []frostsigning.NativeTBTCSignerRetainedKeyGroup{{
+					WalletID: walletID,
+					KeyGroup: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+				}},
+			}, nil
+		},
+	}
+
+	if err := reconciler.reconcile(
+		context.Background(),
+		orphanedDKGTestPoint(),
+		map[[32]byte]struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshotChain.points) != 0 {
+		t.Fatalf(
+			"pre-attempt finalized point triggered a retirement snapshot read: [%+v]",
+			snapshotChain.points,
+		)
+	}
+	if len(engine.retired) != 0 {
+		t.Fatalf(
+			"in-flight DKG material was retired from a pre-attempt snapshot: [%v]",
+			engine.retired,
+		)
+	}
+}
+
+func TestFrostOrphanedDKGReconcilerPreservesMaterialWithoutAttemptBoundary(
+	t *testing.T,
+) {
+	walletID := [32]byte{5}
+	engine := &orphanedDKGRetirementTestEngine{}
+	snapshotChain := &orphanedDKGSnapshotTestChain{
+		state:      Idle,
+		registered: make(map[[32]byte]bool),
+	}
+	reconciler := &frostOrphanedDKGReconciler{
+		snapshotChain: snapshotChain,
+		walletRegistry: &walletRegistry{
+			walletCache: make(map[string]*walletCacheValue),
+		},
+		anchorAdmission:  orphanedDKGTestAnchorAdmission(),
+		retirementEngine: engine,
+		readInventory: func() (
+			*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
+			error,
+		) {
+			return &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
+				Entries: []frostsigning.NativeTBTCSignerRetainedKeyGroup{{
+					WalletID: walletID,
+					KeyGroup: "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+				}},
+			}, nil
+		},
+	}
+
+	if err := reconciler.reconcile(
+		context.Background(),
+		orphanedDKGTestPoint(),
+		map[[32]byte]struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshotChain.points) != 0 || len(engine.retired) != 0 {
+		t.Fatal("material without a durable attempt boundary was not preserved")
+	}
+}
+
 func orphanedDKGTestWalletID(t *testing.T) [32]byte {
 	t.Helper()
 	decoded, err := hex.DecodeString(
@@ -299,6 +379,23 @@ func orphanedDKGTestWalletID(t *testing.T) [32]byte {
 	var walletID [32]byte
 	copy(walletID[:], decoded)
 	return walletID
+}
+
+func orphanedDKGTestWalletRegistry(
+	t *testing.T,
+	attemptStartBlock uint64,
+) *walletRegistry {
+	t.Helper()
+	seed, err := canonicalFrostDKGAttemptSeed(big.NewInt(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &walletRegistry{
+		walletCache: make(map[string]*walletCacheValue),
+		frostDKGAttemptStartBlocks: map[string]uint64{
+			seed: attemptStartBlock,
+		},
+	}
 }
 
 func orphanedDKGTestPoint() FrostPreSignFinality {
