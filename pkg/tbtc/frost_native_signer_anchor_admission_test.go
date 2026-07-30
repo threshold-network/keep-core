@@ -15,7 +15,7 @@ func TestFrostPreSignMaximumAnchorCapacityCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cost.Revisions != 546 || cost.Generations != 1638 {
+	if cost.Revisions != 546 || cost.Generations != 1095 {
 		t.Fatalf("unexpected single-seat maximum cost [%+v]", cost)
 	}
 	if cost.Revisions > FrostNativeSignerAnchorMaximumHistoryEvents ||
@@ -37,16 +37,62 @@ func TestFrostPreSignMaximumAnchorCapacityCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	if multiSeatCost.Revisions != 966 ||
-		multiSeatCost.Generations != 2898 {
+		multiSeatCost.Generations != 1935 {
 		t.Fatalf("unexpected multi-seat maximum cost [%+v]", multiSeatCost)
 	}
 
-	if _, err := frostPreSignMaximumAnchorCapacityCost(
+	// Three and four local seats are an ordinary sortition result in a
+	// hundred-seat wallet, and a twenty-one-input batch is the standard
+	// deposit sweep maximum. Both must be admissible at the maximum batch
+	// size: a seat excluded here is lost to the wallet's signing threshold on
+	// every batch of that size, and enough excluded seats stop the group from
+	// assembling a threshold at all.
+	for _, seats := range []uint64{3, 4} {
+		seatCost, err := frostPreSignMaximumAnchorCapacityCost(
+			frostPreSignAuthorizationMaximumInputs,
+			seats,
+			signingAttemptsLimit,
+		)
+		if err != nil {
+			t.Fatalf("maximum batch with [%d] local seats was rejected: %v", seats, err)
+		}
+		if seatCost.Revisions > FrostNativeSignerAnchorMaximumHistoryEvents ||
+			seatCost.Generations >
+				FrostNativeSignerAnchorMaximumHistoryProofEntries {
+			t.Fatalf(
+				"[%d]-seat maximum [%+v] exceeds restart windows [%d/%d]",
+				seats,
+				seatCost,
+				FrostNativeSignerAnchorMaximumHistoryEvents,
+				FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			)
+		}
+	}
+
+	// The windows are finite, so the ceiling is real and must stay pinned
+	// where the accounting actually puts it. Crossing it is reported with the
+	// ceiling itself, because a node above it is otherwise silently excluded
+	// from every batch of this size.
+	if admissibleSeats := frostPreSignMaximumAdmissibleLocalSeatCount(
 		frostPreSignAuthorizationMaximumInputs,
-		3,
 		signingAttemptsLimit,
-	); err == nil || !strings.Contains(err.Error(), "proof window") {
+	); admissibleSeats != 4 {
+		t.Fatalf(
+			"unexpected maximum-batch local seat ceiling [%d]",
+			admissibleSeats,
+		)
+	}
+	_, err = frostPreSignMaximumAnchorCapacityCost(
+		frostPreSignAuthorizationMaximumInputs,
+		5,
+		signingAttemptsLimit,
+	)
+	if err == nil || !strings.Contains(err.Error(), "proof window") {
 		t.Fatalf("oversized workflow was accepted: [%v]", err)
+	}
+	if !strings.Contains(err.Error(), "at most [4] local seats") ||
+		!strings.Contains(err.Error(), "signing threshold") {
+		t.Fatalf("oversized workflow did not report its seat ceiling: [%v]", err)
 	}
 }
 
@@ -69,13 +115,13 @@ func TestFrostNativeSignerAnchorAdmissionController_AtomicallyReservesNearWarnin
 		FrostNativeSignerAnchorRotationWarningHeadroom+1,
 	)
 
-	// Three inputs and one local seat reserve 78 revisions and 234
+	// Four inputs and one local seat reserve 104 revisions and 211
 	// generations. Admission one unit above the warning boundary is safe
 	// because the full dual-dimensional cost is reserved before the workflow.
 	first, err := controller.reservePreSign(
 		context.Background(),
 		snapshot,
-		3,
+		4,
 		1,
 		signingAttemptsLimit,
 	)
@@ -143,7 +189,7 @@ func TestFrostNativeSignerAnchorAdmissionController_RejectsStaleReadinessHeadroo
 ) {
 	currentHeadroom := frostNativeSignerAnchorCapacity{
 		Revisions:   400,
-		Generations: 300,
+		Generations: 500,
 	}
 	controller := &frostNativeSignerAnchorAdmissionController{
 		readHeadroom: func(
@@ -152,15 +198,15 @@ func TestFrostNativeSignerAnchorAdmissionController_RejectsStaleReadinessHeadroo
 			return currentHeadroom, nil
 		},
 	}
-	staleSnapshot := testFrostAnchorAdmissionReadinessSnapshot(400, 400)
+	staleSnapshot := testFrostAnchorAdmissionReadinessSnapshot(400, 700)
 
-	// Four inputs and one seat cost 104 revisions and 312 generations. The
+	// Twelve inputs and one seat cost 312 revisions and 627 generations. The
 	// stale snapshot would admit it, but the authenticated current tip has
 	// advanced after that snapshot and must be authoritative.
 	if _, err := controller.reservePreSign(
 		context.Background(),
 		staleSnapshot,
-		4,
+		12,
 		1,
 		signingAttemptsLimit,
 	); err == nil || !strings.Contains(err.Error(), "unreserved") {
