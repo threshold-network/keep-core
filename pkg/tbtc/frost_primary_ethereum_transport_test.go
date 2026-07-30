@@ -164,7 +164,7 @@ func TestFrostRetainedPeerLeafRotationDoesNotLatchSeparationFailure(
 				},
 			},
 		},
-		primaryPeers:  map[[32]byte]frostTransportPeerIdentity{},
+		primaryPeers: map[[32]byte]frostTransportPeerIdentity{},
 		retainedPeers: map[string]map[[32]byte]frostTransportPeerIdentity{
 			"retained-history-export": {},
 		},
