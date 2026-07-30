@@ -7,45 +7,30 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/keep-network/keep-core/pkg/frost"
-	"github.com/keep-network/keep-core/pkg/frost/registry"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
-type orphanedDKGRegistrationTestChain struct {
+type orphanedDKGSnapshotTestChain struct {
+	state      DKGState
 	registered map[[32]byte]bool
+	points     []FrostPreSignFinality
 }
 
-func (chain *orphanedDKGRegistrationTestChain) IsFrostWalletRegistered(
-	walletID [32]byte,
-) (bool, error) {
-	return chain.registered[walletID], nil
-}
-
-type orphanedDKGStateTestChain struct {
-	FrostDKGChain
-	state  DKGState
-	events []*FrostDKGResultSubmittedEvent
-	valid  bool
-}
-
-func (chain *orphanedDKGStateTestChain) GetFrostDKGState() (
-	DKGState,
-	error,
-) {
-	return chain.state, nil
-}
-
-func (chain *orphanedDKGStateTestChain) PastFrostDKGResultSubmittedEvents(
-	*FrostDKGResultSubmittedEventFilter,
-) ([]*FrostDKGResultSubmittedEvent, error) {
-	return chain.events, nil
-}
-
-func (chain *orphanedDKGStateTestChain) IsFrostDKGResultValid(
-	*registry.Result,
-) (bool, string, error) {
-	return chain.valid, "", nil
+func (chain *orphanedDKGSnapshotTestChain) FrostDKGRetirementSnapshot(
+	_ context.Context,
+	point FrostPreSignFinality,
+	walletIDs [][32]byte,
+) (*FrostDKGRetirementSnapshot, error) {
+	chain.points = append(chain.points, point)
+	registered := make(map[[32]byte]bool, len(walletIDs))
+	for _, walletID := range walletIDs {
+		registered[walletID] = chain.registered[walletID]
+	}
+	return &FrostDKGRetirementSnapshot{
+		Point:             point,
+		State:             chain.state,
+		RegisteredWallets: registered,
+	}, nil
 }
 
 type orphanedDKGRetirementTestEngine struct {
@@ -63,11 +48,12 @@ func TestFrostOrphanedDKGReconcilerRetiresNativeOnlyOrphan(t *testing.T) {
 	walletID := [32]byte{1}
 	const keyGroup = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 	engine := &orphanedDKGRetirementTestEngine{}
+	snapshotChain := &orphanedDKGSnapshotTestChain{
+		state:      Idle,
+		registered: make(map[[32]byte]bool),
+	}
 	reconciler := &frostOrphanedDKGReconciler{
-		dkgChain: &orphanedDKGStateTestChain{state: Idle},
-		registrationChain: &orphanedDKGRegistrationTestChain{
-			registered: make(map[[32]byte]bool),
-		},
+		snapshotChain: snapshotChain,
 		walletRegistry: &walletRegistry{
 			walletCache: make(map[string]*walletCacheValue),
 		},
@@ -97,11 +83,19 @@ func TestFrostOrphanedDKGReconcilerRetiresNativeOnlyOrphan(t *testing.T) {
 		},
 	}
 
+	target := orphanedDKGTestPoint()
 	if err := reconciler.reconcile(
 		context.Background(),
+		target,
 		map[[32]byte]struct{}{},
 	); err != nil {
 		t.Fatal(err)
+	}
+	if len(snapshotChain.points) != 1 || snapshotChain.points[0] != target {
+		t.Fatalf(
+			"retirement was not pinned to the journal point: [%+v]",
+			snapshotChain.points,
+		)
 	}
 	if len(engine.retired) != 1 || engine.retired[0] != keyGroup {
 		t.Fatalf("unexpected retired key groups: [%v]", engine.retired)
@@ -120,8 +114,8 @@ func TestFrostOrphanedDKGReconcilerPreservesCanonicalAndRegistered(t *testing.T)
 	registeredWalletID := [32]byte{2}
 	engine := &orphanedDKGRetirementTestEngine{}
 	reconciler := &frostOrphanedDKGReconciler{
-		dkgChain: &orphanedDKGStateTestChain{state: Idle},
-		registrationChain: &orphanedDKGRegistrationTestChain{
+		snapshotChain: &orphanedDKGSnapshotTestChain{
+			state:      Idle,
 			registered: map[[32]byte]bool{registeredWalletID: true},
 		},
 		walletRegistry: &walletRegistry{
@@ -150,6 +144,7 @@ func TestFrostOrphanedDKGReconcilerPreservesCanonicalAndRegistered(t *testing.T)
 
 	if err := reconciler.reconcile(
 		context.Background(),
+		orphanedDKGTestPoint(),
 		map[[32]byte]struct{}{canonicalWalletID: {}},
 	); err != nil {
 		t.Fatal(err)
@@ -163,8 +158,8 @@ func TestFrostOrphanedDKGReconcilerPreservesAwaitingResultMaterial(t *testing.T)
 	walletID := [32]byte{3}
 	engine := &orphanedDKGRetirementTestEngine{}
 	reconciler := &frostOrphanedDKGReconciler{
-		dkgChain: &orphanedDKGStateTestChain{state: AwaitingResult},
-		registrationChain: &orphanedDKGRegistrationTestChain{
+		snapshotChain: &orphanedDKGSnapshotTestChain{
+			state:      AwaitingResult,
 			registered: make(map[[32]byte]bool),
 		},
 		walletRegistry: &walletRegistry{
@@ -187,6 +182,7 @@ func TestFrostOrphanedDKGReconcilerPreservesAwaitingResultMaterial(t *testing.T)
 
 	if err := reconciler.reconcile(
 		context.Background(),
+		orphanedDKGTestPoint(),
 		map[[32]byte]struct{}{},
 	); err != nil {
 		t.Fatal(err)
@@ -196,22 +192,15 @@ func TestFrostOrphanedDKGReconcilerPreservesAwaitingResultMaterial(t *testing.T)
 	}
 }
 
-func TestFrostOrphanedDKGReconcilerPreservesMaterialDuringInvalidChallenge(
+func TestFrostOrphanedDKGReconcilerPreservesMaterialDuringChallenge(
 	t *testing.T,
 ) {
 	walletID := orphanedDKGTestWalletID(t)
 	const keyGroup = "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 	engine := &orphanedDKGRetirementTestEngine{}
 	reconciler := &frostOrphanedDKGReconciler{
-		dkgChain: &orphanedDKGStateTestChain{
-			state: Challenge,
-			events: []*FrostDKGResultSubmittedEvent{{
-				Result:      &registry.Result{},
-				BlockNumber: 100,
-			}},
-			valid: false,
-		},
-		registrationChain: &orphanedDKGRegistrationTestChain{
+		snapshotChain: &orphanedDKGSnapshotTestChain{
+			state:      Challenge,
 			registered: make(map[[32]byte]bool),
 		},
 		walletRegistry: &walletRegistry{
@@ -235,6 +224,7 @@ func TestFrostOrphanedDKGReconcilerPreservesMaterialDuringInvalidChallenge(
 
 	if err := reconciler.reconcile(
 		context.Background(),
+		orphanedDKGTestPoint(),
 		map[[32]byte]struct{}{},
 	); err != nil {
 		t.Fatal(err)
@@ -244,14 +234,10 @@ func TestFrostOrphanedDKGReconcilerPreservesMaterialDuringInvalidChallenge(
 	}
 }
 
-func TestFrostOrphanedDKGReconcilerMatchesPendingMaterialByXOnlyIdentity(
+func TestFrostOrphanedDKGReconcilerPreservesEveryKeyEncodingDuringChallenge(
 	t *testing.T,
 ) {
 	walletID := orphanedDKGTestWalletID(t)
-	result := &registry.Result{
-		XOnlyOutputKey: frost.OutputKey(walletID),
-		Members:        registry.FullMembers{1, 2, 3},
-	}
 	testCases := map[string]string{
 		"odd compressed key": "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
 		"legacy x-only key":  "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
@@ -261,15 +247,8 @@ func TestFrostOrphanedDKGReconcilerMatchesPendingMaterialByXOnlyIdentity(
 		t.Run(name, func(t *testing.T) {
 			engine := &orphanedDKGRetirementTestEngine{}
 			reconciler := &frostOrphanedDKGReconciler{
-				dkgChain: &orphanedDKGStateTestChain{
-					state: Challenge,
-					events: []*FrostDKGResultSubmittedEvent{{
-						Result:      result,
-						BlockNumber: 100,
-					}},
-					valid: true,
-				},
-				registrationChain: &orphanedDKGRegistrationTestChain{
+				snapshotChain: &orphanedDKGSnapshotTestChain{
+					state:      Challenge,
 					registered: make(map[[32]byte]bool),
 				},
 				walletRegistry: &walletRegistry{
@@ -293,6 +272,7 @@ func TestFrostOrphanedDKGReconcilerMatchesPendingMaterialByXOnlyIdentity(
 
 			if err := reconciler.reconcile(
 				context.Background(),
+				orphanedDKGTestPoint(),
 				map[[32]byte]struct{}{},
 			); err != nil {
 				t.Fatal(err)
@@ -319,6 +299,13 @@ func orphanedDKGTestWalletID(t *testing.T) [32]byte {
 	var walletID [32]byte
 	copy(walletID[:], decoded)
 	return walletID
+}
+
+func orphanedDKGTestPoint() FrostPreSignFinality {
+	return FrostPreSignFinality{
+		BlockNumber: 100,
+		BlockHash:   [32]byte{0xaa},
+	}
 }
 
 func orphanedDKGTestAnchorAdmission() *frostNativeSignerAnchorAdmissionController {

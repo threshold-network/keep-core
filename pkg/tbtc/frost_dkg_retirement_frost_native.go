@@ -8,23 +8,15 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/keep-network/keep-core/pkg/frost/registry"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
-type frostPendingDKGDescriptor struct {
-	walletID         [32]byte
-	participantCount uint16
-	preserveAll      bool
-}
-
 type frostOrphanedDKGReconciler struct {
-	dkgChain          FrostDKGChain
-	registrationChain frostWalletRegistrationChain
-	walletRegistry    *walletRegistry
-	anchorAdmission   *frostNativeSignerAnchorAdmissionController
-	retirementEngine  frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine
-	readInventory     func() (*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory, error)
+	snapshotChain    frostDKGRetirementSnapshotChain
+	walletRegistry   *walletRegistry
+	anchorAdmission  *frostNativeSignerAnchorAdmissionController
+	retirementEngine frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine
+	readInventory    func() (*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory, error)
 }
 
 type frostDKGRetirementCandidate struct {
@@ -41,7 +33,7 @@ func newFrostOrphanedDKGReconciler(
 	walletRegistry *walletRegistry,
 	anchorAdmission *frostNativeSignerAnchorAdmissionController,
 ) (
-	func(context.Context, map[[32]byte]struct{}) error,
+	frostOrphanedDKGReconcilerFunc,
 	error,
 ) {
 	if chain == nil || walletRegistry == nil || anchorAdmission == nil {
@@ -49,16 +41,10 @@ func newFrostOrphanedDKGReconciler(
 			"orphaned FROST DKG reconciliation dependencies are incomplete",
 		)
 	}
-	dkgChain, ok := chain.(FrostDKGChain)
+	snapshotChain, ok := chain.(frostDKGRetirementSnapshotChain)
 	if !ok {
 		return nil, fmt.Errorf(
-			"chain does not expose FROST DKG state for orphan reconciliation",
-		)
-	}
-	registrationChain, ok := chain.(frostWalletRegistrationChain)
-	if !ok {
-		return nil, fmt.Errorf(
-			"chain does not expose FROST wallet registration for orphan reconciliation",
+			"chain does not expose exact finalized FROST DKG snapshots for orphan reconciliation",
 		)
 	}
 	retirementEngine, ok := frostsigning.CurrentNativeTBTCSignerEngine().(frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine)
@@ -68,11 +54,10 @@ func newFrostOrphanedDKGReconciler(
 		)
 	}
 	reconciler := &frostOrphanedDKGReconciler{
-		dkgChain:          dkgChain,
-		registrationChain: registrationChain,
-		walletRegistry:    walletRegistry,
-		anchorAdmission:   anchorAdmission,
-		retirementEngine:  retirementEngine,
+		snapshotChain:    snapshotChain,
+		walletRegistry:   walletRegistry,
+		anchorAdmission:  anchorAdmission,
+		retirementEngine: retirementEngine,
 		readInventory: frostsigning.
 			ReadNativeTBTCSignerRetainedKeyPackageInventory,
 	}
@@ -81,11 +66,15 @@ func newFrostOrphanedDKGReconciler(
 
 func (reconciler *frostOrphanedDKGReconciler) reconcile(
 	ctx context.Context,
+	target FrostPreSignFinality,
 	canonicalWallets map[[32]byte]struct{},
 ) error {
 	if reconciler == nil || ctx == nil || canonicalWallets == nil ||
-		reconciler.readInventory == nil {
+		reconciler.snapshotChain == nil || reconciler.readInventory == nil {
 		return fmt.Errorf("orphaned FROST DKG reconciliation is not configured")
+	}
+	if target.BlockNumber == 0 || target.BlockHash == [32]byte{} {
+		return fmt.Errorf("orphaned FROST DKG reconciliation point is invalid")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -145,39 +134,46 @@ func (reconciler *frostOrphanedDKGReconciler) reconcile(
 		return bytes.Compare(walletIDs[i][:], walletIDs[j][:]) < 0
 	})
 
-	var pendingRead bool
-	var pending *frostPendingDKGDescriptor
-	retirements := make([]*frostDKGRetirementCandidate, 0)
+	noncanonicalWalletIDs := make([][32]byte, 0, len(walletIDs))
 	for _, walletID := range walletIDs {
-		candidate := candidatesByWallet[walletID]
-		if _, canonical := canonicalWallets[walletID]; canonical {
-			continue
+		if _, canonical := canonicalWallets[walletID]; !canonical {
+			noncanonicalWalletIDs = append(noncanonicalWalletIDs, walletID)
 		}
-		registered, err :=
-			reconciler.registrationChain.IsFrostWalletRegistered(walletID)
-		if err != nil {
+	}
+	if len(noncanonicalWalletIDs) == 0 {
+		return nil
+	}
+	snapshot, err := reconciler.snapshotChain.FrostDKGRetirementSnapshot(
+		ctx,
+		target,
+		noncanonicalWalletIDs,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot read finalized FROST DKG retirement snapshot: [%w]",
+			err,
+		)
+	}
+	if snapshot == nil || snapshot.Point != target ||
+		snapshot.State < Idle || snapshot.State > Challenge ||
+		len(snapshot.RegisteredWallets) != len(noncanonicalWalletIDs) {
+		return fmt.Errorf("finalized FROST DKG retirement snapshot is incomplete")
+	}
+
+	unresolvedDKG := snapshot.State == AwaitingResult ||
+		snapshot.State == Challenge
+	retirements := make([]*frostDKGRetirementCandidate, 0)
+	for _, walletID := range noncanonicalWalletIDs {
+		candidate := candidatesByWallet[walletID]
+		registered, present := snapshot.RegisteredWallets[walletID]
+		if !present {
 			return fmt.Errorf(
-				"cannot check FROST registration for wallet [0x%x]: [%w]",
+				"finalized FROST DKG retirement snapshot omits wallet [0x%x]",
 				walletID,
-				err,
 			)
 		}
-		if registered {
+		if registered || unresolvedDKG {
 			continue
-		}
-		if !pendingRead {
-			pending, err = reconciler.currentPendingDescriptor()
-			if err != nil {
-				return err
-			}
-			pendingRead = true
-		}
-		if pending != nil {
-			if pending.preserveAll ||
-				(pending.walletID == candidate.walletID &&
-					pending.participantCount == candidate.participantCount) {
-				continue
-			}
 		}
 		retirements = append(retirements, candidate)
 	}
@@ -227,69 +223,4 @@ func (reconciler *frostOrphanedDKGReconciler) reconcile(
 		}
 	}
 	return nil
-}
-
-func (reconciler *frostOrphanedDKGReconciler) currentPendingDescriptor() (
-	*frostPendingDKGDescriptor,
-	error,
-) {
-	state, err := reconciler.dkgChain.GetFrostDKGState()
-	if err != nil {
-		return nil, fmt.Errorf("cannot read current FROST DKG state: [%w]", err)
-	}
-	if state == AwaitingResult {
-		// A package may have been persisted by the current DKG, or its result
-		// transaction may have been accepted despite an ambiguous RPC error.
-		// Without an on-chain output key there is no exact identity to compare,
-		// so preserve noncanonical packages until Challenge or timeout makes the
-		// outcome provable. This can delay readiness but cannot release signing.
-		return &frostPendingDKGDescriptor{preserveAll: true}, nil
-	}
-	if state != Challenge {
-		return nil, nil
-	}
-	events, err := reconciler.dkgChain.PastFrostDKGResultSubmittedEvents(nil)
-	if err != nil {
-		return nil, fmt.Errorf("cannot read pending FROST DKG result: [%w]", err)
-	}
-	var latest *FrostDKGResultSubmittedEvent
-	for _, event := range events {
-		if event == nil || event.Result == nil {
-			continue
-		}
-		if latest == nil || event.BlockNumber >= latest.BlockNumber {
-			latest = event
-		}
-	}
-	if latest == nil {
-		return nil, fmt.Errorf(
-			"FROST DKG state is Challenge but no submitted result is available",
-		)
-	}
-	valid, _, err := reconciler.dkgChain.IsFrostDKGResultValid(latest.Result)
-	if err != nil {
-		return nil, fmt.Errorf("cannot validate pending FROST DKG result: [%w]", err)
-	}
-	if !valid {
-		// A successfully challenged invalid result returns this same DKG
-		// attempt to AwaitingResult, where another member may submit the valid
-		// result backed by the packages already persisted by this node. The
-		// invalid submission gives us no trustworthy wallet identity to match,
-		// so retain every noncanonical package until the attempt is resolved.
-		return &frostPendingDKGDescriptor{preserveAll: true}, nil
-	}
-	activeMembers, err := registry.ActiveMembersFromMisbehaved(
-		latest.Result.Members,
-		latest.Result.MisbehavedMembersIndices,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("invalid pending FROST DKG members: [%w]", err)
-	}
-	if len(activeMembers) > int(^uint16(0)) {
-		return nil, fmt.Errorf("pending FROST DKG participant count overflows")
-	}
-	return &frostPendingDKGDescriptor{
-		walletID:         [32]byte(latest.Result.XOnlyOutputKey),
-		participantCount: uint16(len(activeMembers)),
-	}, nil
 }

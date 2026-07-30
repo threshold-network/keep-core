@@ -1,12 +1,32 @@
 package tbtc
 
 import (
+	"context"
 	"math/big"
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
 	"github.com/keep-network/keep-core/pkg/subscription"
 )
+
+// FrostDKGRetirementSnapshot binds every chain predicate used to retire local
+// DKG packages to one exact finalized block.
+type FrostDKGRetirementSnapshot struct {
+	Point             FrostPreSignFinality
+	State             DKGState
+	RegisteredWallets map[[32]byte]bool
+}
+
+// frostDKGRetirementSnapshotChain exposes exact-hash DKG state used only by
+// finalized retained-history reconciliation. Implementations must reject a
+// noncanonical point rather than falling back to latest-state reads.
+type frostDKGRetirementSnapshotChain interface {
+	FrostDKGRetirementSnapshot(
+		context.Context,
+		FrostPreSignFinality,
+		[][32]byte,
+	) (*FrostDKGRetirementSnapshot, error)
+}
 
 // FrostDKGChain defines the FROST wallet-registry chain surface. It is kept
 // separate from the legacy ECDSA DKG chain so the existing coordinator remains

@@ -2,14 +2,12 @@
 
 package tbtc
 
-import "context"
-
 func newFrostOrphanedDKGReconciler(
 	_ Chain,
 	_ *walletRegistry,
 	_ *frostNativeSignerAnchorAdmissionController,
 ) (
-	func(context.Context, map[[32]byte]struct{}) error,
+	frostOrphanedDKGReconcilerFunc,
 	error,
 ) {
 	return nil, nil

@@ -969,6 +969,12 @@ type frostRetainedGroupJournalSnapshot struct {
 	Complete                     bool
 }
 
+type frostOrphanedDKGReconcilerFunc func(
+	context.Context,
+	FrostPreSignFinality,
+	map[[32]byte]struct{},
+) error
+
 type frostRetainedGroupJournal struct {
 	mutex                        sync.Mutex
 	rootDirectory                string
@@ -995,7 +1001,7 @@ type frostRetainedGroupJournal struct {
 	checkpointState              frostRetainedGroupCheckpointJournalState
 	checkpointCertificates       map[uint64]FrostRetainedGroupCheckpointCertificate
 	checkpointHashes             map[uint64][32]byte
-	orphanedDKGReconciler        func(context.Context, map[[32]byte]struct{}) error
+	orphanedDKGReconciler        frostOrphanedDKGReconcilerFunc
 	persistFailureHook           func(string) error
 	checkpointPersistFailureHook func(string) error
 	closed                       bool
@@ -3824,7 +3830,11 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		for _, wallet := range frgj.state.Wallets {
 			canonicalWallets[wallet.WalletID] = struct{}{}
 		}
-		if err := frgj.orphanedDKGReconciler(ctx, canonicalWallets); err != nil {
+		if err := frgj.orphanedDKGReconciler(
+			ctx,
+			target,
+			canonicalWallets,
+		); err != nil {
 			return nil, fmt.Errorf(
 				"cannot retire orphaned native FROST DKG material: [%w]",
 				err,

@@ -10,11 +10,12 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 func TestHandleFrostDKGStartedReleasesDeduplicationKeyAfterFailure(t *testing.T) {
 	localChain := Connect()
-	node := &node{chain: localChain}
+	testNode := &node{chain: localChain}
 	event := &FrostDKGStartedEvent{Seed: big.NewInt(100), BlockNumber: 500}
 	frostChain := &transientFrostDKGStartedChain{event: event}
 	deduplicator := newDeduplicator()
@@ -24,7 +25,7 @@ func TestHandleFrostDKGStartedReleasesDeduplicationKeyAfterFailure(t *testing.T)
 	for i := 0; i < 4; i++ {
 		handleFrostDKGStarted(
 			context.Background(),
-			node,
+			testNode,
 			frostChain,
 			deduplicator,
 			event,
@@ -47,7 +48,7 @@ func TestHandleFrostDKGStartedReleasesDeduplicationKeyAfterFailure(t *testing.T)
 	// terminal local handling; further duplicates must stay suppressed.
 	handleFrostDKGStarted(
 		context.Background(),
-		node,
+		testNode,
 		frostChain,
 		deduplicator,
 		event,
@@ -56,6 +57,65 @@ func TestHandleFrostDKGStartedReleasesDeduplicationKeyAfterFailure(t *testing.T)
 	if frostChain.stateCalls != 4 {
 		t.Fatalf("completed event was processed again")
 	}
+}
+
+func TestHandleFrostDKGStartedRetriesWhenExecutionAdmissionFails(
+	t *testing.T,
+) {
+	localChain := Connect()
+	operatorAddress, err := localChain.operatorAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testNode := &node{chain: localChain}
+	event := &FrostDKGStartedEvent{Seed: big.NewInt(101), BlockNumber: 500}
+	frostChain := &retryableFrostDKGExecutionChain{
+		event:           event,
+		operatorAddress: operatorAddress,
+	}
+	deduplicator := newDeduplicator()
+	executionAttempts := 0
+	execute := func(
+		context.Context,
+		*node,
+		FrostDKGChain,
+		*FrostDKGStartedEvent,
+		[]group.MemberIndex,
+		*GroupSelectionResult,
+	) bool {
+		executionAttempts++
+		return executionAttempts > 1
+	}
+
+	handleFrostDKGStartedWithExecutor(
+		context.Background(),
+		testNode,
+		frostChain,
+		deduplicator,
+		event,
+		false,
+		execute,
+	)
+	if executionAttempts != 1 {
+		t.Fatalf("unexpected first execution attempt count: [%d]", executionAttempts)
+	}
+	if deduplicator.dkgSeedCache.Has(event.Seed.Text(16)) {
+		t.Fatal("transient execution admission failure completed the DKG seed")
+	}
+
+	handleFrostDKGStartedWithExecutor(
+		context.Background(),
+		testNode,
+		frostChain,
+		deduplicator,
+		event,
+		false,
+		execute,
+	)
+	if executionAttempts != 2 {
+		t.Fatalf("DKG execution admission was not retried")
+	}
+	assertFrostDKGStartedSeedCompleted(t, deduplicator, event.Seed)
 }
 
 func TestHandleFrostDKGStartedRekeysToLatestSeedAlreadyInProgress(
@@ -366,6 +426,35 @@ type transientFrostDKGStartedChain struct {
 	stateCalls      int
 	pastEventsCalls int
 	selectionCalls  int
+}
+
+type retryableFrostDKGExecutionChain struct {
+	FrostDKGChain
+
+	event           *FrostDKGStartedEvent
+	operatorAddress chain.Address
+}
+
+func (testChain *retryableFrostDKGExecutionChain) GetFrostDKGState() (
+	DKGState,
+	error,
+) {
+	return AwaitingResult, nil
+}
+
+func (testChain *retryableFrostDKGExecutionChain) PastFrostDKGStartedEvents(
+	*FrostDKGStartedEventFilter,
+) ([]*FrostDKGStartedEvent, error) {
+	return []*FrostDKGStartedEvent{testChain.event}, nil
+}
+
+func (testChain *retryableFrostDKGExecutionChain) SelectFrostGroup() (
+	*GroupSelectionResult,
+	error,
+) {
+	return &GroupSelectionResult{
+		OperatorsAddresses: chain.Addresses{testChain.operatorAddress},
+	}, nil
 }
 
 type rekeyingFrostDKGStartedChain struct {

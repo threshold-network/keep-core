@@ -117,7 +117,22 @@ func executeFrostDKGIfPossible(
 	fullMembers := frostFullMembers(groupSelectionResult)
 	dkgTimeoutBlock := event.BlockNumber + params.SubmissionTimeoutBlocks
 
+	// Acquire the reversible capacity reservation before crossing the
+	// goroutine boundary. A transient admission failure must be visible to the
+	// coordinator so it releases the event lease and a replay can retry.
+	anchorReservation, err := reserveFrostDKGReadiness(
+		ctx,
+		node.frostNativeSignerAnchorAdmission,
+		memberIndexes,
+	)
+	if err != nil {
+		logger.Errorf("FROST DKG anchor admission failed: [%v]", err)
+		return false
+	}
+
 	go func() {
+		defer anchorReservation.Release()
+
 		dkgLogger := logger.With(
 			zap.String("seed", fmt.Sprintf("0x%x", event.Seed)),
 			zap.String("memberIndexes", fmt.Sprintf("%v", memberIndexes)),
@@ -169,20 +184,12 @@ func executeFrostDKGIfPossible(
 				len(groupSelectionResult.OperatorsIDs),
 			)
 		}
-		readinessAdmission, err := reserveAndAnnounceFrostDKGReadiness(
-			dkgCtx,
-			node.frostNativeSignerAnchorAdmission,
-			memberIndexes,
-			announceReadiness,
-		)
+		activeMemberIndexes, misbehavedMembersIndices, err :=
+			announceReadiness()
 		if err != nil {
-			dkgLogger.Errorf("FROST DKG admission or readiness failed: [%v]", err)
+			dkgLogger.Errorf("FROST DKG readiness failed: [%v]", err)
 			return
 		}
-		defer readinessAdmission.anchorReservation.Release()
-		activeMemberIndexes := readinessAdmission.activeMemberIndexes
-		misbehavedMembersIndices :=
-			readinessAdmission.misbehavedMembersIndices
 
 		localActiveMemberIndexes := localActiveFrostMemberIndexes(
 			memberIndexes,
@@ -304,23 +311,12 @@ func executeFrostDKGIfPossible(
 	return true
 }
 
-type frostDKGReadinessAdmission struct {
-	anchorReservation        *frostNativeSignerAnchorRevisionReservation
-	activeMemberIndexes      []group.MemberIndex
-	misbehavedMembersIndices registry.MisbehavedMemberIndices
-}
-
-func reserveAndAnnounceFrostDKGReadiness(
+func reserveFrostDKGReadiness(
 	ctx context.Context,
 	anchorAdmission *frostNativeSignerAnchorAdmissionController,
 	localMemberIndexes []group.MemberIndex,
-	announce func() (
-		[]group.MemberIndex,
-		registry.MisbehavedMemberIndices,
-		error,
-	),
 ) (
-	*frostDKGReadinessAdmission,
+	*frostNativeSignerAnchorRevisionReservation,
 	error,
 ) {
 	if anchorAdmission == nil {
@@ -328,14 +324,9 @@ func reserveAndAnnounceFrostDKGReadiness(
 			"native signer anchor admission is unavailable",
 		)
 	}
-	if announce == nil {
-		return nil, fmt.Errorf(
-			"FROST DKG readiness announcement is unavailable",
-		)
-	}
-
 	// Every selected local seat may become active once readiness is announced.
-	// Reserve that worst-case persistence cost before invoking the announcer.
+	// Reserve that worst-case persistence cost before starting asynchronous
+	// readiness work.
 	anchorReservation, err := anchorAdmission.reserveDKG(
 		ctx,
 		uint64(len(localMemberIndexes)),
@@ -346,21 +337,7 @@ func reserveAndAnnounceFrostDKGReadiness(
 			err,
 		)
 	}
-
-	activeMemberIndexes, misbehavedMembersIndices, err := announce()
-	if err != nil {
-		anchorReservation.Release()
-		return nil, fmt.Errorf(
-			"readiness announcement failed: [%w]",
-			err,
-		)
-	}
-
-	return &frostDKGReadinessAdmission{
-		anchorReservation:        anchorReservation,
-		activeMemberIndexes:      activeMemberIndexes,
-		misbehavedMembersIndices: misbehavedMembersIndices,
-	}, nil
+	return anchorReservation, nil
 }
 
 type frostDKGExecutionResult struct {

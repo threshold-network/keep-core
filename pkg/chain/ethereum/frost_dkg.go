@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	ethabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -647,6 +648,117 @@ func (tc *TbtcChain) GetFrostDKGState() (tbtc.DKGState, error) {
 	}
 
 	return tbtc.DKGState(state), nil
+}
+
+// FrostDKGRetirementSnapshot reads every predicate used for irreversible
+// native-package retirement at one exact finalized block. The independent
+// authorization verifier uses EIP-1898 requireCanonical calls, so a lagging or
+// forked endpoint fails closed instead of silently serving latest state.
+func (tc *TbtcChain) FrostDKGRetirementSnapshot(
+	ctx context.Context,
+	point tbtc.FrostPreSignFinality,
+	walletIDs [][32]byte,
+) (*tbtc.FrostDKGRetirementSnapshot, error) {
+	if ctx == nil || point.BlockNumber == 0 ||
+		point.BlockHash == [32]byte{} ||
+		tc.frostWalletRegistryAddr == (common.Address{}) {
+		return nil, fmt.Errorf("FROST DKG retirement snapshot identity is incomplete")
+	}
+	_, verifier, err := tc.frostPreSignAdapterPair()
+	if err != nil {
+		return nil, err
+	}
+	verifyPoint := func() error {
+		header, err := verifier.reader.HeaderByNumber(
+			ctx,
+			new(big.Int).SetUint64(point.BlockNumber),
+		)
+		if err != nil {
+			return err
+		}
+		if header == nil || header.Number == nil ||
+			!header.Number.IsUint64() ||
+			header.Number.Uint64() != point.BlockNumber ||
+			header.Hash() != common.Hash(point.BlockHash) {
+			return fmt.Errorf(
+				"FROST DKG retirement point is not canonical by height",
+			)
+		}
+		return nil
+	}
+	if err := verifyPoint(); err != nil {
+		return nil, err
+	}
+
+	registryABI, err := frostabi.FrostWalletRegistryMetaData.GetAbi()
+	if err != nil {
+		return nil, fmt.Errorf("cannot load FROST wallet registry ABI: [%w]", err)
+	}
+	stateOutput, err := verifier.callAtHash(
+		ctx,
+		tc.frostWalletRegistryAddr,
+		*registryABI,
+		"getWalletCreationState",
+		common.Hash(point.BlockHash),
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot read exact FROST DKG state: [%w]",
+			err,
+		)
+	}
+	if len(stateOutput) != 1 {
+		return nil, fmt.Errorf("exact FROST DKG state response is malformed")
+	}
+	state := tbtc.DKGState(
+		*ethabi.ConvertType(stateOutput[0], new(uint8)).(*uint8),
+	)
+	if state < tbtc.Idle || state > tbtc.Challenge {
+		return nil, fmt.Errorf("exact FROST DKG state is invalid")
+	}
+
+	registeredWallets := make(map[[32]byte]bool, len(walletIDs))
+	for _, walletID := range walletIDs {
+		if _, duplicate := registeredWallets[walletID]; duplicate {
+			return nil, fmt.Errorf(
+				"FROST DKG retirement snapshot contains a duplicate wallet",
+			)
+		}
+		registrationOutput, err := verifier.callAtHash(
+			ctx,
+			tc.frostWalletRegistryAddr,
+			*registryABI,
+			"isWalletRegistered",
+			common.Hash(point.BlockHash),
+			walletID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot read exact FROST registration for wallet [0x%x]: [%w]",
+				walletID,
+				err,
+			)
+		}
+		if len(registrationOutput) != 1 {
+			return nil, fmt.Errorf(
+				"exact FROST registration response is malformed",
+			)
+		}
+		registeredWallets[walletID] =
+			*ethabi.ConvertType(registrationOutput[0], new(bool)).(*bool)
+	}
+	if err := verifyPoint(); err != nil {
+		return nil, fmt.Errorf(
+			"FROST DKG retirement point changed during snapshot: [%w]",
+			err,
+		)
+	}
+
+	return &tbtc.FrostDKGRetirementSnapshot{
+		Point:             point,
+		State:             state,
+		RegisteredWallets: registeredWallets,
+	}, nil
 }
 
 // IsFrostDKGResultValid validates the submitted FROST DKG result using the

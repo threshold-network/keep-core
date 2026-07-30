@@ -17,7 +17,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-func TestReserveAndAnnounceFrostDKGReadiness_AdmissionFailureDoesNotAnnounce(
+func TestReserveFrostDKGReadiness_AdmissionFailureIsSynchronous(
 	t *testing.T,
 ) {
 	controller := &frostNativeSignerAnchorAdmissionController{
@@ -35,33 +35,20 @@ func TestReserveAndAnnounceFrostDKGReadiness_AdmissionFailureDoesNotAnnounce(
 			Generations: FrostNativeSignerAnchorRotationWarningHeadroom,
 		},
 	}
-	announced := false
-
-	admission, err := reserveAndAnnounceFrostDKGReadiness(
+	reservation, err := reserveFrostDKGReadiness(
 		context.Background(),
 		controller,
 		[]group.MemberIndex{1, 2},
-		func() (
-			[]group.MemberIndex,
-			registry.MisbehavedMemberIndices,
-			error,
-		) {
-			announced = true
-			return nil, nil, nil
-		},
 	)
 	if err == nil || !strings.Contains(err.Error(), "unreserved") {
 		t.Fatalf("unexpected DKG admission result: [%v]", err)
 	}
-	if admission != nil {
+	if reservation != nil {
 		t.Fatal("failed DKG admission returned a reservation")
-	}
-	if announced {
-		t.Fatal("DKG readiness was announced after admission failed")
 	}
 }
 
-func TestReserveAndAnnounceFrostDKGReadiness_ReservesEverySelectedLocalSeat(
+func TestReserveFrostDKGReadiness_ReservesEverySelectedLocalSeat(
 	t *testing.T,
 ) {
 	controller := &frostNativeSignerAnchorAdmissionController{
@@ -77,30 +64,17 @@ func TestReserveAndAnnounceFrostDKGReadiness_ReservesEverySelectedLocalSeat(
 	}
 	localMemberIndexes := []group.MemberIndex{2, 4, 6}
 
-	admission, err :=
-		reserveAndAnnounceFrostDKGReadiness(
+	reservation, err :=
+		reserveFrostDKGReadiness(
 			context.Background(),
 			controller,
 			localMemberIndexes,
-			func() (
-				[]group.MemberIndex,
-				registry.MisbehavedMemberIndices,
-				error,
-			) {
-				return []group.MemberIndex{1, 2}, nil, nil
-			},
 		)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if admission == nil || admission.anchorReservation == nil {
+	if reservation == nil {
 		t.Fatal("successful DKG admission returned no reservation")
-	}
-	if len(admission.activeMemberIndexes) != 2 {
-		t.Fatalf(
-			"unexpected active member indexes: [%v]",
-			admission.activeMemberIndexes,
-		)
 	}
 	expectedPersistenceCalls := uint64(len(localMemberIndexes) * 2)
 	if controller.reserved.Revisions != expectedPersistenceCalls ||
@@ -111,7 +85,7 @@ func TestReserveAndAnnounceFrostDKGReadiness_ReservesEverySelectedLocalSeat(
 		)
 	}
 
-	admission.anchorReservation.Release()
+	reservation.Release()
 	if controller.reserved != (frostNativeSignerAnchorCapacity{}) {
 		t.Fatalf(
 			"released DKG reservation remained charged: [%+v]",

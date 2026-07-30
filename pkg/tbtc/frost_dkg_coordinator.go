@@ -7,6 +7,15 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
+type frostDKGExecutor func(
+	context.Context,
+	*node,
+	FrostDKGChain,
+	*FrostDKGStartedEvent,
+	[]group.MemberIndex,
+	*GroupSelectionResult,
+) bool
+
 func initializeFrostDKGCoordinator(
 	ctx context.Context,
 	node *node,
@@ -61,6 +70,26 @@ func handleFrostDKGStarted(
 	deduplicator *deduplicator,
 	event *FrostDKGStartedEvent,
 	waitForConfirmation bool,
+) {
+	handleFrostDKGStartedWithExecutor(
+		ctx,
+		node,
+		frostChain,
+		deduplicator,
+		event,
+		waitForConfirmation,
+		executeFrostDKGIfPossible,
+	)
+}
+
+func handleFrostDKGStartedWithExecutor(
+	ctx context.Context,
+	node *node,
+	frostChain FrostDKGChain,
+	deduplicator *deduplicator,
+	event *FrostDKGStartedEvent,
+	waitForConfirmation bool,
+	execute frostDKGExecutor,
 ) {
 	lease, ok := deduplicator.beginDKGStarted(event.Seed)
 	if !ok {
@@ -146,13 +175,14 @@ func handleFrostDKGStarted(
 		// failed and released its lease, this path safely becomes the retry.
 		completed = true
 		lease.finish(completed)
-		handleFrostDKGStarted(
+		handleFrostDKGStartedWithExecutor(
 			ctx,
 			node,
 			frostChain,
 			deduplicator,
 			lastEvent,
 			waitForConfirmation,
+			execute,
 		)
 		return
 	}
@@ -177,7 +207,7 @@ func handleFrostDKGStarted(
 		return
 	}
 
-	completed = executeFrostDKGIfPossible(
+	completed = execute(
 		ctx,
 		node,
 		frostChain,
