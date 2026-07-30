@@ -126,11 +126,17 @@ static STATE_ANCHOR_TRUST_TRANSITION_FAULT_INJECTION_POINT: OnceLock<
     Mutex<Option<StateAnchorTrustTransitionFaultInjectionPoint>>,
 > = OnceLock::new();
 
-#[cfg(test)]
+/// The lock-replacement fault injectors below displace and recreate real
+/// directory entries through the same `openat`/`renameat` primitives the store
+/// uses, so they exist only where those primitives do. Their switches are
+/// gated with them: on a non-Unix target the durable store is a stub, the
+/// tests that arm these switches are `cfg(unix)` too, and an ungated switch
+/// would only be unreachable state that keeps `cargo test` from compiling.
+#[cfg(all(test, unix))]
 static REPLACE_TRUST_LOCK_AFTER_GUARDED_PUBLICATION: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 static REPLACE_TRUST_LOCK_AFTER_FLOCK: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -176,7 +182,7 @@ fn clear_state_anchor_trust_transition_fault_for_tests() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn maybe_replace_trust_lock_after_guarded_publication(
     recovery_guard: Option<&StateAnchorTrustRecoveryGuard<'_>>,
 ) -> Result<(), EngineError> {
@@ -222,7 +228,7 @@ fn maybe_replace_trust_lock_after_guarded_publication(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn maybe_replace_trust_lock_after_flock(
     directory: &fs::File,
     lock_name: &OsStr,
