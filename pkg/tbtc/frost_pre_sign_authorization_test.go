@@ -7,8 +7,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	stdnet "net"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +30,10 @@ type testFrostProductionAuthorizationReadiness struct {
 	points            []FrostPreSignFinality
 	headrooms         []uint64
 	activeQuarantines []frostRetainedGroupActiveQuarantine
+	// failingCalls is how many leading reconciliations fail with err before the
+	// verifier starts succeeding. Zero with a non-nil err means every call
+	// fails, which is the pre-existing behaviour.
+	failingCalls uint64
 }
 
 func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductionSignerReadiness(
@@ -35,7 +42,8 @@ func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductio
 ) (*frostProductionSignerReadinessSnapshot, error) {
 	readiness.calls++
 	readiness.points = append(readiness.points, point)
-	if readiness.err != nil {
+	if readiness.err != nil &&
+		(readiness.failingCalls == 0 || readiness.calls <= readiness.failingCalls) {
 		return nil, readiness.err
 	}
 	headroom := uint64(FrostNativeSignerAnchorMaximumHistoryEvents)
@@ -1328,5 +1336,225 @@ func TestThresholdFrostPreSignAuthorizationGate_RefusesQuarantinedSigningWallet(
 				t.Fatalf("quarantined wallet was authorized to sign: [%v]", err)
 			}
 		})
+	}
+}
+
+func TestIsFrostPreSignTransientAuthorizationFailure(t *testing.T) {
+	tests := map[string]struct {
+		err       error
+		transient bool
+	}{
+		"no failure": {},
+		"observed authorization change": {
+			err: fmt.Errorf(
+				"FROST pre-sign authorization identity changed",
+			),
+		},
+		"caller cancelled": {
+			err: fmt.Errorf("readiness: [%w]", context.Canceled),
+		},
+		"history read timed out": {
+			err: fmt.Errorf(
+				"FROST production signer is not authorization-ready: [%w]",
+				fmt.Errorf(
+					"cannot read retained-group history page [3]: [%w]",
+					context.DeadlineExceeded,
+				),
+			),
+			transient: true,
+		},
+		"endpoint refused the connection": {
+			err: fmt.Errorf("anchor read: [%w]", &stdnet.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: syscall.ECONNREFUSED,
+			}),
+			transient: true,
+		},
+		"read deadline elapsed": {
+			err:       fmt.Errorf("anchor read: [%w]", os.ErrDeadlineExceeded),
+			transient: true,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := isFrostPreSignTransientAuthorizationFailure(
+				test.err,
+			); got != test.transient {
+				t.Fatalf(
+					"classified [%v] as transient=[%t], want [%t]",
+					test.err,
+					got,
+					test.transient,
+				)
+			}
+		})
+	}
+}
+
+// testFrostPreSignRevalidationFixture builds a gate and a matching finalized
+// authorization whose revalidation passes, so a test only has to perturb the
+// one dependency it is about.
+func testFrostPreSignRevalidationFixture(
+	t *testing.T,
+	readiness *testFrostProductionAuthorizationReadiness,
+) (
+	*thresholdFrostPreSignAuthorizationGate,
+	*frostPreSignAuthorization,
+) {
+	t.Helper()
+	unsignedTx, _ := buildTaprootKeyPathUnsignedTxForTest(t)
+	transaction := testFrostPreSignTransaction(t, unsignedTx)
+	proposal := completeTestFrostPreSignProposal(transaction)
+	relayFinality := FrostPreSignFinality{
+		RelayTransactionHash:  [32]byte{0x71},
+		BlockNumber:           100,
+		BlockHash:             [32]byte{0x72},
+		AuthorizationSequence: [32]byte{31: 1},
+	}
+	currentFinality := FrostPreSignFinality{
+		BlockNumber: 101,
+		BlockHash:   [32]byte{0x73},
+	}
+	backend := &testFrostPreSignAuthorizationBackend{
+		proposal:        proposal,
+		currentFinality: &currentFinality,
+		states: map[uint64]*FrostPreSignAuthorizationState{
+			relayFinality.BlockNumber: completeTestFrostPreSignState(
+				proposal,
+				relayFinality,
+			),
+			currentFinality.BlockNumber: completeTestFrostPreSignState(
+				proposal,
+				currentFinality,
+			),
+		},
+	}
+	gate := &thresholdFrostPreSignAuthorizationGate{
+		backend:               backend,
+		activationProfile:     activationProfileForTestProposal(proposal),
+		storeBinding:          testFrostDurableSessionStoreBinding(t),
+		productionReadiness:   readiness,
+		transientRetryBudget:  time.Second,
+		transientRetryBackoff: time.Millisecond,
+	}
+	authorization := &frostPreSignAuthorization{
+		ActivationProfileHash: gate.activationProfile.ProfileHash,
+		AuthorizationID:       proposal.Digest,
+		ReservationID:         proposal.ReservationID,
+		VariantRoot:           proposal.AuthorizationRoot,
+		TransactionHash:       proposal.Transaction.TransactionHash,
+		Finality:              relayFinality,
+		VariantSequence:       frostPreSignVariantSequence(relayFinality),
+		proposal:              proposal,
+	}
+	return gate, authorization
+}
+
+// TestThresholdFrostPreSignAuthorizationGate_SurvivesTransientReadinessFailure
+// pins the monitor path against a single unreachable dependency. The monitor
+// latches the first error revalidation returns and cancels the signing session
+// permanently, so a readiness reconciliation that times out - which the
+// cache-miss route performs over paginated network reads every time the
+// finalized point advances - must not be reported as an authorization change.
+func TestThresholdFrostPreSignAuthorizationGate_SurvivesTransientReadinessFailure(
+	t *testing.T,
+) {
+	readiness := &testFrostProductionAuthorizationReadiness{
+		err: fmt.Errorf(
+			"cannot reconstruct complete FROST retained-group history: [%w]",
+			context.DeadlineExceeded,
+		),
+		failingCalls: 2,
+	}
+	gate, authorization := testFrostPreSignRevalidationFixture(t, readiness)
+	if err := gate.revalidate(
+		context.Background(),
+		authorization,
+	); err != nil {
+		t.Fatalf("a transient readiness failure killed the session: [%v]", err)
+	}
+	if readiness.calls != 3 {
+		t.Fatalf(
+			"expected the unreachable reconciliation to be retried, saw [%d] attempts",
+			readiness.calls,
+		)
+	}
+}
+
+// TestThresholdFrostPreSignAuthorizationGate_LatchesObservedReadinessChange
+// keeps the gate fail-closed. An authorization fact that was actually read and
+// disagrees is deterministic, so it must be reported on the first attempt
+// rather than retried into a delayed cancellation.
+func TestThresholdFrostPreSignAuthorizationGate_LatchesObservedReadinessChange(
+	t *testing.T,
+) {
+	readiness := &testFrostProductionAuthorizationReadiness{
+		err: fmt.Errorf(
+			"canonical FROST retained-group history rewrote, omitted, or reordered event [7]",
+		),
+	}
+	gate, authorization := testFrostPreSignRevalidationFixture(t, readiness)
+	err := gate.revalidate(context.Background(), authorization)
+	if err == nil ||
+		!strings.Contains(err.Error(), "rewrote, omitted, or reordered") {
+		t.Fatalf("observed readiness change was not reported: [%v]", err)
+	}
+	if readiness.calls != 1 {
+		t.Fatalf(
+			"observed readiness change was retried [%d] times",
+			readiness.calls,
+		)
+	}
+}
+
+// TestThresholdFrostPreSignAuthorizationGate_FailsClosedOnPersistentOutage
+// bounds the tolerance. A dependency that stays unreachable is a dependency
+// whose authorization facts cannot be checked at all, so the pass gives up and
+// lets the monitor cancel the session.
+func TestThresholdFrostPreSignAuthorizationGate_FailsClosedOnPersistentOutage(
+	t *testing.T,
+) {
+	readiness := &testFrostProductionAuthorizationReadiness{
+		err: fmt.Errorf("anchor read: [%w]", &stdnet.OpError{
+			Op:  "dial",
+			Net: "tcp",
+			Err: syscall.ECONNREFUSED,
+		}),
+	}
+	gate, authorization := testFrostPreSignRevalidationFixture(t, readiness)
+	gate.transientRetryBudget = 20 * time.Millisecond
+	err := gate.revalidate(context.Background(), authorization)
+	if err == nil || !strings.Contains(err.Error(), "stayed unreachable") {
+		t.Fatalf("persistent outage did not fail closed: [%v]", err)
+	}
+	if readiness.calls < 2 {
+		t.Fatalf(
+			"persistent outage was not retried at all, saw [%d] attempts",
+			readiness.calls,
+		)
+	}
+}
+
+// TestThresholdFrostPreSignAuthorizationGate_StopsRetryingWhenCallerCancels
+// keeps a cancelled caller from being held for the retry budget; the monitor
+// treats its own cancellation separately and must not latch on it.
+func TestThresholdFrostPreSignAuthorizationGate_StopsRetryingWhenCallerCancels(
+	t *testing.T,
+) {
+	readiness := &testFrostProductionAuthorizationReadiness{
+		err: fmt.Errorf("anchor read: [%w]", os.ErrDeadlineExceeded),
+	}
+	gate, authorization := testFrostPreSignRevalidationFixture(t, readiness)
+	gate.transientRetryBudget = time.Minute
+	gate.transientRetryBackoff = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := gate.revalidate(ctx, authorization); err == nil {
+		t.Fatal("cancelled revalidation reported success")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("cancelled revalidation waited out the backoff: [%s]", elapsed)
 	}
 }

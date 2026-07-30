@@ -39,9 +39,47 @@ const (
 	frostRetainedGroupLiftCertificatePrefix = "lift-certificate-"
 	frostRetainedGroupJournalFileSuffix     = ".json"
 	frostRetainedGroupJournalTempSuffix     = ".tmp"
-	frostRetainedGroupJournalMaximumFile    = 8 * 1024 * 1024
 	frostRetainedGroupCanonicalDirectory    = "canonical"
 	frostRetainedGroupQuarantineDirectory   = "quarantine"
+
+	// frostRetainedGroupJournalMaximumMutation bounds one serialized
+	// FrostRetainedGroupMutation. A mutation with every field at its widest
+	// accepted value marshals to just over 10 KiB: five event points, 100
+	// operator IDs, six 32-byte digests - encoding/json renders a [32]byte as
+	// an array of decimal numbers, not base64 - and a
+	// frostRetainedGroupMaximumReasonBytes reason made of control characters,
+	// which JSON escapes six bytes to one. Nothing per-mutation is unbounded.
+	frostRetainedGroupJournalMaximumMutation = 12 * 1024
+
+	// frostRetainedGroupJournalMaximumFile bounds every journal file, on the
+	// read path and the write path alike. It is derived from the structural
+	// maxima this package already enforces rather than picked, because a cap
+	// below the largest legitimate file is not a safety property - it is a
+	// permanent wedge with no supported way forward. The write side would
+	// refuse the file the producer just built and the read side would refuse
+	// to reopen a file that had already been published and fsynced.
+	//
+	// The widest legitimate file is one canonical batch. reconcile() refuses a
+	// complete history above frostRetainedGroupMaximumMutations mutations and
+	// a batch carries the suffix of exactly one such read, so no batch holds
+	// more than that many mutations, each bounded by
+	// frostRetainedGroupJournalMaximumMutation; the extra mebibyte covers the
+	// batch header and the envelope wrapper. Every other persisted shape is
+	// strictly narrower - a state file holds at most
+	// frostRetainedGroupMaximumWallets wallet records, a quarantine batch is
+	// the same mutation count in a narrower wire form, and metadata, lift and
+	// checkpoint certificates are fixed-size records.
+	//
+	// 8 MiB, the previous value, was reachable by ordinary canonical history:
+	// the full retained-wallet set admitted with 100-seat signing groups and
+	// then transitioned - 4096 mutations in one batch - serializes to about
+	// 13 MB, so a healthy mainnet node could have published a batch it could
+	// never read back. See
+	// TestFrostRetainedGroupJournalMaximumFileCoversTheWidestLegalShapes and
+	// TestFrostRetainedGroupJournalPersistsAndReadsBackTheWidestLegalBatch,
+	// which measure the real worst case and fail if any input bound moves.
+	frostRetainedGroupJournalMaximumFile = frostRetainedGroupMaximumMutations*
+		frostRetainedGroupJournalMaximumMutation + 1024*1024
 
 	frostRetainedGroupQuarantineMetadataSchema = "tbtc-frost-retained-group-quarantine-metadata/v3"
 	frostRetainedGroupQuarantineBatchSchema    = "tbtc-frost-retained-group-quarantine-batch/v3"
@@ -2097,6 +2135,18 @@ func validateFrostRetainedGroupBatchMutationBounds(
 	to FrostPreSignFinality,
 	mutations []FrostRetainedGroupMutation,
 ) error {
+	// A batch carries the suffix of exactly one complete-history read, and
+	// reconcile() refuses a history above frostRetainedGroupMaximumMutations.
+	// Enforcing the same count when the batch is replayed keeps a durable file
+	// inside the geometry frostRetainedGroupJournalMaximumFile is derived from,
+	// so a corrupted file cannot buy unbounded replay work under the size cap.
+	if len(mutations) > frostRetainedGroupMaximumMutations {
+		return fmt.Errorf(
+			"batch carries [%d] mutations, above the per-batch limit [%d]",
+			len(mutations),
+			frostRetainedGroupMaximumMutations,
+		)
+	}
 	var previous FrostRetainedGroupEventPoint
 	for index, mutation := range mutations {
 		if !mutation.Point.valid() || mutation.Point.BlockNumber <= from.BlockNumber ||
@@ -2204,6 +2254,12 @@ func persistFrostRetainedGroupEnvelopeAt(
 	// the next initialize() discovers it, leaving the journal permanently
 	// unopenable with no signal at the point the file was produced. Fail closed
 	// here instead, while the caller can still name the offending file.
+	//
+	// This bound is unreachable by valid input: the constant is derived from
+	// the mutation count and per-mutation width the producer already enforces,
+	// so only a corrupted or hostile payload can trip it. That is deliberate -
+	// a bound a healthy node can hit would wedge bootstrap rather than protect
+	// it, since the journal is append-only and offers no way to shed the file.
 	if len(envelopeBytes) > frostRetainedGroupJournalMaximumFile {
 		return fmt.Errorf(
 			"FROST retained-group journal file [%s] is [%d] bytes, exceeding the readable maximum [%d]",

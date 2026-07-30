@@ -7,11 +7,16 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
+	stdnet "net"
+	"os"
 	"reflect"
 	"sort"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -27,6 +32,16 @@ const (
 	frostPreSignAuthorizationThreshold         = 51
 	frostPreSignAuthorizationMaximumSeats      = 100
 	frostPreSignAuthorizationMaximumInputs     = 21
+
+	// frostPreSignAuthorizationTransientRetryBudget bounds how long one
+	// revalidation pass keeps re-attempting after an authorization dependency
+	// proved unreachable, and frostPreSignAuthorizationTransientRetryBackoff
+	// paces those attempts. The budget is deliberately short relative to a
+	// signing window: past it the pass reports the failure and the monitor
+	// fails closed, because a dependency nobody can reach is a dependency
+	// nobody can check.
+	frostPreSignAuthorizationTransientRetryBudget  = 15 * time.Second
+	frostPreSignAuthorizationTransientRetryBackoff = 250 * time.Millisecond
 
 	frostPreSignReservationProtocolDomain = "tbtc/p2tr-pre-signing-reservation/threshold-v1"
 	frostPreSignSigningPolicyDomain       = "tbtc/p2tr-pre-signing-policy/default-no-annex-51-seats-v1"
@@ -1575,6 +1590,13 @@ type thresholdFrostPreSignAuthorizationGate struct {
 	localMemberIndexes  []group.MemberIndex
 	threshold           int
 	maximumAttempts     uint64
+
+	// transientRetryBudget and transientRetryBackoff override the package
+	// defaults used by revalidate. They exist so tests can drive the
+	// unreachable-dependency path without waiting out the production budget;
+	// zero means the default.
+	transientRetryBudget  time.Duration
+	transientRetryBackoff time.Duration
 }
 
 func newThresholdFrostPreSignAuthorizationGate(
@@ -1777,7 +1799,116 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 	return authorization, nil
 }
 
+// isFrostPreSignTransientAuthorizationFailure reports whether err is a failure
+// to reach an authorization dependency rather than an authorization fact
+// observed at one.
+//
+// The distinction is load-bearing on the monitor path.
+// frostPreSignAuthorizationMonitor.revalidate latches the first error it sees
+// permanently and cancels the signing session, so an error that merely means
+// "the RPC endpoint did not answer this second" would destroy a live,
+// still-valid signing window. Every genuine authorization change - a raised
+// quarantine, a rollback, an equal-generation fork, a rewritten proposal, a
+// moved readiness stamp - is a comparison against data that was successfully
+// read, and produces a plain error that never carries any of the causes below.
+// So this can only ever classify a transport failure, never an authorization
+// fact, and anything it does not recognize stays fatal.
+//
+// context.Canceled is deliberately excluded: it means the caller went away, and
+// callers handle their own context separately.
+func isFrostPreSignTransientAuthorizationFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.ENETDOWN) {
+		return true
+	}
+	var operationError *stdnet.OpError
+	if errors.As(err, &operationError) {
+		return true
+	}
+	var resolverError *stdnet.DNSError
+	if errors.As(err, &resolverError) {
+		return true
+	}
+	var networkError stdnet.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return true
+	}
+	return false
+}
+
+// revalidate re-establishes every pinned authorization fact, retrying a
+// dependency that is merely unreachable under the caller's context for a
+// bounded budget.
+//
+// Revalidation reads the current finalized point, the pinned authorization
+// state at two points, and - whenever the finalized point has advanced past the
+// cached one - a complete signer-readiness reconciliation whose canonical
+// history arrives over paginated network reads. Any of those can fail
+// transiently, and the monitor latches the first failure permanently, so
+// without this a single RPC timeout during a multi-minute signing window kills
+// a session that nothing was wrong with.
+//
+// This does not make the gate permissive. Retrying never substitutes a stale
+// answer for a fresh one: the pass returns success only when a whole
+// revalidation actually succeeded. A genuine authorization change is
+// deterministic and is not a transport failure, so it returns on the first
+// attempt and still latches. If the dependency stays unreachable for the whole
+// budget the failure is reported and the session still fails closed, because
+// facts nobody can read are facts nobody can verify.
 func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
+	ctx context.Context,
+	authorization *frostPreSignAuthorization,
+) error {
+	if tfpsag == nil || ctx == nil {
+		return tfpsag.revalidateOnce(ctx, authorization)
+	}
+	budget := tfpsag.transientRetryBudget
+	if budget <= 0 {
+		budget = frostPreSignAuthorizationTransientRetryBudget
+	}
+	backoff := tfpsag.transientRetryBackoff
+	if backoff <= 0 {
+		backoff = frostPreSignAuthorizationTransientRetryBackoff
+	}
+	deadline := time.Now().Add(budget)
+	for attempt := 1; ; attempt++ {
+		err := tfpsag.revalidateOnce(ctx, authorization)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil ||
+			!isFrostPreSignTransientAuthorizationFailure(err) {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf(
+				"FROST authorization dependency stayed unreachable across [%d] attempts over [%s]: [%w]",
+				attempt,
+				budget,
+				err,
+			)
+		}
+		backoffTimer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			backoffTimer.Stop()
+			return err
+		case <-backoffTimer.C:
+		}
+	}
+}
+
+func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidateOnce(
 	ctx context.Context,
 	authorization *frostPreSignAuthorization,
 ) error {

@@ -4070,3 +4070,384 @@ func TestPersistFrostRetainedGroupEnvelopeAtRejectsUnreadableSize(t *testing.T) 
 		t.Fatalf("rejected journal file was still published: [%v]", err)
 	}
 }
+
+// journalTestWidestMutation is one FrostRetainedGroupMutation with every field
+// at the widest value the signed history source accepts: the largest canonical
+// JSON block number, 0xff digests - encoding/json renders a [32]byte as an
+// array of decimal numbers, so 0xff is the widest byte - 100 maximal operator
+// IDs, and a full-length reason of NUL bytes, which JSON escapes six to one.
+func journalTestWidestMutation() FrostRetainedGroupMutation {
+	digest := [32]byte{}
+	for index := range digest {
+		digest[index] = 0xff
+	}
+	publicKeyHash := [20]byte{}
+	for index := range publicKeyHash {
+		publicKeyHash[index] = 0xff
+	}
+	point := FrostRetainedGroupEventPoint{
+		BlockNumber:      frostRetainedGroupMaximumCanonicalJSONInteger,
+		BlockHash:        digest,
+		TransactionHash:  digest,
+		TransactionIndex: ^uint32(0),
+		LogIndex:         ^uint32(0),
+	}
+	operatorIDs := make([]uint32, 100)
+	for index := range operatorIDs {
+		operatorIDs[index] = ^uint32(0)
+	}
+	return FrostRetainedGroupMutation{
+		Point:                   point,
+		Kind:                    FrostRetainedGroupRecoveryRequiredMutation,
+		WalletID:                digest,
+		WalletPublicKeyHash:     publicKeyHash,
+		OperatorIDs:             operatorIDs,
+		RetainedGroupHash:       digest,
+		DkgResultHash:           digest,
+		DkgSubmissionPoint:      point,
+		DkgApprovalPoint:        point,
+		CreationPoint:           point,
+		BridgeRegistrationPoint: point,
+		QuarantineID:            digest,
+		EvidenceHash:            digest,
+		LiftCertificateHash:     digest,
+		Reason: strings.Repeat(
+			"\x00",
+			frostRetainedGroupMaximumReasonBytes,
+		),
+	}
+}
+
+// TestFrostRetainedGroupJournalMaximumFileCoversTheWidestLegalShapes proves the
+// shared read/write size bound is derived from the journal's own input limits
+// and still has headroom over every shape the producer can publish. It fails if
+// a field is added to a persisted record, if a per-field limit is raised, or if
+// the file bound is lowered back under the geometry it must cover - all of
+// which would turn the bound from a corruption guard into a bootstrap wedge.
+func TestFrostRetainedGroupJournalMaximumFileCoversTheWidestLegalShapes(
+	t *testing.T,
+) {
+	widestMutation, err := json.Marshal(journalTestWidestMutation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(widestMutation) > frostRetainedGroupJournalMaximumMutation {
+		t.Fatalf(
+			"widest legal mutation is [%d] bytes, above the derived per-mutation bound [%d]",
+			len(widestMutation),
+			frostRetainedGroupJournalMaximumMutation,
+		)
+	}
+
+	digest := [32]byte{}
+	for index := range digest {
+		digest[index] = 0xff
+	}
+	header, err := json.Marshal(frostRetainedGroupJournalBatch{
+		Schema:         frostRetainedGroupJournalBatchSchema,
+		BindingHash:    digest,
+		Sequence:       frostRetainedGroupMaximumCanonicalJSONInteger,
+		From:           FrostPreSignFinality{BlockNumber: 1, BlockHash: digest},
+		To:             FrostPreSignFinality{BlockNumber: 2, BlockHash: digest},
+		PriorBatchRoot: digest,
+		Checksum:       digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := json.Marshal(frostRetainedGroupEnvelope{
+		Payload:  json.RawMessage(header),
+		Checksum: digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A JSON array of N elements costs the elements plus N-1 separators and
+	// two brackets, so this is an exact upper bound on the widest batch file
+	// rather than a sampled one.
+	widestBatchFile := frostRetainedGroupMaximumMutations*
+		(frostRetainedGroupJournalMaximumMutation+1) +
+		len(envelope)
+	if widestBatchFile > frostRetainedGroupJournalMaximumFile {
+		t.Fatalf(
+			"widest legal canonical batch is [%d] bytes, above the journal file bound [%d]",
+			widestBatchFile,
+			frostRetainedGroupJournalMaximumFile,
+		)
+	}
+
+	widestWallet, err := json.Marshal(frostRetainedGroupWalletState{
+		WalletID:                digest,
+		WalletPublicKeyHash:     [20]byte{0xff},
+		OperatorIDs:             journalTestWidestMutation().OperatorIDs,
+		RetainedGroupHash:       digest,
+		Lifecycle:               FrostRetainedGroupMovingFunds,
+		CreationPoint:           journalTestWidestMutation().Point,
+		BridgeRegistrationPoint: journalTestWidestMutation().Point,
+		LifecyclePoint:          journalTestWidestMutation().Point,
+		LastBridgePoint:         journalTestWidestMutation().Point,
+		RegistryClosurePoint:    journalTestWidestMutation().Point,
+		RegistryClosed:          true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	widestStateFile := frostRetainedGroupMaximumWallets*
+		(len(widestWallet)+1) + len(envelope)
+	if widestStateFile > frostRetainedGroupJournalMaximumFile {
+		t.Fatalf(
+			"widest legal state file is [%d] bytes, above the journal file bound [%d]",
+			widestStateFile,
+			frostRetainedGroupJournalMaximumFile,
+		)
+	}
+	t.Logf(
+		"widest mutation [%d] B; widest batch file [%d] B; widest state file [%d] B; bound [%d] B",
+		len(widestMutation),
+		widestBatchFile,
+		widestStateFile,
+		frostRetainedGroupJournalMaximumFile,
+	)
+}
+
+// journalTestWidestLegalBatchMutations builds the widest canonical mutation set
+// a healthy mainnet node can produce: every retained wallet the journal admits,
+// each with a full 100-seat signing group, followed by one lifecycle transition
+// per wallet. The set is deliberately ordinary - no adversarial widths - and is
+// asserted below to satisfy the journal's own semantic replay.
+func journalTestWidestLegalBatchMutations() []FrostRetainedGroupMutation {
+	operatorIDs := make([]uint32, 100)
+	for index := range operatorIDs {
+		operatorIDs[index] = uint32(100000 + index)
+	}
+	reason := strings.Repeat("r", frostRetainedGroupMaximumReasonBytes)
+	admissions := make(
+		[]FrostRetainedGroupMutation,
+		0,
+		frostRetainedGroupMaximumWallets,
+	)
+	lifecycles := make(
+		[]FrostRetainedGroupMutation,
+		0,
+		frostRetainedGroupMaximumWallets,
+	)
+	for index := 0; index < frostRetainedGroupMaximumWallets; index++ {
+		identifier := uint64(index + 1)
+		walletID := [32]byte{0xa1}
+		binary.BigEndian.PutUint64(walletID[24:], identifier)
+		walletPublicKeyHash := [20]byte{0xa2}
+		binary.BigEndian.PutUint64(walletPublicKeyHash[12:], identifier)
+		blockNumber := uint64(index + 2)
+		blockHash := [32]byte{0xa3}
+		binary.BigEndian.PutUint64(blockHash[24:], blockNumber)
+		submissionTransaction := [32]byte{0xa4}
+		binary.BigEndian.PutUint64(submissionTransaction[24:], identifier)
+		admissionTransaction := [32]byte{0xa5}
+		binary.BigEndian.PutUint64(admissionTransaction[24:], identifier)
+		submission := FrostRetainedGroupEventPoint{
+			BlockNumber:      blockNumber,
+			BlockHash:        blockHash,
+			TransactionHash:  submissionTransaction,
+			TransactionIndex: 0,
+			LogIndex:         1,
+		}
+		approval := FrostRetainedGroupEventPoint{
+			BlockNumber:      blockNumber,
+			BlockHash:        blockHash,
+			TransactionHash:  admissionTransaction,
+			TransactionIndex: 1,
+			LogIndex:         1,
+		}
+		creation := approval
+		creation.LogIndex = 2
+		registration := approval
+		registration.LogIndex = 3
+		retainedGroupHash := [32]byte{0xa6}
+		binary.BigEndian.PutUint64(retainedGroupHash[24:], identifier)
+		dkgResultHash := [32]byte{0xa7}
+		binary.BigEndian.PutUint64(dkgResultHash[24:], identifier)
+		admissions = append(admissions, FrostRetainedGroupMutation{
+			Point:                   registration,
+			Kind:                    FrostRetainedGroupAdmissionMutation,
+			WalletID:                walletID,
+			WalletPublicKeyHash:     walletPublicKeyHash,
+			OperatorIDs:             append([]uint32{}, operatorIDs...),
+			RetainedGroupHash:       retainedGroupHash,
+			DkgResultHash:           dkgResultHash,
+			DkgSubmissionPoint:      submission,
+			DkgApprovalPoint:        approval,
+			CreationPoint:           creation,
+			BridgeRegistrationPoint: registration,
+			Reason:                  reason,
+		})
+
+		lifecycleBlock := uint64(frostRetainedGroupMaximumWallets + index + 2)
+		lifecycleBlockHash := [32]byte{0xb3}
+		binary.BigEndian.PutUint64(lifecycleBlockHash[24:], lifecycleBlock)
+		lifecycleTransaction := [32]byte{0xb5}
+		binary.BigEndian.PutUint64(lifecycleTransaction[24:], identifier)
+		lifecycles = append(lifecycles, FrostRetainedGroupMutation{
+			Point: FrostRetainedGroupEventPoint{
+				BlockNumber:      lifecycleBlock,
+				BlockHash:        lifecycleBlockHash,
+				TransactionHash:  lifecycleTransaction,
+				TransactionIndex: 0,
+				LogIndex:         1,
+			},
+			Kind:                FrostRetainedGroupMovingFundsMutation,
+			WalletID:            walletID,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			Reason:              reason,
+		})
+	}
+	return append(admissions, lifecycles...)
+}
+
+// TestFrostRetainedGroupJournalPersistsAndReadsBackTheWidestLegalBatch is the
+// regression anchor for the write-side size bound. The batch it builds is
+// ordinary canonical history - it replays cleanly through the journal's own
+// semantic validator - and it serializes past the 8 MiB the bound used to
+// carry. Under that value persist() refused a batch a healthy node had to
+// write, and, before the write bound existed, the same file was published and
+// then rejected by every later initialize(). Both are unrecoverable, so the
+// widest legal batch must round-trip.
+func TestFrostRetainedGroupJournalPersistsAndReadsBackTheWidestLegalBatch(
+	t *testing.T,
+) {
+	const previousMaximumFile = 8 * 1024 * 1024
+
+	mutations := journalTestWidestLegalBatchMutations()
+	if len(mutations) > frostRetainedGroupMaximumMutations {
+		t.Fatalf(
+			"test batch of [%d] mutations is above the history limit [%d]",
+			len(mutations),
+			frostRetainedGroupMaximumMutations,
+		)
+	}
+	from := FrostPreSignFinality{BlockNumber: 1, BlockHash: [32]byte{0xc1}}
+	to := FrostPreSignFinality{
+		BlockNumber: uint64(2*frostRetainedGroupMaximumWallets + 2),
+		BlockHash:   [32]byte{0xc2},
+	}
+	state := frostRetainedGroupJournalState{
+		Schema:       frostRetainedGroupJournalStateSchema,
+		BindingHash:  [32]byte{0xc3},
+		CurrentPoint: from,
+		Wallets:      []frostRetainedGroupWalletState{},
+	}
+	candidate := cloneFrostRetainedGroupState(state)
+	if err := applyFrostRetainedGroupMutations(
+		&candidate,
+		mutations,
+	); err != nil {
+		t.Fatalf("widest legal batch is not valid canonical history: [%v]", err)
+	}
+
+	batch := frostRetainedGroupJournalBatch{
+		Schema:         frostRetainedGroupJournalBatchSchema,
+		BindingHash:    state.BindingHash,
+		Sequence:       state.BatchSequence + 1,
+		From:           from,
+		To:             to,
+		PriorBatchRoot: state.BatchRoot,
+		Mutations:      mutations,
+	}
+	checksumPayload, err := frostRetainedGroupCanonicalValue(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch.Checksum = sha256.Sum256(checksumPayload)
+	if err := validateFrostRetainedGroupBatch(batch, state); err != nil {
+		t.Fatalf("widest legal batch failed batch validation: [%v]", err)
+	}
+
+	measured, err := json.Marshal(&batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(measured) <= previousMaximumFile {
+		t.Fatalf(
+			"widest legal batch is only [%d] bytes; it no longer exercises the [%d] byte bound it regressed against",
+			len(measured),
+			previousMaximumFile,
+		)
+	}
+
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	name := frostRetainedGroupBatchFileName(batch.Sequence)
+	if err := persistFrostRetainedGroupEnvelopeAt(
+		directory,
+		name,
+		&batch,
+		false,
+	); err != nil {
+		t.Fatalf("widest legal batch could not be published: [%v]", err)
+	}
+	readBack := frostRetainedGroupJournalBatch{}
+	if err := readFrostRetainedGroupEnvelopeAt(
+		directory,
+		name,
+		&readBack,
+	); err != nil {
+		t.Fatalf("published widest legal batch could not be read back: [%v]", err)
+	}
+	if len(readBack.Mutations) != len(mutations) ||
+		readBack.Checksum != batch.Checksum {
+		t.Fatalf(
+			"widest legal batch did not round-trip: [%d] of [%d] mutations",
+			len(readBack.Mutations),
+			len(mutations),
+		)
+	}
+}
+
+// TestValidateFrostRetainedGroupBatchMutationBounds_EnforcesPerBatchLimit keeps
+// a durable batch inside the geometry the file bound is derived from. A batch
+// only ever carries the suffix of one complete-history read, which reconcile()
+// caps at frostRetainedGroupMaximumMutations.
+func TestValidateFrostRetainedGroupBatchMutationBounds_EnforcesPerBatchLimit(
+	t *testing.T,
+) {
+	from := FrostPreSignFinality{BlockNumber: 1, BlockHash: [32]byte{0xd1}}
+	to := FrostPreSignFinality{
+		BlockNumber: uint64(frostRetainedGroupMaximumMutations + 2),
+		BlockHash:   [32]byte{0xd2},
+	}
+	mutations := make(
+		[]FrostRetainedGroupMutation,
+		frostRetainedGroupMaximumMutations+1,
+	)
+	for index := range mutations {
+		blockNumber := uint64(index + 2)
+		blockHash := [32]byte{0xd3}
+		binary.BigEndian.PutUint64(blockHash[24:], blockNumber)
+		transactionHash := [32]byte{0xd4}
+		binary.BigEndian.PutUint64(transactionHash[24:], blockNumber)
+		mutations[index] = FrostRetainedGroupMutation{
+			Point: FrostRetainedGroupEventPoint{
+				BlockNumber:     blockNumber,
+				BlockHash:       blockHash,
+				TransactionHash: transactionHash,
+				LogIndex:        1,
+			},
+			Kind: FrostRetainedGroupClosingMutation,
+		}
+	}
+	if err := validateFrostRetainedGroupBatchMutationBounds(
+		from,
+		to,
+		mutations,
+	); err == nil || !strings.Contains(err.Error(), "per-batch limit") {
+		t.Fatalf("oversized durable batch was accepted: [%v]", err)
+	}
+	if err := validateFrostRetainedGroupBatchMutationBounds(
+		from,
+		to,
+		mutations[:frostRetainedGroupMaximumMutations],
+	); err != nil {
+		t.Fatalf("largest legal durable batch was rejected: [%v]", err)
+	}
+}
