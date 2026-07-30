@@ -44,11 +44,20 @@ GHSA aliases. Serving only `btcec` from this directory lets the main
 btcd module track a current, fully patched release while the btcec
 consumers keep compiling against byte-identical crypto sources.
 
-Note: the v0.22.3-to-v0.24.2 jump also raised btcd's shared script
-pool ceiling from 6.4 MB (12,500 * 512 B) to roughly 524 MB (125 * 4 MiB
-slabs) per concurrent decode. This is not a security issue - per-decode
-worst case is unchanged at 4 MiB - but RSS can grow under high
-concurrency, which is worth knowing for future capacity triage.
+Note: the v0.22.3-to-v0.24.2 jump also reworked btcd's script
+decoding. v0.22.3 pooled 12,500 individual 512-byte buffers
+(`freeListMaxScriptSize = 512`; `Borrow` falls back to
+`make([]byte, size)` for larger scripts); v0.24.2 replaces that
+with a single fixed-size 4 MiB slab (`scriptSlabSize = 1 << 22`)
+checked out per decode, advancing an offset after each script. The
+global retention ceiling therefore rises from 6.4 MB (12,500 * 512 B)
+to 524 MB (125 * 4 MiB), about an 82x increase. The per-script cap
+also tightens from 32 MiB (`MaxMessagePayload`) to 4,000,000
+(`maxWitnessItemSize`). Neither is a security issue; both are
+worth knowing for future RSS-growth triage under high decode
+concurrency. The slab-architecture change is also what introduces
+the readScriptBuf slice-bounds panic guarded against in
+`bitcoin.MaxTransactionByteLength` and `electrum.decodeTransaction`.
 
 ## Verifying against upstream
 
