@@ -606,6 +606,30 @@ func frostTransportPeerChannelKey(
 	return transcript.sum()
 }
 
+// frostTransportRetainedPeerRetentionKey identifies a retained peer by exactly
+// the state the separation policy compares across endpoints: its address, its
+// TLS leaf public key, and its SPIFFE authorities. The leaf certificate hash is
+// deliberately excluded. Two identities that share a certificate necessarily
+// share that certificate's public key, so certificate aliasing is already
+// reported by the leaf SPKI comparison in frostTransportPeersIndependent, and
+// every retained observation collapsed under one retention key carries the same
+// address, the same SPKI and the same authorities - the surviving entry decides
+// every independence comparison exactly as each collapsed observation would.
+//
+// Retaining one entry per certificate would instead let routine leaf rotation
+// consume the bounded history: registerRetainedPeer pins the leaf SPKI to the
+// frozen identity, so a rotated retained leaf is expected to keep its key and
+// change only the certificate around it, and once the cap was reached the
+// policy latched a permanent separation failure on a healthy endpoint. The cap
+// still latches for 4096 genuinely distinct separation identities, which no
+// single frozen endpoint can legitimately present.
+func frostTransportRetainedPeerRetentionKey(
+	peer frostTransportPeerIdentity,
+) [32]byte {
+	peer.leafCertificateHash = [32]byte{}
+	return frostTransportPeerIdentityKey(peer)
+}
+
 func frostTransportStablePeerIdentity(
 	peer frostTransportPeerIdentity,
 ) frostTransportPeerIdentity {
@@ -945,7 +969,7 @@ func (policy *frostPrimaryRetainedSeparationPolicy) registerRetainedPeer(
 		return fmt.Errorf("retained peer role is outside the separation policy")
 	}
 	peers := policy.retainedPeers[role]
-	key := frostTransportPeerIdentityKey(peer)
+	key := frostTransportRetainedPeerRetentionKey(peer)
 	stablePeer := frostTransportStablePeerIdentity(peer)
 	if _, exists := peers[key]; !exists &&
 		len(peers) >= frostPrimaryEthereumMaximumSeenPeers {

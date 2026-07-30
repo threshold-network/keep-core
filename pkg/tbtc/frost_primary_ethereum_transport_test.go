@@ -131,6 +131,102 @@ func TestFrostRetainedPeerReconnectsDoNotExhaustHistory(t *testing.T) {
 	}
 }
 
+// TestFrostRetainedPeerLeafRotationDoesNotLatchSeparationFailure rotates the
+// retained leaf certificate past the bounded history cap while its key, address
+// and SPIFFE authorities stay frozen, which is what routine certificate
+// rotation looks like to this policy. The rotation must not consume history,
+// and the separation property must still hold afterwards.
+func TestFrostRetainedPeerLeafRotationDoesNotLatchSeparationFailure(
+	t *testing.T,
+) {
+	primaryIP := netip.MustParseAddr("192.0.2.1")
+	retainedIP := netip.MustParseAddr("192.0.2.2")
+	retainedPeer := testFrostTransportPeer(0x11)
+	retainedPeer.remoteIP = retainedIP
+	retainedPeer.leafSPKIHash = [32]byte{0x44}
+	retainedPeer.spiffeAuthorities = []string{
+		"retained.example",
+		"shared.example",
+	}
+
+	policy := &frostPrimaryRetainedSeparationPolicy{
+		primary: frostRetainedGroupResolvedEndpoint{
+			addresses: []netip.Addr{primaryIP},
+		},
+		retained: map[string]frostPrimaryRetainedEndpointPolicy{
+			"retained-history-export": {
+				endpoint: frostRetainedGroupResolvedEndpoint{
+					addresses: []netip.Addr{retainedIP},
+				},
+				identity: FrostRetainedGroupEndpointIdentity{
+					TrustDomainID:   "retained.example",
+					TLSLeafSPKIHash: retainedPeer.leafSPKIHash,
+				},
+			},
+		},
+		primaryPeers:  map[[32]byte]frostTransportPeerIdentity{},
+		retainedPeers: map[string]map[[32]byte]frostTransportPeerIdentity{
+			"retained-history-export": {},
+		},
+	}
+	primaryPeer := frostTransportPeerIdentity{
+		remoteIP:            primaryIP,
+		leafCertificateHash: [32]byte{0x55},
+		leafSPKIHash:        [32]byte{0x66},
+		spiffeAuthorities:   []string{"primary.example"},
+	}
+	if err := policy.registerPrimaryPeer(
+		frostTransportPeerIdentityKey(primaryPeer),
+		primaryPeer,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	for index := 0; index <= frostPrimaryEthereumMaximumSeenPeers; index++ {
+		retainedPeer.leafCertificateHash = sha256.Sum256(
+			[]byte(fmt.Sprintf("retained-certificate-%d", index)),
+		)
+		retainedPeer.tlsExporterValueHash = sha256.Sum256(
+			[]byte(fmt.Sprintf("retained-exporter-%d", index)),
+		)
+		if err := policy.registerRetainedPeer(
+			"retained-history-export",
+			retainedPeer,
+		); err != nil {
+			t.Fatalf("retained leaf rotation [%d] failed: [%v]", index, err)
+		}
+	}
+
+	if actual := len(
+		policy.retainedPeers["retained-history-export"],
+	); actual != 1 {
+		t.Fatalf("unexpected retained peer history size [%d]", actual)
+	}
+	if err := policy.verify(); err != nil {
+		t.Fatalf("routine leaf rotation latched a separation failure: [%v]", err)
+	}
+
+	// The surviving entry still decides the comparisons the frozen identities
+	// cannot: this primary peer satisfies the frozen retained identity, and only
+	// the retained history reveals that it shares a SPIFFE authority with the
+	// retained endpoint's actual peer.
+	aliasingPrimaryPeer := frostTransportPeerIdentity{
+		remoteIP:            primaryIP,
+		leafCertificateHash: [32]byte{0x77},
+		leafSPKIHash:        [32]byte{0x78},
+		spiffeAuthorities:   []string{"primary.example", "shared.example"},
+	}
+	if err := policy.registerPrimaryPeer(
+		frostTransportPeerIdentityKey(aliasingPrimaryPeer),
+		aliasingPrimaryPeer,
+	); err == nil {
+		t.Fatal("primary peer aliasing the retained peer was accepted")
+	}
+	if err := policy.verify(); err == nil {
+		t.Fatal("separation policy stayed healthy after an aliasing peer")
+	}
+}
+
 func TestFrostPrimaryEthereumTransportRejectsNewStablePeerPastLimit(
 	t *testing.T,
 ) {
