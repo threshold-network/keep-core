@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"slices"
 
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -119,30 +120,15 @@ func executeFrostDKGIfPossible(
 	fullMembers := frostFullMembers(groupSelectionResult)
 	dkgTimeoutBlock := event.BlockNumber + params.SubmissionTimeoutBlocks
 
-	// Persist the attempt boundary before readiness or native DKG execution can
-	// create key packages. Orphan reconciliation is intentionally unable to
-	// retire packages until its finalized snapshot covers this block.
-	if err := node.walletRegistry.recordFrostDKGAttempt(
+	anchorReservation, err := admitFrostDKGAttempt(
+		ctx,
+		node,
 		event.Seed,
 		event.BlockNumber,
-	); err != nil {
-		logger.Errorf(
-			"failed to persist FROST DKG attempt boundary: [%v]",
-			err,
-		)
-		return false
-	}
-
-	// Acquire the reversible capacity reservation before crossing the
-	// goroutine boundary. A transient admission failure must be visible to the
-	// coordinator so it releases the event lease and a replay can retry.
-	anchorReservation, err := reserveFrostDKGReadiness(
-		ctx,
-		node.frostNativeSignerAnchorAdmission,
 		memberIndexes,
 	)
 	if err != nil {
-		logger.Errorf("FROST DKG anchor admission failed: [%v]", err)
+		logger.Errorf("FROST DKG attempt was not admitted: [%v]", err)
 		return false
 	}
 
@@ -325,6 +311,56 @@ func executeFrostDKGIfPossible(
 	}()
 
 	return true
+}
+
+// admitFrostDKGAttempt performs the two ordered, fail-closed steps that must
+// both succeed before this operator may run a DKG attempt, and returns the
+// anchor reservation the attempt goroutine releases when it finishes.
+//
+// The order is load-bearing. The attempt boundary is persisted FIRST, before
+// readiness or native DKG execution can create any key package: orphan
+// reconciliation is intentionally unable to retire packages until its finalized
+// snapshot covers this block, so a package that exists without a recorded
+// boundary could be retired from a snapshot taken before the attempt started.
+// A boundary that cannot be persisted therefore aborts the attempt outright -
+// nothing may reach the persist stage behind an unrecorded boundary.
+//
+// The reversible capacity reservation is acquired second, still before crossing
+// the goroutine boundary, so a transient admission failure stays visible to the
+// coordinator, which releases the event lease so a replay can retry.
+func admitFrostDKGAttempt(
+	ctx context.Context,
+	node *node,
+	seed *big.Int,
+	startBlock uint64,
+	memberIndexes []group.MemberIndex,
+) (
+	*frostNativeSignerAnchorRevisionReservation,
+	error,
+) {
+	if node == nil {
+		return nil, fmt.Errorf("node is unavailable")
+	}
+	if err := node.walletRegistry.recordFrostDKGAttempt(
+		seed,
+		startBlock,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"cannot persist the FROST DKG attempt boundary: [%w]",
+			err,
+		)
+	}
+
+	anchorReservation, err := reserveFrostDKGReadiness(
+		ctx,
+		node.frostNativeSignerAnchorAdmission,
+		memberIndexes,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return anchorReservation, nil
 }
 
 func reserveFrostDKGReadiness(

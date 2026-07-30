@@ -437,6 +437,49 @@ func TestExecuteDistributedFrostDKG_PreservesPartiallyPersistedKeyGroups(
 	}
 }
 
+func TestAdmitFrostDKGAttempt_UnrecordedBoundaryBlocksAdmission(t *testing.T) {
+	persistenceHandle := &failingFrostDKGAttemptPersistence{
+		mockPersistenceHandle: &mockPersistenceHandle{},
+	}
+	anchorAdmission := orphanedDKGTestAnchorAdmission()
+	dkgNode := &node{
+		walletRegistry: &walletRegistry{
+			walletCache:                  make(map[string]*walletCacheValue),
+			walletStorage:                newWalletStorage(persistenceHandle),
+			frostDKGRetirementBoundaries: make(map[string]uint64),
+		},
+		frostNativeSignerAnchorAdmission: anchorAdmission,
+	}
+
+	reservation, err := admitFrostDKGAttempt(
+		context.Background(),
+		dkgNode,
+		big.NewInt(100),
+		101,
+		[]group.MemberIndex{1, 2},
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		errFrostDKGAttemptPersistenceTest.Error(),
+	) {
+		t.Fatalf("unrecorded attempt boundary was admitted: [%v]", err)
+	}
+	if reservation != nil {
+		t.Fatal("rejected DKG attempt returned an anchor reservation")
+	}
+	// Nothing may run behind an unrecorded boundary: a key package created by
+	// this attempt could be retired from a snapshot taken before it started.
+	if anchorAdmission.reserved != (frostNativeSignerAnchorCapacity{}) {
+		t.Fatalf(
+			"anchor capacity was reserved for an unrecorded attempt: [%+v]",
+			anchorAdmission.reserved,
+		)
+	}
+	if len(dkgNode.walletRegistry.frostDKGRetirementBoundaries) != 0 {
+		t.Fatal("a failed boundary persistence left an in-memory boundary")
+	}
+}
+
 func TestLowestLocalActiveMemberIndex(t *testing.T) {
 	testCases := map[string]struct {
 		local    []group.MemberIndex

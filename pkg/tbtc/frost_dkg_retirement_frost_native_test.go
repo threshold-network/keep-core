@@ -4,10 +4,15 @@ package tbtc
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/hex"
+	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
+	"github.com/keep-network/keep-common/pkg/persistence"
+	"github.com/keep-network/keep-core/pkg/chain"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
@@ -456,6 +461,362 @@ func TestFrostOrphanedDKGReconcilerBackfillsLegacyInventoryBoundary(
 	}
 	if currentBlockReads != 1 {
 		t.Fatalf("migration head was read again: [%d]", currentBlockReads)
+	}
+}
+
+// orphanedDKGOrderedTestEngine and orphanedDKGOrderedTestPersistence share one
+// operation log so a test can pin the ORDER of the two durable mutations a
+// retirement performs. Native key packages must go first: a crash between them
+// leaves a state a later pass can finish (no native material, session still
+// present), whereas archiving first would destroy the identity proving which
+// native key group belongs to the orphan.
+type orphanedDKGOrderedTestEngine struct {
+	operations *[]string
+}
+
+func (engine *orphanedDKGOrderedTestEngine) RetireDistributedDKGKeyPackages(
+	keyGroup string,
+) error {
+	*engine.operations = append(*engine.operations, "retire:"+keyGroup)
+	return nil
+}
+
+type orphanedDKGOrderedTestPersistence struct {
+	*mockPersistenceHandle
+	operations *[]string
+}
+
+func (persistence *orphanedDKGOrderedTestPersistence) Archive(
+	directory string,
+) error {
+	*persistence.operations = append(*persistence.operations, "archive")
+	return persistence.mockPersistenceHandle.Archive(directory)
+}
+
+// orphanedDKGTestSessionRegistry builds a wallet registry holding ONE real local
+// FROST session, so the reconciler's local-session paths run against the same
+// snapshot production takes rather than an empty wallet cache.
+func orphanedDKGTestSessionRegistry(
+	t *testing.T,
+	attemptStartBlock uint64,
+	keyGroup string,
+	operatorCount int,
+	persistenceHandle persistence.ProtectedHandle,
+) *walletRegistry {
+	t.Helper()
+	publicKey := frostBindingWalletPublicKey()
+	walletPublicKeyHash := [20]byte{0x51}
+	operators := make([]chain.Address, 0, operatorCount)
+	for index := 0; index < operatorCount; index++ {
+		operators = append(
+			operators,
+			chain.Address(fmt.Sprintf("0x%040d", index+1)),
+		)
+	}
+
+	registry := orphanedDKGTestWalletRegistry(t, attemptStartBlock)
+	registry.walletStorage = newWalletStorage(persistenceHandle)
+	registry.retainedFrostKeyGroups = make(map[[32]byte]string)
+	registry.walletCache[getWalletStorageKey(publicKey)] =
+		orphanedDKGTestSession(t, publicKey, walletPublicKeyHash, keyGroup, operators)
+
+	return registry
+}
+
+func orphanedDKGTestSession(
+	t *testing.T,
+	publicKey *ecdsa.PublicKey,
+	walletPublicKeyHash [20]byte,
+	keyGroup string,
+	operators []chain.Address,
+) *walletCacheValue {
+	t.Helper()
+	return &walletCacheValue{
+		walletID:            frostBindingWalletID(t),
+		walletPublicKeyHash: walletPublicKeyHash,
+		signers: []*signer{{
+			wallet: wallet{
+				publicKey:             publicKey,
+				signingGroupOperators: operators,
+			},
+			signingGroupMemberIndex: 1,
+			signerMaterial:          frostBindingSignerMaterial(t, keyGroup),
+		}},
+	}
+}
+
+func TestFrostOrphanedDKGReconcilerRetiresNativeMaterialBeforeArchiving(
+	t *testing.T,
+) {
+	operations := make([]string, 0)
+	persistenceHandle := &orphanedDKGOrderedTestPersistence{
+		mockPersistenceHandle: &mockPersistenceHandle{},
+		operations:            &operations,
+	}
+	registry := orphanedDKGTestSessionRegistry(
+		t,
+		90,
+		frostBindingEvenKey,
+		3,
+		persistenceHandle,
+	)
+	walletID := frostBindingWalletID(t)
+	snapshotChain := &orphanedDKGSnapshotTestChain{
+		state:      Idle,
+		registered: make(map[[32]byte]bool),
+	}
+	reconciler := &frostOrphanedDKGReconciler{
+		snapshotChain:    snapshotChain,
+		walletRegistry:   registry,
+		anchorAdmission:  orphanedDKGTestAnchorAdmission(),
+		retirementEngine: &orphanedDKGOrderedTestEngine{operations: &operations},
+		readInventory: func() (
+			*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
+			error,
+		) {
+			return &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
+				Entries: []frostsigning.NativeTBTCSignerRetainedKeyGroup{{
+					WalletID:         walletID,
+					KeyGroup:         frostBindingEvenKey,
+					ParticipantCount: 3,
+				}},
+			}, nil
+		},
+	}
+
+	if err := reconciler.reconcile(
+		context.Background(),
+		orphanedDKGTestPoint(),
+		map[[32]byte]struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(operations) != 2 ||
+		operations[0] != "retire:"+frostBindingEvenKey ||
+		operations[1] != "archive" {
+		t.Fatalf(
+			"orphan was not retired natively before archiving: [%v]",
+			operations,
+		)
+	}
+	if len(registry.walletCache) != 0 {
+		t.Fatalf(
+			"orphaned local session survived reconciliation: [%d]",
+			len(registry.walletCache),
+		)
+	}
+	if registry.retainedFrostKeyGroups[walletID] != frostBindingEvenKey {
+		t.Fatal("archived orphan did not retain its exact key-group binding")
+	}
+	if reconciler.anchorAdmission.reserved !=
+		(frostNativeSignerAnchorCapacity{}) {
+		t.Fatalf(
+			"retirement reservation was not released: [%+v]",
+			reconciler.anchorAdmission.reserved,
+		)
+	}
+}
+
+// TestFrostOrphanedDKGReconcilerArchivesSessionWithoutNativeMaterial covers the
+// crash-recovery half-state: a previous pass retired the native key group and
+// died before archiving the Go session. The repeat pass must finish the archive
+// and must NOT ask the engine to retire material that is already gone.
+func TestFrostOrphanedDKGReconcilerArchivesSessionWithoutNativeMaterial(
+	t *testing.T,
+) {
+	operations := make([]string, 0)
+	persistenceHandle := &orphanedDKGOrderedTestPersistence{
+		mockPersistenceHandle: &mockPersistenceHandle{},
+		operations:            &operations,
+	}
+	registry := orphanedDKGTestSessionRegistry(
+		t,
+		90,
+		frostBindingEvenKey,
+		3,
+		persistenceHandle,
+	)
+	reconciler := &frostOrphanedDKGReconciler{
+		snapshotChain: &orphanedDKGSnapshotTestChain{
+			state:      Idle,
+			registered: make(map[[32]byte]bool),
+		},
+		walletRegistry:   registry,
+		anchorAdmission:  orphanedDKGTestAnchorAdmission(),
+		retirementEngine: &orphanedDKGOrderedTestEngine{operations: &operations},
+		readInventory: func() (
+			*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
+			error,
+		) {
+			return &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
+				Entries: []frostsigning.NativeTBTCSignerRetainedKeyGroup{},
+			}, nil
+		},
+	}
+
+	if err := reconciler.reconcile(
+		context.Background(),
+		orphanedDKGTestPoint(),
+		map[[32]byte]struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(operations) != 1 || operations[0] != "archive" {
+		t.Fatalf(
+			"half-retired orphan was not archived exactly once: [%v]",
+			operations,
+		)
+	}
+	if len(registry.walletCache) != 0 {
+		t.Fatal("half-retired orphan kept its local session")
+	}
+	// No native inventory means nothing to charge the anchor for.
+	if reconciler.anchorAdmission.reserved !=
+		(frostNativeSignerAnchorCapacity{}) {
+		t.Fatalf(
+			"session-only retirement charged anchor capacity: [%+v]",
+			reconciler.anchorAdmission.reserved,
+		)
+	}
+}
+
+// TestFrostOrphanedDKGReconcilerRejectsDisagreeingMaterial pins the fail-closed
+// check guarding destructive reconciliation: if the native inventory and the Go
+// session describe the same wallet differently, the reconciler cannot know which
+// key group a retirement would destroy, so it must refuse to retire anything.
+func TestFrostOrphanedDKGReconcilerRejectsDisagreeingMaterial(t *testing.T) {
+	walletID := frostBindingWalletID(t)
+	testCases := map[string]struct {
+		inventoryKeyGroup         string
+		inventoryParticipantCount uint16
+	}{
+		"key group parity disagrees": {
+			inventoryKeyGroup:         frostBindingOddKey,
+			inventoryParticipantCount: 3,
+		},
+		"participant count disagrees": {
+			inventoryKeyGroup:         frostBindingEvenKey,
+			inventoryParticipantCount: 4,
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			operations := make([]string, 0)
+			persistenceHandle := &orphanedDKGOrderedTestPersistence{
+				mockPersistenceHandle: &mockPersistenceHandle{},
+				operations:            &operations,
+			}
+			registry := orphanedDKGTestSessionRegistry(
+				t,
+				90,
+				frostBindingEvenKey,
+				3,
+				persistenceHandle,
+			)
+			snapshotChain := &orphanedDKGSnapshotTestChain{
+				state:      Idle,
+				registered: make(map[[32]byte]bool),
+			}
+			reconciler := &frostOrphanedDKGReconciler{
+				snapshotChain:   snapshotChain,
+				walletRegistry:  registry,
+				anchorAdmission: orphanedDKGTestAnchorAdmission(),
+				retirementEngine: &orphanedDKGOrderedTestEngine{
+					operations: &operations,
+				},
+				readInventory: func() (
+					*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
+					error,
+				) {
+					return &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
+						Entries: []frostsigning.NativeTBTCSignerRetainedKeyGroup{{
+							WalletID:         walletID,
+							KeyGroup:         test.inventoryKeyGroup,
+							ParticipantCount: test.inventoryParticipantCount,
+						}},
+					}, nil
+				},
+			}
+
+			err := reconciler.reconcile(
+				context.Background(),
+				orphanedDKGTestPoint(),
+				map[[32]byte]struct{}{},
+			)
+			if err == nil ||
+				!strings.Contains(err.Error(), "FROST DKG material disagree") {
+				t.Fatalf("disagreeing DKG material was accepted: [%v]", err)
+			}
+			if len(operations) != 0 || len(snapshotChain.points) != 0 {
+				t.Fatalf(
+					"disagreeing DKG material was acted on: [%v]",
+					operations,
+				)
+			}
+			if len(registry.walletCache) != 1 {
+				t.Fatal("disagreeing DKG material lost its local session")
+			}
+		})
+	}
+}
+
+func TestFrostOrphanedDKGReconcilerRejectsDuplicateLocalSession(t *testing.T) {
+	operations := make([]string, 0)
+	persistenceHandle := &orphanedDKGOrderedTestPersistence{
+		mockPersistenceHandle: &mockPersistenceHandle{},
+		operations:            &operations,
+	}
+	registry := orphanedDKGTestSessionRegistry(
+		t,
+		90,
+		frostBindingEvenKey,
+		3,
+		persistenceHandle,
+	)
+	// A second cache entry resolving to the SAME wallet ID: reconciliation
+	// cannot tell which session a retirement would archive, so it must stop.
+	registry.walletCache["duplicate-frost-session"] =
+		orphanedDKGTestSession(
+			t,
+			frostBindingWalletPublicKey(),
+			[20]byte{0x52},
+			frostBindingEvenKey,
+			[]chain.Address{"0x01", "0x02", "0x03"},
+		)
+	snapshotChain := &orphanedDKGSnapshotTestChain{
+		state:      Idle,
+		registered: make(map[[32]byte]bool),
+	}
+	reconciler := &frostOrphanedDKGReconciler{
+		snapshotChain:    snapshotChain,
+		walletRegistry:   registry,
+		anchorAdmission:  orphanedDKGTestAnchorAdmission(),
+		retirementEngine: &orphanedDKGOrderedTestEngine{operations: &operations},
+		readInventory: func() (
+			*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
+			error,
+		) {
+			return &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
+				Entries: []frostsigning.NativeTBTCSignerRetainedKeyGroup{},
+			}, nil
+		},
+	}
+
+	err := reconciler.reconcile(
+		context.Background(),
+		orphanedDKGTestPoint(),
+		map[[32]byte]struct{}{},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "duplicate local FROST DKG wallet session") {
+		t.Fatalf("duplicate local FROST session was accepted: [%v]", err)
+	}
+	if len(operations) != 0 || len(snapshotChain.points) != 0 {
+		t.Fatalf("duplicate local FROST session was acted on: [%v]", operations)
+	}
+	if len(registry.walletCache) != 2 {
+		t.Fatal("duplicate local FROST sessions were mutated")
 	}
 }
 
