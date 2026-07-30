@@ -3399,6 +3399,178 @@ func equalFrostRetainedGroupSemanticHistories(
 	return true, nil
 }
 
+// adoptDurableBatchSuffixes integrates batches that are already durable but not
+// yet reflected by their state checkpoint. Batch publication and the state
+// checkpoint are two separate writes, so a failure between them - a full disk,
+// an I/O error, or the persistence hooks used by the crash tests - leaves
+// exactly that shape. Batch files are immutable no-replace publications, so
+// without adoption every later reconciliation recomputes the same sequence,
+// fails with "immutable journal file already exists", and the in-process
+// journal stays wedged until a restart replays it. initialize() already
+// performs this adoption on startup; doing it here keeps a running process
+// consistent with its own restart semantics.
+//
+// Adoption is not a trust shortcut. The batch is revalidated against the exact
+// durable predecessor state, and the reconciliation that follows re-derives the
+// canonical history and rejects the whole durable prefix if the source rewrote,
+// omitted, or reordered any adopted event.
+func (frgj *frostRetainedGroupJournal) adoptDurableBatchSuffixes() error {
+	if err := frgj.adoptDurableCanonicalBatches(); err != nil {
+		return err
+	}
+	return frgj.adoptDurableQuarantineBatches()
+}
+
+func (frgj *frostRetainedGroupJournal) adoptDurableCanonicalBatches() error {
+	for {
+		name := frostRetainedGroupBatchFileName(frgj.state.BatchSequence + 1)
+		batch := frostRetainedGroupJournalBatch{}
+		if err := frgj.readEnvelope(name, &batch); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf(
+				"cannot read durable FROST retained-group journal batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		if err := validateFrostRetainedGroupBatch(batch, frgj.state); err != nil {
+			return fmt.Errorf(
+				"invalid durable FROST retained-group journal batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		candidate := cloneFrostRetainedGroupState(frgj.state)
+		if err := applyFrostRetainedGroupMutations(
+			&candidate,
+			batch.Mutations,
+		); err != nil {
+			return fmt.Errorf(
+				"cannot replay durable FROST retained-group journal batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		candidate.BatchSequence = batch.Sequence
+		candidate.CurrentPoint = batch.To
+		candidate.BatchRoot = frostRetainedGroupBatchRoot(
+			batch.PriorBatchRoot,
+			batch.Checksum,
+		)
+		inventoryRoot, _, _, _, err := frostRetainedGroupInventoryRoot(candidate)
+		if err != nil {
+			return err
+		}
+		candidate.InventoryRoot = inventoryRoot
+		if err := frgj.persistEnvelope(
+			frostRetainedGroupJournalStateFile,
+			&candidate,
+			true,
+		); err != nil {
+			return fmt.Errorf(
+				"cannot integrate durable FROST retained-group journal batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		frgj.state = candidate
+		frgj.mutations = append(
+			frgj.mutations,
+			cloneFrostRetainedGroupMutations(batch.Mutations)...,
+		)
+	}
+}
+
+func (frgj *frostRetainedGroupJournal) adoptDurableQuarantineBatches() error {
+	for {
+		name := frostRetainedGroupBatchFileName(
+			frgj.quarantineState.BatchSequence + 1,
+		)
+		wireBatch := frostRetainedGroupWireQuarantineJournalBatch{}
+		if err := readFrostRetainedGroupEnvelopeAt(
+			frgj.quarantineDirectory,
+			name,
+			&wireBatch,
+		); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf(
+				"cannot read durable FROST retained-group quarantine batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		batch, err := frostRetainedGroupQuarantineBatchFromWire(
+			wireBatch,
+			frgj.liftCertificates,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"cannot decode durable FROST retained-group quarantine batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		if err := validateFrostRetainedGroupQuarantineBatch(
+			batch,
+			frgj.quarantineState,
+		); err != nil {
+			return fmt.Errorf(
+				"invalid durable FROST retained-group quarantine batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		if err := frgj.validatePersistedLiftCertificates(
+			batch.Mutations,
+		); err != nil {
+			return fmt.Errorf(
+				"invalid persisted FROST quarantine lift certificate in durable batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		candidate := cloneFrostRetainedGroupQuarantineState(frgj.quarantineState)
+		if err := applyFrostRetainedGroupQuarantineMutations(
+			&candidate,
+			batch.Mutations,
+			frgj.liftPolicy,
+		); err != nil {
+			return fmt.Errorf(
+				"cannot replay durable FROST retained-group quarantine batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		candidate.BatchSequence = batch.Sequence
+		candidate.CurrentPoint = batch.To
+		candidate.BatchRoot = frostRetainedGroupQuarantineBatchRoot(
+			batch.PriorBatchRoot,
+			batch.Checksum,
+		)
+		if err := persistFrostRetainedGroupEnvelopeAt(
+			frgj.quarantineDirectory,
+			frostRetainedGroupJournalStateFile,
+			&candidate,
+			true,
+		); err != nil {
+			return fmt.Errorf(
+				"cannot integrate durable FROST retained-group quarantine batch [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		frgj.quarantineState = candidate
+		frgj.quarantineMutations = append(
+			frgj.quarantineMutations,
+			cloneFrostRetainedGroupMutations(batch.Mutations)...,
+		)
+	}
+}
+
 func (frgj *frostRetainedGroupJournal) reconcile(
 	ctx context.Context,
 	target FrostPreSignFinality,
@@ -3416,6 +3588,9 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 	defer frgj.mutex.Unlock()
 	if frgj.closed {
 		return nil, fmt.Errorf("FROST retained-group journal is closed")
+	}
+	if err := frgj.adoptDurableBatchSuffixes(); err != nil {
+		return nil, err
 	}
 	if target.BlockNumber == 0 || target.BlockHash == [32]byte{} ||
 		target.BlockNumber < frgj.metadata.Checkpoint.BlockNumber ||

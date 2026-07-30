@@ -4006,3 +4006,41 @@ func TestFrostRetainedGroupJournal_SnapshotBindsActiveQuarantineToItsWallet(
 		)
 	}
 }
+
+// TestFrostRetainedGroupJournal_AdoptsCommittedOrphanBatchWithoutRestart covers
+// the in-process half of orphan-batch integration. initialize() already adopts
+// a batch whose state checkpoint never landed; a running journal must do the
+// same or the immutable batch file wedges every later reconciliation.
+func TestFrostRetainedGroupJournal_AdoptsCommittedOrphanBatchWithoutRestart(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	journal := fixture.openJournal(t, filepath.Join(t.TempDir(), "journal"))
+	defer journal.close()
+	journal.persistFailureHook = func(stage string) error {
+		if stage != "after-batch-before-state" {
+			t.Fatalf("unexpected failure stage [%s]", stage)
+		}
+		return fmt.Errorf("simulated persist failure")
+	}
+	if _, err := journal.reconcile(context.Background(), fixture.target); err == nil ||
+		!strings.Contains(err.Error(), "simulated persist failure") {
+		t.Fatalf("expected simulated persist failure, got [%v]", err)
+	}
+	if journal.state.BatchSequence != 0 || len(journal.mutations) != 0 {
+		t.Fatalf(
+			"failed persistence advanced the in-process cursor: %+v",
+			journal.state,
+		)
+	}
+
+	journal.persistFailureHook = nil
+	snapshot, err := journal.reconcile(context.Background(), fixture.later)
+	if err != nil {
+		t.Fatalf("durable orphan batch wedged the running journal: [%v]", err)
+	}
+	if snapshot.SnapshotGeneration != 1 || snapshot.CurrentPoint != fixture.later ||
+		journal.state.BatchSequence != 2 || len(journal.mutations) != 1 {
+		t.Fatalf("orphan batch was not adopted exactly once: %+v", journal.state)
+	}
+}
