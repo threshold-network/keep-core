@@ -925,6 +925,16 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			err,
 		)
 	}
+	// Both snapshots are served from the reconciliation cache, and the journal
+	// stamp compared above covers journal state only: it says nothing about the
+	// native signer inventory or about interactive signing readiness. Their
+	// freshness comes from verifyFrostProductionSignerReadinessUnchanged at the
+	// signing boundary below, which re-reads live native signer state and
+	// refuses to sign unless it still equals reconciliation.inventory - the
+	// exact value exported into the payload - and unless the interactive engine
+	// is still ready. A consumer of a signed handshake therefore tolerates only
+	// the window between that revalidation and the signature, never the age of
+	// the cache.
 	journalSnapshot := &reconciliation.journal
 	nativeSignerSnapshot := &reconciliation.inventory
 	if !nativeSignerSnapshot.ExternalRollbackAnchorBound ||
