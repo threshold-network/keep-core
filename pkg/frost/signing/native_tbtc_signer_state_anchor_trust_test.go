@@ -306,9 +306,15 @@ func uint64ToCanonicalString(value uint64) string {
 // below two or one that does not leave
 // TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION plus
 // TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION records below the
-// maximum. Raising either reservation in Rust must fail this test so the Go
-// validators are updated in the same change instead of silently accepting
-// geometries the signer refuses at node startup.
+// maximum.
+//
+// This pins the Go side only. The crate is not in this branch, so nothing here
+// can observe the signer moving; raising a reservation in Rust does NOT fail
+// this test. The cross-language comparison lives in the frost-cgo-integration
+// workflow, which has the pinned crate checked out and compares the two sources
+// directly. What this test does buy: the bound is computed in one helper over
+// named constants, so once that workflow reports a drift there is exactly one
+// place to change, and these cases document the boundary that moves.
 func TestValidateNativeTBTCSignerStateWitnessGeometry(t *testing.T) {
 	if NativeTBTCSignerStateWitnessRotationTerminalRecordReservation != 6 {
 		t.Fatalf(
