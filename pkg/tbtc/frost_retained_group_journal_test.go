@@ -4044,3 +4044,29 @@ func TestFrostRetainedGroupJournal_AdoptsCommittedOrphanBatchWithoutRestart(
 		t.Fatalf("orphan batch was not adopted exactly once: %+v", journal.state)
 	}
 }
+func TestPersistFrostRetainedGroupEnvelopeAtRejectsUnreadableSize(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	oversized := struct {
+		Blob string `json:"blob"`
+	}{
+		Blob: strings.Repeat("a", frostRetainedGroupJournalMaximumFile),
+	}
+	if err := persistFrostRetainedGroupEnvelopeAt(
+		directory,
+		frostRetainedGroupJournalStateFile,
+		&oversized,
+		true,
+	); err == nil ||
+		!strings.Contains(err.Error(), "exceeding the readable maximum") {
+		t.Fatalf("oversized journal file was persisted: [%v]", err)
+	}
+	if _, err := os.Lstat(filepath.Join(
+		directory,
+		frostRetainedGroupJournalStateFile,
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected journal file was still published: [%v]", err)
+	}
+}

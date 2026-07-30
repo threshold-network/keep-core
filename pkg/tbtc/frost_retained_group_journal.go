@@ -2198,6 +2198,20 @@ func persistFrostRetainedGroupEnvelopeAt(
 	if err != nil {
 		return err
 	}
+	// The read path refuses any journal file above
+	// frostRetainedGroupJournalMaximumFile. Without the symmetric write-side
+	// bound an oversized batch is published and fsynced successfully and only
+	// the next initialize() discovers it, leaving the journal permanently
+	// unopenable with no signal at the point the file was produced. Fail closed
+	// here instead, while the caller can still name the offending file.
+	if len(envelopeBytes) > frostRetainedGroupJournalMaximumFile {
+		return fmt.Errorf(
+			"FROST retained-group journal file [%s] is [%d] bytes, exceeding the readable maximum [%d]",
+			name,
+			len(envelopeBytes),
+			frostRetainedGroupJournalMaximumFile,
+		)
+	}
 
 	directoryFile, err := openFrostRetainedGroupJournalDirectory(directory)
 	if err != nil {
