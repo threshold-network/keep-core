@@ -936,6 +936,26 @@ type frostRetainedGroupEnvelope struct {
 	Checksum [32]byte        `json:"checksum"`
 }
 
+// frostRetainedGroupActiveQuarantine is one active quarantine reduced to the
+// identities a signing caller can present. A quarantine - including the
+// recovery-required kind - is always raised against exactly one WalletID, and
+// the authority-quorum certificate that lifts it is bound to that same
+// WalletID, so quarantine scope is per wallet and never node-wide.
+//
+// WalletPublicKeyHash is the canonical journal's exact Bridge binding for the
+// quarantined wallet. It is zero when no canonical retained group carries that
+// wallet ID, and such a quarantine cannot hide a locally signable wallet:
+// nativeSignerInventoryExpectations derives the expected retained key-group set
+// from state.Wallets alone and the native inventory must match it entry for
+// entry, so a wallet absent from the canonical journal can hold no local
+// signing material.
+type frostRetainedGroupActiveQuarantine struct {
+	QuarantineID        [32]byte
+	WalletID            [32]byte
+	WalletPublicKeyHash [20]byte
+	RecoveryRequired    bool
+}
+
 type frostRetainedGroupJournalSnapshot struct {
 	Schema                       string
 	BindingHash                  [32]byte
@@ -959,6 +979,7 @@ type frostRetainedGroupJournalSnapshot struct {
 	QuarantineActiveRoot         [32]byte
 	QuarantineTombstoneRoot      [32]byte
 	QuarantineCount              uint64
+	ActiveQuarantines            []frostRetainedGroupActiveQuarantine
 	QuarantineTombstoneCount     uint64
 	CheckpointMinimumSequence    uint64
 	CheckpointPredecessorHash    [32]byte
@@ -3076,6 +3097,57 @@ func frostRetainedGroupActiveQuarantineCount(
 	return count
 }
 
+// frostRetainedGroupActiveQuarantines joins the independent quarantine journal
+// with the canonical retained-group inventory so a signing caller can decide,
+// from one authenticated snapshot, whether the exact wallet it is about to sign
+// for is quarantined. Ordering follows the quarantine ID, matching the active
+// quarantine root's canonical order.
+func frostRetainedGroupActiveQuarantines(
+	state frostRetainedGroupJournalState,
+	quarantineState frostRetainedGroupQuarantineJournalState,
+) []frostRetainedGroupActiveQuarantine {
+	publicKeyHashes := make(map[[32]byte][20]byte, len(state.Wallets))
+	for _, wallet := range state.Wallets {
+		publicKeyHashes[wallet.WalletID] = wallet.WalletPublicKeyHash
+	}
+	active := make([]frostRetainedGroupActiveQuarantine, 0)
+	for _, quarantine := range quarantineState.Quarantines {
+		if quarantine.Status != frostRetainedGroupQuarantineActive {
+			continue
+		}
+		active = append(active, frostRetainedGroupActiveQuarantine{
+			QuarantineID:        quarantine.RaisedRecord.QuarantineID,
+			WalletID:            quarantine.RaisedRecord.WalletID,
+			WalletPublicKeyHash: publicKeyHashes[quarantine.RaisedRecord.WalletID],
+			RecoveryRequired:    quarantine.RaisedRecord.RecoveryRequired,
+		})
+	}
+	sort.Slice(active, func(i, j int) bool {
+		return bytes.Compare(
+			active[i].QuarantineID[:],
+			active[j].QuarantineID[:],
+		) < 0
+	})
+	return active
+}
+
+// activeQuarantineFor returns the active quarantine raised against the wallet
+// identified by the given Bridge public-key hash, or nil when that wallet is
+// not quarantined at the reconciled point this snapshot pins.
+func (frgjs *frostRetainedGroupJournalSnapshot) activeQuarantineFor(
+	walletPublicKeyHash [20]byte,
+) *frostRetainedGroupActiveQuarantine {
+	if frgjs == nil {
+		return nil
+	}
+	for index, quarantine := range frgjs.ActiveQuarantines {
+		if quarantine.WalletPublicKeyHash == walletPublicKeyHash {
+			return &frgjs.ActiveQuarantines[index]
+		}
+	}
+	return nil
+}
+
 func validFrostRetainedGroupTransition(
 	current FrostRetainedGroupLifecycle,
 	next FrostRetainedGroupLifecycle,
@@ -3852,6 +3924,15 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 	if root != frgj.state.InventoryRoot || frgj.state.SnapshotGeneration < frgj.minimumGeneration {
 		return nil, fmt.Errorf("FROST retained-group journal generation or inventory root is not activation-ready")
 	}
+	// An active quarantine is deliberately not an activation-ready failure here.
+	// The node-wide "no active quarantine" requirement belongs to the activation
+	// handshake, which refuses to bootstrap or attest health while any
+	// quarantine is unresolved. A quarantine is raised against exactly one
+	// WalletID and lifted by an authority certificate bound to that same
+	// WalletID, so a node that is already running fails closed per wallet
+	// instead: ActiveQuarantines carries every unlifted record and the pre-sign
+	// authorization gate refuses to authorize, or to keep authorizing, a
+	// Bitcoin signing batch for a quarantined wallet.
 	if frgj.quarantineState.CurrentPoint != target ||
 		frgj.quarantineState.Generation < frgj.quarantineMinimumGeneration ||
 		frgj.quarantineState.Root == [32]byte{} ||
@@ -3891,14 +3972,18 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		QuarantineActiveRoot:         frgj.quarantineState.ActiveRoot,
 		QuarantineTombstoneRoot:      frgj.quarantineState.TombstoneRoot,
 		QuarantineCount:              frostRetainedGroupActiveQuarantineCount(frgj.quarantineState),
-		QuarantineTombstoneCount:     uint64(len(frgj.quarantineState.Tombstones)),
-		CheckpointMinimumSequence:    frgj.checkpointPolicy.MinimumSequence,
-		CheckpointPredecessorHash:    frgj.checkpointPolicy.PredecessorHash,
-		CheckpointSequence:           frgj.checkpointState.Sequence,
-		CheckpointCertificateHash:    frgj.checkpointState.CertificateHash,
-		CheckpointHistoryRoot:        frgj.checkpointState.HistoryRoot,
-		LocalSessionCount:            localSessionCount,
-		Complete:                     true,
+		ActiveQuarantines: frostRetainedGroupActiveQuarantines(
+			frgj.state,
+			frgj.quarantineState,
+		),
+		QuarantineTombstoneCount:  uint64(len(frgj.quarantineState.Tombstones)),
+		CheckpointMinimumSequence: frgj.checkpointPolicy.MinimumSequence,
+		CheckpointPredecessorHash: frgj.checkpointPolicy.PredecessorHash,
+		CheckpointSequence:        frgj.checkpointState.Sequence,
+		CheckpointCertificateHash: frgj.checkpointState.CertificateHash,
+		CheckpointHistoryRoot:     frgj.checkpointState.HistoryRoot,
+		LocalSessionCount:         localSessionCount,
+		Complete:                  true,
 	}, nil
 }
 

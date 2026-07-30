@@ -3935,3 +3935,74 @@ func journalTestInventoryWallet(
 	}
 	return wallet
 }
+
+// TestFrostRetainedGroupJournal_SnapshotBindsActiveQuarantineToItsWallet pins
+// the per-wallet scope the signing path gates on: an unlifted record resolves
+// to the exact canonical wallet it names, and only that wallet.
+func TestFrostRetainedGroupJournal_SnapshotBindsActiveQuarantineToItsWallet(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	quarantine := FrostRetainedGroupMutation{
+		Point: FrostRetainedGroupEventPoint{
+			BlockNumber:      5,
+			BlockHash:        [32]byte{0x05},
+			TransactionHash:  [32]byte{0xa5},
+			TransactionIndex: 1,
+			LogIndex:         1,
+		},
+		Kind:         FrostRetainedGroupRecoveryRequiredMutation,
+		WalletID:     fixture.walletID,
+		QuarantineID: [32]byte{0x51},
+		EvidenceHash: [32]byte{0x52},
+		Reason:       "manual recovery is required",
+	}
+	fixture.source.mutations = append(fixture.source.mutations, quarantine)
+	journal := fixture.openJournal(t, filepath.Join(t.TempDir(), "journal"))
+	defer journal.close()
+	raised, err := journal.reconcile(context.Background(), fixture.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raised.ActiveQuarantines) != 1 {
+		t.Fatalf("unexpected active quarantine bindings: %+v", raised.ActiveQuarantines)
+	}
+	binding := raised.ActiveQuarantines[0]
+	if binding.QuarantineID != quarantine.QuarantineID ||
+		binding.WalletID != fixture.walletID ||
+		binding.WalletPublicKeyHash != fixture.walletPKH ||
+		!binding.RecoveryRequired {
+		t.Fatalf("active quarantine was not bound to its canonical wallet: %+v", binding)
+	}
+	if raised.activeQuarantineFor(fixture.walletPKH) == nil {
+		t.Fatal("quarantined wallet was not reported as quarantined")
+	}
+	if raised.activeQuarantineFor([20]byte{0xee}) != nil {
+		t.Fatal("unrelated wallet was reported as quarantined")
+	}
+
+	lift := fixture.liftMutation(
+		t,
+		journal,
+		quarantine,
+		FrostRetainedGroupEventPoint{
+			BlockNumber:      15,
+			BlockHash:        [32]byte{0x0f},
+			TransactionHash:  [32]byte{0xaf},
+			TransactionIndex: 2,
+			LogIndex:         3,
+		},
+	)
+	fixture.source.mutations = append(fixture.source.mutations, lift)
+	lifted, err := journal.reconcile(context.Background(), fixture.later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lifted.ActiveQuarantines) != 0 ||
+		lifted.activeQuarantineFor(fixture.walletPKH) != nil {
+		t.Fatalf(
+			"authenticated lift did not clear the wallet binding: %+v",
+			lifted.ActiveQuarantines,
+		)
+	}
+}

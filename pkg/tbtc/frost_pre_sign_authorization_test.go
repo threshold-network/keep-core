@@ -20,12 +20,13 @@ import (
 )
 
 type testFrostProductionAuthorizationReadiness struct {
-	err            error
-	unchangedErr   error
-	calls          uint64
-	unchangedCalls uint64
-	points         []FrostPreSignFinality
-	headrooms      []uint64
+	err               error
+	unchangedErr      error
+	calls             uint64
+	unchangedCalls    uint64
+	points            []FrostPreSignFinality
+	headrooms         []uint64
+	activeQuarantines []frostRetainedGroupActiveQuarantine
 }
 
 func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductionSignerReadiness(
@@ -45,7 +46,17 @@ func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductio
 		}
 		headroom = readiness.headrooms[index]
 	}
-	return testFrostAnchorAdmissionReadinessSnapshot(headroom, headroom), nil
+	snapshot := testFrostAnchorAdmissionReadinessSnapshot(headroom, headroom)
+	snapshot.Journal = &frostRetainedGroupJournalSnapshot{
+		Schema: frostRetainedGroupJournalSnapshotSchema,
+		ActiveQuarantines: append(
+			[]frostRetainedGroupActiveQuarantine{},
+			readiness.activeQuarantines...,
+		),
+		QuarantineCount: uint64(len(readiness.activeQuarantines)),
+		Complete:        true,
+	}
+	return snapshot, nil
 }
 
 func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductionSignerReadinessUnchanged(
@@ -1225,4 +1236,97 @@ func (tfpsab *testFrostPreSignAuthorizationBackend) ReadFrostPreSignAuthorizatio
 	}
 	result := *tfpsab.states[finality.BlockNumber]
 	return &result, nil
+}
+
+// TestThresholdFrostPreSignAuthorizationGate_RefusesQuarantinedSigningWallet
+// pins the scope of an active canonical quarantine on the signing path. Raising
+// one is an authenticated operational stop for exactly one wallet, so that
+// wallet must stop signing Bitcoin immediately, while wallets the record does
+// not name keep working.
+func TestThresholdFrostPreSignAuthorizationGate_RefusesQuarantinedSigningWallet(
+	t *testing.T,
+) {
+	unsignedTx, _ := buildTaprootKeyPathUnsignedTxForTest(t)
+	transaction := testFrostPreSignTransaction(t, unsignedTx)
+	proposal := completeTestFrostPreSignProposal(transaction)
+	relayFinality := FrostPreSignFinality{
+		RelayTransactionHash:  [32]byte{0x71},
+		BlockNumber:           100,
+		BlockHash:             [32]byte{0x72},
+		AuthorizationSequence: [32]byte{31: 1},
+	}
+	currentFinality := FrostPreSignFinality{
+		BlockNumber: 101,
+		BlockHash:   [32]byte{0x73},
+	}
+	tests := map[string]struct {
+		walletID            [32]byte
+		walletPublicKeyHash [20]byte
+		accepted            bool
+	}{
+		"signing wallet quarantined": {
+			walletID:            proposal.WalletID,
+			walletPublicKeyHash: transaction.WalletPublicKeyHash,
+		},
+		"unrelated wallet quarantined": {
+			walletID:            [32]byte{0x91},
+			walletPublicKeyHash: [20]byte{0x92},
+			accepted:            true,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			backend := &testFrostPreSignAuthorizationBackend{
+				proposal:        proposal,
+				currentFinality: &currentFinality,
+				states: map[uint64]*FrostPreSignAuthorizationState{
+					relayFinality.BlockNumber: completeTestFrostPreSignState(
+						proposal,
+						relayFinality,
+					),
+					currentFinality.BlockNumber: completeTestFrostPreSignState(
+						proposal,
+						currentFinality,
+					),
+				},
+			}
+			gate := &thresholdFrostPreSignAuthorizationGate{
+				backend:           backend,
+				activationProfile: activationProfileForTestProposal(proposal),
+				storeBinding:      testFrostDurableSessionStoreBinding(t),
+				productionReadiness: &testFrostProductionAuthorizationReadiness{
+					activeQuarantines: []frostRetainedGroupActiveQuarantine{{
+						QuarantineID:        [32]byte{0x51},
+						WalletID:            test.walletID,
+						WalletPublicKeyHash: test.walletPublicKeyHash,
+						RecoveryRequired:    true,
+					}},
+				},
+			}
+			authorization := &frostPreSignAuthorization{
+				ActivationProfileHash: gate.activationProfile.ProfileHash,
+				AuthorizationID:       proposal.Digest,
+				ReservationID:         proposal.ReservationID,
+				VariantRoot:           proposal.AuthorizationRoot,
+				TransactionHash:       proposal.Transaction.TransactionHash,
+				Finality:              relayFinality,
+				VariantSequence:       frostPreSignVariantSequence(relayFinality),
+				proposal:              proposal,
+			}
+			err := gate.revalidate(context.Background(), authorization)
+			if test.accepted {
+				if err != nil {
+					t.Fatalf(
+						"unrelated wallet quarantine blocked signing: [%v]",
+						err,
+					)
+				}
+				return
+			}
+			if err == nil ||
+				!strings.Contains(err.Error(), "active canonical quarantine") {
+				t.Fatalf("quarantined wallet was authorized to sign: [%v]", err)
+			}
+		})
+	}
 }

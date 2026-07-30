@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -335,6 +336,10 @@ func cloneFrostProductionSignerReadinessSnapshot(
 	result := *snapshot
 	if snapshot.Journal != nil {
 		journal := *snapshot.Journal
+		journal.ActiveQuarantines = append(
+			[]frostRetainedGroupActiveQuarantine{},
+			snapshot.Journal.ActiveQuarantines...,
+		)
 		result.Journal = &journal
 	}
 	if snapshot.Inventory != nil {
@@ -434,6 +439,7 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 		return fmt.Errorf("interactive FROST signing engine is not ready")
 	}
 	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		ctx,
 		expected.Journal,
 	); err != nil {
 		return err
@@ -452,10 +458,11 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 	if err != nil {
 		return err
 	}
-	if *inventory != *expected.Inventory {
-		return fmt.Errorf(
-			"native signer state changed since readiness reconciliation",
-		)
+	if err := verifyFrostNativeSignerInventoryUnchanged(
+		expected.Inventory,
+		inventory,
+	); err != nil {
+		return err
 	}
 	if !readiness.journal.walletRegistry.frostReadinessRevisionMatches(
 		expected.registryRevision,
@@ -470,6 +477,7 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 		)
 	}
 	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		ctx,
 		expected.Journal,
 	); err != nil {
 		return err
@@ -477,19 +485,126 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 	return nil
 }
 
+// verifyFrostNativeSignerInventoryUnchanged separates the native signer facts
+// that must be byte-identical for the whole authorized signing window from the
+// ones the window itself legitimately advances.
+//
+// The authorized window is exactly what mutates the Rust store: the anchor
+// admission controller reserves the durable cost of every anchored call up
+// front, the engine persists a consumption marker before releasing each share,
+// and the inventory endpoint reports the live tip. Requiring the whole snapshot
+// to compare equal therefore turns each session's own persistence into
+// "readiness changed", and because the pre-sign authorization monitor latches
+// the first revalidation error permanently, that aborts the very signing it is
+// guarding.
+//
+// Identity, trust and key material stay strictly pinned. The state checkpoint,
+// the anchor revision and the derived restartable headrooms may only advance
+// monotonically, and only while the anchor stays out of its rotation-warning
+// band - the same threshold below which the admission controller refuses new
+// work. A rollback, an equal-generation fork, a different store or trust head,
+// a changed key-package commitment, or an advance that consumes the warning
+// headroom all still fail closed.
+func verifyFrostNativeSignerInventoryUnchanged(
+	expected *frostNativeSignerInventorySnapshot,
+	actual *frostNativeSignerInventorySnapshot,
+) error {
+	if expected == nil || actual == nil {
+		return fmt.Errorf("native signer readiness snapshot is nil")
+	}
+	if actual.Schema != expected.Schema ||
+		actual.StoreFingerprint != expected.StoreFingerprint ||
+		actual.InventoryCommitment != expected.InventoryCommitment ||
+		actual.WalletCount != expected.WalletCount ||
+		actual.KeyPackageCount != expected.KeyPackageCount ||
+		actual.ExternalRollbackAnchorBound !=
+			expected.ExternalRollbackAnchorBound ||
+		actual.TrustCertificateSequence != expected.TrustCertificateSequence ||
+		actual.TrustCertificateDigest != expected.TrustCertificateDigest ||
+		actual.AnchorServiceEpoch != expected.AnchorServiceEpoch ||
+		actual.CertifiedFloorRevision != expected.CertifiedFloorRevision ||
+		actual.CertifiedFloorGeneration != expected.CertifiedFloorGeneration ||
+		actual.AnchorRotationWarning != expected.AnchorRotationWarning {
+		return fmt.Errorf(
+			"native signer identity, trust head, or retained key material changed since readiness reconciliation",
+		)
+	}
+	if actual.StateGeneration < expected.StateGeneration ||
+		actual.CurrentAnchorRevision < expected.CurrentAnchorRevision ||
+		actual.RestartableGenerationHeadroom >
+			expected.RestartableGenerationHeadroom ||
+		actual.RestartableRevisionHeadroom >
+			expected.RestartableRevisionHeadroom {
+		return fmt.Errorf(
+			"native signer state or anchor revision rolled back since readiness reconciliation",
+		)
+	}
+	// A durable advance always moves the state commitment chain forward, so an
+	// unchanged generation carrying a different commitment is a fork, not the
+	// session's own progress.
+	if actual.StateGeneration == expected.StateGeneration &&
+		(actual.StateCommitment != expected.StateCommitment ||
+			actual.PreviousStateCommitment != expected.PreviousStateCommitment ||
+			actual.StateImageDigest != expected.StateImageDigest) {
+		return fmt.Errorf(
+			"native signer state forked at an unchanged generation since readiness reconciliation",
+		)
+	}
+	return nil
+}
+
+// frostRetainedGroupJournalStampRetryInterval bounds how often a readiness
+// revalidation retries the canonical journal mutex while another workflow
+// holds it.
+const frostRetainedGroupJournalStampRetryInterval = 5 * time.Millisecond
+
+// lockFrostRetainedGroupJournalStamp waits for the canonical journal mutex
+// under the caller's context instead of treating contention as a failure. The
+// mutex is held for an entire reconcile, including paginated reads against the
+// independent history source, so multi-second holds are routine and any other
+// wallet's authorization - or the activation-handshake exporter's background
+// reconciliation - can hold it. Contention is not evidence that anything
+// changed, and the pre-sign authorization monitor latches the first
+// revalidation error permanently, so returning one here would cancel a
+// perfectly valid signing session. Only a genuine stamp change, or the
+// caller's own context ending, fails.
+func lockFrostRetainedGroupJournalStamp(
+	ctx context.Context,
+	journal *frostRetainedGroupJournal,
+) error {
+	if journal.mutex.TryLock() {
+		return nil
+	}
+	ticker := time.NewTicker(frostRetainedGroupJournalStampRetryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf(
+				"canonical FROST retained-group journal stayed busy until the readiness revalidation deadline: [%w]",
+				ctx.Err(),
+			)
+		case <-ticker.C:
+			if journal.mutex.TryLock() {
+				return nil
+			}
+		}
+	}
+}
+
 func (readiness *frostProductionSignerReadiness) verifyFrostRetainedGroupJournalStampUnchanged(
+	ctx context.Context,
 	expected *frostRetainedGroupJournalSnapshot,
 ) error {
-	if readiness == nil || readiness.journal == nil || expected == nil {
+	if readiness == nil || readiness.journal == nil || expected == nil ||
+		ctx == nil {
 		return fmt.Errorf(
 			"cached FROST retained-group journal readiness is incomplete",
 		)
 	}
 	journal := readiness.journal
-	if !journal.mutex.TryLock() {
-		return fmt.Errorf(
-			"canonical FROST retained-group journal is busy during readiness revalidation",
-		)
+	if err := lockFrostRetainedGroupJournalStamp(ctx, journal); err != nil {
+		return err
 	}
 	defer journal.mutex.Unlock()
 

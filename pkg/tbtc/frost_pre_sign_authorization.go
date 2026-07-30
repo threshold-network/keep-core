@@ -1656,7 +1656,11 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 		return nil, err
 	}
 	readinessPoint, readinessSnapshot, err :=
-		tfpsag.verifyCurrentProductionSignerReadiness(ctx, nil)
+		tfpsag.verifyCurrentProductionSignerReadiness(
+			ctx,
+			transaction.WalletPublicKeyHash,
+			nil,
+		)
 	if err != nil {
 		return nil, err
 	}
@@ -1777,16 +1781,24 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 	ctx context.Context,
 	authorization *frostPreSignAuthorization,
 ) error {
+	// The signing wallet's identity is needed before the first readiness check
+	// so a quarantined wallet is refused at the same boundary as every other
+	// authorization fact.
+	if authorization == nil || authorization.proposal == nil ||
+		authorization.proposal.Transaction == nil {
+		return fmt.Errorf("FROST pre-sign authorization is nil")
+	}
 	currentFinality, readinessSnapshot, err :=
-		tfpsag.verifyCurrentProductionSignerReadiness(ctx, authorization)
+		tfpsag.verifyCurrentProductionSignerReadiness(
+			ctx,
+			authorization.proposal.Transaction.WalletPublicKeyHash,
+			authorization,
+		)
 	if err != nil {
 		return err
 	}
 	if _, err := tfpsag.storeBinding.verify(); err != nil {
 		return fmt.Errorf("FROST durable session store binding failed: [%w]", err)
-	}
-	if authorization == nil || authorization.proposal == nil {
-		return fmt.Errorf("FROST pre-sign authorization is nil")
 	}
 	if err := authorization.proposal.validate(); err != nil {
 		return fmt.Errorf("FROST pre-sign authorization proposal changed: [%w]", err)
@@ -1840,8 +1852,41 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 	return nil
 }
 
+// verifyFrostPreSignSigningWalletNotQuarantined fails closed when the exact
+// wallet whose UTXOs the authorized batch spends carries an active canonical
+// quarantine. Raising a quarantine is an authenticated operational stop for one
+// wallet; lifting it needs a manifest-pinned authority quorum certificate bound
+// to that same wallet, so an unlifted record must reach the signing path rather
+// than only the activation handshake. Other wallets keep signing: the record
+// binds to one WalletID and node-wide emptiness stays a bootstrap requirement.
+func verifyFrostPreSignSigningWalletNotQuarantined(
+	walletPublicKeyHash [20]byte,
+	readiness *frostProductionSignerReadinessSnapshot,
+) error {
+	if readiness == nil || readiness.Journal == nil {
+		return fmt.Errorf(
+			"FROST production signer readiness snapshot is incomplete",
+		)
+	}
+	if walletPublicKeyHash == [20]byte{} {
+		return fmt.Errorf("FROST pre-sign signing wallet is unidentified")
+	}
+	quarantine := readiness.Journal.activeQuarantineFor(walletPublicKeyHash)
+	if quarantine == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"FROST wallet [%x] is under active canonical quarantine [%x] (recovery required: [%t]); "+
+			"an authority-certified lift is required before it can sign",
+		walletPublicKeyHash,
+		quarantine.QuarantineID,
+		quarantine.RecoveryRequired,
+	)
+}
+
 func (tfpsag *thresholdFrostPreSignAuthorizationGate) verifyCurrentProductionSignerReadiness(
 	ctx context.Context,
+	walletPublicKeyHash [20]byte,
 	authorization *frostPreSignAuthorization,
 ) (
 	*FrostPreSignFinality,
@@ -1871,9 +1916,8 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) verifyCurrentProductionSig
 			"invalid current FROST pre-sign finalized checkpoint",
 		)
 	}
-	if readinessSnapshot := authorization.cachedReadiness(
-		*currentFinality,
-	); readinessSnapshot != nil {
+	readinessSnapshot := authorization.cachedReadiness(*currentFinality)
+	if readinessSnapshot != nil {
 		if err := tfpsag.productionReadiness.
 			verifyFrostProductionSignerReadinessUnchanged(
 				ctx,
@@ -1884,25 +1928,35 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) verifyCurrentProductionSig
 				err,
 			)
 		}
-		return currentFinality, readinessSnapshot, nil
+	} else {
+		reconciled, err :=
+			tfpsag.productionReadiness.verifyFrostProductionSignerReadiness(
+				ctx,
+				*currentFinality,
+			)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"FROST production signer is not authorization-ready: [%w]",
+				err,
+			)
+		}
+		if reconciled == nil {
+			return nil, nil, fmt.Errorf(
+				"FROST production signer readiness snapshot is nil",
+			)
+		}
+		readinessSnapshot = reconciled
+		authorization.cacheReadiness(*currentFinality, readinessSnapshot)
 	}
-	readinessSnapshot, err :=
-		tfpsag.productionReadiness.verifyFrostProductionSignerReadiness(
-			ctx,
-			*currentFinality,
-		)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"FROST production signer is not authorization-ready: [%w]",
-			err,
-		)
+	// The cached branch is safe to gate on too: the journal stamp comparison
+	// pins the quarantine generation and active root, so a quarantine raised
+	// after the cached reconciliation fails the stamp before this point.
+	if err := verifyFrostPreSignSigningWalletNotQuarantined(
+		walletPublicKeyHash,
+		readinessSnapshot,
+	); err != nil {
+		return nil, nil, err
 	}
-	if readinessSnapshot == nil {
-		return nil, nil, fmt.Errorf(
-			"FROST production signer readiness snapshot is nil",
-		)
-	}
-	authorization.cacheReadiness(*currentFinality, readinessSnapshot)
 	return currentFinality, readinessSnapshot, nil
 }
 

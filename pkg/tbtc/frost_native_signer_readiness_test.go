@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
@@ -646,7 +647,7 @@ func TestFrostProductionSignerReadinessRejectsConcurrentRegistryChange(
 	}
 }
 
-func TestFrostProductionSignerReadinessRejectsChangedOrBusyJournalStamp(
+func TestFrostProductionSignerReadinessRejectsChangedJournalStamp(
 	t *testing.T,
 ) {
 	fixture := newJournalTestFixture(t)
@@ -661,6 +662,7 @@ func TestFrostProductionSignerReadinessRejectsChangedOrBusyJournalStamp(
 	}
 	readiness := &frostProductionSignerReadiness{journal: journal}
 	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		context.Background(),
 		expected,
 	); err != nil {
 		t.Fatalf("matching retained-group journal stamp was rejected: [%v]", err)
@@ -668,16 +670,358 @@ func TestFrostProductionSignerReadinessRejectsChangedOrBusyJournalStamp(
 
 	journal.quarantineState.Generation++
 	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		context.Background(),
 		expected,
 	); err == nil || !strings.Contains(err.Error(), "journal changed") {
 		t.Fatalf("advanced quarantine journal stamp was accepted: [%v]", err)
 	}
 	journal.quarantineState.Generation--
+}
 
+func TestFrostProductionSignerReadinessWaitsOutBusyJournalStamp(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	journalDirectory := t.TempDir()
+	if err := os.Chmod(journalDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := fixture.openJournal(t, journalDirectory)
+	expected, err := journal.reconcile(context.Background(), fixture.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness := &frostProductionSignerReadiness{journal: journal}
+
+	// Another workflow holding the journal is contention, not a readiness
+	// change. The monitor latches the first revalidation error permanently, so
+	// the stamp check must wait the holder out instead of reporting one.
 	journal.mutex.Lock()
-	err = readiness.verifyFrostRetainedGroupJournalStampUnchanged(expected)
-	journal.mutex.Unlock()
-	if err == nil || !strings.Contains(err.Error(), "journal is busy") {
-		t.Fatalf("busy retained-group journal did not fail closed: [%v]", err)
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		time.Sleep(50 * time.Millisecond)
+		journal.mutex.Unlock()
+	}()
+	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		context.Background(),
+		expected,
+	); err != nil {
+		t.Fatalf("busy retained-group journal was not waited out: [%v]", err)
+	}
+	<-released
+
+	// Only the caller's own deadline ends the wait.
+	journal.mutex.Lock()
+	defer journal.mutex.Unlock()
+	deadlineContext, cancel := context.WithTimeout(
+		context.Background(),
+		20*time.Millisecond,
+	)
+	defer cancel()
+	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		deadlineContext,
+		expected,
+	); err == nil || !strings.Contains(err.Error(), "stayed busy") {
+		t.Fatalf("busy journal ignored the revalidation deadline: [%v]", err)
+	}
+}
+
+// TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance pins the
+// asymmetry the cached revalidation path depends on: the authorized signing
+// window durably advances the native store it is guarding, so its own advance
+// must not read as a readiness change, while a rollback still must.
+func TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	keyGroup := hex.EncodeToString(fixture.walletID[:])
+	fixture.registry.retainedFrostKeyGroups = map[[32]byte]string{
+		fixture.walletID: keyGroup,
+	}
+	journalDirectory := t.TempDir()
+	if err := os.Chmod(journalDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := fixture.openJournal(t, journalDirectory)
+
+	storeBinding := testFrostDurableSessionStoreBinding(t)
+	storeFingerprint, err := storeBinding.verify()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousStateCommitment := [32]byte{0x71}
+	stateImageDigest := [32]byte{0x72}
+	stateCommitment := frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
+		storeFingerprint,
+		1,
+		previousStateCommitment,
+		stateImageDigest,
+	)
+	entries := []frostsigning.NativeTBTCSignerRetainedKeyGroup{{
+		WalletID:         fixture.walletID,
+		KeyGroup:         keyGroup,
+		Threshold:        frostPreSignAuthorizationThreshold,
+		ParticipantCount: uint16(len(fixture.operatorIDs)),
+		KeyPackages: []frostsigning.NativeTBTCSignerRetainedKeyPackage{{
+			ParticipantSeat: 7,
+		}},
+	}}
+	inventory := &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
+		Schema:                  frostsigning.NativeTBTCSignerRetainedKeyPackageInventorySchema,
+		StoreFingerprint:        storeFingerprint,
+		StateGeneration:         1,
+		StateCommitment:         stateCommitment,
+		PreviousStateCommitment: previousStateCommitment,
+		StateImageDigest:        stateImageDigest,
+		InventoryCommitment:     frostsigning.ComputeNativeTBTCSignerRetainedKeyPackageInventoryCommitment(entries),
+		Entries:                 entries,
+	}
+	checkpoint := FrostNativeSignerStateWitnessCheckpoint{
+		StoreFingerprint:        storeFingerprint,
+		Generation:              1,
+		PreviousStateCommitment: previousStateCommitment,
+		StateImageDigest:        stateImageDigest,
+		StateCommitment:         stateCommitment,
+	}
+	anchorBinding, anchorStore :=
+		testFrostNativeSignerInventoryAnchorBinding(storeFingerprint, checkpoint)
+	trustHead := testFrostNativeSignerInventoryTrustHead(anchorBinding)
+	inventoryBinding, err := newFrostNativeSignerInventoryBinding(
+		storeBinding,
+		anchorBinding,
+		func() (*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory, error) {
+			return inventory, nil
+		},
+		func() (*frostsigning.NativeTBTCSignerStateAnchorTrustHead, error) {
+			copy := *trustHead
+			return &copy, nil
+		},
+		trustHead,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness, err := newFrostProductionSignerReadiness(
+		func() bool { return true },
+		journal,
+		inventoryBinding,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := readiness.verifyFrostProductionSignerReadiness(
+		context.Background(),
+		fixture.target,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := readiness.verifyFrostProductionSignerReadinessUnchanged(
+		context.Background(),
+		snapshot,
+	); err != nil {
+		t.Fatalf("unmutated native signer state was rejected: [%v]", err)
+	}
+
+	// Advance the durable state exactly as one anchored interactive call does:
+	// the consumption marker persists a new generation and the process output
+	// barrier advances the anchor revision once.
+	baselineTip, err := anchorBinding.readTip()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineRecord := *anchorStore.record
+	advancedImage := [32]byte{0x73}
+	advancedCommitment := frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
+		storeFingerprint,
+		2,
+		stateCommitment,
+		advancedImage,
+	)
+	advancedCheckpoint := FrostNativeSignerStateWitnessCheckpoint{
+		StoreFingerprint:        storeFingerprint,
+		Generation:              2,
+		PreviousStateCommitment: stateCommitment,
+		StateImageDigest:        advancedImage,
+		StateCommitment:         advancedCommitment,
+	}
+	advancedEventRoot := [32]byte{0x74}
+	advancedTip := *baselineTip
+	advancedTip.Generation = advancedCheckpoint.Generation
+	advancedTip.PreviousStateCommitment = advancedCheckpoint.PreviousStateCommitment
+	advancedTip.StateImageDigest = advancedCheckpoint.StateImageDigest
+	advancedTip.StateCommitment = advancedCheckpoint.StateCommitment
+	advancedTip.AnchorRevision = baselineTip.AnchorRevision + 1
+	advancedTip.AnchorEventRoot = advancedEventRoot
+	anchorBinding.readTip = func() (
+		*frostsigning.NativeTBTCSignerStateWitnessTip,
+		error,
+	) {
+		copy := advancedTip
+		return &copy, nil
+	}
+	anchorStore.record.Checkpoint = advancedCheckpoint
+	anchorStore.record.Revision = advancedTip.AnchorRevision
+	anchorStore.record.PreviousEventRoot = baselineRecord.EventRoot
+	anchorStore.record.EventRoot = advancedEventRoot
+	inventory.StateGeneration = advancedCheckpoint.Generation
+	inventory.PreviousStateCommitment = advancedCheckpoint.PreviousStateCommitment
+	inventory.StateImageDigest = advancedCheckpoint.StateImageDigest
+	inventory.StateCommitment = advancedCheckpoint.StateCommitment
+
+	if err := readiness.verifyFrostProductionSignerReadinessUnchanged(
+		context.Background(),
+		snapshot,
+	); err != nil {
+		t.Fatalf(
+			"the signing session's own authorized durable advance aborted revalidation: [%v]",
+			err,
+		)
+	}
+
+	// A rolled-back native store is still a fatal readiness change.
+	anchorBinding.readTip = func() (
+		*frostsigning.NativeTBTCSignerStateWitnessTip,
+		error,
+	) {
+		copy := *baselineTip
+		return &copy, nil
+	}
+	*anchorStore.record = baselineRecord
+	inventory.StateGeneration = checkpoint.Generation
+	inventory.PreviousStateCommitment = checkpoint.PreviousStateCommitment
+	inventory.StateImageDigest = checkpoint.StateImageDigest
+	inventory.StateCommitment = checkpoint.StateCommitment
+	snapshot.Inventory.StateGeneration = advancedCheckpoint.Generation
+	snapshot.Inventory.StateCommitment = advancedCheckpoint.StateCommitment
+	snapshot.Inventory.PreviousStateCommitment =
+		advancedCheckpoint.PreviousStateCommitment
+	snapshot.Inventory.StateImageDigest = advancedCheckpoint.StateImageDigest
+	snapshot.Inventory.CurrentAnchorRevision = advancedTip.AnchorRevision
+	snapshot.Inventory.RestartableRevisionHeadroom--
+	snapshot.Inventory.RestartableGenerationHeadroom--
+	if err := readiness.verifyFrostProductionSignerReadinessUnchanged(
+		context.Background(),
+		snapshot,
+	); err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("rolled-back native signer state was accepted: [%v]", err)
+	}
+}
+
+func TestVerifyFrostNativeSignerInventoryUnchangedSeparatesAdvanceFromChange(
+	t *testing.T,
+) {
+	baseline := func() *frostNativeSignerInventorySnapshot {
+		return &frostNativeSignerInventorySnapshot{
+			Schema:                        "inventory/v1",
+			StoreFingerprint:              [32]byte{0x01},
+			StateGeneration:               10,
+			StateCommitment:               [32]byte{0x02},
+			PreviousStateCommitment:       [32]byte{0x03},
+			StateImageDigest:              [32]byte{0x04},
+			InventoryCommitment:           [32]byte{0x05},
+			WalletCount:                   1,
+			KeyPackageCount:               1,
+			ExternalRollbackAnchorBound:   true,
+			TrustCertificateSequence:      1,
+			TrustCertificateDigest:        [32]byte{0x06},
+			AnchorServiceEpoch:            1,
+			CertifiedFloorRevision:        1,
+			CertifiedFloorGeneration:      1,
+			CurrentAnchorRevision:         5,
+			RestartableRevisionHeadroom:   4092,
+			RestartableGenerationHeadroom: 4087,
+		}
+	}
+	tests := map[string]struct {
+		mutate   func(*frostNativeSignerInventorySnapshot)
+		accepted bool
+		message  string
+	}{
+		"unchanged": {
+			mutate:   func(*frostNativeSignerInventorySnapshot) {},
+			accepted: true,
+		},
+		"authorized durable advance": {
+			mutate: func(actual *frostNativeSignerInventorySnapshot) {
+				actual.StateGeneration++
+				actual.PreviousStateCommitment = actual.StateCommitment
+				actual.StateCommitment = [32]byte{0x12}
+				actual.StateImageDigest = [32]byte{0x14}
+				actual.CurrentAnchorRevision++
+				actual.RestartableRevisionHeadroom--
+				actual.RestartableGenerationHeadroom--
+			},
+			accepted: true,
+		},
+		"generation rollback": {
+			mutate: func(actual *frostNativeSignerInventorySnapshot) {
+				actual.StateGeneration--
+				actual.RestartableGenerationHeadroom++
+			},
+			message: "rolled back",
+		},
+		"anchor revision rollback": {
+			mutate: func(actual *frostNativeSignerInventorySnapshot) {
+				actual.CurrentAnchorRevision--
+				actual.RestartableRevisionHeadroom++
+			},
+			message: "rolled back",
+		},
+		"fork at unchanged generation": {
+			mutate: func(actual *frostNativeSignerInventorySnapshot) {
+				actual.StateCommitment = [32]byte{0x22}
+			},
+			message: "forked at an unchanged generation",
+		},
+		"another durable store": {
+			mutate: func(actual *frostNativeSignerInventorySnapshot) {
+				actual.StoreFingerprint = [32]byte{0x31}
+			},
+			message: "identity, trust head, or retained key material changed",
+		},
+		"replaced key material": {
+			mutate: func(actual *frostNativeSignerInventorySnapshot) {
+				actual.InventoryCommitment = [32]byte{0x32}
+			},
+			message: "identity, trust head, or retained key material changed",
+		},
+		"rotated trust certificate": {
+			mutate: func(actual *frostNativeSignerInventorySnapshot) {
+				actual.TrustCertificateSequence++
+			},
+			message: "identity, trust head, or retained key material changed",
+		},
+		"advance into the rotation warning band": {
+			mutate: func(actual *frostNativeSignerInventorySnapshot) {
+				actual.StateGeneration +=
+					actual.RestartableGenerationHeadroom -
+						FrostNativeSignerAnchorRotationWarningHeadroom
+				actual.RestartableGenerationHeadroom =
+					FrostNativeSignerAnchorRotationWarningHeadroom
+				actual.PreviousStateCommitment = actual.StateCommitment
+				actual.StateCommitment = [32]byte{0x42}
+				actual.AnchorRotationWarning = true
+			},
+			message: "identity, trust head, or retained key material changed",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			expected := baseline()
+			actual := baseline()
+			test.mutate(actual)
+			err := verifyFrostNativeSignerInventoryUnchanged(expected, actual)
+			if test.accepted {
+				if err != nil {
+					t.Fatalf("legitimate native signer state was rejected: [%v]", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("native signer state change was accepted: [%v]", err)
+			}
+		})
 	}
 }
