@@ -22,6 +22,13 @@ const (
 	// three snapshots need six PREPARE/COMMIT records to finish the in-flight
 	// request before a checkpoint can be acknowledged.
 	NativeTBTCSignerStateWitnessRotationTerminalRecordReservation uint64 = 6
+	// NativeTBTCSignerStateWitnessQuarantineRecordReservation mirrors the
+	// signer's TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION, the
+	// PREPARE/COMMIT pair kept above the terminal band so corruption recovery
+	// stays reachable once an interrupted retry has parked the journal at the
+	// terminal limit. Quarantine commits an absence, so it never extends usable
+	// state, but it still needs two records that ordinary writes cannot consume.
+	NativeTBTCSignerStateWitnessQuarantineRecordReservation uint64 = 2
 	// NativeTBTCSignerStateWitnessMinimumRotationThresholdRecords mirrors the
 	// signer's lower bound on the rotation threshold: the terminal reserve is
 	// entered only after at least one complete PREPARE/COMMIT pair.
@@ -41,9 +48,10 @@ const (
 // the whole offline ceremony against a plan the signer rejects at node startup,
 // which can only be undone by re-running the ceremony.
 //
-// The bound is deliberately expressed as one helper over one exported
-// reservation constant. Every previous copy of this arithmetic drifted
-// independently when the reservation grew from two records to six.
+// The bound is deliberately expressed as one helper over the exported
+// reservation constants. Every previous copy of this arithmetic drifted
+// independently when the reservation grew from two records to six, and the
+// quarantine pair added on top of it would have drifted the same way.
 func ValidateNativeTBTCSignerStateWitnessGeometry(
 	maximumRecords uint64,
 	rotationThresholdRecords uint64,
@@ -57,17 +65,19 @@ func ValidateNativeTBTCSignerStateWitnessGeometry(
 		)
 	}
 	reserved := rotationThresholdRecords +
-		NativeTBTCSignerStateWitnessRotationTerminalRecordReservation
+		NativeTBTCSignerStateWitnessRotationTerminalRecordReservation +
+		NativeTBTCSignerStateWitnessQuarantineRecordReservation
 	if rotationThresholdRecords <
 		NativeTBTCSignerStateWitnessMinimumRotationThresholdRecords ||
 		reserved < rotationThresholdRecords ||
 		reserved > maximumRecords {
 		return fmt.Errorf(
 			"witnessRotationThresholdRecords [%d] must be at least %d and "+
-				"reserve %d terminal records below witnessMaximumRecords [%d]",
+				"reserve %d records below witnessMaximumRecords [%d]",
 			rotationThresholdRecords,
 			NativeTBTCSignerStateWitnessMinimumRotationThresholdRecords,
-			NativeTBTCSignerStateWitnessRotationTerminalRecordReservation,
+			NativeTBTCSignerStateWitnessRotationTerminalRecordReservation+
+				NativeTBTCSignerStateWitnessQuarantineRecordReservation,
 			maximumRecords,
 		)
 	}

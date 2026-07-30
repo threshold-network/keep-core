@@ -304,8 +304,9 @@ func uint64ToCanonicalString(value uint64) string {
 // native signer enforces in configured_state_anchor (engine/anchor.rs) and
 // parse_endpoint (engine/anchor_trust.rs). Both reject a rotation threshold
 // below two or one that does not leave
-// TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION records below
-// the maximum. Raising that reservation in Rust must fail this test so the Go
+// TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION plus
+// TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION records below the
+// maximum. Raising either reservation in Rust must fail this test so the Go
 // validators are updated in the same change instead of silently accepting
 // geometries the signer refuses at node startup.
 func TestValidateNativeTBTCSignerStateWitnessGeometry(t *testing.T) {
@@ -313,6 +314,12 @@ func TestValidateNativeTBTCSignerStateWitnessGeometry(t *testing.T) {
 		t.Fatalf(
 			"terminal-record reservation [%d] no longer mirrors the signer's six",
 			NativeTBTCSignerStateWitnessRotationTerminalRecordReservation,
+		)
+	}
+	if NativeTBTCSignerStateWitnessQuarantineRecordReservation != 2 {
+		t.Fatalf(
+			"quarantine-record reservation [%d] no longer mirrors the signer's two",
+			NativeTBTCSignerStateWitnessQuarantineRecordReservation,
 		)
 	}
 
@@ -327,18 +334,23 @@ func TestValidateNativeTBTCSignerStateWitnessGeometry(t *testing.T) {
 			valid:                    true,
 		},
 		"smallest geometry the signer accepts": {
-			maximumRecords:           8,
+			maximumRecords:           10,
 			rotationThresholdRecords: 2,
 			valid:                    true,
 		},
-		"threshold exactly at the terminal reserve": {
+		"threshold exactly at the reserved band": {
 			maximumRecords:           1024,
-			rotationThresholdRecords: 1018,
+			rotationThresholdRecords: 1016,
 			valid:                    true,
 		},
-		"threshold one record inside the terminal reserve": {
+		"threshold one record inside the reserved band": {
 			maximumRecords:           1024,
-			rotationThresholdRecords: 1019,
+			rotationThresholdRecords: 1017,
+			valid:                    false,
+		},
+		"threshold leaving only the terminal band without its quarantine pair": {
+			maximumRecords:           1024,
+			rotationThresholdRecords: 1018,
 			valid:                    false,
 		},
 		"threshold leaving only the retired two-record reserve": {
@@ -346,8 +358,8 @@ func TestValidateNativeTBTCSignerStateWitnessGeometry(t *testing.T) {
 			rotationThresholdRecords: 60,
 			valid:                    false,
 		},
-		"maximum below the terminal reserve": {
-			maximumRecords:           7,
+		"maximum one record below the reserved band": {
+			maximumRecords:           9,
 			rotationThresholdRecords: 2,
 			valid:                    false,
 		},
