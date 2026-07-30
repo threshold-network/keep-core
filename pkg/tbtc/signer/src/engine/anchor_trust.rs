@@ -1119,13 +1119,23 @@ fn parse_endpoint(
         &wire.witness_rotation_threshold_records,
         &format!("{label}.witnessRotationThresholdRecords"),
     )?;
+    // Same geometry rule the local configuration enforces: six terminal
+    // records for an interrupted multi-snapshot retry plus the two-record
+    // quarantine reserve that keeps corruption recovery available once the
+    // journal parks at the terminal band. A certified endpoint that omitted
+    // the reserve would pin a store with no supported exit from a corrupt
+    // state image.
     if witness_rotation_threshold_records < 2
         || witness_rotation_threshold_records
             .checked_add(TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION as u64)
+            .and_then(|reserved| {
+                reserved.checked_add(TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION as u64)
+            })
             .is_none_or(|reserved| reserved > witness_maximum_records)
     {
         return Err(EngineError::Validation(format!(
-            "{label}.witnessRotationThresholdRecords must be at least 2 and reserve six terminal records"
+            "{label}.witnessRotationThresholdRecords must be at least 2 and reserve six terminal \
+             records and the quarantine pair"
         )));
     }
     let reference = parse_reference(&wire.reference, &format!("{label}.reference"))?;
@@ -1794,7 +1804,7 @@ pub(crate) fn bootstrap_state_anchor_trust_transition_for_tests(
         response_public_key_spki_sha256,
         offline_authority_public_key,
         offline_authority_spki_sha256,
-        witness_maximum_records: 8,
+        witness_maximum_records: 10,
         witness_rotation_threshold_records: 2,
         reference: StateAnchorTrustReferenceModel {
             service_epoch: 1,
@@ -1963,7 +1973,7 @@ pub(crate) fn bootstrap_state_anchor_trust_transition_for_tests(
         EngineError::Internal(format!("failed to encode test target Read: {error}"))
     })?;
 
-    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "10");
     std::env::set_var(
         TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
         "2",

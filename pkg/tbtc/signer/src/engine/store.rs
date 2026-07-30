@@ -74,6 +74,19 @@ pub(crate) const TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH: usize = 105;
 /// its requested mutation. Those three snapshots need six records to finish
 /// the in-flight request before a checkpoint can be acknowledged.
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION: usize = 6;
+/// Those three snapshots are a legitimately reachable steady state, so the
+/// journal can park at the terminal reservation while it waits for the next
+/// checkpoint acknowledgement. Corruption quarantine must still work there:
+/// it is the operator-selected recovery for a state image that no longer
+/// decodes, and its own unblock - an acknowledgement of the current tip - is
+/// itself refused while the image is corrupt, because acknowledging first
+/// revalidates the image against the committed witness tip. Quarantine
+/// commits an ABSENCE: it renames the undecodable image away and records its
+/// removal, so it never extends usable state and cannot be repeated (the
+/// second call finds no state file). Reserving its PREPARE/COMMIT pair above
+/// the terminal band therefore keeps a supported exit open without widening
+/// the bound on ordinary state writes by a single record.
+pub(crate) const TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION: usize = 2;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE: u8 = 1;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT: u8 = 2;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_ABORT: u8 = 3;
@@ -284,6 +297,17 @@ pub(crate) struct StateWitness {
 pub(crate) struct LoadedStateImage {
     pub(crate) bytes: Option<Vec<u8>>,
     pub(crate) digest: [u8; 32],
+}
+
+/// Why a witness pair is being prepared. Only the corruption quarantine may
+/// draw on `TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION`; every
+/// ordinary state write stays inside the rotation bound, so a caller cannot
+/// reach the reserve by persisting state.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WitnessAppendPurpose {
+    StateWrite,
+    CorruptionQuarantine,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1472,7 +1496,7 @@ impl StateFileLock {
                 return Err(StoreReplaceError::before_replacement(error));
             }
         };
-        if let Err(error) = self.prepare_witness(next_witness) {
+        if let Err(error) = self.prepare_witness(next_witness, WitnessAppendPurpose::StateWrite) {
             let _ = unlinkat_entry(self.directory.as_raw_fd(), &temp_name);
             return Err(StoreReplaceError::before_replacement(error));
         }
@@ -1535,6 +1559,10 @@ impl StateFileLock {
         // state bytes differ from the committed image, and only after the
         // caller has selected the explicit quarantine-and-reset policy. All
         // directory, anchor, inode, permission, and journal checks still hold.
+        // It is also the sole operation allowed to draw on the quarantine
+        // record reservation, because the acknowledgement that would otherwise
+        // rotate the segment revalidates the state image first and therefore
+        // cannot run while that image is the thing that is broken.
         self.revalidate_store_entries()?;
         if self.current_state_identity.is_none() {
             return Err(EngineError::Internal(format!(
@@ -1567,7 +1595,7 @@ impl StateFileLock {
         validate_entry_name(backup_name, "state backup")?;
         ensure_entry_absent(self.directory.as_raw_fd(), backup_name, "state backup")?;
         let next_witness = self.next_state_witness(state_image_digest(None))?;
-        self.prepare_witness(next_witness)?;
+        self.prepare_witness(next_witness, WitnessAppendPurpose::CorruptionQuarantine)?;
         if let Err(rename_error) = renameat_same_directory(
             self.directory.as_raw_fd(),
             &self.state_name,
@@ -3473,7 +3501,11 @@ impl StateFileLock {
     }
 
     #[cfg(unix)]
-    fn prepare_witness(&mut self, witness: StateWitness) -> Result<(), EngineError> {
+    fn prepare_witness(
+        &mut self,
+        witness: StateWitness,
+        purpose: WitnessAppendPurpose,
+    ) -> Result<(), EngineError> {
         if self.pending_witness.is_some() {
             return Err(EngineError::Internal(
                 "cannot prepare a state witness while another update is pending".to_string(),
@@ -3487,8 +3519,20 @@ impl StateFileLock {
         }
         if let Some(threshold) = self.witness_rotation_threshold {
             let record_count = self.witness_record_count()?;
+            // The quarantine reserve sits strictly above the terminal band, so
+            // it is reachable only by the absence commit; ordinary writes stop
+            // at the terminal band exactly as before. The configured geometry
+            // keeps the reserve below the hard record ceiling, so the quarantine
+            // pair never has to choose between the rotation bound and a journal
+            // that would no longer parse on reopen.
             let completion_limit = threshold
                 .checked_add(TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION)
+                .and_then(|limit| match purpose {
+                    WitnessAppendPurpose::StateWrite => Some(limit),
+                    WitnessAppendPurpose::CorruptionQuarantine => {
+                        limit.checked_add(TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION)
+                    }
+                })
                 .ok_or_else(|| {
                     EngineError::Internal(
                         "signer state witness rotation completion limit overflowed".to_string(),
@@ -7593,7 +7637,7 @@ mod witness_transcript_tests {
         spki_digest.update(response_public_key);
         let configured_spki_hash: [u8; 32] = spki_digest.finalize().into();
         std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, state_path);
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "10");
         std::env::set_var(
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             "2",
@@ -7620,6 +7664,29 @@ mod witness_transcript_tests {
         store_fingerprint: [u8; 32],
         tip: &StateWitness,
     ) -> StateAnchorAcknowledgement {
+        signed_acknowledgement_for_tip_at_revision(
+            signing_key,
+            configured_spki_hash,
+            store_fingerprint,
+            tip,
+            1,
+            [0u8; 32],
+        )
+    }
+
+    /// Every acknowledgement after the first must advance the service revision
+    /// by exactly one and chain the previous event root, so a test that
+    /// acknowledges the same store twice has to sign the successor rather than
+    /// replay revision 1.
+    #[cfg(unix)]
+    fn signed_acknowledgement_for_tip_at_revision(
+        signing_key: &SigningKey,
+        configured_spki_hash: [u8; 32],
+        store_fingerprint: [u8; 32],
+        tip: &StateWitness,
+        revision: u64,
+        previous_event_root: [u8; 32],
+    ) -> StateAnchorAcknowledgement {
         let now = u64::try_from(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -7628,6 +7695,8 @@ mod witness_transcript_tests {
         )
         .expect("clock fits u64");
         let mut acknowledgement = fixture_acknowledgement();
+        acknowledgement.revision = revision;
+        acknowledgement.previous_event_root = previous_event_root;
         acknowledgement.checkpoint_store_fingerprint = store_fingerprint;
         acknowledgement.checkpoint_generation = tip.generation;
         acknowledgement.checkpoint_previous_commitment = tip.previous_commitment;
@@ -7726,7 +7795,7 @@ mod witness_transcript_tests {
         state_path: &Path,
     ) -> (VerifiedStateAnchorTrustTransition, StateWitness) {
         std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, state_path);
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "10");
         let mut initial = StateFileLock::acquire(state_path).expect("open unanchored store");
         let tip = initial.state_witness_tip().expect("unanchored genesis tip");
         let store_fingerprint = initial.identity.fingerprint;
@@ -8449,7 +8518,7 @@ mod witness_transcript_tests {
             hex::encode(random)
         ));
         std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "10");
         std::env::set_var(
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             "2",
@@ -8518,7 +8587,9 @@ mod witness_transcript_tests {
         let aborted = store
             .next_state_witness(state_image_digest(Some(b"aborted state")))
             .expect("next witness");
-        store.prepare_witness(aborted).expect("prepare witness");
+        store
+            .prepare_witness(aborted, WitnessAppendPurpose::StateWrite)
+            .expect("prepare witness");
         store.abort_pending_witness().expect("abort witness");
         assert_eq!(store.state_witness_tip().expect("unchanged tip"), tip);
         assert_eq!(store.witness_record_count().expect("prepare plus abort"), 2);
@@ -8609,7 +8680,9 @@ mod witness_transcript_tests {
         let aborted = store
             .next_state_witness(state_image_digest(Some(b"aborted state")))
             .expect("next witness");
-        store.prepare_witness(aborted).expect("prepare witness");
+        store
+            .prepare_witness(aborted, WitnessAppendPurpose::StateWrite)
+            .expect("prepare witness");
         store.abort_pending_witness().expect("abort witness");
         assert_eq!(store.state_witness_tip().expect("unchanged tip"), tip);
         assert_eq!(store.witness_record_count().expect("threshold count"), 2);
@@ -8720,6 +8793,143 @@ mod witness_transcript_tests {
             .to_string()
             .contains("rotation threshold reached"));
         drop(store);
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn quarantine_recovers_a_corrupt_image_parked_at_the_terminal_reservation() {
+        let _guard = lock_test_state();
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let state_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-anchor-terminal-quarantine-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let signing_key = SigningKey::from_bytes(&[0x07; 32]);
+        let configured_spki_hash =
+            configure_anchor_store_fixture(&state_path, &signing_key, [0x44; 32]);
+        let mut store = StateFileLock::acquire(&state_path).expect("open anchored store");
+        let genesis = store.state_witness_tip().expect("genesis tip");
+        let genesis_acknowledgement = signed_acknowledgement_for_tip(
+            &signing_key,
+            configured_spki_hash,
+            store.identity.fingerprint,
+            &genesis,
+        );
+        assert!(
+            store
+                .acknowledge_state_witness_checkpoint(
+                    genesis_acknowledgement.clone(),
+                    2,
+                    false,
+                    genesis_acknowledgement.expires_at_unix_ms,
+                )
+                .expect("anchor and rotate genesis")
+                .rotated
+        );
+
+        // Park the journal exactly where the terminal reservation leaves it:
+        // the threshold is behind us and the last reserved snapshot has been
+        // spent, so the next ordinary write waits for a checkpoint.
+        for snapshot in 0..4 {
+            store
+                .replace_state(format!("terminal snapshot {snapshot}").as_bytes())
+                .expect("terminal reservation admits the parked snapshots");
+        }
+        assert_eq!(store.witness_record_count().expect("parked count"), 8);
+        let parked_tip = store.state_witness_tip().expect("parked tip");
+        drop(store);
+
+        // Corrupt the committed image in place. The inode, mode, and link count
+        // are unchanged, so only the image digest stops matching the tip.
+        fs::write(&state_path, b"{corrupt-while-parked").expect("corrupt the parked state image");
+        let mut store = StateFileLock::acquire(&state_path).expect("reopen with a corrupt image");
+
+        // Both maintenance exits are closed: the acknowledgement that would
+        // rotate the segment revalidates the image first, and it is the image
+        // that is broken.
+        let image_error = store
+            .validate_state_image()
+            .expect_err("the corrupt image no longer matches the committed tip");
+        assert!(image_error
+            .to_string()
+            .contains("signer state image does not match the committed witness tip"));
+        let parked_acknowledgement = signed_acknowledgement_for_tip(
+            &signing_key,
+            configured_spki_hash,
+            store.identity.fingerprint,
+            &parked_tip,
+        );
+        let acknowledge_error = store
+            .acknowledge_state_witness_checkpoint(
+                parked_acknowledgement.clone(),
+                2,
+                false,
+                parked_acknowledgement.expires_at_unix_ms,
+            )
+            .expect_err("a corrupt image cannot be checkpointed into a rotation");
+        assert!(acknowledge_error
+            .to_string()
+            .contains("signer state image does not match the committed witness tip"));
+
+        // The operator-selected quarantine policy is the remaining exit, and it
+        // draws on the reserve rather than the rotation bound.
+        let backup_path = state_path.with_file_name(format!(
+            "{}.corrupt-backup",
+            state_path
+                .file_name()
+                .expect("fixture state file name")
+                .to_string_lossy()
+        ));
+        store
+            .quarantine_state(&backup_path)
+            .expect("quarantine uses the reserved record pair");
+        assert_eq!(store.witness_record_count().expect("quarantined count"), 10);
+        assert_eq!(store.read_state().expect("quarantined state"), None);
+        assert_eq!(
+            fs::read(&backup_path).expect("read quarantined image"),
+            b"{corrupt-while-parked"
+        );
+
+        // The reserve is not an escape hatch for ordinary writes: they still
+        // wait for the acknowledgement, which is now unblocked because the
+        // committed tip is the absence the quarantine recorded.
+        let rejected = store
+            .replace_state(b"write after quarantine")
+            .expect_err("the quarantine reserve does not admit state writes");
+        assert!(!rejected.replaced());
+        assert!(rejected
+            .into_engine_error()
+            .to_string()
+            .contains("rotation threshold reached"));
+        let quarantined_tip = store.state_witness_tip().expect("quarantined tip");
+        assert_eq!(quarantined_tip.state_image_digest, state_image_digest(None));
+        let quarantined_acknowledgement = signed_acknowledgement_for_tip_at_revision(
+            &signing_key,
+            configured_spki_hash,
+            store.identity.fingerprint,
+            &quarantined_tip,
+            genesis_acknowledgement.revision + 1,
+            genesis_acknowledgement.event_root,
+        );
+        assert!(
+            store
+                .acknowledge_state_witness_checkpoint(
+                    quarantined_acknowledgement.clone(),
+                    2,
+                    false,
+                    quarantined_acknowledgement.expires_at_unix_ms,
+                )
+                .expect("the quarantined tip is checkpointable")
+                .rotated
+        );
+        store
+            .replace_state(b"clean state after quarantine")
+            .expect("writes resume on the rotated segment");
+        drop(store);
+        let _ = fs::remove_file(&backup_path);
         cleanup_anchor_store_fixture(&state_path);
     }
 

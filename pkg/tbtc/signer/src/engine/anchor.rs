@@ -209,17 +209,26 @@ pub(crate) fn configured_state_anchor() -> Result<Option<StateAnchorConfiguratio
         TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
     )?;
     let maximum_records = state_witness_max_records()?;
-    let threshold_with_terminal = rotation_threshold_records
+    // The terminal band lets an interrupted multi-snapshot retry finish, and
+    // the quarantine pair above it keeps corruption recovery available once
+    // the journal parks there. Both must fit below the hard record ceiling:
+    // exceeding that ceiling would leave a journal that no longer parses on
+    // reopen, so a geometry without the reserve has no supported exit from a
+    // corrupt state image.
+    let threshold_with_reservations = rotation_threshold_records
         .checked_add(TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION)
+        .and_then(|reserved| {
+            reserved.checked_add(TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION)
+        })
         .ok_or_else(|| {
             EngineError::Validation(
                 "state witness rotation threshold overflows its terminal-record reservation"
                     .to_string(),
             )
         })?;
-    if rotation_threshold_records < 2 || threshold_with_terminal > maximum_records {
+    if rotation_threshold_records < 2 || threshold_with_reservations > maximum_records {
         return Err(EngineError::Validation(format!(
-            "{} must be at least 2 and leave six records below {} [{}]; got [{}]",
+            "{} must be at least 2 and leave eight records below {} [{}]; got [{}]",
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
             maximum_records,
@@ -1752,7 +1761,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_anchor_reserves_six_terminal_witness_records() {
+    fn configured_anchor_reserves_terminal_and_quarantine_witness_records() {
         let _guard = lock_test_state();
         let signing_key = SigningKey::from_bytes(&[0x01; 32]);
         let public_key = signing_key.verifying_key().to_bytes();
@@ -1772,14 +1781,18 @@ mod tests {
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             "2",
         );
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "7");
-        let error = configured_state_anchor().expect_err("five records are insufficient");
-        assert!(error.to_string().contains("leave six records"));
+        // Eight records above the threshold: six terminal records for an
+        // interrupted multi-snapshot retry, then the quarantine pair that keeps
+        // corruption recovery available once the journal parks there.
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "9");
+        let error = configured_state_anchor()
+            .expect_err("a terminal band without a quarantine reserve is insufficient");
+        assert!(error.to_string().contains("leave eight records"));
 
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "10");
         assert_eq!(
             configured_state_anchor()
-                .expect("eight records satisfy the configured reservation")
+                .expect("ten records satisfy the configured reservations")
                 .expect("anchor configuration")
                 .rotation_threshold_records,
             2
