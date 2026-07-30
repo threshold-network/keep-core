@@ -373,9 +373,27 @@ func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSigner
 	ctx context.Context,
 	expected *frostProductionSignerReadinessSnapshot,
 ) error {
+	_, err := readiness.revalidateFrostProductionSignerReadinessInventory(
+		ctx,
+		expected,
+	)
+	return err
+}
+
+// revalidateFrostProductionSignerReadinessInventory mirrors production: it
+// compares the live inventory against the reconciled one with exactly the
+// comparison the real verifier uses - strict on identity, key material, trust
+// head and the rotation warning, monotone on the state checkpoint, the anchor
+// revision and both headrooms - and returns the live snapshot. Comparing the
+// whole struct by value here would model a production behaviour that no longer
+// exists and would assert a 503 the exporter no longer returns.
+func (readiness *testFrostProductionSignerReadiness) revalidateFrostProductionSignerReadinessInventory(
+	ctx context.Context,
+	expected *frostProductionSignerReadinessSnapshot,
+) (*frostNativeSignerInventorySnapshot, error) {
 	if ctx == nil || expected == nil || expected.Inventory == nil ||
 		!expected.InteractiveSigningReady {
-		return fmt.Errorf("cached signer readiness is incomplete")
+		return nil, fmt.Errorf("cached signer readiness is incomplete")
 	}
 	readiness.mutex.Lock()
 	unchangedStarted := readiness.unchangedStarted
@@ -389,21 +407,24 @@ func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSigner
 	if unchangedRelease != nil {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-unchangedRelease:
 		}
 	}
 	interactive, readinessErr, inventory := readiness.snapshot()
 	if readinessErr != nil {
-		return readinessErr
+		return nil, readinessErr
 	}
 	if !interactive {
-		return fmt.Errorf("interactive signer is not ready")
+		return nil, fmt.Errorf("interactive signer is not ready")
 	}
-	if inventory != *expected.Inventory {
-		return fmt.Errorf("native signer state changed since reconciliation")
+	if err := verifyFrostNativeSignerInventoryUnchanged(
+		expected.Inventory,
+		&inventory,
+	); err != nil {
+		return nil, err
 	}
-	return nil
+	return &inventory, nil
 }
 
 func (source *testFrostRetainedGroupHistorySource) BindFrostRetainedGroupActivationEvidence(
@@ -830,8 +851,12 @@ func TestFrostActivationHandshakeExporter_AttestsInclusiveCheckpointAncestry(
 func TestFrostActivationHandshakeExporter_RevalidatesNativeSignerStateBeforeSigning(
 	t *testing.T,
 ) {
+	// Only changes the revalidation fails closed on belong here. A pure
+	// monotone advance of the state checkpoint, the anchor revision or the
+	// headrooms is the authorized signing window's own progress and is covered
+	// by TestFrostActivationHandshakeExporter_SignsLiveNativeSignerState.
 	testCases := map[string]func(*testFrostProductionSignerReadiness){
-		"native state advances": func(
+		"retained key material changes": func(
 			readiness *testFrostProductionSignerReadiness,
 		) {
 			inventory := testFrostProductionSignerInventorySnapshot()
@@ -843,12 +868,23 @@ func TestFrostActivationHandshakeExporter_RevalidatesNativeSignerStateBeforeSign
 			inventory.RestartableGenerationHeadroom--
 			readiness.setInventory(inventory)
 		},
-		"native anchor advances": func(
+		"native state rolls back": func(
 			readiness *testFrostProductionSignerReadiness,
 		) {
 			inventory := testFrostProductionSignerInventorySnapshot()
-			inventory.CurrentAnchorRevision++
-			inventory.RestartableRevisionHeadroom--
+			inventory.StateGeneration--
+			inventory.StateCommitment = inventory.PreviousStateCommitment
+			inventory.PreviousStateCommitment = [32]byte{0x2f}
+			inventory.StateImageDigest = [32]byte{0x35}
+			inventory.RestartableGenerationHeadroom++
+			readiness.setInventory(inventory)
+		},
+		"rotated anchor trust certificate": func(
+			readiness *testFrostProductionSignerReadiness,
+		) {
+			inventory := testFrostProductionSignerInventorySnapshot()
+			inventory.TrustCertificateSequence++
+			inventory.TrustCertificateDigest = [32]byte{0x3a}
 			readiness.setInventory(inventory)
 		},
 		"interactive readiness changes": func(
@@ -911,7 +947,7 @@ func TestFrostActivationHandshakeExporter_RevalidatesNativeSignerStateBeforeSign
 			if !handshake.Payload.State.Healthy {
 				t.Fatal("fresh stable signer state did not recover healthy attestation")
 			}
-			if name == "native state advances" &&
+			if name == "retained key material changes" &&
 				(handshake.Payload.State.NativeSignerState.StateGeneration != 8 ||
 					handshake.Payload.State.NativeSignerState.StateCommitment !=
 						frostActivationHex32([32]byte{0x41})) {
@@ -920,16 +956,112 @@ func TestFrostActivationHandshakeExporter_RevalidatesNativeSignerStateBeforeSign
 					handshake.Payload.State.NativeSignerState,
 				)
 			}
-			if name == "native anchor advances" &&
-				(handshake.Payload.State.NativeSignerState.CurrentAnchorRevision != 2 ||
-					handshake.Payload.State.NativeSignerState.RestartableRevisionHeadroom !=
-						FrostNativeSignerAnchorMaximumHistoryEvents-1) {
+			if name == "native state rolls back" &&
+				handshake.Payload.State.NativeSignerState.StateGeneration != 6 {
 				t.Fatalf(
-					"reconciled attestation did not use the current native anchor: %+v",
+					"reconciled attestation did not use the current native state: %+v",
 					handshake.Payload.State.NativeSignerState,
 				)
 			}
 		})
+	}
+}
+
+// TestFrostActivationHandshakeExporter_SignsLiveNativeSignerState pins that the
+// signed attestation carries native signer facts read at the signing boundary,
+// not the ones the finality-keyed reconciliation cache recorded.
+//
+// The cache is refreshed only when finality advances, which is minutes apart,
+// while an authorized signing batch advances the state generation, the anchor
+// revision and both restartable headrooms continuously. Those fields are
+// exactly the ones the readiness revalidation permits to move, so exporting
+// them from the cache would sign a headroom that is stale by orders of
+// magnitude and mislead a consumer scheduling offline anchor rotation.
+func TestFrostActivationHandshakeExporter_SignsLiveNativeSignerState(
+	t *testing.T,
+) {
+	point := frostActivationEthereumPoint{
+		BlockNumber: 123,
+		BlockHash:   frostActivationHex32([32]byte{0x44}),
+	}
+	exporter, _, _, _, endpoint, request :=
+		startTestFrostActivationHandshakeExporter(t, point)
+	readiness, ok := exporter.readiness.(*testFrostProductionSignerReadiness)
+	if !ok {
+		t.Fatal("unexpected production signer readiness verifier")
+	}
+
+	response := postTestFrostActivationHandshake(t, endpoint, request)
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	response.Body.Close()
+
+	cached := testFrostProductionSignerInventorySnapshot()
+
+	// One authorized batch: the engine persists a consumption marker and the
+	// output barrier advances the anchor revision once, so the checkpoint
+	// chain, the revision and both headrooms move while identity, key material
+	// and the trust head stay put.
+	advanced := cached
+	advanced.StateGeneration++
+	advanced.PreviousStateCommitment = cached.StateCommitment
+	advanced.StateCommitment = [32]byte{0x41}
+	advanced.StateImageDigest = [32]byte{0x42}
+	advanced.RestartableGenerationHeadroom--
+	advanced.CurrentAnchorRevision++
+	advanced.RestartableRevisionHeadroom--
+	readiness.setInventory(advanced)
+
+	// The advance is not a readiness change, so the very next challenge is
+	// answered from the same cache without a reconciliation round trip.
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf(
+			"authorized durable advance was refused with status [%d]: %s",
+			response.StatusCode,
+			body,
+		)
+	}
+	defer response.Body.Close()
+	handshake := &frostActivationSignedHandshake{}
+	if err := json.NewDecoder(response.Body).Decode(handshake); err != nil {
+		t.Fatal(err)
+	}
+
+	exporter.reconciliationMutex.Lock()
+	stillCached := exporter.reconciliationCompleted != nil &&
+		exporter.reconciliationCompleted.inventory == cached
+	exporter.reconciliationMutex.Unlock()
+	if !stillCached {
+		t.Fatal("reconciliation cache was refreshed; the export is not proven live")
+	}
+
+	signed := handshake.Payload.State.NativeSignerState
+	if signed.StateGeneration != advanced.StateGeneration ||
+		signed.StateCommitment != frostActivationHex32(advanced.StateCommitment) ||
+		signed.PreviousStateCommitment !=
+			frostActivationHex32(advanced.PreviousStateCommitment) ||
+		signed.StateImageDigest !=
+			frostActivationHex32(advanced.StateImageDigest) ||
+		signed.CurrentAnchorRevision != advanced.CurrentAnchorRevision ||
+		signed.RestartableRevisionHeadroom !=
+			advanced.RestartableRevisionHeadroom ||
+		signed.RestartableGenerationHeadroom !=
+			advanced.RestartableGenerationHeadroom {
+		t.Fatalf(
+			"attestation signed the cached native signer state instead of the live one: %+v",
+			signed,
+		)
+	}
+	if !handshake.Payload.State.Healthy {
+		t.Fatal("live native signer state did not produce a healthy attestation")
 	}
 }
 

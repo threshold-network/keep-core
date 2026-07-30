@@ -424,30 +424,58 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 	}, nil
 }
 
+// verifyFrostProductionSignerReadinessUnchanged revalidates cached readiness
+// and discards the live native signer inventory it read. Callers that export
+// native signer facts into a signed statement must use
+// revalidateFrostProductionSignerReadinessInventory instead and publish the
+// returned live snapshot: the cached one is only pinned on the strict fields.
 func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerReadinessUnchanged(
 	ctx context.Context,
 	expected *frostProductionSignerReadinessSnapshot,
 ) error {
+	_, err := readiness.revalidateFrostProductionSignerReadinessInventory(
+		ctx,
+		expected,
+	)
+	return err
+}
+
+// revalidateFrostProductionSignerReadinessInventory revalidates cached
+// readiness and returns the live native signer inventory it read.
+//
+// The returned snapshot is not the cached one. Everything
+// verifyFrostNativeSignerInventoryUnchanged pins strictly - store identity,
+// retained key material, trust head, certified floor and the anchor rotation
+// warning - is guaranteed equal to the cached value or this returns an error.
+// The state checkpoint, the anchor revision and both restartable headrooms are
+// only held to a monotone advance, so on those the returned live values and
+// the cached ones can legitimately differ.
+func (readiness *frostProductionSignerReadiness) revalidateFrostProductionSignerReadinessInventory(
+	ctx context.Context,
+	expected *frostProductionSignerReadinessSnapshot,
+) (*frostNativeSignerInventorySnapshot, error) {
 	if readiness == nil || readiness.interactiveSigningReady == nil ||
 		readiness.journal == nil || readiness.inventoryBinding == nil ||
 		ctx == nil || expected == nil || expected.Journal == nil ||
 		expected.Inventory == nil ||
 		!expected.InteractiveSigningReady {
-		return fmt.Errorf("cached FROST production signer readiness is incomplete")
+		return nil, fmt.Errorf(
+			"cached FROST production signer readiness is incomplete",
+		)
 	}
 	if !readiness.interactiveSigningReady() {
-		return fmt.Errorf("interactive FROST signing engine is not ready")
+		return nil, fmt.Errorf("interactive FROST signing engine is not ready")
 	}
 	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
 		ctx,
 		expected.Journal,
 	); err != nil {
-		return err
+		return nil, err
 	}
 	if !readiness.journal.walletRegistry.frostReadinessRevisionMatches(
 		expected.registryRevision,
 	) {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"local FROST signer registry changed since readiness reconciliation",
 		)
 	}
@@ -456,23 +484,23 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 		expected.inventoryExpectations,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := verifyFrostNativeSignerInventoryUnchanged(
 		expected.Inventory,
 		inventory,
 	); err != nil {
-		return err
+		return nil, err
 	}
 	if !readiness.journal.walletRegistry.frostReadinessRevisionMatches(
 		expected.registryRevision,
 	) {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"local FROST signer registry changed during readiness revalidation",
 		)
 	}
 	if !readiness.interactiveSigningReady() {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"interactive FROST signing engine became unavailable during readiness revalidation",
 		)
 	}
@@ -480,9 +508,9 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 		ctx,
 		expected.Journal,
 	); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return inventory, nil
 }
 
 // verifyFrostNativeSignerInventoryUnchanged separates the native signer facts
@@ -690,9 +718,21 @@ func (readiness *frostProductionSignerReadiness) verifyStableFrostProductionSign
 	if err != nil {
 		return nil, err
 	}
-	if *firstInventory != *secondInventory {
+	// The two reads are not adjacent: each one verifies the state tip against
+	// the authenticated external anchor, which is a full round trip to the
+	// anchor service. An authorized signing session persisting its own
+	// consumption marker routinely lands in that window, so the same
+	// advance-versus-change discipline the cached revalidation uses has to
+	// apply here too. Comparing the whole snapshot by value instead would let
+	// a session's own durable advance fail its guard - and the pre-sign
+	// authorization monitor latches the first such error permanently.
+	if err := verifyFrostNativeSignerInventoryUnchanged(
+		firstInventory,
+		secondInventory,
+	); err != nil {
 		return nil, fmt.Errorf(
-			"native signer state changed during readiness verification",
+			"native signer state changed during readiness verification: [%w]",
+			err,
 		)
 	}
 	if err := validateFrostNativeSignerAnchorReadinessHeadroom(

@@ -248,10 +248,14 @@ type frostActivationReconciliationCache struct {
 
 type frostActivationHandshakeReadinessVerifier interface {
 	frostProductionSignerReadinessVerifier
-	verifyFrostProductionSignerReadinessUnchanged(
+	// revalidateFrostProductionSignerReadinessInventory revalidates cached
+	// readiness and hands back the live native signer inventory it read, so a
+	// signed attestation can export what the signer reports now rather than
+	// what the finality-keyed reconciliation cache recorded minutes ago.
+	revalidateFrostProductionSignerReadinessInventory(
 		context.Context,
 		*frostProductionSignerReadinessSnapshot,
-	) error
+	) (*frostNativeSignerInventorySnapshot, error)
 }
 
 func newFrostActivationHandshakeExporter(
@@ -925,49 +929,13 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			err,
 		)
 	}
-	// Both snapshots are served from the reconciliation cache, and the journal
-	// stamp compared above covers journal state only: it says nothing about the
-	// native signer inventory or about interactive signing readiness. Their
-	// freshness comes from verifyFrostProductionSignerReadinessUnchanged at the
-	// signing boundary below, which re-reads live native signer state and
-	// refuses to sign unless it still equals reconciliation.inventory - the
-	// exact value exported into the payload - and unless the interactive engine
-	// is still ready. A consumer of a signed handshake therefore tolerates only
-	// the window between that revalidation and the signature, never the age of
-	// the cache.
+	// The journal snapshot is served from the reconciliation cache, and the
+	// stamp compared above pins exactly it: canonical and quarantine
+	// generations and roots move the stamp, so a cached journal state that no
+	// longer matches the live journal cannot reach the payload. The stamp says
+	// nothing about the native signer inventory, which is why that snapshot is
+	// re-read live further down instead of being exported from the cache.
 	journalSnapshot := &reconciliation.journal
-	nativeSignerSnapshot := &reconciliation.inventory
-	if !nativeSignerSnapshot.ExternalRollbackAnchorBound ||
-		nativeSignerSnapshot.TrustCertificateSequence == 0 ||
-		nativeSignerSnapshot.TrustCertificateDigest == [32]byte{} ||
-		nativeSignerSnapshot.AnchorServiceEpoch == 0 ||
-		nativeSignerSnapshot.CertifiedFloorRevision == 0 ||
-		nativeSignerSnapshot.CertifiedFloorGeneration == 0 ||
-		nativeSignerSnapshot.CurrentAnchorRevision <
-			nativeSignerSnapshot.CertifiedFloorRevision ||
-		nativeSignerSnapshot.RestartableRevisionHeadroom == 0 ||
-		nativeSignerSnapshot.StateGeneration <
-			nativeSignerSnapshot.CertifiedFloorGeneration ||
-		nativeSignerSnapshot.RestartableGenerationHeadroom == 0 ||
-		nativeSignerSnapshot.CurrentAnchorRevision-
-			nativeSignerSnapshot.CertifiedFloorRevision+
-			nativeSignerSnapshot.RestartableRevisionHeadroom !=
-			FrostNativeSignerAnchorMaximumHistoryEvents ||
-		nativeSignerSnapshot.StateGeneration-
-			nativeSignerSnapshot.CertifiedFloorGeneration+
-			nativeSignerSnapshot.RestartableGenerationHeadroom !=
-			FrostNativeSignerAnchorMaximumHistoryProofEntries ||
-		nativeSignerSnapshot.AnchorRotationWarning !=
-			frostNativeSignerAnchorRotationWarning(
-				minFrostNativeSignerAnchorHeadroom(
-					nativeSignerSnapshot.RestartableRevisionHeadroom,
-					nativeSignerSnapshot.RestartableGenerationHeadroom,
-				),
-			) {
-		return nil, fmt.Errorf(
-			"native signer state lacks an authenticated external rollback anchor trust certificate",
-		)
-	}
 	journalManifest := fahe.manifest.CanonicalJournal
 	if !fahe.journal.mutex.TryLock() {
 		return nil, fmt.Errorf(
@@ -1015,6 +983,78 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		return nil, fmt.Errorf(
 			"FROST durable session store changed during readiness reconciliation: [%w]",
 			err,
+		)
+	}
+	// The reconciliation cache is keyed on the finalized Ethereum point and is
+	// refreshed only when finality advances, so its native signer inventory can
+	// be many minutes old by the time a challenge arrives. This revalidation
+	// re-reads live native signer state, and the payload below is built from
+	// that live read rather than from the cache, because the two are pinned to
+	// each other only in part:
+	//
+	//   - the strict facts - store identity and fingerprint, retained key
+	//     material, trust head, anchor service epoch, certified floor and the
+	//     AnchorRotationWarning flag - must still equal the reconciled values
+	//     or signing fails closed here. An attestation can therefore never
+	//     claim a healthier anchor, or different key material, than the signer
+	//     actually has;
+	//   - the volatile facts that an authorized signing window advances by
+	//     design - state generation, the state commitment chain, the state
+	//     image digest, the anchor revision and both restartable headrooms -
+	//     are only held to a monotone advance. A concurrent authorized batch
+	//     can consume thousands of generations inside one finality window, so
+	//     exporting the cached values would sign a headroom that is stale by
+	//     orders of magnitude. They are exported as read here instead.
+	//
+	// The residual a consumer of a signed handshake must tolerate is the window
+	// between this read and the signature - the checkpoint self-verification,
+	// the transcript, one activation-point check and the journal stamp taken
+	// under the signing lock - never the age of the cache. A concurrent batch
+	// can still advance within that window, so the six volatile values are
+	// bounds rather than instants: attested generation and anchor revision are
+	// lower bounds on live state, attested headrooms are upper bounds.
+	nativeSignerSnapshot, err :=
+		fahe.readiness.revalidateFrostProductionSignerReadinessInventory(
+			ctx,
+			&reconciliation.readiness,
+		)
+	if err != nil {
+		fahe.queueReconciliation(finality, true)
+		return nil, fmt.Errorf(
+			"%w: cached FROST signer readiness changed before signing: [%v]",
+			errFrostActivationReconciliationPending,
+			err,
+		)
+	}
+	if !nativeSignerSnapshot.ExternalRollbackAnchorBound ||
+		nativeSignerSnapshot.TrustCertificateSequence == 0 ||
+		nativeSignerSnapshot.TrustCertificateDigest == [32]byte{} ||
+		nativeSignerSnapshot.AnchorServiceEpoch == 0 ||
+		nativeSignerSnapshot.CertifiedFloorRevision == 0 ||
+		nativeSignerSnapshot.CertifiedFloorGeneration == 0 ||
+		nativeSignerSnapshot.CurrentAnchorRevision <
+			nativeSignerSnapshot.CertifiedFloorRevision ||
+		nativeSignerSnapshot.RestartableRevisionHeadroom == 0 ||
+		nativeSignerSnapshot.StateGeneration <
+			nativeSignerSnapshot.CertifiedFloorGeneration ||
+		nativeSignerSnapshot.RestartableGenerationHeadroom == 0 ||
+		nativeSignerSnapshot.CurrentAnchorRevision-
+			nativeSignerSnapshot.CertifiedFloorRevision+
+			nativeSignerSnapshot.RestartableRevisionHeadroom !=
+			FrostNativeSignerAnchorMaximumHistoryEvents ||
+		nativeSignerSnapshot.StateGeneration-
+			nativeSignerSnapshot.CertifiedFloorGeneration+
+			nativeSignerSnapshot.RestartableGenerationHeadroom !=
+			FrostNativeSignerAnchorMaximumHistoryProofEntries ||
+		nativeSignerSnapshot.AnchorRotationWarning !=
+			frostNativeSignerAnchorRotationWarning(
+				minFrostNativeSignerAnchorHeadroom(
+					nativeSignerSnapshot.RestartableRevisionHeadroom,
+					nativeSignerSnapshot.RestartableGenerationHeadroom,
+				),
+			) {
+		return nil, fmt.Errorf(
+			"native signer state lacks an authenticated external rollback anchor trust certificate",
 		)
 	}
 	state := frostActivationHandshakeState{
@@ -1156,17 +1196,6 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		fahe.queueReconciliation(finality, true)
 		return nil, fmt.Errorf(
 			"%w: cached FROST activation point changed before signing: [%v]",
-			errFrostActivationReconciliationPending,
-			err,
-		)
-	}
-	if err := fahe.readiness.verifyFrostProductionSignerReadinessUnchanged(
-		ctx,
-		&reconciliation.readiness,
-	); err != nil {
-		fahe.queueReconciliation(finality, true)
-		return nil, fmt.Errorf(
-			"%w: cached FROST signer readiness changed before signing: [%v]",
 			errFrostActivationReconciliationPending,
 			err,
 		)

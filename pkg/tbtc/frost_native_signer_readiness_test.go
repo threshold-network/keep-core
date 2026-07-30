@@ -727,23 +727,49 @@ func TestFrostProductionSignerReadinessWaitsOutBusyJournalStamp(
 	}
 }
 
-// TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance pins the
-// asymmetry the cached revalidation path depends on: the authorized signing
-// window durably advances the native store it is guarding, so its own advance
-// must not read as a readiness change, while a rollback still must.
-func TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance(
+// testFrostNativeSignerDurableState is the durable native signer state a
+// readiness verification observes: the local state-witness tip and the
+// authenticated remote anchor record that has to agree with it.
+type testFrostNativeSignerDurableState struct {
+	tip    frostsigning.NativeTBTCSignerStateWitnessTip
+	record FrostNativeSignerStateWitnessAnchorRecord
+}
+
+// testFrostProductionSignerReadinessFixture wires a production readiness
+// verifier over a mutable native signer store, so a test can move the durable
+// state the way an authorized signing session does - and, through beforeRead,
+// at a chosen point inside a single verification.
+type testFrostProductionSignerReadinessFixture struct {
+	journal          *frostRetainedGroupJournal
+	readiness        *frostProductionSignerReadiness
+	anchorBinding    *frostNativeSignerAnchorBinding
+	anchorStore      *testFrostNativeSignerStateWitnessAnchorStore
+	inventory        *frostsigning.NativeTBTCSignerRetainedKeyPackageInventory
+	storeFingerprint [32]byte
+	target           FrostPreSignFinality
+	tip              frostsigning.NativeTBTCSignerStateWitnessTip
+
+	// reads counts anchored native signer reads. beforeRead runs at the start
+	// of each one, which is where a test injects a durable change that lands
+	// strictly between two reads of the same stability check.
+	reads      int
+	beforeRead func(read int)
+}
+
+func newTestFrostProductionSignerReadinessFixture(
 	t *testing.T,
-) {
-	fixture := newJournalTestFixture(t)
-	keyGroup := hex.EncodeToString(fixture.walletID[:])
-	fixture.registry.retainedFrostKeyGroups = map[[32]byte]string{
-		fixture.walletID: keyGroup,
+) *testFrostProductionSignerReadinessFixture {
+	t.Helper()
+	journalFixture := newJournalTestFixture(t)
+	keyGroup := hex.EncodeToString(journalFixture.walletID[:])
+	journalFixture.registry.retainedFrostKeyGroups = map[[32]byte]string{
+		journalFixture.walletID: keyGroup,
 	}
 	journalDirectory := t.TempDir()
 	if err := os.Chmod(journalDirectory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := fixture.openJournal(t, journalDirectory)
+	journal := journalFixture.openJournal(t, journalDirectory)
 
 	storeBinding := testFrostDurableSessionStoreBinding(t)
 	storeFingerprint, err := storeBinding.verify()
@@ -759,10 +785,10 @@ func TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance(
 		stateImageDigest,
 	)
 	entries := []frostsigning.NativeTBTCSignerRetainedKeyGroup{{
-		WalletID:         fixture.walletID,
+		WalletID:         journalFixture.walletID,
 		KeyGroup:         keyGroup,
 		Threshold:        frostPreSignAuthorizationThreshold,
-		ParticipantCount: uint16(len(fixture.operatorIDs)),
+		ParticipantCount: uint16(len(journalFixture.operatorIDs)),
 		KeyPackages: []frostsigning.NativeTBTCSignerRetainedKeyPackage{{
 			ParticipantSeat: 7,
 		}},
@@ -787,15 +813,44 @@ func TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance(
 	anchorBinding, anchorStore :=
 		testFrostNativeSignerInventoryAnchorBinding(storeFingerprint, checkpoint)
 	trustHead := testFrostNativeSignerInventoryTrustHead(anchorBinding)
+	baselineTip, err := anchorBinding.readTip()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := &testFrostProductionSignerReadinessFixture{
+		journal:          journal,
+		anchorBinding:    anchorBinding,
+		anchorStore:      anchorStore,
+		inventory:        inventory,
+		storeFingerprint: storeFingerprint,
+		target:           journalFixture.target,
+		tip:              *baselineTip,
+	}
+	anchorBinding.readTip = func() (
+		*frostsigning.NativeTBTCSignerStateWitnessTip,
+		error,
+	) {
+		tip := fixture.tip
+		return &tip, nil
+	}
 	inventoryBinding, err := newFrostNativeSignerInventoryBinding(
 		storeBinding,
 		anchorBinding,
 		func() (*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory, error) {
-			return inventory, nil
+			result := *fixture.inventory
+			return &result, nil
 		},
 		func() (*frostsigning.NativeTBTCSignerStateAnchorTrustHead, error) {
-			copy := *trustHead
-			return &copy, nil
+			// The trust head is the first thing a native signer verification
+			// reads, so counting here counts whole reads and a hook here lands
+			// strictly between two of them.
+			fixture.reads++
+			if fixture.beforeRead != nil {
+				fixture.beforeRead(fixture.reads)
+			}
+			head := *trustHead
+			return &head, nil
 		},
 		trustHead,
 	)
@@ -810,67 +865,111 @@ func TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance(
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := readiness.verifyFrostProductionSignerReadiness(
+	fixture.readiness = readiness
+	return fixture
+}
+
+func (fixture *testFrostProductionSignerReadinessFixture) durableState() testFrostNativeSignerDurableState {
+	return testFrostNativeSignerDurableState{
+		tip:    fixture.tip,
+		record: *fixture.anchorStore.record,
+	}
+}
+
+func (fixture *testFrostProductionSignerReadinessFixture) setDurableState(
+	state testFrostNativeSignerDurableState,
+) {
+	fixture.tip = state.tip
+	*fixture.anchorStore.record = state.record
+	fixture.inventory.StateGeneration = state.tip.Generation
+	fixture.inventory.PreviousStateCommitment = state.tip.PreviousStateCommitment
+	fixture.inventory.StateImageDigest = state.tip.StateImageDigest
+	fixture.inventory.StateCommitment = state.tip.StateCommitment
+}
+
+// advance moves the durable state exactly as one anchored interactive call
+// does: the consumption marker persists a new generation and the process
+// output barrier advances the anchor revision once.
+func (fixture *testFrostProductionSignerReadinessFixture) advance(
+	imageDigest [32]byte,
+	eventRoot [32]byte,
+) {
+	fixture.transition(
+		fixture.tip.Generation+1,
+		fixture.tip.StateCommitment,
+		imageDigest,
+		eventRoot,
+	)
+}
+
+// fork re-anchors a different state image at the generation the signer is
+// already on. That is a durable fork, not the session's own progress, and must
+// always fail closed.
+func (fixture *testFrostProductionSignerReadinessFixture) fork(
+	imageDigest [32]byte,
+	eventRoot [32]byte,
+) {
+	fixture.transition(
+		fixture.tip.Generation,
+		fixture.tip.PreviousStateCommitment,
+		imageDigest,
+		eventRoot,
+	)
+}
+
+func (fixture *testFrostProductionSignerReadinessFixture) transition(
+	generation uint64,
+	previousStateCommitment [32]byte,
+	imageDigest [32]byte,
+	eventRoot [32]byte,
+) {
+	next := fixture.durableState()
+	next.tip.Generation = generation
+	next.tip.PreviousStateCommitment = previousStateCommitment
+	next.tip.StateImageDigest = imageDigest
+	next.tip.StateCommitment =
+		frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
+			fixture.storeFingerprint,
+			generation,
+			previousStateCommitment,
+			imageDigest,
+		)
+	next.tip.AnchorRevision = fixture.tip.AnchorRevision + 1
+	next.tip.AnchorEventRoot = eventRoot
+	next.record.Checkpoint = frostNativeSignerCheckpointFromTip(next.tip)
+	next.record.Revision = next.tip.AnchorRevision
+	next.record.PreviousEventRoot = fixture.anchorStore.record.EventRoot
+	next.record.EventRoot = eventRoot
+	fixture.setDurableState(next)
+}
+
+// TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance pins the
+// asymmetry the cached revalidation path depends on: the authorized signing
+// window durably advances the native store it is guarding, so its own advance
+// must not read as a readiness change, while a rollback still must.
+func TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance(
+	t *testing.T,
+) {
+	fixture := newTestFrostProductionSignerReadinessFixture(t)
+	baseline := fixture.durableState()
+
+	snapshot, err := fixture.readiness.verifyFrostProductionSignerReadiness(
 		context.Background(),
 		fixture.target,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := readiness.verifyFrostProductionSignerReadinessUnchanged(
+	if err := fixture.readiness.verifyFrostProductionSignerReadinessUnchanged(
 		context.Background(),
 		snapshot,
 	); err != nil {
 		t.Fatalf("unmutated native signer state was rejected: [%v]", err)
 	}
 
-	// Advance the durable state exactly as one anchored interactive call does:
-	// the consumption marker persists a new generation and the process output
-	// barrier advances the anchor revision once.
-	baselineTip, err := anchorBinding.readTip()
-	if err != nil {
-		t.Fatal(err)
-	}
-	baselineRecord := *anchorStore.record
-	advancedImage := [32]byte{0x73}
-	advancedCommitment := frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
-		storeFingerprint,
-		2,
-		stateCommitment,
-		advancedImage,
-	)
-	advancedCheckpoint := FrostNativeSignerStateWitnessCheckpoint{
-		StoreFingerprint:        storeFingerprint,
-		Generation:              2,
-		PreviousStateCommitment: stateCommitment,
-		StateImageDigest:        advancedImage,
-		StateCommitment:         advancedCommitment,
-	}
-	advancedEventRoot := [32]byte{0x74}
-	advancedTip := *baselineTip
-	advancedTip.Generation = advancedCheckpoint.Generation
-	advancedTip.PreviousStateCommitment = advancedCheckpoint.PreviousStateCommitment
-	advancedTip.StateImageDigest = advancedCheckpoint.StateImageDigest
-	advancedTip.StateCommitment = advancedCheckpoint.StateCommitment
-	advancedTip.AnchorRevision = baselineTip.AnchorRevision + 1
-	advancedTip.AnchorEventRoot = advancedEventRoot
-	anchorBinding.readTip = func() (
-		*frostsigning.NativeTBTCSignerStateWitnessTip,
-		error,
-	) {
-		copy := advancedTip
-		return &copy, nil
-	}
-	anchorStore.record.Checkpoint = advancedCheckpoint
-	anchorStore.record.Revision = advancedTip.AnchorRevision
-	anchorStore.record.PreviousEventRoot = baselineRecord.EventRoot
-	anchorStore.record.EventRoot = advancedEventRoot
-	inventory.StateGeneration = advancedCheckpoint.Generation
-	inventory.PreviousStateCommitment = advancedCheckpoint.PreviousStateCommitment
-	inventory.StateImageDigest = advancedCheckpoint.StateImageDigest
-	inventory.StateCommitment = advancedCheckpoint.StateCommitment
-
-	if err := readiness.verifyFrostProductionSignerReadinessUnchanged(
+	fixture.advance([32]byte{0x73}, [32]byte{0x74})
+	advanced := fixture.durableState()
+	if err := fixture.readiness.verifyFrostProductionSignerReadinessUnchanged(
 		context.Background(),
 		snapshot,
 	); err != nil {
@@ -881,31 +980,137 @@ func TestFrostProductionSignerReadinessAcceptsAuthorizedGenerationAdvance(
 	}
 
 	// A rolled-back native store is still a fatal readiness change.
-	anchorBinding.readTip = func() (
-		*frostsigning.NativeTBTCSignerStateWitnessTip,
-		error,
-	) {
-		copy := *baselineTip
-		return &copy, nil
-	}
-	*anchorStore.record = baselineRecord
-	inventory.StateGeneration = checkpoint.Generation
-	inventory.PreviousStateCommitment = checkpoint.PreviousStateCommitment
-	inventory.StateImageDigest = checkpoint.StateImageDigest
-	inventory.StateCommitment = checkpoint.StateCommitment
-	snapshot.Inventory.StateGeneration = advancedCheckpoint.Generation
-	snapshot.Inventory.StateCommitment = advancedCheckpoint.StateCommitment
+	fixture.setDurableState(baseline)
+	snapshot.Inventory.StateGeneration = advanced.tip.Generation
+	snapshot.Inventory.StateCommitment = advanced.tip.StateCommitment
 	snapshot.Inventory.PreviousStateCommitment =
-		advancedCheckpoint.PreviousStateCommitment
-	snapshot.Inventory.StateImageDigest = advancedCheckpoint.StateImageDigest
-	snapshot.Inventory.CurrentAnchorRevision = advancedTip.AnchorRevision
+		advanced.tip.PreviousStateCommitment
+	snapshot.Inventory.StateImageDigest = advanced.tip.StateImageDigest
+	snapshot.Inventory.CurrentAnchorRevision = advanced.tip.AnchorRevision
 	snapshot.Inventory.RestartableRevisionHeadroom--
 	snapshot.Inventory.RestartableGenerationHeadroom--
-	if err := readiness.verifyFrostProductionSignerReadinessUnchanged(
+	if err := fixture.readiness.verifyFrostProductionSignerReadinessUnchanged(
 		context.Background(),
 		snapshot,
 	); err == nil || !strings.Contains(err.Error(), "rolled back") {
 		t.Fatalf("rolled-back native signer state was accepted: [%v]", err)
+	}
+}
+
+// TestFrostProductionSignerReadinessAcceptsAdvanceBetweenStabilityReads covers
+// the twice-read stability check inside a single verification, which the
+// cached-snapshot comparison does not reach.
+//
+// The two reads are separated by a full anchored round trip to the external
+// anchor service, so the signing session's own consumption marker routinely
+// persists between them. Comparing the two reads by value reports that as
+// "native signer state changed during readiness verification", and the pre-sign
+// authorization monitor latches the first revalidation error permanently, so
+// the guard cancels the very session it is guarding.
+func TestFrostProductionSignerReadinessAcceptsAdvanceBetweenStabilityReads(
+	t *testing.T,
+) {
+	fixture := newTestFrostProductionSignerReadinessFixture(t)
+
+	// The initial reconciliation runs the same twice-read check.
+	fixture.reads = 0
+	fixture.beforeRead = func(read int) {
+		if read == 2 {
+			fixture.advance([32]byte{0x75}, [32]byte{0x76})
+		}
+	}
+	snapshot, err := fixture.readiness.verifyFrostProductionSignerReadiness(
+		context.Background(),
+		fixture.target,
+	)
+	if err != nil {
+		t.Fatalf(
+			"an authorized durable advance between the two reconciliation reads was rejected: [%v]",
+			err,
+		)
+	}
+	if snapshot.Inventory.StateGeneration != 2 ||
+		snapshot.Inventory.CurrentAnchorRevision != 2 {
+		t.Fatalf(
+			"reconciliation did not adopt the fresher of its two reads: %+v",
+			snapshot.Inventory,
+		)
+	}
+
+	// And so does every revalidation the pre-sign monitor performs.
+	fixture.reads = 0
+	fixture.beforeRead = func(read int) {
+		if read == 2 {
+			fixture.advance([32]byte{0x77}, [32]byte{0x78})
+		}
+	}
+	if err := fixture.readiness.verifyFrostProductionSignerReadinessUnchanged(
+		context.Background(),
+		snapshot,
+	); err != nil {
+		t.Fatalf(
+			"an authorized durable advance between the two revalidation reads aborted the session: [%v]",
+			err,
+		)
+	}
+}
+
+// TestFrostProductionSignerReadinessRejectsRollbackOrForkBetweenStabilityReads
+// is the other half: widening the twice-read check to accept a monotone
+// advance must not make it accept a rollback or an equal-generation fork.
+func TestFrostProductionSignerReadinessRejectsRollbackOrForkBetweenStabilityReads(
+	t *testing.T,
+) {
+	fixture := newTestFrostProductionSignerReadinessFixture(t)
+	baseline := fixture.durableState()
+	fixture.advance([32]byte{0x79}, [32]byte{0x7a})
+	advanced := fixture.durableState()
+
+	snapshot, err := fixture.readiness.verifyFrostProductionSignerReadiness(
+		context.Background(),
+		fixture.target,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.reads = 0
+	fixture.beforeRead = func(read int) {
+		if read == 2 {
+			fixture.setDurableState(baseline)
+		}
+	}
+	err = fixture.readiness.verifyFrostProductionSignerReadinessUnchanged(
+		context.Background(),
+		snapshot,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "changed during readiness verification") ||
+		!strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf(
+			"a rollback between the two stability reads was accepted: [%v]",
+			err,
+		)
+	}
+
+	fixture.setDurableState(advanced)
+	fixture.reads = 0
+	fixture.beforeRead = func(read int) {
+		if read == 2 {
+			fixture.fork([32]byte{0x7b}, [32]byte{0x7c})
+		}
+	}
+	err = fixture.readiness.verifyFrostProductionSignerReadinessUnchanged(
+		context.Background(),
+		snapshot,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "changed during readiness verification") ||
+		!strings.Contains(err.Error(), "forked at an unchanged generation") {
+		t.Fatalf(
+			"a fork between the two stability reads was accepted: [%v]",
+			err,
+		)
 	}
 }
 
