@@ -7,46 +7,90 @@ import (
 )
 
 const (
-	// One request-taking interactive signer call can durably advance the Rust
-	// generation up to three times: the expiry-sweep prologue takes one
-	// snapshot and, when a prior write left a repair pending, a second for the
-	// retirement that repair unblocked, then the endpoint persists its own
-	// mutation. Matching pending operations are covered by the sweep;
-	// nonmatching operations remain pending without another write. The
-	// process output barrier still advances the remote anchor revision only
-	// once for the call's final checkpoint.
+	// One request-taking interactive signer call performs up to three durable
+	// Rust writes: the expiry-sweep prologue takes one snapshot and, when a
+	// prior write left a repair pending, a second for the retirement that
+	// repair unblocked, then the endpoint persists its own mutation (or, on
+	// Round2/Aggregate, re-persists a fail-closed marker instead of it).
+	// Matching pending operations are covered by the sweep; nonmatching
+	// operations remain pending without another write. The process output
+	// barrier still advances the remote anchor revision only once for the
+	// call's final checkpoint.
 	//
-	// This is a hard per-operation bound, not an accounting convenience: node
-	// startup installs it as the output barrier's MaximumStateGenerationAdvance
-	// PerOperation, and one call advancing further poisons the process. It must
-	// stay at the signer's own worst case for one in-flight request, which
-	// TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION states as
-	// three snapshots (six journal records, two per snapshot).
+	// Those three writes are not three generations. One generation is one
+	// committed state witness, and the signer's replace_state commits up to
+	// two per write: it first reconciles a witness an earlier call prepared
+	// and left uncommitted after that call's rename won, then prepares,
+	// renames, and commits its own. Only a call's first write can find such a
+	// carried-in witness, so a single call can reach FOUR advances - see
+	// frostsigning.NativeTBTCSignerStateAnchorEngineReachableGeneration
+	// AdvancePerOperation, which pins that reachable worst case.
+	//
+	// This constant stays at three anyway, and the gap is a documented
+	// residual rather than a claim that four cannot happen. Node startup
+	// installs it as the output barrier's MaximumStateGenerationAdvance
+	// PerOperation, whose own frozen protocol ceiling is three, and a call
+	// that advances four poisons the process terminally. The fourth advance
+	// needs an earlier persist that failed after its rename and before its
+	// commit, so it is fault-driven, and the poison is fail-closed: no share
+	// is released and no replay gate weakens. Raising it would widen the only
+	// check that catches an anchored call mutating more than this accounting
+	// reserved, and would have to raise the frozen barrier ceiling with it.
 	frostNativeSignerMaximumGenerationAdvancesPerAnchoredCall uint64 = 3
 
-	// A workflow reservation cannot simply multiply the per-operation bound by
-	// its call count, because the third advance of any single call is always a
-	// repair and no workflow can pay it on every call. Both extra writes - the
-	// sweep's second snapshot and the Round2/Aggregate marker re-persist - are
-	// reached only when an earlier snapshot failed and left a pending
-	// persistence operation, and the marker re-persist excludes that call's own
-	// mutation because flushing the marker makes the replay gate reject the
-	// retry. A snapshot that failed before replacing the state image, or that
-	// replaced it and left its witness prepared and uncommitted, advanced no
-	// generation at all, so its call spent one of the two advances reserved
-	// here and the later repair lands the one it did not. The steady-state cost
-	// is therefore the shared sweep prologue plus the endpoint's own mutation.
+	// A workflow reservation cannot multiply the per-operation bound by its
+	// call count: at production parameters that reserves more of the certified
+	// proof window than exists, and excludes every operator holding three or
+	// more local seats from full-size batches. What actually bounds the
+	// consumption is the witness journal - generations advanced equals witness
+	// COMMITs, and every COMMIT belongs either to a persist that reached its
+	// rename or to the single witness that may have been carried into the
+	// workflow already prepared. The cost is therefore the number of persists
+	// that reach a rename, not the call count times the per-call ceiling.
+	//
+	// Two per call is the fault-free steady state, not a proven upper bound:
+	// the sweep prologue's snapshot plus the endpoint's own mutation. The
+	// sweep's second snapshot and the Round2/Aggregate marker re-persist both
+	// require a pending persistence operation that only a failed persist
+	// creates, and the marker re-persist excludes that call's own mutation
+	// because flushing the marker makes the replay gate reject the retry. A
+	// persist that fails BEFORE its rename advances nothing, so its call
+	// leaves an advance unspent and the later repair lands the one it did not.
+	// A persist that fails AFTER its rename does not leave that slack: it has
+	// either already committed its own witness (a failed post-commit
+	// revalidation) or left it for the next call's reconciliation to commit,
+	// while the repair call that follows still pays its own sweep snapshot,
+	// its repair snapshot, and its own mutation. Each post-rename persist
+	// failure therefore costs roughly one generation more than this reserves;
+	// the workflow-wide allowance below is what absorbs them.
 	frostNativeSignerAmortizedGenerationAdvancesPerAnchoredCall uint64 = 2
 
-	// Two interleavings outrun the amortized bound, and neither recurs. A
-	// snapshot that committed its witness and then failed its post-commit
-	// revalidation both spends an advance and leaves a repair pending; it
-	// cannot happen twice in a workflow because replace_state revalidates the
-	// store before replacing anything, so every later anchored call fails
-	// closed without advancing a generation. A witness prepared before
-	// admission and reconciled inside the workflow lands one further advance;
-	// prepare_witness refuses to prepare a second, so at most one is ever
-	// outstanding. This workflow-wide allowance covers both.
+	// The workflow-wide allowance on top of the amortized per-call cost. It
+	// covers one witness prepared before admission and reconciled inside the
+	// workflow - prepare_witness refuses to prepare a second, so at most one
+	// is ever outstanding - plus roughly two further post-rename persist
+	// failures, each of which overruns the amortized bound by about one
+	// generation.
+	//
+	// It is an allowance, not a proof, and the reservation it completes is not
+	// exact. Nothing in the signer bounds how many times a failing store can
+	// fail a persist after its rename, so a workflow that suffers more of them
+	// than this covers consumes more of the proof window than it reserved. The
+	// allowance is kept small deliberately: the slack that really absorbs
+	// faults is that most calls sweep nothing and spend one advance rather
+	// than two, and a node failing this many persists after rename has a
+	// failing store, where blocking is the correct outcome.
+	//
+	// The residual is fail-closed availability, never authority. The
+	// reservation only promises that the certified proof window can cover the
+	// whole workflow; overrunning it means that window can run out mid
+	// workflow. What an operator then sees is request-taking calls blocked
+	// with "the certified signer-generation window cannot cover its maximum
+	// advance; offline anchor rotation is required" and new pre-sign work
+	// rejected for want of unreserved headroom - on a node that was already
+	// failing every one of those persists. No share is released, no replay
+	// gate weakens, and the recovery is the offline anchor rotation that
+	// window exhaustion always requires.
 	frostNativeSignerTerminalGenerationAdvancesPerWorkflow uint64 = 3
 )
 
@@ -372,7 +416,11 @@ func (reservation *frostNativeSignerAnchorRevisionReservation) Release() {
 // mutates otherwise-unrelated state. The proof-window cost is the amortized
 // per-call generation bound times the anchored-call count plus the
 // workflow-wide terminal allowance, not the hard per-operation bound times
-// that count: no workflow can pay a repair advance on every one of its calls.
+// that count: no workflow can pay a repair advance on every one of its calls,
+// because every repair advance consumes a pending operation that only an
+// earlier failed persist creates. That makes the generation figure an
+// amortized reservation with a bounded allowance rather than an exact upper
+// bound - the constants above state precisely what it does not cover.
 // Attempt derivation, package/evidence handling, and authorization guards do
 // not persist Rust state.
 //
@@ -387,6 +435,16 @@ func (reservation *frostNativeSignerAnchorRevisionReservation) Release() {
 // its attempts, so the errors below name the ceiling explicitly - an operator
 // that crosses it would otherwise have to infer it from a wallet that quietly
 // stops reaching its signing threshold on full-size batches.
+//
+// The ceiling of four is an accepted exclusion, not a solved problem. Five
+// seats in a hundred-seat wallet is an ordinary sortition result for a large
+// staker, one seat over the ceiling, and such a node is refused every standard
+// 20-deposit sweep: it tops out at 19 inputs, and a six-seat node at 16. Those
+// seats are lost to the wallet's signing threshold on full-size batches for as
+// long as the node holds them. Moving the ceiling requires enlarging the
+// certified restart windows or lowering the signing-attempt limit, both of
+// which are protocol-level changes to constants this function only reads, so
+// this accounting cannot make the exclusion smaller on its own.
 func frostPreSignMaximumAnchorCapacityCost(
 	inputCount uint64,
 	localSeatCount uint64,
@@ -411,6 +469,7 @@ func frostPreSignMaximumAnchorCapacityCost(
 			FrostNativeSignerAnchorMaximumHistoryEvents,
 			frostPreSignAdmissibleLocalSeatAdvice(
 				inputCount,
+				localSeatCount,
 				maximumSigningAttempts,
 			),
 		)
@@ -426,6 +485,7 @@ func frostPreSignMaximumAnchorCapacityCost(
 			FrostNativeSignerAnchorMaximumHistoryProofEntries,
 			frostPreSignAdmissibleLocalSeatAdvice(
 				inputCount,
+				localSeatCount,
 				maximumSigningAttempts,
 			),
 		)
@@ -434,13 +494,17 @@ func frostPreSignMaximumAnchorCapacityCost(
 }
 
 // frostPreSignAdmissibleLocalSeatAdvice states the seat ceiling that produced a
-// window rejection in operator-actionable terms. Every local seat above the
-// ceiling is permanently excluded from batches of this size, and the wallet
-// loses those seats toward its signing threshold, so this belongs in the error
-// itself: the exclusion is otherwise visible only as a group that stops
+// window rejection in operator-actionable terms, together with the largest
+// batch this node's own seat count could still have signed. Every local seat
+// above the ceiling is permanently excluded from batches of this size, and the
+// wallet loses those seats toward its signing threshold, so this belongs in the
+// error itself: the exclusion is otherwise visible only as a group that stops
 // assembling a threshold on full-size batches, with no node reporting a cause.
+// Both numbers are reported because both levers are the operator's - shed
+// seats, or sign smaller batches - and neither is inferable from the other.
 func frostPreSignAdmissibleLocalSeatAdvice(
 	inputCount uint64,
+	localSeatCount uint64,
 	maximumSigningAttempts uint64,
 ) string {
 	admissibleSeats := frostPreSignMaximumAdmissibleLocalSeatCount(
@@ -455,14 +519,59 @@ func frostPreSignAdmissibleLocalSeatAdvice(
 			inputCount,
 		)
 	}
+	admissibleInputs := frostPreSignMaximumAdmissibleInputCount(
+		localSeatCount,
+		maximumSigningAttempts,
+	)
+	if admissibleInputs == 0 {
+		return fmt.Sprintf(
+			"at most [%d] local seats can sign [%d] inputs within the certified "+
+				"restart windows, and [%d] local seats can sign no batch size at "+
+				"all, so every local seat above that ceiling is excluded from "+
+				"every batch of this size and is lost to the wallet's signing "+
+				"threshold",
+			admissibleSeats,
+			inputCount,
+			localSeatCount,
+		)
+	}
 	return fmt.Sprintf(
 		"at most [%d] local seats can sign [%d] inputs within the certified "+
-			"restart windows, so every local seat above that ceiling is excluded "+
-			"from every batch of this size and is lost to the wallet's signing "+
-			"threshold",
+			"restart windows, and [%d] local seats can sign at most [%d] inputs, "+
+			"so every local seat above that ceiling is excluded from every batch "+
+			"of this size and is lost to the wallet's signing threshold",
 		admissibleSeats,
 		inputCount,
+		localSeatCount,
+		admissibleInputs,
 	)
+}
+
+// frostPreSignMaximumAdmissibleInputCount reports the largest batch size this
+// local seat count can still sign within both certified restart windows, or
+// zero when no batch size can. Cost rises monotonically with the input count,
+// so the first rejection ends the scan.
+func frostPreSignMaximumAdmissibleInputCount(
+	localSeatCount uint64,
+	maximumSigningAttempts uint64,
+) uint64 {
+	admissibleInputs := uint64(0)
+	for inputs := uint64(1); inputs <=
+		uint64(frostPreSignAuthorizationMaximumInputs); inputs++ {
+		cost, err := frostPreSignAnchoredWorkflowCost(
+			inputs,
+			localSeatCount,
+			maximumSigningAttempts,
+		)
+		if err != nil ||
+			cost.Revisions > FrostNativeSignerAnchorMaximumHistoryEvents ||
+			cost.Generations >
+				FrostNativeSignerAnchorMaximumHistoryProofEntries {
+			break
+		}
+		admissibleInputs = inputs
+	}
+	return admissibleInputs
 }
 
 // frostPreSignMaximumAdmissibleLocalSeatCount reports the largest local seat

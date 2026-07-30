@@ -38,10 +38,39 @@ const (
 	NativeTBTCSignerStateAnchorMaximumGenerationDistance uint64 = 4096
 
 	// NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation is the
-	// maximum durable Rust state writes one request-taking call may perform:
-	// one prepared-witness reconciliation, a sweep/repair snapshot (which
-	// also covers protected retirement), and the operation's own write.
+	// frozen maximum number of durable Rust generations one request-taking
+	// call may advance before the barrier treats the process as terminally
+	// poisoned. One generation is one committed state witness, and a call
+	// reaches three durable writes: the expiry-sweep prologue's snapshot, the
+	// second snapshot the sweep takes for a retirement its own repair
+	// unblocked, and the endpoint's own write (or, on Round2/Aggregate, the
+	// re-persist of a fail-closed marker in place of that write).
+	//
+	// This ceiling is deliberately one below what the engine can reach; see
+	// NativeTBTCSignerStateAnchorEngineReachableGenerationAdvancePerOperation.
 	NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation uint64 = 3
+
+	// NativeTBTCSignerStateAnchorEngineReachableGenerationAdvancePerOperation
+	// records what the signer engine can actually reach in one request-taking
+	// call, which is one more than the frozen ceiling above. Every durable
+	// write goes through the engine's replace_state, which commits up to two
+	// witnesses: it first reconciles a witness an earlier call prepared and
+	// left uncommitted after that call's rename won, and then prepares,
+	// renames, and commits its own. Only the first of a call's three writes
+	// can find such a carried-in witness, so the reachable worst case is
+	// three writes plus one reconciliation.
+	//
+	// A call that reaches it exceeds the ceiling and poisons the barrier for
+	// the life of the process. That is a documented residual, not an assertion
+	// that it cannot happen: the interleaving needs an earlier persist that
+	// failed after its rename and before its commit, so it is fault-driven,
+	// and poisoning is fail-closed - request-taking calls then return
+	// ErrNativeTBTCSignerStateAnchorTerminal, no signature share is released,
+	// and no replay gate weakens. Raising the ceiling to four would widen the
+	// only check that catches a call mutating more state than the pre-sign
+	// admission accounting reserved for it, and is a protocol change to this
+	// frozen bound rather than a documentation fix.
+	NativeTBTCSignerStateAnchorEngineReachableGenerationAdvancePerOperation uint64 = 4
 )
 
 // NativeTBTCSignerStateAnchorCommitter durably commits a transition to the

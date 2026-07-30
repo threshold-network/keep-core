@@ -852,6 +852,87 @@ func TestNativeTBTCSignerStateAnchorBarrierPoisonsOversizedGenerationAdvance(
 	}
 }
 
+// TestNativeTBTCSignerStateAnchorBarrierPoisonsTheEngineReachableAdvance pins
+// the residual documented at the two generation-advance constants. One
+// request-taking call performs up to three durable writes, and the first of
+// them can also commit a witness carried in from an earlier persist that
+// failed after its rename, so the engine can reach one advance more than the
+// frozen ceiling admits. That reachable case must keep poisoning the process
+// rather than being quietly admitted: raising the ceiling to accept it widens
+// the only check that catches an anchored call mutating more state than
+// pre-sign admission reserved for it.
+func TestNativeTBTCSignerStateAnchorBarrierPoisonsTheEngineReachableAdvance(
+	t *testing.T,
+) {
+	if NativeTBTCSignerStateAnchorEngineReachableGenerationAdvancePerOperation !=
+		NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation+1 {
+		t.Fatalf(
+			"engine-reachable advance [%d] is no longer one above the frozen "+
+				"ceiling [%d]; the residual documented at both constants must be "+
+				"restated before this changes",
+			NativeTBTCSignerStateAnchorEngineReachableGenerationAdvancePerOperation,
+			NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+		)
+	}
+
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{current: &current}
+	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := current
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var discarded atomic.Int32
+	// Reconcile a carried-in witness and commit its own inside the sweep's
+	// first snapshot, commit the second snapshot the repair unblocked, then
+	// commit the endpoint's own mutation.
+	_, err := executeNativeTBTCSignerStateAnchoredOutput(
+		"InteractiveSessionAbort",
+		func() {
+			current = testNativeTBTCSignerStateWitnessTip(
+				initial.Generation+
+					NativeTBTCSignerStateAnchorEngineReachableGenerationAdvancePerOperation,
+				initial.StateCommitment,
+			)
+		},
+		func() ([]byte, error) {
+			t.Fatal("engine-reachable generation advance released native output")
+			return nil, nil
+		},
+		func() {
+			discarded.Add(1)
+		},
+	)
+	if !errors.Is(err, ErrNativeTBTCSignerStateAnchorTerminal) ||
+		discarded.Load() != 1 || committer.calls != 0 {
+		t.Fatalf(
+			"engine-reachable generation advance was not terminally rejected: [%v] discarded [%d] commits [%d]",
+			err,
+			discarded.Load(),
+			committer.calls,
+		)
+	}
+}
+
 func TestNativeTBTCSignerStateAnchorBarrierAcceptsMaximumGenerationAdvance(
 	t *testing.T,
 ) {
