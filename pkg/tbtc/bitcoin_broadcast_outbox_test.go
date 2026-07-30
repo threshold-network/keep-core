@@ -770,6 +770,70 @@ func TestBitcoinBroadcastOutbox_ReplayIsolatesCandidateFailures(t *testing.T) {
 	}
 }
 
+func TestBitcoinBroadcastOutbox_ReportsRejectedBitcoinRebroadcast(t *testing.T) {
+	chain := newOutboxTestBitcoinChain()
+	outbox := openTestBitcoinBroadcastOutbox(t, t.TempDir(), chain)
+	defer outbox.close()
+
+	rejected := testOutboxTransaction(41, 7000)
+	healthy := testOutboxTransaction(42, 7000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		rejected,
+		testBitcoinBroadcastAuthorization(41, 11, 1),
+	)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		healthy,
+		testBitcoinBroadcastAuthorization(42, 12, 1),
+	)
+	chain.setBroadcastError(
+		rejected.Hash(),
+		errors.New("txn-mempool-conflict"),
+	)
+
+	err := outbox.replayOnce()
+	if err == nil || !strings.Contains(err.Error(), "txn-mempool-conflict") ||
+		!strings.Contains(err.Error(), "on attempt [1]") {
+		t.Fatalf("Bitcoin rebroadcast rejection was not surfaced: [%v]", err)
+	}
+	var replayErrors *bitcoinBroadcastReplayErrors
+	if !errors.As(err, &replayErrors) || replayErrors.hasFatalFailure() {
+		t.Fatalf("Bitcoin rebroadcast rejection is not retryable: [%v]", err)
+	}
+	if chain.broadcastCount(healthy.Hash()) != 1 {
+		t.Fatal("candidate after a rejected rebroadcast was starved")
+	}
+
+	// The attempt counter separates a persistently failing entry from a single
+	// transient rejection, so a stuck reservation is visible in one log line.
+	if err := outbox.replayOnce(); err == nil ||
+		!strings.Contains(err.Error(), "on attempt [2]") {
+		t.Fatalf("repeated Bitcoin rebroadcast rejection was not surfaced: [%v]", err)
+	}
+
+	// A rejected rebroadcast must not stop recovery: it is retried, not fatal.
+	contextValue, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := outbox.start(contextValue); err != nil {
+		t.Fatalf("rejected rebroadcast stopped outbox recovery: [%v]", err)
+	}
+	snapshot, err := outbox.activationSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Recovered || snapshot.PendingReservationCount != 2 {
+		t.Fatalf("unexpected recovery snapshot: [%+v]", snapshot)
+	}
+
+	chain.setBroadcastError(rejected.Hash(), nil)
+	if err := outbox.replayOnce(); err != nil {
+		t.Fatalf("accepted rebroadcast still reported a failure: [%v]", err)
+	}
+}
+
 func TestBitcoinBroadcastOutbox_StartRetriesTransientCandidateFailure(
 	t *testing.T,
 ) {
@@ -1657,11 +1721,12 @@ func testOutboxTransaction(inputByte byte, outputValue int64) *bitcoin.Transacti
 type outboxTestBitcoinChain struct {
 	*localBitcoinChain
 
-	mutex       sync.Mutex
-	statuses    map[bitcoin.Hash]*bitcoin.CanonicalTransactionStatus
-	statusErrs  map[bitcoin.Hash]error
-	broadcasts  map[bitcoin.Hash]uint
-	statusCalls uint
+	mutex         sync.Mutex
+	statuses      map[bitcoin.Hash]*bitcoin.CanonicalTransactionStatus
+	statusErrs    map[bitcoin.Hash]error
+	broadcastErrs map[bitcoin.Hash]error
+	broadcasts    map[bitcoin.Hash]uint
+	statusCalls   uint
 }
 
 type blockingOutboxTestBitcoinChain struct {
@@ -1790,6 +1855,7 @@ func newOutboxTestBitcoinChain() *outboxTestBitcoinChain {
 		localBitcoinChain: newLocalBitcoinChain(),
 		statuses:          make(map[bitcoin.Hash]*bitcoin.CanonicalTransactionStatus),
 		statusErrs:        make(map[bitcoin.Hash]error),
+		broadcastErrs:     make(map[bitcoin.Hash]error),
 		broadcasts:        make(map[bitcoin.Hash]uint),
 	}
 }
@@ -1817,7 +1883,7 @@ func (otbc *outboxTestBitcoinChain) BroadcastTransaction(
 	otbc.mutex.Lock()
 	defer otbc.mutex.Unlock()
 	otbc.broadcasts[tx.Hash()]++
-	return nil
+	return otbc.broadcastErrs[tx.Hash()]
 }
 
 func (otbc *outboxTestBitcoinChain) setCanonicalStatus(
@@ -1828,6 +1894,15 @@ func (otbc *outboxTestBitcoinChain) setCanonicalStatus(
 	defer otbc.mutex.Unlock()
 	clone := *status
 	otbc.statuses[hash] = &clone
+}
+
+func (otbc *outboxTestBitcoinChain) setBroadcastError(
+	hash bitcoin.Hash,
+	err error,
+) {
+	otbc.mutex.Lock()
+	defer otbc.mutex.Unlock()
+	otbc.broadcastErrs[hash] = err
 }
 
 func (otbc *outboxTestBitcoinChain) setCanonicalError(

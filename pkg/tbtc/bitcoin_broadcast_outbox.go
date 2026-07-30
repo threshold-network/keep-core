@@ -898,6 +898,26 @@ candidateLoop:
 			continue
 		}
 		if broadcastErr != nil {
+			// A Bitcoin-side rejection is recoverable: the durable record is
+			// unchanged apart from its attempt counter, and the next replay
+			// tick retries the very same authorized variant. It is reported as
+			// a transient failure so it neither aborts this pass nor blocks
+			// start-up recovery, but it must not stay invisible either: the
+			// attempt counter travels with the message, so an entry a node has
+			// been failing to broadcast for hours is distinguishable from a
+			// single mempool hiccup in one log line.
+			replayErrors.failures = append(
+				replayErrors.failures,
+				bitcoinBroadcastReplayFailure{
+					candidate.reservationID,
+					&bitcoinBroadcastTransientReplayError{fmt.Errorf(
+						"cannot broadcast Bitcoin transaction [%x] on attempt [%d]: [%w]",
+						broadcastRecord.TransactionHash,
+						broadcastRecord.BroadcastAttempts,
+						broadcastErr,
+					)},
+				},
+			)
 			continue
 		}
 		if _, err := bbo.refreshConfirmation(ctx, broadcastRecord); err != nil {
