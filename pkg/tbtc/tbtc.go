@@ -368,6 +368,15 @@ func Initialize(
 		// Prometheus.
 		frostsigning.RegisterRoastRetryMetrics(clientInfo)
 		frostsigning.RegisterInteractiveSigningMetrics(clientInfo)
+		// The native signer state anchor is registered on exactly the same
+		// terms, and it needs them more than the counters above do. Its two
+		// failure modes - the barrier latching terminally poisoned, and the
+		// certified restart windows draining - both leave the process running
+		// and attesting healthy while it silently stops signing, and the
+		// headroom numbers were until now readable only through the activation
+		// handshake, whose endpoint validator requires a loopback host and so
+		// cannot be reached from a monitoring host at all.
+		frostsigning.RegisterNativeTBTCSignerStateAnchorMetrics(clientInfo)
 
 		if perfMetrics == nil {
 			perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfo)

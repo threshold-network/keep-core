@@ -822,7 +822,21 @@ func newNode(
 				"cannot obtain a valid startup FROST signer-readiness checkpoint",
 			)
 		}
-		if _, err := readiness.verifyFrostProductionSignerReadiness(
+		// Every authenticated readiness reconciliation already carries the
+		// restartable revision and generation headroom, so the scrapeable
+		// mirror is fed from the path that computes them instead of being
+		// recomputed on the scrape. Recomputing costs the anchor binding
+		// mutex - which CommitNativeTBTCSignerStateTransition holds across the
+		// remote CAS for the whole of a signing commit - plus an authenticated
+		// read of the remote anchor service, and neither belongs on a metrics
+		// timer: the scrape would stall behind an in-flight signing operation
+		// and would put a network call on a fixed tick. Wrapping here covers
+		// both the startup verification immediately below and every later
+		// pre-sign authorization, which is the only recurring caller of the
+		// verifier this node stores.
+		observedReadiness :=
+			newFrostNativeSignerAnchorHeadroomObserver(readiness)
+		if _, err := observedReadiness.verifyFrostProductionSignerReadiness(
 			context.Background(),
 			*startupFinality,
 		); err != nil {
@@ -851,13 +865,77 @@ func newNode(
 		node.frostPreSignAuthorizationBackend = backend
 		node.frostPreSignActivationProfile = verifiedActivationProfile
 		node.frostDurableSessionStoreBinding = storeBinding
-		node.frostProductionSignerReadiness = readiness
+		node.frostProductionSignerReadiness = observedReadiness
 		node.frostNativeSignerAnchorAdmission = anchorAdmission
 		node.bitcoinBroadcastOutbox = outbox
 		node.frostActivationHandshakeExporter = exporter
 	}
 
 	return node, nil
+}
+
+// frostNativeSignerAnchorHeadroomObserver decorates the production signer
+// readiness verifier so that the restartable revision and generation headroom
+// each successful reconciliation already computed reaches the scrapeable
+// mirror in pkg/frost/signing.
+//
+// It is a decorator rather than a call inside the verifier because those two
+// numbers are only trustworthy once the reconciliation that produced them has
+// succeeded: the snapshot is assembled after the local tip has been
+// authenticated against the remote anchor, and a failed verification can
+// return a partially built or nil snapshot whose headroom means nothing. So
+// only the success path publishes, and a failed reconciliation deliberately
+// leaves the previous value standing rather than zeroing it - zero is the
+// value that means "the certified windows are exhausted", and a transport blip
+// must not be reported as that.
+//
+// Publishing costs one atomic store on a path that has just performed remote
+// I/O, so it is not measurable there. Nothing reads the mirror back to make a
+// decision; it exists solely so an operator can see the windows drain in time
+// to schedule the offline rotation ceremony.
+type frostNativeSignerAnchorHeadroomObserver struct {
+	inner frostProductionSignerReadinessVerifier
+}
+
+func newFrostNativeSignerAnchorHeadroomObserver(
+	inner frostProductionSignerReadinessVerifier,
+) frostProductionSignerReadinessVerifier {
+	if inner == nil {
+		return nil
+	}
+	return &frostNativeSignerAnchorHeadroomObserver{inner: inner}
+}
+
+func (fnsaho *frostNativeSignerAnchorHeadroomObserver) verifyFrostProductionSignerReadiness(
+	ctx context.Context,
+	finality FrostPreSignFinality,
+) (*frostProductionSignerReadinessSnapshot, error) {
+	snapshot, err := fnsaho.inner.verifyFrostProductionSignerReadiness(
+		ctx,
+		finality,
+	)
+	if err == nil && snapshot != nil && snapshot.Inventory != nil {
+		signing.RecordNativeTBTCSignerStateAnchorRestartableHeadroom(
+			snapshot.Inventory.RestartableRevisionHeadroom,
+			snapshot.Inventory.RestartableGenerationHeadroom,
+		)
+	}
+	return snapshot, err
+}
+
+// verifyFrostProductionSignerReadinessUnchanged publishes nothing. It proves a
+// previously reconciled snapshot has not changed and returns no fresh headroom
+// of its own, so republishing the caller's snapshot here would only restate a
+// value the mirror already holds while bumping the observation counter that
+// tells an operator how fresh that value is.
+func (fnsaho *frostNativeSignerAnchorHeadroomObserver) verifyFrostProductionSignerReadinessUnchanged(
+	ctx context.Context,
+	snapshot *frostProductionSignerReadinessSnapshot,
+) error {
+	return fnsaho.inner.verifyFrostProductionSignerReadinessUnchanged(
+		ctx,
+		snapshot,
+	)
 }
 
 func configureFrostSigningBackend(config Config) error {
@@ -1187,6 +1265,36 @@ func (n *node) getSigningExecutor(
 		}
 		executor.preSignAuthorizationGate = gate
 		executor.broadcastOutbox = n.bitcoinBroadcastOutbox
+
+		// The seat ceiling is a property of this node's seat count in this
+		// wallet and of protocol constants, so it is decided the moment the
+		// wallet is formed and never changes for the wallet's whole life. The
+		// gate is the only thing that reports it today, and only inside the
+		// error of an authorization it has already refused, so an operator
+		// over the ceiling learns about it the first time a full-size deposit
+		// sweep is proposed - which may be weeks after the seats were awarded,
+		// and is the worst possible moment. Say it once, here, at the same
+		// place the executor announces how many signers it controls.
+		//
+		// The gate's own deduplicated, validated seat set is used rather than
+		// localMemberIndexes because that is exactly what reservePreSign
+		// charges for; a duplicated index in the registry would otherwise make
+		// this warn about a seat count admission never sees.
+		//
+		// Gated on Schnorr material because getSigningExecutor builds a gate
+		// for every wallet on a FROST-enabled node, including the legacy ECDSA
+		// wallets still draining, and walletTransactionExecutor only routes
+		// through the gate when the wallet signs with Schnorr. Warning about a
+		// seat ceiling that cannot apply to an ECDSA wallet would be noise.
+		if executor.usesSchnorrSignatures() {
+			if warning, exceeded := frostPreSignLocalSeatCeilingWarning(
+				uint64(len(gate.localMemberIndexes)),
+				uint64(frostPreSignAuthorizationMaximumInputs),
+				gate.maximumAttempts,
+			); exceeded {
+				executorLogger.Warnf("%s", warning)
+			}
+		}
 	}
 
 	// Wire metrics recorder if available
@@ -1197,6 +1305,106 @@ func (n *node) getSigningExecutor(
 	n.signingExecutors[executorKey] = executor
 
 	return executor, true, nil
+}
+
+// frostPreSignLocalSeatCeilingWarning states, at wallet-executor construction
+// time, that this node's seat count in a FROST wallet is above the count
+// anchor admission can serve for a maximum-size pre-sign batch. It returns the
+// warning text and whether the ceiling is exceeded at all.
+//
+// The exclusion this reports is whole-node, not per-seat.
+// thresholdFrostPreSignAuthorizationGate.authorize charges reservePreSign for
+// its complete local seat set in one reservation, so a set one seat over the
+// ceiling fails the reservation and the node contributes nothing at all to
+// that batch - every one of its seats is lost to the wallet's signing
+// threshold, not just the surplus one. That is worth stating explicitly
+// because the natural reading of "a ceiling of four" is that four seats still
+// sign, and they do not.
+//
+// Both levers are named because neither is inferable from the other and both
+// belong to the operator: shed seats down to the ceiling, or keep batches at
+// or below the largest this seat count can serve. Neither the certified
+// restart windows nor the signing-attempt limit are configurable here, so
+// there is no third option to offer.
+//
+// Kept as a pure function of the three numbers so it can be exercised without
+// standing up a wallet, a gate, or a native build.
+func frostPreSignLocalSeatCeilingWarning(
+	localSeatCount uint64,
+	maximumInputCount uint64,
+	maximumSigningAttempts uint64,
+) (string, bool) {
+	// Mirrors authorize: an unset limit means the package default, and
+	// charging the ceiling scan a different attempt count than admission uses
+	// would make this warn about a ceiling that does not exist.
+	if maximumSigningAttempts == 0 {
+		maximumSigningAttempts = signingAttemptsLimit
+	}
+
+	admissibleSeats := frostPreSignMaximumAdmissibleLocalSeatCount(
+		maximumInputCount,
+		maximumSigningAttempts,
+	)
+	if admissibleSeats > 0 && localSeatCount <= admissibleSeats {
+		return "", false
+	}
+	if admissibleSeats == 0 {
+		// Not this node's problem to fix: no seat count at all can serve a
+		// maximum-size batch under the current windows, so shedding seats
+		// would not help and only a protocol-level change would.
+		return fmt.Sprintf(
+			"this node holds [%d] of this FROST wallet's seats, and no local "+
+				"seat count can sign a maximum-size [%d]-input pre-sign batch "+
+				"within the certified anchor restart windows; every full-size "+
+				"deposit sweep on this wallet will be refused for every member, "+
+				"and only enlarging those windows or lowering the "+
+				"signing-attempt limit [%d] changes that",
+			localSeatCount,
+			maximumInputCount,
+			maximumSigningAttempts,
+		), true
+	}
+
+	admissibleInputs := frostPreSignMaximumAdmissibleInputCount(
+		localSeatCount,
+		maximumSigningAttempts,
+	)
+	if admissibleInputs == 0 {
+		return fmt.Sprintf(
+			"this node holds [%d] of this FROST wallet's seats, above the "+
+				"[%d]-seat ceiling for a maximum-size [%d]-input pre-sign "+
+				"batch, and [%d] seats can sign no batch size at all; anchor "+
+				"admission will refuse this node every signing request for "+
+				"this wallet for the wallet's whole life, so all [%d] of its "+
+				"seats are lost to the wallet's signing threshold - shed seats "+
+				"down to [%d]",
+			localSeatCount,
+			admissibleSeats,
+			maximumInputCount,
+			localSeatCount,
+			localSeatCount,
+			admissibleSeats,
+		), true
+	}
+
+	return fmt.Sprintf(
+		"this node holds [%d] of this FROST wallet's seats, above the "+
+			"[%d]-seat ceiling for a maximum-size [%d]-input pre-sign batch; "+
+			"the largest batch [%d] seats can sign is [%d] inputs, and anchor "+
+			"admission refuses the node as a whole rather than the surplus "+
+			"seats, so all [%d] of its seats are excluded from every full-size "+
+			"deposit sweep for this wallet's whole life and are lost to the "+
+			"wallet's signing threshold on those sweeps - shed seats down to "+
+			"[%d], or keep sweeps at or below [%d] inputs",
+		localSeatCount,
+		admissibleSeats,
+		maximumInputCount,
+		localSeatCount,
+		admissibleInputs,
+		localSeatCount,
+		admissibleSeats,
+		admissibleInputs,
+	), true
 }
 
 // getCoordinationExecutor gets the coordination executor responsible for
