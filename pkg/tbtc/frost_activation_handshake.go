@@ -1062,11 +1062,10 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			nativeSignerSnapshot.RestartableGenerationHeadroom !=
 			FrostNativeSignerAnchorMaximumHistoryProofEntries ||
 		nativeSignerSnapshot.AnchorRotationWarning !=
-			frostNativeSignerAnchorRotationWarning(
-				minFrostNativeSignerAnchorHeadroom(
-					nativeSignerSnapshot.RestartableRevisionHeadroom,
-					nativeSignerSnapshot.RestartableGenerationHeadroom,
-				),
+			frostNativeSignerAnchorWorkloadRotationWarning(
+				nativeSignerSnapshot.RestartableRevisionHeadroom,
+				nativeSignerSnapshot.RestartableGenerationHeadroom,
+				nativeSignerSnapshot.LargestLocalSeatCount,
 			) {
 		return nil, fmt.Errorf(
 			"native signer state lacks an authenticated external rollback anchor trust certificate",

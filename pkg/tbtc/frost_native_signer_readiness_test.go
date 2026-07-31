@@ -264,6 +264,41 @@ func TestValidateFrostNativeSignerAnchorReadinessHeadroomWarningUsesMinimum(
 	}
 }
 
+func TestValidateFrostNativeSignerAnchorReadinessHeadroomUsesLargestLocalSeatCount(
+	t *testing.T,
+) {
+	cost, err := frostPreSignAnchoredInputCost(20, signingAttemptsLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost.Revisions != 406 || cost.Generations != 815 {
+		t.Fatalf("unexpected twenty-seat per-input cost: %+v", cost)
+	}
+
+	inventory := &frostNativeSignerInventorySnapshot{
+		LargestLocalSeatCount:         20,
+		CertifiedFloorRevision:        1,
+		CurrentAnchorRevision:         1 + FrostNativeSignerAnchorMaximumHistoryEvents - (cost.Revisions - 1),
+		RestartableRevisionHeadroom:   cost.Revisions - 1,
+		CertifiedFloorGeneration:      1,
+		StateGeneration:               1 + FrostNativeSignerAnchorMaximumHistoryProofEntries - (cost.Generations - 1),
+		RestartableGenerationHeadroom: cost.Generations - 1,
+		AnchorRotationWarning:         true,
+	}
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		inventory,
+	); err != nil {
+		t.Fatalf("workload-aware warning snapshot was rejected: %v", err)
+	}
+
+	inventory.AnchorRotationWarning = false
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		inventory,
+	); err == nil || !strings.Contains(err.Error(), "inconsistent") {
+		t.Fatalf("flat-floor-only warning remained readiness-valid: %v", err)
+	}
+}
+
 func TestVerifyFrostNativeSignerInventoryEntriesRejectsMismatch(t *testing.T) {
 	walletID := [32]byte{0x21}
 	valid := []frostsigning.NativeTBTCSignerRetainedKeyGroup{
@@ -343,6 +378,19 @@ func TestFrostNativeSignerInventoryBindingRequiresExactAuthenticatedAnchor(t *te
 		stateImage,
 	)
 	walletID := [32]byte{0x43}
+	keyPackages := make(
+		[]frostsigning.NativeTBTCSignerRetainedKeyPackage,
+		20,
+	)
+	participantSeats := make([]uint16, len(keyPackages))
+	for index := range keyPackages {
+		seat := uint16(index + 1)
+		keyPackages[index] = frostsigning.NativeTBTCSignerRetainedKeyPackage{
+			ParticipantSeat:      seat,
+			KeyPackageCommitment: [32]byte{byte(index + 1)},
+		}
+		participantSeats[index] = seat
+	}
 	entries := []frostsigning.NativeTBTCSignerRetainedKeyGroup{
 		{
 			WalletID:                   walletID,
@@ -350,9 +398,7 @@ func TestFrostNativeSignerInventoryBindingRequiresExactAuthenticatedAnchor(t *te
 			Threshold:                  51,
 			ParticipantCount:           100,
 			PublicKeyPackageCommitment: [32]byte{0x44},
-			KeyPackages: []frostsigning.NativeTBTCSignerRetainedKeyPackage{
-				{ParticipantSeat: 2, KeyPackageCommitment: [32]byte{0x45}},
-			},
+			KeyPackages:                keyPackages,
 		},
 	}
 	inventory := &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
@@ -398,7 +444,7 @@ func TestFrostNativeSignerInventoryBindingRequiresExactAuthenticatedAnchor(t *te
 			KeyGroup:         hex.EncodeToString(walletID[:]),
 			Threshold:        51,
 			ParticipantCount: 100,
-			ParticipantSeats: []uint16{2},
+			ParticipantSeats: participantSeats,
 		},
 	}
 	snapshot, err := binding.verify(context.Background(), expected)
@@ -413,6 +459,7 @@ func TestFrostNativeSignerInventoryBindingRequiresExactAuthenticatedAnchor(t *te
 			FrostNativeSignerAnchorMaximumHistoryEvents ||
 		snapshot.RestartableGenerationHeadroom !=
 			FrostNativeSignerAnchorMaximumHistoryProofEntries ||
+		snapshot.LargestLocalSeatCount != 20 ||
 		snapshot.AnchorRotationWarning {
 		t.Fatalf("unexpected native anchor readiness headroom: %+v", snapshot)
 	}
@@ -423,6 +470,48 @@ func TestFrostNativeSignerInventoryBindingRequiresExactAuthenticatedAnchor(t *te
 	}
 	baselineTip := *warningTip
 	baselineRecord := *anchorStore.record
+	workloadCost, err := frostPreSignAnchoredInputCost(20, signingAttemptsLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warningTip.AnchorRevision =
+		anchorBinding.floor.Revision +
+			FrostNativeSignerAnchorMaximumHistoryEvents -
+			(workloadCost.Revisions - 1)
+	warningTip.AnchorEventRoot = [32]byte{0xc1}
+	warningTip.AnchorAcknowledgementDigest = [32]byte{0xc2}
+	anchorBinding.readTip = func() (
+		*frostsigning.NativeTBTCSignerStateWitnessTip,
+		error,
+	) {
+		copy := *warningTip
+		return &copy, nil
+	}
+	anchorStore.record.Revision = warningTip.AnchorRevision
+	anchorStore.record.PreviousEventRoot = [32]byte{0xc0}
+	anchorStore.record.EventRoot = warningTip.AnchorEventRoot
+	anchorStore.record.AcknowledgementDigest =
+		warningTip.AnchorAcknowledgementDigest
+	workloadWarningSnapshot, err := binding.verify(
+		context.Background(),
+		expected,
+	)
+	if err != nil {
+		t.Fatalf("workload-warning inventory was rejected: %v", err)
+	}
+	if workloadWarningSnapshot.RestartableRevisionHeadroom !=
+		workloadCost.Revisions-1 ||
+		workloadWarningSnapshot.RestartableRevisionHeadroom <=
+			FrostNativeSignerAnchorRotationWarningHeadroom ||
+		!workloadWarningSnapshot.AnchorRotationWarning {
+		t.Fatalf(
+			"workload-relative anchor exhaustion warning was not surfaced: %+v",
+			workloadWarningSnapshot,
+		)
+	}
+
+	*warningTip = baselineTip
+	*anchorStore.record = baselineRecord
 	warningTip.AnchorRevision =
 		anchorBinding.floor.Revision +
 			FrostNativeSignerAnchorMaximumHistoryEvents - 1
