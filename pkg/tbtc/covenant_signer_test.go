@@ -1889,3 +1889,36 @@ func TestCovenantSignerEngine_VerifySignerApprovalRejectsNonLiveWallet(t *testin
 		t.Fatal("expected VerifySignerApproval to reject a closed wallet")
 	}
 }
+
+// TestEnsureActiveOutpointFinalityPropagatesProviderError asserts the finality
+// guard fails closed when the confirmation provider cannot answer. The existing
+// finality tests only exercise known confirmation counts above and below the
+// threshold; this covers the error path, where refusing to sign (rather than
+// treating an unknown count as sufficient) is the reorg-safety behavior we rely
+// on.
+func TestEnsureActiveOutpointFinalityPropagatesProviderError(t *testing.T) {
+	node, bitcoinChain, _ := setupCovenantSignerTestNode(t)
+
+	// A transaction the fake chain has never seen: it is neither in the
+	// confirmations map nor among the known transactions, so
+	// GetTransactionConfirmations returns "transaction not found". Version 99
+	// makes an accidental hash collision with any seeded transaction
+	// vanishingly unlikely.
+	unknownTransactionHash := (&bitcoin.Transaction{Version: 99}).Hash()
+	if _, err := bitcoinChain.GetTransactionConfirmations(unknownTransactionHash); err == nil {
+		t.Fatal("test setup: expected the fabricated transaction hash to be unknown to the chain")
+	}
+
+	cse := &covenantSignerEngine{
+		node:                               node,
+		minimumActiveOutpointConfirmations: 6,
+	}
+
+	err := cse.ensureActiveOutpointFinality(unknownTransactionHash)
+	if err == nil {
+		t.Fatal("expected finality check to fail when confirmations cannot be determined")
+	}
+	if !strings.Contains(err.Error(), "cannot determine active outpoint transaction confirmations") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}

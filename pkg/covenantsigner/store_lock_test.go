@@ -146,3 +146,53 @@ func TestNewStore_SequentialOpenCloseOpen(t *testing.T) {
 		}
 	}
 }
+
+// TestNewServiceReleasesLockOnInitFailure asserts that when NewService acquires
+// the store's file lock and then fails a later initialization step, it releases
+// the lock rather than leaking it. Without the release, a signer that failed to
+// start once (e.g. on a misconfigured trust root) could never restart against
+// the same data directory. The failure is triggered with an invalid custodian
+// trust-root public key, which is normalized after the store (and its lock) is
+// created.
+func TestNewServiceReleasesLockOnInitFailure(t *testing.T) {
+	tempDir := t.TempDir()
+
+	firstHandle, err := persistence.NewBasicDiskHandle(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewService(
+		firstHandle,
+		&scriptedEngine{},
+		WithDataDir(tempDir),
+		WithCustodianTrustRoots([]CustodianTrustRoot{
+			{
+				Route:     TemplateQcV1,
+				Reserve:   validMigrationDestination().Reserve,
+				Network:   validMigrationDestination().Network,
+				PublicKey: "0x1234",
+			},
+		}),
+	)
+	if err == nil {
+		t.Fatal("expected NewService to fail on the invalid custodian trust root")
+	}
+
+	// A second NewService on the same data directory must be able to acquire the
+	// lock, proving the failed first attempt released it.
+	secondHandle, err := persistence.NewBasicDiskHandle(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service, err := NewService(secondHandle, &scriptedEngine{}, WithDataDir(tempDir))
+	if err != nil {
+		t.Fatalf(
+			"expected second NewService to succeed; the lock should have been "+
+				"released after the first init failure, got: %v",
+			err,
+		)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+}

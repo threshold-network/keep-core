@@ -1031,3 +1031,74 @@ func TestSignerApprovalCertificateSigningDigestMatchesCrossLanguageVectorAboveUi
 		)
 	}
 }
+
+// TestVerifySignerApprovalCertificateRejectsUnsupportedVersion asserts the
+// certificate version is a hard gate: only version 2 is accepted, and any other
+// value (an unset zero, the superseded version 1, or a future version 3) is
+// rejected before the signature is checked. This pins the version-negotiation
+// contract so a future format bump cannot be silently accepted by an unupgraded
+// verifier.
+func TestVerifySignerApprovalCertificateRejectsUnsupportedVersion(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	// The version gate is checked before the signer-set hash is examined, so the
+	// expected hash passed here is a deliberately arbitrary, non-empty
+	// placeholder: its value must not affect the outcome. Were the version check
+	// ever reordered after the hash comparison, this mismatching hash would
+	// surface as a "signer set hash does not match" error and fail the assertion
+	// below, catching the reordering.
+	arbitrarySignerSetHash := "0x" + strings.Repeat("ab", 32)
+
+	// An unset (0), the superseded (1), and a future (3) version must all be
+	// rejected; only 2 is supported.
+	for _, unsupportedVersion := range []uint32{0, 1, 3} {
+		certificate := *request.SignerApproval
+		certificate.CertificateVersion = unsupportedVersion
+
+		err := verifySignerApprovalCertificate(&certificate, arbitrarySignerSetHash)
+		if err == nil || !strings.Contains(err.Error(), "unsupported certificate version") {
+			t.Fatalf(
+				"expected unsupported certificate version error for version %d, got %v",
+				unsupportedVersion,
+				err,
+			)
+		}
+	}
+}
+
+// TestVerifySignerApprovalCertificateRejectsUnsupportedSignatureAlgorithm
+// asserts the signature-algorithm field is a hard gate: only the tECDSA
+// secp256k1 algorithm is accepted. This prevents a certificate from claiming a
+// different (potentially weaker or unverifiable) algorithm than the one the
+// verifier actually checks.
+func TestVerifySignerApprovalCertificateRejectsUnsupportedSignatureAlgorithm(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	// The algorithm gate is checked before the signer-set hash is examined, so
+	// the expected hash passed here is a deliberately arbitrary, non-empty
+	// placeholder: its value must not affect the outcome. Were the algorithm
+	// check ever reordered after the hash comparison, this mismatching hash would
+	// surface as a "signer set hash does not match" error and fail the assertion
+	// below, catching the reordering.
+	arbitrarySignerSetHash := "0x" + strings.Repeat("ab", 32)
+
+	certificate := *request.SignerApproval
+	certificate.SignatureAlgorithm = "ed25519"
+
+	err := verifySignerApprovalCertificate(&certificate, arbitrarySignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "unsupported signature algorithm") {
+		t.Fatalf("expected unsupported signature algorithm error, got %v", err)
+	}
+}
