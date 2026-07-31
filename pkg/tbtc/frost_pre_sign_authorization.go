@@ -1549,6 +1549,32 @@ func (authorization *frostPreSignAuthorization) cacheReadiness(
 		cloneFrostProductionSignerReadinessSnapshot(snapshot)
 }
 
+// currentReadinessSnapshot returns the most recently reconciled readiness
+// snapshot regardless of which finalized point produced it, or nil when none
+// has been cached yet.
+//
+// It differs from cachedReadiness deliberately. cachedReadiness answers "may I
+// skip a reconciliation at THIS point", so it must refuse a snapshot taken at
+// any other point. Per-input anchor admission asks a different question: it
+// needs the inventory headroom the last authenticated reconciliation reported,
+// as one of the two bounds reservePreSign takes the minimum of. The other bound
+// is the current tip read under the admission lock, which is authoritative, so
+// a snapshot that lags can only make the admission more conservative, never
+// less.
+func (authorization *frostPreSignAuthorization) currentReadinessSnapshot() *frostProductionSignerReadinessSnapshot {
+	if authorization == nil {
+		return nil
+	}
+	authorization.readinessMutex.Lock()
+	defer authorization.readinessMutex.Unlock()
+	if authorization.readinessSnapshot == nil {
+		return nil
+	}
+	return cloneFrostProductionSignerReadinessSnapshot(
+		authorization.readinessSnapshot,
+	)
+}
+
 func (authorization *frostPreSignAuthorization) cachedReadiness(
 	point FrostPreSignFinality,
 ) *frostProductionSignerReadinessSnapshot {
@@ -1575,6 +1601,22 @@ type frostPreSignAuthorizationGate interface {
 		context.Context,
 		*frostPreSignAuthorization,
 	) error
+	// admitInput reserves the native signer anchor capacity for exactly one
+	// transaction input of an already finalized authorization, and returns the
+	// function that gives it back. The returned release is non-nil whenever the
+	// error is nil, and the caller must run it on every exit path from that
+	// input - a reservation held past its input is capacity no other wallet on
+	// this node can use, and the certified windows never refill.
+	//
+	// It lives on the gate rather than on the authorization because the gate is
+	// what holds the node-wide admission controller, this wallet's validated
+	// local seat set and this wallet's signing-attempt limit. Putting it in the
+	// interface makes it impossible to add a signing path, or a test double,
+	// that reaches native signing with no per-input admission at all.
+	admitInput(
+		context.Context,
+		*frostPreSignAuthorization,
+	) (func(), error)
 }
 
 type thresholdFrostPreSignAuthorizationGate struct {
@@ -1691,16 +1733,20 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 			"FROST native signer anchor admission controller is nil",
 		)
 	}
-	maximumAttempts := tfpsag.maximumAttempts
-	if maximumAttempts == 0 {
-		maximumAttempts = signingAttemptsLimit
-	}
+	// One input's worth, not the batch's. Native signing reserves per input in
+	// its own sequential loop, so this reservation is not the signing budget:
+	// it is what keeps the node from spending gas relaying an authorization it
+	// has no capacity to act on, and from letting several wallets relay against
+	// capacity only one of them can use. walletTransactionExecutor releases it
+	// at the moment the per-input reservations take over, so the two are never
+	// charged at once - holding both would put the ceiling back at fifty local
+	// seats instead of removing it.
 	anchorReservation, err := tfpsag.anchorAdmission.reservePreSign(
 		ctx,
 		readinessSnapshot,
 		uint64(len(transaction.SignatureHashes)),
 		uint64(len(tfpsag.localMemberIndexes)),
-		maximumAttempts,
+		tfpsag.effectiveMaximumAttempts(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -1797,6 +1843,82 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 
 	reservationTransferred = true
 	return authorization, nil
+}
+
+// effectiveMaximumAttempts is the signing-attempt limit anchor admission has to
+// charge for. It is read in one place so the reservation, the per-input
+// admission and the startup seat-ceiling warning can never disagree about what
+// an unset limit means.
+func (tfpsag *thresholdFrostPreSignAuthorizationGate) effectiveMaximumAttempts() uint64 {
+	if tfpsag == nil || tfpsag.maximumAttempts == 0 {
+		return signingAttemptsLimit
+	}
+	return tfpsag.maximumAttempts
+}
+
+// admitInput reserves anchor capacity for exactly one input of an authorized
+// batch and returns the release for it.
+//
+// The reservation covers that input's whole attempt budget - its BuildTaprootTx
+// call and, for every one of the signing-attempt limit's attempts, an Open,
+// Round1, Round2 and Abort per local seat plus the memoized Aggregate - so an
+// admitted input keeps every retry the ROAST loop can give it. That is why the
+// unit is an input and not an attempt: reserving per attempt would be cheaper
+// still, but it would admit an input that then cannot pay for its own second
+// attempt, and re-admitting mid-input has nothing sensible to do when it is
+// refused half way through a signing round.
+//
+// Nothing fallible runs after reservePreSign returns a reservation - it is
+// wrapped and handed back on the next line - so a refusal from this function
+// can never be a refusal that has already taken capacity. Every earlier check
+// returns before a reservation exists at all.
+//
+// The counter records capacity refusals only. The nil-argument refusals above
+// are programming errors that cannot arise from a gate this package builds, and
+// counting them would put wiring mistakes on the same operator dashboard line
+// as an anchor window that needs rotating.
+func (tfpsag *thresholdFrostPreSignAuthorizationGate) admitInput(
+	ctx context.Context,
+	authorization *frostPreSignAuthorization,
+) (func(), error) {
+	if tfpsag == nil || tfpsag.anchorAdmission == nil {
+		return nil, fmt.Errorf(
+			"FROST native signer anchor admission controller is nil",
+		)
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("FROST pre-sign input admission context is nil")
+	}
+	if authorization == nil || authorization.proposal == nil ||
+		authorization.proposal.Transaction == nil {
+		return nil, fmt.Errorf(
+			"FROST pre-sign input admission has no finalized authorization",
+		)
+	}
+	// The snapshot is one of the two bounds reservePreSign takes the minimum
+	// of; the other is the tip it authenticates under the admission lock.
+	// Refusing without one is deliberate: an authorization that never
+	// reconciled readiness has no business reaching the native signer, and the
+	// monitor refreshes this on every pass for the whole signing window.
+	readinessSnapshot := authorization.currentReadinessSnapshot()
+	if readinessSnapshot == nil {
+		return nil, fmt.Errorf(
+			"FROST pre-sign input admission has no reconciled signer readiness",
+		)
+	}
+
+	reservation, err := tfpsag.anchorAdmission.reservePreSign(
+		ctx,
+		readinessSnapshot,
+		uint64(len(authorization.proposal.Transaction.SignatureHashes)),
+		uint64(len(tfpsag.localMemberIndexes)),
+		tfpsag.effectiveMaximumAttempts(),
+	)
+	if err != nil {
+		recordFrostNativeSignerAnchorPreSignInputRejection()
+		return nil, err
+	}
+	return reservation.Release, nil
 }
 
 // isFrostPreSignTransientAuthorizationFailure reports whether err is a failure

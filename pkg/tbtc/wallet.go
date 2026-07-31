@@ -315,6 +315,16 @@ type taprootPolicyBoundWalletSigningExecutor interface {
 	) ([]*frost.Signature, error)
 }
 
+// authorizedTaprootPolicyBoundWalletSigningExecutor is the only signing entry
+// point that may reach native FROST signing.
+//
+// admitInput is a sibling of authorizationGuard rather than something the
+// executor derives, and both are per input for the same reason: the batch is
+// signed one input at a time, and each input has to re-establish that it is
+// still permitted (the guard) and that the node still has the anchor capacity
+// to run it (the admission). The executor calls admitInput once per input and
+// runs the release it returns before moving to the next one, so the node holds
+// exactly one input's reservation at a time no matter how large the batch is.
 type authorizedTaprootPolicyBoundWalletSigningExecutor interface {
 	signBatchWithAuthorizedTaprootTransaction(
 		ctx context.Context,
@@ -324,6 +334,7 @@ type authorizedTaprootPolicyBoundWalletSigningExecutor interface {
 		unsignedTx *bitcoin.TransactionBuilder,
 		authorizationID [32]byte,
 		authorizationGuard func(context.Context) error,
+		admitInput func(context.Context) (func(), error),
 	) ([]*frost.Signature, error)
 }
 
@@ -646,6 +657,28 @@ func (wte *walletTransactionExecutor) signTransaction(
 		defer authorizationMonitor.stop()
 
 		signTxLogger.Infof("signing transaction's sig hashes")
+
+		// Hand the anchor reservation over to the per-input admissions before
+		// the first input runs.
+		//
+		// The reservation taken inside authorize() is one input's worth and its
+		// job is done: it gated the on-chain relay on a node that had the
+		// capacity to act on it. From here the sequential loop reserves an
+		// input's worth for each input it signs, and holding both at once would
+		// charge two inputs for one input's work - at the hundred-seat maximum
+		// that is 8030 of a 4096-entry proof window, which would reinstate a
+		// seat ceiling at fifty rather than remove it.
+		//
+		// Releasing here rather than leaving it to the deferred release is safe
+		// and is not a hole: the release is idempotent, the deferred call still
+		// covers every path that leaves before this point, and the window this
+		// opens - another wallet on this node taking the capacity between here
+		// and the first admitInput - is the same interleaving that already
+		// exists between any two inputs of the loop. Its worst outcome is a
+		// clean refusal of an already-relayed batch, which the pre-sign input
+		// rejection counter reports.
+		authorization.releaseAnchorReservation()
+
 		signatures, err = authorizedSigningExecutor.signBatchWithAuthorizedTaprootTransaction(
 			authorizationMonitor.ctx,
 			sigHashes,
@@ -654,6 +687,12 @@ func (wte *walletTransactionExecutor) signTransaction(
 			unsignedTx,
 			authorization.AuthorizationID,
 			authorizationMonitor.guard,
+			func(ctx context.Context) (func(), error) {
+				return wte.preSignAuthorizationGate.admitInput(
+					ctx,
+					authorization,
+				)
+			},
 		)
 		if authorizationErr := authorizationMonitor.err(); authorizationErr != nil {
 			err = authorizationErr

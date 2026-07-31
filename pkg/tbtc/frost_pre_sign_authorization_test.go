@@ -988,8 +988,12 @@ type testFrostPreSignAuthorizationGate struct {
 	mutex           sync.Mutex
 	authorizeErr    error
 	revalidateErr   error
+	admitInputErr   error
 	authorizeCalls  int
 	revalidateCalls int
+	admitInputCalls int
+	admitInputHeld  int
+	admitInputPeak  int
 	finalizedBlock  uint64
 	proposal        *FrostPreSignAuthorizationProposal
 }
@@ -1039,6 +1043,38 @@ func (tfpsag *testFrostPreSignAuthorizationGate) revalidate(
 	defer tfpsag.mutex.Unlock()
 	tfpsag.revalidateCalls++
 	return tfpsag.revalidateErr
+}
+
+// admitInput stands in for the node-wide anchor admission controller. It takes
+// nothing real, but it counts: the batch loop must call it once per input and
+// run the release it returns before the next one, so admitInputHeld is back to
+// zero between inputs and admitInputPeak never exceeds one. A stub that simply
+// returned a no-op would let a regression to a single batch-wide reservation
+// pass unnoticed here.
+func (tfpsag *testFrostPreSignAuthorizationGate) admitInput(
+	ctx context.Context,
+	authorization *frostPreSignAuthorization,
+) (func(), error) {
+	tfpsag.mutex.Lock()
+	defer tfpsag.mutex.Unlock()
+	tfpsag.admitInputCalls++
+	if tfpsag.admitInputErr != nil {
+		return nil, tfpsag.admitInputErr
+	}
+	tfpsag.admitInputHeld++
+	if tfpsag.admitInputHeld > tfpsag.admitInputPeak {
+		tfpsag.admitInputPeak = tfpsag.admitInputHeld
+	}
+	released := false
+	return func() {
+		tfpsag.mutex.Lock()
+		defer tfpsag.mutex.Unlock()
+		if released {
+			return
+		}
+		released = true
+		tfpsag.admitInputHeld--
+	}, nil
 }
 
 func (tfpsag *testFrostPreSignAuthorizationGate) setRevalidateError(err error) {

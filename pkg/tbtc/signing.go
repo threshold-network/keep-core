@@ -368,6 +368,7 @@ func (se *signingExecutor) signBatchWithTaprootMerkleRoots(
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 }
 
@@ -395,12 +396,19 @@ func (se *signingExecutor) signBatchWithTaprootTransaction(
 		unsignedTx,
 		nil,
 		nil,
+		nil,
 	)
 }
 
 // signBatchWithAuthorizedTaprootTransaction is the only wallet-transaction
 // entry point that may reach native FROST signing. authorizationID is folded
 // into both the stable ROAST namespace and every attempt session namespace.
+//
+// admitInput reserves this node's native signer anchor capacity for one input
+// and returns the release for it. It is required rather than optional on this
+// path: the signer's certified restart windows are finite and do not refill, so
+// a native signing run that never asked admission for capacity is a run that
+// can exhaust the window it needs to prove its own history after a crash.
 func (se *signingExecutor) signBatchWithAuthorizedTaprootTransaction(
 	ctx context.Context,
 	messages []*big.Int,
@@ -409,6 +417,7 @@ func (se *signingExecutor) signBatchWithAuthorizedTaprootTransaction(
 	unsignedTx *bitcoin.TransactionBuilder,
 	authorizationID [32]byte,
 	authorizationGuard func(context.Context) error,
+	admitInput func(context.Context) (func(), error),
 ) ([]*frost.Signature, error) {
 	if authorizationID == [32]byte{} {
 		return nil, fmt.Errorf("pre-sign authorization ID is zero")
@@ -419,6 +428,9 @@ func (se *signingExecutor) signBatchWithAuthorizedTaprootTransaction(
 	if authorizationGuard == nil {
 		return nil, fmt.Errorf("pre-sign authorization guard is nil")
 	}
+	if admitInput == nil {
+		return nil, fmt.Errorf("native signer anchor input admission is nil")
+	}
 
 	return se.signBatchWithTaprootPolicy(
 		ctx,
@@ -428,6 +440,7 @@ func (se *signingExecutor) signBatchWithAuthorizedTaprootTransaction(
 		unsignedTx,
 		&authorizationID,
 		authorizationGuard,
+		admitInput,
 	)
 }
 
@@ -439,11 +452,18 @@ func (se *signingExecutor) signBatchWithTaprootPolicy(
 	unsignedTx *bitcoin.TransactionBuilder,
 	authorizationID *[32]byte,
 	authorizationGuard func(context.Context) error,
+	admitInput func(context.Context) (func(), error),
 ) ([]*frost.Signature, error) {
 	// This check must precede policy-artifact binding: binding enters the native
 	// signer and may allocate session state even before nonce generation.
+	//
+	// A missing per-input anchor admission fails here with the rest of the
+	// authorization preconditions, and for the same reason: both are things the
+	// native signer path must never run without, and neither can be recovered
+	// from once binding has entered the signer.
 	if se.usesSchnorrSignatures() &&
-		(authorizationID == nil || *authorizationID == [32]byte{}) {
+		(authorizationID == nil || *authorizationID == [32]byte{} ||
+			admitInput == nil) {
 		return nil, fmt.Errorf(
 			"FROST signing requires a finalized transaction authorization",
 		)
@@ -532,44 +552,18 @@ func (se *signingExecutor) signBatchWithTaprootPolicy(
 				)
 			}
 		}
-		policyBoundRoastSID, err := bindTaprootPolicyArtifactForAuthorizedSigning(
+		signature, endBlock, err := se.signBatchInputUnderAnchorAdmission(
+			ctx,
+			i,
 			message,
 			taprootMerkleRoot,
 			signingStartBlock,
 			roastKeyGroupID,
 			unsignedTx,
-			i,
 			authorizationID,
+			authorizationGuard,
+			admitInput,
 		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot bind input [%d] to the native signer policy artifact: [%w]",
-				i,
-				err,
-			)
-		}
-
-		var signature *frost.Signature
-		var endBlock uint64
-		if authorizationID != nil {
-			signature, _, endBlock, err = se.signWithTaprootMerkleRootForAuthorizedSession(
-				ctx,
-				message,
-				taprootMerkleRoot,
-				signingStartBlock,
-				policyBoundRoastSID,
-				authorizationID,
-				authorizationGuard,
-			)
-		} else {
-			signature, _, endBlock, err = se.signWithTaprootMerkleRootForSession(
-				ctx,
-				message,
-				taprootMerkleRoot,
-				signingStartBlock,
-				policyBoundRoastSID,
-			)
-		}
 		if err != nil {
 			// Error metrics are recorded in the sign() method for all error paths.
 			return nil, err
@@ -586,6 +580,102 @@ func (se *signingExecutor) signBatchWithTaprootPolicy(
 	}
 
 	return signatures, nil
+}
+
+// signBatchInputUnderAnchorAdmission binds and signs exactly one input of a
+// batch while holding exactly one input's native signer anchor reservation.
+//
+// It is a separate function purely so the release can be deferred. Go defers
+// run at function exit, not at the end of a loop iteration, and this input has
+// three ways out - the admission itself failing, the policy binding failing,
+// and the signing failing or its context being cancelled. Releasing by hand on
+// each of them is how a reservation leaks: a leaked one is capacity no other
+// wallet on this node can ever use again, because the certified windows do not
+// refill and the controller has no way to notice an owner that walked away.
+// The defer also covers the unwind if anything below panics.
+//
+// The reservation is taken AFTER the caller's authorization guard and BEFORE
+// the policy binding, because BuildTaprootTx inside the binding is the input's
+// first request-taking signer call and is already part of what the reservation
+// pays for. Nothing between the guard and here consumes anchor capacity, so
+// ordering them the other way would only hold capacity while revalidating an
+// authorization that may be about to be refused anyway.
+//
+// admitInput is nil on the non-authorized paths, which cannot reach the native
+// signer at all; signBatchWithTaprootPolicy has already refused a Schnorr batch
+// that arrives without one.
+func (se *signingExecutor) signBatchInputUnderAnchorAdmission(
+	ctx context.Context,
+	inputIndex int,
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	signingStartBlock uint64,
+	roastKeyGroupID string,
+	unsignedTx *bitcoin.TransactionBuilder,
+	authorizationID *[32]byte,
+	authorizationGuard func(context.Context) error,
+	admitInput func(context.Context) (func(), error),
+) (*frost.Signature, uint64, error) {
+	if admitInput != nil {
+		releaseInputAdmission, err := admitInput(ctx)
+		if err != nil {
+			return nil, 0, fmt.Errorf(
+				"cannot reserve native signer anchor capacity for input [%d]: [%w]",
+				inputIndex,
+				err,
+			)
+		}
+		if releaseInputAdmission == nil {
+			return nil, 0, fmt.Errorf(
+				"native signer anchor admission for input [%d] returned no release",
+				inputIndex,
+			)
+		}
+		defer releaseInputAdmission()
+	}
+
+	policyBoundRoastSID, err := bindTaprootPolicyArtifactForAuthorizedSigning(
+		message,
+		taprootMerkleRoot,
+		signingStartBlock,
+		roastKeyGroupID,
+		unsignedTx,
+		inputIndex,
+		authorizationID,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf(
+			"cannot bind input [%d] to the native signer policy artifact: [%w]",
+			inputIndex,
+			err,
+		)
+	}
+
+	var signature *frost.Signature
+	var endBlock uint64
+	if authorizationID != nil {
+		signature, _, endBlock, err = se.signWithTaprootMerkleRootForAuthorizedSession(
+			ctx,
+			message,
+			taprootMerkleRoot,
+			signingStartBlock,
+			policyBoundRoastSID,
+			authorizationID,
+			authorizationGuard,
+		)
+	} else {
+		signature, _, endBlock, err = se.signWithTaprootMerkleRootForSession(
+			ctx,
+			message,
+			taprootMerkleRoot,
+			signingStartBlock,
+			policyBoundRoastSID,
+		)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	return signature, endBlock, nil
 }
 
 // sign performs the signing process for the given message. The process is
