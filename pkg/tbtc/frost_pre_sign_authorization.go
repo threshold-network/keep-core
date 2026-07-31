@@ -2028,8 +2028,9 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 		backoff = frostPreSignAuthorizationTransientRetryBackoff
 	}
 	deadline := time.Now().Add(budget)
-	for attempt := 1; ; attempt++ {
-		err := tfpsag.revalidateOnce(ctx, authorization)
+	attempt := 1
+	err := tfpsag.revalidateOnce(ctx, authorization)
+	for {
 		if err == nil {
 			return nil
 		}
@@ -2045,13 +2046,34 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 				err,
 			)
 		}
-		backoffTimer := time.NewTimer(backoff)
+		remaining := time.Until(deadline)
+		backoffDuration := backoff
+		if backoffDuration > remaining {
+			backoffDuration = remaining
+		}
+		backoffTimer := time.NewTimer(backoffDuration)
 		select {
 		case <-ctx.Done():
 			backoffTimer.Stop()
 			return err
 		case <-backoffTimer.C:
 		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf(
+				"FROST authorization dependency stayed unreachable across [%d] attempts over [%s]: [%w]",
+				attempt,
+				budget,
+				err,
+			)
+		}
+
+		// Only retries are bounded by this deadline. The initial validation is
+		// allowed to use the caller's whole context; once it proves transient,
+		// no subsequent dependency call may outlive the declared retry budget.
+		retryContext, cancelRetry := context.WithDeadline(ctx, deadline)
+		attempt++
+		err = tfpsag.revalidateOnce(retryContext, authorization)
+		cancelRetry()
 	}
 }
 

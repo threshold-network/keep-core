@@ -1560,6 +1560,11 @@ func (client *FrostNativeSignerAnchorClient) postWithResponseLimit(
 		)
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, true, &frostNativeSignerAnchorStatusError{
+			statusCode: response.StatusCode,
+		}
+	}
 	limited := io.LimitReader(response.Body, responseLimit+1)
 	body, readErr := io.ReadAll(limited)
 	if readErr != nil {
@@ -1567,11 +1572,6 @@ func (client *FrostNativeSignerAnchorClient) postWithResponseLimit(
 	}
 	if len(body) == 0 || int64(len(body)) > responseLimit {
 		return nil, true, fmt.Errorf("native signer anchor response size is invalid")
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, true, &frostNativeSignerAnchorStatusError{
-			statusCode: response.StatusCode,
-		}
 	}
 	mediaType, parameters, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" || len(parameters) != 0 {

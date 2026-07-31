@@ -1675,6 +1675,36 @@ func TestThresholdFrostPreSignAuthorizationGate_FailsClosedOnPersistentOutage(
 	}
 }
 
+func TestThresholdFrostPreSignAuthorizationGate_DoesNotStartRetryAfterBudgetExpiresDuringBackoff(
+	t *testing.T,
+) {
+	readiness := &testFrostProductionAuthorizationReadiness{
+		err: fmt.Errorf("anchor read: [%w]", os.ErrDeadlineExceeded),
+	}
+	gate, authorization := testFrostPreSignRevalidationFixture(t, readiness)
+	gate.transientRetryBudget = 20 * time.Millisecond
+	gate.transientRetryBackoff = time.Second
+
+	started := time.Now()
+	err := gate.revalidate(context.Background(), authorization)
+	if err == nil || !strings.Contains(err.Error(), "stayed unreachable") {
+		t.Fatalf("expired retry budget did not fail closed: [%v]", err)
+	}
+	if readiness.calls != 1 {
+		t.Fatalf(
+			"[%d] dependency attempts ran even though the budget expired during backoff",
+			readiness.calls,
+		)
+	}
+	if elapsed := time.Since(started); elapsed >= gate.transientRetryBackoff {
+		t.Fatalf(
+			"retry budget [%s] waited out the full backoff [%s]",
+			gate.transientRetryBudget,
+			elapsed,
+		)
+	}
+}
+
 // TestThresholdFrostPreSignAuthorizationGate_StopsRetryingWhenCallerCancels
 // keeps a cancelled caller from being held for the retry budget; the monitor
 // treats its own cancellation separately and must not latch on it.

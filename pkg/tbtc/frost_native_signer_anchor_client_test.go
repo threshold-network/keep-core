@@ -1153,7 +1153,10 @@ func newTestFrostNativeSignerAnchorEnvironment(
 		switch request.URL.Path {
 		case "/anchor/read":
 			if status := readFaults.next(); status != 0 {
-				http.Error(writer, "injected read fault", status)
+				// A proxy or overloaded service commonly sends only the status
+				// line. The client must classify that status before imposing the
+				// successful acknowledgement's non-empty body contract.
+				writer.WriteHeader(status)
 				return
 			}
 			payload, _ := io.ReadAll(request.Body)
