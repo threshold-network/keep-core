@@ -87,6 +87,24 @@ full-size sweeps per anchor epoch at 4 seats*. The derivation is in
   `pkg/tbtc/frost_native_signer_anchor_binding.go`)
 |===
 
+=== Which rollback this actually defends against
+
+Not a restore from backup. Nonces are never written to disk -
+`PersistedSessionState` has no nonce field, its comment calls the
+consumption markers "the ONLY durable artifact", and
+`interactive_session_open` zeroizes any prior nonce on every new
+attempt. Restore a signer store from a file-level backup and restart,
+and the spent nonce is simply gone; round 1 mints a fresh one.
+
+The threat is a *memory-inclusive* rollback - a VM snapshot restore, a
+CRIU checkpoint, a live-migration rollback - because that is the only
+thing that resurrects a nonce the node had already consumed. Round 2
+pins the message and the member's own commitment, but not the signing
+subset, so a resurrected nonce signed against enough distinct subsets
+recovers the private key share. Treat hypervisor-level snapshots of a
+running signer as a key-compromise event, not an operational
+convenience.
+
 === Why rotation exists at all
 
 The floor is a rollback boundary. If the node could move it, a node
@@ -168,8 +186,15 @@ workflow that succeeds on its first attempt makes, per input:
   subset calls `Open`, `Round1`, `Abort` instead - also three; and
 * one memoized `Aggregate`.
 
-That is `3 * seats + 2` anchored calls per input, each costing one
-revision and one to two generations:
+That is `3 * seats + 2` anchored calls per input. Only the calls that
+actually advance durable state cost anything: the barrier skips the
+remote CAS when the Rust tip is unchanged
+(`if *candidate == lease.expected` in
+`pkg/frost/signing/native_tbtc_signer_state_anchor_barrier.go`), so
+`Round1` — which mints its nonce in memory and persists nothing —
+spends no revision and no generation at all. The figures below are
+therefore an upper bound, and the pre-sign admission reservation is
+charged against that bound rather than against real consumption:
 
 [cols="1,1,1,1"]
 |===
