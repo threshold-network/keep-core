@@ -212,20 +212,20 @@ func getUnprovenMovingFundsTransactions(
 		targetWalletPublicKeyHash := targetWallets[0]
 
 		targetWallet, err := spvChain.GetWallet(targetWalletPublicKeyHash)
-		var walletTransactions []*bitcoin.Transaction
 		if err != nil {
-			walletTransactions, err = btcChain.GetTransactionsForPublicKeyHash(
+			return nil, fmt.Errorf(
+				"failed to get target wallet [%x]: [%w]",
 				targetWalletPublicKeyHash,
-				transactionLimit,
-			)
-		} else {
-			walletTransactions, err = getWalletTransactions(
-				targetWalletPublicKeyHash,
-				targetWallet,
-				transactionLimit,
-				btcChain,
+				err,
 			)
 		}
+
+		walletTransactions, err := getWalletTransactions(
+			targetWalletPublicKeyHash,
+			targetWallet,
+			transactionLimit,
+			btcChain,
+		)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"failed to get transactions for wallet: [%v]",
