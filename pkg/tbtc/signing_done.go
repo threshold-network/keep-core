@@ -2,15 +2,18 @@ package tbtc
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"fmt"
 	"math/big"
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
+	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 // signingDoneReceiveBuffer is a buffer for messages received from the broadcast
@@ -36,7 +39,10 @@ type signingDoneMessage struct {
 	message       *big.Int
 	attemptNumber uint64
 	signature     *frost.Signature
-	endBlock      uint64
+	// legacySignature preserves the pre-FROST protobuf wire representation for
+	// ECDSA wallet attempts. It is nil for versioned native FROST signatures.
+	legacySignature *tecdsa.Signature
+	endBlock        uint64
 }
 
 func (sdm *signingDoneMessage) Type() string {
@@ -46,10 +52,11 @@ func (sdm *signingDoneMessage) Type() string {
 // signingDoneCheck is a component that is responsible for signaling a
 // successful signature calculation across all signing group members.
 type signingDoneCheck struct {
-	groupSize           int
-	honestThreshold     int
-	broadcastChannel    net.BroadcastChannel
-	membershipValidator *group.MembershipValidator
+	groupSize             int
+	honestThreshold       int
+	broadcastChannel      net.BroadcastChannel
+	membershipValidator   *group.MembershipValidator
+	legacyWalletPublicKey *ecdsa.PublicKey
 
 	receiveCtx       context.Context
 	cancelReceiveCtx context.CancelFunc
@@ -72,6 +79,12 @@ type signingDoneCheck struct {
 	attemptTimeoutBlock uint64
 	doneSigners         map[group.MemberIndex]*signingDoneMessage
 	doneSignersMutex    sync.RWMutex
+}
+
+func (sdc *signingDoneCheck) useLegacySignatureWireFormat(
+	walletPublicKey *ecdsa.PublicKey,
+) {
+	sdc.legacyWalletPublicKey = walletPublicKey
 }
 
 func newSigningDoneCheck(
@@ -169,13 +182,77 @@ func (sdc *signingDoneCheck) signalDone(
 	result *signing.Result,
 	endBlock uint64,
 ) error {
+	var legacySignature *tecdsa.Signature
+	if sdc.legacyWalletPublicKey != nil {
+		var err error
+		legacySignature, err = legacySigningDoneSignature(
+			message,
+			result.Signature,
+			sdc.legacyWalletPublicKey,
+		)
+		if err != nil {
+			return fmt.Errorf("cannot encode legacy signing done signature: [%w]", err)
+		}
+	}
+
 	return sdc.broadcastChannel.Send(ctx, &signingDoneMessage{
-		senderID:      memberIndex,
-		message:       message,
-		attemptNumber: attemptNumber,
-		signature:     result.Signature,
-		endBlock:      endBlock,
+		senderID:        memberIndex,
+		message:         message,
+		attemptNumber:   attemptNumber,
+		signature:       result.Signature,
+		legacySignature: legacySignature,
+		endBlock:        endBlock,
 	}, net.BackoffRetransmissionStrategy)
+}
+
+func legacySigningDoneSignature(
+	message *big.Int,
+	signature *frost.Signature,
+	walletPublicKey *ecdsa.PublicKey,
+) (*tecdsa.Signature, error) {
+	if message == nil {
+		return nil, fmt.Errorf("message is nil")
+	}
+	if signature == nil {
+		return nil, fmt.Errorf("signature is nil")
+	}
+	if walletPublicKey == nil || walletPublicKey.X == nil || walletPublicKey.Y == nil {
+		return nil, fmt.Errorf("wallet public key is nil")
+	}
+
+	messageBytes := message.Bytes()
+	if len(messageBytes) > 32 {
+		return nil, fmt.Errorf("message exceeds 32 bytes")
+	}
+	messageDigest := make([]byte, 32)
+	copy(messageDigest[32-len(messageBytes):], messageBytes)
+
+	serializedSignature := signature.Serialize()
+	compactSignature := make([]byte, 1+len(serializedSignature))
+	copy(compactSignature[1:], serializedSignature[:])
+
+	for recoveryID := byte(0); recoveryID < 4; recoveryID++ {
+		compactSignature[0] = 27 + 4 + recoveryID
+		recoveredPublicKey, _, err := btcec.RecoverCompact(
+			btcec.S256(),
+			compactSignature,
+			messageDigest,
+		)
+		if err != nil {
+			continue
+		}
+
+		if recoveredPublicKey.X.Cmp(walletPublicKey.X) == 0 &&
+			recoveredPublicKey.Y.Cmp(walletPublicKey.Y) == 0 {
+			return &tecdsa.Signature{
+				R:          new(big.Int).SetBytes(signature.R[:]),
+				S:          new(big.Int).SetBytes(signature.S[:]),
+				RecoveryID: int8(recoveryID),
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("cannot recover wallet public key from signature")
 }
 
 // waitUntilAllDone blocks until the attempt's completion rule is met or the
@@ -385,6 +462,17 @@ func (sdm *signingDoneMessage) clone() *signingDoneMessage {
 	if sdm.signature != nil {
 		signatureCopy := *sdm.signature
 		result.signature = &signatureCopy
+	}
+	if sdm.legacySignature != nil {
+		result.legacySignature = &tecdsa.Signature{
+			RecoveryID: sdm.legacySignature.RecoveryID,
+		}
+		if sdm.legacySignature.R != nil {
+			result.legacySignature.R = new(big.Int).Set(sdm.legacySignature.R)
+		}
+		if sdm.legacySignature.S != nil {
+			result.legacySignature.S = new(big.Int).Set(sdm.legacySignature.S)
+		}
 	}
 
 	return result

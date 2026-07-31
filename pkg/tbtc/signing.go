@@ -931,6 +931,9 @@ func (se *signingExecutor) signWithTaprootMerkleRootForSessionIntentAndAuthoriza
 				se.broadcastChannel,
 				se.membershipValidator,
 			)
+			if !se.usesSchnorrSignatures() {
+				doneCheck.useLegacySignatureWireFormat(wallet.publicKey)
+			}
 
 			retryLoop := newSigningRetryLoop(
 				signingLogger,

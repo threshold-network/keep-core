@@ -3,9 +3,12 @@ package tbtc
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
+
+const frostDKGRecoveryRetryInterval = 15 * time.Second
 
 type frostDKGExecutor func(
 	context.Context,
@@ -70,8 +73,8 @@ func handleFrostDKGStarted(
 	deduplicator *deduplicator,
 	event *FrostDKGStartedEvent,
 	waitForConfirmation bool,
-) {
-	handleFrostDKGStartedWithExecutor(
+) bool {
+	return handleFrostDKGStartedWithExecutor(
 		ctx,
 		node,
 		frostChain,
@@ -90,7 +93,7 @@ func handleFrostDKGStartedWithExecutor(
 	event *FrostDKGStartedEvent,
 	waitForConfirmation bool,
 	execute frostDKGExecutor,
-) {
+) (completed bool) {
 	lease, ok := deduplicator.beginDKGStarted(event.Seed)
 	if !ok {
 		logger.Infof(
@@ -98,9 +101,8 @@ func handleFrostDKGStartedWithExecutor(
 				"being processed",
 			event.Seed,
 		)
-		return
+		return deduplicator.dkgSeedCache.Has(event.Seed.Text(16))
 	}
-	completed := false
 	defer func() { lease.finish(completed) }()
 
 	if waitForConfirmation {
@@ -115,18 +117,18 @@ func handleFrostDKGStartedWithExecutor(
 
 		if err := node.waitForBlockHeight(ctx, confirmationBlock); err != nil {
 			logger.Errorf("failed to confirm FROST DKG started event: [%v]", err)
-			return
+			return false
 		}
 		if ctx.Err() != nil {
 			logger.Errorf("stopping FROST DKG started event handling: [%v]", ctx.Err())
-			return
+			return false
 		}
 	}
 
 	dkgState, err := frostChain.GetFrostDKGState()
 	if err != nil {
 		logger.Errorf("failed to check FROST DKG state: [%v]", err)
-		return
+		return false
 	}
 	if dkgState != AwaitingResult {
 		logger.Infof(
@@ -135,8 +137,7 @@ func handleFrostDKGStartedWithExecutor(
 			event.Seed,
 			event.BlockNumber,
 		)
-		completed = true
-		return
+		return true
 	}
 
 	startBlock := uint64(0)
@@ -151,11 +152,11 @@ func handleFrostDKGStartedWithExecutor(
 	)
 	if err != nil {
 		logger.Errorf("failed to get past FROST DKG started events: [%v]", err)
-		return
+		return false
 	}
 	if len(pastEvents) == 0 {
 		logger.Errorf("no past FROST DKG started events")
-		return
+		return false
 	}
 
 	lastEvent := pastEvents[len(pastEvents)-1]
@@ -175,7 +176,7 @@ func handleFrostDKGStartedWithExecutor(
 		// failed and released its lease, this path safely becomes the retry.
 		completed = true
 		lease.finish(completed)
-		handleFrostDKGStartedWithExecutor(
+		return handleFrostDKGStartedWithExecutor(
 			ctx,
 			node,
 			frostChain,
@@ -184,7 +185,6 @@ func handleFrostDKGStartedWithExecutor(
 			waitForConfirmation,
 			execute,
 		)
-		return
 	}
 
 	memberIndexes, groupSelectionResult, err := localFrostMembership(
@@ -193,7 +193,7 @@ func handleFrostDKGStartedWithExecutor(
 	)
 	if err != nil {
 		logger.Errorf("failed to resolve FROST DKG membership: [%v]", err)
-		return
+		return false
 	}
 
 	if len(memberIndexes) == 0 {
@@ -203,11 +203,10 @@ func handleFrostDKGStartedWithExecutor(
 			lastEvent.Seed,
 			lastEvent.BlockNumber,
 		)
-		completed = true
-		return
+		return true
 	}
 
-	completed = execute(
+	return execute(
 		ctx,
 		node,
 		frostChain,
@@ -223,10 +222,66 @@ func recoverFrostDKGCoordinatorState(
 	frostChain FrostDKGChain,
 	deduplicator *deduplicator,
 ) {
+	recoverFrostDKGCoordinatorStateWithRetryInterval(
+		ctx,
+		node,
+		frostChain,
+		deduplicator,
+		frostDKGRecoveryRetryInterval,
+	)
+}
+
+func recoverFrostDKGCoordinatorStateWithRetryInterval(
+	ctx context.Context,
+	node *node,
+	frostChain FrostDKGChain,
+	deduplicator *deduplicator,
+	retryInterval time.Duration,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		if recoverFrostDKGCoordinatorStateOnce(
+			ctx,
+			node,
+			frostChain,
+			deduplicator,
+		) {
+			return
+		}
+
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+// recoverFrostDKGCoordinatorStateOnce returns true when recovery reached a
+// terminal on-chain state or successfully handed the active state to its
+// handler. It returns false for retryable reads and handler failures.
+func recoverFrostDKGCoordinatorStateOnce(
+	ctx context.Context,
+	node *node,
+	frostChain FrostDKGChain,
+	deduplicator *deduplicator,
+) bool {
 	state, err := frostChain.GetFrostDKGState()
 	if err != nil {
 		logger.Errorf("failed to recover FROST DKG state: [%v]", err)
-		return
+		return false
 	}
 
 	switch state {
@@ -234,7 +289,7 @@ func recoverFrostDKGCoordinatorState(
 		startBlock, err := frostDKGRecoveryStartBlock(node, frostChain)
 		if err != nil {
 			logger.Errorf("failed to resolve FROST DKG recovery start block: [%v]", err)
-			return
+			return false
 		}
 
 		events, err := frostChain.PastFrostDKGStartedEvents(
@@ -242,14 +297,14 @@ func recoverFrostDKGCoordinatorState(
 		)
 		if err != nil {
 			logger.Errorf("failed to recover past FROST DKG started events: [%v]", err)
-			return
+			return false
 		}
 		if len(events) == 0 {
 			logger.Warnf("FROST DKG state is AwaitingResult but no DkgStarted event was found")
-			return
+			return false
 		}
 
-		handleFrostDKGStarted(
+		return handleFrostDKGStarted(
 			ctx,
 			node,
 			frostChain,
@@ -262,7 +317,7 @@ func recoverFrostDKGCoordinatorState(
 		startBlock, err := frostDKGRecoveryStartBlock(node, frostChain)
 		if err != nil {
 			logger.Errorf("failed to resolve FROST DKG recovery start block: [%v]", err)
-			return
+			return false
 		}
 
 		events, err := frostChain.PastFrostDKGResultSubmittedEvents(
@@ -270,14 +325,14 @@ func recoverFrostDKGCoordinatorState(
 		)
 		if err != nil {
 			logger.Errorf("failed to recover past FROST DKG result submissions: [%v]", err)
-			return
+			return false
 		}
 		if len(events) == 0 {
 			logger.Warnf("FROST DKG state is Challenge but no result submission was found")
-			return
+			return false
 		}
 
-		handleFrostDKGResultSubmitted(
+		return handleFrostDKGResultSubmitted(
 			ctx,
 			node,
 			frostChain,
@@ -285,6 +340,8 @@ func recoverFrostDKGCoordinatorState(
 			events[len(events)-1],
 		)
 	}
+
+	return true
 }
 
 func handleFrostDKGResultSubmitted(
@@ -293,7 +350,7 @@ func handleFrostDKGResultSubmitted(
 	frostChain FrostDKGChain,
 	deduplicator *deduplicator,
 	event *FrostDKGResultSubmittedEvent,
-) {
+) (completed bool) {
 	lease, ok := deduplicator.beginDKGResultSubmitted(
 		event.Seed,
 		event.ResultHash,
@@ -307,9 +364,14 @@ func handleFrostDKGResultSubmitted(
 			event.Seed,
 			event.BlockNumber,
 		)
-		return
+		return deduplicator.dkgResultHashCache.Has(
+			dkgResultSubmittedCacheKey(
+				event.Seed,
+				event.ResultHash,
+				event.BlockNumber,
+			),
+		)
 	}
-	completed := false
 	defer func() { lease.finish(completed) }()
 
 	valid, reason, err := frostChain.IsFrostDKGResultValid(event.Result)
@@ -319,7 +381,7 @@ func handleFrostDKGResultSubmitted(
 			event.ResultHash,
 			err,
 		)
-		return
+		return false
 	}
 
 	if !valid {
@@ -328,14 +390,13 @@ func handleFrostDKGResultSubmitted(
 			event.ResultHash,
 			reason,
 		)
-		completed = challengeInvalidFrostDKGResult(ctx, node, frostChain, event)
-		return
+		return challengeInvalidFrostDKGResult(ctx, node, frostChain, event)
 	}
 
 	memberIndexes, _, err := localFrostMembership(node, frostChain)
 	if err != nil {
 		logger.Errorf("failed to resolve local FROST DKG membership: [%v]", err)
-		return
+		return false
 	}
 	if len(memberIndexes) == 0 {
 		logger.Infof(
@@ -343,22 +404,21 @@ func handleFrostDKGResultSubmitted(
 				"selected group and will not approve",
 			event.ResultHash,
 		)
-		completed = true
-		return
+		return true
 	}
 
 	params, err := frostChain.FrostDKGParameters()
 	if err != nil {
 		logger.Errorf("failed to get FROST DKG parameters: [%v]", err)
-		return
+		return false
 	}
 	if params == nil {
 		logger.Errorf("FROST DKG parameters are nil")
-		return
+		return false
 	}
 	if ctx.Err() != nil {
 		logger.Errorf("stopping FROST DKG result handling: [%v]", ctx.Err())
-		return
+		return false
 	}
 
 	challengePeriodEndBlock := event.BlockNumber + params.ChallengePeriodBlocks
@@ -385,7 +445,7 @@ func handleFrostDKGResultSubmitted(
 			approvalBlock,
 		)
 	}
-	completed = true
+	return true
 }
 
 func challengeInvalidFrostDKGResult(

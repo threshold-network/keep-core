@@ -1,14 +1,17 @@
 package tbtc
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/sha256"
 	"encoding/hex"
 	"math/big"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 
 	fuzz "github.com/google/gofuzz"
@@ -19,6 +22,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/internal/pbutils"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
+	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 func TestSignerMarshalling(t *testing.T) {
@@ -94,6 +98,116 @@ func TestSigningDoneMessage_MarshalingRoundtrip(t *testing.T) {
 
 	if !reflect.DeepEqual(msg, unmarshaled) {
 		t.Fatalf("unexpected content of unmarshaled message")
+	}
+
+	marshaled, err := msg.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pbMsg := &pb.SigningDoneMessage{}
+	if err := proto.Unmarshal(marshaled, pbMsg); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(pbMsg.Signature, []byte(frostSigningDoneSignaturePrefix)) {
+		t.Fatal("native FROST signature is missing its wire-format version")
+	}
+}
+
+func TestSigningDoneMessage_LegacyWireCompatibility(t *testing.T) {
+	messageDigest := sha256.Sum256([]byte("legacy signing done compatibility"))
+	privateKey, publicKey := btcec.PrivKeyFromBytes(
+		btcec.S256(),
+		bytes.Repeat([]byte{0x01}, 32),
+	)
+	compactSignature, err := btcec.SignCompact(
+		btcec.S256(),
+		privateKey,
+		messageDigest[:],
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	legacySignature := &tecdsa.Signature{
+		R: new(big.Int).SetBytes(compactSignature[1:33]),
+		S: new(big.Int).SetBytes(compactSignature[33:]),
+		RecoveryID: int8(
+			(compactSignature[0] - 27) &^ byte(4),
+		),
+	}
+	legacySignatureBytes, err := legacySignature.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldWireMessage := &pb.SigningDoneMessage{
+		SenderID:      10,
+		Message:       messageDigest[:],
+		AttemptNumber: 2,
+		Signature:     legacySignatureBytes,
+		EndBlock:      4500,
+	}
+	oldWire, err := proto.Marshal(oldWireMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decoded := &signingDoneMessage{}
+	if err := decoded.Unmarshal(oldWire); err != nil {
+		t.Fatalf("new peer rejected legacy signing done message: [%v]", err)
+	}
+	if decoded.legacySignature == nil ||
+		!legacySignature.Equals(decoded.legacySignature) {
+		t.Fatal("legacy signature was not preserved")
+	}
+
+	reencoded, err := decoded.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(oldWire, reencoded) {
+		t.Fatal("legacy signing done wire format changed after roundtrip")
+	}
+
+	recoveredLegacySignature, err := legacySigningDoneSignature(
+		new(big.Int).SetBytes(messageDigest[:]),
+		decoded.signature,
+		publicKey.ToECDSA(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !legacySignature.Equals(recoveredLegacySignature) {
+		t.Fatalf(
+			"new peer did not reproduce the legacy signature\nexpected: [%v]\nactual:   [%v]",
+			legacySignature,
+			recoveredLegacySignature,
+		)
+	}
+
+	newPeerMessage := &signingDoneMessage{
+		senderID:        10,
+		message:         new(big.Int).SetBytes(messageDigest[:]),
+		attemptNumber:   2,
+		signature:       decoded.signature,
+		legacySignature: recoveredLegacySignature,
+		endBlock:        4500,
+	}
+	newPeerWire, err := newPeerMessage.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPeerPB := &pb.SigningDoneMessage{}
+	if err := proto.Unmarshal(newPeerWire, newPeerPB); err != nil {
+		t.Fatal(err)
+	}
+	oldPeerSignature := &tecdsa.Signature{}
+	if err := oldPeerSignature.Unmarshal(newPeerPB.Signature); err != nil {
+		t.Fatalf("old peer rejected new peer's legacy signature: [%v]", err)
+	}
+	if !legacySignature.Equals(oldPeerSignature) {
+		t.Fatal("new peer changed the signature observed by an old peer")
 	}
 }
 
