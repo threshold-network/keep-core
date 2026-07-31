@@ -48,7 +48,29 @@ type ReservationRoute string
 
 const (
 	ReservationRouteMigration ReservationRoute = "MIGRATION"
+	ReservationRouteRedeem    ReservationRoute = "REDEEM"
+	ReservationRouteRenew     ReservationRoute = "RENEW"
 )
+
+// CovenantAction discriminates the covenant lifecycle action a submit request
+// performs. It selects which destination/plan the request carries and which
+// transaction output the signer builds. An empty Action defaults to MIGRATION.
+type CovenantAction string
+
+const (
+	CovenantActionMigration CovenantAction = "MIGRATION"
+	CovenantActionRedeem    CovenantAction = "REDEEM"
+	CovenantActionRenew     CovenantAction = "RENEW"
+)
+
+// ResolvedAction returns the request's action, defaulting an empty value to
+// MIGRATION.
+func (r RouteSubmitRequest) ResolvedAction() CovenantAction {
+	if r.Action == "" {
+		return CovenantActionMigration
+	}
+	return r.Action
+}
 
 type ReservationStatus string
 
@@ -158,6 +180,12 @@ type DepositorTrustRoot struct {
 	Reserve   string     `json:"reserve" mapstructure:"reserve"`
 	Network   string     `json:"network" mapstructure:"network"`
 	PublicKey string     `json:"publicKey" mapstructure:"publicKey"`
+	// EthAddress optionally pins the depositor's Ethereum identity (20-byte
+	// address). When set, the v2 artifact approval's depositor signature is
+	// verified against it via ecrecover-and-compare, enabling wallet-signed
+	// (eth_signTypedData_v4) approvals. When empty, verification falls back to
+	// the secp256k1 PublicKey above.
+	EthAddress string `json:"ethAddress" mapstructure:"ethAddress"`
 }
 
 type CustodianTrustRoot struct {
@@ -214,6 +242,7 @@ type RouteSubmitRequest struct {
 	IdempotencyKey            string                            `json:"idempotencyKey"`
 	RequestType               RequestType                       `json:"requestType"`
 	Route                     TemplateID                        `json:"route"`
+	Action                    CovenantAction                    `json:"action,omitempty"`
 	Strategy                  string                            `json:"strategy"`
 	Reserve                   string                            `json:"reserve"`
 	Epoch                     uint64                            `json:"epoch"`
@@ -221,6 +250,8 @@ type RouteSubmitRequest struct {
 	ActiveOutpoint            CovenantOutpoint                  `json:"activeOutpoint"`
 	DestinationCommitmentHash string                            `json:"destinationCommitmentHash"`
 	MigrationDestination      *MigrationDestinationReservation  `json:"migrationDestination,omitempty"`
+	RedeemDestination         *RedeemDestinationReservation     `json:"redeemDestination,omitempty"`
+	RenewDestination          *RenewDestinationReservation      `json:"renewDestination,omitempty"`
 	MigrationPlanQuote        *MigrationDestinationPlanQuote    `json:"migrationPlanQuote,omitempty"`
 	MigrationTransactionPlan  *MigrationTransactionPlan         `json:"migrationTransactionPlan,omitempty"`
 	ArtifactApprovals         *ArtifactApprovalEnvelope         `json:"artifactApprovals,omitempty"`
@@ -229,6 +260,45 @@ type RouteSubmitRequest struct {
 	Artifacts                 map[RecoveryPathID]ArtifactRecord `json:"artifacts"`
 	ScriptTemplate            json.RawMessage                   `json:"scriptTemplate"`
 	Signing                   SigningRequirements               `json:"signing"`
+}
+
+// RedeemDestinationReservation is the cooperative-REDEEM destination: a payout
+// output the signer pays directly. Its commitment binds the covenant identity
+// (reserve/epoch/route/revealer/vault/network) to the payout (output scriptPubKey
+// + value), so the depositor's artifact approval authorizes exactly that payout.
+type RedeemDestinationReservation struct {
+	ReservationID             string            `json:"reservationId,omitempty"`
+	Reserve                   string            `json:"reserve"`
+	Epoch                     uint64            `json:"epoch"`
+	Route                     ReservationRoute  `json:"route"`
+	Revealer                  string            `json:"revealer"`
+	Vault                     string            `json:"vault"`
+	Network                   string            `json:"network"`
+	Status                    ReservationStatus `json:"status"`
+	OutputScript              string            `json:"outputScript"`
+	OutputScriptHash          string            `json:"outputScriptHash"`
+	OutputValueSats           uint64            `json:"outputValueSats"`
+	DestinationCommitmentHash string            `json:"destinationCommitmentHash"`
+}
+
+// RenewDestinationReservation is the cooperative-RENEW destination: the value is
+// re-locked into the next-epoch covenant output. Its commitment binds the
+// covenant identity to the next covenant scriptPubKey, its maturity height, and
+// the re-locked value.
+type RenewDestinationReservation struct {
+	ReservationID             string            `json:"reservationId,omitempty"`
+	Reserve                   string            `json:"reserve"`
+	Epoch                     uint64            `json:"epoch"`
+	Route                     ReservationRoute  `json:"route"`
+	Revealer                  string            `json:"revealer"`
+	Vault                     string            `json:"vault"`
+	Network                   string            `json:"network"`
+	Status                    ReservationStatus `json:"status"`
+	NextCovenantScript        string            `json:"nextCovenantScript"`
+	NextCovenantScriptHash    string            `json:"nextCovenantScriptHash"`
+	NextMaturityHeight        uint64            `json:"nextMaturityHeight"`
+	OutputValueSats           uint64            `json:"outputValueSats"`
+	DestinationCommitmentHash string            `json:"destinationCommitmentHash"`
 }
 
 type SignerSubmitInput struct {
@@ -255,23 +325,32 @@ type StepResult struct {
 }
 
 type Job struct {
-	RequestID       string             `json:"requestId"`
-	RouteRequestID  string             `json:"routeRequestId"`
-	Route           TemplateID         `json:"route"`
-	IdempotencyKey  string             `json:"idempotencyKey"`
-	FacadeRequestID string             `json:"facadeRequestId"`
-	RequestDigest   string             `json:"requestDigest"`
-	State           JobState           `json:"state"`
-	Detail          string             `json:"detail,omitempty"`
-	Reason          FailureReason      `json:"reason,omitempty"`
-	CreatedAt       string             `json:"createdAt"`
-	UpdatedAt       string             `json:"updatedAt"`
-	CompletedAt     string             `json:"completedAt,omitempty"`
-	FailedAt        string             `json:"failedAt,omitempty"`
-	Request         RouteSubmitRequest `json:"request"`
-	PSBTHash        string             `json:"psbtHash,omitempty"`
-	TransactionHex  string             `json:"transactionHex,omitempty"`
-	Handoff         map[string]any     `json:"handoff,omitempty"`
+	RequestID       string     `json:"requestId"`
+	RouteRequestID  string     `json:"routeRequestId"`
+	Route           TemplateID `json:"route"`
+	IdempotencyKey  string     `json:"idempotencyKey"`
+	FacadeRequestID string     `json:"facadeRequestId"`
+	RequestDigest   string     `json:"requestDigest"`
+	// DepositorEthAddress is the depositor's ETH identity resolved from
+	// depositorTrustRoots at submit time, when one was configured for this
+	// request's trust-root scope; empty means the depositor's artifact
+	// approval was (and continues to be) verified against the secp256k1
+	// script-template key instead. Poll re-validation is policy-independent
+	// (it must not depend on depositorTrustRoots possibly having changed
+	// since submit), so it reuses this pinned snapshot rather than
+	// re-resolving trust roots on every poll.
+	DepositorEthAddress string             `json:"depositorEthAddress,omitempty"`
+	State               JobState           `json:"state"`
+	Detail              string             `json:"detail,omitempty"`
+	Reason              FailureReason      `json:"reason,omitempty"`
+	CreatedAt           string             `json:"createdAt"`
+	UpdatedAt           string             `json:"updatedAt"`
+	CompletedAt         string             `json:"completedAt,omitempty"`
+	FailedAt            string             `json:"failedAt,omitempty"`
+	Request             RouteSubmitRequest `json:"request"`
+	PSBTHash            string             `json:"psbtHash,omitempty"`
+	TransactionHex      string             `json:"transactionHex,omitempty"`
+	Handoff             map[string]any     `json:"handoff,omitempty"`
 }
 
 type SelfV1Template struct {

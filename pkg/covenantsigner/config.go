@@ -49,4 +49,13 @@ type Config struct {
 	// When set, the store acquires an exclusive file lock to prevent concurrent
 	// process corruption. When empty, file locking is skipped.
 	DataDir string `mapstructure:"dataDir"`
+	// EIP712ChainID pins the chainId of the EIP-712 domain used to wrap the v2
+	// artifact approval digest. It must equal the chain the depositor's wallet
+	// signs on (eth_signTypedData_v4 enforces the active chain matches). Set
+	// this to the covenant's Ethereum chain (e.g. 1 mainnet, 11155111 Sepolia).
+	EIP712ChainID uint64 `mapstructure:"eip712ChainId"`
+	// EIP712Salt optionally overrides the EIP-712 domain salt (32-byte hex).
+	// When empty, a fixed program-namespace salt is used. It must match the
+	// client (wallet / covenant-manager / dashboard) domain construction.
+	EIP712Salt string `mapstructure:"eip712Salt"`
 }

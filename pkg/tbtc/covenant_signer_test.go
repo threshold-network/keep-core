@@ -83,7 +83,7 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0, true),
+		newCovenantSignerEngine(node, 0, true, testEIP712ChainID, testEIP712Salt),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -330,7 +330,7 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0, true),
+		newCovenantSignerEngine(node, 0, true, testEIP712ChainID, testEIP712Salt),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -629,7 +629,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsInvalidBeta(t *testing.T) {
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0, true),
+		newCovenantSignerEngine(node, 0, true, testEIP712ChainID, testEIP712Salt),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -745,7 +745,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) 
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0, true),
+		newCovenantSignerEngine(node, 0, true, testEIP712ChainID, testEIP712Salt),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -891,7 +891,7 @@ func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0, true),
+		newCovenantSignerEngine(node, 0, true, testEIP712ChainID, testEIP712Salt),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1144,7 +1144,7 @@ func TestCovenantSignerEngine_OnSubmitFailsClosedWithoutBridgeFraudDefense(t *te
 
 	// Construct the engine with the default (fail-closed) configuration: the
 	// bridge covenant fraud-defense path is not confirmed deployed.
-	engine := newCovenantSignerEngine(node, 0, false)
+	engine := newCovenantSignerEngine(node, 0, false, testEIP712ChainID, testEIP712Salt)
 
 	for _, route := range []covenantsigner.TemplateID{
 		covenantsigner.TemplateSelfV1,
@@ -1367,6 +1367,17 @@ var testArtifactApprovalTypeHash = crypto.Keccak256Hash([]byte(
 		"bytes32 planCommitmentHash)",
 ))
 
+var testEIP712DomainTypeHash = crypto.Keccak256Hash([]byte(
+	"EIP712Domain(string name,string version,uint256 chainId,bytes32 salt)",
+))
+
+// testEIP712ChainID and testEIP712Salt are the zero EIP-712 domain used across
+// tbtc covenant tests, matching engines constructed with (0, zero salt).
+var (
+	testEIP712ChainID uint64
+	testEIP712Salt    [32]byte
+)
+
 func testArtifactApprovalDigest(
 	t *testing.T,
 	payload covenantsigner.ArtifactApprovalPayload,
@@ -1421,8 +1432,25 @@ func testArtifactApprovalDigest(
 	copy(encoded[96:128], scriptTemplateIdentifier[:])
 	copy(encoded[128:160], destinationCommitmentHash[:])
 	copy(encoded[160:192], planCommitmentHash[:])
+	structHash := crypto.Keccak256Hash(encoded)
 
-	digest := crypto.Keccak256Hash(encoded)
+	// Domain-wrap the struct hash: keccak256(0x1901 ‖ domainSeparator ‖ structHash).
+	var chainIDWord [32]byte
+	binary.BigEndian.PutUint64(chainIDWord[24:], testEIP712ChainID)
+	domainEncoded := make([]byte, 32*5)
+	copy(domainEncoded[0:32], testEIP712DomainTypeHash.Bytes())
+	copy(domainEncoded[32:64], crypto.Keccak256Hash([]byte("tBTC Covenant Artifact Approval")).Bytes())
+	copy(domainEncoded[64:96], crypto.Keccak256Hash([]byte("2")).Bytes())
+	copy(domainEncoded[96:128], chainIDWord[:])
+	copy(domainEncoded[128:160], testEIP712Salt[:])
+	domainSeparator := crypto.Keccak256Hash(domainEncoded)
+
+	prefixed := make([]byte, 0, 2+32+32)
+	prefixed = append(prefixed, 0x19, 0x01)
+	prefixed = append(prefixed, domainSeparator.Bytes()...)
+	prefixed = append(prefixed, structHash.Bytes()...)
+
+	digest := crypto.Keccak256Hash(prefixed)
 	return digest.Bytes()
 }
 
@@ -1452,7 +1480,7 @@ func applyTestArtifactApprovals(
 	t.Helper()
 
 	payload := covenantsigner.ArtifactApprovalPayload{
-		ApprovalVersion:           1,
+		ApprovalVersion:           2,
 		Route:                     request.Route,
 		ScriptTemplateID:          request.Route,
 		DestinationCommitmentHash: request.DestinationCommitmentHash,
@@ -1587,7 +1615,7 @@ func TestCovenantSignerEngine_SubmitRejectsUnsupportedRoute(t *testing.T) {
 func TestCovenantSignerEngine_CurrentBlockHeightUsesNodeHostChain(t *testing.T) {
 	node, _, _ := setupCovenantSignerTestNode(t)
 
-	engine := newCovenantSignerEngine(node, 0, true)
+	engine := newCovenantSignerEngine(node, 0, true, testEIP712ChainID, testEIP712Salt)
 	cse, ok := engine.(*covenantSignerEngine)
 	if !ok {
 		t.Fatal("expected engine to be *covenantSignerEngine")
@@ -1622,7 +1650,7 @@ func TestCovenantSignerEngine_CurrentBlockHeightUsesNodeHostChain(t *testing.T) 
 func TestNewCovenantSignerEngine_DefaultMinConfirmations(t *testing.T) {
 	node, _, _ := setupCovenantSignerTestNode(t)
 
-	engine := newCovenantSignerEngine(node, 0, true)
+	engine := newCovenantSignerEngine(node, 0, true, testEIP712ChainID, testEIP712Salt)
 
 	cse, ok := engine.(*covenantSignerEngine)
 	if !ok {
@@ -1640,7 +1668,7 @@ func TestNewCovenantSignerEngine_DefaultMinConfirmations(t *testing.T) {
 func TestNewCovenantSignerEngine_ExplicitMinConfirmations(t *testing.T) {
 	node, _, _ := setupCovenantSignerTestNode(t)
 
-	engine := newCovenantSignerEngine(node, 3, true)
+	engine := newCovenantSignerEngine(node, 3, true, testEIP712ChainID, testEIP712Salt)
 
 	cse, ok := engine.(*covenantSignerEngine)
 	if !ok {

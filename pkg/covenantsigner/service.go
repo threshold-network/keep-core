@@ -27,6 +27,8 @@ type Service struct {
 	migrationPlanQuoteTrustRoots []MigrationPlanQuoteTrustRoot
 	depositorTrustRoots          []DepositorTrustRoot
 	custodianTrustRoots          []CustodianTrustRoot
+	eip712ChainID                uint64
+	eip712Salt                   [32]byte
 }
 
 type ServiceOption func(*Service)
@@ -59,6 +61,33 @@ func WithCustodianTrustRoots(
 	return func(service *Service) {
 		service.custodianTrustRoots = cloned
 	}
+}
+
+// WithEIP712Domain pins the EIP-712 domain (chainId + salt) used to compute the
+// v2 domain-wrapped artifact approval digest. An empty saltHex falls back to the
+// default program-namespace salt. The chainId and salt must match the client
+// (wallet / covenant-manager / dashboard) domain construction.
+func WithEIP712Domain(chainID uint64, saltHex string) (ServiceOption, error) {
+	salt, err := ResolveEIP712DomainSalt(saltHex)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(service *Service) {
+		service.eip712ChainID = chainID
+		service.eip712Salt = salt
+	}, nil
+}
+
+// ResolveEIP712DomainSalt resolves the EIP-712 domain salt from its configured
+// hex form, defaulting to the fixed program-namespace salt when empty. It is the
+// single source of truth shared by the signer service and the tBTC engine so
+// both compute identical approval digests.
+func ResolveEIP712DomainSalt(saltHex string) ([32]byte, error) {
+	if trimmed := strings.TrimSpace(saltHex); trimmed != "" {
+		return decodeBytes32HexString("eip712Salt", trimmed)
+	}
+	return defaultArtifactApprovalDomainSalt, nil
 }
 
 func WithCurrentBlockProvider(engine Engine) ServiceOption {
@@ -364,6 +393,8 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 		input.Request,
 		validationOptions{
 			policyIndependentDigest: true,
+			eip712ChainID:           s.eip712ChainID,
+			eip712Salt:              s.eip712Salt,
 		},
 	)
 	if err != nil {
@@ -394,6 +425,7 @@ func (s *Service) createOrDedup(
 	input SignerSubmitInput,
 	normalizedRequest RouteSubmitRequest,
 	requestDigest string,
+	depositorEthAddress string,
 ) (*Job, *StepResult, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -431,17 +463,18 @@ func (s *Service) createOrDedup(
 	now := s.now()
 
 	job := &Job{
-		RequestID:       requestID,
-		RouteRequestID:  input.RouteRequestID,
-		Route:           route,
-		IdempotencyKey:  input.Request.IdempotencyKey,
-		FacadeRequestID: input.Request.FacadeRequestID,
-		RequestDigest:   requestDigest,
-		State:           JobStateSubmitted,
-		Detail:          "accepted for covenant signing",
-		CreatedAt:       now.Format(time.RFC3339Nano),
-		UpdatedAt:       now.Format(time.RFC3339Nano),
-		Request:         normalizedRequest,
+		RequestID:           requestID,
+		RouteRequestID:      input.RouteRequestID,
+		Route:               route,
+		IdempotencyKey:      input.Request.IdempotencyKey,
+		FacadeRequestID:     input.Request.FacadeRequestID,
+		RequestDigest:       requestDigest,
+		DepositorEthAddress: depositorEthAddress,
+		State:               JobStateSubmitted,
+		Detail:              "accepted for covenant signing",
+		CreatedAt:           now.Format(time.RFC3339Nano),
+		UpdatedAt:           now.Format(time.RFC3339Nano),
+		Request:             normalizedRequest,
 	}
 
 	if err := s.store.Put(job); err != nil {
@@ -465,6 +498,8 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		migrationPlanQuoteVerificationNow: s.now(),
 		signerApprovalVerifier:            s.signerApprovalVerifier,
 		currentBlock:                      currentBlock,
+		eip712ChainID:                     s.eip712ChainID,
+		eip712Salt:                        s.eip712Salt,
 	}
 	if err := validateSubmitInput(route, input, submitValidationOptions); err != nil {
 		return StepResult{}, err
@@ -477,6 +512,8 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 			depositorTrustRoots:          s.depositorTrustRoots,
 			custodianTrustRoots:          s.custodianTrustRoots,
 			signerApprovalVerifier:       s.signerApprovalVerifier,
+			eip712ChainID:                s.eip712ChainID,
+			eip712Salt:                   s.eip712Salt,
 		},
 	)
 	if err != nil {
@@ -488,7 +525,15 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		return StepResult{}, err
 	}
 
-	job, existingResult, err := s.createOrDedup(route, input, normalizedRequest, requestDigest)
+	// Pin the depositor's ETH identity (if any) to the durable job record now,
+	// at submit time, using the exact same resolution validateSubmitInput just
+	// used to decide whether this request's approval verified. Poll's
+	// re-validation is policy-independent (see policyIndependentDigest) and
+	// must not re-resolve depositorTrustRoots - which could change after
+	// submit - so it reuses this pinned snapshot instead.
+	depositorEthAddress := resolveExpectedDepositorEthAddress(input.Request, s.depositorTrustRoots)
+
+	job, existingResult, err := s.createOrDedup(route, input, normalizedRequest, requestDigest, depositorEthAddress)
 	if err != nil {
 		return StepResult{}, err
 	}
@@ -581,12 +626,30 @@ func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollIn
 	if err != nil {
 		return StepResult{}, err
 	}
+
+	// Look up the depositor ETH address pinned on the job at submit time, if
+	// any, so the signature re-verification below can use it. This must come
+	// from the durable job record rather than from live depositorTrustRoots
+	// config: policyIndependentDigest re-validation is deliberately isolated
+	// from config that could have changed since submit, and unlike the
+	// secp256k1 depositor key, the ETH identity has no equivalent field
+	// embedded in the resubmitted request for Poll to read back directly.
+	var pinnedDepositorEthAddress string
+	if storedJob, ok, err := s.store.GetByRequestID(input.RequestID); err != nil {
+		return StepResult{}, err
+	} else if ok && storedJob.Route == route && storedJob.RouteRequestID == input.RouteRequestID {
+		pinnedDepositorEthAddress = storedJob.DepositorEthAddress
+	}
+
 	if err := validatePollInput(
 		route,
 		input,
 		validationOptions{
-			policyIndependentDigest: true,
-			currentBlock:            currentBlock,
+			policyIndependentDigest:   true,
+			currentBlock:              currentBlock,
+			pinnedDepositorEthAddress: pinnedDepositorEthAddress,
+			eip712ChainID:             s.eip712ChainID,
+			eip712Salt:                s.eip712Salt,
 		},
 	); err != nil {
 		return StepResult{}, err

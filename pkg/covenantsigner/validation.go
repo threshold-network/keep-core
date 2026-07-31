@@ -16,10 +16,14 @@ import (
 )
 
 const (
-	canonicalCovenantInputSequence     uint32 = 0xFFFFFFFD
-	canonicalAnchorValueSats           uint64 = 330
-	migrationTransactionPlanVersion    uint32 = 1
-	artifactApprovalVersion            uint32 = 1
+	canonicalCovenantInputSequence  uint32 = 0xFFFFFFFD
+	canonicalAnchorValueSats        uint64 = 330
+	migrationTransactionPlanVersion uint32 = 1
+	// artifactApprovalVersion and signerApprovalCertificateVersion version two
+	// different nested objects: the EIP-712 domain-wrapped artifact approval and
+	// the threshold-signed signer approval certificate respectively. They are
+	// bumped independently; neither value supersedes the other.
+	artifactApprovalVersion            uint32 = 2
 	signerApprovalCertificateVersion   uint32 = 2
 	migrationPlanQuoteVersion          uint32 = 1
 	migrationPlanQuoteSignatureVersion uint32 = 1
@@ -30,6 +34,13 @@ const (
 	migrationPlanQuoteSigningDomain      = "migration-plan-quote-v1:"
 	signerApprovalSignatureAlgorithm     = "tecdsa-secp256k1"
 	covenantSignerRequestDigestDomain    = "covenant-signer-request-v1:"
+	// artifactApprovalDomainName and artifactApprovalDomainVersion are the
+	// EIP-712 domain identity for the v2 domain-wrapped artifact approval. They
+	// are part of the signed contract and must match the values a wallet's
+	// eth_signTypedData_v4 domain carries; keep them aligned with the client
+	// (covenant-manager / dashboard / verification kit) domain construction.
+	artifactApprovalDomainName    = "tBTC Covenant Artifact Approval"
+	artifactApprovalDomainVersion = "2"
 )
 
 var artifactApprovalTypeHash = crypto.Keccak256Hash([]byte(
@@ -39,6 +50,27 @@ var artifactApprovalTypeHash = crypto.Keccak256Hash([]byte(
 		"bytes32 scriptTemplateId," +
 		"bytes32 destinationCommitmentHash," +
 		"bytes32 planCommitmentHash)",
+))
+
+// eip712DomainTypeHash is the EIP-712 typehash of the domain separator used to
+// wrap the artifact approval struct hash. The domain omits verifyingContract
+// (the approval is verified off-chain, not by a contract) and instead pins a
+// program salt alongside name, version, and chainId.
+var eip712DomainTypeHash = crypto.Keccak256Hash([]byte(
+	"EIP712Domain(string name,string version,uint256 chainId,bytes32 salt)",
+))
+
+// defaultArtifactApprovalDomainSalt is the fixed program-namespace salt used
+// when the signer config does not pin an explicit salt. This salt does NOT by
+// itself separate approvals across covenant deployments: scriptTemplateId only
+// carries the route type (qc_v1/self_v1), which is identical across deployments,
+// and the domain omits verifyingContract. Cross-deployment separation instead
+// comes from the globally-unique reserve/vault bound inside
+// destinationCommitmentHash plus the signer's trust-root scoping. Operators
+// running multiple deployments on the same chainId that could share a reserve
+// should pin a per-deployment eip712Salt to guarantee domain separation.
+var defaultArtifactApprovalDomainSalt = [32]byte(crypto.Keccak256Hash(
+	[]byte("tBTC Covenant Artifact Approval Domain v2"),
 ))
 
 var canonicalTimestampPattern = regexp.MustCompile(
@@ -80,6 +112,21 @@ type validationOptions struct {
 	signerApprovalVerifier            SignerApprovalVerifier
 	policyIndependentDigest           bool
 	currentBlock                      *uint64
+	// pinnedDepositorEthAddress, when non-empty, is used directly as the
+	// depositor's ETH identity for artifact-approval verification instead of
+	// resolving it from depositorTrustRoots. Poll's re-validation sets this
+	// from the job's DepositorEthAddress (resolved once at submit time and
+	// persisted on the durable job record) because policyIndependentDigest
+	// re-validation must not depend on depositorTrustRoots possibly having
+	// changed since submit, and the ETH identity - unlike the secp256k1
+	// depositor key - has no equivalent field embedded in the request itself
+	// for Poll to fall back to reading directly.
+	pinnedDepositorEthAddress string
+	// eip712ChainID and eip712Salt define the EIP-712 domain the artifact
+	// approval digest is wrapped with. They must be identical across Submit,
+	// Poll, and normalization so recomputed digests match stored ones.
+	eip712ChainID uint64
+	eip712Salt    [32]byte
 }
 
 // requestDigest accepts raw requests because Poll validates equivalence against
@@ -210,6 +257,8 @@ func normalizeRouteSubmitRequest(
 	normalizedArtifactApprovals, normalizedSignerApproval, normalizedArtifactSignatures, err := normalizeArtifactApprovals(
 		request.Route,
 		request,
+		options.eip712ChainID,
+		options.eip712Salt,
 	)
 	if err != nil {
 		return RouteSubmitRequest{}, err
@@ -220,12 +269,19 @@ func normalizeRouteSubmitRequest(
 		return RouteSubmitRequest{}, err
 	}
 
-	normalizedMigrationPlanQuote, err := normalizeMigrationPlanQuote(
-		request,
-		options,
-	)
-	if err != nil {
-		return RouteSubmitRequest{}, err
+	// The migration plan quote authority path applies only to MIGRATION; REDEEM
+	// and RENEW requests carry no plan-quote field and must default to nil
+	// instead of being rejected by a deployment that also verifies MIGRATION
+	// plan quotes (mirrors the gating in validateCommonRequest).
+	var normalizedMigrationPlanQuote *MigrationDestinationPlanQuote
+	if request.ResolvedAction() == CovenantActionMigration {
+		normalizedMigrationPlanQuote, err = normalizeMigrationPlanQuote(
+			request,
+			options,
+		)
+		if err != nil {
+			return RouteSubmitRequest{}, err
+		}
 	}
 	normalizedRequestType, err := normalizeRequestType(request.Route, request.RequestType)
 	if err != nil {
@@ -251,8 +307,11 @@ func normalizeRouteSubmitRequest(
 				return normalizeLowerHex(request.ActiveOutpoint.ScriptHash)
 			}(),
 		},
+		Action:                    request.Action,
 		DestinationCommitmentHash: normalizeLowerHex(request.DestinationCommitmentHash),
 		MigrationDestination:      normalizeMigrationDestination(request.MigrationDestination),
+		RedeemDestination:         normalizeRedeemDestination(request.RedeemDestination),
+		RenewDestination:          normalizeRenewDestination(request.RenewDestination),
 		MigrationPlanQuote:        normalizedMigrationPlanQuote,
 		MigrationTransactionPlan:  normalizeMigrationTransactionPlan(request.MigrationTransactionPlan),
 		ArtifactApprovals:         normalizedArtifactApprovals,
@@ -313,20 +372,23 @@ func validateCommonRequest(
 	if err := validateHexString("request.destinationCommitmentHash", request.DestinationCommitmentHash); err != nil {
 		return err
 	}
-	// This intentionally creates a deployment ordering constraint: the
-	// orchestrator must supply the concrete migration destination artifact
-	// before this signer version can accept requests.
-	if err := validateMigrationDestination(request, request.MigrationDestination); err != nil {
+	// Validate the destination for the request's action (MIGRATION/REDEEM/RENEW).
+	// For MIGRATION this preserves the deployment ordering constraint: the
+	// orchestrator must supply the concrete destination artifact before this
+	// signer version can accept requests.
+	if err := validateActionDestination(request); err != nil {
 		return err
 	}
-	// This intentionally creates the next deployment ordering constraint: the
-	// orchestrator must supply the canonical migration transaction plan before
-	// this signer version can accept requests.
+	// The migration transaction plan carries the shared output/anchor/fee/
+	// sequence/locktime parameters used to build the transaction for every action.
 	if err := validateMigrationTransactionPlan(request, request.MigrationTransactionPlan); err != nil {
 		return err
 	}
-	if _, err := normalizeMigrationPlanQuote(request, options); err != nil {
-		return err
+	// The migration plan quote authority path applies only to MIGRATION.
+	if request.ResolvedAction() == CovenantActionMigration {
+		if _, err := normalizeMigrationPlanQuote(request, options); err != nil {
+			return err
+		}
 	}
 	if request.ArtifactApprovals == nil {
 		return &inputError{"request.artifactApprovals is required"}
@@ -336,7 +398,7 @@ func validateCommonRequest(
 			"request.signerApproval is required when the signer approval verifier is configured",
 		}
 	}
-	if err := validateArtifactApprovals(route, request); err != nil {
+	if err := validateArtifactApprovals(route, request, options.eip712ChainID, options.eip712Salt); err != nil {
 		return err
 	}
 
@@ -360,7 +422,8 @@ func validateCommonRequest(
 		}
 
 		depositorPublicKey := template.DepositorPublicKey
-		if len(options.depositorTrustRoots) > 0 && !options.policyIndependentDigest {
+		depositorEthAddress := options.pinnedDepositorEthAddress
+		if depositorEthAddress == "" && len(options.depositorTrustRoots) > 0 && !options.policyIndependentDigest {
 			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
 				request,
 				options.depositorTrustRoots,
@@ -376,12 +439,19 @@ func validateCommonRequest(
 				}
 			}
 			depositorPublicKey = expectedDepositorPublicKey
+			depositorEthAddress = resolveExpectedDepositorEthAddress(
+				request,
+				options.depositorTrustRoots,
+			)
 		}
 
 		if err := validateArtifactApprovalAuthenticity(
 			request,
 			depositorPublicKey,
+			depositorEthAddress,
 			"",
+			options.eip712ChainID,
+			options.eip712Salt,
 		); err != nil {
 			return err
 		}
@@ -407,7 +477,8 @@ func validateCommonRequest(
 		}
 
 		depositorPublicKey := template.DepositorPublicKey
-		if len(options.depositorTrustRoots) > 0 && !options.policyIndependentDigest {
+		depositorEthAddress := options.pinnedDepositorEthAddress
+		if depositorEthAddress == "" && len(options.depositorTrustRoots) > 0 && !options.policyIndependentDigest {
 			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
 				request,
 				options.depositorTrustRoots,
@@ -423,6 +494,10 @@ func validateCommonRequest(
 				}
 			}
 			depositorPublicKey = expectedDepositorPublicKey
+			depositorEthAddress = resolveExpectedDepositorEthAddress(
+				request,
+				options.depositorTrustRoots,
+			)
 		}
 
 		custodianPublicKey := template.CustodianPublicKey
@@ -447,7 +522,10 @@ func validateCommonRequest(
 		if err := validateArtifactApprovalAuthenticity(
 			request,
 			depositorPublicKey,
+			depositorEthAddress,
 			custodianPublicKey,
+			options.eip712ChainID,
+			options.eip712Salt,
 		); err != nil {
 			return err
 		}

@@ -145,7 +145,7 @@ func normalizeScopedTrustRoots[T any](
 func normalizeDepositorTrustRoots(
 	trustRoots []DepositorTrustRoot,
 ) ([]DepositorTrustRoot, error) {
-	return normalizeScopedTrustRoots(
+	normalized, err := normalizeScopedTrustRoots(
 		"depositorTrustRoots",
 		trustRoots,
 		func(t DepositorTrustRoot) (TemplateID, string, string, string) {
@@ -158,6 +158,74 @@ func normalizeDepositorTrustRoots(
 			}
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
+
+	// normalizeScopedTrustRoots preserves input order, so entries are
+	// index-aligned with trustRoots. Attach the optional pinned depositor ETH
+	// address (enables ecrecover-based v2 approval verification).
+	for i := range normalized {
+		ethAddress := strings.TrimSpace(trustRoots[i].EthAddress)
+		if ethAddress == "" {
+			continue
+		}
+		normalizedEth, err := normalizeEthAddress(
+			fmt.Sprintf("depositorTrustRoots[%d].ethAddress", i),
+			ethAddress,
+		)
+		if err != nil {
+			return nil, err
+		}
+		normalized[i].EthAddress = normalizedEth
+	}
+
+	// Prevent a silent ETH->secp verification downgrade: within a single
+	// (route, reserve) pair, ethAddress must be set on every network entry or on
+	// none of them. A mix would let a request steer verification to the
+	// secp-only sibling scope through its (partially caller-influenced) network
+	// value, bypassing an operator's intended wallet-signed enforcement.
+	ethPresenceByPair := make(map[string]bool, len(normalized))
+	for i := range normalized {
+		pairKey := string(normalized[i].Route) + "|" + normalized[i].Reserve
+		hasEth := normalized[i].EthAddress != ""
+		if existing, ok := ethPresenceByPair[pairKey]; ok {
+			if existing != hasEth {
+				return nil, &inputError{
+					fmt.Sprintf(
+						"depositorTrustRoots for route %s reserve %s must set ethAddress on all network entries or on none",
+						normalized[i].Route,
+						normalized[i].Reserve,
+					),
+				}
+			}
+		} else {
+			ethPresenceByPair[pairKey] = hasEth
+		}
+	}
+
+	return normalized, nil
+}
+
+// normalizeEthAddress validates a 20-byte hex Ethereum address and returns it in
+// lowercase 0x-prefixed form.
+func normalizeEthAddress(name, value string) (string, error) {
+	trimmed := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), "0x")
+	raw, err := hex.DecodeString(trimmed)
+	if err != nil || len(raw) != 20 {
+		return "", &inputError{
+			fmt.Sprintf("%s must be a 20-byte hex ETH address", name),
+		}
+	}
+	// Reject the zero address: an operator misconfiguring it would make the
+	// ecrecover-based approval check compare against 0x0, silently weakening the
+	// depositor binding to whatever recovers to the zero address.
+	if strings.Trim(trimmed, "0") == "" {
+		return "", &inputError{
+			fmt.Sprintf("%s must not be the zero ETH address", name),
+		}
+	}
+	return "0x" + trimmed, nil
 }
 
 func normalizeCustodianTrustRoots(
@@ -179,12 +247,19 @@ func normalizeCustodianTrustRoots(
 }
 
 func trustRootLookupScope(request RouteSubmitRequest) (TemplateID, string, string) {
+	// The trust-root scope network comes from the destination reservation for the
+	// request's action (migration/redeem/renew).
 	network := ""
-	if request.MigrationDestination != nil {
-		network = strings.ToLower(strings.TrimSpace(request.MigrationDestination.Network))
+	switch {
+	case request.MigrationDestination != nil:
+		network = request.MigrationDestination.Network
+	case request.RedeemDestination != nil:
+		network = request.RedeemDestination.Network
+	case request.RenewDestination != nil:
+		network = request.RenewDestination.Network
 	}
 
-	return request.Route, normalizeLowerHex(request.Reserve), network
+	return request.Route, normalizeLowerHex(request.Reserve), strings.ToLower(strings.TrimSpace(network))
 }
 
 func migrationPlanQuoteSigningPayloadBytes(

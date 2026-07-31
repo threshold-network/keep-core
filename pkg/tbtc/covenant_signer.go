@@ -30,6 +30,11 @@ type covenantSignerEngine struct {
 	// SIGHASH_ALL signature over a covenant active UTXO is otherwise a valid,
 	// undefeatable tBTC fraud proof against the signing wallet.
 	bridgeFraudDefenseConfirmed bool
+	// eip712ChainID and eip712Salt define the EIP-712 domain used to recompute
+	// the v2 artifact approval digest during signer approval verification. They
+	// must match the covenant signer service's configured domain.
+	eip712ChainID uint64
+	eip712Salt    [32]byte
 }
 
 // Compile-time assertions that covenantSignerEngine satisfies the full
@@ -81,6 +86,8 @@ func newCovenantSignerEngine(
 	node *node,
 	minConfirmations uint,
 	bridgeFraudDefenseConfirmed bool,
+	eip712ChainID uint64,
+	eip712Salt [32]byte,
 ) covenantsigner.Engine {
 	if minConfirmations == 0 {
 		minConfirmations = defaultMinActiveOutpointConfirmations
@@ -90,6 +97,8 @@ func newCovenantSignerEngine(
 		node:                               node,
 		minimumActiveOutpointConfirmations: minConfirmations,
 		bridgeFraudDefenseConfirmed:        bridgeFraudDefenseConfirmed,
+		eip712ChainID:                      eip712ChainID,
+		eip712Salt:                         eip712Salt,
 	}
 }
 
@@ -109,6 +118,8 @@ func (cse *covenantSignerEngine) VerifySignerApproval(
 
 	expectedApprovalDigest, err := covenantsigner.ComputeArtifactApprovalDigest(
 		request.ArtifactApprovals.Payload,
+		cse.eip712ChainID,
+		cse.eip712Salt,
 	)
 	if err != nil {
 		return covenantsigner.NewInputError(
@@ -220,11 +231,22 @@ func (cse *covenantSignerEngine) VerifySignerApproval(
 }
 
 // isCovenantSigningEligibleState reports whether a wallet in the given state is
-// eligible to receive covenant signatures. Covenant migrations are only
-// expected for live wallets, so covenant signing fails closed for every other
-// state (including closed and terminated wallets that the closure path intends
-// to deauthorize). If covenant signing must be allowed for another state in the
-// future, add it here explicitly together with justification and tests.
+// eligible to receive covenant signatures. The rule is uniform across every
+// covenant action - migration, redeem, and renew: all three are only expected
+// for live wallets, so covenant signing fails closed for every other state
+// (including closed and terminated wallets that the closure path intends to
+// deauthorize).
+//
+// Redeem and renew are deliberately held to the same live-only rule rather than
+// being widened on the intuition that a cooperative payout should still be
+// possible while a wallet winds down. Nothing in a signer approval certificate
+// binds the wallet's state - the signer set hash covers only wallet identity,
+// members hash, and threshold - so a certificate issued while the wallet was
+// live stays verifiable after closure, and widening any action here makes that
+// certificate replayable against a wallet the protocol already deauthorized.
+// Allowing another action/state pair therefore requires an explicit protocol
+// decision about why certificate reuse past that point is safe; add it here
+// with that justification and matching tests.
 func isCovenantSigningEligibleState(state WalletState) bool {
 	return state == StateLive
 }
@@ -833,31 +855,75 @@ func (cse *covenantSignerEngine) buildQcV1SignerHandoff(
 	}, nil
 }
 
+// covenantDestinationOutputScript returns the destination output scriptPubKey
+// for the request's covenant action. The redeem payout script and the renew
+// next-covenant script are already output scripts and are paid directly, but a
+// migration's deposit script is not: it is wrapped into its P2WSH scriptPubKey
+// first. Validation has already recompute-and-compared each of these against the
+// action's destination commitment, so the built output is exactly what the
+// depositor's artifact approval authorized.
+func covenantDestinationOutputScript(
+	request covenantsigner.RouteSubmitRequest,
+) (bitcoin.Script, error) {
+	switch request.ResolvedAction() {
+	case covenantsigner.CovenantActionMigration:
+		if request.MigrationDestination == nil {
+			return nil, fmt.Errorf("migration destination is required")
+		}
+		script, err := decodePrefixedHex(request.MigrationDestination.DepositScript)
+		if err != nil {
+			return nil, fmt.Errorf("migration destination deposit script is invalid")
+		}
+		if len(script) == 0 {
+			return nil, fmt.Errorf("migration destination deposit script must not be empty")
+		}
+		// MigrationDestination.DepositScript is the plain tBTC deposit script, not
+		// a ready-made output script. The Bitcoin funding output must pay to its
+		// P2WSH script hash (OP_0 <sha256(depositScript)>), which is how the tBTC
+		// Bridge rebuilds and verifies the funding output in
+		// revealDepositWithExtraData. Using the plain deposit script directly as
+		// the output script would make the migration deposit unrevealable to the
+		// Bridge.
+		scriptPubKey, err := payToWitnessScriptHash(script)
+		if err != nil {
+			return nil, fmt.Errorf("cannot build migration destination locking script: %v", err)
+		}
+		return scriptPubKey, nil
+	case covenantsigner.CovenantActionRedeem:
+		if request.RedeemDestination == nil {
+			return nil, fmt.Errorf("redeem destination is required")
+		}
+		script, err := decodePrefixedHex(request.RedeemDestination.OutputScript)
+		if err != nil {
+			return nil, fmt.Errorf("redeem destination output script is invalid")
+		}
+		return script, nil
+	case covenantsigner.CovenantActionRenew:
+		if request.RenewDestination == nil {
+			return nil, fmt.Errorf("renew destination is required")
+		}
+		script, err := decodePrefixedHex(request.RenewDestination.NextCovenantScript)
+		if err != nil {
+			return nil, fmt.Errorf("renew destination next covenant script is invalid")
+		}
+		return script, nil
+	default:
+		return nil, fmt.Errorf("unsupported covenant action %q", request.ResolvedAction())
+	}
+}
+
 func (cse *covenantSignerEngine) buildCovenantTransactionBuilder(
 	request covenantsigner.RouteSubmitRequest,
 	activeUtxo *bitcoin.UnspentTransactionOutput,
 	witnessScript bitcoin.Script,
 ) (*bitcoin.TransactionBuilder, error) {
-	destinationDepositScript, err := decodePrefixedHex(request.MigrationDestination.DepositScript)
+	destinationScriptPubKey, err := covenantDestinationOutputScript(request)
 	if err != nil {
-		return nil, fmt.Errorf("migration destination deposit script is invalid")
-	}
-	if len(destinationDepositScript) == 0 {
-		return nil, fmt.Errorf("migration destination deposit script must not be empty")
-	}
-	// MigrationDestination.DepositScript is the plain tBTC deposit script, not a
-	// ready-made output script. The Bitcoin funding output must pay to its P2WSH
-	// script hash (OP_0 <sha256(depositScript)>), which is how the tBTC Bridge
-	// rebuilds and verifies the funding output in revealDepositWithExtraData.
-	// Using the plain deposit script directly as the output script would make
-	// the migration deposit unrevealable to the Bridge.
-	destinationScriptPubKey, err := payToWitnessScriptHash(destinationDepositScript)
-	if err != nil {
-		return nil, fmt.Errorf("cannot build migration destination locking script: %v", err)
+		return nil, err
 	}
 	destinationValue, err := toBitcoinOutputValue(
 		request.MigrationTransactionPlan.DestinationValueSats,
-		"migration destination value",
+		"covenant destination value",
 	)
 	if err != nil {
 		return nil, err

@@ -1,14 +1,13 @@
 {
-  "version": 1,
-  "scope": "covenant_recovery_approval_contract_v1",
+  "version": 2,
+  "scope": "covenant_recovery_approval_contract_v2",
   "vectors": {
     "qc_v1": {
-      "expectedApprovalDigest": "0xa6ffb42318a8e8b3b9669324ee5ad393133afcc9cc81044739cbaa77d5fa34c9",
       "canonicalSubmitRequest": {
         "facadeRequestId": "rf_vector_qc_v1",
         "idempotencyKey": "idem-qc-vector-v1",
-        "route": "qc_v1",
         "requestType": "reconstruct",
+        "route": "qc_v1",
         "strategy": "0x1111111111111111111111111111111111111111",
         "reserve": "0x2222222222222222222222222222222222222222",
         "epoch": 12,
@@ -45,7 +44,7 @@
         },
         "artifactApprovals": {
           "payload": {
-            "approvalVersion": 1,
+            "approvalVersion": 2,
             "route": "qc_v1",
             "scriptTemplateId": "qc_v1",
             "destinationCommitmentHash": "0x913b832b3736a29966fd53f8a733a7587b150d3dfacb1c2d54994c1d3e56cdf9",
@@ -65,12 +64,19 @@
         "signerApproval": {
           "certificateVersion": 2,
           "signatureAlgorithm": "tecdsa-secp256k1",
-          "approvalDigest": "0xa6ffb42318a8e8b3b9669324ee5ad393133afcc9cc81044739cbaa77d5fa34c9",
+          "approvalDigest": "0xb6fca0f533f54f4918502215bd82d10d06a073ca6c7c0f869cc90fb43ad0e602",
           "walletPublicKey": "0x04d140d1eedb94f53ce43e0f4d68e8e0de6d6f2a444ef98f2a0e6c0f7fca02ef7dc4cb14e7b0f7c23787c93ca4d978f312c64379f38d9f52f86d1a89f0f8572f9f",
           "signerSetHash": "0xabababababababababababababababababababababababababababababababab",
           "signature": "0x5050",
-          "activeMembers": [1, 2, 3],
-          "inactiveMembers": [4, 5],
+          "activeMembers": [
+            1,
+            2,
+            3
+          ],
+          "inactiveMembers": [
+            4,
+            5
+          ],
           "endBlock": 123
         },
         "artifactSignatures": [
@@ -92,15 +98,15 @@
           "custodianRequired": true
         }
       },
-      "expectedRequestDigest": "0x81e134d0bf0d1a7d41ec2c32d4ea555a77558f06bbe0941d0519e52a1132e28c"
+      "expectedApprovalDigest": "0xb6fca0f533f54f4918502215bd82d10d06a073ca6c7c0f869cc90fb43ad0e602",
+      "expectedRequestDigest": "0x70eba111184d4eb43a2eb9ca7a6c4219eca4a13fe63d41fce5b4e45c894953c4"
     },
     "self_v1": {
-      "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
       "canonicalSubmitRequest": {
         "facadeRequestId": "rf_vector_self_v1",
         "idempotencyKey": "idem-self-vector-v1",
-        "route": "self_v1",
         "requestType": "reconstruct",
+        "route": "self_v1",
         "strategy": "0x1111111111111111111111111111111111111111",
         "reserve": "0x2222222222222222222222222222222222222222",
         "epoch": 12,
@@ -137,7 +143,7 @@
         },
         "artifactApprovals": {
           "payload": {
-            "approvalVersion": 1,
+            "approvalVersion": 2,
             "route": "self_v1",
             "scriptTemplateId": "self_v1",
             "destinationCommitmentHash": "0x913b832b3736a29966fd53f8a733a7587b150d3dfacb1c2d54994c1d3e56cdf9",
@@ -153,12 +159,19 @@
         "signerApproval": {
           "certificateVersion": 2,
           "signatureAlgorithm": "tecdsa-secp256k1",
-          "approvalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
+          "approvalDigest": "0x76d32f60185526f68eb132094599ddaae8d592efc4eff0f2d008c5386350041d",
           "walletPublicKey": "0x04d140d1eedb94f53ce43e0f4d68e8e0de6d6f2a444ef98f2a0e6c0f7fca02ef7dc4cb14e7b0f7c23787c93ca4d978f312c64379f38d9f52f86d1a89f0f8572f9f",
           "signerSetHash": "0xabababababababababababababababababababababababababababababababab",
           "signature": "0x5050",
-          "activeMembers": [1, 2, 3],
-          "inactiveMembers": [4, 5],
+          "activeMembers": [
+            1,
+            2,
+            3
+          ],
+          "inactiveMembers": [
+            4,
+            5
+          ],
           "endBlock": 123
         },
         "artifactSignatures": [
@@ -177,15 +190,15 @@
           "custodianRequired": false
         }
       },
-      "expectedRequestDigest": "0x5eb10d5df3818f646b79f1feee1decd34949a688ca44f47c52d2a7b5d3aaf5d1"
+      "expectedApprovalDigest": "0x76d32f60185526f68eb132094599ddaae8d592efc4eff0f2d008c5386350041d",
+      "expectedRequestDigest": "0x0e043ce0fdead8dce09a75014558e12e1416c1386100b79a5bdbe227b2e1ddbc"
     },
     "self_v1_presign": {
-      "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
       "canonicalSubmitRequest": {
         "facadeRequestId": "rf_vector_self_v1_presign",
         "idempotencyKey": "idem-self-presign-vector-v1",
-        "route": "self_v1",
         "requestType": "presign_self_v1",
+        "route": "self_v1",
         "strategy": "0x1111111111111111111111111111111111111111",
         "reserve": "0x2222222222222222222222222222222222222222",
         "epoch": 12,
@@ -222,7 +235,7 @@
         },
         "artifactApprovals": {
           "payload": {
-            "approvalVersion": 1,
+            "approvalVersion": 2,
             "route": "self_v1",
             "scriptTemplateId": "self_v1",
             "destinationCommitmentHash": "0x913b832b3736a29966fd53f8a733a7587b150d3dfacb1c2d54994c1d3e56cdf9",
@@ -238,12 +251,19 @@
         "signerApproval": {
           "certificateVersion": 2,
           "signatureAlgorithm": "tecdsa-secp256k1",
-          "approvalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
+          "approvalDigest": "0x76d32f60185526f68eb132094599ddaae8d592efc4eff0f2d008c5386350041d",
           "walletPublicKey": "0x04d140d1eedb94f53ce43e0f4d68e8e0de6d6f2a444ef98f2a0e6c0f7fca02ef7dc4cb14e7b0f7c23787c93ca4d978f312c64379f38d9f52f86d1a89f0f8572f9f",
           "signerSetHash": "0xabababababababababababababababababababababababababababababababab",
           "signature": "0x5050",
-          "activeMembers": [1, 2, 3],
-          "inactiveMembers": [4, 5],
+          "activeMembers": [
+            1,
+            2,
+            3
+          ],
+          "inactiveMembers": [
+            4,
+            5
+          ],
           "endBlock": 123
         },
         "artifactSignatures": [
@@ -262,7 +282,8 @@
           "custodianRequired": false
         }
       },
-      "expectedRequestDigest": "0x9c53f8df7ffbeece1ba9652bca402ce51561a94083355b3f1809c087d1598e97"
+      "expectedApprovalDigest": "0x76d32f60185526f68eb132094599ddaae8d592efc4eff0f2d008c5386350041d",
+      "expectedRequestDigest": "0x2fd19995dcccf23591dc1340fb0dc3735255ed7d0876ea76236e7473cbc344c0"
     }
   }
 }

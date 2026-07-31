@@ -86,6 +86,8 @@ func Initialize(
 	perfMetrics *clientinfo.PerformanceMetrics,
 	minActiveOutpointConfirmations uint,
 	bridgeCovenantFraudDefenseConfirmed bool,
+	eip712ChainID uint64,
+	eip712Salt [32]byte,
 ) (covenantsigner.Engine, error) {
 	groupParameters := &GroupParameters{
 		GroupSize:       100,
@@ -308,6 +310,8 @@ func Initialize(
 		node,
 		minActiveOutpointConfirmations,
 		bridgeCovenantFraudDefenseConfirmed,
+		eip712ChainID,
+		eip712Salt,
 	), nil
 }
 

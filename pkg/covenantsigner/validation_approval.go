@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -49,6 +50,8 @@ func normalizeSignerApprovalMemberIndexes(
 
 func normalizeSignerApprovalCertificate(
 	request RouteSubmitRequest,
+	chainID uint64,
+	salt [32]byte,
 ) (*SignerApprovalCertificate, error) {
 	if request.SignerApproval == nil {
 		return nil, nil
@@ -114,7 +117,11 @@ func normalizeSignerApprovalCertificate(
 		return nil, err
 	}
 
-	expectedApprovalDigest, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
+	expectedApprovalDigest, err := artifactApprovalDigest(
+		request.ArtifactApprovals.Payload,
+		chainID,
+		salt,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +203,14 @@ func abiEncodeUint32Word(value uint32) [32]byte {
 	return encoded
 }
 
+// abiEncodeUint64Word right-aligns a uint64 into a 32-byte word, the ABI
+// encoding of a uint256 whose value fits in 64 bits (e.g. an EIP-712 chainId).
+func abiEncodeUint64Word(value uint64) [32]byte {
+	var encoded [32]byte
+	binary.BigEndian.PutUint64(encoded[24:], value)
+	return encoded
+}
+
 func keccakTemplateIdentifier(id TemplateID) [32]byte {
 	hash := crypto.Keccak256Hash([]byte(id))
 
@@ -205,10 +220,9 @@ func keccakTemplateIdentifier(id TemplateID) [32]byte {
 	return encoded
 }
 
-// artifactApprovalDigest pins the current phase-1 approval payload contract to
-// a deterministic EIP-712-compatible struct hash, without yet committing to a
-// chain-specific domain separator.
-func artifactApprovalDigest(payload ArtifactApprovalPayload) ([]byte, error) {
+// artifactApprovalStructHash computes the EIP-712 hashStruct of the
+// ArtifactApproval message. It is the inner half of the domain-wrapped digest.
+func artifactApprovalStructHash(payload ArtifactApprovalPayload) ([]byte, error) {
 	destinationCommitmentHash, err := decodeBytes32HexString(
 		"request.artifactApprovals.payload.destinationCommitmentHash",
 		payload.DestinationCommitmentHash,
@@ -237,15 +251,63 @@ func artifactApprovalDigest(payload ArtifactApprovalPayload) ([]byte, error) {
 	copy(encoded[128:160], destinationCommitmentHash[:])
 	copy(encoded[160:192], planCommitmentHash[:])
 
-	digest := crypto.Keccak256Hash(encoded)
+	return crypto.Keccak256(encoded), nil
+}
+
+// artifactApprovalDomainSeparator computes the EIP-712 domain separator for the
+// artifact approval (name, version, chainId, salt; no verifyingContract).
+func artifactApprovalDomainSeparator(chainID uint64, salt [32]byte) [32]byte {
+	encoded := make([]byte, 32*5)
+	chainIDWord := abiEncodeUint64Word(chainID)
+	nameHash := crypto.Keccak256Hash([]byte(artifactApprovalDomainName))
+	versionHash := crypto.Keccak256Hash([]byte(artifactApprovalDomainVersion))
+
+	copy(encoded[0:32], eip712DomainTypeHash.Bytes())
+	copy(encoded[32:64], nameHash.Bytes())
+	copy(encoded[64:96], versionHash.Bytes())
+	copy(encoded[96:128], chainIDWord[:])
+	copy(encoded[128:160], salt[:])
+
+	var separator [32]byte
+	copy(separator[:], crypto.Keccak256(encoded))
+	return separator
+}
+
+// artifactApprovalDigest computes the domain-wrapped EIP-712 v4 digest that a
+// wallet's eth_signTypedData_v4 signature is produced over:
+// keccak256(0x1901 ‖ domainSeparator ‖ hashStruct(message)). The digest is
+// chain-specific: chainID and salt define the domain and must match the client.
+func artifactApprovalDigest(
+	payload ArtifactApprovalPayload,
+	chainID uint64,
+	salt [32]byte,
+) ([]byte, error) {
+	structHash, err := artifactApprovalStructHash(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	domainSeparator := artifactApprovalDomainSeparator(chainID, salt)
+
+	prefixed := make([]byte, 0, 2+32+32)
+	prefixed = append(prefixed, 0x19, 0x01)
+	prefixed = append(prefixed, domainSeparator[:]...)
+	prefixed = append(prefixed, structHash...)
+
+	digest := crypto.Keccak256Hash(prefixed)
 	return digest.Bytes(), nil
 }
 
-// ComputeArtifactApprovalDigest exposes the current phase-1 approval payload
-// digest contract to cross-package verifiers that need to bind
-// signerApproval.approvalDigest to request.artifactApprovals.payload.
-func ComputeArtifactApprovalDigest(payload ArtifactApprovalPayload) ([]byte, error) {
-	return artifactApprovalDigest(payload)
+// ComputeArtifactApprovalDigest exposes the v2 domain-wrapped approval digest to
+// cross-package verifiers that need to bind signerApproval.approvalDigest to
+// request.artifactApprovals.payload. chainID and salt must match the signer's
+// configured EIP-712 domain.
+func ComputeArtifactApprovalDigest(
+	payload ArtifactApprovalPayload,
+	chainID uint64,
+	salt [32]byte,
+) ([]byte, error) {
+	return artifactApprovalDigest(payload, chainID, salt)
 }
 
 func parseCompressedSecp256k1PublicKey(
@@ -339,6 +401,62 @@ func verifySecp256k1Signature(
 	return &inputError{fmt.Sprintf("%s does not verify against the required public key", name)}
 }
 
+// verifyEthSignature verifies a wallet-produced ECDSA signature over the digest
+// against a pinned depositor ETH address (ecrecover-and-compare). It accepts the
+// 65-byte r‖s‖v shape that eth_signTypedData_v4 returns (v in {27,28}, also
+// tolerating {0,1}) and enforces low-S per EIP-2.
+func verifyEthSignature(
+	name string,
+	ethAddress string,
+	digest []byte,
+	signature string,
+) error {
+	rawSignature, err := hex.DecodeString(strings.TrimPrefix(signature, "0x"))
+	if err != nil {
+		return &inputError{fmt.Sprintf("%s must be valid hex", name)}
+	}
+	if len(rawSignature) != 65 {
+		return &inputError{
+			fmt.Sprintf("%s must be a 65-byte secp256k1 signature", name),
+		}
+	}
+	if !isLowSSecp256k1(new(big.Int).SetBytes(rawSignature[32:64])) {
+		return &inputError{
+			fmt.Sprintf("%s must be a low-S secp256k1 signature", name),
+		}
+	}
+
+	// crypto.SigToPub expects the recovery id in {0,1}; wallets emit {27,28}.
+	normalized := make([]byte, 65)
+	copy(normalized, rawSignature)
+	switch normalized[64] {
+	case 27, 28:
+		normalized[64] -= 27
+	case 0, 1:
+		// already normalized
+	default:
+		return &inputError{
+			fmt.Sprintf("%s has an invalid recovery id", name),
+		}
+	}
+
+	publicKey, err := crypto.SigToPub(digest, normalized)
+	if err != nil {
+		return &inputError{
+			fmt.Sprintf("%s does not recover to a valid public key", name),
+		}
+	}
+
+	recovered := crypto.PubkeyToAddress(*publicKey)
+	if recovered != common.HexToAddress(ethAddress) {
+		return &inputError{
+			fmt.Sprintf("%s does not verify against the required depositor ETH address", name),
+		}
+	}
+
+	return nil
+}
+
 func validateArtifactSignatures(signatures []string) ([]string, error) {
 	if len(signatures) == 0 {
 		return nil, &inputError{"request.artifactSignatures must not be empty"}
@@ -375,16 +493,23 @@ func requiredStructuredArtifactApprovalRoles(route TemplateID) ([]ArtifactApprov
 	}
 }
 
-func validateArtifactApprovals(route TemplateID, request RouteSubmitRequest) error {
-	_, _, _, err := normalizeArtifactApprovals(route, request)
+func validateArtifactApprovals(
+	route TemplateID,
+	request RouteSubmitRequest,
+	chainID uint64,
+	salt [32]byte,
+) error {
+	_, _, _, err := normalizeArtifactApprovals(route, request, chainID, salt)
 	return err
 }
 
 func normalizeArtifactApprovals(
 	route TemplateID,
 	request RouteSubmitRequest,
+	chainID uint64,
+	salt [32]byte,
 ) (*ArtifactApprovalEnvelope, *SignerApprovalCertificate, []string, error) {
-	normalizedSignerApproval, err := normalizeSignerApprovalCertificate(request)
+	normalizedSignerApproval, err := normalizeSignerApprovalCertificate(request, chainID, salt)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -402,7 +527,7 @@ func normalizeArtifactApprovals(
 	}
 
 	if request.ArtifactApprovals.Payload.ApprovalVersion != artifactApprovalVersion {
-		return nil, nil, nil, &inputError{"request.artifactApprovals.payload.approvalVersion must equal 1"}
+		return nil, nil, nil, &inputError{"request.artifactApprovals.payload.approvalVersion must equal 2"}
 	}
 	if request.ArtifactApprovals.Payload.Route != route {
 		return nil, nil, nil, &inputError{"request.artifactApprovals.payload.route must match request.route"}
@@ -528,22 +653,38 @@ func normalizeArtifactApprovals(
 	return normalizedApprovals, normalizedSignerApproval, derivedLegacySignatures, nil
 }
 
+// validateArtifactApprovalAuthenticity verifies each artifact approval signature
+// against the payload digest. The depositor approval is verified against a
+// pinned depositor ETH identity via ecrecover-and-compare when depositorEthAddress
+// is set (the v2 wallet-signed path); otherwise it falls back to the
+// script-template secp256k1 depositor key. The custodian approval always uses the
+// secp256k1 custodian key.
 func validateArtifactApprovalAuthenticity(
 	request RouteSubmitRequest,
 	depositorPublicKey string,
+	depositorEthAddress string,
 	custodianPublicKey string,
+	chainID uint64,
+	salt [32]byte,
 ) error {
-	payloadDigest, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
+	payloadDigest, err := artifactApprovalDigest(
+		request.ArtifactApprovals.Payload,
+		chainID,
+		salt,
+	)
 	if err != nil {
 		return err
 	}
 
-	depositorKey, err := parseCompressedSecp256k1PublicKey(
-		"request.scriptTemplate.depositorPublicKey",
-		depositorPublicKey,
-	)
-	if err != nil {
-		return err
+	var depositorKey *btcec.PublicKey
+	if depositorEthAddress == "" {
+		depositorKey, err = parseCompressedSecp256k1PublicKey(
+			"request.scriptTemplate.depositorPublicKey",
+			depositorPublicKey,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	var custodianKey *btcec.PublicKey
@@ -565,7 +706,16 @@ func validateArtifactApprovalAuthenticity(
 
 		switch approval.Role {
 		case ArtifactApprovalRoleDepositor:
-			if err := verifySecp256k1Signature(
+			if depositorEthAddress != "" {
+				if err := verifyEthSignature(
+					signaturePath,
+					depositorEthAddress,
+					payloadDigest,
+					approval.Signature,
+				); err != nil {
+					return err
+				}
+			} else if err := verifySecp256k1Signature(
 				signaturePath,
 				depositorKey,
 				payloadDigest,
@@ -586,6 +736,16 @@ func validateArtifactApprovalAuthenticity(
 				approval.Signature,
 			); err != nil {
 				return err
+			}
+		default:
+			// normalizeArtifactApprovals already rejects unrecognized roles
+			// before this loop runs; fail closed here as defense in depth so an
+			// unexpected role can never be silently skipped without verification.
+			return &inputError{
+				fmt.Sprintf(
+					"request.artifactApprovals.approvals[%d].role is not a recognized role",
+					i,
+				),
 			}
 		}
 	}
@@ -635,6 +795,26 @@ func resolveExpectedDepositorPublicKey(
 	}
 
 	return "", false
+}
+
+// resolveExpectedDepositorEthAddress returns the pinned depositor ETH address
+// for the request scope, if one is configured. An empty return means no ETH
+// identity is pinned and approval verification falls back to the secp256k1
+// depositor key.
+func resolveExpectedDepositorEthAddress(
+	request RouteSubmitRequest,
+	trustRoots []DepositorTrustRoot,
+) string {
+	route, reserve, network := trustRootLookupScope(request)
+	for _, trustRoot := range trustRoots {
+		if trustRoot.Route == route &&
+			trustRoot.Reserve == reserve &&
+			trustRoot.Network == network {
+			return trustRoot.EthAddress
+		}
+	}
+
+	return ""
 }
 
 func resolveExpectedCustodianPublicKey(

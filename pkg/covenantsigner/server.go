@@ -56,6 +56,11 @@ func Initialize(
 		)
 	}
 
+	eip712DomainOption, err := WithEIP712Domain(config.EIP712ChainID, config.EIP712Salt)
+	if err != nil {
+		return nil, false, err
+	}
+
 	service, err := NewService(
 		handle,
 		engine,
@@ -64,6 +69,7 @@ func Initialize(
 		WithDepositorTrustRoots(config.DepositorTrustRoots),
 		WithCustodianTrustRoots(config.CustodianTrustRoots),
 		WithCurrentBlockProvider(engine),
+		eip712DomainOption,
 	)
 	if err != nil {
 		return nil, false, err
@@ -87,6 +93,9 @@ func Initialize(
 	// requirement above. Loopback deployments may still run with warnings unless
 	// requireApprovalTrustRoots is set explicitly.
 	if err := validateRequiredApprovalTrustRoots(config, service, !isLoopback); err != nil {
+		return nil, false, err
+	}
+	if err := validateEIP712ChainIDForEthTrustRoots(service); err != nil {
 		return nil, false, err
 	}
 	if service.signerApprovalVerifier == nil {
@@ -252,6 +261,27 @@ func validateRequiredApprovalTrustRoots(
 		)
 	}
 
+	return nil
+}
+
+// validateEIP712ChainIDForEthTrustRoots fails startup loudly when a depositor ETH
+// identity is pinned but no EIP-712 chainId is configured. chainId 0 would
+// silently produce a domain no real wallet signs against (eth_signTypedData_v4
+// binds the wallet's active chain), so approvals would fail closed with no
+// diagnostic.
+func validateEIP712ChainIDForEthTrustRoots(service *Service) error {
+	if service.eip712ChainID != 0 {
+		return nil
+	}
+	for _, trustRoot := range service.depositorTrustRoots {
+		if trustRoot.EthAddress != "" {
+			return fmt.Errorf(
+				"covenant signer depositorTrustRoots pin an ethAddress but " +
+					"covenantSigner.eip712ChainId is unset; set it to the covenant's " +
+					"Ethereum chainId so wallet-signed approvals can verify",
+			)
+		}
+	}
 	return nil
 }
 
