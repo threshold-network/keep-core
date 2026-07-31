@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
+
+	"github.com/keep-network/keep-core/pkg/clientinfo"
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
 const (
@@ -118,6 +122,13 @@ type frostNativeSignerAnchorAdmissionController struct {
 	// readHeadroom is test-only injection. Production always authenticates the
 	// current tip through anchorBinding while holding mutex.
 	readHeadroom func(context.Context) (frostNativeSignerAnchorCapacity, error)
+	// anchorPoisoned is test-only injection. Production always reads the
+	// process-global state-anchor barrier through
+	// frostsigning.NativeTBTCSignerStateAnchorPoisoned. The seam exists because
+	// that barrier is a package-global in another package with no exported way
+	// to poison it, and poisoning it for real inside a test would latch a
+	// terminal failure into every later test in this process.
+	anchorPoisoned func() error
 
 	reserved frostNativeSignerAnchorCapacity
 }
@@ -268,6 +279,42 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 		)
 	}
 
+	// A terminally poisoned state anchor is the one refusal reason this
+	// controller cannot otherwise see. currentRestartableHeadroom reads the
+	// witness tip straight through the inventory bridge and authenticates it
+	// against the anchor service; neither path takes the request-taking
+	// barrier, so a barrier that has already latched a terminal failure still
+	// reports perfectly healthy headroom here. Without this check the node goes
+	// on admitting pre-sign, DKG and DKG-retirement workflows whose every
+	// request-taking signer call will be refused with
+	// ErrNativeTBTCSignerStateAnchorTerminal - it accepts work it cannot
+	// finish, and the wallet loses this member's seats toward its signing
+	// threshold with no node reporting a cause.
+	//
+	// This is checked before the headroom read, and outside the admission
+	// mutex, because it is both cheaper (one atomic load against an anchor
+	// round trip) and strictly more terminal than anything the headroom can
+	// say: nothing clears poisoned in-process, so no later headroom value can
+	// make this workflow admissible. Racing a poisoning that lands immediately
+	// after this load is harmless - the reservation is then made and the
+	// workflow's own calls are refused by the barrier, which is the behavior
+	// that already existed.
+	anchorPoisoned := frostsigning.NativeTBTCSignerStateAnchorPoisoned
+	if controller.anchorPoisoned != nil {
+		anchorPoisoned = controller.anchorPoisoned
+	}
+	if poisoned := anchorPoisoned(); poisoned != nil {
+		recordFrostNativeSignerAnchorPoisonedRejection()
+		return nil, fmt.Errorf(
+			"%s is blocked because this node's native signer state anchor is "+
+				"terminally poisoned: [%w]; every request-taking native signer "+
+				"call is refused until this process is restarted, and only a "+
+				"process restart clears it",
+			workflow,
+			poisoned,
+		)
+	}
+
 	controller.mutex.Lock()
 	defer controller.mutex.Unlock()
 
@@ -284,6 +331,7 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 		headroom.Generations,
 	)
 	if minimumHeadroom <= FrostNativeSignerAnchorRotationWarningHeadroom {
+		recordFrostNativeSignerAnchorRotationFloorRejection()
 		return nil, fmt.Errorf(
 			"%s is blocked with revision/generation headroom [%d/%d]; "+
 				"offline anchor rotation is required before admitting new work",
@@ -292,11 +340,25 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 			headroom.Generations,
 		)
 	}
+	// Both unreserved-headroom refusals name the same remedy as the
+	// rotation-floor refusal above. They are not a smaller version of it: a
+	// node refused here still has most of both windows unspent - a four-seat
+	// node is refused its next maximum-size sweep with 3508 of 4096 generations
+	// left - so the number in the message reads healthy and the refusal looks
+	// transient. It is not. Neither window refills on its own; only an
+	// offline-authorized rotation moves the certified floor forward, so this is
+	// the first message an operator of a correctly configured node sees, and it
+	// has to say what to do about it rather than leave rotation to be inferred
+	// from the far rarer floor refusal.
 	if controller.reserved.Revisions > headroom.Revisions ||
 		cost.Revisions >
 			headroom.Revisions-controller.reserved.Revisions {
+		recordFrostNativeSignerAnchorUnreservedHeadroomRejection()
 		return nil, fmt.Errorf(
-			"%s requires [%d] anchor revisions but only [%d] are unreserved",
+			"%s requires [%d] anchor revisions but only [%d] are unreserved; "+
+				"the certified history window does not refill on its own, so "+
+				"offline anchor rotation is required before this workflow can "+
+				"be admitted",
 			workflow,
 			cost.Revisions,
 			headroom.Revisions-controller.reserved.Revisions,
@@ -305,8 +367,12 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 	if controller.reserved.Generations > headroom.Generations ||
 		cost.Generations >
 			headroom.Generations-controller.reserved.Generations {
+		recordFrostNativeSignerAnchorUnreservedHeadroomRejection()
 		return nil, fmt.Errorf(
-			"%s requires [%d] signer generations but only [%d] are unreserved",
+			"%s requires [%d] signer generations but only [%d] are unreserved; "+
+				"the certified proof window does not refill on its own, so "+
+				"offline anchor rotation is required before this workflow can "+
+				"be admitted",
 			workflow,
 			cost.Generations,
 			headroom.Generations-controller.reserved.Generations,
@@ -459,6 +525,7 @@ func frostPreSignMaximumAnchorCapacityCost(
 		return frostNativeSignerAnchorCapacity{}, err
 	}
 	if cost.Revisions > FrostNativeSignerAnchorMaximumHistoryEvents {
+		recordFrostNativeSignerAnchorSeatCeilingRejection()
 		return frostNativeSignerAnchorCapacity{}, fmt.Errorf(
 			"FROST pre-sign workflow over [%d] inputs with [%d] local seats "+
 				"requires [%d] anchor revisions, exceeding the certified history "+
@@ -475,6 +542,7 @@ func frostPreSignMaximumAnchorCapacityCost(
 		)
 	}
 	if cost.Generations > FrostNativeSignerAnchorMaximumHistoryProofEntries {
+		recordFrostNativeSignerAnchorSeatCeilingRejection()
 		return frostNativeSignerAnchorCapacity{}, fmt.Errorf(
 			"FROST pre-sign workflow over [%d] inputs with [%d] local seats "+
 				"requires [%d] signer generations, exceeding the certified proof "+
@@ -666,4 +734,223 @@ func frostPreSignAnchoredWorkflowCost(
 		Revisions:   revisions,
 		Generations: generations,
 	}, nil
+}
+
+// frostNativeSignerAnchorWorkloadRotationWarning reports whether this node
+// should already be arranging an offline anchor rotation, measured against the
+// work it can actually be asked to admit rather than against a flat number.
+//
+// localSeatCount is the largest number of local seats this node holds in any
+// one wallet, because a pre-sign workflow is per wallet and reserves against
+// that wallet's local member indexes. It is a parameter rather than something
+// derived here because this file has no view of the node's sortition result;
+// guessing it would be worse than requiring the caller that does know it to
+// say so.
+//
+// The flat floor (FrostNativeSignerAnchorRotationWarningHeadroom, 256) is kept
+// as a hard lower bound, and this condition is added to it rather than
+// substituted for it, because the two guard different things. The flat floor
+// guards the rotation-blocked refusal in reserve(): at or below it ALL new work
+// is refused regardless of size, so a node that reaches it has already stopped
+// signing outright. That makes it a useless warning threshold, because
+// admission stops long before it is reached. A node holding four local seats -
+// an ordinary sortition result, and the ceiling for the standard 21-input
+// sweep - reserves 3615 generations for one maximum-size workflow, so its next
+// sweep is refused with 3508 of the 4096 generations still unspent, roughly
+// 3359 generations before the flat warning would fire. An operator alerting on
+// the flat flag alone learns that the node stopped signing long after it
+// stopped signing.
+//
+// Each window is compared against its own dimension's cost rather than
+// comparing the smaller headroom against the generation cost. The generation
+// cost is about twice the revision cost, so collapsing the two would raise the
+// warning on the revision window for a shortfall that only the generation
+// window has.
+//
+// The measuring stick is deliberately the largest ADMISSIBLE workflow, not
+// unconditionally a 21-input batch. A node above the seat ceiling can never be
+// admitted for 21 inputs at all, and its 21-input cost exceeds the whole
+// 4096-entry window, so measuring it that way would latch this warning on for
+// the life of the process; because the warning also forces the activation
+// handshake's top-level health to false, that would take an otherwise healthy
+// five-seat node out of service for a seat-ceiling exclusion no rotation can
+// fix. frostPreSignMaximumAdmissibleInputCount reports what this seat count can
+// actually be admitted for, so a five-seat node is measured against its own
+// 19-input maximum.
+//
+// Native DKG and DKG retirement share the same admission controller but reserve
+// two capacity units per local seat - orders of magnitude below a pre-sign
+// workflow - so the pre-sign cost bounds them too and they need no separate
+// term.
+func frostNativeSignerAnchorWorkloadRotationWarning(
+	revisionHeadroom uint64,
+	generationHeadroom uint64,
+	localSeatCount uint64,
+) bool {
+	if frostNativeSignerAnchorRotationWarning(
+		minFrostNativeSignerAnchorHeadroom(
+			revisionHeadroom,
+			generationHeadroom,
+		),
+	) {
+		return true
+	}
+	cost, admissible :=
+		frostNativeSignerAnchorLargestAdmissibleWorkflowCost(localSeatCount)
+	if !admissible {
+		return false
+	}
+	return revisionHeadroom <= cost.Revisions ||
+		generationHeadroom <= cost.Generations
+}
+
+// frostNativeSignerAnchorLargestAdmissibleWorkflowCost reports the worst-case
+// capacity one pre-sign workflow can reserve on a node holding this many local
+// seats in a single wallet, together with whether any workflow is admissible at
+// all.
+//
+// It reports false, rather than a cost, for a seat count that no batch size can
+// serve and for a seat count of zero. Both mean the same thing for this
+// purpose: pre-sign admission is not what will consume the windows, so only the
+// flat rotation floor is a meaningful warning threshold, and inventing a cost
+// here would warn permanently on a node whose seats a rotation cannot restore.
+func frostNativeSignerAnchorLargestAdmissibleWorkflowCost(
+	localSeatCount uint64,
+) (frostNativeSignerAnchorCapacity, bool) {
+	admissibleInputs := frostPreSignMaximumAdmissibleInputCount(
+		localSeatCount,
+		signingAttemptsLimit,
+	)
+	if admissibleInputs == 0 {
+		return frostNativeSignerAnchorCapacity{}, false
+	}
+	cost, err := frostPreSignAnchoredWorkflowCost(
+		admissibleInputs,
+		localSeatCount,
+		signingAttemptsLimit,
+	)
+	if err != nil {
+		return frostNativeSignerAnchorCapacity{}, false
+	}
+	return cost, true
+}
+
+// FROST native signer anchor admission rejection counters.
+//
+// A node that stops admitting FROST work does so silently: the refusals reach
+// the log wrapped inside a generic wallet-action failure, and nothing anchored
+// is registered with clientinfo at all, so a monitoring system cannot tell a
+// node that is refusing every signing request from one that simply has not been
+// asked. These process-wide cumulative counters make each refusal cause
+// countable on its own, because the four causes need four different responses:
+//
+//   - seatCeiling is a CONFIGURATION signal. It never clears on its own and no
+//     rotation fixes it: this node holds more local seats than the certified
+//     windows can serve at the requested batch size, and those seats are lost to
+//     the wallet's signing threshold until the operator sheds them. Any non-zero
+//     value should alert.
+//   - poisoned is a TERMINAL signal. The state anchor has latched a permanent
+//     failure and only a process restart clears it. Any non-zero value should
+//     alert.
+//   - unreservedHeadroom is the ROTATION-DUE signal. It is the first refusal a
+//     healthy, correctly configured node produces, and it arrives while most of
+//     both windows are still unspent.
+//   - rotationFloor is the ROTATION-OVERDUE signal. All new work is already
+//     being refused regardless of size.
+//
+// They follow the roast_interactive_signing_metrics.go pattern, are emitted in
+// every build, and stay at zero until an admission is actually refused - so
+// they are inert by default and registering them activates no behavior.
+var (
+	frostNativeSignerAnchorSeatCeilingRejections        atomic.Uint64
+	frostNativeSignerAnchorUnreservedHeadroomRejections atomic.Uint64
+	frostNativeSignerAnchorRotationFloorRejections      atomic.Uint64
+	frostNativeSignerAnchorPoisonedRejections           atomic.Uint64
+)
+
+// frostNativeSignerAnchorAdmissionMetricsApplication is the clientinfo
+// application-label prefix; the registry concatenates it with each per-source
+// name, so the final labels look like
+// "frost_native_signer_anchor_admission_poisoned_rejected_total".
+const frostNativeSignerAnchorAdmissionMetricsApplication = "frost_native_signer_anchor_admission"
+
+const (
+	frostNativeSignerAnchorSeatCeilingMetricName        = "seat_ceiling_rejected_total"
+	frostNativeSignerAnchorUnreservedHeadroomMetricName = "unreserved_headroom_rejected_total"
+	frostNativeSignerAnchorRotationFloorMetricName      = "rotation_floor_rejected_total"
+	frostNativeSignerAnchorPoisonedMetricName           = "poisoned_rejected_total"
+)
+
+// RegisterFrostNativeSignerAnchorAdmissionMetrics registers the cumulative
+// anchor-admission rejection counters with the supplied clientinfo registry.
+// The node's startup sequence calls it alongside
+// frostsigning.RegisterInteractiveSigningMetrics so the counters appear in the
+// Prometheus scrape; without that call they increment internally and never
+// reach an operator. A nil registry is a no-op.
+func RegisterFrostNativeSignerAnchorAdmissionMetrics(
+	registry *clientinfo.Registry,
+) {
+	if registry == nil {
+		return
+	}
+	registry.ObserveApplicationSource(
+		frostNativeSignerAnchorAdmissionMetricsApplication,
+		map[string]clientinfo.Source{
+			frostNativeSignerAnchorSeatCeilingMetricName: func() float64 {
+				return float64(
+					frostNativeSignerAnchorSeatCeilingRejections.Load(),
+				)
+			},
+			frostNativeSignerAnchorUnreservedHeadroomMetricName: func() float64 {
+				return float64(
+					frostNativeSignerAnchorUnreservedHeadroomRejections.Load(),
+				)
+			},
+			frostNativeSignerAnchorRotationFloorMetricName: func() float64 {
+				return float64(
+					frostNativeSignerAnchorRotationFloorRejections.Load(),
+				)
+			},
+			frostNativeSignerAnchorPoisonedMetricName: func() float64 {
+				return float64(
+					frostNativeSignerAnchorPoisonedRejections.Load(),
+				)
+			},
+		},
+	)
+}
+
+// recordFrostNativeSignerAnchorSeatCeilingRejection marks one workflow refused
+// because its worst case cannot fit a certified restart window at this node's
+// local seat count.
+func recordFrostNativeSignerAnchorSeatCeilingRejection() {
+	frostNativeSignerAnchorSeatCeilingRejections.Add(1)
+}
+
+// recordFrostNativeSignerAnchorUnreservedHeadroomRejection marks one workflow
+// refused because the unreserved part of a certified window cannot cover it.
+func recordFrostNativeSignerAnchorUnreservedHeadroomRejection() {
+	frostNativeSignerAnchorUnreservedHeadroomRejections.Add(1)
+}
+
+// recordFrostNativeSignerAnchorRotationFloorRejection marks one workflow
+// refused because a certified window has fallen to the rotation floor, where
+// all new work is refused regardless of size.
+func recordFrostNativeSignerAnchorRotationFloorRejection() {
+	frostNativeSignerAnchorRotationFloorRejections.Add(1)
+}
+
+// recordFrostNativeSignerAnchorPoisonedRejection marks one workflow refused
+// because the native signer state anchor is terminally poisoned.
+func recordFrostNativeSignerAnchorPoisonedRejection() {
+	frostNativeSignerAnchorPoisonedRejections.Add(1)
+}
+
+// resetFrostNativeSignerAnchorAdmissionMetricsForTest clears the cumulative
+// counters. Exposed only for the package's own tests; not a production helper.
+func resetFrostNativeSignerAnchorAdmissionMetricsForTest() {
+	frostNativeSignerAnchorSeatCeilingRejections.Store(0)
+	frostNativeSignerAnchorUnreservedHeadroomRejections.Store(0)
+	frostNativeSignerAnchorRotationFloorRejections.Store(0)
+	frostNativeSignerAnchorPoisonedRejections.Store(0)
 }

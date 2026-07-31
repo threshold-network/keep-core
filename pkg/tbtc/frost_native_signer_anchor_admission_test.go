@@ -2,6 +2,8 @@ package tbtc
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -362,6 +364,417 @@ func TestFrostNativeSignerAnchorAdmissionController_RejectsStaleReadinessHeadroo
 	); err == nil || !strings.Contains(err.Error(), "unreserved") {
 		t.Fatalf("stale readiness headroom was trusted: [%v]", err)
 	}
+}
+
+// TestFrostNativeSignerAnchorAdmissionController_RefusesWhilePoisoned pins the
+// invariant that admission must not accept work this node cannot finish. The
+// controller reads headroom through the anchor binding and the inventory
+// bridge, neither of which takes the request-taking barrier, so a barrier that
+// has latched a terminal failure leaves every headroom number here looking
+// perfectly healthy. Without the poisoned check a poisoned node keeps admitting
+// pre-sign and DKG workflows whose every signer call is already doomed, and the
+// wallet loses this member's seats with no node reporting a cause.
+func TestFrostNativeSignerAnchorAdmissionController_RefusesWhilePoisoned(
+	t *testing.T,
+) {
+	resetFrostNativeSignerAnchorAdmissionMetricsForTest()
+
+	poisonCause := fmt.Errorf(
+		"%w: post-mutation anchor advance did not match",
+		frostsigning.ErrNativeTBTCSignerStateAnchorTerminal,
+	)
+	poisoned := poisonCause
+	controller := &frostNativeSignerAnchorAdmissionController{
+		readHeadroom: func(
+			context.Context,
+		) (frostNativeSignerAnchorCapacity, error) {
+			// Both windows completely unspent: nothing but the poison can
+			// refuse anything here.
+			return frostNativeSignerAnchorCapacity{
+				Revisions:   FrostNativeSignerAnchorMaximumHistoryEvents,
+				Generations: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			}, nil
+		},
+		anchorPoisoned: func() error { return poisoned },
+	}
+	snapshot := testFrostAnchorAdmissionReadinessSnapshot(
+		FrostNativeSignerAnchorMaximumHistoryEvents,
+		FrostNativeSignerAnchorMaximumHistoryProofEntries,
+	)
+
+	// Every reservation path shares reserve(), so pre-sign, native DKG and DKG
+	// retirement all have to refuse. DKG is not exempt: a poisoned node cannot
+	// persist a key package any more than it can sign.
+	for _, test := range []struct {
+		name    string
+		reserve func() (*frostNativeSignerAnchorRevisionReservation, error)
+	}{
+		{
+			name: "pre-sign",
+			reserve: func() (
+				*frostNativeSignerAnchorRevisionReservation,
+				error,
+			) {
+				return controller.reservePreSign(
+					context.Background(),
+					snapshot,
+					1,
+					1,
+					signingAttemptsLimit,
+				)
+			},
+		},
+		{
+			name: "native DKG",
+			reserve: func() (
+				*frostNativeSignerAnchorRevisionReservation,
+				error,
+			) {
+				return controller.reserveDKG(context.Background(), 1)
+			},
+		},
+		{
+			name: "native DKG retirement",
+			reserve: func() (
+				*frostNativeSignerAnchorRevisionReservation,
+				error,
+			) {
+				return controller.reserveDKGRetirement(context.Background(), 1)
+			},
+		},
+	} {
+		reservation, err := test.reserve()
+		if err == nil {
+			reservation.Release()
+			t.Fatalf(
+				"[%s] was admitted while the state anchor is poisoned",
+				test.name,
+			)
+		}
+		if !errors.Is(
+			err,
+			frostsigning.ErrNativeTBTCSignerStateAnchorTerminal,
+		) {
+			t.Fatalf(
+				"[%s] refusal did not carry the terminal anchor cause: [%v]",
+				test.name,
+				err,
+			)
+		}
+		// The refusal has to be operator-actionable on its own. Poisoning is
+		// latched on a package-global barrier and nothing clears it in
+		// process, so a message that does not name the restart leaves an
+		// operator waiting for a recovery that cannot arrive.
+		if !strings.Contains(err.Error(), "terminally poisoned") ||
+			!strings.Contains(err.Error(), "restart") {
+			t.Fatalf(
+				"[%s] refusal did not name the cause and the remedy: [%v]",
+				test.name,
+				err,
+			)
+		}
+	}
+
+	if rejections :=
+		frostNativeSignerAnchorPoisonedRejections.Load(); rejections != 3 {
+		t.Fatalf(
+			"poisoned rejections counted [%d], expected [3]",
+			rejections,
+		)
+	}
+	// Nothing else refused, so no other cause may have been counted. A counter
+	// that fires on the wrong cause sends an operator to the wrong remedy.
+	if seatCeiling := frostNativeSignerAnchorSeatCeilingRejections.Load(); seatCeiling != 0 {
+		t.Fatalf("seat-ceiling rejections counted [%d]", seatCeiling)
+	}
+	if unreserved := frostNativeSignerAnchorUnreservedHeadroomRejections.Load(); unreserved != 0 {
+		t.Fatalf("unreserved-headroom rejections counted [%d]", unreserved)
+	}
+	if rotationFloor := frostNativeSignerAnchorRotationFloorRejections.Load(); rotationFloor != 0 {
+		t.Fatalf("rotation-floor rejections counted [%d]", rotationFloor)
+	}
+
+	// The poison was the only thing refusing: with it cleared the identical
+	// reservation is admitted, so the refusals above cannot be explained by
+	// headroom.
+	poisoned = nil
+	reservation, err := controller.reservePreSign(
+		context.Background(),
+		snapshot,
+		1,
+		1,
+		signingAttemptsLimit,
+	)
+	if err != nil {
+		t.Fatalf("healthy anchor refused an admissible workflow: [%v]", err)
+	}
+	reservation.Release()
+}
+
+// TestFrostNativeSignerAnchorWorkloadRotationWarning pins the warning against
+// the workload it is supposed to warn about. The flat floor fires only once all
+// new work is already refused, which is far too late to be a warning: a
+// four-seat node - an ordinary sortition result, and the ceiling for the
+// standard 21-input sweep - stops admitting maximum-size batches thousands of
+// generations before it.
+func TestFrostNativeSignerAnchorWorkloadRotationWarning(t *testing.T) {
+	fourSeatCost, err := frostPreSignAnchoredWorkflowCost(
+		frostPreSignAuthorizationMaximumInputs,
+		4,
+		signingAttemptsLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fourSeatCost.Revisions != 1806 || fourSeatCost.Generations != 3615 {
+		t.Fatalf("unexpected four-seat maximum-batch cost [%+v]", fourSeatCost)
+	}
+	// The gap the flat threshold leaves open, pinned as a number so that
+	// shrinking it is a deliberate act.
+	if gap := fourSeatCost.Generations -
+		uint64(FrostNativeSignerAnchorRotationWarningHeadroom); gap != 3359 {
+		t.Fatalf(
+			"the flat warning now fires [%d] generations after a four-seat "+
+				"node stops signing, expected [3359]",
+			gap,
+		)
+	}
+
+	for _, test := range []struct {
+		name               string
+		revisionHeadroom   uint64
+		generationHeadroom uint64
+		localSeatCount     uint64
+		warning            bool
+	}{
+		// A fresh rotation warns about nothing.
+		{
+			name:               "four seats, both windows unspent",
+			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
+			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			localSeatCount:     4,
+			warning:            false,
+		},
+		// One generation above the next workflow's cost is the last moment
+		// this node can still admit a maximum-size batch, so it is the last
+		// moment before the warning.
+		{
+			name:               "four seats, one generation above the next workflow",
+			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
+			generationHeadroom: 3616,
+			localSeatCount:     4,
+			warning:            false,
+		},
+		{
+			name:               "four seats, exactly the next workflow's generations",
+			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
+			generationHeadroom: 3615,
+			localSeatCount:     4,
+			warning:            true,
+		},
+		// Each window is measured against its own dimension's cost. The
+		// revision cost is about half the generation cost, so a revision
+		// shortfall has to be caught on the revision number.
+		{
+			name:               "four seats, revision window at the next workflow's revisions",
+			revisionHeadroom:   1806,
+			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			localSeatCount:     4,
+			warning:            true,
+		},
+		{
+			name:               "four seats, revision window one above",
+			revisionHeadroom:   1807,
+			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			localSeatCount:     4,
+			warning:            false,
+		},
+		// A node above the seat ceiling must not be warned forever. It can
+		// never be admitted for 21 inputs at all, so it is measured against
+		// the 19-input batch it can actually be admitted for; warning
+		// permanently would also force its activation-handshake health to
+		// false for an exclusion that no rotation can fix.
+		{
+			name:               "five seats, both windows unspent",
+			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
+			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			localSeatCount:     5,
+			warning:            false,
+		},
+		{
+			name:               "five seats, at its own admissible maximum",
+			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
+			generationHeadroom: 4031,
+			localSeatCount:     5,
+			warning:            true,
+		},
+		// A seat count that can serve no batch at all leaves only the flat
+		// floor, which still has to work.
+		{
+			name:               "no local seats, windows unspent",
+			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
+			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			localSeatCount:     0,
+			warning:            false,
+		},
+		{
+			name:               "no local seats, at the flat floor",
+			revisionHeadroom:   FrostNativeSignerAnchorRotationWarningHeadroom,
+			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			localSeatCount:     0,
+			warning:            true,
+		},
+		// The flat floor is kept, not replaced: it still fires for a seat
+		// count whose workload term would not have.
+		{
+			name:               "one seat, at the flat floor",
+			revisionHeadroom:   FrostNativeSignerAnchorRotationWarningHeadroom,
+			generationHeadroom: FrostNativeSignerAnchorRotationWarningHeadroom,
+			localSeatCount:     1,
+			warning:            true,
+		},
+	} {
+		if warning := frostNativeSignerAnchorWorkloadRotationWarning(
+			test.revisionHeadroom,
+			test.generationHeadroom,
+			test.localSeatCount,
+		); warning != test.warning {
+			t.Fatalf(
+				"[%s] warned [%t], expected [%t]",
+				test.name,
+				warning,
+				test.warning,
+			)
+		}
+	}
+
+	// The whole point of the change: the flat predicate is still silent at the
+	// exact headroom where a four-seat node stops being able to sign a
+	// maximum-size batch.
+	if frostNativeSignerAnchorRotationWarning(
+		minFrostNativeSignerAnchorHeadroom(
+			FrostNativeSignerAnchorMaximumHistoryEvents,
+			fourSeatCost.Generations,
+		),
+	) {
+		t.Fatal(
+			"the flat rotation warning already fires at the four-seat " +
+				"workload threshold, so the workload-relative term adds nothing",
+		)
+	}
+}
+
+// TestFrostNativeSignerAnchorAdmissionRefusalsNameARemedy pins that every
+// admission refusal an operator can hit says what to do about it, and that each
+// one is countable on its own. The unreserved-headroom refusal is the one a
+// healthy, correctly configured node produces first, and it arrives while most
+// of both windows are still unspent - so a message that only reports the
+// numbers reads as transient when it is not.
+func TestFrostNativeSignerAnchorAdmissionRefusalsNameARemedy(t *testing.T) {
+	resetFrostNativeSignerAnchorAdmissionMetricsForTest()
+
+	currentHeadroom := frostNativeSignerAnchorCapacity{}
+	controller := &frostNativeSignerAnchorAdmissionController{
+		readHeadroom: func(
+			context.Context,
+		) (frostNativeSignerAnchorCapacity, error) {
+			return currentHeadroom, nil
+		},
+	}
+
+	// Native DKG reserves one revision and one generation per persistence
+	// call, so 300 local seats cost exactly 600 of each and each dimension can
+	// be starved on its own while the other stays healthy.
+	currentHeadroom = frostNativeSignerAnchorCapacity{
+		Revisions:   300,
+		Generations: 1000,
+	}
+	if _, err := controller.reserveDKG(
+		context.Background(),
+		300,
+	); err == nil || !strings.Contains(err.Error(), "anchor revisions") ||
+		!strings.Contains(err.Error(), "offline anchor rotation is required") {
+		t.Fatalf("revision-dimension refusal did not name the remedy: [%v]", err)
+	}
+
+	currentHeadroom = frostNativeSignerAnchorCapacity{
+		Revisions:   1000,
+		Generations: 300,
+	}
+	if _, err := controller.reserveDKG(
+		context.Background(),
+		300,
+	); err == nil || !strings.Contains(err.Error(), "signer generations") ||
+		!strings.Contains(err.Error(), "offline anchor rotation is required") {
+		t.Fatalf("generation-dimension refusal did not name the remedy: [%v]", err)
+	}
+
+	// The sibling rotation-floor refusal keeps its own wording and its own
+	// counter, so a monitoring system can tell "rotation is due" from
+	// "rotation is overdue and everything is already refused".
+	currentHeadroom = frostNativeSignerAnchorCapacity{
+		Revisions:   FrostNativeSignerAnchorRotationWarningHeadroom,
+		Generations: 1000,
+	}
+	if _, err := controller.reserveDKG(
+		context.Background(),
+		1,
+	); err == nil || !strings.Contains(err.Error(), "is blocked with") ||
+		!strings.Contains(err.Error(), "offline anchor rotation is required") {
+		t.Fatalf("rotation-floor refusal changed shape: [%v]", err)
+	}
+
+	// The seat-ceiling refusal is a configuration signal no rotation fixes, so
+	// it must stay separately countable from the rotation causes.
+	if _, err := frostPreSignMaximumAnchorCapacityCost(
+		frostPreSignAuthorizationMaximumInputs,
+		5,
+		signingAttemptsLimit,
+	); err == nil {
+		t.Fatal("five local seats were admitted at the maximum batch size")
+	}
+
+	for _, test := range []struct {
+		name     string
+		counted  uint64
+		expected uint64
+	}{
+		{
+			name:     "unreserved headroom",
+			counted:  frostNativeSignerAnchorUnreservedHeadroomRejections.Load(),
+			expected: 2,
+		},
+		{
+			name:     "rotation floor",
+			counted:  frostNativeSignerAnchorRotationFloorRejections.Load(),
+			expected: 1,
+		},
+		{
+			name:     "seat ceiling",
+			counted:  frostNativeSignerAnchorSeatCeilingRejections.Load(),
+			expected: 1,
+		},
+		{
+			name:     "poisoned",
+			counted:  frostNativeSignerAnchorPoisonedRejections.Load(),
+			expected: 0,
+		},
+	} {
+		if test.counted != test.expected {
+			t.Fatalf(
+				"[%s] rejections counted [%d], expected [%d]",
+				test.name,
+				test.counted,
+				test.expected,
+			)
+		}
+	}
+
+	// Registration must never be what breaks a node that has no metrics
+	// endpoint configured.
+	RegisterFrostNativeSignerAnchorAdmissionMetrics(nil)
+
+	resetFrostNativeSignerAnchorAdmissionMetricsForTest()
 }
 
 func testFrostAnchorAdmissionReadinessSnapshot(
