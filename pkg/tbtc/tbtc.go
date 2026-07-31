@@ -377,6 +377,12 @@ func Initialize(
 		// handshake, whose endpoint validator requires a loopback host and so
 		// cannot be reached from a monitoring host at all.
 		frostsigning.RegisterNativeTBTCSignerStateAnchorMetrics(clientInfo)
+		// The admission controller's refusals are the other half of that
+		// picture: the anchor gauges say the window is draining, these say
+		// which workflows were already turned away and why. A non-zero
+		// seat-ceiling or poisoned count is the signal that a node has stopped
+		// taking work it will never be able to finish.
+		RegisterFrostNativeSignerAnchorAdmissionMetrics(clientInfo)
 
 		if perfMetrics == nil {
 			perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfo)
