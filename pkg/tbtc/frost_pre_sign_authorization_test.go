@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	stdnet "net"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	ethereumRPC "github.com/ethereum/go-ethereum/rpc"
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -1411,6 +1413,26 @@ func TestIsFrostPreSignTransientAuthorizationFailure(t *testing.T) {
 			err:       fmt.Errorf("anchor read: [%w]", os.ErrDeadlineExceeded),
 			transient: true,
 		},
+		"Ethereum RPC rate limited": {
+			err: fmt.Errorf("Ethereum RPC: [%w]", ethereumRPC.HTTPError{
+				StatusCode: http.StatusTooManyRequests,
+				Status:     "429 Too Many Requests",
+			}),
+			transient: true,
+		},
+		"Ethereum RPC service unavailable": {
+			err: fmt.Errorf("Ethereum RPC: [%w]", ethereumRPC.HTTPError{
+				StatusCode: http.StatusServiceUnavailable,
+				Status:     "503 Service Unavailable",
+			}),
+			transient: true,
+		},
+		"Ethereum RPC authentication rejected": {
+			err: fmt.Errorf("Ethereum RPC: [%w]", ethereumRPC.HTTPError{
+				StatusCode: http.StatusUnauthorized,
+				Status:     "401 Unauthorized",
+			}),
+		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -1513,6 +1535,31 @@ func TestThresholdFrostPreSignAuthorizationGate_SurvivesTransientReadinessFailur
 	if readiness.calls != 3 {
 		t.Fatalf(
 			"expected the unreachable reconciliation to be retried, saw [%d] attempts",
+			readiness.calls,
+		)
+	}
+}
+
+func TestThresholdFrostPreSignAuthorizationGate_SurvivesTemporaryEthereumHTTPFailure(
+	t *testing.T,
+) {
+	readiness := &testFrostProductionAuthorizationReadiness{
+		err: fmt.Errorf("Ethereum RPC: [%w]", ethereumRPC.HTTPError{
+			StatusCode: http.StatusServiceUnavailable,
+			Status:     "503 Service Unavailable",
+		}),
+		failingCalls: 2,
+	}
+	gate, authorization := testFrostPreSignRevalidationFixture(t, readiness)
+	if err := gate.revalidate(
+		context.Background(),
+		authorization,
+	); err != nil {
+		t.Fatalf("a temporary Ethereum HTTP failure killed the session: [%v]", err)
+	}
+	if readiness.calls != 3 {
+		t.Fatalf(
+			"expected the Ethereum HTTP failure to be retried, saw [%d] attempts",
 			readiness.calls,
 		)
 	}

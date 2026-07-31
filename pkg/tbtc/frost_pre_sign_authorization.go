@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	stdnet "net"
+	"net/http"
 	"os"
 	"reflect"
 	"sort"
@@ -21,6 +22,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	ethereumCrypto "github.com/ethereum/go-ethereum/crypto"
+	ethereumRPC "github.com/ethereum/go-ethereum/rpc"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -1964,6 +1966,12 @@ func isFrostPreSignTransientAuthorizationFailure(err error) bool {
 	var networkError stdnet.Error
 	if errors.As(err, &networkError) && networkError.Timeout() {
 		return true
+	}
+	var httpError ethereumRPC.HTTPError
+	if errors.As(err, &httpError) {
+		return httpError.StatusCode == http.StatusTooManyRequests ||
+			httpError.StatusCode >= http.StatusInternalServerError &&
+				httpError.StatusCode <= 599
 	}
 	return false
 }

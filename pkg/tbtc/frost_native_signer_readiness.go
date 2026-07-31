@@ -57,6 +57,7 @@ type frostNativeSignerInventorySnapshot struct {
 	InventoryCommitment           [32]byte
 	WalletCount                   uint64
 	KeyPackageCount               uint64
+	LargestLocalSeatCount         uint64
 	ExternalRollbackAnchorBound   bool
 	TrustCertificateSequence      uint64
 	TrustCertificateDigest        [32]byte
@@ -198,8 +199,13 @@ func (binding *frostNativeSignerInventoryBinding) verify(
 	}
 
 	keyPackageCount := uint64(0)
+	largestLocalSeatCount := uint64(0)
 	for _, entry := range inventory.Entries {
-		keyPackageCount += uint64(len(entry.KeyPackages))
+		localSeatCount := uint64(len(entry.KeyPackages))
+		keyPackageCount += localSeatCount
+		if localSeatCount > largestLocalSeatCount {
+			largestLocalSeatCount = localSeatCount
+		}
 	}
 	return &frostNativeSignerInventorySnapshot{
 		Schema:                        inventory.Schema,
@@ -211,6 +217,7 @@ func (binding *frostNativeSignerInventoryBinding) verify(
 		InventoryCommitment:           inventory.InventoryCommitment,
 		WalletCount:                   uint64(len(inventory.Entries)),
 		KeyPackageCount:               keyPackageCount,
+		LargestLocalSeatCount:         largestLocalSeatCount,
 		ExternalRollbackAnchorBound:   true,
 		TrustCertificateSequence:      trustHead.CertificateSequence,
 		TrustCertificateDigest:        trustHead.CertificateDigest,
@@ -220,11 +227,10 @@ func (binding *frostNativeSignerInventoryBinding) verify(
 		CurrentAnchorRevision:         localTip.AnchorRevision,
 		RestartableRevisionHeadroom:   revisionHeadroom,
 		RestartableGenerationHeadroom: generationHeadroom,
-		AnchorRotationWarning: frostNativeSignerAnchorRotationWarning(
-			minFrostNativeSignerAnchorHeadroom(
-				revisionHeadroom,
-				generationHeadroom,
-			),
+		AnchorRotationWarning: frostNativeSignerAnchorWorkloadRotationWarning(
+			revisionHeadroom,
+			generationHeadroom,
+			largestLocalSeatCount,
 		),
 	}, nil
 }
@@ -545,6 +551,7 @@ func verifyFrostNativeSignerInventoryUnchanged(
 		actual.InventoryCommitment != expected.InventoryCommitment ||
 		actual.WalletCount != expected.WalletCount ||
 		actual.KeyPackageCount != expected.KeyPackageCount ||
+		actual.LargestLocalSeatCount != expected.LargestLocalSeatCount ||
 		actual.ExternalRollbackAnchorBound !=
 			expected.ExternalRollbackAnchorBound ||
 		actual.TrustCertificateSequence != expected.TrustCertificateSequence ||
@@ -758,11 +765,10 @@ func validateFrostNativeSignerAnchorReadinessHeadroom(
 			inventory.RestartableGenerationHeadroom !=
 			FrostNativeSignerAnchorMaximumHistoryProofEntries ||
 		inventory.AnchorRotationWarning !=
-			frostNativeSignerAnchorRotationWarning(
-				minFrostNativeSignerAnchorHeadroom(
-					inventory.RestartableRevisionHeadroom,
-					inventory.RestartableGenerationHeadroom,
-				),
+			frostNativeSignerAnchorWorkloadRotationWarning(
+				inventory.RestartableRevisionHeadroom,
+				inventory.RestartableGenerationHeadroom,
+				inventory.LargestLocalSeatCount,
 			) {
 		return fmt.Errorf(
 			"native signer certified anchor revision or generation headroom is inconsistent",

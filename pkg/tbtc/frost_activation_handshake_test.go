@@ -292,6 +292,7 @@ func testFrostProductionSignerInventorySnapshot() frostNativeSignerInventorySnap
 		PreviousStateCommitment:     [32]byte{0x30},
 		StateImageDigest:            [32]byte{0x33},
 		InventoryCommitment:         [32]byte{0x32},
+		LargestLocalSeatCount:       20,
 		ExternalRollbackAnchorBound: true,
 		TrustCertificateSequence:    3,
 		TrustCertificateDigest:      [32]byte{0x34},
@@ -1062,6 +1063,85 @@ func TestFrostActivationHandshakeExporter_SignsLiveNativeSignerState(
 	}
 	if !handshake.Payload.State.Healthy {
 		t.Fatal("live native signer state did not produce a healthy attestation")
+	}
+}
+
+func TestFrostActivationHandshakeExporter_RejectsFlatFloorOnlyAnchorWarning(
+	t *testing.T,
+) {
+	point := frostActivationEthereumPoint{
+		BlockNumber: 123,
+		BlockHash:   frostActivationHex32([32]byte{0x44}),
+	}
+	exporter, _, _, _, endpoint, request :=
+		startTestFrostActivationHandshakeExporter(t, point)
+	readiness, ok := exporter.readiness.(*testFrostProductionSignerReadiness)
+	if !ok {
+		t.Fatal("unexpected production signer readiness verifier")
+	}
+
+	response := postTestFrostActivationHandshake(t, endpoint, request)
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	response.Body.Close()
+
+	cost, err := frostPreSignAnchoredInputCost(20, signingAttemptsLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := testFrostProductionSignerInventorySnapshot()
+	inventory.StateGeneration = inventory.CertifiedFloorGeneration +
+		FrostNativeSignerAnchorMaximumHistoryProofEntries -
+		(cost.Generations - 1)
+	inventory.PreviousStateCommitment = inventory.StateCommitment
+	inventory.StateCommitment = [32]byte{0x51}
+	inventory.StateImageDigest = [32]byte{0x52}
+	inventory.RestartableGenerationHeadroom = cost.Generations - 1
+	inventory.CurrentAnchorRevision = inventory.CertifiedFloorRevision +
+		FrostNativeSignerAnchorMaximumHistoryEvents -
+		(cost.Revisions - 1)
+	inventory.RestartableRevisionHeadroom = cost.Revisions - 1
+	// This is the production bug under test: both windows remain above the flat
+	// floor, but neither can reserve this node's next twenty-seat input.
+	inventory.AnchorRotationWarning = false
+	readiness.setInventory(inventory)
+
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusServiceUnavailable {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf(
+			"flat-floor-only warning produced status [%d]: %s",
+			response.StatusCode,
+			body,
+		)
+	}
+	response.Body.Close()
+
+	inventory.AnchorRotationWarning = true
+	readiness.setInventory(inventory)
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	defer response.Body.Close()
+	handshake := &frostActivationSignedHandshake{}
+	if err := json.NewDecoder(response.Body).Decode(handshake); err != nil {
+		t.Fatal(err)
+	}
+	if handshake.Payload.State.Healthy ||
+		!handshake.Payload.State.NativeSignerState.AnchorRotationWarning {
+		t.Fatalf(
+			"workload-exhausted signer attested healthy: %+v",
+			handshake.Payload.State.NativeSignerState,
+		)
 	}
 }
 
