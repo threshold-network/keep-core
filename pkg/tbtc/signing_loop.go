@@ -76,6 +76,10 @@ type signingDoneCheckStrategy interface {
 	) error
 
 	waitUntilAllDone(ctx context.Context) (*signing.Result, uint64, error)
+
+	// stopListening stops the listener goroutine started by listen. Called
+	// on any early-exit path taken after listen but before waitUntilAllDone.
+	stopListening()
 }
 
 // signingRetryLoop is a struct that encapsulates the signing retry logic.
@@ -95,7 +99,10 @@ type signingRetryLoop struct {
 	attemptStartBlock uint64
 	attemptSeed       int64
 
-	doneCheck signingDoneCheckStrategy
+	// newDoneCheck constructs a fresh signingDoneCheckStrategy for each retry
+	// attempt (see start), instead of one instance being reused across
+	// attempts.
+	newDoneCheck func() signingDoneCheckStrategy
 }
 
 func newSigningRetryLoop(
@@ -106,7 +113,7 @@ func newSigningRetryLoop(
 	signingGroupOperators chain.Addresses,
 	groupParameters *GroupParameters,
 	announcer signingAnnouncer,
-	doneCheck signingDoneCheckStrategy,
+	newDoneCheck func() signingDoneCheckStrategy,
 ) *signingRetryLoop {
 	// Compute the 8-byte seed needed for the random retry algorithm. We take
 	// the first 8 bytes of the hash of the signed message. This allows us to
@@ -125,7 +132,7 @@ func newSigningRetryLoop(
 		attemptCounter:          0,
 		attemptStartBlock:       initialStartBlock,
 		attemptSeed:             attemptSeed,
-		doneCheck:               doneCheck,
+		newDoneCheck:            newDoneCheck,
 	}
 }
 
@@ -339,7 +346,17 @@ func (srl *signingRetryLoop) start(
 		// participants have a chance to receive signingDoneMessage.
 		doneCheckTimeoutCtx, _ := withCancelOnBlock(ctx, timeoutBlock, waitForBlockFn)
 
-		srl.doneCheck.listen(
+		// A fresh doneCheck is constructed for this attempt alone, rather
+		// than reusing one instance across attempts: reusing a single
+		// instance let a slow-to-exit listener goroutine from a failed
+		// attempt still be reading/writing the shared struct fields this
+		// same code resets for the next attempt. Every early-exit path below
+		// (taken after listen but before waitUntilAllDone) explicitly stops
+		// this attempt's listener so it does not linger until
+		// doneCheckTimeoutCtx's own block timeout.
+		doneCheck := srl.newDoneCheck()
+
+		doneCheck.listen(
 			doneCheckTimeoutCtx,
 			srl.message,
 			uint64(srl.attemptCounter),
@@ -368,6 +385,7 @@ func (srl *signingRetryLoop) start(
 					srl.attemptCounter,
 					err,
 				)
+				doneCheck.stopListening()
 				continue
 			}
 
@@ -377,7 +395,7 @@ func (srl *signingRetryLoop) start(
 				srl.attemptCounter,
 			)
 
-			err = srl.doneCheck.signalDone(
+			err = doneCheck.signalDone(
 				doneCheckTimeoutCtx,
 				srl.signingGroupMemberIndex,
 				srl.message,
@@ -393,6 +411,7 @@ func (srl *signingRetryLoop) start(
 					srl.attemptCounter,
 					err,
 				)
+				doneCheck.stopListening()
 				continue
 			}
 		} else {
@@ -404,7 +423,7 @@ func (srl *signingRetryLoop) start(
 			)
 		}
 
-		result, latestEndBlock, err := srl.doneCheck.waitUntilAllDone(doneCheckTimeoutCtx)
+		result, latestEndBlock, err := doneCheck.waitUntilAllDone(doneCheckTimeoutCtx)
 		if err != nil {
 			srl.logger.Warnf(
 				"[member:%v] cannot wait for signing done "+

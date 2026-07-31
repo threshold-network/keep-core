@@ -576,12 +576,19 @@ func (de *dkgExecutor) publishDkgResult(
 // challenge. If the result is valid and the given node was involved in the DKG,
 // this function schedules an on-chain approve that is submitted once the
 // challenge period elapses.
+//
+// It returns a nil error once the result has reached a terminal handled state
+// (invalid result challenged, valid result with no local approval duty, or
+// valid result with approval scheduled). It returns a non-nil error when a
+// transient failure (e.g. an RPC error) prevented validation from reaching a
+// terminal state; callers may use that signal to retry on a later redelivery
+// of the same event.
 func (de *dkgExecutor) executeDkgValidation(
 	seed *big.Int,
 	submissionBlock uint64,
 	result *DKGChainResult,
 	resultHash [32]byte,
-) {
+) error {
 	dkgLogger := logger.With(
 		zap.String("seed", fmt.Sprintf("0x%x", seed)),
 		zap.String("groupPublicKey", fmt.Sprintf("0x%x", result.GroupPublicKey)),
@@ -597,7 +604,7 @@ func (de *dkgExecutor) executeDkgValidation(
 	isValid, err := de.chain.IsDKGResultValid(result)
 	if err != nil {
 		dkgLogger.Errorf("cannot validate DKG result: [%v]", err)
-		return
+		return fmt.Errorf("cannot validate DKG result: [%w]", err)
 	}
 
 	if !isValid {
@@ -620,7 +627,10 @@ func (de *dkgExecutor) executeDkgValidation(
 					"cannot challenge invalid DKG result: [%v]",
 					err,
 				)
-				return
+				return fmt.Errorf(
+					"cannot challenge invalid DKG result: [%w]",
+					err,
+				)
 			}
 
 			if de.metricsRecorder != nil {
@@ -642,20 +652,23 @@ func (de *dkgExecutor) executeDkgValidation(
 					"error while waiting for challenge confirmation: [%v]",
 					err,
 				)
-				return
+				return fmt.Errorf(
+					"error while waiting for challenge confirmation: [%w]",
+					err,
+				)
 			}
 
 			state, err := de.chain.GetDKGState()
 			if err != nil {
 				dkgLogger.Errorf("cannot check DKG state: [%v]", err)
-				return
+				return fmt.Errorf("cannot check DKG state: [%w]", err)
 			}
 
 			if state != Challenge {
 				dkgLogger.Infof(
 					"invalid DKG result challenged successfully",
 				)
-				return
+				return nil
 			}
 
 			dkgLogger.Infof(
@@ -669,7 +682,7 @@ func (de *dkgExecutor) executeDkgValidation(
 	operatorID, err := de.operatorIDFn()
 	if err != nil {
 		dkgLogger.Errorf("cannot get node's operator ID: [%v]", err)
-		return
+		return fmt.Errorf("cannot get node's operator ID: [%w]", err)
 	}
 
 	// Determine the member indexes controlled by this node's operator.
@@ -689,7 +702,7 @@ func (de *dkgExecutor) executeDkgValidation(
 			operatorID,
 			result.Members,
 		)
-		return
+		return nil
 	}
 
 	dkgLogger.Infof("scheduling DKG result approval")
@@ -697,7 +710,7 @@ func (de *dkgExecutor) executeDkgValidation(
 	parameters, err := de.chain.DKGParameters()
 	if err != nil {
 		dkgLogger.Errorf("cannot get current DKG parameters: [%v]", err)
-		return
+		return fmt.Errorf("cannot get current DKG parameters: [%w]", err)
 	}
 
 	// The challenge period starts at the result submission block and lasts
@@ -780,6 +793,10 @@ func (de *dkgExecutor) executeDkgValidation(
 			dkgLogger.Infof("[member:%v] approving DKG result", memberIndex)
 		}(currentMemberIndex)
 	}
+
+	// The result was valid and this node's approval duties have been scheduled;
+	// the event is terminally handled.
+	return nil
 }
 
 // finalSigningGroup takes three parameters:

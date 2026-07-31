@@ -347,7 +347,7 @@ func TestDkgExecutor_ExecuteDkgValidation(t *testing.T) {
 				},
 			)
 
-			dkgExecutor.executeDkgValidation(
+			_ = dkgExecutor.executeDkgValidation(
 				dkgResultSubmittedEvent.Seed,
 				dkgResultSubmittedEvent.BlockNumber,
 				dkgResultSubmittedEvent.Result,

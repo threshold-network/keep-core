@@ -352,6 +352,8 @@ func TestGetUnprovenDepositSweepTransactions(t *testing.T) {
 	transactions, err := getUnprovenDepositSweepTransactions(
 		historyDepth,
 		transactionLimit,
+		DefaultTransactionScanLimit,
+		newWalletTransactionScanner(),
 		btcChain,
 		spvChain,
 	)

@@ -344,6 +344,12 @@ func initCovenantSignerFlags(cmd *cobra.Command, cfg *config.Config) {
 		false,
 		"Fail startup when enabled covenant routes are missing route-level approval trust roots. Request-time validation still enforces exact reserve/network trust-root matches.",
 	)
+	cmd.Flags().BoolVar(
+		&cfg.CovenantSigner.BridgeCovenantFraudDefenseConfirmed,
+		"covenantSigner.bridgeCovenantFraudDefenseConfirmed",
+		false,
+		"Set only after confirming the tBTC Bridge covenant fraud-defense path is deployed. Until set, the covenant signer fails closed and refuses to sign, because a covenant signature would otherwise expose the wallet to an undefeatable fraud challenge.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.
@@ -380,8 +386,17 @@ func initMaintainerFlags(command *cobra.Command, cfg *config.Config) {
 		&cfg.Maintainer.Spv.TransactionLimit,
 		"spv.transactionLimit",
 		spv.DefaultTransactionLimit,
-		"The maximum number of confirmed transactions returned when getting "+
-			"transactions for a public key hash.",
+		"The maximum number of matching (unproven protocol) transactions "+
+			"returned when getting transactions for a public key hash.",
+	)
+
+	command.Flags().IntVar(
+		&cfg.Maintainer.Spv.TransactionScanLimit,
+		"spv.transactionScanLimit",
+		spv.DefaultTransactionScanLimit,
+		"The maximum number of not-yet-classified confirmed transactions "+
+			"examined, per wallet, each time the maintainer searches for "+
+			"matching (unproven protocol) transactions.",
 	)
 
 	command.Flags().DurationVar(

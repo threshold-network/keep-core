@@ -251,6 +251,8 @@ func convertVaultAddress(vault *chain.Address) common.Address {
 func getUnprovenDepositSweepTransactions(
 	historyDepth uint64,
 	transactionLimit int,
+	transactionScanLimit int,
+	scanner *walletTransactionScanner,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 ) (
@@ -311,40 +313,34 @@ func getUnprovenDepositSweepTransactions(
 			continue
 		}
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		walletUnprovenTransactions, err := scanner.getUnprovenWalletTransactions(
+			walletTransactionScanKey{
+				actionType:      tbtc.ActionDepositSweep,
+				actorWalletPKH:  walletPublicKeyHash,
+				lookupWalletPKH: walletPublicKeyHash,
+			},
 			walletPublicKeyHash,
 			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenDepositSweepTransaction(
+			transactionScanLimit,
+			"deposit sweep",
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenDepositSweepTransaction(
 					transaction,
 					walletPublicKeyHash,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven deposit sweep "+
-						"transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenDepositSweepTransactions = append(
-					unprovenDepositSweepTransactions,
-					transaction,
-				)
-			}
+			},
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenDepositSweepTransactions = append(
+			unprovenDepositSweepTransactions,
+			walletUnprovenTransactions...,
+		)
 	}
 
 	return unprovenDepositSweepTransactions, nil

@@ -3,6 +3,7 @@ package spv
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -151,7 +152,26 @@ func (lbc *localBitcoinChain) GetTransactionsForPublicKeyHash(
 func (lbc *localBitcoinChain) GetTxHashesForPublicKeyHash(
 	publicKeyHash [20]byte,
 ) ([]bitcoin.Hash, error) {
-	panic("unsupported")
+	// Delegate to GetTransactionsForPublicKeyHash with an effectively
+	// unbounded limit instead of duplicating its P2PKH/P2WPKH matching loop.
+	// Do not hold lbc.mutex here: the delegated call locks it itself, and
+	// sync.Mutex is not reentrant.
+	transactions, err := lbc.GetTransactionsForPublicKeyHash(
+		publicKeyHash,
+		math.MaxInt32,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Preserves the ascending block-height order GetTransactionsForPublicKeyHash
+	// returns, which the tests rely on.
+	hashes := make([]bitcoin.Hash, len(transactions))
+	for i, transaction := range transactions {
+		hashes[i] = transaction.Hash()
+	}
+
+	return hashes, nil
 }
 
 func (lbc *localBitcoinChain) GetMempoolForPublicKeyHash(publicKeyHash [20]byte) (

@@ -415,6 +415,156 @@ func TestInitializeRequiresSignerApprovalVerifierWhenConfigured(t *testing.T) {
 	}
 }
 
+// verifierOnlyEngine implements Engine and SignerApprovalVerifier but
+// deliberately not CurrentBlockHeightProvider, so NewService succeeds (there
+// is nothing to auto-detect a provider from) while Initialize's post-NewService
+// invariant check -- a verifier without a way to determine expiry -- must
+// still reject startup.
+type verifierOnlyEngine struct{}
+
+func (verifierOnlyEngine) OnSubmit(context.Context, *Job) (*Transition, error) {
+	return nil, nil
+}
+
+func (verifierOnlyEngine) OnPoll(context.Context, *Job) (*Transition, error) {
+	return nil, nil
+}
+
+func (verifierOnlyEngine) VerifySignerApproval(RouteSubmitRequest) error {
+	return nil
+}
+
+func TestInitializeRejectsVerifierWithoutBlockHeightProvider(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, enabled, err := Initialize(
+		ctx,
+		Config{Port: availableLoopbackPort(t)},
+		handle,
+		&verifierOnlyEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf("expected startup to fail for a verifier without a block height provider, got enabled=%v err=%v", enabled, err)
+	}
+	if !strings.Contains(err.Error(), "CurrentBlockHeightProvider") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestInitializeReleasesStoreLockAfterLaterStartupFailure proves that a
+// startup failure occurring after NewService has already acquired the
+// store's exclusive file lock still releases it: a first Initialize attempt
+// fails on the verifier/provider invariant (after successfully constructing
+// the service and its store), and a second attempt over the very same data
+// directory must be able to acquire the lock and succeed. Without the
+// deferred cleanup in Initialize, the second attempt would fail with a
+// lock-contention error instead of starting.
+func TestInitializeReleasesStoreLockAfterLaterStartupFailure(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, enabled, err := Initialize(
+		ctx,
+		Config{
+			Port:    availableLoopbackPort(t),
+			DataDir: dataDir,
+		},
+		newMemoryHandle(),
+		&verifierOnlyEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf("expected the first startup attempt to fail, got enabled=%v err=%v", enabled, err)
+	}
+	// Assert this failed for the verifier/provider invariant, not because the
+	// data directory's lock was already held (which would defeat the point
+	// of this test: proving the *first* attempt's lock gets released).
+	if !strings.Contains(err.Error(), "CurrentBlockHeightProvider") {
+		t.Fatalf("expected a verifier/provider invariant error, got: %v", err)
+	}
+
+	server, enabled, err := Initialize(
+		ctx,
+		Config{
+			Port:    availableLoopbackPort(t),
+			DataDir: dataDir,
+		},
+		newMemoryHandle(),
+		&scriptedVerifierEngine{},
+	)
+	if err != nil || !enabled || server == nil {
+		t.Fatalf(
+			"expected retry over the same data directory to succeed, got enabled=%v server=%v err=%v",
+			enabled,
+			server != nil,
+			err,
+		)
+	}
+}
+
+func TestInitializeRequiresTrustRootsForNonLoopbackListenAddress(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// A non-loopback (production) listen address must fail startup when the
+	// required approval trust roots are missing, even without
+	// RequireApprovalTrustRoots being set explicitly. The engine provides a
+	// verifier, so the failure is attributable to the missing trust roots.
+	_, enabled, err := Initialize(
+		ctx,
+		Config{
+			Port:          availableLoopbackPort(t),
+			ListenAddress: "0.0.0.0",
+			AuthToken:     "test-token",
+		},
+		handle,
+		&scriptedVerifierEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf("expected non-loopback startup without trust roots to fail, got enabled=%v err=%v", enabled, err)
+	}
+	if !strings.Contains(err.Error(), "non-loopback listen address") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitializeRequiresSignerApprovalVerifierForNonLoopbackListenAddress(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// A non-loopback (production) listen address with all trust roots present
+	// but no signer approval verifier must fail startup.
+	_, enabled, err := Initialize(
+		ctx,
+		Config{
+			Port:          availableLoopbackPort(t),
+			ListenAddress: "0.0.0.0",
+			AuthToken:     "test-token",
+			DepositorTrustRoots: []DepositorTrustRoot{
+				testDepositorTrustRoot(TemplateQcV1),
+			},
+			CustodianTrustRoots: []CustodianTrustRoot{
+				testCustodianTrustRoot(TemplateQcV1),
+			},
+		},
+		handle,
+		&scriptedEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf("expected non-loopback startup without a verifier to fail, got enabled=%v err=%v", enabled, err)
+	}
+	if !strings.Contains(err.Error(), "requires a signerApprovalVerifier") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "non-loopback listen address") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestIsLoopbackListenAddressAcceptsBracketedIPv6Loopback(t *testing.T) {
 	if !isLoopbackListenAddress("[::1]") {
 		t.Fatal("expected bracketed IPv6 loopback address to be recognized")
@@ -927,6 +1077,67 @@ func TestSubmitHandlerPreservesServiceContextValues(t *testing.T) {
 				"got %v",
 			testValue,
 			capturedValue,
+		)
+	}
+}
+
+// TestServerAcceptsBodyExactlyAtLimit asserts the request-body size guard is an
+// inclusive cap: a body of exactly maxRequestBodyBytes must pass, since
+// http.MaxBytesReader only rejects bodies strictly larger than the limit. This
+// complements the maxRequestBodyBytes+1 rejection in TestServerBoundaryErrorMatrix
+// and pins the exact boundary so an off-by-one in the cap would be caught.
+func TestServerAcceptsBodyExactlyAtLimit(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(newHandler(service, context.Background(), "test-token", true))
+	defer server.Close()
+
+	// Build a well-formed submit envelope padded to exactly maxRequestBodyBytes
+	// by stretching the facadeRequestId string field.
+	prefix := `{"routeRequestId":"ors_exact","stage":"SIGNER_COORDINATION","request":{"facadeRequestId":"`
+	suffix := `"}}`
+	pad := maxRequestBodyBytes - len(prefix) - len(suffix)
+	if pad <= 0 {
+		t.Fatalf("test assumption broken: prefix+suffix already exceed the body limit")
+	}
+	body := []byte(prefix + strings.Repeat("a", pad) + suffix)
+	if len(body) != maxRequestBodyBytes {
+		t.Fatalf("expected body of exactly %d bytes, got %d", maxRequestBodyBytes, len(body))
+	}
+
+	request, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/self_v1/signer/requests",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer test-token")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	// The body may still be rejected on its contents, but it must not be
+	// rejected by the size guard, which surfaces as "malformed request body".
+	responseBody, _ := io.ReadAll(response.Body)
+	if strings.Contains(string(responseBody), "malformed request body") {
+		t.Fatalf(
+			"body exactly at the limit was rejected as malformed (size guard fired): %d %s",
+			response.StatusCode,
+			string(responseBody),
 		)
 	}
 }

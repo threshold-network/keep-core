@@ -565,6 +565,28 @@ describe("TokenStakingEscrow", () => {
       )
     })
 
+    it("does not allow a second withdrawal after a partial withdraw", async () => {
+      // Withdraw part of the unlocked deposit first, so the withdrawn counter
+      // is non-zero before the grant is revoked.
+      await time.increaseTo(grantStart.add(time.duration.days(15)))
+      await escrow.withdraw(operator, { from: operator }) // (300k / 30) * 15 = 150k KEEP
+      await tokenGrant.revoke(grantId, { from: grantManager })
+
+      // The first revoked withdrawal transfers the remaining 150k.
+      await escrow.withdrawRevoked(operator, { from: grantManager })
+
+      // A second revoked withdrawal must transfer nothing. Overwriting the
+      // withdrawn counter instead of adding to it would discard the prior
+      // partial withdrawal and let the same tokens be withdrawn again, draining
+      // the escrow's shared token balance.
+      const balanceBefore = await token.balanceOf(grantManager)
+      await escrow.withdrawRevoked(operator, { from: grantManager })
+      const balanceAfter = await token.balanceOf(grantManager)
+
+      const diff = balanceAfter.sub(balanceBefore)
+      expect(diff).to.eq.BN(0)
+    })
+
     it("withdraws entire deposited amount if nothing has been withdrawn before", async () => {
       await time.increaseTo(grantStart.add(time.duration.days(15)))
       await tokenGrant.revoke(grantId, { from: grantManager })

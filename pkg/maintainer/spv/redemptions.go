@@ -161,6 +161,8 @@ func parseRedemptionTransactionInput(
 func getUnprovenRedemptionTransactions(
 	historyDepth uint64,
 	transactionLimit int,
+	transactionScanLimit int,
+	scanner *walletTransactionScanner,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 ) (
@@ -221,40 +223,34 @@ func getUnprovenRedemptionTransactions(
 			continue
 		}
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		walletUnprovenTransactions, err := scanner.getUnprovenWalletTransactions(
+			walletTransactionScanKey{
+				actionType:      tbtc.ActionRedemption,
+				actorWalletPKH:  walletPublicKeyHash,
+				lookupWalletPKH: walletPublicKeyHash,
+			},
 			walletPublicKeyHash,
 			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenRedemptionTransaction(
+			transactionScanLimit,
+			"redemption",
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenRedemptionTransaction(
 					transaction,
 					walletPublicKeyHash,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven redemption "+
-						"transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenRedemptionTransactions = append(
-					unprovenRedemptionTransactions,
-					transaction,
-				)
-			}
+			},
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenRedemptionTransactions = append(
+			unprovenRedemptionTransactions,
+			walletUnprovenTransactions...,
+		)
 	}
 
 	return unprovenRedemptionTransactions, nil

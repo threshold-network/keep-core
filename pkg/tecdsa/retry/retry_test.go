@@ -2,6 +2,7 @@ package retry
 
 import (
 	"fmt"
+	"math/rand"
 	"reflect"
 	"strings"
 	"testing"
@@ -248,4 +249,91 @@ func assertInvariants(
 	isLargeEnough(t, groupMemberRandomizer, groupMembers, seed, retryCount, retryParticipantsCount)
 	affectedBySeed(t, groupMemberRandomizer, groupMembers, seed, retryCount, retryParticipantsCount)
 	affectedByRetryCount(t, groupMemberRandomizer, groupMembers, seed, retryCount, retryParticipantsCount)
+}
+
+// TestExcludeOperatorTriplets_EligibilityFilterUsesThirdOperatorSeats verifies
+// that the triplet eligibility filter subtracts the seat count of all three
+// distinct operators in a triple. The filter must count the third operator's
+// (operators[k]) seats; reusing the middle operator's (operators[j]) seats in
+// its place double-counts the middle operator and ignores the third, which both
+// admits triples whose true post-exclusion seat count is below
+// retryParticipantsCount and drops valid triples.
+func TestExcludeOperatorTriplets_EligibilityFilterUsesThirdOperatorSeats(t *testing.T) {
+	// Four operators with deliberately distinguishable seat counts. The last
+	// operator (D) controls far more seats than the others, so every triple that
+	// includes D must be rejected once D's seats are correctly subtracted.
+	operators := []chain.Address{"A", "B", "C", "D"}
+	operatorToSeatCount := map[chain.Address]uint{
+		"A": 1,
+		"B": 1,
+		"C": 1,
+		"D": 10,
+	}
+
+	// groupMembers is consistent with the seat counts above: 1+1+1+10 = 13 seats.
+	groupMembers := make([]chain.Address, 0, 13)
+	for _, operator := range operators {
+		for i := uint(0); i < operatorToSeatCount[operator]; i++ {
+			groupMembers = append(groupMembers, operator)
+		}
+	}
+
+	// With retryParticipantsCount = 5, only the triple {A, B, C} leaves enough
+	// seats: 13 - 1 - 1 - 1 = 10 >= 5. Every triple that includes D leaves
+	// 13 - 1 - 1 - 10 = 1 < 5 and must be filtered out. The buggy arithmetic
+	// (subtracting the middle operator's seats twice and ignoring D's seats)
+	// would instead admit all four triples.
+	retryParticipantsCount := 5
+
+	rng := rand.New(rand.NewSource(1))
+
+	// An out-of-range index makes excludeOperatorTriplets report the number of
+	// eligible triplets without shuffling, which is exactly the value produced
+	// by the eligibility filter.
+	_, eligibleTripletCount, ok := excludeOperatorTriplets(
+		rng,
+		groupMembers,
+		1<<30,
+		operatorToSeatCount,
+		operators,
+		retryParticipantsCount,
+	)
+	if ok {
+		t.Fatal("expected excludeOperatorTriplets to report an out-of-range index")
+	}
+	if eligibleTripletCount != 1 {
+		t.Fatalf(
+			"unexpected eligible triplet count\nexpected: [1] (only {A, B, C})\nactual:   [%d]",
+			eligibleTripletCount,
+		)
+	}
+
+	// The single eligible triplet must be {A, B, C}; excluding it leaves only
+	// D's seats. If the filter had admitted a triple containing D, the resulting
+	// subset would still contain one of A, B, or C.
+	subset, _, ok := excludeOperatorTriplets(
+		rng,
+		groupMembers,
+		0,
+		operatorToSeatCount,
+		operators,
+		retryParticipantsCount,
+	)
+	if !ok {
+		t.Fatal("expected excludeOperatorTriplets to select the eligible triplet")
+	}
+	for _, operator := range subset {
+		if operator != "D" {
+			t.Errorf(
+				"subset should exclude {A, B, C} and contain only D seats, found [%s]",
+				operator,
+			)
+		}
+	}
+	if len(subset) != 10 {
+		t.Errorf(
+			"unexpected subset size\nexpected: [10] (all D seats)\nactual:   [%d]",
+			len(subset),
+		)
+	}
 }

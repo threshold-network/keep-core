@@ -1251,6 +1251,32 @@ func (tc *TbtcChain) PastDepositRevealedEvents(
 	return convertedEvents, err
 }
 
+// convertPastRedemptionRequestedEvent maps a single on-chain RedemptionRequested
+// event to its off-chain tbtc.RedemptionRequestedEvent representation. The event
+// carries two distinct fee fields, TreasuryFee and TxMaxFee, that must be mapped
+// to their matching destination fields independently; keeping the mapping in a
+// standalone helper lets that field-by-field correspondence be unit tested.
+func convertPastRedemptionRequestedEvent(
+	event *tbtcabi.BridgeRedemptionRequested,
+) (*tbtc.RedemptionRequestedEvent, error) {
+	redeemerOutputScript, err := bitcoin.NewScriptFromVarLenData(
+		event.RedeemerOutputScript,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tbtc.RedemptionRequestedEvent{
+		WalletPublicKeyHash:  event.WalletPubKeyHash,
+		RedeemerOutputScript: redeemerOutputScript,
+		Redeemer:             chain.Address(event.Redeemer.Hex()),
+		RequestedAmount:      event.RequestedAmount,
+		TreasuryFee:          event.TreasuryFee,
+		TxMaxFee:             event.TxMaxFee,
+		BlockNumber:          event.Raw.BlockNumber,
+	}, nil
+}
+
 func (tc *TbtcChain) PastRedemptionRequestedEvents(
 	filter *tbtc.RedemptionRequestedEventFilter,
 ) ([]*tbtc.RedemptionRequestedEvent, error) {
@@ -1282,21 +1308,9 @@ func (tc *TbtcChain) PastRedemptionRequestedEvents(
 
 	convertedEvents := make([]*tbtc.RedemptionRequestedEvent, 0)
 	for _, event := range events {
-		redeemerOutputScript, err := bitcoin.NewScriptFromVarLenData(
-			event.RedeemerOutputScript,
-		)
+		convertedEvent, err := convertPastRedemptionRequestedEvent(event)
 		if err != nil {
 			return nil, err
-		}
-
-		convertedEvent := &tbtc.RedemptionRequestedEvent{
-			WalletPublicKeyHash:  event.WalletPubKeyHash,
-			RedeemerOutputScript: redeemerOutputScript,
-			Redeemer:             chain.Address(event.Redeemer.Hex()),
-			RequestedAmount:      event.RequestedAmount,
-			TreasuryFee:          event.TreasuryFee,
-			TxMaxFee:             event.TreasuryFee,
-			BlockNumber:          event.Raw.BlockNumber,
 		}
 
 		convertedEvents = append(convertedEvents, convertedEvent)

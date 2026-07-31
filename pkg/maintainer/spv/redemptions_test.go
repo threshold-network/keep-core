@@ -291,6 +291,8 @@ func TestGetUnprovenRedemptionTransactions(t *testing.T) {
 	transactions, err := getUnprovenRedemptionTransactions(
 		historyDepth,
 		transactionLimit,
+		DefaultTransactionScanLimit,
+		newWalletTransactionScanner(),
 		btcChain,
 		spvChain,
 	)

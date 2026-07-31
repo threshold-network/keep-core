@@ -85,6 +85,7 @@ func Initialize(
 	clientInfo *clientinfo.Registry,
 	perfMetrics *clientinfo.PerformanceMetrics,
 	minActiveOutpointConfirmations uint,
+	bridgeCovenantFraudDefenseConfirmed bool,
 ) (covenantsigner.Engine, error) {
 	groupParameters := &GroupParameters{
 		GroupSize:       100,
@@ -172,161 +173,142 @@ func Initialize(
 
 	_ = chain.OnDKGStarted(func(event *DKGStartedEvent) {
 		go func() {
-			if ok := deduplicator.notifyDKGStarted(
-				event.Seed,
-			); !ok {
-				logger.Infof(
-					"DKG started event with seed [0x%x] has been "+
-						"already processed",
-					event.Seed,
-				)
-				return
-			}
+			// handleDKGStartedEvent records the deduplication entry as completed
+			// only once the local DKG join has been dispatched (or the event was
+			// authoritatively found unconfirmed), so a transient early return in
+			// the handler below leaves the event retryable on redelivery.
+			handleDKGStartedEvent(
+				deduplicator,
+				event,
+				func(event *DKGStartedEvent) error {
+					confirmationBlock := event.BlockNumber + dkgStartedConfirmationBlocks
 
-			confirmationBlock := event.BlockNumber + dkgStartedConfirmationBlocks
+					logger.Infof(
+						"observed DKG started event with seed [0x%x] and "+
+							"starting block [%v]; waiting for block [%v] to confirm",
+						event.Seed,
+						event.BlockNumber,
+						confirmationBlock,
+					)
 
-			logger.Infof(
-				"observed DKG started event with seed [0x%x] and "+
-					"starting block [%v]; waiting for block [%v] to confirm",
-				event.Seed,
-				event.BlockNumber,
-				confirmationBlock,
+					if err := node.waitForBlockHeight(ctx, confirmationBlock); err != nil {
+						return fmt.Errorf(
+							"failed to confirm DKG started event: [%w]",
+							err,
+						)
+					}
+
+					dkgState, err := chain.GetDKGState()
+					if err != nil {
+						return fmt.Errorf("failed to check DKG state: [%w]", err)
+					}
+
+					if dkgState != AwaitingResult {
+						logger.Infof(
+							"DKG started event with seed [0x%x] and starting "+
+								"block [%v] was not confirmed",
+							event.Seed,
+							event.BlockNumber,
+						)
+
+						// The event was authoritatively determined to be
+						// unconfirmed; there is nothing to retry, so treat it as
+						// terminally handled.
+						return nil
+					}
+
+					// Fetch all past DKG started events starting from one
+					// confirmation period before the original event's block.
+					// If there was a chain reorg, the event we received could be
+					// moved to a block with a lower number than the one
+					// we received.
+					pastEvents, err := chain.PastDKGStartedEvents(
+						&DKGStartedEventFilter{
+							StartBlock: event.BlockNumber - dkgStartedConfirmationBlocks,
+						},
+					)
+					if err != nil {
+						return fmt.Errorf(
+							"failed to get past DKG started events: [%w]",
+							err,
+						)
+					}
+
+					// Should not happen but just in case.
+					if len(pastEvents) == 0 {
+						return fmt.Errorf("no past DKG started events")
+					}
+
+					lastEvent := pastEvents[len(pastEvents)-1]
+
+					logger.Infof(
+						"DKG started with seed [0x%x] at block [%v]",
+						lastEvent.Seed,
+						lastEvent.BlockNumber,
+					)
+
+					// The off-chain protocol should be started as close as
+					// possible to the current block or even further. Starting the
+					// off-chain protocol with a past block will likely cause a
+					// failure of the first attempt as the start block is used to
+					// synchronize the announcements and the state machine. Here we
+					// ensure a proper start point by delaying the execution by the
+					// confirmation period length.
+					node.joinDKGIfEligible(
+						lastEvent.Seed,
+						lastEvent.BlockNumber,
+						dkgStartedConfirmationBlocks,
+					)
+
+					// The local DKG join has been dispatched; the event is
+					// terminally handled.
+					return nil
+				},
 			)
-
-			err := node.waitForBlockHeight(ctx, confirmationBlock)
-			if err != nil {
-				logger.Errorf("failed to confirm DKG started event: [%v]", err)
-				return
-			}
-
-			dkgState, err := chain.GetDKGState()
-			if err != nil {
-				logger.Errorf("failed to check DKG state: [%v]", err)
-				return
-			}
-
-			if dkgState == AwaitingResult {
-				// Fetch all past DKG started events starting from one
-				// confirmation period before the original event's block.
-				// If there was a chain reorg, the event we received could be
-				// moved to a block with a lower number than the one
-				// we received.
-				pastEvents, err := chain.PastDKGStartedEvents(
-					&DKGStartedEventFilter{
-						StartBlock: event.BlockNumber - dkgStartedConfirmationBlocks,
-					},
-				)
-				if err != nil {
-					logger.Errorf("failed to get past DKG started events: [%v]", err)
-					return
-				}
-
-				// Should not happen but just in case.
-				if len(pastEvents) == 0 {
-					logger.Errorf("no past DKG started events")
-					return
-				}
-
-				lastEvent := pastEvents[len(pastEvents)-1]
-
-				logger.Infof(
-					"DKG started with seed [0x%x] at block [%v]",
-					lastEvent.Seed,
-					lastEvent.BlockNumber,
-				)
-
-				// The off-chain protocol should be started as close as possible
-				// to the current block or even further. Starting the off-chain
-				// protocol with a past block will likely cause a failure of the
-				// first attempt as the start block is used to synchronize
-				// the announcements and the state machine. Here we ensure
-				// a proper start point by delaying the execution by the
-				// confirmation period length.
-				node.joinDKGIfEligible(
-					lastEvent.Seed,
-					lastEvent.BlockNumber,
-					dkgStartedConfirmationBlocks,
-				)
-			} else {
-				logger.Infof(
-					"DKG started event with seed [0x%x] and starting "+
-						"block [%v] was not confirmed",
-					event.Seed,
-					event.BlockNumber,
-				)
-			}
 		}()
 	})
 
 	_ = chain.OnDKGResultSubmitted(func(event *DKGResultSubmittedEvent) {
 		go func() {
-			if ok := deduplicator.notifyDKGResultSubmitted(
-				event.Seed,
-				event.ResultHash,
-				event.BlockNumber,
-			); !ok {
-				logger.Warnf(
-					"Result with hash [0x%x] for DKG with seed [0x%x] "+
-						"and starting block [%v] has been already processed",
-					event.ResultHash,
-					event.Seed,
-					event.BlockNumber,
-				)
-				return
-			}
-
-			logger.Infof(
-				"Result with hash [0x%x] for DKG with seed [0x%x] "+
-					"submitted at block [%v]",
-				event.ResultHash,
-				event.Seed,
-				event.BlockNumber,
-			)
-
-			node.validateDKG(
-				event.Seed,
-				event.BlockNumber,
-				event.Result,
-				event.ResultHash,
+			// handleDKGResultSubmittedEvent records the deduplication entry as
+			// completed only after validation reaches a terminal state, so a
+			// transient failure below leaves the event retryable on redelivery.
+			handleDKGResultSubmittedEvent(
+				deduplicator,
+				event,
+				func(event *DKGResultSubmittedEvent) error {
+					return node.validateDKG(
+						event.Seed,
+						event.BlockNumber,
+						event.Result,
+						event.ResultHash,
+					)
+				},
 			)
 		}()
 	})
 
 	_ = chain.OnWalletClosed(func(event *WalletClosedEvent) {
 		go func() {
-			if ok := deduplicator.notifyWalletClosed(
-				event.WalletID,
-			); !ok {
-				logger.Warnf(
-					"Wallet closure for wallet with ID [0x%x] at block [%v] "+
-						"has been already processed",
-					event.WalletID,
-					event.BlockNumber,
-				)
-				return
-			}
-
-			logger.Infof(
-				"Wallet with ID [0x%x] has been closed at block [%v]; "+
-					"proceeding with handling wallet closure",
-				event.WalletID,
-				event.BlockNumber,
+			// handleWalletClosedEvent records the deduplication entry as
+			// completed only after the wallet has actually been archived, so a
+			// transient archival failure below leaves the event retryable on
+			// redelivery.
+			handleWalletClosedEvent(
+				deduplicator,
+				event,
+				func(event *WalletClosedEvent) error {
+					return node.handleWalletClosure(event.WalletID)
+				},
 			)
-
-			err := node.handleWalletClosure(
-				event.WalletID,
-			)
-			if err != nil {
-				logger.Errorf(
-					"Failure while handling wallet closure with ID [0x%x]: [%v]",
-					event.WalletID,
-					err,
-				)
-			}
 		}()
 	})
 
-	return newCovenantSignerEngine(node, minActiveOutpointConfirmations), nil
+	return newCovenantSignerEngine(
+		node,
+		minActiveOutpointConfirmations,
+		bridgeCovenantFraudDefenseConfirmed,
+	), nil
 }
 
 // enoughPreParamsInPoolPolicy is a policy that enforces the sufficient size

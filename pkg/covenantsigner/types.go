@@ -201,7 +201,7 @@ type SignerApprovalCertificate struct {
 	Signature          string   `json:"signature"`
 	ActiveMembers      []uint32 `json:"activeMembers,omitempty"`
 	InactiveMembers    []uint32 `json:"inactiveMembers,omitempty"`
-	EndBlock           *uint64  `json:"endBlock,omitempty"`
+	EndBlock           *uint64  `json:"endBlock"`
 }
 
 type SigningRequirements struct {

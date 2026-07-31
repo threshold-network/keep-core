@@ -131,6 +131,8 @@ func parseMovedFundsSweepTransactionInputs(
 func getUnprovenMovedFundsSweepTransactions(
 	historyDepth uint64,
 	transactionLimit int,
+	transactionScanLimit int,
+	scanner *walletTransactionScanner,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 ) (
@@ -210,46 +212,43 @@ func getUnprovenMovedFundsSweepTransactions(
 
 		// When wallet makes a moved funds sweep transaction, it transfers
 		// funds to itself. Therefore we can search all the transactions that
-		// pay to the wallet's public key hash.
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		// pay to the wallet's public key hash. A wallet can have only one
+		// unproven moved funds sweep transaction at a time, so the scan is
+		// bounded to a single match: it stops at the first unproven moved funds
+		// sweep transaction it finds, scanning past any unrelated (e.g. spam)
+		// transactions along the way.
+		// A wallet can have only one unproven moved funds sweep transaction at
+		// a time, so the result limit is always 1 regardless of the caller's
+		// transactionLimit - but the raw-examination budget below still uses
+		// the real transactionScanLimit, not this result limit.
+		walletUnprovenTransactions, err := scanner.getUnprovenWalletTransactions(
+			walletTransactionScanKey{
+				actionType:      tbtc.ActionMovedFundsSweep,
+				actorWalletPKH:  walletPublicKeyHash,
+				lookupWalletPKH: walletPublicKeyHash,
+			},
 			walletPublicKeyHash,
-			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenMovedFundsSweepTransaction(
+			1,
+			transactionScanLimit,
+			"moved funds sweep",
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenMovedFundsSweepTransaction(
 					transaction,
 					walletPublicKeyHash,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven moved "+
-						"funds sweep transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenMovedFundsSweepTransactions = append(
-					unprovenMovedFundsSweepTransactions,
-					transaction,
-				)
-
-				// A wallet can have only one unproven moved funds sweep
-				// transaction at a time. If we found such transaction, we don't
-				// have to look at this wallet's transactions anymore.
-				break
-			}
+			},
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenMovedFundsSweepTransactions = append(
+			unprovenMovedFundsSweepTransactions,
+			walletUnprovenTransactions...,
+		)
 	}
 
 	return unprovenMovedFundsSweepTransactions, nil

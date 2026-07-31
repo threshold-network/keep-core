@@ -37,6 +37,14 @@ type Config struct {
 	// covenant signer accepts it. When zero (unset), the system defaults to 6
 	// to align with the deposit sweep finality threshold.
 	MinActiveOutpointConfirmations uint `mapstructure:"minActiveOutpointConfirmations"`
+	// BridgeCovenantFraudDefenseConfirmed must be set only when the operator has
+	// confirmed that the tBTC Bridge recognizes covenant active UTXO spends as
+	// honest spends in Fraud.defeatFraudChallenge (the covenant fraud-defense
+	// path is deployed). Until then the covenant signer fails closed and refuses
+	// to produce signatures, because a covenant signature over a covenant active
+	// UTXO would otherwise be a valid, undefeatable tBTC fraud proof that could
+	// slash the signing wallet.
+	BridgeCovenantFraudDefenseConfirmed bool `mapstructure:"bridgeCovenantFraudDefenseConfirmed"`
 	// DataDir is the base directory path used by the disk persistence handle.
 	// When set, the store acquires an exclusive file lock to prevent concurrent
 	// process corruption. When empty, file locking is skipped.

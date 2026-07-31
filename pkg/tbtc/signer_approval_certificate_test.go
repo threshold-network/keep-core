@@ -6,12 +6,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/asn1"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -123,6 +126,7 @@ func validStructuredSignerApprovalVerificationRequest(
 		context.Background(),
 		testArtifactApprovalDigest(t, request.ArtifactApprovals.Payload),
 		startBlock,
+		startBlock+100000,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -151,11 +155,13 @@ func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *t
 	approvalDigest := sha256.Sum256(
 		[]byte("psbt-covenant-signer-approval-certificate-spike"),
 	)
+	requestedEndBlock := startBlock + 100000
 
 	certificate, err := executor.issueSignerApprovalCertificate(
 		context.Background(),
 		approvalDigest[:],
 		startBlock,
+		requestedEndBlock,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -201,12 +207,80 @@ func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *t
 			certificate.ActiveMembers,
 		)
 	}
-	if certificate.EndBlock == nil || *certificate.EndBlock < startBlock {
+	if certificate.EndBlock == nil || *certificate.EndBlock != requestedEndBlock {
 		t.Fatalf(
-			"expected end block [%v] to be >= start block [%v]",
+			"expected end block [%v] to equal the requested end block [%v]",
 			certificate.EndBlock,
-			startBlock,
+			requestedEndBlock,
 		)
+	}
+}
+
+// TestSigningExecutorIssueSignerApprovalCertificateAcceptsEndBlockAboveUint32Range
+// proves an EndBlock above math.MaxUint32 round-trips correctly through
+// issuance (signing) and verification. The certificate v2 digest binds
+// EndBlock as a full 8-byte big-endian uint64 (see
+// signerApprovalCertificateSigningDigest), so the full uint64 range must be
+// usable end to end, not just the low 32 bits.
+func TestSigningExecutorIssueSignerApprovalCertificateAcceptsEndBlockAboveUint32Range(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	executor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+
+	startBlock, err := executor.getCurrentBlockFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approvalDigest := sha256.Sum256(
+		[]byte("psbt-covenant-signer-approval-certificate-uint64-end-block"),
+	)
+	requestedEndBlock := uint64(math.MaxUint32) + 100000
+	if requestedEndBlock <= math.MaxUint32 {
+		t.Fatalf("test vector must exceed math.MaxUint32, got %d", requestedEndBlock)
+	}
+
+	certificate, err := executor.issueSignerApprovalCertificate(
+		context.Background(),
+		approvalDigest[:],
+		startBlock,
+		requestedEndBlock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if certificate.EndBlock == nil || *certificate.EndBlock != requestedEndBlock {
+		t.Fatalf(
+			"expected end block [%v] to equal the requested end block [%v]",
+			certificate.EndBlock,
+			requestedEndBlock,
+		)
+	}
+
+	walletChainData, err := executor.chain.GetWallet(
+		bitcoin.PublicKeyHash(executor.wallet().publicKey),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
+		executor.wallet().publicKey,
+		walletChainData,
+		executor.groupParameters,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySignerApprovalCertificate(certificate, expectedSignerSetHash); err != nil {
+		t.Fatalf("expected certificate verification to succeed: %v", err)
 	}
 }
 
@@ -240,6 +314,7 @@ func TestSigningExecutorIssueSignerApprovalCertificateFailsWhenWalletRegistryUna
 		context.Background(),
 		approvalDigest[:],
 		startBlock,
+		startBlock+100000,
 	)
 	if err == nil || !strings.Contains(
 		err.Error(),
@@ -270,6 +345,7 @@ func TestSignerApprovalCertificateVerificationRejectsTamperedDigest(t *testing.T
 		context.Background(),
 		approvalDigest[:],
 		startBlock,
+		startBlock+100000,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -667,5 +743,362 @@ func TestVerifySignerApprovalCertificateRejectsMalformedWalletPublicKey(t *testi
 	err = verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
 	if err == nil || !strings.Contains(err.Error(), "wallet public key is not a valid uncompressed secp256k1 key") {
 		t.Fatalf("expected malformed wallet public key error, got %v", err)
+	}
+}
+
+func TestVerifySignerApprovalCertificateRejectsV1CertificateVersion(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	certificate := *request.SignerApproval
+	certificate.CertificateVersion = 1
+
+	walletExecutor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+	walletChainData, err := walletExecutor.chain.GetWallet(bitcoin.PublicKeyHash(walletPublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
+		walletPublicKey,
+		walletChainData,
+		walletExecutor.groupParameters,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "unsupported certificate version: 1") {
+		t.Fatalf("expected v1 certificate version rejection, got %v", err)
+	}
+}
+
+func TestVerifySignerApprovalCertificateRejectsMissingEndBlock(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	certificate := *request.SignerApproval
+	certificate.EndBlock = nil
+
+	walletExecutor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+	walletChainData, err := walletExecutor.chain.GetWallet(bitcoin.PublicKeyHash(walletPublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
+		walletPublicKey,
+		walletChainData,
+		walletExecutor.groupParameters,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "certificate end block is required") {
+		t.Fatalf("expected missing end block rejection, got %v", err)
+	}
+}
+
+// TestVerifySignerApprovalCertificateRejectsTamperedEndBlock proves EndBlock
+// is bound into the signed digest, not just carried alongside it: changing
+// EndBlock on an otherwise-untouched, validly-issued certificate must
+// invalidate the threshold signature. Without this, an attacker (or a
+// compromised relay) could extend a certificate's validity window after
+// issuance without the wallet's cooperation.
+func TestVerifySignerApprovalCertificateRejectsTamperedEndBlock(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	certificate := *request.SignerApproval
+	tamperedEndBlock := *certificate.EndBlock + 1_000_000
+	certificate.EndBlock = &tamperedEndBlock
+
+	walletExecutor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+	walletChainData, err := walletExecutor.chain.GetWallet(bitcoin.PublicKeyHash(walletPublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
+		walletPublicKey,
+		walletChainData,
+		walletExecutor.groupParameters,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "threshold signature does not verify against wallet public key") {
+		t.Fatalf("expected tampered end block to invalidate the signature, got %v", err)
+	}
+}
+
+// TestSigningExecutorIssueSignerApprovalCertificateRejectsCompletionAfterRequestedExpiry
+// verifies that issuance is rejected outright -- not merely issued with a
+// signing-completion-block EndBlock -- when synchronous threshold signing
+// does not finish until after the requested expiry. A short real sleep
+// ensures the local block counter has ticked past block zero, so the chosen
+// requestedEndBlock (one below the observed start block) is guaranteed to be
+// exceeded by the actual signing completion block regardless of how fast
+// signing itself completes.
+func TestSigningExecutorIssueSignerApprovalCertificateRejectsCompletionAfterRequestedExpiry(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	executor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+
+	time.Sleep(600 * time.Millisecond)
+
+	startBlock, err := executor.getCurrentBlockFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startBlock == 0 {
+		t.Fatal("expected the local block counter to have advanced past zero")
+	}
+	requestedEndBlock := startBlock - 1
+
+	approvalDigest := sha256.Sum256([]byte("already-expired-by-completion"))
+	_, err = executor.issueSignerApprovalCertificate(
+		context.Background(),
+		approvalDigest[:],
+		startBlock,
+		requestedEndBlock,
+	)
+	if err == nil || !strings.Contains(err.Error(), "after the requested end block") {
+		t.Fatalf("expected completion-after-expiry rejection, got %v", err)
+	}
+}
+
+// TestSignerApprovalCertificateSigningDigestMatchesCrossLanguageVector pins
+// the exact byte layout of the certificate v2 signing digest so independent
+// (non-Go) certificate producers can verify their implementation against the
+// same inputs and output:
+//
+//	signingDigest = SHA256(
+//	  ASCII("covenant-signer-approval-certificate-v2:") ||
+//	  rawApprovalDigest[32] ||
+//	  uint64_big_endian(endBlock)
+//	)
+func TestSignerApprovalCertificateSigningDigestMatchesCrossLanguageVector(t *testing.T) {
+	approvalDigest, err := hex.DecodeString(strings.Repeat("11", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const endBlock = uint64(123456)
+
+	// Independently constructed preimage and digest -- deliberately not
+	// calling the production helper -- so this test actually catches a
+	// broken implementation rather than just echoing it back.
+	preimage := append(
+		[]byte("covenant-signer-approval-certificate-v2:"),
+		approvalDigest...,
+	)
+	var endBlockBytes [8]byte
+	binary.BigEndian.PutUint64(endBlockBytes[:], endBlock)
+	preimage = append(preimage, endBlockBytes[:]...)
+	expectedDigest := sha256.Sum256(preimage)
+	expectedDigestHex := "0x" + hex.EncodeToString(expectedDigest[:])
+
+	// Pinned exact value: SHA256(
+	//   "covenant-signer-approval-certificate-v2:" ||
+	//   0x1111111111111111111111111111111111111111111111111111111111111111 ||
+	//   0x000000000001e240
+	// )
+	const expectedPinnedHex = "0x636bf1d70b67dd7f54e1d4e090fd258928cce229b66a9a8cae3a5e75e288e19d"
+	if expectedDigestHex != expectedPinnedHex {
+		t.Fatalf(
+			"test vector itself is inconsistent\nindependent: %s\npinned:      %s",
+			expectedDigestHex,
+			expectedPinnedHex,
+		)
+	}
+
+	actualDigest, err := signerApprovalCertificateSigningDigest(approvalDigest, endBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualDigestHex := "0x" + hex.EncodeToString(actualDigest)
+
+	if actualDigestHex != expectedDigestHex {
+		t.Fatalf(
+			"unexpected v2 signing digest\nexpected: %s\nactual:   %s",
+			expectedDigestHex,
+			actualDigestHex,
+		)
+	}
+}
+
+// TestSignerApprovalCertificateSigningDigestMatchesCrossLanguageVectorAboveUint32Range
+// pins a second cross-language vector whose EndBlock exceeds math.MaxUint32,
+// so the digest's high-order 4 bytes are nonzero. The vector above alone
+// cannot catch an implementation that silently truncates EndBlock to 32 bits
+// before hashing it, since 123456 fits entirely in the low-order bytes; this
+// one specifically exercises the full 8-byte big-endian encoding.
+func TestSignerApprovalCertificateSigningDigestMatchesCrossLanguageVectorAboveUint32Range(t *testing.T) {
+	approvalDigest, err := hex.DecodeString(strings.Repeat("11", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One past math.MaxUint32, plus the same 123456 low-order value used by
+	// the vector above.
+	const endBlock = uint64(math.MaxUint32) + 1 + 123456
+	if endBlock <= math.MaxUint32 {
+		t.Fatalf("test vector must exceed math.MaxUint32, got %d", endBlock)
+	}
+
+	// Independently constructed preimage and digest -- deliberately not
+	// calling the production helper -- so this test actually catches a
+	// broken implementation rather than just echoing it back.
+	preimage := append(
+		[]byte("covenant-signer-approval-certificate-v2:"),
+		approvalDigest...,
+	)
+	var endBlockBytes [8]byte
+	binary.BigEndian.PutUint64(endBlockBytes[:], endBlock)
+	if endBlockBytes != ([8]byte{0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0xe2, 0x40}) {
+		t.Fatalf("unexpected big-endian encoding of endBlock: %x", endBlockBytes)
+	}
+	preimage = append(preimage, endBlockBytes[:]...)
+	expectedDigest := sha256.Sum256(preimage)
+	expectedDigestHex := "0x" + hex.EncodeToString(expectedDigest[:])
+
+	// Pinned exact value, independently computed (Python hashlib, not this
+	// Go codebase): SHA256(
+	//   "covenant-signer-approval-certificate-v2:" ||
+	//   0x1111111111111111111111111111111111111111111111111111111111111111 ||
+	//   0x000000010001e240
+	// )
+	const expectedPinnedHex = "0x67e035629f14cad309d349046c6c6ec0ec2c18a79b0c948796a6668b15d4dd60"
+	if expectedDigestHex != expectedPinnedHex {
+		t.Fatalf(
+			"test vector itself is inconsistent\nindependent: %s\npinned:      %s",
+			expectedDigestHex,
+			expectedPinnedHex,
+		)
+	}
+
+	actualDigest, err := signerApprovalCertificateSigningDigest(approvalDigest, endBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualDigestHex := "0x" + hex.EncodeToString(actualDigest)
+
+	if actualDigestHex != expectedDigestHex {
+		t.Fatalf(
+			"unexpected v2 signing digest\nexpected: %s\nactual:   %s",
+			expectedDigestHex,
+			actualDigestHex,
+		)
+	}
+}
+
+// TestVerifySignerApprovalCertificateRejectsUnsupportedVersion asserts the
+// certificate version is a hard gate: only version 2 is accepted, and any other
+// value (an unset zero, the superseded version 1, or a future version 3) is
+// rejected before the signature is checked. This pins the version-negotiation
+// contract so a future format bump cannot be silently accepted by an unupgraded
+// verifier.
+func TestVerifySignerApprovalCertificateRejectsUnsupportedVersion(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	// The version gate is checked before the signer-set hash is examined, so the
+	// expected hash passed here is a deliberately arbitrary, non-empty
+	// placeholder: its value must not affect the outcome. Were the version check
+	// ever reordered after the hash comparison, this mismatching hash would
+	// surface as a "signer set hash does not match" error and fail the assertion
+	// below, catching the reordering.
+	arbitrarySignerSetHash := "0x" + strings.Repeat("ab", 32)
+
+	// An unset (0), the superseded (1), and a future (3) version must all be
+	// rejected; only 2 is supported.
+	for _, unsupportedVersion := range []uint32{0, 1, 3} {
+		certificate := *request.SignerApproval
+		certificate.CertificateVersion = unsupportedVersion
+
+		err := verifySignerApprovalCertificate(&certificate, arbitrarySignerSetHash)
+		if err == nil || !strings.Contains(err.Error(), "unsupported certificate version") {
+			t.Fatalf(
+				"expected unsupported certificate version error for version %d, got %v",
+				unsupportedVersion,
+				err,
+			)
+		}
+	}
+}
+
+// TestVerifySignerApprovalCertificateRejectsUnsupportedSignatureAlgorithm
+// asserts the signature-algorithm field is a hard gate: only the tECDSA
+// secp256k1 algorithm is accepted. This prevents a certificate from claiming a
+// different (potentially weaker or unverifiable) algorithm than the one the
+// verifier actually checks.
+func TestVerifySignerApprovalCertificateRejectsUnsupportedSignatureAlgorithm(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	// The algorithm gate is checked before the signer-set hash is examined, so
+	// the expected hash passed here is a deliberately arbitrary, non-empty
+	// placeholder: its value must not affect the outcome. Were the algorithm
+	// check ever reordered after the hash comparison, this mismatching hash would
+	// surface as a "signer set hash does not match" error and fail the assertion
+	// below, catching the reordering.
+	arbitrarySignerSetHash := "0x" + strings.Repeat("ab", 32)
+
+	certificate := *request.SignerApproval
+	certificate.SignatureAlgorithm = "ed25519"
+
+	err := verifySignerApprovalCertificate(&certificate, arbitrarySignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "unsupported signature algorithm") {
+		t.Fatalf("expected unsupported signature algorithm error, got %v", err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -303,13 +304,17 @@ func (n *node) joinDKGIfEligible(
 // challenge. If the result is valid and the given node was involved in the DKG,
 // this function schedules an on-chain approve that is submitted once the
 // challenge period elapses.
+//
+// It returns a nil error once the result has been terminally handled and a
+// non-nil error when a transient failure prevented handling from completing,
+// so the caller can retry on a later redelivery of the same event.
 func (n *node) validateDKG(
 	seed *big.Int,
 	submissionBlock uint64,
 	result *DKGChainResult,
 	resultHash [32]byte,
-) {
-	n.dkgExecutor.executeDkgValidation(seed, submissionBlock, result, resultHash)
+) error {
+	return n.dkgExecutor.executeDkgValidation(seed, submissionBlock, result, resultHash)
 }
 
 // getSigningExecutor gets the signing executor responsible for executing
@@ -413,6 +418,28 @@ func (n *node) getSigningExecutor(
 	n.signingExecutors[executorKey] = executor
 
 	return executor, true, nil
+}
+
+// invalidateSigningExecutor removes any cached signing executor for the given
+// wallet. It is used when a wallet is archived (closed or terminated) so that a
+// stale cached executor cannot keep the node signing for a wallet that has been
+// removed from the wallet registry. getSigningExecutor consults the executor
+// cache before the wallet registry, so without this eviction an executor
+// created while the wallet was live would remain usable after archival.
+func (n *node) invalidateSigningExecutor(walletPublicKey *ecdsa.PublicKey) error {
+	walletPublicKeyBytes, err := marshalPublicKey(walletPublicKey)
+	if err != nil {
+		return fmt.Errorf("cannot marshal wallet public key: [%v]", err)
+	}
+
+	executorKey := hex.EncodeToString(walletPublicKeyBytes)
+
+	n.signingExecutorsMutex.Lock()
+	defer n.signingExecutorsMutex.Unlock()
+
+	delete(n.signingExecutors, executorKey)
+
+	return nil
 }
 
 // getCoordinationExecutor gets the coordination executor responsible for
@@ -1279,29 +1306,31 @@ func (n *node) archiveClosedWallets() error {
 	for _, walletPublicKey := range walletPublicKeys {
 		walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
 
-		walletID, err := n.chain.CalculateWalletID(walletPublicKey)
+		walletChainData, err := n.chain.GetWallet(walletPublicKeyHash)
 		if err != nil {
+			if errors.Is(err, ErrWalletNotFound) {
+				// The wallet is not recorded on-chain by the Bridge. This is the
+				// case for a freshly generated wallet whose DKG result has not
+				// yet been approved on-chain; during that approval window the
+				// wallet exists only on the node's disk. Such a wallet must not
+				// be archived because it may be about to become active. Only
+				// wallets that were registered on-chain and are now closed or
+				// terminated should be archived, so leave this one in place.
+				continue
+			}
+
 			return fmt.Errorf(
-				"could not calculate wallet ID for wallet with public key "+
+				"could not get on-chain data for wallet with public key "+
 					"hash [0x%x]: [%v]",
 				walletPublicKeyHash,
 				err,
 			)
 		}
 
-		isRegistered, err := n.chain.IsWalletRegistered(walletID)
-		if err != nil {
-			return fmt.Errorf(
-				"could not check if wallet is registered for wallet with ID "+
-					"[0x%x]: [%v]",
-				walletPublicKeyHash,
-				err,
-			)
-		}
-
-		if !isRegistered {
-			// If the wallet is no longer registered it means the wallet has
-			// been closed or terminated.
+		// The wallet is recorded on-chain, so it has been registered. Archive it
+		// only if it has reached a closed or terminated state.
+		if walletChainData.State == StateClosed ||
+			walletChainData.State == StateTerminated {
 			err := n.walletRegistry.archiveWallet(walletPublicKeyHash)
 			if err != nil {
 				return fmt.Errorf(
@@ -1312,10 +1341,10 @@ func (n *node) archiveClosedWallets() error {
 			}
 
 			logger.Infof(
-				"successfully archived wallet with ID [0x%x] and public key "+
-					"hash [0x%x]",
-				walletID,
+				"successfully archived wallet with public key hash [0x%x] "+
+					"in state [%v]",
 				walletPublicKeyHash,
+				walletChainData.State,
 			)
 		}
 	}
@@ -1383,6 +1412,17 @@ func (n *node) handleWalletClosure(walletID [32]byte) error {
 	err = n.walletRegistry.archiveWallet(walletPublicKeyHash)
 	if err != nil {
 		return fmt.Errorf("failed to archive the wallet: [%v]", err)
+	}
+
+	// Evict any cached signing executor for the archived wallet so that the
+	// closure actually deauthorizes signing for it. getSigningExecutor consults
+	// the executor cache before the wallet registry, so a stale cached executor
+	// would otherwise keep the wallet signable until the process restarts.
+	if err := n.invalidateSigningExecutor(wallet.publicKey); err != nil {
+		return fmt.Errorf(
+			"failed to invalidate signing executor for archived wallet: [%v]",
+			err,
+		)
 	}
 
 	logger.Infof(

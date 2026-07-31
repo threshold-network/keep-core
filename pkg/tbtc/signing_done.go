@@ -96,6 +96,17 @@ func (sdc *signingDoneCheck) listen(
 	})
 
 	sdc.expectedSignersCount = len(attemptMembersIndexes)
+	// Record the members selected for this attempt so that done messages from
+	// members excluded from the current attempt can be rejected. This lookup is
+	// kept local to the listener goroutine below (captured by its closure and
+	// passed to isValidDoneMessage) instead of being stored on the shared
+	// signingDoneCheck struct. Keeping it out of shared state means concurrent
+	// listen calls on the same instance cannot race, and in particular cannot
+	// trigger a "concurrent map writes" fatal error, when populating it.
+	attemptMembers := make(map[group.MemberIndex]bool)
+	for _, memberIndex := range attemptMembersIndexes {
+		attemptMembers[memberIndex] = true
+	}
 	sdc.doneSigners = make(map[group.MemberIndex]*signingDoneMessage)
 
 	go func() {
@@ -113,6 +124,7 @@ func (sdc *signingDoneCheck) listen(
 					message,
 					attemptNumber,
 					attemptTimeoutBlock,
+					attemptMembers,
 				) {
 					continue
 				}
@@ -126,6 +138,19 @@ func (sdc *signingDoneCheck) listen(
 			}
 		}
 	}()
+}
+
+// stopListening cancels the message receiver started by listen, stopping its
+// listener goroutine. It is safe to call even if listen was never called,
+// and safe to call more than once (waitUntilAllDone also calls it, via
+// cancelReceiveCtx, when the attempt reaches that point normally). Call it
+// on any early-exit path taken after listen but before waitUntilAllDone, so
+// a failed attempt's listener does not linger until its context's own block
+// timeout.
+func (sdc *signingDoneCheck) stopListening() {
+	if sdc.cancelReceiveCtx != nil {
+		sdc.cancelReceiveCtx()
+	}
 }
 
 // signalDone broadcasts the signing done check along with information necessary
@@ -169,30 +194,44 @@ func (sdc *signingDoneCheck) waitUntilAllDone(ctx context.Context) (
 			return nil, 0, errWaitDoneTimedOut
 
 		case <-ticker.C:
-			if sdc.expectedSignersCount == len(sdc.doneSigners) {
-				var signature *tecdsa.Signature
-				var latestEndBlock uint64
+			// Read doneSigners under the mutex to avoid a data race with the
+			// listen goroutine that writes to the same map. Results are captured
+			// into local variables so the lock can be released before returning.
+			sdc.doneSignersMutex.Lock()
 
-				for _, doneMessage := range sdc.doneSigners {
-					if signature == nil {
-						signature = doneMessage.signature
-					} else {
-						if !signature.Equals(doneMessage.signature) {
-							return nil, 0, fmt.Errorf(
-								"not matching signatures detected: [%v] and [%v]",
-								signature,
-								doneMessage.signature,
-							)
-						}
-					}
+			if sdc.expectedSignersCount != len(sdc.doneSigners) {
+				sdc.doneSignersMutex.Unlock()
+				continue
+			}
 
-					if doneMessage.endBlock > latestEndBlock {
-						latestEndBlock = doneMessage.endBlock
-					}
+			var signature *tecdsa.Signature
+			var latestEndBlock uint64
+			var mismatchedSignature *tecdsa.Signature
+
+			for _, doneMessage := range sdc.doneSigners {
+				if signature == nil {
+					signature = doneMessage.signature
+				} else if !signature.Equals(doneMessage.signature) {
+					mismatchedSignature = doneMessage.signature
+					break
 				}
 
-				return &signing.Result{Signature: signature}, latestEndBlock, nil
+				if doneMessage.endBlock > latestEndBlock {
+					latestEndBlock = doneMessage.endBlock
+				}
 			}
+
+			sdc.doneSignersMutex.Unlock()
+
+			if mismatchedSignature != nil {
+				return nil, 0, fmt.Errorf(
+					"not matching signatures detected: [%v] and [%v]",
+					signature,
+					mismatchedSignature,
+				)
+			}
+
+			return &signing.Result{Signature: signature}, latestEndBlock, nil
 		}
 	}
 }
@@ -205,8 +244,11 @@ func (sdc *signingDoneCheck) isValidDoneMessage(
 	message *big.Int,
 	attemptNumber uint64,
 	attemptTimeoutBlock uint64,
+	attemptMembers map[group.MemberIndex]bool,
 ) bool {
+	sdc.doneSignersMutex.Lock()
 	_, signerDone := sdc.doneSigners[doneMessage.senderID]
+	sdc.doneSignersMutex.Unlock()
 	if signerDone {
 		// only one done message allowed
 		return false
@@ -216,6 +258,13 @@ func (sdc *signingDoneCheck) isValidDoneMessage(
 		doneMessage.senderID,
 		senderPublicKey,
 	) {
+		return false
+	}
+
+	// The sender must have been selected for the current signing attempt. A
+	// valid wallet group member that was excluded from this attempt must not
+	// count toward its completion threshold.
+	if !attemptMembers[doneMessage.senderID] {
 		return false
 	}
 

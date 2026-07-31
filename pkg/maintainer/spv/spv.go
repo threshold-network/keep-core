@@ -30,10 +30,11 @@ func Initialize(
 	btcChain bitcoin.Chain,
 ) {
 	spvMaintainer := &spvMaintainer{
-		config:       config,
-		spvChain:     spvChain,
-		btcDiffChain: btcDiffChain,
-		btcChain:     btcChain,
+		config:             config,
+		spvChain:           spvChain,
+		btcDiffChain:       btcDiffChain,
+		btcChain:           btcChain,
+		transactionScanner: newWalletTransactionScanner(),
 	}
 
 	go spvMaintainer.startControlLoop(ctx)
@@ -92,10 +93,11 @@ var proofTypes = map[tbtc.WalletActionType]struct {
 }
 
 type spvMaintainer struct {
-	config       Config
-	spvChain     Chain
-	btcDiffChain btcdiff.Chain
-	btcChain     bitcoin.Chain
+	config             Config
+	spvChain           Chain
+	btcDiffChain       btcdiff.Chain
+	btcChain           bitcoin.Chain
+	transactionScanner *walletTransactionScanner
 }
 
 func (sm *spvMaintainer) startControlLoop(ctx context.Context) {
@@ -124,6 +126,8 @@ func (sm *spvMaintainer) startControlLoop(ctx context.Context) {
 
 func (sm *spvMaintainer) maintainSpv(ctx context.Context) error {
 	for {
+		sm.transactionScanner.beginRound()
+
 		for action, v := range proofTypes {
 			logger.Infof("starting [%s] proof task execution...", action)
 
@@ -159,6 +163,8 @@ func (sm *spvMaintainer) maintainSpv(ctx context.Context) error {
 type unprovenTransactionsGetter func(
 	historyDepth uint64,
 	transactionLimit int,
+	transactionScanLimit int,
+	scanner *walletTransactionScanner,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 ) (
@@ -185,6 +191,8 @@ func (sm *spvMaintainer) proveTransactions(
 	transactions, err := unprovenTransactionsGetter(
 		sm.config.HistoryDepth,
 		sm.config.TransactionLimit,
+		sm.config.TransactionScanLimit,
+		sm.transactionScanner,
 		sm.btcChain,
 		sm.spvChain,
 	)

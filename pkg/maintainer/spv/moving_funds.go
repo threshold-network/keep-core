@@ -127,6 +127,8 @@ func parseMovingFundsTransactionInput(
 func getUnprovenMovingFundsTransactions(
 	historyDepth uint64,
 	transactionLimit int,
+	transactionScanLimit int,
+	scanner *walletTransactionScanner,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 ) (
@@ -197,41 +199,41 @@ func getUnprovenMovingFundsTransactions(
 		// source wallet.
 		targetWalletPublicKeyHash := targetWallets[0]
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		// The scan key's context hash is the Bridge's own commitment to this
+		// wallet's ordered target-wallet list, so a wallet that (in some
+		// future protocol version) could submit more than one moving funds
+		// commitment over its lifetime gets a distinct, persisted scan state
+		// per commitment instead of silently reusing a stale one.
+		walletUnprovenTransactions, err := scanner.getUnprovenWalletTransactions(
+			walletTransactionScanKey{
+				actionType:      tbtc.ActionMovingFunds,
+				actorWalletPKH:  walletPublicKeyHash,
+				lookupWalletPKH: targetWalletPublicKeyHash,
+				contextHash:     wallet.MovingFundsTargetWalletsCommitmentHash,
+			},
 			targetWalletPublicKeyHash,
 			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenMovingFundsTransaction(
+			transactionScanLimit,
+			"moving funds",
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenMovingFundsTransaction(
 					transaction,
 					walletPublicKeyHash,
 					targetWallets,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven moving funds "+
-						"transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenMovingFundsTransactions = append(
-					unprovenMovingFundsTransactions,
-					transaction,
-				)
-			}
+			},
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenMovingFundsTransactions = append(
+			unprovenMovingFundsTransactions,
+			walletUnprovenTransactions...,
+		)
 	}
 
 	return unprovenMovingFundsTransactions, nil

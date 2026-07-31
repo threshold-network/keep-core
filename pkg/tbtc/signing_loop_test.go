@@ -600,6 +600,11 @@ func TestSigningRetryLoop(t *testing.T) {
 				incomingAnnouncementsFn: test.incomingAnnouncementsFn,
 			}
 
+			// The retry loop under test constructs a fresh doneCheck per
+			// attempt (see signingRetryLoop.start), but this suite asserts
+			// on outgoingDoneChecks accumulated across every attempt of a
+			// single test case, so the factory always returns the same
+			// mock instance rather than a new one per attempt.
 			doneCheck := &mockSigningDoneCheck{
 				waitUntilAllDoneOutcomeFn: test.waitUntilAllDoneOutcomeFn,
 			}
@@ -612,7 +617,7 @@ func TestSigningRetryLoop(t *testing.T) {
 				signingGroupOperators,
 				groupParameters,
 				announcer,
-				doneCheck,
+				func() signingDoneCheckStrategy { return doneCheck },
 			)
 
 			ctx, cancelCtx := test.ctxFn()
@@ -760,3 +765,5 @@ func (msdc *mockSigningDoneCheck) signalDone(
 func (msdc *mockSigningDoneCheck) waitUntilAllDone(ctx context.Context) (*signing.Result, uint64, error) {
 	return msdc.waitUntilAllDoneOutcomeFn(msdc.currentAttemptNumber)
 }
+
+func (msdc *mockSigningDoneCheck) stopListening() {}

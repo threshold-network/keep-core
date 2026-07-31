@@ -119,6 +119,18 @@ func NewService(
 	if verifier, ok := engine.(SignerApprovalVerifier); ok {
 		service.signerApprovalVerifier = verifier
 	}
+	// Auto-detect the current block height provider from the engine, mirroring
+	// the SignerApprovalVerifier auto-detection above. Correctness must not
+	// depend on callers remembering to pass WithCurrentBlockProvider: a caller
+	// that forgets it would otherwise silently get fail-open "never expires"
+	// certificate handling. WithCurrentBlockProvider (below, via options) can
+	// still override this when a caller genuinely needs a different provider
+	// than the engine itself.
+	if provider, ok := engine.(CurrentBlockHeightProvider); ok {
+		service.currentBlockProvider = func() (uint64, error) {
+			return provider.CurrentBlockHeight(context.Background())
+		}
+	}
 	for _, option := range options {
 		option(service)
 	}
@@ -251,6 +263,75 @@ func sameJobRevision(current *Job, snapshot *Job) bool {
 		reflect.DeepEqual(current.Handoff, snapshot.Handoff)
 }
 
+// currentBlockForRequest returns the current block height needed to validate
+// request's signer approval certificate expiry, or nil if request carries no
+// certificate at all, or the certificate has no EndBlock (expiry does not
+// apply either way, and the provider is not queried unnecessarily). Gating on
+// EndBlock here -- not just on SignerApproval being present -- keeps the
+// required validation order (EndBlock structural presence before any
+// provider query) even though this helper runs ahead of full request
+// validation: a request with a present-but-nil EndBlock must never trigger a
+// provider RPC before normalizeSignerApprovalCertificate gets a chance to
+// reject it structurally. When request does carry a certificate with an
+// EndBlock but no block height provider is configured, this returns (nil,
+// nil) rather than a fabricated zero height: the absence stays
+// distinguishable so callers fail closed instead of silently treating the
+// certificate as unexpired. Provider errors are propagated so callers fail
+// closed on provider failures too.
+func (s *Service) currentBlockForRequest(request RouteSubmitRequest) (*uint64, error) {
+	if request.SignerApproval == nil {
+		return nil, nil
+	}
+	if request.SignerApproval.EndBlock == nil {
+		return nil, nil
+	}
+	if s.currentBlockProvider == nil {
+		return nil, nil
+	}
+
+	height, err := s.currentBlockProvider()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current block height: %w", err)
+	}
+
+	return &height, nil
+}
+
+// ensureStoredCertificateTimely rejects a job whose signer approval
+// certificate has expired, whose EndBlock is missing (e.g. a legacy v1 job
+// persisted before v2 enforcement rolled out), or whose expiry cannot be
+// determined because no current block height provider is configured. Jobs
+// without a signer approval certificate are always timely, since expiry only
+// applies to certificate-bearing requests. This is shared by every place a
+// durable job with a certificate is trusted again after having been
+// persisted: loadPollJob's two call sites, and Submit's pre-lock and
+// authoritative post-lock rechecks.
+func (s *Service) ensureStoredCertificateTimely(job *Job) error {
+	certificate := job.Request.SignerApproval
+	if certificate == nil {
+		return nil
+	}
+	if certificate.EndBlock == nil {
+		return &inputError{"signer approval certificate has expired"}
+	}
+
+	currentBlock, err := s.currentBlockForRequest(job.Request)
+	if err != nil {
+		return err
+	}
+	if currentBlock == nil {
+		return fmt.Errorf(
+			"cannot determine signer approval certificate expiry: " +
+				"no current block height provider is configured",
+		)
+	}
+	if certificateExpired(*currentBlock, *certificate.EndBlock) {
+		return &inputError{"signer approval certificate has expired"}
+	}
+
+	return nil
+}
+
 func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, error) {
 	job, ok, err := s.store.GetByRequestID(input.RequestID)
 	if err != nil {
@@ -272,24 +353,11 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 		return nil, errJobNotFound
 	}
 
-	// Check if the signer approval certificate has expired since submit.
-	// If expired, reject the poll to avoid producing a signature with an
+	// Check if the signer approval certificate has expired since submit. If
+	// expired, reject the poll to avoid producing a signature with an
 	// authorization that is no longer valid.
-	//
-	// NOTE: The >= comparison is intentional. A certificate with
-	// EndBlock=100 is considered expired when the current block is
-	// 100 or greater. This is because EndBlock is a closed interval:
-	// the signature is valid only up to and including EndBlock.
-	if s.currentBlockProvider != nil && job.Request.SignerApproval != nil && job.Request.SignerApproval.EndBlock != nil {
-		currentBlock, err := s.currentBlockProvider()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get current block height: %w", err)
-		}
-		if currentBlock >= *job.Request.SignerApproval.EndBlock {
-			return nil, &inputError{
-				"signer approval certificate has expired",
-			}
-		}
+	if err := s.ensureStoredCertificateTimely(job); err != nil {
+		return nil, err
 	}
 
 	digest, err := requestDigest(
@@ -311,6 +379,16 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 // createOrDedup creates a new job under the service mutex, or returns the
 // existing job result if the route request is already known. Returns
 // (job, nil, nil) for a new job, or (nil, result, nil) for a dedup hit.
+//
+// A dedup hit -- including one that resolves to an already-terminal
+// ready/failed job -- is only returned after a fresh ensureStoredCertificateTimely
+// check, run here while s.mutex is held. Without this, a certificate that was
+// valid when the original job was created but has since expired (or whose
+// provider now errors) could be echoed back as if it were still valid: the
+// dedup path short-circuits Submit before any of its other expiry/provider
+// rechecks ever run. On failure this returns the expiry/provider error and
+// leaves the durable job untouched, the same fail-closed contract Submit
+// itself uses for its own rechecks.
 func (s *Service) createOrDedup(
 	route TemplateID,
 	input SignerSubmitInput,
@@ -327,6 +405,9 @@ func (s *Service) createOrDedup(
 			return nil, nil, &inputError{
 				"routeRequestId already exists with a different request payload",
 			}
+		}
+		if err := s.ensureStoredCertificateTimely(existing); err != nil {
+			return nil, nil, err
 		}
 		result := mapJobResult(existing)
 		return nil, &result, nil
@@ -371,6 +452,11 @@ func (s *Service) createOrDedup(
 }
 
 func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubmitInput) (StepResult, error) {
+	currentBlock, err := s.currentBlockForRequest(input.Request)
+	if err != nil {
+		return StepResult{}, err
+	}
+
 	submitValidationOptions := validationOptions{
 		migrationPlanQuoteTrustRoots:      s.migrationPlanQuoteTrustRoots,
 		depositorTrustRoots:               s.depositorTrustRoots,
@@ -378,6 +464,7 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		requireFreshMigrationPlanQuote:    true,
 		migrationPlanQuoteVerificationNow: s.now(),
 		signerApprovalVerifier:            s.signerApprovalVerifier,
+		currentBlock:                      currentBlock,
 	}
 	if err := validateSubmitInput(route, input, submitValidationOptions); err != nil {
 		return StepResult{}, err
@@ -418,6 +505,14 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		defer func() { <-s.inFlightSlots }()
 	}
 
+	// The certificate may have expired while this submission waited on the
+	// signer approval verifier or for an in-flight slot. Recheck before
+	// starting synchronous threshold signing so signing never begins on an
+	// authorization that has already lapsed.
+	if err := s.ensureStoredCertificateTimely(job); err != nil {
+		return StepResult{}, err
+	}
+
 	transition, err := s.engine.OnSubmit(ctx, job)
 	if err != nil {
 		return StepResult{}, err
@@ -430,6 +525,16 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		}
 	}
 
+	// Fast rejection path: synchronous threshold signing itself can take long
+	// enough for the certificate to expire. Recheck before acquiring the
+	// service mutex so an already-stale result does not even reach the
+	// authoritative check below. This check is optimistic, not authoritative
+	// -- the check after acquiring the mutex is what actually protects the
+	// persisted state from a concurrent expiry.
+	if err := s.ensureStoredCertificateTimely(job); err != nil {
+		return StepResult{}, err
+	}
+
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -439,6 +544,21 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	}
 	if !ok {
 		return StepResult{}, errJobNotFound
+	}
+
+	// Authoritative recheck: the last point before any stored job state --
+	// whether this call's own transition or a newer/terminal state a
+	// concurrent Submit or Poll already persisted -- is persisted or
+	// returned, running while s.mutex is held so no concurrent Submit or
+	// Poll can advance the current height and slip past it. This closes the
+	// TOCTOU window between the fast check above and the store write/return
+	// below. It must run here, immediately after currentJob is loaded and
+	// before the early-return just below: a concurrently-advanced or
+	// terminal currentJob must never be handed back without this check, the
+	// same fail-closed contract createOrDedup's dedup hit and loadPollJob's
+	// every call site already use.
+	if err := s.ensureStoredCertificateTimely(currentJob); err != nil {
+		return StepResult{}, err
 	}
 
 	// Another poll already advanced the stored job while submit was waiting on
@@ -457,20 +577,16 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 }
 
 func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollInput) (StepResult, error) {
-	var currentBlock uint64
-	if s.currentBlockProvider != nil {
-		blockHeight, err := s.currentBlockProvider()
-		if err != nil {
-			return StepResult{}, fmt.Errorf("failed to get current block height: %w", err)
-		}
-		currentBlock = blockHeight
+	currentBlock, err := s.currentBlockForRequest(input.Request)
+	if err != nil {
+		return StepResult{}, err
 	}
 	if err := validatePollInput(
 		route,
 		input,
 		validationOptions{
 			policyIndependentDigest: true,
-			currentBlock:            &currentBlock,
+			currentBlock:            currentBlock,
 		},
 	); err != nil {
 		return StepResult{}, err

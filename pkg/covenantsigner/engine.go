@@ -33,18 +33,27 @@ type Transition struct {
 // underlying signing job. The service treats this as a terminal failure and
 // transitions the job to JobStateFailed.
 //
-// CurrentBlockHeight is optional. When implemented, it is called during Submit
-// and Poll to determine whether a signer approval certificate has expired.
+// An Engine may also implement SignerApprovalVerifier and
+// CurrentBlockHeightProvider; see their doc comments for the constraints
+// between them.
 type Engine interface {
 	OnSubmit(ctx context.Context, job *Job) (*Transition, error)
 	OnPoll(ctx context.Context, job *Job) (*Transition, error)
 }
 
-// CurrentBlockHeightProvider is an optional interface implemented by Engines
-// that can provide the current Bitcoin block height. When implemented, the
-// service uses it to check signer approval certificate expiration during
-// Submit and Poll. Engines that do not implement this interface are assumed
-// to never have signer approvals expire.
+// CurrentBlockHeightProvider is implemented by Engines that can provide the
+// current block height of the host chain (e.g. Ethereum) that signer approval
+// certificate EndBlock values are denominated in -- never the Bitcoin chain.
+// The service uses it to check signer approval certificate expiration during
+// Submit and Poll.
+//
+// Any engine that implements SignerApprovalVerifier must also implement this
+// interface: Initialize rejects engines that verify signer approvals but
+// cannot report a current block height, because such an engine could never
+// determine whether a certificate has expired. There is no fail-open "never
+// expires" behavior for engines that omit this interface -- Submit and Poll
+// reject certificate-bearing requests outright when no provider is
+// configured.
 type CurrentBlockHeightProvider interface {
 	CurrentBlockHeight(ctx context.Context) (uint64, error)
 }

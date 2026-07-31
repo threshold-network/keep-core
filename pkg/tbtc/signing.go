@@ -248,11 +248,19 @@ func (se *signingExecutor) sign(
 				se.membershipValidator,
 			)
 
-			doneCheck := newSigningDoneCheck(
-				se.groupParameters.GroupSize,
-				se.broadcastChannel,
-				se.membershipValidator,
-			)
+			// A fresh signingDoneCheck is constructed for every retry attempt
+			// (see signingRetryLoop.start) rather than reusing one instance
+			// across attempts. Reusing a single instance previously let a
+			// slow-to-exit listener goroutine from a failed attempt race
+			// with the very next attempt's reset of the same shared struct
+			// fields.
+			newDoneCheck := func() signingDoneCheckStrategy {
+				return newSigningDoneCheck(
+					se.groupParameters.GroupSize,
+					se.broadcastChannel,
+					se.membershipValidator,
+				)
+			}
 
 			retryLoop := newSigningRetryLoop(
 				signingLogger,
@@ -262,7 +270,7 @@ func (se *signingExecutor) sign(
 				wallet.signingGroupOperators,
 				se.groupParameters,
 				announcer,
-				doneCheck,
+				newDoneCheck,
 			)
 
 			// Set up the loop timeout signal. This context is associated with

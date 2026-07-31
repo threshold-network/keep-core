@@ -15,6 +15,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
 
 	"github.com/keep-network/keep-core/internal/testutils"
@@ -23,6 +24,91 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	tbtcpkg "github.com/keep-network/keep-core/pkg/tbtc"
 )
+
+func TestConvertPastRedemptionRequestedEvent(t *testing.T) {
+	// RedeemerOutputScript is stored on-chain as variable-length data (a
+	// CompactSizeUint length prefix followed by the script bytes), so build the
+	// fixture from a known script to guarantee the helper can parse it back.
+	redeemerOutputScript := bitcoin.Script([]byte{0x76, 0xa9, 0x14})
+	redeemerOutputScriptVarLen, err := redeemerOutputScript.ToVarLenData()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	walletPublicKeyHash := [20]byte{1, 2, 3}
+	redeemer := common.HexToAddress("0x1111111111111111111111111111111111111111")
+
+	// The treasury fee and the per-transaction max fee are two independent
+	// on-chain fields. They are set to distinct values so that a mapping which
+	// reads the wrong source (e.g. populating TxMaxFee from TreasuryFee) is
+	// caught rather than masked by equal values.
+	const (
+		requestedAmount = uint64(1_000_000)
+		treasuryFee     = uint64(2_000)
+		txMaxFee        = uint64(7_500)
+		blockNumber     = uint64(123_456)
+	)
+
+	event := &tbtcabi.BridgeRedemptionRequested{
+		WalletPubKeyHash:     walletPublicKeyHash,
+		RedeemerOutputScript: redeemerOutputScriptVarLen,
+		Redeemer:             redeemer,
+		RequestedAmount:      requestedAmount,
+		TreasuryFee:          treasuryFee,
+		TxMaxFee:             txMaxFee,
+		Raw:                  types.Log{BlockNumber: blockNumber},
+	}
+
+	converted, err := convertPastRedemptionRequestedEvent(event)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	testutils.AssertUintsEqual(
+		t,
+		"requested amount",
+		requestedAmount,
+		converted.RequestedAmount,
+	)
+
+	// Both fee fields must be populated from their own distinct source field.
+	testutils.AssertUintsEqual(
+		t,
+		"treasury fee",
+		treasuryFee,
+		converted.TreasuryFee,
+	)
+	testutils.AssertUintsEqual(
+		t,
+		"tx max fee",
+		txMaxFee,
+		converted.TxMaxFee,
+	)
+
+	testutils.AssertUintsEqual(
+		t,
+		"block number",
+		blockNumber,
+		converted.BlockNumber,
+	)
+
+	testutils.AssertBytesEqual(t, redeemerOutputScript, converted.RedeemerOutputScript)
+
+	testutils.AssertStringsEqual(
+		t,
+		"redeemer",
+		chain.Address(redeemer.Hex()).String(),
+		converted.Redeemer.String(),
+	)
+
+	if converted.WalletPublicKeyHash != walletPublicKeyHash {
+		t.Errorf(
+			"unexpected wallet public key hash\nexpected: [%x]\nactual:   [%x]",
+			walletPublicKeyHash,
+			converted.WalletPublicKeyHash,
+		)
+	}
+}
 
 func TestComputeOperatorsIDsHash(t *testing.T) {
 	operatorIDs := []chain.OperatorID{

@@ -23,7 +23,25 @@ import (
 type covenantSignerEngine struct {
 	node                               *node
 	minimumActiveOutpointConfirmations uint
+	// bridgeFraudDefenseConfirmed records the operator's explicit confirmation
+	// that the tBTC Bridge recognizes covenant active UTXO spends as honest
+	// spends, i.e. the covenant fraud-defense path is deployed. Until it is set,
+	// the engine refuses to produce covenant signatures because a covenant
+	// SIGHASH_ALL signature over a covenant active UTXO is otherwise a valid,
+	// undefeatable tBTC fraud proof against the signing wallet.
+	bridgeFraudDefenseConfirmed bool
 }
+
+// Compile-time assertions that covenantSignerEngine satisfies the full
+// covenant signer contract, including CurrentBlockHeightProvider. Signer
+// approval certificate expiry enforcement depends on every verifier-capable
+// engine also providing a current block height; losing this interface
+// silently would make certificates never expire.
+var (
+	_ covenantsigner.Engine                     = (*covenantSignerEngine)(nil)
+	_ covenantsigner.SignerApprovalVerifier     = (*covenantSignerEngine)(nil)
+	_ covenantsigner.CurrentBlockHeightProvider = (*covenantSignerEngine)(nil)
+)
 
 // defaultMinActiveOutpointConfirmations is the confirmation threshold applied
 // when the operator config does not specify a custom value. It aligns with
@@ -55,7 +73,15 @@ type qcV1SignerHandoff struct {
 // newCovenantSignerEngine creates a covenant signer engine bound to the given
 // node. When minConfirmations is zero (the Go zero-value produced by an unset
 // config field), defaultMinActiveOutpointConfirmations is used.
-func newCovenantSignerEngine(node *node, minConfirmations uint) covenantsigner.Engine {
+//
+// bridgeFraudDefenseConfirmed must be set only when the operator has confirmed
+// that the tBTC Bridge covenant fraud-defense path is deployed. When false (the
+// default), the engine fails closed and refuses to produce covenant signatures.
+func newCovenantSignerEngine(
+	node *node,
+	minConfirmations uint,
+	bridgeFraudDefenseConfirmed bool,
+) covenantsigner.Engine {
 	if minConfirmations == 0 {
 		minConfirmations = defaultMinActiveOutpointConfirmations
 	}
@@ -63,6 +89,7 @@ func newCovenantSignerEngine(node *node, minConfirmations uint) covenantsigner.E
 	return &covenantSignerEngine{
 		node:                               node,
 		minimumActiveOutpointConfirmations: minConfirmations,
+		bridgeFraudDefenseConfirmed:        bridgeFraudDefenseConfirmed,
 	}
 }
 
@@ -145,6 +172,23 @@ func (cse *covenantSignerEngine) VerifySignerApproval(
 		return err
 	}
 
+	// Fail closed for wallets that are not in a state eligible for covenant
+	// signing. The signer set hash embedded in a certificate binds only the
+	// wallet identity, members hash, and threshold, none of which change when a
+	// wallet is closed or terminated, so a certificate issued while the wallet
+	// was live would otherwise keep verifying after closure. Rejecting
+	// non-eligible states here ensures a wallet the closure path intended to
+	// deauthorize cannot be made to sign a covenant transaction.
+	if !isCovenantSigningEligibleState(walletChainData.State) {
+		return covenantsigner.NewInputError(
+			fmt.Sprintf(
+				"request.signerApproval.walletPublicKey resolves to a wallet in "+
+					"state [%v] that is not eligible for covenant signing",
+				walletChainData.State,
+			),
+		)
+	}
+
 	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
 		signerPublicKey,
 		walletChainData,
@@ -175,6 +219,16 @@ func (cse *covenantSignerEngine) VerifySignerApproval(
 	return nil
 }
 
+// isCovenantSigningEligibleState reports whether a wallet in the given state is
+// eligible to receive covenant signatures. Covenant migrations are only
+// expected for live wallets, so covenant signing fails closed for every other
+// state (including closed and terminated wallets that the closure path intends
+// to deauthorize). If covenant signing must be allowed for another state in the
+// future, add it here explicitly together with justification and tests.
+func isCovenantSigningEligibleState(state WalletState) bool {
+	return state == StateLive
+}
+
 func (cse *covenantSignerEngine) resolveSignerApprovalTemplatePublicKey(
 	request covenantsigner.RouteSubmitRequest,
 ) (*ecdsa.PublicKey, error) {
@@ -200,6 +254,26 @@ func (cse *covenantSignerEngine) OnSubmit(
 	ctx context.Context,
 	job *covenantsigner.Job,
 ) (*covenantsigner.Transition, error) {
+	// Fail closed unless the operator has confirmed the tBTC Bridge covenant
+	// fraud-defense path is deployed. Producing a covenant SIGHASH_ALL
+	// signature over a covenant active UTXO exposes the signing wallet to a
+	// tBTC fraud challenge it cannot defeat, because the Bridge does not
+	// recognize a covenant active UTXO spend as an honest spend in
+	// Fraud.defeatFraudChallenge; only a swept deposit, a spent main UTXO, or a
+	// processed moved-funds sweep can defeat the challenge. The complete
+	// remediation is the bridge-side covenant fraud-defense path. Until it is
+	// deployed and confirmed here, refuse to sign so a valid migration
+	// signature cannot become a slashable wallet signature.
+	if !cse.bridgeFraudDefenseConfirmed {
+		return failedTransition(
+			covenantsigner.ReasonPolicyRejected,
+			"covenant signing is disabled until the tBTC Bridge covenant "+
+				"fraud-defense path is confirmed deployed; a covenant signature "+
+				"would otherwise expose the wallet to an undefeatable fraud "+
+				"challenge",
+		), nil
+	}
+
 	switch job.Route {
 	case covenantsigner.TemplateSelfV1:
 		return cse.submitSelfV1(ctx, job), nil
@@ -219,6 +293,21 @@ func (cse *covenantSignerEngine) OnPoll(
 	*covenantsigner.Job,
 ) (*covenantsigner.Transition, error) {
 	return nil, nil
+}
+
+// CurrentBlockHeight returns the current height of the host chain (e.g.
+// Ethereum), obtained through the same node chain connection the signing
+// executors use. It is deliberately the host chain, not cse.node.btcChain:
+// signer approval certificate EndBlock values are defined in host-chain block
+// units so expiry can be enforced independently of Bitcoin's slower,
+// reorg-prone confirmation times.
+func (cse *covenantSignerEngine) CurrentBlockHeight(context.Context) (uint64, error) {
+	blockCounter, err := cse.node.chain.BlockCounter()
+	if err != nil {
+		return 0, fmt.Errorf("cannot get host chain block counter: %w", err)
+	}
+
+	return blockCounter.CurrentBlock()
 }
 
 func (cse *covenantSignerEngine) submitSelfV1(
@@ -548,8 +637,7 @@ func (cse *covenantSignerEngine) resolveActiveUtxo(
 		return nil, fmt.Errorf("active outpoint output index is out of range")
 	}
 
-	expectedWitnessScriptHash := bitcoin.WitnessScriptHash(witnessScript)
-	expectedScriptPubKey, err := bitcoin.PayToWitnessScriptHash(expectedWitnessScriptHash)
+	expectedScriptPubKey, err := payToWitnessScriptHash(witnessScript)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot build expected %s locking script: %v",
@@ -750,9 +838,22 @@ func (cse *covenantSignerEngine) buildCovenantTransactionBuilder(
 	activeUtxo *bitcoin.UnspentTransactionOutput,
 	witnessScript bitcoin.Script,
 ) (*bitcoin.TransactionBuilder, error) {
-	destinationScript, err := decodePrefixedHex(request.MigrationDestination.DepositScript)
+	destinationDepositScript, err := decodePrefixedHex(request.MigrationDestination.DepositScript)
 	if err != nil {
 		return nil, fmt.Errorf("migration destination deposit script is invalid")
+	}
+	if len(destinationDepositScript) == 0 {
+		return nil, fmt.Errorf("migration destination deposit script must not be empty")
+	}
+	// MigrationDestination.DepositScript is the plain tBTC deposit script, not a
+	// ready-made output script. The Bitcoin funding output must pay to its P2WSH
+	// script hash (OP_0 <sha256(depositScript)>), which is how the tBTC Bridge
+	// rebuilds and verifies the funding output in revealDepositWithExtraData.
+	// Using the plain deposit script directly as the output script would make
+	// the migration deposit unrevealable to the Bridge.
+	destinationScriptPubKey, err := payToWitnessScriptHash(destinationDepositScript)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build migration destination locking script: %v", err)
 	}
 	destinationValue, err := toBitcoinOutputValue(
 		request.MigrationTransactionPlan.DestinationValueSats,
@@ -779,7 +880,7 @@ func (cse *covenantSignerEngine) buildCovenantTransactionBuilder(
 	builder.SetLocktime(request.MigrationTransactionPlan.LockTime)
 	builder.AddOutput(&bitcoin.TransactionOutput{
 		Value:           destinationValue,
-		PublicKeyScript: destinationScript,
+		PublicKeyScript: destinationScriptPubKey,
 	})
 
 	anchorScript, err := canonicalAnchorScriptPubKey()
@@ -794,6 +895,15 @@ func (cse *covenantSignerEngine) buildCovenantTransactionBuilder(
 	return builder, nil
 }
 
+// signCovenantTransactionInput produces the wallet's tECDSA signature over the
+// single covenant input of the migration transaction.
+//
+// This signature is a normal Bitcoin SIGHASH_ALL signature over a covenant
+// active UTXO. A covenant active UTXO is neither a swept deposit, a spent main
+// UTXO, nor a processed moved-funds sweep, so the tBTC Bridge cannot defeat a
+// fraud challenge that replays this signature. Callers must therefore only
+// reach this path once the bridge-side covenant fraud-defense has been
+// confirmed deployed; OnSubmit enforces that fail-closed gate.
 func signCovenantTransactionInput(
 	ctx context.Context,
 	signingExecutor *signingExecutor,
@@ -884,8 +994,15 @@ func (handoff *qcV1SignerHandoff) toMap() map[string]any {
 }
 
 func canonicalAnchorScriptPubKey() (bitcoin.Script, error) {
-	witnessScriptHash := bitcoin.WitnessScriptHash(bitcoin.Script{txscript.OP_TRUE})
-	return bitcoin.PayToWitnessScriptHash(witnessScriptHash)
+	return payToWitnessScriptHash(bitcoin.Script{txscript.OP_TRUE})
+}
+
+// payToWitnessScriptHash derives the P2WSH locking script
+// (OP_0 <sha256(script)>) that pays to the given witness script. This is how
+// the tBTC Bridge matches an output against a script it independently
+// recomputes; callers wrap the returned error with their own context.
+func payToWitnessScriptHash(script bitcoin.Script) (bitcoin.Script, error) {
+	return bitcoin.PayToWitnessScriptHash(bitcoin.WitnessScriptHash(script))
 }
 
 func decodePrefixedHex(value string) ([]byte, error) {

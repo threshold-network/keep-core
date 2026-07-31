@@ -171,16 +171,21 @@ func normalizeSignerApprovalCertificate(
 		}
 	}
 
-	if signerApproval.EndBlock != nil {
-		if err := validateUint32Range(
-			"request.signerApproval.endBlock",
-			*signerApproval.EndBlock,
-		); err != nil {
-			return nil, err
+	// EndBlock is a required v2 certificate field: a missing or null EndBlock
+	// must fail closed rather than being treated as "never expires". Unlike
+	// request.maturityHeight (a Bitcoin nLockTime-style field genuinely
+	// bounded to uint32), EndBlock is a host-chain block number bound into
+	// the certificate v2 signing digest as a full 8-byte big-endian uint64
+	// (see signerApprovalCertificateSigningDigest in pkg/tbtc), so it must
+	// accept the entire uint64 range here too -- rejecting values above
+	// math.MaxUint32 would contradict that contract.
+	if signerApproval.EndBlock == nil {
+		return nil, &inputError{
+			"request.signerApproval.endBlock is required",
 		}
-		endBlock := *signerApproval.EndBlock
-		normalizedSignerApproval.EndBlock = &endBlock
 	}
+	endBlock := *signerApproval.EndBlock
+	normalizedSignerApproval.EndBlock = &endBlock
 
 	return normalizedSignerApproval, nil
 }

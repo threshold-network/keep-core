@@ -1,6 +1,10 @@
 package retransmission
 
-import "github.com/keep-network/keep-core/pkg/net"
+import (
+	"sync"
+
+	"github.com/keep-network/keep-core/pkg/net"
+)
 
 // Strategy represents a specific retransmission strategy.
 type Strategy interface {
@@ -44,6 +48,10 @@ func (ss *StandardStrategy) Tick(retransmitFn RetransmitFn) error {
 // ticks, between third and fourth is 4 ticks and so on. Graphically, the
 // schedule looks as follows: R _ R _ _ R _ _ _ _  R _ _ _ _ _ _ _ _ R
 type BackoffStrategy struct {
+	// mutex guards the retransmission counters below. ScheduleRetransmissions
+	// invokes Tick from a new goroutine on every tick, so overlapping ticks can
+	// call Tick concurrently on the same strategy instance.
+	mutex          sync.Mutex
 	tickCounter    uint64
 	delay          uint64
 	retransmitTick uint64
@@ -61,12 +69,23 @@ func WithBackoffStrategy() *BackoffStrategy {
 
 // Tick implements the Strategy.Tick function.
 func (bos *BackoffStrategy) Tick(retransmitFn RetransmitFn) error {
+	// Update the retransmission counters under the mutex so that concurrent
+	// Tick calls do not race on them. The decision is captured in a local and
+	// retransmitFn is invoked after releasing the lock, preserving the original
+	// behavior of not holding shared state while the message is retransmitted.
+	bos.mutex.Lock()
+
 	bos.tickCounter++
 
-	if bos.tickCounter == bos.retransmitTick {
+	shouldRetransmit := bos.tickCounter == bos.retransmitTick
+	if shouldRetransmit {
 		bos.retransmitTick += bos.delay + 1
 		bos.delay *= 2
+	}
 
+	bos.mutex.Unlock()
+
+	if shouldRetransmit {
 		return retransmitFn()
 	}
 

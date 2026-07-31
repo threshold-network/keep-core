@@ -442,7 +442,12 @@ contract TokenStakingEscrow is Ownable {
         address grantManager
     ) internal {
         uint256 amount = availableAmount(operator);
-        deposits[operator].withdrawn = amount;
+        // Add to the existing withdrawn counter instead of overwriting it, so
+        // that a prior partial withdrawal is not discarded. Overwriting would
+        // reset availableAmount and let the revoked deposit be withdrawn
+        // repeatedly, draining the escrow's shared token balance. This mirrors
+        // the accounting used by withdraw and migrate.
+        deposits[operator].withdrawn = deposit.withdrawn.add(amount);
         keepToken.safeTransfer(grantManager, amount);
 
         emit RevokedDepositWithdrawn(operator, grantManager, amount);

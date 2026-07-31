@@ -226,6 +226,13 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: true,
 		defaultValue:          false,
 	},
+	"covenantSigner.bridgeCovenantFraudDefenseConfirmed": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.BridgeCovenantFraudDefenseConfirmed },
+		flagName:              "--covenantSigner.bridgeCovenantFraudDefenseConfirmed",
+		flagValue:             "",
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
 	"tbtc.preParamsPoolSize": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.PreParamsPoolSize },
 		flagName:              "--tbtc.preParamsPoolSize",

@@ -100,6 +100,7 @@ type startDeps struct {
 		clientInfoRegistry *clientinfo.Registry,
 		perfMetrics *clientinfo.PerformanceMetrics,
 		minActiveOutpointConfirmations uint,
+		bridgeCovenantFraudDefenseConfirmed bool,
 	) (covenantsigner.Engine, error)
 	initializeSigner func(
 		ctx context.Context,
@@ -254,6 +255,7 @@ func startWithDeps(cmd *cobra.Command, deps startDeps) error {
 			clientInfoRegistry,
 			perfMetrics, // Pass the existing performance metrics instance to avoid duplicate registrations
 			clientConfig.CovenantSigner.MinActiveOutpointConfirmations,
+			clientConfig.CovenantSigner.BridgeCovenantFraudDefenseConfirmed,
 		)
 		if err != nil {
 			return fmt.Errorf("error initializing TBTC: [%v]", err)

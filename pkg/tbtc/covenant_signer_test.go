@@ -83,7 +83,7 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0),
+		newCovenantSignerEngine(node, 0, true),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -250,8 +250,20 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 	if transaction.Outputs[0].Value != int64(destinationValueSats) {
 		t.Fatalf("unexpected destination value: %d", transaction.Outputs[0].Value)
 	}
-	if !bytes.Equal(transaction.Outputs[0].PublicKeyScript, destinationScript) {
+	// The destination output must pay to the P2WSH script hash of the deposit
+	// script (OP_0 <sha256(depositScript)>), not to the plain deposit script
+	// itself; otherwise the migration deposit is unrevealable to the tBTC Bridge.
+	expectedDestinationScript, err := bitcoin.PayToWitnessScriptHash(
+		bitcoin.WitnessScriptHash(destinationScript),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(transaction.Outputs[0].PublicKeyScript, expectedDestinationScript) {
 		t.Fatal("unexpected destination output script")
+	}
+	if bytes.Equal(transaction.Outputs[0].PublicKeyScript, destinationScript) {
+		t.Fatal("destination output must not be the raw deposit script")
 	}
 
 	expectedAnchorScript, err := canonicalAnchorScriptPubKey()
@@ -318,7 +330,7 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0),
+		newCovenantSignerEngine(node, 0, true),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -517,8 +529,20 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 	if unsignedTransaction.Outputs[0].Value != int64(destinationValueSats) {
 		t.Fatalf("unexpected destination value: %d", unsignedTransaction.Outputs[0].Value)
 	}
-	if !bytes.Equal(unsignedTransaction.Outputs[0].PublicKeyScript, destinationScript) {
+	// The destination output must pay to the P2WSH script hash of the deposit
+	// script (OP_0 <sha256(depositScript)>), not to the plain deposit script
+	// itself; otherwise the migration deposit is unrevealable to the tBTC Bridge.
+	expectedDestinationScript, err := bitcoin.PayToWitnessScriptHash(
+		bitcoin.WitnessScriptHash(destinationScript),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(unsignedTransaction.Outputs[0].PublicKeyScript, expectedDestinationScript) {
 		t.Fatal("unexpected destination output script")
+	}
+	if bytes.Equal(unsignedTransaction.Outputs[0].PublicKeyScript, destinationScript) {
+		t.Fatal("destination output must not be the raw deposit script")
 	}
 
 	expectedAnchorScript, err := canonicalAnchorScriptPubKey()
@@ -605,7 +629,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsInvalidBeta(t *testing.T) {
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0),
+		newCovenantSignerEngine(node, 0, true),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -721,7 +745,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) 
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0),
+		newCovenantSignerEngine(node, 0, true),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -867,7 +891,7 @@ func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node, 0),
+		newCovenantSignerEngine(node, 0, true),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1006,6 +1030,150 @@ func TestCovenantSignerEngine_EnsureActiveOutpointFinalityRejectsUnconfirmed(t *
 	}).ensureActiveOutpointFinality(activeTransactionHash)
 	if err == nil || !strings.Contains(err.Error(), "active outpoint transaction must have at least 6 confirmations") {
 		t.Fatalf("expected confirmation error, got %v", err)
+	}
+}
+
+func TestNode_InvalidateSigningExecutorEvictsCachedExecutorOnArchival(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	// setupCovenantSignerTestNode already created and cached a signing executor
+	// for the wallet. Confirm it is served from the cache.
+	executor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected the node to control the wallet before archival")
+	}
+
+	// Archive the wallet, removing it from the wallet registry, as the wallet
+	// closure path does.
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+	if err := node.walletRegistry.archiveWallet(walletPublicKeyHash); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before invalidation, getSigningExecutor still returns the stale cached
+	// executor even though the wallet is no longer in the registry -- this is
+	// the behavior the fix must prevent.
+	staleExecutor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || staleExecutor != executor {
+		t.Fatal("expected the stale cached executor to still be present before invalidation")
+	}
+
+	// Invalidating the signing executor (as handleWalletClosure does after
+	// archival) evicts the cached executor, so the archived wallet is no longer
+	// signable through it.
+	if err := node.invalidateSigningExecutor(walletPublicKey); err != nil {
+		t.Fatal(err)
+	}
+
+	_, ok, err = node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("expected the archived wallet to no longer be signable after executor invalidation")
+	}
+}
+
+func TestArchiveClosedWallets_SkipsWalletNotYetRegisteredOnChain(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	localChain, ok := node.chain.(*localChain)
+	if !ok {
+		t.Fatal("expected local chain implementation")
+	}
+
+	// Simulate a freshly generated wallet that is present in the local wallet
+	// registry but not yet recorded on-chain by the Bridge, i.e. still inside
+	// the DKG approval window.
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+	localChain.walletsMutex.Lock()
+	delete(localChain.wallets, walletPublicKeyHash)
+	localChain.walletsMutex.Unlock()
+
+	if err := node.archiveClosedWallets(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The pending wallet must be left in place, not archived.
+	if len(node.walletRegistry.getSigners(walletPublicKey)) == 0 {
+		t.Fatal("expected the not-yet-registered wallet to be left in place, but it was archived")
+	}
+}
+
+func TestArchiveClosedWallets_ArchivesClosedWallet(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	localChain, ok := node.chain.(*localChain)
+	if !ok {
+		t.Fatal("expected local chain implementation")
+	}
+
+	// Transition the on-chain wallet to the closed state, keeping its identity.
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+	existing, err := localChain.GetWallet(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := *existing
+	closed.State = StateClosed
+	localChain.setWallet(walletPublicKeyHash, &closed)
+
+	if err := node.archiveClosedWallets(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The closed wallet must be archived.
+	if len(node.walletRegistry.getSigners(walletPublicKey)) != 0 {
+		t.Fatal("expected the closed wallet to be archived, but it is still present")
+	}
+}
+
+// TestCovenantSignerEngine_OnSubmitFailsClosedWithoutBridgeFraudDefense verifies
+// that the engine refuses to produce covenant signatures unless the operator has
+// confirmed the tBTC Bridge covenant fraud-defense path is deployed. A covenant
+// signature would otherwise expose the signing wallet to an undefeatable fraud
+// challenge.
+func TestCovenantSignerEngine_OnSubmitFailsClosedWithoutBridgeFraudDefense(t *testing.T) {
+	node, _, _ := setupCovenantSignerTestNode(t)
+
+	// Construct the engine with the default (fail-closed) configuration: the
+	// bridge covenant fraud-defense path is not confirmed deployed.
+	engine := newCovenantSignerEngine(node, 0, false)
+
+	for _, route := range []covenantsigner.TemplateID{
+		covenantsigner.TemplateSelfV1,
+		covenantsigner.TemplateQcV1,
+	} {
+		transition, err := engine.OnSubmit(
+			context.Background(),
+			&covenantsigner.Job{Route: route},
+		)
+		if err != nil {
+			t.Fatalf("[%s] unexpected error: %v", route, err)
+		}
+		if transition == nil {
+			t.Fatalf("[%s] expected a transition", route)
+		}
+		if transition.State != covenantsigner.JobStateFailed {
+			t.Fatalf(
+				"[%s] expected a failed transition, got state [%v]",
+				route,
+				transition.State,
+			)
+		}
+		if transition.Reason != covenantsigner.ReasonPolicyRejected {
+			t.Fatalf(
+				"[%s] expected a policy rejection, got reason [%v]",
+				route,
+				transition.Reason,
+			)
+		}
 	}
 }
 
@@ -1329,10 +1497,17 @@ func applyTestArtifactApprovals(
 		t.Fatal(err)
 	}
 
+	// Generously far in the future: these submit-flow tests exercise
+	// certificate expiry enforcement incidentally (through the real engine's
+	// CurrentBlockHeight wiring), and only care that the certificate is
+	// valid, not about a specific expiry block.
+	requestedEndBlock := startBlock + 100000
+
 	signerApproval, err := executor.issueSignerApprovalCertificate(
 		context.Background(),
 		testArtifactApprovalDigest(t, payload),
 		startBlock,
+		requestedEndBlock,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1380,7 +1555,9 @@ func TestCovenantSignerEngine_OnPollReturnsNoTransition(t *testing.T) {
 }
 
 func TestCovenantSignerEngine_SubmitRejectsUnsupportedRoute(t *testing.T) {
-	transition, err := (&covenantSignerEngine{}).OnSubmit(
+	// Confirm the bridge fraud-defense so OnSubmit reaches route validation
+	// rather than the fail-closed gate.
+	transition, err := (&covenantSignerEngine{bridgeFraudDefenseConfirmed: true}).OnSubmit(
 		context.Background(),
 		&covenantsigner.Job{
 			Route: covenantsigner.TemplateID("unsupported_route"),
@@ -1403,10 +1580,49 @@ func TestCovenantSignerEngine_SubmitRejectsUnsupportedRoute(t *testing.T) {
 	}
 }
 
+// TestCovenantSignerEngine_CurrentBlockHeightUsesNodeHostChain verifies that
+// the production covenantSignerEngine.CurrentBlockHeight is backed by
+// node.chain.BlockCounter() (the host/Ethereum chain), matching whatever the
+// same block counter reports directly -- never node.btcChain.
+func TestCovenantSignerEngine_CurrentBlockHeightUsesNodeHostChain(t *testing.T) {
+	node, _, _ := setupCovenantSignerTestNode(t)
+
+	engine := newCovenantSignerEngine(node, 0, true)
+	cse, ok := engine.(*covenantSignerEngine)
+	if !ok {
+		t.Fatal("expected engine to be *covenantSignerEngine")
+	}
+
+	var provider covenantsigner.CurrentBlockHeightProvider = cse
+	height, err := provider.CurrentBlockHeight(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blockCounter, err := node.chain.BlockCounter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedHeight, err := blockCounter.CurrentBlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The two reads are not atomic with each other, so tolerate the local
+	// block counter having ticked forward by exactly one block in between.
+	if height != expectedHeight && height != expectedHeight+1 {
+		t.Fatalf(
+			"expected CurrentBlockHeight [%d] to match node.chain.BlockCounter() [%d] (+/- 1 tick)",
+			height,
+			expectedHeight,
+		)
+	}
+}
+
 func TestNewCovenantSignerEngine_DefaultMinConfirmations(t *testing.T) {
 	node, _, _ := setupCovenantSignerTestNode(t)
 
-	engine := newCovenantSignerEngine(node, 0)
+	engine := newCovenantSignerEngine(node, 0, true)
 
 	cse, ok := engine.(*covenantSignerEngine)
 	if !ok {
@@ -1424,7 +1640,7 @@ func TestNewCovenantSignerEngine_DefaultMinConfirmations(t *testing.T) {
 func TestNewCovenantSignerEngine_ExplicitMinConfirmations(t *testing.T) {
 	node, _, _ := setupCovenantSignerTestNode(t)
 
-	engine := newCovenantSignerEngine(node, 3)
+	engine := newCovenantSignerEngine(node, 3, true)
 
 	cse, ok := engine.(*covenantSignerEngine)
 	if !ok {
@@ -1596,5 +1812,113 @@ func TestComputeQcV1SignerHandoffPayloadHash_DeterministicKeyOrdering(t *testing
 			expectedJSON,
 			rawJSON,
 		)
+	}
+}
+
+// TestCovenantSignerEngine_VerifySignerApprovalRejectsNonLiveWallet verifies
+// that a signer approval certificate which is otherwise valid (matching the
+// wallet identity and members hash) is rejected once the wallet leaves the live
+// state, so a closed or terminated wallet cannot be made to sign a covenant
+// transaction.
+func TestCovenantSignerEngine_VerifySignerApprovalRejectsNonLiveWallet(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	localChain, ok := node.chain.(*localChain)
+	if !ok {
+		t.Fatal("expected local chain implementation")
+	}
+
+	depositorPrivateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{0x42}, 32))
+	depositorPublicKey := depositorPrivateKey.PubKey().SerializeCompressed()
+	signerPublicKey := (*btcec.PublicKey)(walletPublicKey).SerializeCompressed()
+
+	template := &covenantsigner.SelfV1Template{
+		Template:           covenantsigner.TemplateSelfV1,
+		DepositorPublicKey: "0x" + hex.EncodeToString(depositorPublicKey),
+		SignerPublicKey:    "0x" + hex.EncodeToString(signerPublicKey),
+		Delta2:             4320,
+	}
+	templateJSON, err := json.Marshal(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build a request whose signer approval certificate is issued while the
+	// wallet is live, so it is genuinely valid apart from the wallet state.
+	request := covenantsigner.RouteSubmitRequest{
+		Route:                     covenantsigner.TemplateSelfV1,
+		DestinationCommitmentHash: "0x" + strings.Repeat("11", 32),
+		MigrationTransactionPlan: &covenantsigner.MigrationTransactionPlan{
+			InputValueSats:       1_000_000,
+			DestinationValueSats: 998_000,
+			AnchorValueSats:      330,
+			FeeSats:              1_670,
+			InputSequence:        0xfffffffd,
+			LockTime:             912345,
+		},
+		ScriptTemplate: templateJSON,
+		Signing: covenantsigner.SigningRequirements{
+			SignerRequired:    true,
+			CustodianRequired: false,
+		},
+	}
+	applyTestMigrationTransactionPlanCommitment(t, &request)
+	applyTestArtifactApprovals(t, node, walletPublicKey, &request, depositorPrivateKey, nil)
+
+	cse := &covenantSignerEngine{node: node}
+
+	// While the wallet is live, the otherwise-valid request is accepted.
+	if err := cse.VerifySignerApproval(request); err != nil {
+		t.Fatalf("expected a live wallet to be accepted, got: %v", err)
+	}
+
+	// Transition the wallet to the closed state, keeping otherwise-valid
+	// registry data (same identity and members hash), matching the reported
+	// scenario where a certificate for a now-closed wallet is replayed.
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+	existing, err := localChain.GetWallet(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := *existing
+	closed.State = StateClosed
+	localChain.setWallet(walletPublicKeyHash, &closed)
+
+	// The closed wallet must now be rejected before any signing occurs.
+	if err := cse.VerifySignerApproval(request); err == nil {
+		t.Fatal("expected VerifySignerApproval to reject a closed wallet")
+	}
+}
+
+// TestEnsureActiveOutpointFinalityPropagatesProviderError asserts the finality
+// guard fails closed when the confirmation provider cannot answer. The existing
+// finality tests only exercise known confirmation counts above and below the
+// threshold; this covers the error path, where refusing to sign (rather than
+// treating an unknown count as sufficient) is the reorg-safety behavior we rely
+// on.
+func TestEnsureActiveOutpointFinalityPropagatesProviderError(t *testing.T) {
+	node, bitcoinChain, _ := setupCovenantSignerTestNode(t)
+
+	// A transaction the fake chain has never seen: it is neither in the
+	// confirmations map nor among the known transactions, so
+	// GetTransactionConfirmations returns "transaction not found". Version 99
+	// makes an accidental hash collision with any seeded transaction
+	// vanishingly unlikely.
+	unknownTransactionHash := (&bitcoin.Transaction{Version: 99}).Hash()
+	if _, err := bitcoinChain.GetTransactionConfirmations(unknownTransactionHash); err == nil {
+		t.Fatal("test setup: expected the fabricated transaction hash to be unknown to the chain")
+	}
+
+	cse := &covenantSignerEngine{
+		node:                               node,
+		minimumActiveOutpointConfirmations: 6,
+	}
+
+	err := cse.ensureActiveOutpointFinality(unknownTransactionHash)
+	if err == nil {
+		t.Fatal("expected finality check to fail when confirmations cannot be determined")
+	}
+	if !strings.Contains(err.Error(), "cannot determine active outpoint transaction confirmations") {
+		t.Fatalf("unexpected error message: %v", err)
 	}
 }

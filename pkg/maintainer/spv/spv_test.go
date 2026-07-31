@@ -324,3 +324,137 @@ func TestIsInputCurrentWalletsMainUTXO(t *testing.T) {
 		})
 	}
 }
+
+// TestGetUnprovenWalletTransactions_FindsProtocolTransactionBehindSpam verifies
+// that a real protocol transaction is still discovered even when more than
+// transactionScanLimit unrelated (spam) transactions are paid to the same
+// wallet address after it - it just takes as many scanner rounds as it takes
+// to walk past the spam, rather than being permanently evicted. This is the
+// shared discovery path used by all SPV scanners, so a bounded tail lookup
+// would let the spam evict the protocol transaction forever.
+func TestGetUnprovenWalletTransactions_FindsProtocolTransactionBehindSpam(t *testing.T) {
+	btcChain := newLocalBitcoinChain()
+
+	walletPublicKeyHash := [20]byte{
+		0x8d, 0xb5, 0x0e, 0xb5, 0x20, 0x63, 0xea, 0x9d, 0x98, 0xb3,
+		0xea, 0xc9, 0x14, 0x89, 0xa9, 0x0f, 0x73, 0x89, 0x86, 0xf6,
+	}
+	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// buildWalletTx builds a distinct confirmed transaction paying to the wallet
+	// address. The output count distinguishes the protocol transaction (a single
+	// output, as the deposit sweep scanner requires) from spam, and the input
+	// outpoint index keeps each transaction unique.
+	buildWalletTx := func(index uint32, outputCount int) *bitcoin.Transaction {
+		outputs := make([]*bitcoin.TransactionOutput, outputCount)
+		for i := range outputs {
+			outputs[i] = &bitcoin.TransactionOutput{
+				Value:           546,
+				PublicKeyScript: walletScript,
+			}
+		}
+		return &bitcoin.Transaction{
+			Version: 1,
+			Inputs: []*bitcoin.TransactionInput{
+				{
+					Outpoint: &bitcoin.TransactionOutpoint{
+						TransactionHash: bitcoin.Hash{},
+						OutputIndex:     index,
+					},
+					Sequence: 0xffffffff,
+				},
+			},
+			Outputs:  outputs,
+			Locktime: 0,
+		}
+	}
+
+	// The protocol transaction is the oldest transaction paying to the wallet.
+	protocolTransaction := buildWalletTx(0, 1)
+	if err := btcChain.BroadcastTransaction(protocolTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add many unrelated transactions after the protocol one, well beyond the
+	// per-round scan limit, each paying to the same wallet address.
+	transactionLimit := 5
+	transactionScanLimit := 4
+	spamCount := transactionScanLimit * 6
+	for i := 0; i < spamCount; i++ {
+		spamTransaction := buildWalletTx(uint32(i+1), 2)
+		if err := btcChain.BroadcastTransaction(spamTransaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	protocolTransactionHash := protocolTransaction.Hash()
+
+	scanner := newWalletTransactionScanner()
+	key := walletTransactionScanKey{lookupWalletPKH: walletPublicKeyHash}
+	predicate := func(transaction *bitcoin.Transaction) (bool, error) {
+		return transaction.Hash() == protocolTransactionHash, nil
+	}
+
+	// A single round with a scan limit far smaller than the spam count must
+	// not find the protocol transaction yet - it is still buried beyond this
+	// round's examination budget.
+	scanner.beginRound()
+	found, err := scanner.getUnprovenWalletTransactions(
+		key, walletPublicKeyHash, transactionLimit, transactionScanLimit,
+		"test", btcChain, predicate,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Fatalf(
+			"expected the protocol transaction to still be undiscovered "+
+				"after one bounded round, got %d match(es)",
+			len(found),
+		)
+	}
+
+	// Repeated rounds (simulating repeated maintainer ticks) must eventually
+	// walk the cursor past all the spam and discover the protocol
+	// transaction - it must never be permanently evicted.
+	maxRounds := (spamCount / transactionScanLimit) + 2
+	for round := 0; round < maxRounds && len(found) == 0; round++ {
+		scanner.beginRound()
+		found, err = scanner.getUnprovenWalletTransactions(
+			key, walletPublicKeyHash, transactionLimit, transactionScanLimit,
+			"test", btcChain, predicate,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(found) != 1 {
+		t.Fatalf(
+			"expected exactly one unproven transaction within %d rounds, got %d",
+			maxRounds, len(found),
+		)
+	}
+	if found[0].Hash() != protocolTransactionHash {
+		t.Fatal(
+			"expected the protocol transaction to be discovered behind the spam",
+		)
+	}
+
+	// Once discovered, the transaction must stay reported on subsequent
+	// rounds instead of needing to be rediscovered.
+	scanner.beginRound()
+	foundAgain, err := scanner.getUnprovenWalletTransactions(
+		key, walletPublicKeyHash, transactionLimit, transactionScanLimit,
+		"test", btcChain, predicate,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(foundAgain) != 1 || foundAgain[0].Hash() != protocolTransactionHash {
+		t.Fatal("expected the protocol transaction to remain a candidate")
+	}
+}
