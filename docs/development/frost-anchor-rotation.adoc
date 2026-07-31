@@ -67,9 +67,11 @@ derivation is in <<when-rotation-is-required>>.
   rotation, increments it. Within one epoch, revisions count from 1.
 
 | Revision
-| One event in the stream. In practice one request-taking signer call
-  advances one revision, because the process output barrier advances
-  the remote anchor revision once for the call's final checkpoint.
+| One event in the stream. A request-taking signer call advances at most
+  one revision, and only if it actually changed durable state: the
+  output barrier skips the remote compare-and-swap entirely when the
+  Rust tip is unchanged, so a call such as `Round1` - which mints its
+  nonce in memory and persists nothing - costs none.
 
 | Generation
 | One committed state witness inside the Rust signer - one durable
