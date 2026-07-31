@@ -714,7 +714,7 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		"complete", "currentAnchorRevision", "externalRollbackAnchorBound", "inventoryCommitment",
 		"previousStateCommitment", "retainedKeyPackageCount", "retainedWalletCount",
 		"restartableGenerationHeadroom", "restartableRevisionHeadroom",
-		"schema", "stateCommitment", "stateGeneration",
+		"schema", "stateAnchorPoisoned", "stateCommitment", "stateGeneration",
 		"stateImageDigest", "storeFingerprint",
 		"trustCertificateDigest", "trustCertificateSequence",
 	})
@@ -1063,6 +1063,258 @@ func TestFrostActivationHandshakeExporter_SignsLiveNativeSignerState(
 	if !handshake.Payload.State.Healthy {
 		t.Fatal("live native signer state did not produce a healthy attestation")
 	}
+}
+
+// TestFrostActivationHandshakeHealthy_RequiresAnUnpoisonedStateAnchor pins the
+// health term itself, independently of how the payload is assembled: an
+// otherwise perfect state is unhealthy once the native signer state anchor is
+// terminally poisoned.
+func TestFrostActivationHandshakeHealthy_RequiresAnUnpoisonedStateAnchor(
+	t *testing.T,
+) {
+	state := frostActivationHandshakeState{
+		InteractiveSigningReady:       true,
+		NonceShareGateEnforced:        true,
+		DurableBitcoinOutboxRecovered: true,
+		QuarantineFailClosed:          true,
+		NativeSignerState: frostActivationNativeSignerState{
+			ExternalRollbackAnchorBound: true,
+			Complete:                    true,
+		},
+	}
+	if !frostActivationHandshakeHealthy(state) {
+		t.Fatal("a ready state did not attest healthy")
+	}
+	state.NativeSignerState.StateAnchorPoisoned = true
+	if frostActivationHandshakeHealthy(state) {
+		t.Fatal(
+			"a terminally poisoned native signer state anchor still attested " +
+				"healthy, while the node refuses every request-taking signer " +
+				"call it is asked for",
+		)
+	}
+}
+
+// TestFrostActivationHandshakeExporter_AttestsPoisonedStateAnchorAsUnhealthy
+// pins that a terminally poisoned native tBTC signer state anchor reaches the
+// signed attestation, both as the health verdict and as the named reason for
+// it.
+//
+// The barrier guards every request-taking native signer call, so a node that
+// latches it keeps running and silently stops signing. Nothing else in this
+// payload moves when that happens: interactive readiness is configuration, and
+// every native signer fact is read through no-arg entry points that never enter
+// the barrier's request-taking path. Without the poisoning term, a permissioned
+// FROST set could therefore lose threshold while every member attests health,
+// with no node reporting a cause.
+func TestFrostActivationHandshakeExporter_AttestsPoisonedStateAnchorAsUnhealthy(
+	t *testing.T,
+) {
+	point := frostActivationEthereumPoint{
+		BlockNumber: 123,
+		BlockHash:   frostActivationHex32([32]byte{0x44}),
+	}
+	signal := installTestFrostActivationStateAnchorPoisonSignal(t)
+	exporter, _, _, _, endpoint, request :=
+		startTestFrostActivationHandshakeExporter(t, point)
+
+	response := postTestFrostActivationHandshake(t, endpoint, request)
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	healthy := &frostActivationSignedHandshake{}
+	healthyErr := json.NewDecoder(response.Body).Decode(healthy)
+	response.Body.Close()
+	if healthyErr != nil {
+		t.Fatal(healthyErr)
+	}
+	if !healthy.Payload.State.Healthy ||
+		healthy.Payload.State.NativeSignerState.StateAnchorPoisoned {
+		t.Fatalf(
+			"an unpoisoned state anchor attested healthy [%t] with "+
+				"stateAnchorPoisoned [%t]",
+			healthy.Payload.State.Healthy,
+			healthy.Payload.State.NativeSignerState.StateAnchorPoisoned,
+		)
+	}
+	exporter.reconciliationMutex.Lock()
+	cached := exporter.reconciliationCompleted
+	exporter.reconciliationMutex.Unlock()
+	if cached == nil {
+		t.Fatal("the healthy attestation left no reconciliation cache")
+	}
+
+	// One more healthy read, so the next attestation builds its payload before
+	// the barrier latches and meets the latch only under the signing lock. That
+	// attestation must be refused rather than signed, and must be refused as
+	// retryable: the latch is one-way, so the immediate retry answers with the
+	// poisoned verdict instead of flapping.
+	poisoning := fmt.Errorf(
+		"native tBTC signer state anchor is terminally poisoned: " +
+			"anchor compare-and-swap lost after the native mutation",
+	)
+	signal.latch(poisoning, 1)
+	refused := postTestFrostActivationHandshake(t, endpoint, request)
+	refusedBody, _ := io.ReadAll(refused.Body)
+	refused.Body.Close()
+	if refused.StatusCode != http.StatusServiceUnavailable ||
+		refused.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
+		t.Fatalf(
+			"an anchor poisoned during signing was attested with status [%d] "+
+				"and Retry-After [%s]: %s",
+			refused.StatusCode,
+			refused.Header.Get("Retry-After"),
+			refusedBody,
+		)
+	}
+
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf(
+			"a poisoned node refused to attest at all with status [%d]: %s; "+
+				"the attestation is the only place the reason is reported",
+			response.StatusCode,
+			body,
+		)
+	}
+	defer response.Body.Close()
+	poisoned := &frostActivationSignedHandshake{}
+	if err := json.NewDecoder(response.Body).Decode(poisoned); err != nil {
+		t.Fatal(err)
+	}
+	if poisoned.Payload.State.Healthy ||
+		!poisoned.Payload.State.NativeSignerState.StateAnchorPoisoned {
+		t.Fatalf(
+			"a terminally poisoned node attested healthy [%t] with "+
+				"stateAnchorPoisoned [%t], while it refuses every "+
+				"request-taking native signer call it is asked for",
+			poisoned.Payload.State.Healthy,
+			poisoned.Payload.State.NativeSignerState.StateAnchorPoisoned,
+		)
+	}
+	// Exactly two bits differ from the healthy attestation: the verdict and the
+	// reason for it. An operator holding both must be able to tell that this
+	// node stopped signing because of the anchor and not because some other
+	// activation invariant also broke.
+	expected := healthy.Payload.State
+	expected.NativeSignerState.StateAnchorPoisoned = true
+	expected.Healthy = false
+	if !reflect.DeepEqual(poisoned.Payload.State, expected) {
+		t.Fatal(
+			"the poisoned attestation moved more than the health verdict and " +
+				"its reason, so it does not name the anchor as the cause",
+		)
+	}
+
+	// The reason must be inside what the node signed, not decoration added on
+	// the way out: a consumer recomputes the verdict from the transcript it
+	// verified.
+	publicKeyDER, err := base64.StdEncoding.Strict().DecodeString(
+		poisoned.SignerPublicKeySPKI,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedPublicKey, err := x509.ParsePKIXPublicKey(publicKeyDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, ok := parsedPublicKey.(ed25519.PublicKey)
+	if !ok {
+		t.Fatal("attestation public key is not Ed25519")
+	}
+	canonicalPayload, err := canonicalFrostActivationValue(poisoned.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := base64.StdEncoding.Strict().DecodeString(poisoned.Signature)
+	if err != nil || !ed25519.Verify(
+		publicKey,
+		append(
+			[]byte(frostActivationHandshakeSignatureDomain),
+			canonicalPayload...,
+		),
+		signature,
+	) {
+		t.Fatal(
+			"poisoned attestation signature did not verify over the canonical payload",
+		)
+	}
+	if frostActivationHandshakeHealthy(poisoned.Payload.State) {
+		t.Fatal(
+			"the health verdict recomputed from the signed payload disagrees " +
+				"with the attested one",
+		)
+	}
+
+	// The unhealthy attestation was served from the same reconciliation cache
+	// that produced the healthy one, which is what proves the verdict is read
+	// live at the signing boundary instead of being cached with the rest of the
+	// activation state and going stale across the transition.
+	exporter.reconciliationMutex.Lock()
+	sameCache := exporter.reconciliationCompleted == cached
+	exporter.reconciliationMutex.Unlock()
+	if !sameCache {
+		t.Fatal(
+			"the unhealthy attestation came from a refreshed reconciliation " +
+				"cache, so it does not prove the barrier verdict is read live",
+		)
+	}
+}
+
+// testFrostActivationStateAnchorPoisonSignal stands in for the process-wide
+// state anchor barrier of pkg/frost/signing. The real barrier latches its
+// poisoning until the process restarts, so a test that poisoned it for real
+// would leave every later test in this package unable to sign.
+type testFrostActivationStateAnchorPoisonSignal struct {
+	mutex sync.Mutex
+	// healthyReads is the number of leading reads still answered healthy after
+	// the poisoning was latched, which is how a test places the latch inside
+	// the window between building an attestation and signing it.
+	healthyReads int
+	poisoning    error
+}
+
+func (signal *testFrostActivationStateAnchorPoisonSignal) read() error {
+	signal.mutex.Lock()
+	defer signal.mutex.Unlock()
+	if signal.poisoning == nil {
+		return nil
+	}
+	if signal.healthyReads > 0 {
+		signal.healthyReads--
+		return nil
+	}
+	return signal.poisoning
+}
+
+func (signal *testFrostActivationStateAnchorPoisonSignal) latch(
+	poisoning error,
+	healthyReads int,
+) {
+	signal.mutex.Lock()
+	defer signal.mutex.Unlock()
+	signal.poisoning = poisoning
+	signal.healthyReads = healthyReads
+}
+
+func installTestFrostActivationStateAnchorPoisonSignal(
+	t *testing.T,
+) *testFrostActivationStateAnchorPoisonSignal {
+	t.Helper()
+	signal := &testFrostActivationStateAnchorPoisonSignal{}
+	previous := frostActivationNativeSignerStateAnchorPoisoned
+	frostActivationNativeSignerStateAnchorPoisoned = signal.read
+	t.Cleanup(func() {
+		frostActivationNativeSignerStateAnchorPoisoned = previous
+	})
+	return signal
 }
 
 func TestFrostActivationHandshakeExporter_RevalidatesOutboxStateBeforeSigning(
@@ -1473,6 +1725,13 @@ func TestFrostActivationHandshakeExporter_RejectsUnboundOrLegacyChallenge(
 		},
 		"legacy v2 schema": func(request *frostActivationHandshakeRequest) {
 			request.Schema = "tbtc-p2tr-production-activation-handshake/v2"
+		},
+		// v4 is the schema that did not carry the state-anchor poisoning
+		// verdict, so an auditor still pinned to it would read a payload whose
+		// health verdict it cannot recompute. It is refused like any other
+		// superseded schema.
+		"legacy v4 schema": func(request *frostActivationHandshakeRequest) {
+			request.Schema = "tbtc-p2tr-production-activation-handshake/v4"
 		},
 		"different binding": func(request *frostActivationHandshakeRequest) {
 			request.Challenge.BindingHash = frostActivationHex32([32]byte{0xff})

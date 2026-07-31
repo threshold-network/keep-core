@@ -25,11 +25,12 @@ import (
 	"sync"
 	"time"
 
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"golang.org/x/sys/unix"
 )
 
 const (
-	frostActivationHandshakeSchema                = "tbtc-p2tr-production-activation-handshake/v4"
+	frostActivationHandshakeSchema                = "tbtc-p2tr-production-activation-handshake/v5"
 	frostActivationInventorySchema                = "tbtc-p2tr-frost-wallet-group-inventory/v1"
 	frostActivationHandshakeSignatureDomain       = "tbtc-p2tr-production-activation-handshake-signature/v3\x00"
 	frostActivationHandshakeReconciliationTimeout = frostRetainedGroupMaximumReconciliationDuration
@@ -45,6 +46,19 @@ var errFrostActivationReconciliationPending = errors.New(
 var errFrostActivationJournalBusy = errors.New(
 	"FROST activation journal live-state check is busy",
 )
+
+// frostActivationNativeSignerStateAnchorPoisoned reports the latched terminal
+// state-anchor failure that makes this node refuse every request-taking native
+// signer call until the process is restarted, or nil while the barrier is
+// healthy. It reads an atomic and never takes the barrier mutex, so calling it
+// on the attestation path cannot block behind an in-flight signing operation.
+//
+// It is a variable only so that tests can drive the poisoned branch. The
+// barrier it reads is a process-wide singleton in pkg/frost/signing whose
+// poisoned state is deliberately one-way and clearable only by restart, so a
+// test that latched it for real would leave every later test in this package
+// unable to sign.
+var frostActivationNativeSignerStateAnchorPoisoned = frostsigning.NativeTBTCSignerStateAnchorPoisoned
 
 type frostActivationEthereumPoint struct {
 	BlockNumber uint64 `json:"blockNumber"`
@@ -127,6 +141,7 @@ type frostActivationNativeSignerState struct {
 	RestartableRevisionHeadroom   uint64 `json:"restartableRevisionHeadroom"`
 	RestartableGenerationHeadroom uint64 `json:"restartableGenerationHeadroom"`
 	AnchorRotationWarning         bool   `json:"anchorRotationWarning"`
+	StateAnchorPoisoned           bool   `json:"stateAnchorPoisoned"`
 	Complete                      bool   `json:"complete"`
 }
 
@@ -1057,6 +1072,27 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			"native signer state lacks an authenticated external rollback anchor trust certificate",
 		)
 	}
+	// Every fact revalidated above is read through no-arg native entry points -
+	// the state witness tip, the retained key package inventory and the anchor
+	// trust head - and none of them takes the state-anchor barrier's
+	// request-taking path. A node whose barrier has latched its terminal
+	// failure therefore still reports a complete, anchor-bound, rotation-quiet
+	// native signer state while it refuses every signing request it is asked
+	// for, which is precisely the silent failure this attestation exists to
+	// make visible. The barrier verdict is read live here rather than taken
+	// from the finality-keyed reconciliation cache, because the cache is
+	// refreshed only when finality advances and a poisoning that happened after
+	// the last refresh must not be attested away as health.
+	stateAnchorPoisoning := frostActivationNativeSignerStateAnchorPoisoned()
+	if stateAnchorPoisoning != nil {
+		logger.Errorf(
+			"FROST activation handshake is attesting an unhealthy node: the "+
+				"native tBTC signer state anchor is terminally poisoned: [%v]; "+
+				"this node refuses every request-taking native signer call and "+
+				"cannot contribute a signature share until it is restarted",
+			stateAnchorPoisoning,
+		)
+	}
 	state := frostActivationHandshakeState{
 		ProtocolID:                       frostActivationHex32(fahe.manifest.SignerProtocolID),
 		ReservationProtocolID:            frostActivationHex32(fahe.manifest.ReservationProtocolID),
@@ -1154,6 +1190,7 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			RestartableRevisionHeadroom:   nativeSignerSnapshot.RestartableRevisionHeadroom,
 			RestartableGenerationHeadroom: nativeSignerSnapshot.RestartableGenerationHeadroom,
 			AnchorRotationWarning:         nativeSignerSnapshot.AnchorRotationWarning,
+			StateAnchorPoisoned:           stateAnchorPoisoning != nil,
 			Complete:                      true,
 		},
 		InteractiveSigningReady:                   reconciliation.interactiveSigningReady,
@@ -1213,6 +1250,26 @@ func (fahe *frostActivationHandshakeExporter) attest(
 				)
 			}
 			defer fahe.journal.mutex.Unlock()
+			// The barrier can latch at any moment, including after the payload
+			// above recorded its verdict. Everything the volatile native signer
+			// values tolerate in that window is a bound - an attested
+			// generation is a lower bound on the live one - but health is a
+			// verdict, not a bound: signing "healthy" for a node that has
+			// already stopped being able to sign is exactly the failure this
+			// attestation must not produce, and the window is not short, since
+			// it spans the checkpoint self-verification and one activation
+			// point check over the network. Refuse instead, as a retryable
+			// pending state. The latch is one-way and sticky until restart, so
+			// the retry cannot flap back: it rebuilds the payload with the
+			// poisoned verdict and signs that.
+			if poisoning := frostActivationNativeSignerStateAnchorPoisoned(); (poisoning != nil) !=
+				state.NativeSignerState.StateAnchorPoisoned {
+				return fmt.Errorf(
+					"%w: native tBTC signer state anchor poisoning changed before signing: [%v]",
+					errFrostActivationReconciliationPending,
+					poisoning,
+				)
+			}
 			signingStamp, stampErr := fahe.journalStampLocked()
 			if stampErr != nil || signingStamp != reconciliation.stamp ||
 				!fahe.journal.checkpointDescendsFrom(checkpointFloor) {
@@ -1239,6 +1296,25 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	}, nil
 }
 
+// frostActivationHandshakeHealthy derives the attested health verdict from the
+// signed payload alone, so that a consumer that keeps the handshake can
+// recompute the verdict from the bytes it verified rather than trusting the
+// flag. Every term is therefore a field of the payload, including
+// StateAnchorPoisoned.
+//
+// StateAnchorPoisoned is the only term that no other term implies. The
+// remaining ones are configuration and no-arg native reads:
+// InteractiveSigningReady is opt-in configuration plus a registered engine, and
+// the whole native signer snapshot is read through entry points that never
+// enter the state-anchor barrier's request-taking path. A node whose barrier is
+// poisoned keeps every one of them true while it cannot produce a single
+// signature share, so without this term a permissioned set could have several
+// members silently unable to sign while all of them attest health.
+//
+// The term is one-way. The barrier's poisoning is latched until the process
+// restarts, so an attestation that reports it unhealthy is never followed by
+// one that reports it healthy again short of a restart, and nothing here caches
+// the verdict across that transition: it is read live on every attestation.
 func frostActivationHandshakeHealthy(
 	state frostActivationHandshakeState,
 ) bool {
@@ -1248,7 +1324,8 @@ func frostActivationHandshakeHealthy(
 		state.QuarantineFailClosed &&
 		state.NativeSignerState.Complete &&
 		state.NativeSignerState.ExternalRollbackAnchorBound &&
-		!state.NativeSignerState.AnchorRotationWarning
+		!state.NativeSignerState.AnchorRotationWarning &&
+		!state.NativeSignerState.StateAnchorPoisoned
 }
 
 func frostActivationHandshakeSignatureTranscript(
