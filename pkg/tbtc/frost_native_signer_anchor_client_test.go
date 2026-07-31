@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -853,14 +855,238 @@ func TestFrostNativeSignerAnchorClientRejectsSignedAbsentStream(t *testing.T) {
 	}
 }
 
+// TestFrostNativeSignerAnchorClientReadRidesOutOneTransientFailure pins that a
+// single unanswerable read does not surface at all. Every native signer
+// operation is gated on this read, so a blip that reaches the caller costs a
+// whole signing round.
+func TestFrostNativeSignerAnchorClientReadRidesOutOneTransientFailure(
+	t *testing.T,
+) {
+	for _, status := range []int{
+		http.StatusServiceUnavailable,
+		http.StatusBadGateway,
+		http.StatusInternalServerError,
+		http.StatusTooManyRequests,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			environment := newTestFrostNativeSignerAnchorEnvironment(t, "normal")
+			defer environment.server.Close()
+
+			environment.readFaults.armOnce(status)
+			record, err := environment.client.ReadFrostNativeSignerStateWitnessAnchor(
+				context.Background(),
+			)
+			if err != nil {
+				t.Fatalf("a single [%d] read failure was not ridden out: %v", status, err)
+			}
+			if record == nil || record.Revision == 0 {
+				t.Fatal("retried read did not return the authenticated record")
+			}
+			if requests := environment.readFaults.count(); requests != 2 {
+				t.Fatalf("expected exactly one retry, observed [%d] read requests", requests)
+			}
+		})
+	}
+}
+
+// TestFrostNativeSignerAnchorClientReadRetryIsBoundedAndOnlyForUnreachability
+// pins the two limits that keep the retry honest: it stops after a small fixed
+// number of attempts, and it never re-issues a read the service actually
+// answered, because such an answer is a deterministic fact about the anchor.
+func TestFrostNativeSignerAnchorClientReadRetryIsBoundedAndOnlyForUnreachability(
+	t *testing.T,
+) {
+	tests := []struct {
+		name             string
+		status           int
+		expectedRequests int
+	}{
+		{
+			"unreachable service stops at the attempt bound",
+			http.StatusServiceUnavailable,
+			frostNativeSignerAnchorReadAttempts,
+		},
+		{
+			"rejected client is not retried",
+			http.StatusUnauthorized,
+			1,
+		},
+		{
+			"rejected request is not retried",
+			http.StatusBadRequest,
+			1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			environment := newTestFrostNativeSignerAnchorEnvironment(t, "normal")
+			defer environment.server.Close()
+
+			environment.readFaults.armPersistent(test.status)
+			started := time.Now()
+			if _, err := environment.client.ReadFrostNativeSignerStateWitnessAnchor(
+				context.Background(),
+			); err == nil {
+				t.Fatalf("read against a [%d] service unexpectedly succeeded", test.status)
+			}
+			if elapsed := time.Since(started); elapsed > environment.client.requestTimeout {
+				t.Fatalf(
+					"read retries overran the configured request timeout [%s]: took [%s]",
+					environment.client.requestTimeout,
+					elapsed,
+				)
+			}
+			if requests := environment.readFaults.count(); requests != test.expectedRequests {
+				t.Fatalf(
+					"expected [%d] read requests, observed [%d]",
+					test.expectedRequests,
+					requests,
+				)
+			}
+		})
+	}
+}
+
+// TestIsFrostNativeSignerAnchorRetryableReadFailure pins exactly which failures
+// an idempotent read may re-issue. Everything the service answered has to stay
+// fatal on the first attempt.
+func TestIsFrostNativeSignerAnchorRetryableReadFailure(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{"nil", nil, false},
+		{
+			"deadline exceeded",
+			fmt.Errorf("request failed: %w", context.DeadlineExceeded),
+			true,
+		},
+		{
+			"connection refused",
+			fmt.Errorf("request failed: %w", syscall.ECONNREFUSED),
+			true,
+		},
+		{
+			"connection reset",
+			fmt.Errorf("request failed: %w", syscall.ECONNRESET),
+			true,
+		},
+		{
+			"dial failure",
+			fmt.Errorf("request failed: %w", &net.OpError{
+				Op:  "dial",
+				Err: syscall.EHOSTUNREACH,
+			}),
+			true,
+		},
+		{
+			"name resolution failure",
+			fmt.Errorf("request failed: %w", &net.DNSError{
+				Err:  "no such host",
+				Name: "anchor.example",
+			}),
+			true,
+		},
+		{
+			"service unavailable",
+			&frostNativeSignerAnchorStatusError{
+				statusCode: http.StatusServiceUnavailable,
+			},
+			true,
+		},
+		{
+			"too many requests",
+			&frostNativeSignerAnchorStatusError{
+				statusCode: http.StatusTooManyRequests,
+			},
+			true,
+		},
+		{
+			"unauthorized",
+			&frostNativeSignerAnchorStatusError{
+				statusCode: http.StatusUnauthorized,
+			},
+			false,
+		},
+		{
+			"caller cancelled",
+			fmt.Errorf("request failed: %w", context.Canceled),
+			false,
+		},
+		{
+			"invalid response signature",
+			fmt.Errorf("native signer anchor read response signature is invalid"),
+			false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isFrostNativeSignerAnchorRetryableReadFailure(
+				test.err,
+			); got != test.retryable {
+				t.Fatalf("expected retryable [%v], got [%v]", test.retryable, got)
+			}
+		})
+	}
+}
+
 type testFrostNativeSignerAnchorEnvironment struct {
 	server        *httptest.Server
 	client        *FrostNativeSignerAnchorClient
+	readFaults    *testFrostNativeSignerAnchorReadFaults
 	expected      FrostNativeSignerStateWitnessCheckpoint
 	candidate     FrostNativeSignerStateWitnessCheckpoint
 	proof         []frostsigning.NativeTBTCSignerStateWitnessProofEntry
 	historyFloor  FrostNativeSignerStateWitnessAnchorReference
 	historyTarget FrostNativeSignerStateWitnessAnchorReference
+}
+
+// testFrostNativeSignerAnchorReadFaults counts read requests and answers the
+// first ones with injected HTTP statuses. Its zero value injects nothing, so
+// environments that do not arm it behave exactly as before.
+type testFrostNativeSignerAnchorReadFaults struct {
+	mutex      sync.Mutex
+	statuses   []int
+	persistent int
+	requests   int
+}
+
+// armOnce answers the next reads with the given statuses and everything after
+// them normally.
+func (faults *testFrostNativeSignerAnchorReadFaults) armOnce(statuses ...int) {
+	faults.mutex.Lock()
+	defer faults.mutex.Unlock()
+	faults.statuses = append([]int{}, statuses...)
+	faults.persistent = 0
+	faults.requests = 0
+}
+
+// armPersistent answers every read with the given status.
+func (faults *testFrostNativeSignerAnchorReadFaults) armPersistent(status int) {
+	faults.mutex.Lock()
+	defer faults.mutex.Unlock()
+	faults.statuses = nil
+	faults.persistent = status
+	faults.requests = 0
+}
+
+func (faults *testFrostNativeSignerAnchorReadFaults) next() int {
+	faults.mutex.Lock()
+	defer faults.mutex.Unlock()
+	faults.requests++
+	if len(faults.statuses) > 0 {
+		status := faults.statuses[0]
+		faults.statuses = faults.statuses[1:]
+		return status
+	}
+	return faults.persistent
+}
+
+func (faults *testFrostNativeSignerAnchorReadFaults) count() int {
+	faults.mutex.Lock()
+	defer faults.mutex.Unlock()
+	return faults.requests
 }
 
 func newTestFrostNativeSignerAnchorEnvironment(
@@ -913,10 +1139,15 @@ func newTestFrostNativeSignerAnchorEnvironment(
 	var historyTarget FrostNativeSignerStateWitnessAnchorReference
 	var historyEvents []FrostNativeSignerStateWitnessAnchorHistoryEvent
 	advanceCalls := 0
+	readFaults := &testFrostNativeSignerAnchorReadFaults{}
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/anchor/read":
+			if status := readFaults.next(); status != 0 {
+				http.Error(writer, "injected read fault", status)
+				return
+			}
 			payload, _ := io.ReadAll(request.Body)
 			readRequest := frostNativeSignerAnchorReadRequest{}
 			if err := decodeStrictFrostNativeSignerAnchorJSON(payload, &readRequest); err != nil {
@@ -1212,6 +1443,7 @@ func newTestFrostNativeSignerAnchorEnvironment(
 	return &testFrostNativeSignerAnchorEnvironment{
 		server:        server,
 		client:        client,
+		readFaults:    readFaults,
 		expected:      expected,
 		candidate:     candidate,
 		proof:         proof,

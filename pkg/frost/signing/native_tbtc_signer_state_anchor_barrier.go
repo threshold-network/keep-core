@@ -4,8 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	stdnet "net"
+	"os"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
+
+	"github.com/ipfs/go-log/v2"
 )
 
 var (
@@ -21,6 +27,21 @@ var (
 	ErrNativeTBTCSignerStateAnchorTerminal = errors.New(
 		"native tbtc signer state anchor is terminally poisoned",
 	)
+)
+
+// nativeTBTCSignerStateAnchorEventLogger is the only logging capability this
+// file needs. It is narrowed to one method so the poisoning event can be
+// observed in tests without standing up a whole logger.
+type nativeTBTCSignerStateAnchorEventLogger interface {
+	Errorf(format string, args ...interface{})
+}
+
+// nativeTBTCSignerStateAnchorLogger names the one event this file emits: the
+// transition into the terminal poisoned state. Nothing else here logs, because
+// the barrier runs under the process-global signer mutation lock on every
+// request-taking call and its refusals are already reported by the caller.
+var nativeTBTCSignerStateAnchorLogger nativeTBTCSignerStateAnchorEventLogger = log.Logger(
+	"keep-frost-tbtc-signer-state-anchor",
 )
 
 const (
@@ -107,8 +128,26 @@ type NativeTBTCSignerStateAnchorBarrierConfig struct {
 	Timeout                                   time.Duration
 }
 
+// nativeTBTCSignerStateAnchorPoisonRecord carries one poisoning cause to
+// readers that must not take the barrier mutex. It is a struct rather than a
+// bare error so a stored value is always non-nil and unambiguous.
+type nativeTBTCSignerStateAnchorPoisonRecord struct {
+	cause error
+}
+
 type nativeTBTCSignerStateAnchorBarrier struct {
 	mutex sync.Mutex
+
+	// poisonedSignal mirrors poisoned for callers that must observe the
+	// terminal state without taking the barrier mutex. That mutex is held for
+	// the whole of a request-taking call - the native call, the remote CAS,
+	// and the acknowledgement readback - so a health or attestation path that
+	// took it to read poisoned would stall behind a signing operation for the
+	// full anchor timeout. Every write happens under the mutex in
+	// recordNativeTBTCSignerStateAnchorPoisoning, so this can never report
+	// poisoned before the barrier itself is, and it becomes visible in the
+	// same critical section that poisons the barrier.
+	poisonedSignal atomic.Pointer[nativeTBTCSignerStateAnchorPoisonRecord]
 
 	installed     bool
 	poisoned      error
@@ -375,6 +414,40 @@ func beginNativeTBTCSignerStateAnchoredOperation(
 		ctx,
 		*readback,
 	); err != nil {
+		// This is the only remote call the barrier makes BEFORE the native
+		// call runs, so failing here cannot have diverged anything: no FFI
+		// request-taking symbol has been entered, no Rust generation has
+		// advanced, barrier.tip is untouched, and the local readback and trust
+		// head were already checked against the installed identity above.
+		// Releasing the mutex therefore leaves the barrier byte-for-byte as it
+		// was, and the very next call re-reads and re-authenticates everything
+		// from scratch.
+		//
+		// So a failure that only means "the anchor service did not answer this
+		// second" - a redeploy, a TLS or DNS hiccup, a reset connection, a
+		// momentary load spike - must not be terminal. Poisoning is
+		// process-lifetime and only a restart clears it, so spending it on a
+		// transport blip permanently disables FROST signing on this node for a
+		// fault that healed on its own.
+		//
+		// Anything this does not positively recognize as a transport failure
+		// still poisons. That is deliberate: a stale, rolled-back, forked, or
+		// unauthenticated anchor is a comparison against data that was
+		// successfully read, produces a plain error carrying none of the causes
+		// below, and genuinely means it is unsafe to proceed.
+		//
+		// Both branches fail closed for THIS operation - no native call runs
+		// and no signature share is released either way. The only difference is
+		// whether the next call may try again.
+		if isNativeTBTCSignerStateAnchorTransportFailure(err) {
+			barrier.mutex.Unlock()
+			return nil, fmt.Errorf(
+				"%w: request-taking operation [%s] is blocked because the state anchor could not be reached before any signer state changed: %v",
+				ErrNativeTBTCSignerStateAnchorUnavailable,
+				operation,
+				err,
+			)
+		}
 		return nil, poisonAndUnlockNativeTBTCSignerStateAnchor(
 			barrier,
 			fmt.Errorf("cannot authenticate pre-operation remote state anchor: %w", err),
@@ -445,6 +518,39 @@ func (lease *nativeTBTCSignerStateAnchorLease) commit() error {
 		*candidate,
 	)
 	if err != nil {
+		// Unlike the pre-operation authentication in
+		// beginNativeTBTCSignerStateAnchoredOperation, a transport failure
+		// HERE is not declassified, and the distinction is the whole reason
+		// this comment exists.
+		//
+		// By this line the native call has already advanced durable Rust state
+		// past lease.expected, so local and remote may disagree in either
+		// direction and this node cannot tell which from the error alone. The
+		// CAS is not idempotent and the transport cannot say whether the
+		// service applied it: the anchor client already exhausts the only safe
+		// disambiguation - on an ambiguous CAS it takes a fresh signed read and
+		// either recovers the exact acknowledgement or refuses - so by the time
+		// an error surfaces here every recoverable outcome has been tried. A
+		// bare "the request timed out" is therefore indistinguishable from a
+		// genuine CAS conflict, which is exactly the rollback/fork case the
+		// anchor exists to catch.
+		//
+		// Releasing without poisoning would also not buy anything. barrier.tip
+		// still holds lease.expected while Rust sits at candidate, so the next
+		// call's pre-operation readback would mismatch the committed process
+		// tip and poison there instead - one call later, with the original
+		// cause lost. And lease.release poisons any lease that leaves
+		// incomplete, so a non-poisoning exit would have to claim completion
+		// for an operation that did not complete.
+		//
+		// The designed recovery for a local-ahead-of-remote state is a restart,
+		// not a retry: frostNativeSignerAnchorBinding.reconcileStartup
+		// re-authenticates the whole service history from the certified floor
+		// and, when local is ahead and carries the exact remote anchor
+		// reference it advanced from, proves the gap and catches the anchor up.
+		// That path only runs at startup, under the offline-certified floor,
+		// and after full history authentication - none of which this line can
+		// reproduce while holding the signer lock mid-operation.
 		return lease.poison(fmt.Errorf(
 			"cannot commit native tbtc signer state transition: %w",
 			err,
@@ -489,7 +595,7 @@ func (lease *nativeTBTCSignerStateAnchorLease) poison(cause error) error {
 	if lease == nil || lease.barrier == nil {
 		return fmt.Errorf("%w: %v", ErrNativeTBTCSignerStateAnchorTerminal, cause)
 	}
-	lease.barrier.poisoned = cause
+	recordNativeTBTCSignerStateAnchorPoisoning(lease.barrier, cause)
 	lease.completed = true
 	return fmt.Errorf("%w: %v", ErrNativeTBTCSignerStateAnchorTerminal, cause)
 }
@@ -499,10 +605,10 @@ func (lease *nativeTBTCSignerStateAnchorLease) release() {
 		return
 	}
 	if !lease.completed {
-		lease.barrier.poisoned = fmt.Errorf(
+		recordNativeTBTCSignerStateAnchorPoisoning(lease.barrier, fmt.Errorf(
 			"native signer operation [%s] escaped without anchor completion",
 			lease.operation,
-		)
+		))
 	}
 	lease.barrier.mutex.Unlock()
 	lease.barrier = nil
@@ -512,9 +618,110 @@ func poisonAndUnlockNativeTBTCSignerStateAnchor(
 	barrier *nativeTBTCSignerStateAnchorBarrier,
 	cause error,
 ) error {
-	barrier.poisoned = cause
+	recordNativeTBTCSignerStateAnchorPoisoning(barrier, cause)
 	barrier.mutex.Unlock()
 	return fmt.Errorf("%w: %v", ErrNativeTBTCSignerStateAnchorTerminal, cause)
+}
+
+// recordNativeTBTCSignerStateAnchorPoisoning is the single place the barrier
+// becomes terminally poisoned. It must be called with the barrier mutex held.
+//
+// It logs at ERROR exactly once per poisoning rather than once per refusal:
+// every later request-taking call re-reports the same latched cause, and an
+// operator whose node is refusing every signing round would otherwise get one
+// ERROR line per attempt for the life of the process. The line names the
+// remedy because it is not guessable from the message alone - poisoned lives on
+// the package-global barrier and nothing clears it in-process, so only a
+// restart recovers, and a restart is safe: startup re-runs anchor
+// reconciliation and any durable witness the failed operation carried in is
+// self-consuming on reload.
+//
+// The first cause wins. Poisoning is latched, and the first failure is the one
+// that explains what actually happened; a later escape or refusal is only its
+// consequence.
+func recordNativeTBTCSignerStateAnchorPoisoning(
+	barrier *nativeTBTCSignerStateAnchorBarrier,
+	cause error,
+) {
+	if barrier == nil || barrier.poisoned != nil {
+		return
+	}
+	barrier.poisoned = cause
+	barrier.poisonedSignal.Store(
+		&nativeTBTCSignerStateAnchorPoisonRecord{cause: cause},
+	)
+	nativeTBTCSignerStateAnchorLogger.Errorf(
+		"FROST native tBTC signer state anchor is now terminally poisoned: "+
+			"[%v]; every request-taking native signer call on this node is "+
+			"refused from now on, and only restarting this process clears it",
+		cause,
+	)
+}
+
+// NativeTBTCSignerStateAnchorPoisoned reports the latched terminal anchor
+// failure, or nil while the barrier is healthy. It is the supported way for
+// health, admission, and attestation paths to observe that this node has
+// stopped being able to sign, and it never blocks on an in-flight signer
+// operation: it reads the lock-free mirror rather than taking the barrier
+// mutex, which a request-taking call holds across its native call and remote
+// commit.
+//
+// A nil result is not a promise that the next call will be admitted. The
+// barrier can still refuse recoverably - it is not installed yet, a certified
+// window is exhausted, or the anchor is momentarily unreachable - and those
+// refusals are deliberately not terminal.
+func NativeTBTCSignerStateAnchorPoisoned() error {
+	record := globalNativeTBTCSignerStateAnchorBarrier.poisonedSignal.Load()
+	if record == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: %v",
+		ErrNativeTBTCSignerStateAnchorTerminal,
+		record.cause,
+	)
+}
+
+// isNativeTBTCSignerStateAnchorTransportFailure reports whether err is a
+// failure to REACH the anchor service rather than something the anchor service
+// said.
+//
+// This mirrors isFrostPreSignTransientAuthorizationFailure in pkg/tbtc, cause
+// for cause and deliberately no wider. It is duplicated rather than shared
+// because pkg/tbtc imports this package, so importing it back would be an
+// import cycle, and because the two callers must stay in lockstep: both use it
+// to keep a transport blip from latching a permanent refusal.
+//
+// context.Canceled is excluded for the same reason it is there: it means the
+// caller went away, not that the dependency is unreachable.
+func isNativeTBTCSignerStateAnchorTransportFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.ENETDOWN) {
+		return true
+	}
+	var operationError *stdnet.OpError
+	if errors.As(err, &operationError) {
+		return true
+	}
+	var resolverError *stdnet.DNSError
+	if errors.As(err, &resolverError) {
+		return true
+	}
+	var networkError stdnet.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return true
+	}
+	return false
 }
 
 func validateNativeTBTCSignerStateWitnessTip(
@@ -657,6 +864,7 @@ func resetNativeTBTCSignerStateAnchorBarrierForTest() {
 	defer barrier.mutex.Unlock()
 	barrier.installed = false
 	barrier.poisoned = nil
+	barrier.poisonedSignal.Store(nil)
 	barrier.tip = NativeTBTCSignerStateWitnessTip{}
 	barrier.readTip = nil
 	barrier.readTrustHead = nil

@@ -3,8 +3,13 @@ package signing
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -1127,6 +1132,402 @@ func TestValidateNativeTBTCSignerAcknowledgedTipRequiresNextRevisionInPinnedEpoc
 				candidate.AnchorServiceEpoch,
 			); err == nil {
 				t.Fatal("invalid acknowledgement epoch/revision was accepted")
+			}
+		})
+	}
+}
+
+// installTestNativeTBTCSignerStateAnchorBarrier installs the barrier over a
+// tip the caller keeps mutating, which is how these tests stand in for Rust
+// advancing its durable state.
+func installTestNativeTBTCSignerStateAnchorBarrier(
+	t *testing.T,
+	initial *NativeTBTCSignerStateWitnessTip,
+	current *NativeTBTCSignerStateWitnessTip,
+	committer NativeTBTCSignerStateAnchorCommitter,
+) {
+	t.Helper()
+	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             4096,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := *current
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// testNativeTBTCSignerStateAnchorUnreachable is what the anchor binding hands
+// back when the service could not be reached at all: the binding's own wrapper
+// around the client's wrapper around a dial failure.
+func testNativeTBTCSignerStateAnchorUnreachable() error {
+	return fmt.Errorf(
+		"cannot read native signer remote anchor: %w",
+		fmt.Errorf("native signer anchor request failed: %w", &net.OpError{
+			Op:  "dial",
+			Net: "tcp",
+			Err: syscall.ECONNREFUSED,
+		}),
+	)
+}
+
+// TestNativeTBTCSignerStateAnchorBarrierDoesNotPoisonOnPreOperationTransportFailure
+// pins that an unreachable anchor before the native call is recoverable. This
+// check runs ahead of every request-taking call and nothing has been mutated
+// when it fails, so treating a redeploy or a reset connection as terminal would
+// disable FROST signing on the node for the life of the process over a fault
+// that healed by itself.
+func TestNativeTBTCSignerStateAnchorBarrierDoesNotPoisonOnPreOperationTransportFailure(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	candidate := testNativeTBTCSignerStateWitnessTip(2, initial.StateCommitment)
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{
+		current: &current,
+		acknowledge: func(
+			candidate NativeTBTCSignerStateWitnessTip,
+		) NativeTBTCSignerStateWitnessTip {
+			candidate.AnchorRevision = 2
+			candidate.AnchorEventRoot = [32]byte{13}
+			candidate.AnchorAcknowledgementDigest = [32]byte{14}
+			return candidate
+		},
+	}
+	installTestNativeTBTCSignerStateAnchorBarrier(
+		t, &initial, &current, committer,
+	)
+
+	committer.verifyErr = testNativeTBTCSignerStateAnchorUnreachable()
+	invoked := false
+	released := false
+	discarded := false
+	_, err := executeNativeTBTCSignerStateAnchoredOutput(
+		"InteractiveRound1",
+		func() {
+			invoked = true
+			current = candidate
+		},
+		func() ([]byte, error) {
+			released = true
+			return []byte("must-not-escape"), nil
+		},
+		func() {
+			discarded = true
+		},
+	)
+	if errors.Is(err, ErrNativeTBTCSignerStateAnchorTerminal) {
+		t.Fatalf("an unreachable anchor terminally poisoned the barrier: %v", err)
+	}
+	if !errors.Is(err, ErrNativeTBTCSignerStateAnchorUnavailable) {
+		t.Fatalf("an unreachable anchor was not refused recoverably: %v", err)
+	}
+	if invoked || released || discarded || current != initial {
+		t.Fatal("a refused operation reached the native call")
+	}
+	if err := NativeTBTCSignerStateAnchorPoisoned(); err != nil {
+		t.Fatalf("a recoverable refusal was reported as terminal: %v", err)
+	}
+
+	// The anchor comes back and the very next call proceeds normally.
+	committer.verifyErr = nil
+	payload, err := executeNativeTBTCSignerStateAnchoredOutput(
+		"InteractiveRound1",
+		func() {
+			current = candidate
+		},
+		func() ([]byte, error) {
+			return []byte("sentinel-output"), nil
+		},
+		func() {},
+	)
+	if err != nil {
+		t.Fatalf("barrier did not recover after the anchor answered again: %v", err)
+	}
+	if string(payload) != "sentinel-output" {
+		t.Fatal("recovered operation did not release its output")
+	}
+}
+
+// TestNativeTBTCSignerStateAnchorBarrierPoisonsPreOperationAnchorDisagreement
+// is the other half of the classification: anything the anchor actually
+// answered - a rollback, a fork, an unauthenticated tip - is a fact about the
+// anchor and stays terminal.
+func TestNativeTBTCSignerStateAnchorBarrierPoisonsPreOperationAnchorDisagreement(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{current: &current}
+	installTestNativeTBTCSignerStateAnchorBarrier(
+		t, &initial, &current, committer,
+	)
+
+	committer.verifyErr = errors.New(
+		"local native signer state tip differs from the authenticated remote anchor",
+	)
+	if _, err := beginNativeTBTCSignerStateAnchoredOperation(
+		"InteractiveRound1",
+	); !errors.Is(err, ErrNativeTBTCSignerStateAnchorTerminal) {
+		t.Fatalf("a forked remote anchor was not treated as terminal: %v", err)
+	}
+	poisoned := NativeTBTCSignerStateAnchorPoisoned()
+	if !errors.Is(poisoned, ErrNativeTBTCSignerStateAnchorTerminal) {
+		t.Fatalf("poisoned barrier was not reported by its accessor: %v", poisoned)
+	}
+	if !strings.Contains(poisoned.Error(), "authenticated remote anchor") {
+		t.Fatalf("poisoning cause was not carried to the accessor: %v", poisoned)
+	}
+	committer.verifyErr = nil
+	if _, err := beginNativeTBTCSignerStateAnchoredOperation(
+		"InteractiveRound2",
+	); !errors.Is(err, ErrNativeTBTCSignerStateAnchorTerminal) {
+		t.Fatalf("poisoned barrier allowed another operation: %v", err)
+	}
+}
+
+// TestNativeTBTCSignerStateAnchorBarrierPoisonsUnreachableAnchorAfterMutation
+// pins the deliberate asymmetry with the pre-operation path. Once the native
+// call has advanced durable Rust state, an unreachable anchor is
+// indistinguishable from a lost CAS: local and remote may disagree, and
+// recovery is a restart under startup reconciliation, not a retry. This must
+// stay terminal even though the identical error before the call does not.
+func TestNativeTBTCSignerStateAnchorBarrierPoisonsUnreachableAnchorAfterMutation(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	candidate := testNativeTBTCSignerStateWitnessTip(2, initial.StateCommitment)
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{
+		current: &current,
+		err:     testNativeTBTCSignerStateAnchorUnreachable(),
+	}
+	installTestNativeTBTCSignerStateAnchorBarrier(
+		t, &initial, &current, committer,
+	)
+
+	_, err := executeNativeTBTCSignerStateAnchoredOutput(
+		"InteractiveRound2",
+		func() {
+			current = candidate
+		},
+		func() ([]byte, error) {
+			return []byte("must-not-escape"), nil
+		},
+		func() {},
+	)
+	if !errors.Is(err, ErrNativeTBTCSignerStateAnchorTerminal) {
+		t.Fatalf(
+			"an unreachable anchor after a durable mutation was not terminal: %v",
+			err,
+		)
+	}
+	if poisoned := NativeTBTCSignerStateAnchorPoisoned(); !errors.Is(
+		poisoned,
+		ErrNativeTBTCSignerStateAnchorTerminal,
+	) {
+		t.Fatalf("post-mutation poisoning was not reported: %v", poisoned)
+	}
+}
+
+// TestNativeTBTCSignerStateAnchorPoisonedAccessorDoesNotBlockOnAnOperation
+// pins that health and admission callers can read the terminal state while a
+// signing operation holds the barrier. That operation owns the barrier mutex
+// across its native call and its remote commit, so an accessor that took the
+// mutex would stall a health probe for the whole anchor timeout.
+func TestNativeTBTCSignerStateAnchorPoisonedAccessorDoesNotBlockOnAnOperation(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	if err := NativeTBTCSignerStateAnchorPoisoned(); err != nil {
+		t.Fatalf("an uninstalled barrier was reported as poisoned: %v", err)
+	}
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{current: &current}
+	installTestNativeTBTCSignerStateAnchorBarrier(
+		t, &initial, &current, committer,
+	)
+
+	lease, err := beginNativeTBTCSignerStateAnchoredOperation("VerifySignatureShare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan error, 1)
+	go func() {
+		observed <- NativeTBTCSignerStateAnchorPoisoned()
+	}()
+	blocked := false
+	var poisoned error
+	select {
+	case poisoned = <-observed:
+	case <-time.After(5 * time.Second):
+		blocked = true
+	}
+	// The lease must be surrendered before any assertion fails, or the failure
+	// would leave the process-global barrier locked and wedge every later test.
+	if err := lease.commit(); err != nil {
+		lease.release()
+		t.Fatal(err)
+	}
+	lease.release()
+	if blocked {
+		t.Fatal("poison accessor blocked behind an in-flight signer operation")
+	}
+	if poisoned != nil {
+		t.Fatalf("healthy barrier was reported as poisoned: %v", poisoned)
+	}
+}
+
+type testNativeTBTCSignerStateAnchorLogRecorder struct {
+	mutex sync.Mutex
+	lines []string
+}
+
+func (recorder *testNativeTBTCSignerStateAnchorLogRecorder) Errorf(
+	format string,
+	args ...interface{},
+) {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	recorder.lines = append(recorder.lines, fmt.Sprintf(format, args...))
+}
+
+func (recorder *testNativeTBTCSignerStateAnchorLogRecorder) recorded() []string {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	return append([]string{}, recorder.lines...)
+}
+
+// TestNativeTBTCSignerStateAnchorPoisoningIsLoggedOnceWithItsRemedy pins that
+// the poisoning is visible where it happens. Without it the cause is only ever
+// seen at WARN by whichever caller happened to attempt the operation, while the
+// terminal state itself - the thing that keeps the node down until a restart -
+// is never named. It has to be exactly one line: the barrier re-reports the
+// same latched cause on every later call, so logging per refusal would flood.
+func TestNativeTBTCSignerStateAnchorPoisoningIsLoggedOnceWithItsRemedy(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	recorder := &testNativeTBTCSignerStateAnchorLogRecorder{}
+	previousLogger := nativeTBTCSignerStateAnchorLogger
+	nativeTBTCSignerStateAnchorLogger = recorder
+	t.Cleanup(func() { nativeTBTCSignerStateAnchorLogger = previousLogger })
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{current: &current}
+	installTestNativeTBTCSignerStateAnchorBarrier(
+		t, &initial, &current, committer,
+	)
+
+	committer.verifyErr = errors.New("startup native signer local state forks the authenticated remote anchor")
+	for attempt := 0; attempt < 4; attempt++ {
+		if _, err := beginNativeTBTCSignerStateAnchoredOperation(
+			"InteractiveRound1",
+		); !errors.Is(err, ErrNativeTBTCSignerStateAnchorTerminal) {
+			t.Fatalf("attempt [%d] was not refused terminally: %v", attempt, err)
+		}
+	}
+
+	lines := recorder.recorded()
+	if len(lines) != 1 {
+		t.Fatalf(
+			"expected exactly one poisoning line across four refusals, got [%d]: %v",
+			len(lines),
+			lines,
+		)
+	}
+	if !strings.Contains(lines[0], "forks the authenticated remote anchor") {
+		t.Fatalf("poisoning line did not name its cause: %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "restart") {
+		t.Fatalf("poisoning line did not name its remedy: %q", lines[0])
+	}
+}
+
+func TestIsNativeTBTCSignerStateAnchorTransportFailure(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		transport bool
+	}{
+		{"nil", nil, false},
+		{
+			"deadline exceeded",
+			fmt.Errorf("verify failed: %w", context.DeadlineExceeded),
+			true,
+		},
+		{
+			"io deadline exceeded",
+			fmt.Errorf("verify failed: %w", os.ErrDeadlineExceeded),
+			true,
+		},
+		{"connection refused", testNativeTBTCSignerStateAnchorUnreachable(), true},
+		{
+			"connection reset",
+			fmt.Errorf("verify failed: %w", syscall.ECONNRESET),
+			true,
+		},
+		{
+			"name resolution failure",
+			fmt.Errorf("verify failed: %w", &net.DNSError{
+				Err:  "no such host",
+				Name: "anchor.example",
+			}),
+			true,
+		},
+		{
+			"caller cancelled",
+			fmt.Errorf("verify failed: %w", context.Canceled),
+			false,
+		},
+		{
+			"anchor answered a fork",
+			errors.New(
+				"local native signer state tip differs from the authenticated remote anchor",
+			),
+			false,
+		},
+		{
+			"anchor answered a rollback",
+			errors.New(
+				"authenticated native signer anchor record is incomplete",
+			),
+			false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isNativeTBTCSignerStateAnchorTransportFailure(
+				test.err,
+			); got != test.transport {
+				t.Fatalf("expected transport [%v], got [%v]", test.transport, got)
 			}
 		})
 	}

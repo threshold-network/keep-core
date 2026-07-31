@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -35,7 +36,35 @@ const (
 	frostNativeSignerAnchorMaximumClockSkew               = 5 * time.Second
 	frostNativeSignerAnchorDefaultAcknowledgementLifetime = 30 * time.Second
 	frostNativeSignerAnchorMaximumAcknowledgementLifetime = 30 * time.Second
+
+	// frostNativeSignerAnchorReadAttempts bounds how many times one
+	// authenticated anchor read may be re-issued when the service could not be
+	// reached. It is small on purpose: the point is to ride out a single blip,
+	// not to wait out an outage, and the attempts share one request-timeout
+	// budget rather than each getting their own.
+	frostNativeSignerAnchorReadAttempts = 3
+
+	// frostNativeSignerAnchorReadRetryBackoff is the pause before the second
+	// attempt and doubles for the third. Two pauses plus three attempts stay
+	// well inside the smallest sensible request timeout, so the backoff never
+	// becomes the reason a budget is exhausted.
+	frostNativeSignerAnchorReadRetryBackoff = 50 * time.Millisecond
 )
+
+// frostNativeSignerAnchorStatusError reports the HTTP status an anchor request
+// was answered with. It exists so an idempotent read can tell a service that is
+// temporarily unable to answer from one that answered something wrong; its
+// message is the one this failure has always carried.
+type frostNativeSignerAnchorStatusError struct {
+	statusCode int
+}
+
+func (err *frostNativeSignerAnchorStatusError) Error() string {
+	return fmt.Sprintf(
+		"native signer anchor returned HTTP status [%d]",
+		err.statusCode,
+	)
+}
 
 // FrostNativeSignerAnchorClientConfig contains runtime transport material and
 // the complete identity extracted from an independently authenticated
@@ -911,7 +940,80 @@ func frostNativeSignerAnchorReferenceFromAcknowledgement(
 	}
 }
 
+// readLocked performs one authenticated anchor read, retrying a small bounded
+// number of times when the service could not be reached at all.
+//
+// Every native signer operation is preceded by one of these reads, and its
+// failure is expensive out of proportion to its cause: the state-anchor barrier
+// treats an unauthenticated anchor as a reason to refuse the operation, so a
+// single connection reset during an anchor-service redeploy takes down a
+// signing round that nothing was actually wrong with. A read is idempotent -
+// it is a fresh nonce-bound signed request that mutates nothing here and
+// nothing at the service - so the blip can simply be ridden out.
+//
+// The whole loop runs inside ONE requestTimeout budget, so this never lengthens
+// how long a caller can wait: total wall time is exactly what a single attempt
+// could already take. That is also why the retries are worth having, because
+// the failures they cover - refused connection, reset connection, unresolvable
+// name, 503 from a restarting service - come back in milliseconds and leave
+// nearly the whole budget for another try, while a genuine hang consumes the
+// budget on the first attempt and correctly gets no second one.
+//
+// Only a failure to reach the service is retried. Anything the service actually
+// answered - a bad signature, a nonce or digest mismatch, an absent stream, a
+// non-monotonic acknowledgement - is a fact about the anchor, is deterministic,
+// and must surface on the first attempt rather than be papered over.
 func (client *FrostNativeSignerAnchorClient) readLocked(
+	ctx context.Context,
+) (*FrostNativeSignerCheckpointAcknowledgement, error) {
+	budgetContext, cancel := context.WithTimeout(ctx, client.requestTimeout)
+	defer cancel()
+	backoff := frostNativeSignerAnchorReadRetryBackoff
+	for attempt := 1; ; attempt++ {
+		acknowledgement, err := client.readOnceLocked(budgetContext)
+		if err == nil {
+			return acknowledgement, nil
+		}
+		if attempt >= frostNativeSignerAnchorReadAttempts ||
+			budgetContext.Err() != nil ||
+			!isFrostNativeSignerAnchorRetryableReadFailure(err) {
+			return nil, err
+		}
+		backoffTimer := time.NewTimer(backoff)
+		select {
+		case <-budgetContext.Done():
+			backoffTimer.Stop()
+			return nil, err
+		case <-backoffTimer.C:
+		}
+		backoff *= 2
+	}
+}
+
+// isFrostNativeSignerAnchorRetryableReadFailure reports whether a failed
+// authenticated read may be retried within its budget.
+//
+// The transport cases are exactly isFrostPreSignTransientAuthorizationFailure's
+// - the anchor was not reached, so nothing was learned about it. The status
+// cases are the two an HTTP intermediary or a restarting service produces while
+// it is unable to answer at all; every other status is the service answering
+// something wrong and stays fatal on the first attempt.
+func isFrostNativeSignerAnchorRetryableReadFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isFrostPreSignTransientAuthorizationFailure(err) {
+		return true
+	}
+	var statusError *frostNativeSignerAnchorStatusError
+	if errors.As(err, &statusError) {
+		return statusError.statusCode == http.StatusTooManyRequests ||
+			statusError.statusCode >= http.StatusInternalServerError
+	}
+	return false
+}
+
+func (client *FrostNativeSignerAnchorClient) readOnceLocked(
 	ctx context.Context,
 ) (*FrostNativeSignerCheckpointAcknowledgement, error) {
 	nonce, err := client.randomBytes32()
@@ -1475,10 +1577,9 @@ func (client *FrostNativeSignerAnchorClient) postWithResponseLimit(
 		return nil, true, fmt.Errorf("native signer anchor response size is invalid")
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, true, fmt.Errorf(
-			"native signer anchor returned HTTP status [%d]",
-			response.StatusCode,
-		)
+		return nil, true, &frostNativeSignerAnchorStatusError{
+			statusCode: response.StatusCode,
+		}
 	}
 	mediaType, parameters, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" || len(parameters) != 0 {
