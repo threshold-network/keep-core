@@ -1940,6 +1940,17 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) admitInput(
 //
 // context.Canceled is deliberately excluded: it means the caller went away, and
 // callers handle their own context separately.
+type frostAuthorizationDependencyHTTPStatusError interface {
+	error
+	HTTPStatusCode() int
+}
+
+func isFrostPreSignTransientAuthorizationHTTPStatus(statusCode int) bool {
+	return statusCode == http.StatusRequestTimeout ||
+		statusCode == http.StatusTooManyRequests ||
+		statusCode >= http.StatusInternalServerError && statusCode <= 599
+}
+
 func isFrostPreSignTransientAuthorizationFailure(err error) bool {
 	if err == nil {
 		return false
@@ -1969,10 +1980,15 @@ func isFrostPreSignTransientAuthorizationFailure(err error) bool {
 	}
 	var httpError ethereumRPC.HTTPError
 	if errors.As(err, &httpError) {
-		return httpError.StatusCode == http.StatusRequestTimeout ||
-			httpError.StatusCode == http.StatusTooManyRequests ||
-			httpError.StatusCode >= http.StatusInternalServerError &&
-				httpError.StatusCode <= 599
+		return isFrostPreSignTransientAuthorizationHTTPStatus(
+			httpError.StatusCode,
+		)
+	}
+	var dependencyHTTPError frostAuthorizationDependencyHTTPStatusError
+	if errors.As(err, &dependencyHTTPError) {
+		return isFrostPreSignTransientAuthorizationHTTPStatus(
+			dependencyHTTPError.HTTPStatusCode(),
+		)
 	}
 	return false
 }

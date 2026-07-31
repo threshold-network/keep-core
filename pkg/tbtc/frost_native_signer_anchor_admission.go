@@ -384,18 +384,13 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 			headroom.Generations,
 		)
 	}
-	// Both unreserved-headroom refusals name the same remedy as the
-	// rotation-floor refusal above. They are not a smaller version of it: a node
-	// refused here can still have a large part of both windows unspent - a
-	// fifty-seat node needs 2015 generations for its next input and is refused
-	// with 2015 of 4096 left, and a node sharing the window with other wallets
-	// is refused on what they hold rather than on what it has spent - so the
-	// number in the message reads healthy and the refusal looks transient. It is
-	// not. Neither window refills on its own; only an offline-authorized
-	// rotation moves the certified floor forward, so this is the first message
-	// an operator of a correctly configured node sees, and it has to say what to
-	// do about it rather than leave rotation to be inferred from the far rarer
-	// floor refusal.
+	// Raw-window exhaustion and reservation contention need different remedies.
+	// If cost exceeds raw headroom, no in-flight workflow release can make it
+	// fit: neither window refills on its own, so offline rotation is required.
+	// If raw headroom can cover cost but the conservative in-flight reservations
+	// leave too little unreserved, the refusal is temporary and must not tell an
+	// operator to rotate. The reservation is released when its workflow exits
+	// and commonly spends less than its worst-case charge.
 	//
 	// Since admission reserves one input at a time, this refusal can also land
 	// part way through a batch whose authorization is already relayed and
@@ -403,9 +398,22 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 	// that would have caught it earlier is what excluded most operators from
 	// signing at all - and it is made visible by its own counter rather than
 	// hidden behind this message.
-	if controller.reserved.Revisions > headroom.Revisions ||
-		cost.Revisions >
-			headroom.Revisions-controller.reserved.Revisions {
+	unreservedRevisions := headroom.Revisions
+	if controller.reserved.Revisions >= headroom.Revisions {
+		unreservedRevisions = 0
+	} else {
+		unreservedRevisions -= controller.reserved.Revisions
+	}
+	unreservedGenerations := headroom.Generations
+	if controller.reserved.Generations >= headroom.Generations {
+		unreservedGenerations = 0
+	} else {
+		unreservedGenerations -= controller.reserved.Generations
+	}
+	// Exhaustion in either raw window takes precedence over temporary
+	// contention in the other: releasing reservations cannot make a workflow
+	// fit a dimension whose live headroom is already too small.
+	if cost.Revisions > headroom.Revisions {
 		recordFrostNativeSignerAnchorUnreservedHeadroomRejection()
 		return nil, fmt.Errorf(
 			"%s requires [%d] anchor revisions but only [%d] are unreserved; "+
@@ -414,12 +422,10 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 				"be admitted",
 			workflow,
 			cost.Revisions,
-			headroom.Revisions-controller.reserved.Revisions,
+			unreservedRevisions,
 		)
 	}
-	if controller.reserved.Generations > headroom.Generations ||
-		cost.Generations >
-			headroom.Generations-controller.reserved.Generations {
+	if cost.Generations > headroom.Generations {
 		recordFrostNativeSignerAnchorUnreservedHeadroomRejection()
 		return nil, fmt.Errorf(
 			"%s requires [%d] signer generations but only [%d] are unreserved; "+
@@ -428,7 +434,29 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 				"be admitted",
 			workflow,
 			cost.Generations,
-			headroom.Generations-controller.reserved.Generations,
+			unreservedGenerations,
+		)
+	}
+	if cost.Revisions > unreservedRevisions {
+		recordFrostNativeSignerAnchorReservationContentionRejection()
+		return nil, fmt.Errorf(
+			"%s requires [%d] anchor revisions but only [%d] are currently "+
+				"unreserved because in-flight workflows hold temporary "+
+				"reservations; retry after those workflows finish",
+			workflow,
+			cost.Revisions,
+			unreservedRevisions,
+		)
+	}
+	if cost.Generations > unreservedGenerations {
+		recordFrostNativeSignerAnchorReservationContentionRejection()
+		return nil, fmt.Errorf(
+			"%s requires [%d] signer generations but only [%d] are currently "+
+				"unreserved because in-flight workflows hold temporary "+
+				"reservations; retry after those workflows finish",
+			workflow,
+			cost.Generations,
+			unreservedGenerations,
 		)
 	}
 
@@ -840,7 +868,7 @@ func frostNativeSignerAnchorLargestAdmissibleWorkflowCost(
 // is registered with clientinfo at all, so a monitoring system cannot tell a
 // node that is refusing every signing request from one that simply has not been
 // asked. These process-wide cumulative counters make each refusal cause
-// countable on its own, because the five causes need five different responses:
+// countable on its own, because the six causes need six different responses:
 //
 //   - seatCeiling is a CONFIGURATION signal. It never clears on its own and no
 //     rotation fixes it: this node holds more local seats than the certified
@@ -853,9 +881,15 @@ func frostNativeSignerAnchorLargestAdmissibleWorkflowCost(
 //   - poisoned is a TERMINAL signal. The state anchor has latched a permanent
 //     failure and only a process restart clears it. Any non-zero value should
 //     alert.
+//   - reservationContention is a TEMPORARY signal. Raw certified headroom can
+//     cover the workflow, but other in-flight workflows currently hold enough
+//     conservative worst-case capacity to prevent another admission. Their
+//     reservations release on exit, so this is a retry signal, not a rotation
+//     signal.
 //   - unreservedHeadroom is the ROTATION-DUE signal. It is the first refusal a
-//     healthy, correctly configured node produces, and it arrives while most of
-//     both windows are still unspent.
+//     healthy, correctly configured node produces once raw headroom cannot
+//     cover the workflow, and it can arrive while most of one window remains
+//     unspent.
 //   - rotationFloor is the ROTATION-OVERDUE signal. All new work is already
 //     being refused regardless of size.
 //   - preSignInput is the WORK-LOST signal, and it is the one that costs money.
@@ -863,20 +897,22 @@ func frostNativeSignerAnchorLargestAdmissibleWorkflowCost(
 //     has already been relayed and finalized on chain can still be refused at
 //     input 7 of 21 when the window runs out under it. The gas is spent, the
 //     wallet action fails, and the underlying cause is counted by
-//     unreservedHeadroom or rotationFloor alongside it - this counter is what
-//     separates "refused before we spent anything" from "refused after we did".
-//     It counts refusals of the per-input reservation, including the first
-//     input's, because at that point the relay has already happened either way.
+//     reservationContention, unreservedHeadroom or rotationFloor alongside it -
+//     this counter is what separates "refused before we spent anything" from
+//     "refused after we did". It counts refusals of the per-input reservation,
+//     including the first input's, because at that point the relay has already
+//     happened either way.
 //
 // They follow the roast_interactive_signing_metrics.go pattern, are emitted in
 // every build, and stay at zero until an admission is actually refused - so
 // they are inert by default and registering them activates no behavior.
 var (
-	frostNativeSignerAnchorSeatCeilingRejections        atomic.Uint64
-	frostNativeSignerAnchorUnreservedHeadroomRejections atomic.Uint64
-	frostNativeSignerAnchorRotationFloorRejections      atomic.Uint64
-	frostNativeSignerAnchorPoisonedRejections           atomic.Uint64
-	frostNativeSignerAnchorPreSignInputRejections       atomic.Uint64
+	frostNativeSignerAnchorSeatCeilingRejections           atomic.Uint64
+	frostNativeSignerAnchorReservationContentionRejections atomic.Uint64
+	frostNativeSignerAnchorUnreservedHeadroomRejections    atomic.Uint64
+	frostNativeSignerAnchorRotationFloorRejections         atomic.Uint64
+	frostNativeSignerAnchorPoisonedRejections              atomic.Uint64
+	frostNativeSignerAnchorPreSignInputRejections          atomic.Uint64
 )
 
 // frostNativeSignerAnchorAdmissionMetricsApplication is the clientinfo
@@ -886,11 +922,12 @@ var (
 const frostNativeSignerAnchorAdmissionMetricsApplication = "frost_native_signer_anchor_admission"
 
 const (
-	frostNativeSignerAnchorSeatCeilingMetricName        = "seat_ceiling_rejected_total"
-	frostNativeSignerAnchorUnreservedHeadroomMetricName = "unreserved_headroom_rejected_total"
-	frostNativeSignerAnchorRotationFloorMetricName      = "rotation_floor_rejected_total"
-	frostNativeSignerAnchorPoisonedMetricName           = "poisoned_rejected_total"
-	frostNativeSignerAnchorPreSignInputMetricName       = "pre_sign_input_rejected_total"
+	frostNativeSignerAnchorSeatCeilingMetricName           = "seat_ceiling_rejected_total"
+	frostNativeSignerAnchorReservationContentionMetricName = "reservation_contention_rejected_total"
+	frostNativeSignerAnchorUnreservedHeadroomMetricName    = "unreserved_headroom_rejected_total"
+	frostNativeSignerAnchorRotationFloorMetricName         = "rotation_floor_rejected_total"
+	frostNativeSignerAnchorPoisonedMetricName              = "poisoned_rejected_total"
+	frostNativeSignerAnchorPreSignInputMetricName          = "pre_sign_input_rejected_total"
 )
 
 // RegisterFrostNativeSignerAnchorAdmissionMetrics registers the cumulative
@@ -911,6 +948,11 @@ func RegisterFrostNativeSignerAnchorAdmissionMetrics(
 			frostNativeSignerAnchorSeatCeilingMetricName: func() float64 {
 				return float64(
 					frostNativeSignerAnchorSeatCeilingRejections.Load(),
+				)
+			},
+			frostNativeSignerAnchorReservationContentionMetricName: func() float64 {
+				return float64(
+					frostNativeSignerAnchorReservationContentionRejections.Load(),
 				)
 			},
 			frostNativeSignerAnchorUnreservedHeadroomMetricName: func() float64 {
@@ -944,6 +986,13 @@ func recordFrostNativeSignerAnchorSeatCeilingRejection() {
 	frostNativeSignerAnchorSeatCeilingRejections.Add(1)
 }
 
+// recordFrostNativeSignerAnchorReservationContentionRejection marks one
+// workflow refused only because in-flight workflows temporarily hold enough
+// worst-case capacity to prevent another admission.
+func recordFrostNativeSignerAnchorReservationContentionRejection() {
+	frostNativeSignerAnchorReservationContentionRejections.Add(1)
+}
+
 // recordFrostNativeSignerAnchorUnreservedHeadroomRejection marks one workflow
 // refused because the unreserved part of a certified window cannot cover it.
 func recordFrostNativeSignerAnchorUnreservedHeadroomRejection() {
@@ -974,6 +1023,7 @@ func recordFrostNativeSignerAnchorPreSignInputRejection() {
 // counters. Exposed only for the package's own tests; not a production helper.
 func resetFrostNativeSignerAnchorAdmissionMetricsForTest() {
 	frostNativeSignerAnchorSeatCeilingRejections.Store(0)
+	frostNativeSignerAnchorReservationContentionRejections.Store(0)
 	frostNativeSignerAnchorUnreservedHeadroomRejections.Store(0)
 	frostNativeSignerAnchorRotationFloorRejections.Store(0)
 	frostNativeSignerAnchorPoisonedRejections.Store(0)

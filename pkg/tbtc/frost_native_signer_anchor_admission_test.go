@@ -409,6 +409,9 @@ func TestFrostPreSignSeatCeilingGuardStillFires(t *testing.T) {
 func TestFrostNativeSignerAnchorAdmissionController_AtomicallyReservesNearWarning(
 	t *testing.T,
 ) {
+	resetFrostNativeSignerAnchorAdmissionMetricsForTest()
+	t.Cleanup(resetFrostNativeSignerAnchorAdmissionMetricsForTest)
+
 	// Six local seats cost 126 revisions and 255 generations for one input, so
 	// one fits a headroom of 257 and two do not. That is the property under
 	// test: the second workflow is refused on what the first was promised, not
@@ -449,8 +452,17 @@ func TestFrostNativeSignerAnchorAdmissionController_AtomicallyReservesNearWarnin
 		1,
 		6,
 		signingAttemptsLimit,
-	); err == nil || !strings.Contains(err.Error(), "unreserved") {
+	); err == nil || !strings.Contains(err.Error(), "temporary reservations") ||
+		strings.Contains(err.Error(), "offline anchor rotation") {
 		t.Fatalf("concurrent reservation exceeded headroom: [%v]", err)
+	}
+	if contention :=
+		frostNativeSignerAnchorReservationContentionRejections.Load(); contention != 1 {
+		t.Fatalf("reservation-contention rejections counted [%d], expected [1]", contention)
+	}
+	if exhausted :=
+		frostNativeSignerAnchorUnreservedHeadroomRejections.Load(); exhausted != 0 {
+		t.Fatalf("temporary contention counted as anchor exhaustion [%d] times", exhausted)
 	}
 
 	// Crossing into the warning band does not revoke the admitted reservation.
@@ -493,6 +505,100 @@ func TestFrostNativeSignerAnchorAdmissionController_AtomicallyReservesNearWarnin
 	); err != nil {
 		t.Fatalf("released reservation remained charged: [%v]", err)
 	}
+}
+
+func TestFrostNativeSignerAnchorAdmissionController_ContentionSaturatesAvailableHeadroom(
+	t *testing.T,
+) {
+	resetFrostNativeSignerAnchorAdmissionMetricsForTest()
+	t.Cleanup(resetFrostNativeSignerAnchorAdmissionMetricsForTest)
+
+	currentHeadroom := frostNativeSignerAnchorCapacity{
+		Revisions:   FrostNativeSignerAnchorMaximumHistoryEvents,
+		Generations: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+	}
+	controller := &frostNativeSignerAnchorAdmissionController{
+		readHeadroom: func(
+			context.Context,
+		) (frostNativeSignerAnchorCapacity, error) {
+			return currentHeadroom, nil
+		},
+	}
+	snapshot := testFrostAnchorAdmissionReadinessSnapshot(
+		FrostNativeSignerAnchorMaximumHistoryEvents,
+		FrostNativeSignerAnchorMaximumHistoryProofEntries,
+	)
+
+	first, err := controller.reservePreSign(
+		context.Background(),
+		snapshot,
+		1,
+		20,
+		signingAttemptsLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentHeadroom = frostNativeSignerAnchorCapacity{
+		Revisions:   300,
+		Generations: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+	}
+	_, err = controller.reservePreSign(
+		context.Background(),
+		snapshot,
+		1,
+		1,
+		signingAttemptsLimit,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "only [0] are currently unreserved") ||
+		!strings.Contains(err.Error(), "temporary reservations") ||
+		strings.Contains(err.Error(), "offline anchor rotation") {
+		t.Fatalf("wrapped or terminal reservation-contention refusal: [%v]", err)
+	}
+	if contention :=
+		frostNativeSignerAnchorReservationContentionRejections.Load(); contention != 1 {
+		t.Fatalf("reservation-contention rejections counted [%d], expected [1]", contention)
+	}
+	if exhausted :=
+		frostNativeSignerAnchorUnreservedHeadroomRejections.Load(); exhausted != 0 {
+		t.Fatalf("temporary contention counted as anchor exhaustion [%d] times", exhausted)
+	}
+
+	_, err = controller.reservePreSign(
+		context.Background(),
+		snapshot,
+		1,
+		20,
+		signingAttemptsLimit,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "only [0] are unreserved") ||
+		!strings.Contains(err.Error(), "offline anchor rotation") ||
+		strings.Contains(err.Error(), "temporary reservations") {
+		t.Fatalf("wrapped or transient raw-exhaustion refusal: [%v]", err)
+	}
+	if contention :=
+		frostNativeSignerAnchorReservationContentionRejections.Load(); contention != 1 {
+		t.Fatalf("raw exhaustion changed contention count to [%d]", contention)
+	}
+	if exhausted :=
+		frostNativeSignerAnchorUnreservedHeadroomRejections.Load(); exhausted != 1 {
+		t.Fatalf("raw exhaustion rejections counted [%d], expected [1]", exhausted)
+	}
+
+	first.Release()
+	retry, err := controller.reservePreSign(
+		context.Background(),
+		snapshot,
+		1,
+		1,
+		signingAttemptsLimit,
+	)
+	if err != nil {
+		t.Fatalf("released temporary reservation still blocked retry: [%v]", err)
+	}
+	retry.Release()
 }
 
 func TestFrostNativeSignerAnchorAdmissionController_RejectsStaleReadinessHeadroom(
@@ -920,6 +1026,11 @@ func TestFrostNativeSignerAnchorAdmissionRefusalsNameARemedy(t *testing.T) {
 		counted  uint64
 		expected uint64
 	}{
+		{
+			name:     "reservation contention",
+			counted:  frostNativeSignerAnchorReservationContentionRejections.Load(),
+			expected: 0,
+		},
 		{
 			name:     "unreserved headroom",
 			counted:  frostNativeSignerAnchorUnreservedHeadroomRejections.Load(),

@@ -116,6 +116,21 @@ type frostRetainedGroupHTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+type frostRetainedGroupHistoryStatusError struct {
+	statusCode int
+}
+
+func (err *frostRetainedGroupHistoryStatusError) Error() string {
+	return fmt.Sprintf(
+		"retained-group export returned HTTP status [%d]",
+		err.statusCode,
+	)
+}
+
+func (err *frostRetainedGroupHistoryStatusError) HTTPStatusCode() int {
+	return err.statusCode
+}
+
 type canonicalFrostRetainedGroupEthereumVerifier struct {
 	*ethclient.Client
 	rpcClient *rpc.Client
@@ -1232,7 +1247,9 @@ func (source *signedFrostRetainedGroupHistorySource) postSigned(
 		return 0, err
 	}
 	if response.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("retained-group export returned HTTP status [%d]", response.StatusCode)
+		return 0, &frostRetainedGroupHistoryStatusError{
+			statusCode: response.StatusCode,
+		}
 	}
 	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {

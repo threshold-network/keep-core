@@ -1440,6 +1440,23 @@ func TestIsFrostPreSignTransientAuthorizationFailure(t *testing.T) {
 				Status:     "401 Unauthorized",
 			}),
 		},
+		"retained history rate limited": {
+			err: fmt.Errorf("history read: [%w]", &frostRetainedGroupHistoryStatusError{
+				statusCode: http.StatusTooManyRequests,
+			}),
+			transient: true,
+		},
+		"native anchor service unavailable": {
+			err: fmt.Errorf("anchor read: [%w]", &frostNativeSignerAnchorStatusError{
+				statusCode: http.StatusServiceUnavailable,
+			}),
+			transient: true,
+		},
+		"retained history authentication rejected": {
+			err: fmt.Errorf("history read: [%w]", &frostRetainedGroupHistoryStatusError{
+				statusCode: http.StatusUnauthorized,
+			}),
+		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -1550,17 +1567,41 @@ func TestThresholdFrostPreSignAuthorizationGate_SurvivesTransientReadinessFailur
 func TestThresholdFrostPreSignAuthorizationGate_SurvivesTemporaryEthereumHTTPFailure(
 	t *testing.T,
 ) {
-	for name, statusCode := range map[string]int{
-		"request timeout":     http.StatusRequestTimeout,
-		"rate limited":        http.StatusTooManyRequests,
-		"service unavailable": http.StatusServiceUnavailable,
+	for name, failure := range map[string]error{
+		"Ethereum request timeout": ethereumRPC.HTTPError{
+			StatusCode: http.StatusRequestTimeout,
+			Status:     http.StatusText(http.StatusRequestTimeout),
+		},
+		"Ethereum rate limited": ethereumRPC.HTTPError{
+			StatusCode: http.StatusTooManyRequests,
+			Status:     http.StatusText(http.StatusTooManyRequests),
+		},
+		"Ethereum service unavailable": ethereumRPC.HTTPError{
+			StatusCode: http.StatusServiceUnavailable,
+			Status:     http.StatusText(http.StatusServiceUnavailable),
+		},
+		"retained history request timeout": &frostRetainedGroupHistoryStatusError{
+			statusCode: http.StatusRequestTimeout,
+		},
+		"retained history rate limited": &frostRetainedGroupHistoryStatusError{
+			statusCode: http.StatusTooManyRequests,
+		},
+		"retained history service unavailable": &frostRetainedGroupHistoryStatusError{
+			statusCode: http.StatusServiceUnavailable,
+		},
+		"native anchor request timeout": &frostNativeSignerAnchorStatusError{
+			statusCode: http.StatusRequestTimeout,
+		},
+		"native anchor rate limited": &frostNativeSignerAnchorStatusError{
+			statusCode: http.StatusTooManyRequests,
+		},
+		"native anchor service unavailable": &frostNativeSignerAnchorStatusError{
+			statusCode: http.StatusServiceUnavailable,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			readiness := &testFrostProductionAuthorizationReadiness{
-				err: fmt.Errorf("Ethereum RPC: [%w]", ethereumRPC.HTTPError{
-					StatusCode: statusCode,
-					Status:     http.StatusText(statusCode),
-				}),
+				err:          fmt.Errorf("authorization dependency: [%w]", failure),
 				failingCalls: 2,
 			}
 			gate, authorization := testFrostPreSignRevalidationFixture(t, readiness)

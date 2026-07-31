@@ -863,6 +863,7 @@ func TestFrostNativeSignerAnchorClientReadRidesOutOneTransientFailure(
 	t *testing.T,
 ) {
 	for _, status := range []int{
+		http.StatusRequestTimeout,
 		http.StatusServiceUnavailable,
 		http.StatusBadGateway,
 		http.StatusInternalServerError,
@@ -986,6 +987,13 @@ func TestIsFrostNativeSignerAnchorRetryableReadFailure(t *testing.T) {
 				Err:  "no such host",
 				Name: "anchor.example",
 			}),
+			true,
+		},
+		{
+			"request timeout",
+			&frostNativeSignerAnchorStatusError{
+				statusCode: http.StatusRequestTimeout,
+			},
 			true,
 		},
 		{

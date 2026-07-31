@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -2051,6 +2052,11 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsTruncationAndForgery(
 		)
 		if err == nil || !strings.Contains(err.Error(), "HTTP status [503]") {
 			t.Fatalf("expected truncated pagination rejection, got [%v]", err)
+		}
+		statusError := &frostRetainedGroupHistoryStatusError{}
+		if !errors.As(err, &statusError) ||
+			statusError.HTTPStatusCode() != http.StatusServiceUnavailable {
+			t.Fatalf("retained-history HTTP status lost its typed cause: [%v]", err)
 		}
 	})
 

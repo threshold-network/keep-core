@@ -650,7 +650,7 @@ func TestFrostPreSignAuthorizationGate_AdmitInputChargesOneInput(t *testing.T) {
 	if _, err := gate.admitInput(
 		context.Background(),
 		authorization,
-	); err == nil || !strings.Contains(err.Error(), "unreserved") {
+	); err == nil || !strings.Contains(err.Error(), "temporary reservations") {
 		t.Fatalf(
 			"the relay reservation and a per-input admission were charged "+
 				"together: [%v]",

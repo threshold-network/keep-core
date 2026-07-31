@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -64,6 +63,10 @@ func (err *frostNativeSignerAnchorStatusError) Error() string {
 		"native signer anchor returned HTTP status [%d]",
 		err.statusCode,
 	)
+}
+
+func (err *frostNativeSignerAnchorStatusError) HTTPStatusCode() int {
+	return err.statusCode
 }
 
 // FrostNativeSignerAnchorClientConfig contains runtime transport material and
@@ -995,22 +998,11 @@ func (client *FrostNativeSignerAnchorClient) readLocked(
 //
 // The transport cases are exactly isFrostPreSignTransientAuthorizationFailure's
 // - the anchor was not reached, so nothing was learned about it. The status
-// cases are the two an HTTP intermediary or a restarting service produces while
-// it is unable to answer at all; every other status is the service answering
-// something wrong and stays fatal on the first attempt.
+// cases are 408, 429, and 5xx responses an HTTP intermediary or a restarting
+// service produces while it is unable to answer at all; every other status is
+// the service answering something wrong and stays fatal on the first attempt.
 func isFrostNativeSignerAnchorRetryableReadFailure(err error) bool {
-	if err == nil {
-		return false
-	}
-	if isFrostPreSignTransientAuthorizationFailure(err) {
-		return true
-	}
-	var statusError *frostNativeSignerAnchorStatusError
-	if errors.As(err, &statusError) {
-		return statusError.statusCode == http.StatusTooManyRequests ||
-			statusError.statusCode >= http.StatusInternalServerError
-	}
-	return false
+	return isFrostPreSignTransientAuthorizationFailure(err)
 }
 
 func (client *FrostNativeSignerAnchorClient) readOnceLocked(
