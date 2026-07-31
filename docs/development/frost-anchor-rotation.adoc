@@ -286,6 +286,43 @@ replay gate weakens. Nothing is lost by hitting them except availability - but
 availability is lost until an offline ceremony completes, which is why
 the cadence above matters.
 
+[[recovering-a-poisoned-anchor]]
+=== When rotation is not the remedy
+
+A node can also stop signing for a reason rotation will not fix, and the
+two look similar from the outside: both leave the process running,
+answering every other request, and quietly producing no signatures.
+
+If the refusal names a *terminally poisoned* anchor, the node has
+latched a barrier fault - a rollback, a fork, an authentication failure,
+or a commit whose outcome could not be established after the local state
+had already advanced:
+
+----
+native tbtc signer state anchor is terminally poisoned: <cause>
+----
+
+That latch is process-wide and sticky. It is cleared by *restarting the
+node*, and by nothing else - running the ceremony in this document will
+not clear it, and neither will waiting. The signed activation handshake
+reports it as `payload.state.nativeSignerState.stateAnchorPoisoned`, and
+the poisoning is logged once at ERROR with its cause when it first
+latches.
+
+Distinguishing the two before acting:
+
+* headroom at or near zero, refusals naming *offline anchor rotation* ->
+  the window is spent, run the ceremony in this document;
+* refusals naming *terminally poisoned* -> restart the node, then
+  investigate the logged cause, because a poisoning that recurs
+  immediately after a restart is a genuine anchor disagreement and not a
+  transient fault.
+
+A transient failure to reach the anchor service no longer poisons: those
+are classified and retried, and a node that cannot reach its anchor
+refuses work with `native tbtc signer state anchor is unavailable` and
+recovers on its own once the service answers again.
+
 == Reading current headroom today
 
 *This is the weakest part of the current tooling, and the honest answer
@@ -305,11 +342,18 @@ payload.state.nativeSignerState.currentAnchorRevision
 payload.state.nativeSignerState.certifiedFloorRevision
 payload.state.nativeSignerState.certifiedFloorGeneration
 payload.state.nativeSignerState.stateGeneration
+payload.state.nativeSignerState.stateAnchorPoisoned
 ----
 
 `anchorRotationWarning` is true exactly when the smaller headroom is at
 or below 256, and it also forces the payload's top-level
 `state.healthy` to false (`frostActivationHandshakeHealthy`).
+
+`stateAnchorPoisoned` is the other term that forces `state.healthy`
+false, and it reports the different failure described in
+<<recovering-a-poisoned-anchor>>: the node is not out of window, it has
+latched a terminal barrier fault and will refuse every request-taking
+signer call until it is restarted. Rotation does not clear it.
 
 === The endpoint
 
@@ -337,7 +381,7 @@ auditor, not for monitoring:
 curl -sS -X POST http://127.0.0.1:<port>/<path> \
   -H 'Content-Type: application/json' \
   -d '{
-        "schema": "tbtc-p2tr-production-activation-handshake/v4",
+        "schema": "tbtc-p2tr-production-activation-handshake/v5",
         "challenge": {
           "nonce": "0x<32 random bytes, lowercase hex>",
           "manifestHash": "0x<activation manifest hash>",
