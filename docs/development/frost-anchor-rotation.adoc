@@ -1,0 +1,608 @@
+= FROST Native Signer Anchor Rotation
+
+*Audience:* node operators and the offline anchor authority
+*Status:* Draft - describes a ceremony that has no tooling in this
+repository
+*Date:* 2026-07-31
+
+This document was originally planned for a `docs/operations/`
+directory. That directory does not exist in `keep-core`, and the FROST
+readiness manifest already records the decision not to create one
+(`docs/development/frost-readiness-manifest.adoc`); every other FROST
+operator document, including the rollout guide written for node
+operators, lives under `docs/development/`. This one follows them.
+
+== Summary
+
+Every durable write the native tBTC signer makes is anchored to an
+external history service. The node may only prove its own state back
+to a *certified floor* that an offline authority signed. Two bounded
+windows measure the distance from that floor - one counts anchor
+service *revisions*, the other counts signer state *generations* - and
+both are 4096 entries wide
+(`FrostNativeSignerAnchorMaximumHistoryEvents` and
+`FrostNativeSignerAnchorMaximumHistoryProofEntries` in
+`pkg/tbtc/frost_native_signer_anchor_protocol.go`).
+
+The windows never refill on their own. Only an offline-authorized
+*rotation* moves the floor forward, and a rotation is installed at node
+startup. Between two rotations a node has a fixed, non-renewable budget
+of durable signer writes.
+
+IMPORTANT: There is *no* `tbtc-signer anchor rotate` subcommand, and no
+other command in this repository performs a rotation. `cmd/tbtc_signer.go`
+implements exactly one anchor ceremony -
+`keep-client tbtc-signer anchor bootstrap`, with the four subcommands
+`facts`, `core`, `initialize` and `finalize`.
+Rotation is entirely external and manual: the offline authority
+produces a signed certificate by means this repository does not
+provide, an operator installs it in three files, and the node is
+restarted. Do not go looking for a subcommand; it is not hidden, it
+does not exist.
+
+The rotation budget is smaller than it looks. At the production
+maximum batch (21 inputs) a node holding 4 local seats reserves 3615 of
+the 4096 generations for a *single* transaction workflow, and a completed
+workflow consumes a few hundred. The practical result is *one to two
+full-size sweeps per anchor epoch at 4 seats*. The derivation is in
+<<when-rotation-is-required>>.
+
+== What the anchor is, in operator terms
+
+[cols="1,3"]
+|===
+| Term | Meaning
+
+| Anchor service
+| The external, authenticated checkpoint/history service reached over
+  `FrostNativeSignerAnchorURL`. It stores one append-only stream of
+  signed events for this signer store.
+
+| Service epoch
+| A numbered generation of that stream. A rotation, and only a
+  rotation, increments it. Within one epoch, revisions count from 1.
+
+| Revision
+| One event in the stream. In practice one request-taking signer call
+  advances one revision, because the process output barrier advances
+  the remote anchor revision once for the call's final checkpoint.
+
+| Generation
+| One committed state witness inside the Rust signer - one durable
+  state image. A single anchored call can commit one or two of them in
+  fault-free operation (the expiry-sweep prologue's snapshot, plus the
+  endpoint's own mutation), and up to three under the frozen barrier
+  ceiling.
+
+| Certified floor
+| The `(service epoch, revision, checkpoint)` triple named by the final
+  trust certificate the node loaded at startup. It is the oldest point
+  the node can still prove back to.
+
+| Restartable headroom
+| How far the node may still travel from that floor: +
+  `restartableRevisionHeadroom = 4096 - (currentAnchorRevision - certifiedFloorRevision)` +
+  `restartableGenerationHeadroom = 4096 - (stateGeneration - certifiedFloorGeneration)` +
+  (`restartableRevisionHeadroom` / `restartableGenerationHeadroom` in
+  `pkg/tbtc/frost_native_signer_anchor_binding.go`)
+|===
+
+=== Why rotation exists at all
+
+The floor is a rollback boundary. If the node could move it, a node
+that had been rolled back could declare its rolled-back state to be the
+new truth, and the external anchor would stop being external. The code
+states this directly where an absent anchor stream is refused
+(`pkg/tbtc/frost_native_signer_anchor_binding.go`,
+`reconcileStartup`):
+
+....
+// In particular, an absent stream remains a hard failure. The online
+// signer is never authorized to create its own rollback boundary.
+....
+
+So the floor moves only under an Ed25519 signature from the offline
+authority, checked at startup against pins that the running node cannot
+influence. A finite window is the price: the node must be able to
+replay its whole history from the floor to prove it did not roll back,
+and that replay is bounded. Running out of window is therefore not a
+failure of the anchor - it is the anchor working, and asking for a
+fresh signed floor.
+
+[[when-rotation-is-required]]
+== When rotation is required
+
+=== The reservation arithmetic
+
+Before a FROST pre-sign workflow starts, the admission controller
+reserves its entire worst case in both dimensions and holds the
+reservation until the workflow exits
+(`frostPreSignAnchoredWorkflowCost` in
+`pkg/tbtc/frost_native_signer_anchor_admission.go`):
+
+....
+perAttemptCalls = 4 * localSeats + 1
+perInputCalls   = 1 + maximumAttempts * perAttemptCalls
+revisions       = inputs * perInputCalls
+generations     = 2 * revisions + 3
+....
+
+The `4 * seats + 1` is `Open`, `Round1`, `Round2` and `Abort` for every
+local seat plus one memoized `Aggregate`; the leading `1` per input is
+`BuildTaprootTx`. Production parameters are `inputs <= 21`
+(`frostPreSignAuthorizationMaximumInputs`), `maximumAttempts = 5`
+(`signingAttemptsLimit` in `pkg/tbtc/node.go`), and up to 100 wallet
+seats (`frostPreSignAuthorizationMaximumSeats`, threshold 51).
+
+At 21 inputs and 5 attempts:
+
+[cols="1,1,1,3"]
+|===
+| Local seats | Revisions reserved | Generations reserved | Admissible at 21 inputs?
+
+| 1 | 546  | 1095 | yes
+| 2 | 966  | 1935 | yes
+| 3 | 1386 | 2775 | yes
+| 4 | 1806 | 3615 | yes - this is the ceiling
+| 5 | 2226 | 4455 | *no*: exceeds the 4096 proof window; caps at 19 inputs
+| 6 | -    | -    | *no*: caps at 16 inputs
+|===
+
+The 1-seat and 2-seat rows and the 4-seat ceiling are pinned by
+`TestFrostPreSignMaximumAnchorCapacityCost` and
+`TestFrostPreSignSeatCeilingResidual` in
+`pkg/tbtc/frost_native_signer_anchor_admission_test.go`; the rest
+follow from the same formula.
+
+=== What a completed workflow actually consumes
+
+The reservation is a worst case over five attempts. A fault-free
+workflow that succeeds on its first attempt makes, per input:
+
+* one `BuildTaprootTx` call;
+* three calls per local seat - `Open`, `Round1`, `Round2`. The runner
+  suppresses `Abort` for a seat that reached round 2, because round 2
+  already consumed its nonces (the cleanup defer in
+  `pkg/frost/signing/roast_runner_frost_native.go`). A seat that
+  committed but was not selected into the signing
+  subset calls `Open`, `Round1`, `Abort` instead - also three; and
+* one memoized `Aggregate`.
+
+That is `3 * seats + 2` anchored calls per input, each costing one
+revision and one to two generations:
+
+[cols="1,1,1,1"]
+|===
+| Local seats | Calls per 21-input sweep | Revisions consumed | Generations consumed
+
+| 1 | 105 | 105 | 105-210
+| 2 | 168 | 168 | 168-336
+| 3 | 231 | 231 | 231-462
+| 4 | 294 | 294 | 294-588
+|===
+
+=== Cadence
+
+A workflow is admitted only while `cost <= headroom - alreadyReserved`
+in *both* dimensions and the smaller headroom is still above 256. Since
+the generation cost is roughly twice the revision cost while the
+consumption rates are comparable, the generation window always binds
+first. Starting from a fresh rotation (both windows at 4096) and
+running full-size sweeps one at a time:
+
+[cols="1,1,3"]
+|===
+| Local seats | Full-size sweeps per anchor epoch | Note
+
+| 1 | 15-29 | best case assumes one generation per anchored call
+| 2 | 7-13  |
+| 3 | 3-6   |
+| 4 | 1-2   | in both the best and the worst case the next sweep is
+              refused with 3508 generations still unspent
+|===
+
+The 4-seat row is the operationally important one. A 4-seat node stops
+admitting full-size batches with 3508 of 4096 generations - 86% of its
+proof window - still unspent, purely because the *next* workflow's
+worst case no longer fits. Rotation cadence at production seat counts
+is therefore measured in a handful of sweeps, not in months of uptime.
+
+NOTE: An earlier operability assessment put these at "1-2 at 4 seats,
+about 5 at 3 seats, about 28 at 1 seat". The 4-seat figure agrees and
+the 1-seat figure matches the optimistic end of the range here. The
+3-seat figure differs because this derivation counts three calls per
+seat on a successful attempt rather than four - `Abort` is suppressed
+for a seat that signed round 2, so four calls per seat is the shape of
+a *failed* attempt. Use the ranges above.
+
+=== Concurrency
+
+One admission controller is shared by pre-sign authorization, native
+DKG and DKG retirement, and each reservation holds its full worst case
+until its workflow exits. Two concurrent full-size workflows at 4 seats
+would need 7230 generations and can never both be admitted, so such a
+node serializes full-size work. The controller also intentionally
+double-counts in-flight mutations when admitting later work, so
+concurrent load reaches the refusal sooner than the table suggests.
+
+=== What an operator actually sees
+
+There is no warning phase that names a remedy. In headroom order:
+
+. *Admission refusal (no remedy named).* Emitted while headroom is
+  still large but smaller than the next workflow's worst case:
++
+----
+FROST pre-sign authorization requires [3615] signer generations but only [3508] are unreserved
+----
++
+and the revision-dimension twin, `... requires [1806] anchor revisions
+but only [N] are unreserved`. The workflow label is
+`FROST pre-sign authorization`, `FROST native DKG` or
+`FROST native DKG retirement`. *This string does not mention rotation
+at all*, and it is the message a healthy, correctly configured node
+produces first. Treat it as the rotation signal.
++
+It reaches the log wrapped twice, at ERROR, from the wallet
+dispatcher:
++
+----
+action execution terminated with error: [FROST pre-sign authorization failed
+before nonce generation: [FROST pre-sign anchor admission failed: [FROST
+pre-sign authorization requires [3615] signer generations but only [3508]
+are unreserved]]]
+----
+
+. *Rotation-floor refusal.* Once `min(revisionHeadroom,
+  generationHeadroom) <= 256`
+  (`FrostNativeSignerAnchorRotationWarningHeadroom`), *all* new work is
+  refused regardless of size:
++
+----
+FROST pre-sign authorization is blocked with revision/generation headroom [R/G]; offline anchor rotation is required before admitting new work
+----
+
+. *Barrier freeze.* Deeper still, individual request-taking calls are
+  refused by the Rust-side output barrier
+  (`pkg/frost/signing/native_tbtc_signer_state_anchor_barrier.go`),
+  wrapping `native tbtc signer state anchor is unavailable`:
++
+----
+... request-taking operation [<op>] is blocked because the certified signer-generation window cannot cover its maximum advance; offline anchor rotation is required
+... request-taking operation [<op>] is blocked because the certified anchor revision window is exhausted; offline anchor rotation is required
+----
+
+. *Startup and readiness refusals.* A node that reaches zero headroom
+  will not come back up cleanly:
++
+----
+native signer certified anchor revision or generation window is exhausted; offline anchor rotation is required
+native signer anchor certified-floor history bound is exhausted; offline anchor rotation is required
+startup native signer local-ahead state cannot cross the certified-floor history bound; offline anchor rotation is required
+----
+
+Every one of these refusals is fail-closed: no share is released and no
+replay gate weakens. Nothing is lost by hitting them except availability - but
+availability is lost until an offline ceremony completes, which is why
+the cadence above matters.
+
+== Reading current headroom today
+
+*This is the weakest part of the current tooling, and the honest answer
+is that there is no good way.*
+
+`restartableRevisionHeadroom` and `restartableGenerationHeadroom` exist
+in exactly one place an operator can reach: the JSON body of the
+activation-handshake response
+(`pkg/tbtc/frost_activation_handshake.go`, struct
+`frostActivationNativeSignerState`). Specifically:
+
+----
+payload.state.nativeSignerState.restartableRevisionHeadroom
+payload.state.nativeSignerState.restartableGenerationHeadroom
+payload.state.nativeSignerState.anchorRotationWarning
+payload.state.nativeSignerState.currentAnchorRevision
+payload.state.nativeSignerState.certifiedFloorRevision
+payload.state.nativeSignerState.certifiedFloorGeneration
+payload.state.nativeSignerState.stateGeneration
+----
+
+`anchorRotationWarning` is true exactly when the smaller headroom is at
+or below 256, and it also forces the payload's top-level
+`state.healthy` to false (`frostActivationHandshakeHealthy`).
+
+=== The endpoint
+
+The endpoint is configured by `FrostActivationHandshakeURL` and is
+loopback-only, twice over:
+
+* `validateFrostActivationHandshakeEndpoint` requires an `http` URL
+  whose host is a *numeric loopback* address, with a fixed non-zero
+  port and a clean non-empty path; and
+* the handler rejects any request whose remote address is not a
+  loopback IP, with `403 forbidden`.
+
+It answers `POST` on exactly the configured path, requires
+`Content-Type: application/json`, caps the body at 4096 bytes, and
+rejects unknown JSON fields. The response is signed by the node's
+attestation key.
+
+=== The concrete read
+
+You must run this on the node host, and you must supply a complete
+auditor challenge - the endpoint exists for the independent activation
+auditor, not for monitoring:
+
+----
+curl -sS -X POST http://127.0.0.1:<port>/<path> \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "schema": "tbtc-p2tr-production-activation-handshake/v4",
+        "challenge": {
+          "nonce": "0x<32 random bytes, lowercase hex>",
+          "manifestHash": "0x<activation manifest hash>",
+          "bindingHash": "0x<retained-group journal binding hash>",
+          "ethereumPoint": {
+            "blockNumber": <finalized block number>,
+            "blockHash": "0x<that block hash>"
+          },
+          "checkpointFloor": {
+            "sequence": <at least the manifest CheckpointMinimumSequence>,
+            "certificateHash": "0x<that checkpoint certificate hash>"
+          }
+        }
+      }' \
+| jq '.payload.state.nativeSignerState
+      | {restartableRevisionHeadroom, restartableGenerationHeadroom,
+         anchorRotationWarning}'
+----
+
+Every `0x` value is lowercase 32-byte hex; a mismatch on
+`manifestHash` or `bindingHash` is rejected. The first call for a given
+Ethereum point returns `503 activation state is not ready` with
+`Retry-After: 1` while reconciliation is queued - retry until it
+answers.
+
+=== Gaps in this area
+
+* *No metric.* Nothing anchor-related is registered with `clientinfo`,
+  so `/metrics` has no headroom gauge and no rotation warning. The only
+  scrapeable trace of a refusal is the generic
+  `wallet_action_failed_total` counter, which cannot distinguish a
+  headroom refusal from any other action failure.
+* *No log line.* Neither the readiness snapshot nor the anchor binding
+  logs headroom. The first log evidence is the refusal itself, by which
+  time the node is already turning work away.
+* *No client for the endpoint.* Nothing in this repository builds the
+  challenge above; there is no `keep-client` subcommand for it and no
+  script under `scripts/`. Assembling `bindingHash`, the finalized Ethereum
+  point and the checkpoint-floor cursor by hand is the current
+  procedure.
+* *Reading headroom needs a running, healthy node.* The handshake
+  refuses to answer while activation state is not reconciled, so the
+  reading is unavailable exactly when a node is unhealthy.
+
+== The rotation ceremony
+
+A rotation is an offline-signed statement that "the anchor stream moves
+to a new service epoch, starting from this exact frozen checkpoint".
+The node verifies it at startup; nothing at runtime can install one.
+
+=== What the offline authority must produce
+
+One certificate object, schema
+`tbtc-frost-native-signer-state-anchor-trust-certificate/v1`, with
+`"kind": "rotation"`. Every hash and key is lowercase `0x`-prefixed
+hex; every integer is a canonical decimal *string*. Validation lives in
+`ValidateFrostNativeSignerAnchorTrustCertificate` and
+`ValidateFrostNativeSignerAnchorTrustCertificateChain`
+(`pkg/tbtc/frost_native_signer_anchor_trust.go`). The requirements
+that are specific to a rotation:
+
+* `from` must be present and complete. The bootstrap kind is the only
+  one that may carry `"from": null`, and the member must exist in the
+  JSON either way.
+* `certificateSequence` is the previous certificate's sequence plus
+  one, and `previousCertificateDigest` is the previous certificate's
+  `certificateDigest`. Sequence 1 with a zero previous digest is the
+  "legacy adoption" special case and is only reachable on a signer
+  whose trust journal has no head.
+* `to.reference.serviceEpoch` = `from.reference.serviceEpoch + 1`.
+* `to.reference.revision` = `1`.
+* `to.reference.previousEventRoot` = `from.reference.eventRoot`, so the
+  epoch boundary cannot erase ancestry.
+* `to.activationManifestSequence` =
+  `from.activationManifestSequence + 1` - exactly one greater, so a new
+  signed activation manifest is part of every rotation.
+* `to.activationManifestHash` must *differ* from `from`'s, and
+  `to.bindingHash` must *differ* from `from`'s. A rotation that does
+  not change its manifest binding is refused with
+  `native signer anchor rotation does not change its manifest binding`.
+* `coreSignature` and `finalSignature` are Ed25519 signatures by the
+  *`from`* offline authority key over the derived `coreDigest` and
+  final digest; `operationID`, `transitionDigest` and
+  `certificateDigest` must equal their derivations.
+* `targetAcknowledgementBase64` holds the *exact bytes* of the history
+  service's signed checkpoint acknowledgement
+  (`tbtc-signer-state-witness-checkpoint-ack/v1`) for the new epoch's
+  revision-1 event, with `targetAcknowledgementSHA256` its SHA-256. It
+  is retained byte-for-byte and must not be re-encoded.
+
+This implies a service-side step the certificate alone cannot perform:
+the authority must first drive the anchor service to open service epoch
+N+1 at revision 1, carrying the frozen checkpoint and
+`previousEventRoot`, and collect that event's signed acknowledgement.
+The node fetches the matching Read response itself at startup, so the
+new epoch must already be served before the node is restarted.
+
+=== What a rotation may not change
+
+* *The offline authority key.* `to.offlineAuthorityPublicKey` and its
+  SPKI hash must equal `from`'s -
+  `native signer anchor offline authority rotation is unsupported`.
+  There is no key-rotation path for the authority itself.
+* *The signer state.* `to.reference.checkpoint` must be byte-identical
+  to `from.reference.checkpoint`, including its `generation`. A
+  rotation re-certifies the current state as the new floor; it never
+  advances, rewinds or repairs it.
+* *The stream identity.* `protocolID`, `streamID` and
+  `signerStoreFingerprint` are pinned across the entire chain and
+  against the manifest. `streamID` is derived from
+  `(protocolID, trustDomainID, signerStoreFingerprint)` only, so it is
+  deliberately stable across every rotation.
+* *The witness bounds.* `witnessMaximumRecords` and
+  `witnessRotationThresholdRecords` must be identical on both sides.
+
+The online service response key, endpoint leaf pins and manifest
+contents *may* change in a rotation; the offline authority and the
+signer state may not.
+
+=== Where it is installed
+
+Three artifacts must be updated together, and all three are checked
+against each other at startup. A mismatch fails startup closed.
+
+[cols="2,2,3"]
+|===
+| Artifact | Set by | What changes on rotation
+
+| Trust certificate chain
+| `[tbtc]` `FrostNativeSignerAnchorTrustCertificatePath` in the client
+  config file (there is no CLI flag)
+| Append the new rotation certificate to the JSON array.
+
+| Native signer init config
+| The JSON file at `TBTC_SIGNER_INIT_CONFIG_PATH`
+| `state_anchor_activation_manifest_hash`,
+  `state_anchor_activation_manifest_sequence`,
+  `state_anchor_binding_hash`,
+  `state_anchor_trust_certificate_sequence`,
+  `state_anchor_trust_certificate_digest`
+
+| Activation manifest
+| `[tbtc]` `FrostPreSignActivationManifestPath`
+| The new signed manifest whose sequence is one greater and whose hash
+  the certificate's `to` endpoint names.
+|===
+
+The certificate file is a JSON array of *one to 64* certificates and
+must *begin at `certificateSequence` 1*: startup independently
+re-authenticates the complete artifact as a crash-recovery source
+(`authenticateFrostNativeSignerAnchorTrustRecoveryArtifact` in
+`pkg/tbtc/frost_native_signer_anchor_trust_startup.go`), and refuses
+anything else with
+`native signer anchor recovery requires a complete sequence-one certificate artifact`.
+The file is opened `O_NOFOLLOW` and must be a regular file owned by the
+node's effective uid with mode exactly `0600`; the whole file is read
+under a 16 MiB bound and each certificate under a 120 KiB bound.
+
+WARNING: Because the file must always start at sequence 1 and may hold
+at most 64 entries, a signer store admits at most *63 rotations for its
+entire lifetime* - 64 anchor epochs counting the bootstrap. At 1-2
+full-size sweeps per epoch at 4 seats that is roughly 64-128 full-size
+sweeps before the chain can no longer be extended. Nothing in this tree
+implements what happens next. This is a gap, not a documented plan.
+
+=== Restart, and the order of operations
+
+The certified floor is read from the final certificate during
+`tbtc.Initialize` and installed once
+(`certifiedFloor := ...finalTrustCertificate.To.Reference` in
+`pkg/tbtc/node.go`). There is no reload path. *A rotation takes effect
+only on node restart.*
+
+The startup sequence also constrains the ceremony order. The node
+submits the missing certificate suffix to the Rust signer before any
+durable store access, then reconciles, then requires the reconciled tip
+to equal the certificate's target exactly - otherwise
+`reconciled native signer tip differs from the fresh trust-transition target`.
+Consequently:
+
+. Stop the node. The checkpoint frozen into the certificate must be the
+  node's *final* durable checkpoint; any durable write between the
+  authority capturing it and the restart invalidates the certificate.
+. Capture the current reference - service epoch, revision, event root,
+  acknowledgement digest and checkpoint - as the certificate's `from`.
+. Have the authority open epoch N+1 revision 1 on the anchor service
+  and collect the signed acknowledgement.
+. Sign the rotation certificate offline; issue the new activation
+  manifest.
+. Install all three artifacts on the node, preserving mode `0600` and
+  ownership by the node's uid.
+. Restart. Startup performs the trust transition, reconciles, and
+  re-reads headroom from the new floor - both windows return to 4096.
+
+=== Gaps in this area
+
+* *No producer.* `pkg/tbtc/frost_native_signer_anchor_provisioning.go`
+  implements the four-phase ceremony for `kind: "bootstrap"` only, and
+  emits both the one-element chain and the matching init config. There
+  is no rotation counterpart: no `Prepare`/`Initialize`/`Finalize` API,
+  no CLI, no artifact schema for the operator side of a rotation.
+* *No dry run.* Nothing validates a candidate rotation certificate
+  against a stopped node's actual state short of restarting the node
+  with it. A bad certificate is discovered as a startup failure.
+* *Downtime is unmeasured.* The whole ceremony happens with the node
+  stopped, and no rehearsal figure exists.
+
+== Pre-activation checklist
+
+The FROST path is pre-production: both go-live gates in
+`docs/development/frost-readiness-manifest.adoc` currently read
+`missing-no-go`. The following should exist before the rotation cadence
+derived above is run against real value.
+
+. *A rotation certificate producer,* offline and air-gapped, with
+  frozen test vectors, mirroring what `tbtc-signer anchor bootstrap`
+  and its four subcommands provide for the bootstrap case.
+  Detached-signature-only, never accepting the offline authority
+  private key online.
+. *A supported way to read headroom* that does not require an
+  auditor challenge assembled by hand: a `tbtc-signer` subcommand, or
+  a `clientinfo` gauge for both headroom dimensions plus the
+  rotation-warning flag.
+. *An alert threshold set well above the danger points* - above 256
+  (where all work stops) and above the node's own per-workflow
+  reservation for its seat count (3615 generations at 4 seats). An
+  alert that fires at 256 fires far too late.
+. *A documented, rehearsed anchor-service epoch transition:* who opens
+  epoch N+1 revision 1, how the frozen checkpoint and previous event
+  root are supplied, and how the signed acknowledgement bytes are
+  transported to the offline authority unaltered.
+. *A rehearsed full cycle on testnet* - stop, capture, sign, install
+  three artifacts, restart - with the measured downtime recorded, and a
+  verified rollback if the certificate is rejected at startup.
+. *A decision on the 64-certificate lifetime bound,* including what a
+  store does at certificate 64.
+. *A local-seat policy.* 5 or more local seats are excluded from
+  21-input batches entirely and lose those seats to the wallet's
+  signing threshold; 4 seats yields 1-2 sweeps per epoch. Decide the
+  supported seat count per node before sortition produces one.
+. *A consistency check before restart* over the three artifacts -
+  certificate chain, init config, activation manifest - since each is
+  verified against the others at startup and any mismatch is a
+  fail-closed startup error.
+. *Both readiness-manifest gates flipped to `present`* with evidence,
+  per that document's update discipline.
+
+== References
+
+* Certificate protocol and verification:
+  `pkg/tbtc/frost_native_signer_anchor_trust.go`
+* Startup transition and recovery artifact:
+  `pkg/tbtc/frost_native_signer_anchor_trust_startup.go`,
+  `pkg/tbtc/node.go`
+* Windows, floors and headroom:
+  `pkg/tbtc/frost_native_signer_anchor_protocol.go`,
+  `pkg/tbtc/frost_native_signer_anchor_binding.go`
+* Reservation arithmetic and refusals:
+  `pkg/tbtc/frost_native_signer_anchor_admission.go`
+* Barrier freeze:
+  `pkg/frost/signing/native_tbtc_signer_state_anchor_barrier.go`
+* Headroom exposure:
+  `pkg/tbtc/frost_activation_handshake.go`,
+  `pkg/tbtc/frost_native_signer_readiness.go`
+* Bootstrap ceremony (the only implemented one):
+  `cmd/tbtc_signer.go`,
+  `pkg/tbtc/frost_native_signer_anchor_provisioning.go`
+* Readiness gates: `docs/development/frost-readiness-manifest.adoc`
