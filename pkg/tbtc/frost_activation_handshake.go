@@ -1008,11 +1008,12 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	// each other only in part:
 	//
 	//   - the strict facts - store identity and fingerprint, retained key
-	//     material, trust head, anchor service epoch, certified floor and the
-	//     AnchorRotationWarning flag - must still equal the reconciled values
-	//     or signing fails closed here. An attestation can therefore never
-	//     claim a healthier anchor, or different key material, than the signer
-	//     actually has;
+	//     material, trust head, anchor service epoch and certified floor - must
+	//     still equal the reconciled values or signing fails closed here. The
+	//     AnchorRotationWarning flag may turn on, but not off, as an admitted
+	//     input consumes its reserved capacity. An attestation can therefore
+	//     never claim a healthier anchor, or different key material, than the
+	//     signer actually has;
 	//   - the volatile facts that an authorized signing window advances by
 	//     design - state generation, the state commitment chain, the state
 	//     image digest, the anchor revision and both restartable headrooms -

@@ -451,8 +451,10 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 //
 // The returned snapshot is not the cached one. Everything
 // verifyFrostNativeSignerInventoryUnchanged pins strictly - store identity,
-// retained key material, trust head, certified floor and the anchor rotation
-// warning - is guaranteed equal to the cached value or this returns an error.
+// retained key material, trust head and certified floor - is guaranteed equal
+// to the cached value or this returns an error. The anchor rotation warning may
+// turn on as the authorized window consumes its reserved capacity, but it may
+// not turn off.
 // The state checkpoint, the anchor revision and both restartable headrooms are
 // only held to a monotone advance, so on those the returned live values and
 // the cached ones can legitimately differ.
@@ -534,11 +536,12 @@ func (readiness *frostProductionSignerReadiness) revalidateFrostProductionSigner
 //
 // Identity, trust and key material stay strictly pinned. The state checkpoint,
 // the anchor revision and the derived restartable headrooms may only advance
-// monotonically, and only while the anchor stays out of its rotation-warning
-// band - the same threshold below which the admission controller refuses new
-// work. A rollback, an equal-generation fork, a different store or trust head,
-// a changed key-package commitment, or an advance that consumes the warning
-// headroom all still fail closed.
+// monotonically. The anchor rotation warning may move from false to true as an
+// admitted input spends the capacity reserved for it; that transition reports
+// the live node unhealthy to new activation consumers without revoking work
+// already admitted. It may not clear within the same certified anchor context.
+// A rollback, an equal-generation fork, a different store or trust head, or a
+// changed key-package commitment still fails closed.
 func verifyFrostNativeSignerInventoryUnchanged(
 	expected *frostNativeSignerInventorySnapshot,
 	actual *frostNativeSignerInventorySnapshot,
@@ -558,8 +561,7 @@ func verifyFrostNativeSignerInventoryUnchanged(
 		actual.TrustCertificateDigest != expected.TrustCertificateDigest ||
 		actual.AnchorServiceEpoch != expected.AnchorServiceEpoch ||
 		actual.CertifiedFloorRevision != expected.CertifiedFloorRevision ||
-		actual.CertifiedFloorGeneration != expected.CertifiedFloorGeneration ||
-		actual.AnchorRotationWarning != expected.AnchorRotationWarning {
+		actual.CertifiedFloorGeneration != expected.CertifiedFloorGeneration {
 		return fmt.Errorf(
 			"native signer identity, trust head, or retained key material changed since readiness reconciliation",
 		)
@@ -572,6 +574,11 @@ func verifyFrostNativeSignerInventoryUnchanged(
 			expected.RestartableRevisionHeadroom {
 		return fmt.Errorf(
 			"native signer state or anchor revision rolled back since readiness reconciliation",
+		)
+	}
+	if expected.AnchorRotationWarning && !actual.AnchorRotationWarning {
+		return fmt.Errorf(
+			"native signer anchor rotation warning cleared within the certified anchor context",
 		)
 	}
 	// A durable advance always moves the state commitment chain forward, so an

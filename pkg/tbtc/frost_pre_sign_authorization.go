@@ -1969,7 +1969,8 @@ func isFrostPreSignTransientAuthorizationFailure(err error) bool {
 	}
 	var httpError ethereumRPC.HTTPError
 	if errors.As(err, &httpError) {
-		return httpError.StatusCode == http.StatusTooManyRequests ||
+		return httpError.StatusCode == http.StatusRequestTimeout ||
+			httpError.StatusCode == http.StatusTooManyRequests ||
 			httpError.StatusCode >= http.StatusInternalServerError &&
 				httpError.StatusCode <= 599
 	}

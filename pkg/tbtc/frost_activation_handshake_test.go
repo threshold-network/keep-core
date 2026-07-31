@@ -383,11 +383,11 @@ func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSigner
 
 // revalidateFrostProductionSignerReadinessInventory mirrors production: it
 // compares the live inventory against the reconciled one with exactly the
-// comparison the real verifier uses - strict on identity, key material, trust
-// head and the rotation warning, monotone on the state checkpoint, the anchor
-// revision and both headrooms - and returns the live snapshot. Comparing the
-// whole struct by value here would model a production behaviour that no longer
-// exists and would assert a 503 the exporter no longer returns.
+// comparison the real verifier uses - strict on identity, key material and the
+// trust head, monotone on the state checkpoint, the anchor revision, both
+// headrooms and the rotation warning - and returns the live snapshot. Comparing
+// the whole struct by value here would model a production behaviour that no
+// longer exists and would assert a 503 the exporter no longer returns.
 func (readiness *testFrostProductionSignerReadiness) revalidateFrostProductionSignerReadinessInventory(
 	ctx context.Context,
 	expected *frostProductionSignerReadinessSnapshot,

@@ -1413,6 +1413,13 @@ func TestIsFrostPreSignTransientAuthorizationFailure(t *testing.T) {
 			err:       fmt.Errorf("anchor read: [%w]", os.ErrDeadlineExceeded),
 			transient: true,
 		},
+		"Ethereum RPC request timed out": {
+			err: fmt.Errorf("Ethereum RPC: [%w]", ethereumRPC.HTTPError{
+				StatusCode: http.StatusRequestTimeout,
+				Status:     "408 Request Timeout",
+			}),
+			transient: true,
+		},
 		"Ethereum RPC rate limited": {
 			err: fmt.Errorf("Ethereum RPC: [%w]", ethereumRPC.HTTPError{
 				StatusCode: http.StatusTooManyRequests,
@@ -1543,25 +1550,33 @@ func TestThresholdFrostPreSignAuthorizationGate_SurvivesTransientReadinessFailur
 func TestThresholdFrostPreSignAuthorizationGate_SurvivesTemporaryEthereumHTTPFailure(
 	t *testing.T,
 ) {
-	readiness := &testFrostProductionAuthorizationReadiness{
-		err: fmt.Errorf("Ethereum RPC: [%w]", ethereumRPC.HTTPError{
-			StatusCode: http.StatusServiceUnavailable,
-			Status:     "503 Service Unavailable",
-		}),
-		failingCalls: 2,
-	}
-	gate, authorization := testFrostPreSignRevalidationFixture(t, readiness)
-	if err := gate.revalidate(
-		context.Background(),
-		authorization,
-	); err != nil {
-		t.Fatalf("a temporary Ethereum HTTP failure killed the session: [%v]", err)
-	}
-	if readiness.calls != 3 {
-		t.Fatalf(
-			"expected the Ethereum HTTP failure to be retried, saw [%d] attempts",
-			readiness.calls,
-		)
+	for name, statusCode := range map[string]int{
+		"request timeout":     http.StatusRequestTimeout,
+		"rate limited":        http.StatusTooManyRequests,
+		"service unavailable": http.StatusServiceUnavailable,
+	} {
+		t.Run(name, func(t *testing.T) {
+			readiness := &testFrostProductionAuthorizationReadiness{
+				err: fmt.Errorf("Ethereum RPC: [%w]", ethereumRPC.HTTPError{
+					StatusCode: statusCode,
+					Status:     http.StatusText(statusCode),
+				}),
+				failingCalls: 2,
+			}
+			gate, authorization := testFrostPreSignRevalidationFixture(t, readiness)
+			if err := gate.revalidate(
+				context.Background(),
+				authorization,
+			); err != nil {
+				t.Fatalf("a temporary Ethereum HTTP failure killed the session: [%v]", err)
+			}
+			if readiness.calls != 3 {
+				t.Fatalf(
+					"expected the Ethereum HTTP failure to be retried, saw [%d] attempts",
+					readiness.calls,
+				)
+			}
+		})
 	}
 }
 

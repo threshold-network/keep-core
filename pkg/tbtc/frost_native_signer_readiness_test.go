@@ -1298,7 +1298,7 @@ func TestVerifyFrostNativeSignerInventoryUnchangedSeparatesAdvanceFromChange(
 				actual.StateCommitment = [32]byte{0x42}
 				actual.AnchorRotationWarning = true
 			},
-			message: "identity, trust head, or retained key material changed",
+			accepted: true,
 		},
 	}
 	for name, test := range tests {
@@ -1317,5 +1317,78 @@ func TestVerifyFrostNativeSignerInventoryUnchangedSeparatesAdvanceFromChange(
 				t.Fatalf("native signer state change was accepted: [%v]", err)
 			}
 		})
+	}
+}
+
+func TestVerifyFrostNativeSignerInventoryUnchangedPreservesAdmittedInputAcrossWorkloadWarning(
+	t *testing.T,
+) {
+	cost, err := frostPreSignAnchoredInputCost(20, signingAttemptsLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost.Revisions != 406 || cost.Generations != 815 {
+		t.Fatalf("unexpected twenty-seat per-input cost: %+v", cost)
+	}
+	expected := &frostNativeSignerInventorySnapshot{
+		Schema:                        "inventory/v1",
+		StoreFingerprint:              [32]byte{0x01},
+		StateGeneration:               10,
+		StateCommitment:               [32]byte{0x02},
+		PreviousStateCommitment:       [32]byte{0x03},
+		StateImageDigest:              [32]byte{0x04},
+		InventoryCommitment:           [32]byte{0x05},
+		WalletCount:                   1,
+		KeyPackageCount:               20,
+		LargestLocalSeatCount:         20,
+		ExternalRollbackAnchorBound:   true,
+		TrustCertificateSequence:      1,
+		TrustCertificateDigest:        [32]byte{0x06},
+		AnchorServiceEpoch:            1,
+		CertifiedFloorRevision:        1,
+		CertifiedFloorGeneration:      1,
+		CurrentAnchorRevision:         5,
+		RestartableRevisionHeadroom:   cost.Revisions + 1,
+		RestartableGenerationHeadroom: cost.Generations + 1,
+		AnchorRotationWarning:         false,
+	}
+	if frostNativeSignerAnchorWorkloadRotationWarning(
+		expected.RestartableRevisionHeadroom,
+		expected.RestartableGenerationHeadroom,
+		expected.LargestLocalSeatCount,
+	) {
+		t.Fatal("admissible pre-input snapshot unexpectedly warned")
+	}
+
+	actual := *expected
+	actual.StateGeneration++
+	actual.PreviousStateCommitment = expected.StateCommitment
+	actual.StateCommitment = [32]byte{0x12}
+	actual.StateImageDigest = [32]byte{0x14}
+	actual.CurrentAnchorRevision++
+	actual.RestartableRevisionHeadroom--
+	actual.RestartableGenerationHeadroom--
+	actual.AnchorRotationWarning = frostNativeSignerAnchorWorkloadRotationWarning(
+		actual.RestartableRevisionHeadroom,
+		actual.RestartableGenerationHeadroom,
+		actual.LargestLocalSeatCount,
+	)
+	if !actual.AnchorRotationWarning {
+		t.Fatal("the admitted input did not cross the workload warning threshold")
+	}
+	if err := verifyFrostNativeSignerInventoryUnchanged(
+		expected,
+		&actual,
+	); err != nil {
+		t.Fatalf("the admitted input was revoked after consuming reserved capacity: %v", err)
+	}
+
+	cleared := actual
+	cleared.AnchorRotationWarning = false
+	if err := verifyFrostNativeSignerInventoryUnchanged(
+		&actual,
+		&cleared,
+	); err == nil || !strings.Contains(err.Error(), "warning cleared") {
+		t.Fatalf("rotation warning cleared within one certified context: %v", err)
 	}
 }
