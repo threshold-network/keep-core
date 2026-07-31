@@ -40,12 +40,16 @@ provide, an operator installs it in three files, and the node is
 restarted. Do not go looking for a subcommand; it is not hidden, it
 does not exist.
 
-The rotation budget is smaller than it looks. At the production
-maximum batch (21 inputs) a node holding 4 local seats reserves 3615 of
-the 4096 generations for a *single* transaction workflow, and a completed
-workflow consumes a few hundred. The practical result is *one to two
-full-size sweeps per anchor epoch at 4 seats*. The derivation is in
-<<when-rotation-is-required>>.
+The rotation budget is a throughput budget, not an admission ceiling.
+Admission reserves *one transaction input at a time* - a batch signs its
+inputs sequentially and never needs more than one input's worth of
+unconsumed window at once - so no seat count a wallet can award is
+excluded from signing. What is still finite is the number of inputs a
+node can actually sign between two rotations: a fault-free 21-input
+sweep consumes roughly `21 * (3 * localSeats + 2)` revisions and one to
+two generations per call, so a 4-seat node gets *six to thirteen
+full-size sweeps per anchor epoch* and a 20-seat node one to two. The
+derivation is in <<when-rotation-is-required>>.
 
 == What the anchor is, in operator terms
 
@@ -132,45 +136,71 @@ fresh signed floor.
 
 === The reservation arithmetic
 
-Before a FROST pre-sign workflow starts, the admission controller
-reserves its entire worst case in both dimensions and holds the
-reservation until the workflow exits
-(`frostPreSignAnchoredWorkflowCost` in
+Anchor admission reserves *one transaction input* at a time, for that
+input's whole attempt budget, and releases it before the next input is
+admitted (`frostPreSignAnchoredInputCost` in
 `pkg/tbtc/frost_native_signer_anchor_admission.go`):
 
 ....
 perAttemptCalls = 4 * localSeats + 1
-perInputCalls   = 1 + maximumAttempts * perAttemptCalls
-revisions       = inputs * perInputCalls
+revisions       = 1 + maximumAttempts * perAttemptCalls
 generations     = 2 * revisions + 3
 ....
 
 The `4 * seats + 1` is `Open`, `Round1`, `Round2` and `Abort` for every
-local seat plus one memoized `Aggregate`; the leading `1` per input is
+local seat plus one memoized `Aggregate`; the leading `1` is
 `BuildTaprootTx`. Production parameters are `inputs <= 21`
 (`frostPreSignAuthorizationMaximumInputs`), `maximumAttempts = 5`
 (`signingAttemptsLimit` in `pkg/tbtc/node.go`), and up to 100 wallet
-seats (`frostPreSignAuthorizationMaximumSeats`, threshold 51).
+seats (`frostPreSignAuthorizationMaximumSeats`, threshold 51). At five
+attempts this closes to `20 * seats + 6` revisions and `40 * seats + 15`
+generations per input.
 
-At 21 inputs and 5 attempts:
+The batch size does not enter the reservation. A batch's inputs are
+signed strictly sequentially, so a one-input batch and a full sweep
+reserve the same thing - they just reserve it once per input.
 
 [cols="1,1,1,3"]
 |===
-| Local seats | Revisions reserved | Generations reserved | Admissible at 21 inputs?
+| Local seats | Revisions per input | Generations per input | Admissible?
 
-| 1 | 546  | 1095 | yes
-| 2 | 966  | 1935 | yes
-| 3 | 1386 | 2775 | yes
-| 4 | 1806 | 3615 | yes - this is the ceiling
-| 5 | 2226 | 4455 | *no*: exceeds the 4096 proof window; caps at 19 inputs
-| 6 | -    | -    | *no*: caps at 16 inputs
+| 1   | 26   | 55   | yes
+| 2   | 46   | 95   | yes
+| 4   | 86   | 175  | yes
+| 5   | 106  | 215  | yes
+| 20  | 406  | 815  | yes
+| 50  | 1006 | 2015 | yes
+| 100 | 2006 | 4015 | yes - the wallet's entire seat set on one node
 |===
 
-The 1-seat and 2-seat rows and the 4-seat ceiling are pinned by
-`TestFrostPreSignMaximumAnchorCapacityCost` and
-`TestFrostPreSignSeatCeilingResidual` in
-`pkg/tbtc/frost_native_signer_anchor_admission_test.go`; the rest
-follow from the same formula.
+The generation window binds first and the last seat count it covers is
+102, which a 100-seat wallet cannot exceed, so *no protocol-legal seat
+count is excluded from signing*. The rows above and the absence of a ceiling
+are pinned by `TestFrostPreSignMaximumAnchorCapacityCost` and
+`TestFrostPreSignPerInputReservationAdmitsMainnetSeatCounts` in
+`pkg/tbtc/frost_native_signer_anchor_admission_test.go`.
+
+[NOTE]
+====
+This replaces a batch-wide reservation - `inputs * perInputCalls`,
+holding the whole sweep's worst case from the first input to the last -
+which admitted at most *four* local seats for a 21-input sweep. On a
+hundred-seat wallet shared by roughly twenty operators with replacement
+sortition and no per-operator cap, that excluded most of the
+stake-weighted seats: wallets formed normally and then could not sweep,
+because the group never assembled its 51-seat signing threshold on a
+full-size batch. The arithmetic was simply wrong - inputs are signed
+sequentially, so the whole batch's window is never needed at once.
+
+The exchange is that a batch can now be admitted for its first inputs
+and refused part way through, after its authorization has already been
+relayed and finalized on chain. That refusal is fail-closed - the
+input's reservation is released, no share is produced, and the wallet
+action fails naming the rotation remedy - and it is separately countable
+as `frost_native_signer_anchor_admission_pre_sign_input_rejected_total`.
+The batch-wide charge did not actually prevent the window running out
+mid batch; it prevented most operators from starting one.
+====
 
 === What a completed workflow actually consumes
 
@@ -212,43 +242,62 @@ A workflow is admitted only while `cost <= headroom - alreadyReserved`
 in *both* dimensions and the smaller headroom is still above 256. Since
 the generation cost is roughly twice the revision cost while the
 consumption rates are comparable, the generation window always binds
-first. Starting from a fresh rotation (both windows at 4096) and
-running full-size sweeps one at a time:
+first. Because the reservation is now one input rather than a whole
+batch, a node keeps signing until its *consumption* - not its
+reservation - runs the window down: the refusal point is
+`max(257, 40 * localSeats + 15)` generations of headroom.
 
-[cols="1,1,3"]
+Starting from a fresh rotation (both windows at 4096) and running
+full-size sweeps one at a time:
+
+[cols="1,1,1,3"]
 |===
-| Local seats | Full-size sweeps per anchor epoch | Note
+| Local seats | Generations per 21-input sweep | Full-size sweeps per anchor epoch | Note
 
-| 1 | 15-29 | best case assumes one generation per anchored call
-| 2 | 7-13  |
-| 3 | 3-6   |
-| 4 | 1-2   | in both the best and the worst case the next sweep is
-              refused with 3508 generations still unspent
+| 1  | 105-210    | 18-36 | best case assumes one generation per anchored call
+| 2  | 168-336    | 11-22 |
+| 3  | 231-462    | 8-16  |
+| 4  | 294-588    | 6-13  |
+| 5  | 357-714    | 5-10  | the average mainnet holder; excluded entirely before this change
+| 20 | 1302-2604  | 1-2   |
+| 100| 6342-12684 | 0-0   | a single sweep consumes more than the whole window
 |===
 
-The 4-seat row is the operationally important one. A 4-seat node stops
-admitting full-size batches with 3508 of 4096 generations - 86% of its
-proof window - still unspent, purely because the *next* workflow's
-worst case no longer fits. Rotation cadence at production seat counts
-is therefore measured in a handful of sweeps, not in months of uptime.
+The 100-seat row is the honest edge of the model. Such a node is
+*admitted* for every input - the ceiling is gone - but a full sweep
+consumes more window than one epoch has, so it will be refused part way
+through and needs a rotation to finish. That is a throughput limit an
+offline ceremony fixes, not a permanent exclusion from the signing
+threshold, which is what the old ceiling was. It is also not a
+configuration any real wallet produces: one operator holding all 100
+seats of a 100-seat wallet is the protocol maximum, not a sortition
+result.
 
 NOTE: An earlier operability assessment put these at "1-2 at 4 seats,
-about 5 at 3 seats, about 28 at 1 seat". The 4-seat figure agrees and
-the 1-seat figure matches the optimistic end of the range here. The
-3-seat figure differs because this derivation counts three calls per
-seat on a successful attempt rather than four - `Abort` is suppressed
-for a seat that signed round 2, so four calls per seat is the shape of
-a *failed* attempt. Use the ranges above.
+about 5 at 3 seats, about 28 at 1 seat". Those figures were measured
+against the batch-wide reservation, where the *next* workflow's worst
+case, not consumption, decided when a node stopped. They no longer
+apply; use the ranges above.
 
 === Concurrency
 
 One admission controller is shared by pre-sign authorization, native
 DKG and DKG retirement, and each reservation holds its full worst case
-until its workflow exits. Two concurrent full-size workflows at 4 seats
-would need 7230 generations and can never both be admitted, so such a
-node serializes full-size work. The controller also intentionally
-double-counts in-flight mutations when admitting later work, so
-concurrent load reaches the refusal sooner than the table suggests.
+until the admitted unit of work exits. That unit is one input for
+pre-sign signing, so two wallets signing concurrently on one node hold
+one input's worth each - 350 generations at 4 seats, not the 7230 two
+full-size batches used to need - and they interleave between each
+other's inputs rather than serializing whole sweeps.
+
+Admission never waits: `reserve` takes one mutex, compares the cost
+against headroom minus everything currently reserved, and either
+succeeds or fails immediately. There is no queue to deadlock and no
+retry to livelock. Nor is there a large-request starvation path, because
+every pre-sign admission costs the same regardless of batch size - a
+21-input sweep asks for exactly what a 1-input redemption asks for. The
+controller also intentionally double-counts in-flight mutations when
+admitting later work, so concurrent load reaches the refusal sooner than
+the table suggests.
 
 === What an operator actually sees
 
@@ -258,10 +307,10 @@ There is no warning phase that names a remedy. In headroom order:
   still large but smaller than the next workflow's worst case:
 +
 ----
-FROST pre-sign authorization requires [3615] signer generations but only [3508] are unreserved
+FROST pre-sign authorization requires [815] signer generations but only [612] are unreserved
 ----
 +
-and the revision-dimension twin, `... requires [1806] anchor revisions
+and the revision-dimension twin, `... requires [406] anchor revisions
 but only [N] are unreserved`. The workflow label is
 `FROST pre-sign authorization`, `FROST native DKG` or
 `FROST native DKG retirement`. *This string does not mention rotation
@@ -274,7 +323,7 @@ dispatcher:
 ----
 action execution terminated with error: [FROST pre-sign authorization failed
 before nonce generation: [FROST pre-sign anchor admission failed: [FROST
-pre-sign authorization requires [3615] signer generations but only [3508]
+pre-sign authorization requires [815] signer generations but only [612]
 are unreserved]]]
 ----
 
@@ -631,9 +680,11 @@ derived above is run against real value.
   a `clientinfo` gauge for both headroom dimensions plus the
   rotation-warning flag.
 . *An alert threshold set well above the danger points* - above 256
-  (where all work stops) and above the node's own per-workflow
-  reservation for its seat count (3615 generations at 4 seats). An
-  alert that fires at 256 fires far too late.
+  (where all work stops), above the node's own per-input reservation for
+  its seat count (175 generations at 4 seats, 815 at 20), and above what
+  one full sweep consumes (up to 588 generations at 4 seats). An alert
+  that fires at 256 fires after the node has already abandoned a batch
+  whose authorization it paid to relay.
 . *A documented, rehearsed anchor-service epoch transition:* who opens
   epoch N+1 revision 1, how the frozen checkpoint and previous event
   root are supplied, and how the signed acknowledgement bytes are
@@ -643,10 +694,12 @@ derived above is run against real value.
   verified rollback if the certificate is rejected at startup.
 . *A decision on the 64-certificate lifetime bound,* including what a
   store does at certificate 64.
-. *A local-seat policy.* 5 or more local seats are excluded from
-  21-input batches entirely and lose those seats to the wallet's
-  signing threshold; 4 seats yields 1-2 sweeps per epoch. Decide the
-  supported seat count per node before sortition produces one.
+. *A local-seat policy.* No seat count is excluded from signing any
+  more, but seat count still sets rotation cadence: 4 seats yields 6-13
+  full-size sweeps per epoch, 20 seats yields 1-2, and above roughly 30
+  a single full-size sweep can no longer be completed inside one epoch.
+  Decide the supported seat count per node, and the rotation cadence
+  that goes with it, before sortition produces one.
 . *A consistency check before restart* over the three artifacts -
   certificate chain, init config, activation manifest - since each is
   verified against the others at startup and any mismatch is a

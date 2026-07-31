@@ -42,15 +42,16 @@ const (
 	// reserved, and would have to raise the frozen barrier ceiling with it.
 	frostNativeSignerMaximumGenerationAdvancesPerAnchoredCall uint64 = 3
 
-	// A workflow reservation cannot multiply the per-operation bound by its
-	// call count: at production parameters that reserves more of the certified
-	// proof window than exists, and excludes every operator holding three or
-	// more local seats from full-size batches. What actually bounds the
-	// consumption is the witness journal - generations advanced equals witness
-	// COMMITs, and every COMMIT belongs either to a persist that reached its
-	// rename or to the single witness that may have been carried into the
-	// workflow already prepared. The cost is therefore the number of persists
-	// that reach a rename, not the call count times the per-call ceiling.
+	// A reservation cannot multiply the per-operation bound by its call count:
+	// at production parameters that reserves more of the certified proof window
+	// than exists for large local seat counts - charging three per call puts one
+	// input's worth at 60*seats+21, which passes the 4096-entry window at 68
+	// local seats. What actually bounds the consumption is the witness journal -
+	// generations advanced equals witness COMMITs, and every COMMIT belongs
+	// either to a persist that reached its rename or to the single witness that
+	// may have been carried into the admitted work already prepared. The cost is
+	// therefore the number of persists that reach a rename, not the call count
+	// times the per-call ceiling.
 	//
 	// Two per call is the fault-free steady state, not a proven upper bound:
 	// the sweep prologue's snapshot plus the endpoint's own mutation. The
@@ -66,19 +67,27 @@ const (
 	// while the repair call that follows still pays its own sweep snapshot,
 	// its repair snapshot, and its own mutation. Each post-rename persist
 	// failure therefore costs roughly one generation more than this reserves;
-	// the workflow-wide allowance below is what absorbs them.
+	// the per-input allowance below is what absorbs them.
 	frostNativeSignerAmortizedGenerationAdvancesPerAnchoredCall uint64 = 2
 
-	// The workflow-wide allowance on top of the amortized per-call cost. It
-	// covers one witness prepared before admission and reconciled inside the
-	// workflow - prepare_witness refuses to prepare a second, so at most one
-	// is ever outstanding - plus roughly two further post-rename persist
-	// failures, each of which overruns the amortized bound by about one
-	// generation.
+	// The allowance added on top of the amortized per-call cost, once per
+	// admitted input. It covers one witness prepared before that input's
+	// admission and reconciled inside it - prepare_witness refuses to prepare a
+	// second, so at most one is ever outstanding - plus roughly two further
+	// post-rename persist failures, each of which overruns the amortized bound
+	// by about one generation.
+	//
+	// It is charged per input rather than once per batch because one input is
+	// the unit admission reserves: a batch signs its inputs strictly
+	// sequentially and each input takes and releases its own reservation, so
+	// each of them can meet a carried-in witness at its own boundary. A
+	// 21-input sweep therefore carries 21 of these allowances over its life
+	// rather than one, which is more slack than the batch-wide charge gave, not
+	// less.
 	//
 	// It is an allowance, not a proof, and the reservation it completes is not
 	// exact. Nothing in the signer bounds how many times a failing store can
-	// fail a persist after its rename, so a workflow that suffers more of them
+	// fail a persist after its rename, so an input that suffers more of them
 	// than this covers consumes more of the proof window than it reserved. The
 	// allowance is kept small deliberately: the slack that really absorbs
 	// faults is that most calls sweep nothing and spend one advance rather
@@ -87,15 +96,15 @@ const (
 	//
 	// The residual is fail-closed availability, never authority. The
 	// reservation only promises that the certified proof window can cover the
-	// whole workflow; overrunning it means that window can run out mid
-	// workflow. What an operator then sees is request-taking calls blocked
+	// admitted input; overrunning it means that window can run out part way
+	// through one. What an operator then sees is request-taking calls blocked
 	// with "the certified signer-generation window cannot cover its maximum
 	// advance; offline anchor rotation is required" and new pre-sign work
 	// rejected for want of unreserved headroom - on a node that was already
 	// failing every one of those persists. No share is released, no replay
 	// gate weakens, and the recovery is the offline anchor rotation that
 	// window exhaustion always requires.
-	frostNativeSignerTerminalGenerationAdvancesPerWorkflow uint64 = 3
+	frostNativeSignerTerminalGenerationAdvancesPerAdmittedInput uint64 = 3
 )
 
 type frostNativeSignerAnchorCapacity struct {
@@ -112,9 +121,28 @@ type frostNativeSignerAnchorCapacity struct {
 //
 // Pre-sign authorization and native DKG share one controller, so concurrent
 // workflows cannot consume either dimension already promised to admitted work.
-// Reservations retain their full worst-case cost until workflow exit. Because
-// current headroom already reflects consumed work, this intentionally
-// double-counts in-flight mutations for later admissions and is conservative.
+// Reservations retain their full worst-case cost until the admitted unit of
+// work exits. Because current headroom already reflects consumed work, this
+// intentionally double-counts in-flight mutations for later admissions and is
+// conservative.
+//
+// The admitted unit for pre-sign signing is ONE transaction input, not a whole
+// batch. A batch signs its inputs strictly sequentially, so no batch ever needs
+// more than one input's worth of unconsumed window at any instant; charging the
+// whole batch up front reserved 21 times what the peak demand is and put a hard
+// four-local-seat ceiling on an operator's ability to sign a full deposit sweep
+// at all. Nothing about that reservation is given up by charging per input: the
+// unit still covers every signing attempt for its input, so an admitted input
+// keeps its full retry budget, and the reservation is still taken before any
+// anchored call for that input runs.
+//
+// What is given up is the whole-batch promise. Under a per-input reservation a
+// batch can be admitted for input 0 and refused at input 7 because the window
+// ran out under it. That is a clean, fail-closed refusal - the input's
+// reservation is released, no share is produced, and the wallet action fails
+// with the rotation remedy named - and it replaces a guarantee that was
+// unpurchasable anyway: the whole-batch charge did not stop the window running
+// out mid batch, it only stopped most operators from starting one.
 type frostNativeSignerAnchorAdmissionController struct {
 	mutex sync.Mutex
 
@@ -153,11 +181,27 @@ func newFrostNativeSignerAnchorAdmissionController(
 	}, nil
 }
 
-// reservePreSign reserves the entire upper bound before backend authorization
-// or native signing begins. The readiness snapshot was independently
-// reconciled twice, but may be stale by the time this mutex is acquired. The
-// authenticated current tip is therefore read under the admission lock and the
-// smaller headroom in each dimension is authoritative.
+// reservePreSign reserves one input's complete upper bound. A pre-sign workflow
+// calls it once per input plus once up front, and every call charges the same
+// one-input cost:
+//
+//   - once inside authorize(), before the authorization is relayed on chain, so
+//     the relay is still gated by a node that has the capacity to act on it. It
+//     is released before the loop below starts, because the two are the same
+//     size and holding them together would charge two inputs for one input's
+//     work; and
+//   - once for each input of the sequential signing loop, released as soon as
+//     that input is signed or has failed.
+//
+// inputCount is the size of the batch this admission belongs to. It bounds
+// nothing in the cost - one input costs the same whether it is the only input
+// or one of twenty-one - and is taken so a batch outside the protocol's legal
+// range is refused here as well as at proposal validation.
+//
+// The readiness snapshot was independently reconciled twice, but may be stale
+// by the time this mutex is acquired. The authenticated current tip is
+// therefore read under the admission lock and the smaller headroom in each
+// dimension is authoritative.
 func (controller *frostNativeSignerAnchorAdmissionController) reservePreSign(
 	ctx context.Context,
 	snapshot *frostProductionSignerReadinessSnapshot,
@@ -341,15 +385,24 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 		)
 	}
 	// Both unreserved-headroom refusals name the same remedy as the
-	// rotation-floor refusal above. They are not a smaller version of it: a
-	// node refused here still has most of both windows unspent - a four-seat
-	// node is refused its next maximum-size sweep with 3508 of 4096 generations
-	// left - so the number in the message reads healthy and the refusal looks
-	// transient. It is not. Neither window refills on its own; only an
-	// offline-authorized rotation moves the certified floor forward, so this is
-	// the first message an operator of a correctly configured node sees, and it
-	// has to say what to do about it rather than leave rotation to be inferred
-	// from the far rarer floor refusal.
+	// rotation-floor refusal above. They are not a smaller version of it: a node
+	// refused here can still have a large part of both windows unspent - a
+	// fifty-seat node needs 2015 generations for its next input and is refused
+	// with 2015 of 4096 left, and a node sharing the window with other wallets
+	// is refused on what they hold rather than on what it has spent - so the
+	// number in the message reads healthy and the refusal looks transient. It is
+	// not. Neither window refills on its own; only an offline-authorized
+	// rotation moves the certified floor forward, so this is the first message
+	// an operator of a correctly configured node sees, and it has to say what to
+	// do about it rather than leave rotation to be inferred from the far rarer
+	// floor refusal.
+	//
+	// Since admission reserves one input at a time, this refusal can also land
+	// part way through a batch whose authorization is already relayed and
+	// finalized on chain. That is a deliberate trade - the batch-wide charge
+	// that would have caught it earlier is what excluded most operators from
+	// signing at all - and it is made visible by its own counter rather than
+	// hidden behind this message.
 	if controller.reserved.Revisions > headroom.Revisions ||
 		cost.Revisions >
 			headroom.Revisions-controller.reserved.Revisions {
@@ -470,9 +523,9 @@ func (reservation *frostNativeSignerAnchorRevisionReservation) Release() {
 	})
 }
 
-// frostPreSignMaximumAnchorCapacityCost freezes the upper bound for one
-// authorized transaction and rejects a workflow no certified restart window
-// can cover. For every input:
+// frostPreSignMaximumAnchorCapacityCost freezes the upper bound for ONE
+// admitted transaction input and rejects work no certified restart window can
+// cover. For that one input:
 //
 //   - BuildTaprootTx is one request-taking call;
 //   - every attempt lets each local seat call Open, Round1, Round2, and Abort;
@@ -480,44 +533,44 @@ func (reservation *frostNativeSignerAnchorRevisionReservation) Release() {
 //
 // Each of those calls can advance one service revision when its sweep prologue
 // mutates otherwise-unrelated state. The proof-window cost is the amortized
-// per-call generation bound times the anchored-call count plus the
-// workflow-wide terminal allowance, not the hard per-operation bound times
-// that count: no workflow can pay a repair advance on every one of its calls,
-// because every repair advance consumes a pending operation that only an
-// earlier failed persist creates. That makes the generation figure an
-// amortized reservation with a bounded allowance rather than an exact upper
-// bound - the constants above state precisely what it does not cover.
-// Attempt derivation, package/evidence handling, and authorization guards do
-// not persist Rust state.
+// per-call generation bound times the anchored-call count plus the per-input
+// terminal allowance, not the hard per-operation bound times that count: no
+// input can pay a repair advance on every one of its calls, because every
+// repair advance consumes a pending operation that only an earlier failed
+// persist creates. That makes the generation figure an amortized reservation
+// with a bounded allowance rather than an exact upper bound - the constants
+// above state precisely what it does not cover. Attempt derivation,
+// package/evidence handling, and authorization guards do not persist Rust
+// state.
 //
-// Both windows are finite, so the local seat count an operator can serve at a
-// given batch size is finite too. With production parameters (21 inputs, the
-// standard 20-deposit sweep plus its main UTXO, and 5 signing attempts) the
-// ceiling is four local seats. This is a real operational limit rather than an
-// accounting artifact: the windows bound how far a restarting node can still
-// prove its own history back to the last offline-authorized floor, and a
-// workflow admitted beyond them could not be recovered after a crash. A seat
-// above the ceiling is excluded from every batch of that size on every one of
-// its attempts, so the errors below name the ceiling explicitly - an operator
-// that crosses it would otherwise have to infer it from a wallet that quietly
-// stops reaching its signing threshold on full-size batches.
+// inputCount is validated but does not scale the cost. A batch's inputs are
+// signed strictly sequentially and each one holds its own reservation for its
+// own lifetime, so a batch never needs more than one input's worth of
+// unconsumed window at any instant. Charging the whole batch up front was the
+// arithmetic error this replaces: at production parameters (21 inputs, 5
+// signing attempts) it admitted at most four local seats, which on a
+// hundred-seat wallet shared by around twenty operators excluded most of the
+// stake-weighted seats and left formed wallets unable to sweep the deposits
+// they had already received.
 //
-// The ceiling of four is an accepted exclusion, not a solved problem. Five
-// seats in a hundred-seat wallet is an ordinary sortition result for a large
-// staker, one seat over the ceiling, and such a node is refused every standard
-// 20-deposit sweep: it tops out at 19 inputs, and a six-seat node at 16. Those
-// seats are lost to the wallet's signing threshold on full-size batches for as
-// long as the node holds them. Moving the ceiling requires enlarging the
-// certified restart windows or lowering the signing-attempt limit, both of
-// which are protocol-level changes to constants this function only reads, so
-// this accounting cannot make the exclusion smaller on its own.
+// A ceiling still exists in principle, because both windows are finite. One
+// input costs 20*seats+6 revisions and 40*seats+15 generations, so the
+// 4096-entry proof window is the binding one and the last seat count it covers
+// is 102. A wallet has only frostPreSignAuthorizationMaximumSeats (100) seats to
+// give in total, so no protocol-legal seat count is excluded and the ceiling is
+// unreachable rather than merely large. The rejections below are kept, and
+// still name the ceiling, because they are the guard that makes a future change
+// to the certified windows, the signing-attempt limit or the seat cap visible
+// instead of silent.
 func frostPreSignMaximumAnchorCapacityCost(
 	inputCount uint64,
 	localSeatCount uint64,
 	maximumSigningAttempts uint64,
 ) (frostNativeSignerAnchorCapacity, error) {
-	cost, err := frostPreSignAnchoredWorkflowCost(
-		inputCount,
+	if err := validateFrostPreSignAdmissionInputCount(inputCount); err != nil {
+		return frostNativeSignerAnchorCapacity{}, err
+	}
+	cost, err := frostPreSignAnchoredInputCost(
 		localSeatCount,
 		maximumSigningAttempts,
 	)
@@ -527,15 +580,12 @@ func frostPreSignMaximumAnchorCapacityCost(
 	if cost.Revisions > FrostNativeSignerAnchorMaximumHistoryEvents {
 		recordFrostNativeSignerAnchorSeatCeilingRejection()
 		return frostNativeSignerAnchorCapacity{}, fmt.Errorf(
-			"FROST pre-sign workflow over [%d] inputs with [%d] local seats "+
-				"requires [%d] anchor revisions, exceeding the certified history "+
-				"window [%d]; %s",
-			inputCount,
+			"one FROST pre-sign input with [%d] local seats requires [%d] "+
+				"anchor revisions, exceeding the certified history window [%d]; %s",
 			localSeatCount,
 			cost.Revisions,
 			FrostNativeSignerAnchorMaximumHistoryEvents,
 			frostPreSignAdmissibleLocalSeatAdvice(
-				inputCount,
 				localSeatCount,
 				maximumSigningAttempts,
 			),
@@ -544,15 +594,12 @@ func frostPreSignMaximumAnchorCapacityCost(
 	if cost.Generations > FrostNativeSignerAnchorMaximumHistoryProofEntries {
 		recordFrostNativeSignerAnchorSeatCeilingRejection()
 		return frostNativeSignerAnchorCapacity{}, fmt.Errorf(
-			"FROST pre-sign workflow over [%d] inputs with [%d] local seats "+
-				"requires [%d] signer generations, exceeding the certified proof "+
-				"window [%d]; %s",
-			inputCount,
+			"one FROST pre-sign input with [%d] local seats requires [%d] "+
+				"signer generations, exceeding the certified proof window [%d]; %s",
 			localSeatCount,
 			cost.Generations,
 			FrostNativeSignerAnchorMaximumHistoryProofEntries,
 			frostPreSignAdmissibleLocalSeatAdvice(
-				inputCount,
 				localSeatCount,
 				maximumSigningAttempts,
 			),
@@ -561,100 +608,77 @@ func frostPreSignMaximumAnchorCapacityCost(
 	return cost, nil
 }
 
+// validateFrostPreSignAdmissionInputCount refuses a batch outside the
+// protocol's legal size. Batch size no longer scales what admission reserves,
+// so this is a legality check rather than a cost input; it is kept here as well
+// as at proposal validation so a batch that never passed a proposal check
+// cannot reach the native signer through this path.
+func validateFrostPreSignAdmissionInputCount(inputCount uint64) error {
+	if inputCount == 0 ||
+		inputCount > uint64(frostPreSignAuthorizationMaximumInputs) {
+		return fmt.Errorf(
+			"FROST pre-sign anchor admission input count [%d] is outside [1,%d]",
+			inputCount,
+			frostPreSignAuthorizationMaximumInputs,
+		)
+	}
+	return nil
+}
+
 // frostPreSignAdmissibleLocalSeatAdvice states the seat ceiling that produced a
-// window rejection in operator-actionable terms, together with the largest
-// batch this node's own seat count could still have signed. Every local seat
-// above the ceiling is permanently excluded from batches of this size, and the
-// wallet loses those seats toward its signing threshold, so this belongs in the
-// error itself: the exclusion is otherwise visible only as a group that stops
-// assembling a threshold on full-size batches, with no node reporting a cause.
-// Both numbers are reported because both levers are the operator's - shed
-// seats, or sign smaller batches - and neither is inferable from the other.
+// window rejection in operator-actionable terms. Every local seat above the
+// ceiling is excluded from every batch, whatever its size, and the wallet loses
+// those seats toward its signing threshold, so this belongs in the error
+// itself: the exclusion is otherwise visible only as a group that stops
+// assembling a threshold, with no node reporting a cause.
+//
+// Only one lever is named now. Signing a smaller batch was the second lever
+// while the reservation scaled with the batch; it no longer helps at all,
+// because one input costs the same in a one-input batch as in a full sweep.
+// Offering it would send an operator to a remedy that cannot work.
 func frostPreSignAdmissibleLocalSeatAdvice(
-	inputCount uint64,
 	localSeatCount uint64,
 	maximumSigningAttempts uint64,
 ) string {
 	admissibleSeats := frostPreSignMaximumAdmissibleLocalSeatCount(
-		inputCount,
 		maximumSigningAttempts,
 	)
 	if admissibleSeats == 0 {
-		return fmt.Sprintf(
-			"no local seat count can sign [%d] inputs within the certified "+
-				"restart windows; the wallet cannot serve batches of this size "+
-				"until those windows or the signing-attempt limit change",
-			inputCount,
-		)
-	}
-	admissibleInputs := frostPreSignMaximumAdmissibleInputCount(
-		localSeatCount,
-		maximumSigningAttempts,
-	)
-	if admissibleInputs == 0 {
-		return fmt.Sprintf(
-			"at most [%d] local seats can sign [%d] inputs within the certified "+
-				"restart windows, and [%d] local seats can sign no batch size at "+
-				"all, so every local seat above that ceiling is excluded from "+
-				"every batch of this size and is lost to the wallet's signing "+
-				"threshold",
-			admissibleSeats,
-			inputCount,
-			localSeatCount,
-		)
+		return "no local seat count can sign a single pre-sign input within " +
+			"the certified restart windows; this wallet can serve no batch of " +
+			"any size until those windows or the signing-attempt limit change"
 	}
 	return fmt.Sprintf(
-		"at most [%d] local seats can sign [%d] inputs within the certified "+
-			"restart windows, and [%d] local seats can sign at most [%d] inputs, "+
-			"so every local seat above that ceiling is excluded from every batch "+
-			"of this size and is lost to the wallet's signing threshold",
+		"at most [%d] local seats can sign one pre-sign input within the "+
+			"certified restart windows and this node holds [%d], so it is "+
+			"excluded from every batch of every size and all of its seats are "+
+			"lost to the wallet's signing threshold; batch size is not a lever "+
+			"here - one input costs the same in a one-input batch as in a full "+
+			"sweep - so the only remedy is to shed seats down to [%d]",
 		admissibleSeats,
-		inputCount,
 		localSeatCount,
-		admissibleInputs,
+		admissibleSeats,
 	)
-}
-
-// frostPreSignMaximumAdmissibleInputCount reports the largest batch size this
-// local seat count can still sign within both certified restart windows, or
-// zero when no batch size can. Cost rises monotonically with the input count,
-// so the first rejection ends the scan.
-func frostPreSignMaximumAdmissibleInputCount(
-	localSeatCount uint64,
-	maximumSigningAttempts uint64,
-) uint64 {
-	admissibleInputs := uint64(0)
-	for inputs := uint64(1); inputs <=
-		uint64(frostPreSignAuthorizationMaximumInputs); inputs++ {
-		cost, err := frostPreSignAnchoredWorkflowCost(
-			inputs,
-			localSeatCount,
-			maximumSigningAttempts,
-		)
-		if err != nil ||
-			cost.Revisions > FrostNativeSignerAnchorMaximumHistoryEvents ||
-			cost.Generations >
-				FrostNativeSignerAnchorMaximumHistoryProofEntries {
-			break
-		}
-		admissibleInputs = inputs
-	}
-	return admissibleInputs
 }
 
 // frostPreSignMaximumAdmissibleLocalSeatCount reports the largest local seat
-// count whose complete worst-case workflow still fits both certified restart
-// windows at this input count, or zero when no seat count does. Cost rises
+// count whose complete worst-case single-input reservation still fits both
+// certified restart windows, or zero when no seat count does. Cost rises
 // monotonically with the seat count, so the first rejection ends the scan.
+//
+// It takes no input count: batch size does not enter the reservation any more,
+// so the answer is the same for a one-input batch and for a full sweep. The
+// scan stops at frostPreSignAuthorizationMaximumSeats because that is the most
+// seats a wallet has to give, and under the current constants every one of them
+// fits - a hundred-seat holder reserves 4015 of the 4096-entry proof window for
+// one input - so this returns the cap itself and the ceiling excludes nobody.
 func frostPreSignMaximumAdmissibleLocalSeatCount(
-	inputCount uint64,
 	maximumSigningAttempts uint64,
 ) uint64 {
 	admissibleSeats := uint64(0)
 	for seats := uint64(1); seats <=
 		uint64(frostPreSignAuthorizationMaximumSeats); seats++ {
-		cost, err := frostPreSignAnchoredWorkflowCost(
-			inputCount,
+		cost, err := frostPreSignAnchoredInputCost(
 			seats,
 			maximumSigningAttempts,
 		)
@@ -669,23 +693,14 @@ func frostPreSignMaximumAdmissibleLocalSeatCount(
 	return admissibleSeats
 }
 
-// frostPreSignAnchoredWorkflowCost is the window-independent arithmetic behind
-// frostPreSignMaximumAnchorCapacityCost. It is kept separate so the seat
-// ceiling can be scanned without re-entering the window diagnostics that report
-// it.
-func frostPreSignAnchoredWorkflowCost(
-	inputCount uint64,
+// frostPreSignAnchoredInputCost is the window-independent arithmetic behind
+// frostPreSignMaximumAnchorCapacityCost, for exactly one transaction input. It
+// is kept separate so the seat ceiling can be scanned without re-entering the
+// window diagnostics that report it.
+func frostPreSignAnchoredInputCost(
 	localSeatCount uint64,
 	maximumSigningAttempts uint64,
 ) (frostNativeSignerAnchorCapacity, error) {
-	if inputCount == 0 ||
-		inputCount > uint64(frostPreSignAuthorizationMaximumInputs) {
-		return frostNativeSignerAnchorCapacity{}, fmt.Errorf(
-			"FROST pre-sign anchor admission input count [%d] is outside [1,%d]",
-			inputCount,
-			frostPreSignAuthorizationMaximumInputs,
-		)
-	}
 	if localSeatCount == 0 ||
 		localSeatCount > uint64(frostPreSignAuthorizationMaximumSeats) {
 		return frostNativeSignerAnchorCapacity{}, fmt.Errorf(
@@ -712,15 +727,9 @@ func frostPreSignAnchoredWorkflowCost(
 			"FROST pre-sign anchored-call cost overflow",
 		)
 	}
-	perInputCalls := uint64(1) + maximumSigningAttempts*perAttemptCalls
-	if inputCount > maxUint64/perInputCalls {
-		return frostNativeSignerAnchorCapacity{}, fmt.Errorf(
-			"FROST pre-sign anchored-call cost overflow",
-		)
-	}
-	revisions := inputCount * perInputCalls
+	revisions := uint64(1) + maximumSigningAttempts*perAttemptCalls
 	if revisions > (maxUint64-
-		frostNativeSignerTerminalGenerationAdvancesPerWorkflow)/
+		frostNativeSignerTerminalGenerationAdvancesPerAdmittedInput)/
 		frostNativeSignerAmortizedGenerationAdvancesPerAnchoredCall {
 		return frostNativeSignerAnchorCapacity{}, fmt.Errorf(
 			"FROST pre-sign generation cost overflow",
@@ -728,7 +737,7 @@ func frostPreSignAnchoredWorkflowCost(
 	}
 	generations := revisions*
 		frostNativeSignerAmortizedGenerationAdvancesPerAnchoredCall +
-		frostNativeSignerTerminalGenerationAdvancesPerWorkflow
+		frostNativeSignerTerminalGenerationAdvancesPerAdmittedInput
 
 	return frostNativeSignerAnchorCapacity{
 		Revisions:   revisions,
@@ -741,7 +750,7 @@ func frostPreSignAnchoredWorkflowCost(
 // work it can actually be asked to admit rather than against a flat number.
 //
 // localSeatCount is the largest number of local seats this node holds in any
-// one wallet, because a pre-sign workflow is per wallet and reserves against
+// one wallet, because a pre-sign reservation is per wallet and reserves against
 // that wallet's local member indexes. It is a parameter rather than something
 // derived here because this file has no view of the node's sortition result;
 // guessing it would be worse than requiring the caller that does know it to
@@ -751,15 +760,18 @@ func frostPreSignAnchoredWorkflowCost(
 // as a hard lower bound, and this condition is added to it rather than
 // substituted for it, because the two guard different things. The flat floor
 // guards the rotation-blocked refusal in reserve(): at or below it ALL new work
-// is refused regardless of size, so a node that reaches it has already stopped
-// signing outright. That makes it a useless warning threshold, because
-// admission stops long before it is reached. A node holding four local seats -
-// an ordinary sortition result, and the ceiling for the standard 21-input
-// sweep - reserves 3615 generations for one maximum-size workflow, so its next
-// sweep is refused with 3508 of the 4096 generations still unspent, roughly
-// 3359 generations before the flat warning would fire. An operator alerting on
-// the flat flag alone learns that the node stopped signing long after it
-// stopped signing.
+// is refused regardless of size. This term guards the earlier moment at which
+// this particular node stops being able to admit an input of its own.
+//
+// Which of the two fires first now depends on the seat count, and that is the
+// honest answer rather than a weakness. One input costs 40*seats+15
+// generations, so a node holding six or fewer local seats needs less than the
+// flat floor's 256 and the flat floor is genuinely the binding warning for it;
+// a node holding fifty reserves 2015 and is warned about 1759 generations
+// earlier than the flat floor would. While the reservation covered a whole
+// batch this term was doing far heavier lifting - a four-seat node then
+// reserved 3615 generations at once and stopped signing 3359 generations before
+// the flat floor - and that gap is exactly what reserving per input removed.
 //
 // Each window is compared against its own dimension's cost rather than
 // comparing the smaller headroom against the generation cost. The generation
@@ -767,21 +779,9 @@ func frostPreSignAnchoredWorkflowCost(
 // warning on the revision window for a shortfall that only the generation
 // window has.
 //
-// The measuring stick is deliberately the largest ADMISSIBLE workflow, not
-// unconditionally a 21-input batch. A node above the seat ceiling can never be
-// admitted for 21 inputs at all, and its 21-input cost exceeds the whole
-// 4096-entry window, so measuring it that way would latch this warning on for
-// the life of the process; because the warning also forces the activation
-// handshake's top-level health to false, that would take an otherwise healthy
-// five-seat node out of service for a seat-ceiling exclusion no rotation can
-// fix. frostPreSignMaximumAdmissibleInputCount reports what this seat count can
-// actually be admitted for, so a five-seat node is measured against its own
-// 19-input maximum.
-//
 // Native DKG and DKG retirement share the same admission controller but reserve
-// two capacity units per local seat - orders of magnitude below a pre-sign
-// workflow - so the pre-sign cost bounds them too and they need no separate
-// term.
+// two capacity units per local seat - well below one pre-sign input - so the
+// pre-sign cost bounds them too and they need no separate term.
 func frostNativeSignerAnchorWorkloadRotationWarning(
 	revisionHeadroom uint64,
 	generationHeadroom uint64,
@@ -805,31 +805,29 @@ func frostNativeSignerAnchorWorkloadRotationWarning(
 }
 
 // frostNativeSignerAnchorLargestAdmissibleWorkflowCost reports the worst-case
-// capacity one pre-sign workflow can reserve on a node holding this many local
-// seats in a single wallet, together with whether any workflow is admissible at
-// all.
+// capacity one pre-sign admission can reserve on a node holding this many local
+// seats in a single wallet, together with whether anything is admissible at
+// all. That is one input's cost: admission's unit is an input, and a batch
+// never holds more than one input's reservation at a time.
 //
-// It reports false, rather than a cost, for a seat count that no batch size can
-// serve and for a seat count of zero. Both mean the same thing for this
+// It reports false, rather than a cost, for a seat count no single input can be
+// admitted for and for a seat count of zero. Both mean the same thing for this
 // purpose: pre-sign admission is not what will consume the windows, so only the
 // flat rotation floor is a meaningful warning threshold, and inventing a cost
 // here would warn permanently on a node whose seats a rotation cannot restore.
 func frostNativeSignerAnchorLargestAdmissibleWorkflowCost(
 	localSeatCount uint64,
 ) (frostNativeSignerAnchorCapacity, bool) {
-	admissibleInputs := frostPreSignMaximumAdmissibleInputCount(
-		localSeatCount,
-		signingAttemptsLimit,
-	)
-	if admissibleInputs == 0 {
+	if localSeatCount == 0 {
 		return frostNativeSignerAnchorCapacity{}, false
 	}
-	cost, err := frostPreSignAnchoredWorkflowCost(
-		admissibleInputs,
+	cost, err := frostPreSignAnchoredInputCost(
 		localSeatCount,
 		signingAttemptsLimit,
 	)
-	if err != nil {
+	if err != nil ||
+		cost.Revisions > FrostNativeSignerAnchorMaximumHistoryEvents ||
+		cost.Generations > FrostNativeSignerAnchorMaximumHistoryProofEntries {
 		return frostNativeSignerAnchorCapacity{}, false
 	}
 	return cost, true
@@ -842,13 +840,16 @@ func frostNativeSignerAnchorLargestAdmissibleWorkflowCost(
 // is registered with clientinfo at all, so a monitoring system cannot tell a
 // node that is refusing every signing request from one that simply has not been
 // asked. These process-wide cumulative counters make each refusal cause
-// countable on its own, because the four causes need four different responses:
+// countable on its own, because the five causes need five different responses:
 //
 //   - seatCeiling is a CONFIGURATION signal. It never clears on its own and no
 //     rotation fixes it: this node holds more local seats than the certified
-//     windows can serve at the requested batch size, and those seats are lost to
-//     the wallet's signing threshold until the operator sheds them. Any non-zero
-//     value should alert.
+//     windows can serve for a single transaction input, and those seats are lost
+//     to the wallet's signing threshold until the operator sheds them. Any
+//     non-zero value should alert. Under the current constants it is
+//     unreachable - a wallet's whole hundred-seat set costs 4015 of the
+//     4096-entry proof window for one input - so a non-zero value means a
+//     protocol constant moved, which is exactly why the counter is kept.
 //   - poisoned is a TERMINAL signal. The state anchor has latched a permanent
 //     failure and only a process restart clears it. Any non-zero value should
 //     alert.
@@ -857,6 +858,15 @@ func frostNativeSignerAnchorLargestAdmissibleWorkflowCost(
 //     both windows are still unspent.
 //   - rotationFloor is the ROTATION-OVERDUE signal. All new work is already
 //     being refused regardless of size.
+//   - preSignInput is the WORK-LOST signal, and it is the one that costs money.
+//     A batch is admitted one input at a time, so a batch whose authorization
+//     has already been relayed and finalized on chain can still be refused at
+//     input 7 of 21 when the window runs out under it. The gas is spent, the
+//     wallet action fails, and the underlying cause is counted by
+//     unreservedHeadroom or rotationFloor alongside it - this counter is what
+//     separates "refused before we spent anything" from "refused after we did".
+//     It counts refusals of the per-input reservation, including the first
+//     input's, because at that point the relay has already happened either way.
 //
 // They follow the roast_interactive_signing_metrics.go pattern, are emitted in
 // every build, and stay at zero until an admission is actually refused - so
@@ -866,6 +876,7 @@ var (
 	frostNativeSignerAnchorUnreservedHeadroomRejections atomic.Uint64
 	frostNativeSignerAnchorRotationFloorRejections      atomic.Uint64
 	frostNativeSignerAnchorPoisonedRejections           atomic.Uint64
+	frostNativeSignerAnchorPreSignInputRejections       atomic.Uint64
 )
 
 // frostNativeSignerAnchorAdmissionMetricsApplication is the clientinfo
@@ -879,6 +890,7 @@ const (
 	frostNativeSignerAnchorUnreservedHeadroomMetricName = "unreserved_headroom_rejected_total"
 	frostNativeSignerAnchorRotationFloorMetricName      = "rotation_floor_rejected_total"
 	frostNativeSignerAnchorPoisonedMetricName           = "poisoned_rejected_total"
+	frostNativeSignerAnchorPreSignInputMetricName       = "pre_sign_input_rejected_total"
 )
 
 // RegisterFrostNativeSignerAnchorAdmissionMetrics registers the cumulative
@@ -916,13 +928,18 @@ func RegisterFrostNativeSignerAnchorAdmissionMetrics(
 					frostNativeSignerAnchorPoisonedRejections.Load(),
 				)
 			},
+			frostNativeSignerAnchorPreSignInputMetricName: func() float64 {
+				return float64(
+					frostNativeSignerAnchorPreSignInputRejections.Load(),
+				)
+			},
 		},
 	)
 }
 
-// recordFrostNativeSignerAnchorSeatCeilingRejection marks one workflow refused
-// because its worst case cannot fit a certified restart window at this node's
-// local seat count.
+// recordFrostNativeSignerAnchorSeatCeilingRejection marks one admission refused
+// because one input's worst case cannot fit a certified restart window at this
+// node's local seat count.
 func recordFrostNativeSignerAnchorSeatCeilingRejection() {
 	frostNativeSignerAnchorSeatCeilingRejections.Add(1)
 }
@@ -946,6 +963,13 @@ func recordFrostNativeSignerAnchorPoisonedRejection() {
 	frostNativeSignerAnchorPoisonedRejections.Add(1)
 }
 
+// recordFrostNativeSignerAnchorPreSignInputRejection marks one input of an
+// already-relayed pre-sign batch refused for want of anchor capacity. The cause
+// is counted separately by whichever reserve() refusal produced it.
+func recordFrostNativeSignerAnchorPreSignInputRejection() {
+	frostNativeSignerAnchorPreSignInputRejections.Add(1)
+}
+
 // resetFrostNativeSignerAnchorAdmissionMetricsForTest clears the cumulative
 // counters. Exposed only for the package's own tests; not a production helper.
 func resetFrostNativeSignerAnchorAdmissionMetricsForTest() {
@@ -953,4 +977,5 @@ func resetFrostNativeSignerAnchorAdmissionMetricsForTest() {
 	frostNativeSignerAnchorUnreservedHeadroomRejections.Store(0)
 	frostNativeSignerAnchorRotationFloorRejections.Store(0)
 	frostNativeSignerAnchorPoisonedRejections.Store(0)
+	frostNativeSignerAnchorPreSignInputRejections.Store(0)
 }

@@ -10,7 +10,15 @@ import (
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
+// TestFrostPreSignMaximumAnchorCapacityCost pins the reservation contract:
+// anchor admission charges for ONE transaction input, and the batch that input
+// belongs to does not scale it. Inputs are signed strictly sequentially, so a
+// batch never needs more than one input's worth of unconsumed window at any
+// instant; charging the whole batch reserved 21 times the peak demand.
 func TestFrostPreSignMaximumAnchorCapacityCost(t *testing.T) {
+	// One input with one local seat: BuildTaprootTx, then five attempts of
+	// (Open, Round1, Round2, Abort) per seat plus one memoized Aggregate, so
+	// 1 + 5*(4*1+1) = 26 revisions and 2*26+3 = 55 generations.
 	cost, err := frostPreSignMaximumAnchorCapacityCost(
 		frostPreSignAuthorizationMaximumInputs,
 		1,
@@ -19,53 +27,109 @@ func TestFrostPreSignMaximumAnchorCapacityCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cost.Revisions != 546 || cost.Generations != 1095 {
-		t.Fatalf("unexpected single-seat maximum cost [%+v]", cost)
-	}
-	if cost.Revisions > FrostNativeSignerAnchorMaximumHistoryEvents ||
-		cost.Generations > FrostNativeSignerAnchorMaximumHistoryProofEntries {
-		t.Fatalf(
-			"single-seat maximum [%+v] exceeds restart windows [%d/%d]",
-			cost,
-			FrostNativeSignerAnchorMaximumHistoryEvents,
-			FrostNativeSignerAnchorMaximumHistoryProofEntries,
-		)
+	if cost.Revisions != 26 || cost.Generations != 55 {
+		t.Fatalf("unexpected single-seat per-input cost [%+v]", cost)
 	}
 
-	multiSeatCost, err := frostPreSignMaximumAnchorCapacityCost(
-		frostPreSignAuthorizationMaximumInputs,
+	// The batch size is validated but must not enter the cost. A one-input
+	// batch and a full sweep reserve exactly the same thing, because they
+	// reserve it once per input either way.
+	for _, inputCount := range []uint64{
+		1,
 		2,
-		signingAttemptsLimit,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if multiSeatCost.Revisions != 966 ||
-		multiSeatCost.Generations != 1935 {
-		t.Fatalf("unexpected multi-seat maximum cost [%+v]", multiSeatCost)
-	}
-
-	// Three and four local seats are an ordinary sortition result in a
-	// hundred-seat wallet, and a twenty-one-input batch is the standard
-	// deposit sweep maximum. Both must be admissible at the maximum batch
-	// size: a seat excluded here is lost to the wallet's signing threshold on
-	// every batch of that size, and enough excluded seats stop the group from
-	// assembling a threshold at all.
-	for _, seats := range []uint64{3, 4} {
-		seatCost, err := frostPreSignMaximumAnchorCapacityCost(
-			frostPreSignAuthorizationMaximumInputs,
-			seats,
+		uint64(frostPreSignAuthorizationMaximumInputs),
+	} {
+		batchCost, err := frostPreSignMaximumAnchorCapacityCost(
+			inputCount,
+			1,
 			signingAttemptsLimit,
 		)
 		if err != nil {
-			t.Fatalf("maximum batch with [%d] local seats was rejected: %v", seats, err)
+			t.Fatalf("[%d]-input batch was rejected: %v", inputCount, err)
+		}
+		if batchCost != cost {
+			t.Fatalf(
+				"[%d]-input batch reserved [%+v], not the per-input [%+v]; the "+
+					"reservation is scaling with the batch again",
+				inputCount,
+				batchCost,
+				cost,
+			)
+		}
+	}
+
+	// An illegal batch size is still refused here, so a batch that never
+	// passed proposal validation cannot reach the native signer this way.
+	for _, inputCount := range []uint64{
+		0,
+		uint64(frostPreSignAuthorizationMaximumInputs) + 1,
+	} {
+		if _, err := frostPreSignMaximumAnchorCapacityCost(
+			inputCount,
+			1,
+			signingAttemptsLimit,
+		); err == nil || !strings.Contains(err.Error(), "input count") {
+			t.Fatalf(
+				"[%d]-input batch was admitted: [%v]",
+				inputCount,
+				err,
+			)
+		}
+	}
+
+	// The seat counts that matter operationally. Mainnet sortition samples a
+	// hundred-seat wallet with replacement across roughly twenty operators, so
+	// the average holder has five seats and a large staker can hold twenty or
+	// more. Every one of them must be able to sign a full 20-deposit sweep plus
+	// its main UTXO; a seat excluded here is lost to the wallet's signing
+	// threshold, and enough excluded seats leave a formed wallet unable to move
+	// the deposits it has already received.
+	for _, test := range []struct {
+		seats       uint64
+		revisions   uint64
+		generations uint64
+	}{
+		{seats: 1, revisions: 26, generations: 55},
+		{seats: 4, revisions: 86, generations: 175},
+		{seats: 5, revisions: 106, generations: 215},
+		{seats: 20, revisions: 406, generations: 815},
+		// The whole wallet held by one operator - not a realistic sortition
+		// result, but the protocol's own maximum, and it has to fit for the
+		// ceiling to be gone rather than merely moved.
+		{
+			seats:       uint64(frostPreSignAuthorizationMaximumSeats),
+			revisions:   2006,
+			generations: 4015,
+		},
+	} {
+		seatCost, err := frostPreSignMaximumAnchorCapacityCost(
+			frostPreSignAuthorizationMaximumInputs,
+			test.seats,
+			signingAttemptsLimit,
+		)
+		if err != nil {
+			t.Fatalf(
+				"maximum batch with [%d] local seats was rejected: %v",
+				test.seats,
+				err,
+			)
+		}
+		if seatCost.Revisions != test.revisions ||
+			seatCost.Generations != test.generations {
+			t.Fatalf(
+				"[%d]-seat per-input cost [%+v], expected [%d/%d]",
+				test.seats,
+				seatCost,
+				test.revisions,
+				test.generations,
+			)
 		}
 		if seatCost.Revisions > FrostNativeSignerAnchorMaximumHistoryEvents ||
 			seatCost.Generations >
 				FrostNativeSignerAnchorMaximumHistoryProofEntries {
 			t.Fatalf(
-				"[%d]-seat maximum [%+v] exceeds restart windows [%d/%d]",
-				seats,
+				"[%d]-seat per-input cost [%+v] exceeds restart windows [%d/%d]",
+				test.seats,
 				seatCost,
 				FrostNativeSignerAnchorMaximumHistoryEvents,
 				FrostNativeSignerAnchorMaximumHistoryProofEntries,
@@ -73,30 +137,104 @@ func TestFrostPreSignMaximumAnchorCapacityCost(t *testing.T) {
 		}
 	}
 
-	// The windows are finite, so the ceiling is real and must stay pinned
-	// where the accounting actually puts it. Crossing it is reported with the
-	// ceiling itself, because a node above it is otherwise silently excluded
-	// from every batch of this size.
+	// The ceiling is gone rather than moved: every seat count a wallet can
+	// award fits. The closed form is 40*seats+15 generations, which passes the
+	// 4096-entry proof window only at 103 seats, and a wallet has 100 to give.
 	if admissibleSeats := frostPreSignMaximumAdmissibleLocalSeatCount(
-		frostPreSignAuthorizationMaximumInputs,
 		signingAttemptsLimit,
-	); admissibleSeats != 4 {
+	); admissibleSeats != uint64(frostPreSignAuthorizationMaximumSeats) {
 		t.Fatalf(
-			"unexpected maximum-batch local seat ceiling [%d]",
+			"local seat ceiling is [%d], expected every one of the wallet's "+
+				"[%d] seats to be admissible",
 			admissibleSeats,
+			frostPreSignAuthorizationMaximumSeats,
 		)
 	}
-	_, err = frostPreSignMaximumAnchorCapacityCost(
-		frostPreSignAuthorizationMaximumInputs,
-		5,
+}
+
+// TestFrostPreSignPerInputReservationAdmitsMainnetSeatCounts is the regression
+// this change exists for. Charging a whole batch up front admitted at most four
+// local seats for a 21-input sweep. Mainnet runs a hundred-seat wallet across
+// roughly twenty operators with replacement sortition and no per-operator cap,
+// so the average operator holds five seats: wallets formed normally and then
+// could not sweep, because most of the stake-weighted seats were refused every
+// full-size batch and the group never reached its signing threshold.
+//
+// Reserving per input removes the exclusion outright rather than raising the
+// bar, and this test states both halves - that the old arithmetic really did
+// refuse these operators, and that the new one admits them.
+func TestFrostPreSignPerInputReservationAdmitsMainnetSeatCounts(t *testing.T) {
+	const maximumInputs = uint64(frostPreSignAuthorizationMaximumInputs)
+
+	for _, seats := range []uint64{
+		1, 4, 5, 6, 7, 10, 20, 50,
+		uint64(frostPreSignAuthorizationMaximumSeats),
+	} {
+		cost, err := frostPreSignMaximumAnchorCapacityCost(
+			maximumInputs,
+			seats,
+			signingAttemptsLimit,
+		)
+		if err != nil {
+			t.Fatalf(
+				"[%d] local seats cannot sign a [%d]-input sweep: %v",
+				seats,
+				maximumInputs,
+				err,
+			)
+		}
+
+		// The reservation an operator of this size is charged has to be
+		// coverable by a freshly rotated window with room to keep working, not
+		// merely to fit inside it once.
+		if cost.Generations >=
+			uint64(FrostNativeSignerAnchorMaximumHistoryProofEntries) &&
+			seats != uint64(frostPreSignAuthorizationMaximumSeats) {
+			t.Fatalf(
+				"[%d] local seats reserve [%d] of the [%d]-entry proof window "+
+					"for one input",
+				seats,
+				cost.Generations,
+				FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			)
+		}
+
+		// What the batch-wide charge would have been for the same operator.
+		// Anything over the window is an operator the old accounting excluded.
+		batchGenerations := maximumInputs*cost.Revisions*
+			frostNativeSignerAmortizedGenerationAdvancesPerAnchoredCall +
+			frostNativeSignerTerminalGenerationAdvancesPerAdmittedInput
+		excludedBefore := batchGenerations >
+			uint64(FrostNativeSignerAnchorMaximumHistoryProofEntries)
+		if seats >= 5 && !excludedBefore {
+			t.Fatalf(
+				"[%d] local seats were not excluded by the batch-wide charge "+
+					"([%d] generations); this test no longer covers the defect",
+				seats,
+				batchGenerations,
+			)
+		}
+	}
+
+	// The five-seat operator is the average mainnet holder and the first one
+	// the old ceiling of four excluded. Pin it as a number so a regression
+	// reads as this test failing rather than as wallets quietly not sweeping.
+	fiveSeatCost, err := frostPreSignAnchoredInputCost(5, signingAttemptsLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fiveSeatCost.Revisions != 106 || fiveSeatCost.Generations != 215 {
+		t.Fatalf("unexpected five-seat per-input cost [%+v]", fiveSeatCost)
+	}
+	twentySeatCost, err := frostPreSignAnchoredInputCost(
+		20,
 		signingAttemptsLimit,
 	)
-	if err == nil || !strings.Contains(err.Error(), "proof window") {
-		t.Fatalf("oversized workflow was accepted: [%v]", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "at most [4] local seats") ||
-		!strings.Contains(err.Error(), "signing threshold") {
-		t.Fatalf("oversized workflow did not report its seat ceiling: [%v]", err)
+	if twentySeatCost.Revisions != 406 || twentySeatCost.Generations != 815 {
+		t.Fatalf("unexpected twenty-seat per-input cost [%+v]", twentySeatCost)
 	}
 }
 
@@ -131,16 +269,13 @@ func TestFrostPreSignGenerationReservationIsAmortizedNotWorstCase(t *testing.T) 
 		)
 	}
 
-	for _, test := range []struct {
-		inputCount     uint64
-		localSeatCount uint64
-	}{
-		{inputCount: 1, localSeatCount: 1},
-		{inputCount: frostPreSignAuthorizationMaximumInputs, localSeatCount: 4},
+	for _, localSeatCount := range []uint64{
+		1,
+		4,
+		uint64(frostPreSignAuthorizationMaximumSeats),
 	} {
-		cost, err := frostPreSignAnchoredWorkflowCost(
-			test.inputCount,
-			test.localSeatCount,
+		cost, err := frostPreSignAnchoredInputCost(
+			localSeatCount,
 			signingAttemptsLimit,
 		)
 		if err != nil {
@@ -148,13 +283,11 @@ func TestFrostPreSignGenerationReservationIsAmortizedNotWorstCase(t *testing.T) 
 		}
 		expected := cost.Revisions*
 			frostNativeSignerAmortizedGenerationAdvancesPerAnchoredCall +
-			frostNativeSignerTerminalGenerationAdvancesPerWorkflow
+			frostNativeSignerTerminalGenerationAdvancesPerAdmittedInput
 		if cost.Generations != expected {
 			t.Fatalf(
-				"[%d] inputs with [%d] seats reserved [%d] generations, not the "+
-					"amortized [%d]",
-				test.inputCount,
-				test.localSeatCount,
+				"[%d] seats reserved [%d] generations, not the amortized [%d]",
+				localSeatCount,
 				cost.Generations,
 				expected,
 			)
@@ -165,92 +298,121 @@ func TestFrostPreSignGenerationReservationIsAmortizedNotWorstCase(t *testing.T) 
 		if cost.Generations >= cost.Revisions*frostsigning.
 			NativeTBTCSignerStateAnchorEngineReachableGenerationAdvancePerOperation {
 			t.Fatalf(
-				"[%d] inputs with [%d] seats reserved the per-call worst case "+
-					"[%d] rather than an amortized bound",
-				test.inputCount,
-				test.localSeatCount,
+				"[%d] seats reserved the per-call worst case [%d] rather than "+
+					"an amortized bound",
+				localSeatCount,
 				cost.Generations,
 			)
 		}
 	}
 }
 
-// TestFrostPreSignSeatCeilingResidual pins the exclusion the amortized
-// reservation still leaves in place. Four local seats is the ceiling at the
-// standard maximum batch, so a five-seat holder in a hundred-seat wallet - an
-// ordinary sortition result for a large staker, one seat over - is refused
-// every 20-deposit sweep, and those seats are lost to the wallet's signing
-// threshold. That is an accepted operational limit; moving it needs the
-// certified windows or the attempt limit to change, so the numbers are pinned
-// here and reported in the rejection itself.
-func TestFrostPreSignSeatCeilingResidual(t *testing.T) {
-	if admissibleSeats := frostPreSignMaximumAdmissibleLocalSeatCount(
-		frostPreSignAuthorizationMaximumInputs,
-		signingAttemptsLimit,
-	); admissibleSeats != 4 {
-		t.Fatalf(
-			"unexpected maximum-batch local seat ceiling [%d]",
-			admissibleSeats,
-		)
-	}
-	for _, test := range []struct {
-		localSeatCount      uint64
-		admissibleInputs    uint64
-		servesStandardSweep bool
-	}{
-		{localSeatCount: 4, admissibleInputs: 21, servesStandardSweep: true},
-		{localSeatCount: 5, admissibleInputs: 19, servesStandardSweep: false},
-		{localSeatCount: 6, admissibleInputs: 16, servesStandardSweep: false},
-	} {
-		admissibleInputs := frostPreSignMaximumAdmissibleInputCount(
-			test.localSeatCount,
+// TestFrostPreSignSeatCeilingGuardStillFires pins that the seat-ceiling refusal
+// is unreachable rather than deleted. Nothing a wallet can award trips it now -
+// one input costs 40*seats+15 generations and a wallet has a hundred seats to
+// give - but it is the guard that would catch a raised signing-attempt limit or
+// a shrunken certified window before it silently excluded operators again, so
+// it must keep working and keep naming the ceiling.
+func TestFrostPreSignSeatCeilingGuardStillFires(t *testing.T) {
+	resetFrostNativeSignerAnchorAdmissionMetricsForTest()
+	t.Cleanup(resetFrostNativeSignerAnchorAdmissionMetricsForTest)
+
+	// No protocol-legal seat count is refused under the shipped constants.
+	for seats := uint64(1); seats <=
+		uint64(frostPreSignAuthorizationMaximumSeats); seats++ {
+		if _, err := frostPreSignMaximumAnchorCapacityCost(
+			uint64(frostPreSignAuthorizationMaximumInputs),
+			seats,
 			signingAttemptsLimit,
+		); err != nil {
+			t.Fatalf("[%d] local seats were refused: %v", seats, err)
+		}
+	}
+	if rejections :=
+		frostNativeSignerAnchorSeatCeilingRejections.Load(); rejections != 0 {
+		t.Fatalf(
+			"the seat ceiling refused [%d] admissible seat counts",
+			rejections,
 		)
-		if admissibleInputs != test.admissibleInputs {
-			t.Fatalf(
-				"[%d] local seats top out at [%d] inputs, expected [%d]",
-				test.localSeatCount,
-				admissibleInputs,
-				test.admissibleInputs,
-			)
-		}
-		if servesStandardSweep := admissibleInputs >=
-			uint64(frostPreSignAuthorizationMaximumInputs); servesStandardSweep !=
-			test.servesStandardSweep {
-			t.Fatalf(
-				"[%d] local seats serving the standard sweep is [%t], expected [%t]",
-				test.localSeatCount,
-				servesStandardSweep,
-				test.servesStandardSweep,
-			)
-		}
 	}
 
-	// The rejection has to name both levers the operator holds: how many seats
-	// this batch admits, and how large a batch these seats admit. Neither is
-	// inferable from the other, and the exclusion is otherwise visible only as
-	// a wallet that quietly stops reaching its signing threshold.
+	// A raised attempt limit is the change most likely to move the ceiling
+	// back into reach, so it is what drives the guard here. At twenty attempts
+	// one input costs 160*seats+45 generations and the proof window binds at
+	// twenty-five local seats.
+	const attempts = uint64(20)
+	if ceiling := frostPreSignMaximumAdmissibleLocalSeatCount(
+		attempts,
+	); ceiling != 25 {
+		t.Fatalf("unexpected [%d]-attempt seat ceiling [%d]", attempts, ceiling)
+	}
+	if _, err := frostPreSignMaximumAnchorCapacityCost(
+		uint64(frostPreSignAuthorizationMaximumInputs),
+		25,
+		attempts,
+	); err != nil {
+		t.Fatalf("the [%d]-attempt ceiling itself was refused: %v", attempts, err)
+	}
 	_, err := frostPreSignMaximumAnchorCapacityCost(
-		frostPreSignAuthorizationMaximumInputs,
-		5,
-		signingAttemptsLimit,
+		uint64(frostPreSignAuthorizationMaximumInputs),
+		26,
+		attempts,
 	)
 	if err == nil {
-		t.Fatal("five local seats were admitted at the maximum batch size")
+		t.Fatal("a seat count over the ceiling was admitted")
 	}
-	if !strings.Contains(err.Error(), "at most [4] local seats") ||
-		!strings.Contains(
-			err.Error(),
-			"[5] local seats can sign at most [19] inputs",
-		) ||
-		!strings.Contains(err.Error(), "signing threshold") {
-		t.Fatalf("seat-ceiling rejection lost an operator lever: [%v]", err)
+	// The refusal has to name the ceiling, this node's own seat count, and the
+	// only remedy. Batch size must NOT be offered: it is no longer a lever, and
+	// an operator who shrinks sweeps because the error suggested it would lose
+	// throughput and still be excluded.
+	for _, want := range []string{
+		"at most [25] local seats",
+		"this node holds [26]",
+		"shed seats down to [25]",
+		"signing threshold",
+		"batch size is not a lever",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("seat-ceiling refusal is missing %q: [%v]", want, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "proof window") {
+		t.Errorf("seat-ceiling refusal did not name the window: [%v]", err)
+	}
+
+	// The revision window is the binding one at a high enough attempt count,
+	// and it has its own message.
+	_, err = frostPreSignMaximumAnchorCapacityCost(
+		uint64(frostPreSignAuthorizationMaximumInputs),
+		1,
+		1000,
+	)
+	if err == nil || !strings.Contains(err.Error(), "history window") {
+		t.Fatalf("the revision window did not refuse an oversized cost: [%v]", err)
+	}
+	if !strings.Contains(err.Error(), "no local seat count can sign") {
+		t.Errorf(
+			"a configuration no seat count can serve did not say so: [%v]",
+			err,
+		)
+	}
+
+	if rejections :=
+		frostNativeSignerAnchorSeatCeilingRejections.Load(); rejections != 2 {
+		t.Fatalf(
+			"seat-ceiling rejections counted [%d], expected [2]",
+			rejections,
+		)
 	}
 }
 
 func TestFrostNativeSignerAnchorAdmissionController_AtomicallyReservesNearWarning(
 	t *testing.T,
 ) {
+	// Six local seats cost 126 revisions and 255 generations for one input, so
+	// one fits a headroom of 257 and two do not. That is the property under
+	// test: the second workflow is refused on what the first was promised, not
+	// on what the anchor has already spent.
 	currentHeadroom := frostNativeSignerAnchorCapacity{
 		Revisions:   FrostNativeSignerAnchorRotationWarningHeadroom + 1,
 		Generations: FrostNativeSignerAnchorRotationWarningHeadroom + 1,
@@ -267,14 +429,11 @@ func TestFrostNativeSignerAnchorAdmissionController_AtomicallyReservesNearWarnin
 		FrostNativeSignerAnchorRotationWarningHeadroom+1,
 	)
 
-	// Four inputs and one local seat reserve 104 revisions and 211
-	// generations. Admission one unit above the warning boundary is safe
-	// because the full dual-dimensional cost is reserved before the workflow.
 	first, err := controller.reservePreSign(
 		context.Background(),
 		snapshot,
 		4,
-		1,
+		6,
 		signingAttemptsLimit,
 	)
 	if err != nil {
@@ -282,13 +441,13 @@ func TestFrostNativeSignerAnchorAdmissionController_AtomicallyReservesNearWarnin
 	}
 	defer first.Release()
 
-	// A concurrent workflow cannot spend the revisions promised to the first,
+	// A concurrent workflow cannot spend the capacity promised to the first,
 	// even though both observed the same pre-mutation readiness snapshot.
 	if _, err := controller.reservePreSign(
 		context.Background(),
 		snapshot,
 		1,
-		1,
+		6,
 		signingAttemptsLimit,
 	); err == nil || !strings.Contains(err.Error(), "unreserved") {
 		t.Fatalf("concurrent reservation exceeded headroom: [%v]", err)
@@ -329,7 +488,7 @@ func TestFrostNativeSignerAnchorAdmissionController_AtomicallyReservesNearWarnin
 		context.Background(),
 		snapshot,
 		1,
-		1,
+		6,
 		signingAttemptsLimit,
 	); err != nil {
 		t.Fatalf("released reservation remained charged: [%v]", err)
@@ -352,14 +511,14 @@ func TestFrostNativeSignerAnchorAdmissionController_RejectsStaleReadinessHeadroo
 	}
 	staleSnapshot := testFrostAnchorAdmissionReadinessSnapshot(400, 700)
 
-	// Twelve inputs and one seat cost 312 revisions and 627 generations. The
-	// stale snapshot would admit it, but the authenticated current tip has
-	// advanced after that snapshot and must be authoritative.
+	// Thirteen local seats cost 266 revisions and 535 generations for one
+	// input. The stale snapshot would admit that, but the authenticated current
+	// tip has advanced after that snapshot and must be authoritative.
 	if _, err := controller.reservePreSign(
 		context.Background(),
 		staleSnapshot,
 		12,
-		1,
+		13,
 		signingAttemptsLimit,
 	); err == nil || !strings.Contains(err.Error(), "unreserved") {
 		t.Fatalf("stale readiness headroom was trusted: [%v]", err)
@@ -493,6 +652,9 @@ func TestFrostNativeSignerAnchorAdmissionController_RefusesWhilePoisoned(
 	if rotationFloor := frostNativeSignerAnchorRotationFloorRejections.Load(); rotationFloor != 0 {
 		t.Fatalf("rotation-floor rejections counted [%d]", rotationFloor)
 	}
+	if preSignInput := frostNativeSignerAnchorPreSignInputRejections.Load(); preSignInput != 0 {
+		t.Fatalf("pre-sign input rejections counted [%d]", preSignInput)
+	}
 
 	// The poison was the only thing refusing: with it cleared the identical
 	// reservation is admitted, so the refusals above cannot be explained by
@@ -509,34 +671,47 @@ func TestFrostNativeSignerAnchorAdmissionController_RefusesWhilePoisoned(
 		t.Fatalf("healthy anchor refused an admissible workflow: [%v]", err)
 	}
 	reservation.Release()
+
+	resetFrostNativeSignerAnchorAdmissionMetricsForTest()
 }
 
 // TestFrostNativeSignerAnchorWorkloadRotationWarning pins the warning against
-// the workload it is supposed to warn about. The flat floor fires only once all
-// new work is already refused, which is far too late to be a warning: a
-// four-seat node - an ordinary sortition result, and the ceiling for the
-// standard 21-input sweep - stops admitting maximum-size batches thousands of
-// generations before it.
+// the workload it is supposed to warn about: the largest single admission this
+// node can be asked to make, which is one transaction input.
+//
+// Which of the two terms binds now depends on the seat count, and that is the
+// honest answer. One input costs 40*seats+15 generations, so a small holder
+// needs less than the flat floor's 256 and the flat floor genuinely is its
+// warning; a large holder is warned much earlier by the workload term. While
+// the reservation covered a whole batch this term carried everything - a
+// four-seat node then stopped signing 3359 generations before the flat floor -
+// and that gap is exactly what reserving per input removed.
 func TestFrostNativeSignerAnchorWorkloadRotationWarning(t *testing.T) {
-	fourSeatCost, err := frostPreSignAnchoredWorkflowCost(
-		frostPreSignAuthorizationMaximumInputs,
-		4,
-		signingAttemptsLimit,
-	)
+	fiftySeatCost, err := frostPreSignAnchoredInputCost(50, signingAttemptsLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fourSeatCost.Revisions != 1806 || fourSeatCost.Generations != 3615 {
-		t.Fatalf("unexpected four-seat maximum-batch cost [%+v]", fourSeatCost)
+	if fiftySeatCost.Revisions != 1006 || fiftySeatCost.Generations != 2015 {
+		t.Fatalf("unexpected fifty-seat per-input cost [%+v]", fiftySeatCost)
 	}
-	// The gap the flat threshold leaves open, pinned as a number so that
-	// shrinking it is a deliberate act.
-	if gap := fourSeatCost.Generations -
-		uint64(FrostNativeSignerAnchorRotationWarningHeadroom); gap != 3359 {
+	fourSeatCost, err := frostPreSignAnchoredInputCost(4, signingAttemptsLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fourSeatCost.Revisions != 86 || fourSeatCost.Generations != 175 {
+		t.Fatalf("unexpected four-seat per-input cost [%+v]", fourSeatCost)
+	}
+	// The gap the flat threshold used to leave open is gone for a small
+	// holder: its next admission now costs less than the flat floor, so the
+	// flat floor fires first and there is nothing left for the workload term
+	// to catch. Pinning this keeps a future reservation increase honest.
+	if fourSeatCost.Generations >=
+		uint64(FrostNativeSignerAnchorRotationWarningHeadroom) {
 		t.Fatalf(
-			"the flat warning now fires [%d] generations after a four-seat "+
-				"node stops signing, expected [3359]",
-			gap,
+			"a four-seat node again needs [%d] generations per admission, at "+
+				"or above the flat rotation floor [%d]",
+			fourSeatCost.Generations,
+			FrostNativeSignerAnchorRotationWarningHeadroom,
 		)
 	}
 
@@ -547,7 +722,8 @@ func TestFrostNativeSignerAnchorWorkloadRotationWarning(t *testing.T) {
 		localSeatCount     uint64
 		warning            bool
 	}{
-		// A fresh rotation warns about nothing.
+		// A fresh rotation warns about nothing, at any seat count a wallet can
+		// award.
 		{
 			name:               "four seats, both windows unspent",
 			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
@@ -555,61 +731,66 @@ func TestFrostNativeSignerAnchorWorkloadRotationWarning(t *testing.T) {
 			localSeatCount:     4,
 			warning:            false,
 		},
-		// One generation above the next workflow's cost is the last moment
-		// this node can still admit a maximum-size batch, so it is the last
-		// moment before the warning.
 		{
-			name:               "four seats, one generation above the next workflow",
+			name:               "the whole wallet on one node, both windows unspent",
 			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
-			generationHeadroom: 3616,
-			localSeatCount:     4,
+			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			localSeatCount:     uint64(frostPreSignAuthorizationMaximumSeats),
+			warning:            false,
+		},
+		// One generation above the next admission's cost is the last moment
+		// this node can still be admitted, so it is the last moment before the
+		// warning.
+		{
+			name:               "fifty seats, one generation above the next admission",
+			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
+			generationHeadroom: 2016,
+			localSeatCount:     50,
 			warning:            false,
 		},
 		{
-			name:               "four seats, exactly the next workflow's generations",
+			name:               "fifty seats, exactly the next admission's generations",
 			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
-			generationHeadroom: 3615,
-			localSeatCount:     4,
+			generationHeadroom: 2015,
+			localSeatCount:     50,
 			warning:            true,
 		},
 		// Each window is measured against its own dimension's cost. The
 		// revision cost is about half the generation cost, so a revision
 		// shortfall has to be caught on the revision number.
 		{
-			name:               "four seats, revision window at the next workflow's revisions",
-			revisionHeadroom:   1806,
+			name:               "fifty seats, revision window at the next admission's revisions",
+			revisionHeadroom:   1006,
 			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
-			localSeatCount:     4,
+			localSeatCount:     50,
 			warning:            true,
 		},
 		{
-			name:               "four seats, revision window one above",
-			revisionHeadroom:   1807,
+			name:               "fifty seats, revision window one above",
+			revisionHeadroom:   1007,
 			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			localSeatCount:     50,
+			warning:            false,
+		},
+		// A small holder's admission costs less than the flat floor, so the
+		// flat floor is what warns it and the workload term stays quiet above
+		// that floor.
+		{
+			name:               "four seats, one above the flat floor",
+			revisionHeadroom:   FrostNativeSignerAnchorRotationWarningHeadroom + 1,
+			generationHeadroom: FrostNativeSignerAnchorRotationWarningHeadroom + 1,
 			localSeatCount:     4,
 			warning:            false,
 		},
-		// A node above the seat ceiling must not be warned forever. It can
-		// never be admitted for 21 inputs at all, so it is measured against
-		// the 19-input batch it can actually be admitted for; warning
-		// permanently would also force its activation-handshake health to
-		// false for an exclusion that no rotation can fix.
 		{
-			name:               "five seats, both windows unspent",
-			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
-			generationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
-			localSeatCount:     5,
-			warning:            false,
-		},
-		{
-			name:               "five seats, at its own admissible maximum",
-			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
-			generationHeadroom: 4031,
-			localSeatCount:     5,
+			name:               "four seats, at the flat floor",
+			revisionHeadroom:   FrostNativeSignerAnchorRotationWarningHeadroom,
+			generationHeadroom: FrostNativeSignerAnchorRotationWarningHeadroom,
+			localSeatCount:     4,
 			warning:            true,
 		},
-		// A seat count that can serve no batch at all leaves only the flat
-		// floor, which still has to work.
+		// A seat count that can be admitted for nothing at all leaves only the
+		// flat floor, which still has to work.
 		{
 			name:               "no local seats, windows unspent",
 			revisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
@@ -624,8 +805,6 @@ func TestFrostNativeSignerAnchorWorkloadRotationWarning(t *testing.T) {
 			localSeatCount:     0,
 			warning:            true,
 		},
-		// The flat floor is kept, not replaced: it still fires for a seat
-		// count whose workload term would not have.
 		{
 			name:               "one seat, at the flat floor",
 			revisionHeadroom:   FrostNativeSignerAnchorRotationWarningHeadroom,
@@ -648,17 +827,17 @@ func TestFrostNativeSignerAnchorWorkloadRotationWarning(t *testing.T) {
 		}
 	}
 
-	// The whole point of the change: the flat predicate is still silent at the
-	// exact headroom where a four-seat node stops being able to sign a
-	// maximum-size batch.
+	// The workload term still earns its place for the seat counts whose
+	// admission costs more than the flat floor: the flat predicate is silent at
+	// the exact headroom where a fifty-seat node stops being admissible.
 	if frostNativeSignerAnchorRotationWarning(
 		minFrostNativeSignerAnchorHeadroom(
 			FrostNativeSignerAnchorMaximumHistoryEvents,
-			fourSeatCost.Generations,
+			fiftySeatCost.Generations,
 		),
 	) {
 		t.Fatal(
-			"the flat rotation warning already fires at the four-seat " +
+			"the flat rotation warning already fires at the fifty-seat " +
 				"workload threshold, so the workload-relative term adds nothing",
 		)
 	}
@@ -725,13 +904,15 @@ func TestFrostNativeSignerAnchorAdmissionRefusalsNameARemedy(t *testing.T) {
 	}
 
 	// The seat-ceiling refusal is a configuration signal no rotation fixes, so
-	// it must stay separately countable from the rotation causes.
+	// it must stay separately countable from the rotation causes. Nothing a
+	// wallet can award reaches it now, so it is driven here the only way that
+	// still can: a signing-attempt limit no certified window could serve.
 	if _, err := frostPreSignMaximumAnchorCapacityCost(
-		frostPreSignAuthorizationMaximumInputs,
-		5,
-		signingAttemptsLimit,
+		uint64(frostPreSignAuthorizationMaximumInputs),
+		1,
+		1000,
 	); err == nil {
-		t.Fatal("five local seats were admitted at the maximum batch size")
+		t.Fatal("an unservable signing-attempt limit was admitted")
 	}
 
 	for _, test := range []struct {
@@ -757,6 +938,14 @@ func TestFrostNativeSignerAnchorAdmissionRefusalsNameARemedy(t *testing.T) {
 		{
 			name:     "poisoned",
 			counted:  frostNativeSignerAnchorPoisonedRejections.Load(),
+			expected: 0,
+		},
+		// Nothing here went through the per-input admission, so the counter
+		// that tells an operator "an already-relayed batch was abandoned" must
+		// stay clean.
+		{
+			name:     "pre-sign input",
+			counted:  frostNativeSignerAnchorPreSignInputRejections.Load(),
 			expected: 0,
 		},
 	} {

@@ -1858,6 +1858,36 @@ func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatchWithTaproo
 	return dsseft.signBatch(ctx, messages, startBlock)
 }
 
+// exerciseTestPerInputAnchorAdmission mirrors what the real batch loop does
+// with the admission it is handed: one reservation per input, released before
+// the next one is taken. The stubs below sign nothing real, but they must still
+// exercise the admission the same way, or a regression that takes a single
+// reservation for the whole batch would pass every test that uses them.
+func exerciseTestPerInputAnchorAdmission(
+	ctx context.Context,
+	messageCount int,
+	admitInput func(context.Context) (func(), error),
+) error {
+	if admitInput == nil {
+		return errors.New("nil native signer anchor input admission")
+	}
+	for i := 0; i < messageCount; i++ {
+		release, err := admitInput(ctx)
+		if err != nil {
+			return fmt.Errorf(
+				"cannot reserve native signer anchor capacity for input [%d]: [%w]",
+				i,
+				err,
+			)
+		}
+		if release == nil {
+			return errors.New("anchor input admission returned no release")
+		}
+		release()
+	}
+	return nil
+}
+
 func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatchWithAuthorizedTaprootTransaction(
 	ctx context.Context,
 	messages []*big.Int,
@@ -1866,6 +1896,7 @@ func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatchWithAuthor
 	unsignedTx *bitcoin.TransactionBuilder,
 	authorizationID [32]byte,
 	authorizationGuard func(context.Context) error,
+	admitInput func(context.Context) (func(), error),
 ) ([]*frost.Signature, error) {
 	if authorizationID == [32]byte{} {
 		return nil, errors.New("zero authorization ID")
@@ -1874,6 +1905,13 @@ func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatchWithAuthor
 		return nil, errors.New("nil authorization guard")
 	}
 	if err := authorizationGuard(ctx); err != nil {
+		return nil, err
+	}
+	if err := exerciseTestPerInputAnchorAdmission(
+		ctx,
+		len(messages),
+		admitInput,
+	); err != nil {
 		return nil, err
 	}
 	dsseft.authorizedCalls++
@@ -1991,6 +2029,7 @@ func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) signBatchWithAu
 	unsignedTx *bitcoin.TransactionBuilder,
 	authorizationID [32]byte,
 	authorizationGuard func(context.Context) error,
+	admitInput func(context.Context) (func(), error),
 ) ([]*frost.Signature, error) {
 	if authorizationID == [32]byte{} {
 		return nil, errors.New("zero authorization ID")
@@ -1999,6 +2038,13 @@ func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) signBatchWithAu
 		return nil, errors.New("nil authorization guard")
 	}
 	if err := authorizationGuard(ctx); err != nil {
+		return nil, err
+	}
+	if err := exerciseTestPerInputAnchorAdmission(
+		ctx,
+		len(messages),
+		admitInput,
+	); err != nil {
 		return nil, err
 	}
 	tmrrsse.authorizedCalls++

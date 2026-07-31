@@ -10,36 +10,78 @@ import (
 )
 
 // The warning must fire on exactly the seat counts anchor admission would
-// refuse for a maximum-size batch, and stay quiet on the rest. This is the
-// coupling that matters: a warning that fires on an admissible seat count is
-// noise an operator learns to ignore, and one that stays quiet on an
-// inadmissible one leaves the wallet to discover the exclusion weeks later,
-// when a full-size sweep first forms.
+// refuse, and stay quiet on the rest. This is the coupling that matters: a
+// warning that fires on an admissible seat count is noise an operator learns to
+// ignore, and one that stays quiet on an inadmissible one leaves the wallet to
+// discover the exclusion weeks later, when a sweep first forms.
+//
+// Both sides are checked at the shipped attempt limit, where nothing is
+// refused, and at an attempt limit high enough to put the ceiling back in
+// reach, where the two must agree on exactly where it falls.
 func TestFrostPreSignLocalSeatCeilingWarning_MatchesAdmission(t *testing.T) {
 	const maximumInputs = uint64(frostPreSignAuthorizationMaximumInputs)
 
-	for seats := uint64(1); seats <= 8; seats++ {
-		_, admissionErr := frostPreSignMaximumAnchorCapacityCost(
-			maximumInputs,
-			seats,
-			signingAttemptsLimit,
-		)
-		warning, warned := frostPreSignLocalSeatCeilingWarning(
-			seats,
-			maximumInputs,
-			signingAttemptsLimit,
-		)
-		if warned != (admissionErr != nil) {
-			t.Errorf(
-				"[%d] local seats: warned=%v but admission refusal=%v",
+	for _, attempts := range []uint64{signingAttemptsLimit, 20} {
+		for seats := uint64(1); seats <= 30; seats++ {
+			_, admissionErr := frostPreSignMaximumAnchorCapacityCost(
+				maximumInputs,
 				seats,
-				warned,
-				admissionErr != nil,
+				attempts,
 			)
+			warning, warned := frostPreSignLocalSeatCeilingWarning(
+				seats,
+				attempts,
+			)
+			if warned != (admissionErr != nil) {
+				t.Errorf(
+					"[%d] attempts, [%d] local seats: warned=%v but admission "+
+						"refusal=%v",
+					attempts,
+					seats,
+					warned,
+					admissionErr != nil,
+				)
+			}
+			if !warned && warning != "" {
+				t.Errorf(
+					"[%d] attempts, [%d] local seats: no warning expected but "+
+						"text was [%s]",
+					attempts,
+					seats,
+					warning,
+				)
+			}
 		}
-		if !warned && warning != "" {
-			t.Errorf(
-				"[%d] local seats: no warning expected but text was [%s]",
+	}
+}
+
+// Under the shipped constants there is no ceiling left to warn about: anchor
+// admission reserves one transaction input at a time, one input costs
+// 40*seats+15 generations, and a whole hundred-seat wallet held by a single
+// node still fits the 4096-entry proof window. Pinning that here means a change
+// to the certified windows or the attempt limit shows up as a failing test
+// rather than as operators silently excluded from signing again.
+func TestFrostPreSignLocalSeatCeilingWarning_ProductionParameters(t *testing.T) {
+	if ceiling := frostPreSignMaximumAdmissibleLocalSeatCount(
+		signingAttemptsLimit,
+	); ceiling != uint64(frostPreSignAuthorizationMaximumSeats) {
+		t.Fatalf(
+			"production local seat ceiling: got %d want %d",
+			ceiling,
+			frostPreSignAuthorizationMaximumSeats,
+		)
+	}
+
+	// Every seat count a wallet can award, including the five-seat average
+	// mainnet holder that the batch-wide reservation used to exclude.
+	for seats := uint64(1); seats <=
+		uint64(frostPreSignAuthorizationMaximumSeats); seats++ {
+		if warning, warned := frostPreSignLocalSeatCeilingWarning(
+			seats,
+			signingAttemptsLimit,
+		); warned {
+			t.Fatalf(
+				"[%d] local seats are admissible but were warned: [%s]",
 				seats,
 				warning,
 			)
@@ -47,44 +89,38 @@ func TestFrostPreSignLocalSeatCeilingWarning_MatchesAdmission(t *testing.T) {
 	}
 }
 
-// The production ceiling is four local seats at the 21-input maximum batch and
-// five signing attempts, and a five-seat node tops out at 19 inputs. Those are
-// the numbers the admission accounting documents; pinning them here means a
-// change to the certified windows or the attempt limit shows up as a failing
-// test rather than as a silently different operator warning.
-func TestFrostPreSignLocalSeatCeilingWarning_ProductionParameters(t *testing.T) {
-	const maximumInputs = uint64(frostPreSignAuthorizationMaximumInputs)
+// A seat count above the ceiling still has to be reported, and the report has
+// to be actionable. Only a raised attempt limit can produce one now, so that is
+// what drives it.
+func TestFrostPreSignLocalSeatCeilingWarning_AboveTheCeiling(t *testing.T) {
+	const attempts = uint64(20)
 
 	if ceiling := frostPreSignMaximumAdmissibleLocalSeatCount(
-		maximumInputs,
-		signingAttemptsLimit,
-	); ceiling != 4 {
-		t.Fatalf("production local seat ceiling: got %d want 4", ceiling)
+		attempts,
+	); ceiling != 25 {
+		t.Fatalf("[%d]-attempt seat ceiling: got %d want 25", attempts, ceiling)
+	}
+	if _, warned := frostPreSignLocalSeatCeilingWarning(25, attempts); warned {
+		t.Error("a node at the ceiling is admissible and must not be warned")
 	}
 
-	if _, warned := frostPreSignLocalSeatCeilingWarning(
-		4,
-		maximumInputs,
-		signingAttemptsLimit,
-	); warned {
-		t.Error("a four-seat node is admissible and must not be warned")
-	}
-
-	warning, warned := frostPreSignLocalSeatCeilingWarning(
-		5,
-		maximumInputs,
-		signingAttemptsLimit,
-	)
+	warning, warned := frostPreSignLocalSeatCeilingWarning(26, attempts)
 	if !warned {
-		t.Fatal("a five-seat node is above the ceiling and must be warned")
+		t.Fatal("a node above the ceiling must be warned")
 	}
-	// The operator needs all four numbers to act: how many seats it holds, the
-	// ceiling it is over, the batch size that produced the ceiling, and the
-	// largest batch it can actually sign.
-	for _, want := range []string{"[5]", "[4]", "[21]", "[19]"} {
+	// The operator needs the numbers it can act on: how many seats it holds and
+	// the ceiling it is over. The batch size it used to be told is deliberately
+	// absent - admission reserves per input now, so smaller sweeps do not help.
+	for _, want := range []string{"[26]", "[25]"} {
 		if !strings.Contains(warning, want) {
 			t.Errorf("warning is missing %s: [%s]", want, warning)
 		}
+	}
+	if !strings.Contains(warning, "Batch size is not a lever") {
+		t.Errorf(
+			"warning does not rule out the lever that no longer works: [%s]",
+			warning,
+		)
 	}
 	// The exclusion is whole-node, not just the surplus seat, because
 	// reservePreSign is charged for the complete local seat set at once.
@@ -94,37 +130,29 @@ func TestFrostPreSignLocalSeatCeilingWarning_ProductionParameters(t *testing.T) 
 			warning,
 		)
 	}
-
-	sixSeatWarning, warned := frostPreSignLocalSeatCeilingWarning(
-		6,
-		maximumInputs,
-		signingAttemptsLimit,
-	)
-	if !warned || !strings.Contains(sixSeatWarning, "[16]") {
-		t.Errorf(
-			"a six-seat node tops out at 16 inputs; warning was [%s]",
-			sixSeatWarning,
-		)
-	}
 }
 
-// An unset attempt limit must be read the way authorize reads it, otherwise
-// the warning describes a ceiling admission never applies.
+// An unset attempt limit must be read the way the gate reads it, otherwise the
+// warning describes a ceiling admission never applies.
 func TestFrostPreSignLocalSeatCeilingWarning_ZeroAttemptsUsesTheDefault(
 	t *testing.T,
 ) {
-	const maximumInputs = uint64(frostPreSignAuthorizationMaximumInputs)
+	// A seat count above what any wallet can award is the only input that
+	// warns under the shipped attempt limit, which makes it the only one that
+	// can compare two non-empty warnings.
+	const overCapSeats = uint64(frostPreSignAuthorizationMaximumSeats) + 1
 
 	zeroWarning, zeroWarned := frostPreSignLocalSeatCeilingWarning(
-		5,
-		maximumInputs,
+		overCapSeats,
 		0,
 	)
 	defaultWarning, defaultWarned := frostPreSignLocalSeatCeilingWarning(
-		5,
-		maximumInputs,
+		overCapSeats,
 		signingAttemptsLimit,
 	)
+	if !zeroWarned {
+		t.Fatal("a seat count no wallet can award must be warned")
+	}
 	if zeroWarned != defaultWarned || zeroWarning != defaultWarning {
 		t.Fatalf(
 			"zero attempts did not fall back to the default limit: [%s] vs [%s]",
@@ -134,38 +162,35 @@ func TestFrostPreSignLocalSeatCeilingWarning_ZeroAttemptsUsesTheDefault(
 	}
 }
 
-// A seat count that can sign no batch size at all must still be reported, and
-// must not offer a largest admissible batch of zero inputs as if it were a
-// usable setting. Under today's constants this needs a seat count admission
-// rejects outright - at the 100-seat maximum a node can still sign a
-// single-input batch - so the case is defensive, and it is covered because the
-// arithmetic that makes it unreachable is exactly the arithmetic a constant
-// change would move.
-func TestFrostPreSignLocalSeatCeilingWarning_NoAdmissibleBatch(t *testing.T) {
-	const maximumInputs = uint64(frostPreSignAuthorizationMaximumInputs)
-
-	if admissible := frostPreSignMaximumAdmissibleInputCount(
-		frostPreSignAuthorizationMaximumSeats,
+// A configuration in which no seat count can be admitted at all must still be
+// reported, and must not offer shedding seats as if it were a usable remedy.
+// Under today's constants this needs an attempt limit no certified window could
+// serve, because a single local seat signing a single input costs 55 of 4096
+// generations.
+func TestFrostPreSignLocalSeatCeilingWarning_NoAdmissibleSeatCount(t *testing.T) {
+	if admissible := frostPreSignMaximumAdmissibleLocalSeatCount(
 		signingAttemptsLimit,
 	); admissible == 0 {
-		t.Fatalf(
-			"the maximum seat count now signs nothing; this test needs a seat "+
-				"count admission rejects outright, not [%d]",
-			frostPreSignAuthorizationMaximumSeats,
+		t.Fatal(
+			"the shipped attempt limit now admits no seat count at all; this " +
+				"test needs a configuration admission rejects outright",
 		)
 	}
 
-	warning, warned := frostPreSignLocalSeatCeilingWarning(
-		frostPreSignAuthorizationMaximumSeats+1,
-		maximumInputs,
-		signingAttemptsLimit,
-	)
+	warning, warned := frostPreSignLocalSeatCeilingWarning(1, 1000)
 	if !warned {
-		t.Fatal("a seat count that can sign nothing must be warned")
+		t.Fatal("a configuration that can sign nothing must be warned")
 	}
-	if !strings.Contains(warning, "no batch size at all") {
+	if !strings.Contains(warning, "no local seat count can sign") {
 		t.Errorf(
 			"warning does not say the node can sign nothing: [%s]",
+			warning,
+		)
+	}
+	if strings.Contains(warning, "shed seats") {
+		t.Errorf(
+			"warning offers shedding seats for a limit no seat count can "+
+				"serve: [%s]",
 			warning,
 		)
 	}
