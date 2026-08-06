@@ -143,13 +143,15 @@ func TestNativeTBTCSignerStateAnchorMetrics_RegisteredSourceNames(t *testing.T) 
 		nativeTBTCSignerStateAnchorGenerationHeadroomMetricName,
 		nativeTBTCSignerStateAnchorHeadroomObservationsMetricName,
 		nativeTBTCSignerStateAnchorRotationWarningMetricName,
+		nativeTBTCSignerStateAnchorGenerationsConsumedMetricName,
+		nativeTBTCSignerStateAnchorRevisionsConsumedMetricName,
 	} {
 		if _, ok := sources[name]; !ok {
 			t.Errorf("metric source [%s] is not registered", name)
 		}
 	}
-	if len(sources) != 5 {
-		t.Errorf("registered source count: got %d want 5", len(sources))
+	if len(sources) != 7 {
+		t.Errorf("registered source count: got %d want 7", len(sources))
 	}
 	if nativeTBTCSignerStateAnchorMetricsApplication !=
 		"frost_native_signer_anchor" {
@@ -213,5 +215,64 @@ func TestNativeTBTCSignerStateAnchorMetrics_RotationWarningGauge(t *testing.T) {
 		NativeTBTCSignerStateAnchorLargestLocalSeatCount(); !observed ||
 		seats != 7 {
 		t.Fatalf("seat count: got (%d, %v) want (7, true)", seats, observed)
+	}
+}
+
+// The burn-rate numerator. These are monotonic totals rather than levels
+// precisely because the headroom gauges reset at every rotation, so no rate can
+// be taken across one; dividing these by the admission counter yields real
+// generations and revisions per unit of work, which is the measurement the
+// anchor capacity model currently lacks.
+func TestNativeTBTCSignerStateAnchorMetrics_ConsumptionTotals(t *testing.T) {
+	baseGenerations, baseRevisions := NativeTBTCSignerStateAnchorConsumption()
+
+	// An operation that advanced nothing spends no revision either, because
+	// the barrier skips the compare-and-swap when the tip is unchanged.
+	recordNativeTBTCSignerStateAnchorConsumption(0, 0)
+	if generations, revisions :=
+		NativeTBTCSignerStateAnchorConsumption(); generations != baseGenerations ||
+		revisions != baseRevisions {
+		t.Fatalf(
+			"a non-advancing operation was counted: (%d, %d) want (%d, %d)",
+			generations,
+			revisions,
+			baseGenerations,
+			baseRevisions,
+		)
+	}
+
+	recordNativeTBTCSignerStateAnchorConsumption(2, 1)
+	recordNativeTBTCSignerStateAnchorConsumption(3, 1)
+
+	generations, revisions := NativeTBTCSignerStateAnchorConsumption()
+	if generations != baseGenerations+5 || revisions != baseRevisions+2 {
+		t.Fatalf(
+			"consumption totals: got (%d, %d) want (%d, %d)",
+			generations,
+			revisions,
+			baseGenerations+5,
+			baseRevisions+2,
+		)
+	}
+
+	if got := nativeTBTCSignerStateAnchorMetricSourceForTest(
+		t,
+		nativeTBTCSignerStateAnchorGenerationsConsumedMetricName,
+	); got != float64(baseGenerations+5) {
+		t.Fatalf(
+			"generations gauge: got %v want %v",
+			got,
+			float64(baseGenerations+5),
+		)
+	}
+	if got := nativeTBTCSignerStateAnchorMetricSourceForTest(
+		t,
+		nativeTBTCSignerStateAnchorRevisionsConsumedMetricName,
+	); got != float64(baseRevisions+2) {
+		t.Fatalf(
+			"revisions gauge: got %v want %v",
+			got,
+			float64(baseRevisions+2),
+		)
 	}
 }

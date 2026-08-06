@@ -462,6 +462,15 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 
 	controller.reserved.Revisions += cost.Revisions
 	controller.reserved.Generations += cost.Generations
+	// The burn-rate denominator. Counted once per admitted workflow, which for
+	// pre-sign is once per input, so the anchor consumption counters divided by
+	// this yield real generations and revisions per unit of work.
+	//
+	// This is the measurement the capacity model is missing: fault-free burn is
+	// only bounded, between k+3 and 3k+2 generations per input, and every
+	// window-sizing and rotation-cadence figure so far is a code reading
+	// against that range rather than an observation of it.
+	frostNativeSignerAnchorAdmissions.Add(1)
 	return &frostNativeSignerAnchorRevisionReservation{
 		controller: controller,
 		cost:       cost,
@@ -914,6 +923,13 @@ var (
 	frostNativeSignerAnchorRotationFloorRejections         atomic.Uint64
 	frostNativeSignerAnchorPoisonedRejections              atomic.Uint64
 	frostNativeSignerAnchorPreSignInputRejections          atomic.Uint64
+
+	// frostNativeSignerAnchorAdmissions counts admitted workflows - the
+	// denominator for the anchor consumption totals published by
+	// pkg/frost/signing. Every other counter here records a refusal; this one
+	// records work that was allowed to proceed, without which the consumption
+	// totals have no unit.
+	frostNativeSignerAnchorAdmissions atomic.Uint64
 )
 
 // frostNativeSignerAnchorAdmissionMetricsApplication is the clientinfo
@@ -929,6 +945,7 @@ const (
 	frostNativeSignerAnchorRotationFloorMetricName         = "rotation_floor_rejected_total"
 	frostNativeSignerAnchorPoisonedMetricName              = "poisoned_rejected_total"
 	frostNativeSignerAnchorPreSignInputMetricName          = "pre_sign_input_rejected_total"
+	frostNativeSignerAnchorAdmittedMetricName              = "admitted_total"
 )
 
 // RegisterFrostNativeSignerAnchorAdmissionMetrics registers the cumulative
@@ -975,6 +992,9 @@ func RegisterFrostNativeSignerAnchorAdmissionMetrics(
 				return float64(
 					frostNativeSignerAnchorPreSignInputRejections.Load(),
 				)
+			},
+			frostNativeSignerAnchorAdmittedMetricName: func() float64 {
+				return float64(frostNativeSignerAnchorAdmissions.Load())
 			},
 		},
 	)

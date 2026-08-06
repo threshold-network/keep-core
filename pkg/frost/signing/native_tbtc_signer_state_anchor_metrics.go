@@ -65,6 +65,22 @@ var (
 	// headroom_observations_total > 0, and its rate is also the staleness
 	// signal for the two gauges.
 	nativeTBTCSignerStateAnchorHeadroomObservations atomic.Uint64
+
+	// The two consumption counters below are the burn-rate numerator. They are
+	// deliberately monotonic totals rather than levels: the headroom gauges
+	// already report a level, but that level resets at every rotation, so a
+	// rate cannot be taken across one. These do not reset, so
+	// rate(generations_consumed_total) divided by the rate of an admitted-work
+	// counter yields real burn per unit of work, across rotations.
+	//
+	// That ratio is the measurement the anchor's capacity planning currently
+	// lacks. Fault-free burn is only bounded - between k+3 and 3k+2 durable
+	// generations per signed input, because a call whose sweep prologue mutates
+	// state advances more than one generation - and every window-sizing and
+	// rotation-cadence figure derived so far is a code reading against that
+	// range rather than an observation of it.
+	nativeTBTCSignerStateAnchorGenerationsConsumed atomic.Uint64
+	nativeTBTCSignerStateAnchorRevisionsConsumed   atomic.Uint64
 )
 
 // nativeTBTCSignerStateAnchorHeadroomRecord is the immutable snapshot stored
@@ -97,6 +113,8 @@ const (
 	nativeTBTCSignerStateAnchorGenerationHeadroomMetricName   = "restartable_generation_headroom"
 	nativeTBTCSignerStateAnchorHeadroomObservationsMetricName = "headroom_observations_total"
 	nativeTBTCSignerStateAnchorRotationWarningMetricName      = "rotation_warning"
+	nativeTBTCSignerStateAnchorGenerationsConsumedMetricName  = "generations_consumed_total"
+	nativeTBTCSignerStateAnchorRevisionsConsumedMetricName    = "revisions_consumed_total"
 )
 
 // RegisterNativeTBTCSignerStateAnchorMetrics registers the state-anchor health
@@ -163,7 +181,49 @@ func nativeTBTCSignerStateAnchorMetricSources() map[string]clientinfo.Source {
 			}
 			return 1
 		},
+		nativeTBTCSignerStateAnchorGenerationsConsumedMetricName: func() float64 {
+			return float64(
+				nativeTBTCSignerStateAnchorGenerationsConsumed.Load(),
+			)
+		},
+		nativeTBTCSignerStateAnchorRevisionsConsumedMetricName: func() float64 {
+			return float64(
+				nativeTBTCSignerStateAnchorRevisionsConsumed.Load(),
+			)
+		},
 	}
+}
+
+// recordNativeTBTCSignerStateAnchorConsumption adds one anchored operation's
+// durable cost to the burn-rate totals: the generations its native call
+// advanced, and the revision its compare-and-swap spent.
+//
+// Called only after the acknowledgement has been validated and durably read
+// back, so it counts work the anchor actually witnessed rather than work
+// attempted. An operation that advanced no generation spends no revision
+// either - the barrier skips the CAS when the tip is unchanged - and is
+// counted as neither.
+func recordNativeTBTCSignerStateAnchorConsumption(
+	generations uint64,
+	revisions uint64,
+) {
+	if generations > 0 {
+		nativeTBTCSignerStateAnchorGenerationsConsumed.Add(generations)
+	}
+	if revisions > 0 {
+		nativeTBTCSignerStateAnchorRevisionsConsumed.Add(revisions)
+	}
+}
+
+// NativeTBTCSignerStateAnchorConsumption returns the burn-rate totals. Exposed
+// so a caller can assert on what the counters will report without reaching
+// into package state.
+func NativeTBTCSignerStateAnchorConsumption() (
+	generations uint64,
+	revisions uint64,
+) {
+	return nativeTBTCSignerStateAnchorGenerationsConsumed.Load(),
+		nativeTBTCSignerStateAnchorRevisionsConsumed.Load()
 }
 
 // RecordNativeTBTCSignerStateAnchorRestartableHeadroom publishes the

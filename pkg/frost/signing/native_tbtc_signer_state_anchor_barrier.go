@@ -504,6 +504,10 @@ func (lease *nativeTBTCSignerStateAnchorLease) commit() error {
 	}
 
 	if *candidate == lease.expected {
+		// Nothing advanced, so nothing was consumed: no generation, and no
+		// revision either, because this path skips the CAS entirely. Counting
+		// it would inflate the burn-rate denominator's numerator with
+		// operations the anchor never had to witness.
 		barrier.tip = *candidate
 		lease.completed = true
 		return nil
@@ -585,6 +589,14 @@ func (lease *nativeTBTCSignerStateAnchorLease) commit() error {
 			"native signer did not durably install the exact anchor acknowledgement",
 		))
 	}
+
+	// Count only after the acknowledgement is validated and durably read back,
+	// so the totals describe work the anchor witnessed rather than work
+	// attempted. Reaching here means exactly one compare-and-swap succeeded.
+	recordNativeTBTCSignerStateAnchorConsumption(
+		acknowledged.Generation-lease.expected.Generation,
+		1,
+	)
 
 	barrier.tip = *acknowledged
 	lease.completed = true
