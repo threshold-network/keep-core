@@ -126,12 +126,56 @@ states this directly where an absent anchor stream is refused
 ....
 
 So the floor moves only under an Ed25519 signature from the offline
-authority, checked at startup against pins that the running node cannot
-influence. A finite window is the price: the node must be able to
-replay its whole history from the floor to prove it did not roll back,
-and that replay is bounded. Running out of window is therefore not a
-failure of the anchor - it is the anchor working, and asking for a
-fresh signed floor.
+authority. That signature is what the running *signer process* cannot
+forge: a compromised signer cannot mint itself a new floor, because
+every certificate is verified against the offline authority key in both
+Go and Rust. It is not a pin against the *operator* - see
+<<what-the-floor-does-not-bound>>. A finite window is the price: the
+node must be able to replay its whole history from the floor to prove
+it did not roll back, and that replay is bounded. Running out of window
+is therefore not a failure of the anchor - it is the anchor working,
+and asking for a fresh signed floor.
+
+[[what-the-floor-does-not-bound]]
+=== What the floor does not bound
+
+The floor bounds the anchor *service* and the signer *process*. It does
+not bound the *operator*, and an earlier revision of this document said
+otherwise.
+
+Every artifact that names the floor is an operator-owned local file:
+the certificate chain (`FrostNativeSignerAnchorTrustCertificatePath`),
+the init config (`TBTC_SIGNER_INIT_CONFIG_PATH`), and the activation
+manifest (`FrostPreSignActivationManifestPath` - a signed envelope read
+from disk, not fetched from chain). The only comparison the certificate
+sequence and digest ever face is against the init config, in
+`validateFrostNativeSignerAnchorTrustExpectedHead`. An operator holding
+an earlier rotation's artifacts can therefore present them to their own
+node.
+
+Three things bound how far that goes, and none of them is the floor:
+
+. *The bundle moves in lockstep.* Every rotation must change the
+  activation manifest hash, advance the manifest sequence by exactly
+  one, and advance the service epoch by exactly one
+  (`validate_rotation_endpoints`). A certificate is only presentable
+  together with its own manifest, so a downgrade means reverting the
+  whole bundle, not swapping one file.
+. *The durable trust journal is append-only.* Its head must equal the
+  configured pin, so a downgraded bundle also requires a signer-store
+  snapshot from before the transition.
+. *The anchor service can refuse.* Every signed request names the
+  current `bindingHash` and `activationManifestSequence`, so a service
+  that retires the previous binding after a rotation makes the older
+  epoch unusable. This repository can neither specify nor enforce that;
+  see the pre-activation checklist.
+
+The practical consequence: a floor downgrade is not a single edit but a
+coordinated restore of the artifact bundle *and* the signer store,
+against a service still willing to answer for a retired epoch. Treat
+the certified floor as a bound on the service and on a compromised
+signer process, and treat operator-side rollback as governed by the
+checklist items below rather than by the floor.
 
 [[when-rotation-is-required]]
 == When rotation is required
@@ -708,6 +752,26 @@ derived above is run against real value.
   fail-closed startup error.
 . *Both readiness-manifest gates flipped to `present`* with evidence,
   per that document's update discipline.
+. *An anchor-service rule that retires the previous binding.* After a
+  rotation the service should refuse reads and compare-and-swaps for the
+  previous `bindingHash`, or for an identity whose
+  `activationManifestSequence` is not the current one. Both fields ride
+  in every signed request (`frostNativeSignerAnchorIdentityToWire`), so
+  this is an admission rule rather than a protocol change. Without it,
+  an operator who keeps an earlier rotation's artifacts *and* an earlier
+  signer-store snapshot can run against the earlier certified floor; see
+  <<what-the-floor-does-not-bound>>.
+. *A decision on where a monotonic floor is published,* if operator-side
+  rollback is in scope. Nothing inside this repository can close it: every
+  candidate pin is downstream of a file the operator owns. Closing it
+  requires publishing a minimum trust-certificate sequence per signer
+  stream somewhere the operator cannot rewrite - on chain, or enforced by
+  the anchor service - which is a governance decision, not a keep-core
+  change. Note the signed activation-handshake attestation already
+  exports `trustCertificateSequence`, `anchorServiceEpoch` and the
+  certified floor revision/generation, so an external monitor retaining
+  the maximum ever seen per operator detects a downgrade today without
+  any protocol change.
 
 == References
 

@@ -374,6 +374,28 @@ func reconstructFrostNativeSignerAnchorTrustPriorHead(
 		)
 	}
 
+	// A durable trust head ahead of the configured pin means the artifacts on
+	// disk are older than this signer store - the configuration was rolled back
+	// while the store was not. That already fails closed a few lines below,
+	// because every rotation changes the activation manifest hash and so the
+	// endpoint identities cannot match; naming the condition here only turns an
+	// oblique identity mismatch into a diagnosable one.
+	//
+	// This is diagnosability, not a new guarantee, and in particular it is NOT a
+	// bound on operator-side rollback: reverting the artifact bundle *and* the
+	// signer store together leaves readback equal to installed and fires nothing
+	// here or anywhere else. See "What the floor does not bound" in
+	// docs/development/frost-anchor-rotation.adoc.
+	if readback.CertificateSequence > installed.TrustCertificateSequence {
+		return nil, fmt.Errorf(
+			"durable native signer anchor trust head sequence [%v] is ahead of "+
+				"the installed certificate pin [%v]; the configured anchor "+
+				"artifacts are older than this signer store",
+			readback.CertificateSequence,
+			installed.TrustCertificateSequence,
+		)
+	}
+
 	identity := runtimeManifest.NativeSignerAnchor.Identity
 	anchorManifest := runtimeManifest.NativeSignerAnchor
 	if readback.OfflineAuthoritySPKISHA256 !=
