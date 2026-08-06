@@ -83,6 +83,10 @@ typedef TbtcSignerResult (*tbtc_init_signer_config_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_trigger_emergency_rekey_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_durable_store_identity_fn)(void);
 typedef void (*tbtc_free_buffer_fn)(uint8_t* ptr, size_t len);
 
@@ -300,6 +304,18 @@ static TbtcSignerResult tbtc_signer_init_signer_config(const uint8_t* request_pt
   return init_signer_config(request_ptr, request_len);
 }
 
+static TbtcSignerResult tbtc_signer_trigger_emergency_rekey(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_trigger_emergency_rekey_fn trigger_emergency_rekey = (tbtc_trigger_emergency_rekey_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_trigger_emergency_rekey"
+  );
+  if (trigger_emergency_rekey == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return trigger_emergency_rekey(request_ptr, request_len);
+}
+
 static TbtcSignerResult tbtc_signer_durable_store_identity(void) {
   tbtc_durable_store_identity_fn durable_store_identity =
     (tbtc_durable_store_identity_fn)dlsym(
@@ -340,6 +356,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"unsafe"
 )
 
@@ -437,6 +454,19 @@ type buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse struct {
 	KeyGroup               string `json:"key_group"`
 	Retired                bool   `json:"retired"`
 	RetiredKeyPackageCount uint16 `json:"retired_key_package_count"`
+}
+
+type buildTaggedTBTCSignerTriggerEmergencyRekeyRequest struct {
+	SessionID string `json:"session_id"`
+	Reason    string `json:"reason"`
+}
+
+type buildTaggedTBTCSignerTriggerEmergencyRekeyResponse struct {
+	SessionID               string `json:"session_id"`
+	EmergencyRekeyRequired  bool   `json:"emergency_rekey_required"`
+	Reason                  string `json:"reason"`
+	TriggeredAtUnix         uint64 `json:"triggered_at_unix"`
+	RecommendedNewSessionID string `json:"recommended_new_session_id"`
 }
 
 type buildTaggedTBTCSignerNativeFROSTCommitment struct {
@@ -1112,6 +1142,101 @@ func decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
 		)
 	}
 	return nil
+}
+
+func buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
+	sessionID string,
+	reason string,
+) ([]byte, error) {
+	const op = "TriggerEmergencyRekey"
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(op, "session ID is empty")
+	}
+	// The engine validates the session ID too, but rejecting here keeps a
+	// malformed operator input from costing a barrier lease and an anchor round
+	// trip before it fails.
+	if len(sessionID) > maximumTBTCSignerEmergencyRekeySessionIDLength {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"session ID is too long",
+		)
+	}
+	if strings.ContainsAny(sessionID, "\x00\n\r\t \"\\=") {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"session ID contains disallowed characters",
+		)
+	}
+	// Trim before the emptiness check so a whitespace-only reason cannot arm the
+	// switch with no recorded justification; the engine trims identically, and
+	// the response echo is compared against the trimmed value.
+	trimmedReason := strings.TrimSpace(reason)
+	if trimmedReason == "" {
+		return nil, buildTaggedTBTCSignerOperationError(op, "reason is empty")
+	}
+	return buildTaggedTBTCSignerMarshalRequest(
+		op,
+		buildTaggedTBTCSignerTriggerEmergencyRekeyRequest{
+			SessionID: sessionID,
+			Reason:    trimmedReason,
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse(
+	responsePayload []byte,
+	expectedReason string,
+) (*NativeTBTCSignerEmergencyRekey, error) {
+	const op = "TriggerEmergencyRekey"
+	var response buildTaggedTBTCSignerTriggerEmergencyRekeyResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+	// The engine reports false only if it declined to arm the switch, which it
+	// signals as an error; treat a false here as a contract violation rather
+	// than as a quiet no-op, so a caller never reads "rekey done" from it.
+	if !response.EmergencyRekeyRequired {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"response does not report the emergency rekey as required",
+		)
+	}
+	if response.Reason != expectedReason {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"response reason does not match request",
+		)
+	}
+	// The engine may retarget a per-signing session to the wallet session it
+	// serves, so the echoed session ID legitimately differs from the request.
+	// It must still name some session.
+	if response.SessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"response session ID is empty",
+		)
+	}
+	if response.TriggeredAtUnix == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"response trigger timestamp is zero",
+		)
+	}
+	if response.RecommendedNewSessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"response recommended new session ID is empty",
+		)
+	}
+	return &NativeTBTCSignerEmergencyRekey{
+		SessionID:               response.SessionID,
+		Reason:                  response.Reason,
+		TriggeredAtUnix:         response.TriggeredAtUnix,
+		RecommendedNewSessionID: response.RecommendedNewSessionID,
+	}, nil
 }
 
 func decodeBuildTaggedTBTCSignerDKGPart3Response(
@@ -1841,6 +1966,18 @@ func callBuildTaggedTBTCSignerBuildTaprootTx(
 	)
 }
 
+func callBuildTaggedTBTCSignerTriggerEmergencyRekey(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"TriggerEmergencyRekey",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_trigger_emergency_rekey(requestPtr, requestLen)
+		},
+	)
+}
+
 func callBuildTaggedTBTCSignerOperation(
 	operation string,
 	requestPayload []byte,
@@ -2062,6 +2199,59 @@ func ReadNativeTBTCSignerDurableStoreIdentity() (
 		)
 	}
 	return identity, nil
+}
+
+// TriggerNativeTBTCSignerEmergencyRekey arms the wallet-level emergency rekey
+// kill switch through the state-anchored operation path, so the durable write
+// is compare-and-swapped onto the anchor stream before this call returns.
+//
+// Routing matters more than the call itself. The engine export has always
+// existed, but with no Go caller the only way to arm the switch was to stop the
+// node and mutate its store out of band - an uncertified local write that a
+// restart cannot distinguish from an operator restoring the pre-rekey state
+// file. Going through callBuildTaggedTBTCSignerOperation makes the write
+// externally witnessed, so erasing it afterwards is detectable.
+//
+// Deliberately NOT admission-gated: callBuildTaggedTBTCSignerOperation performs
+// no capacity reservation, and admission refuses all work once headroom reaches
+// the rotation floor while the barrier keeps admitting until the certified
+// window is genuinely exhausted. A kill switch that capacity accounting can
+// veto is not a kill switch, so it runs in that band unreserved.
+//
+// The barrier, by contrast, stays mandatory. When it refuses - a poisoned
+// anchor, or an exhausted certified window - this call fails. That is correct
+// rather than a gap: every barrier refusal predicate is operation-independent,
+// so a state in which this trigger is refused is a state in which the node is
+// already refusing every signature-producing call. The kill switch is redundant
+// there, not defeated, and its residual is availability, never authority.
+//
+// The call is serialized behind any in-flight anchored operation and may wait
+// tens of seconds on the process-global barrier mutex; it is never refused for
+// that reason. Callers must be single-flight - the engine treats an armed event
+// as immutable, and no export clears it.
+func TriggerNativeTBTCSignerEmergencyRekey(
+	sessionID string,
+	reason string,
+) (*NativeTBTCSignerEmergencyRekey, error) {
+	requestPayload, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
+		sessionID,
+		reason,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerTriggerEmergencyRekey(
+		requestPayload,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse(
+		responsePayload,
+		strings.TrimSpace(reason),
+	)
 }
 
 // ----------------------------------------------------------------------------

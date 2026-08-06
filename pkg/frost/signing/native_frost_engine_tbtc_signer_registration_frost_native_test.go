@@ -1443,3 +1443,75 @@ func TestDecodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(t *t
 		t.Fatal("expected mismatched participant correspondence to be rejected")
 	}
 }
+
+func TestBuildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(t *testing.T) {
+	payload, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
+		"tbtc-frost-dkg-abcd-attempt-1",
+		"  suspected key compromise  ",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	var request buildTaggedTBTCSignerTriggerEmergencyRekeyRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode built payload: [%v]", err)
+	}
+	if request.SessionID != "tbtc-frost-dkg-abcd-attempt-1" {
+		t.Fatalf("unexpected session ID: [%v]", request.SessionID)
+	}
+	// The reason is trimmed before it is sent, so the response echo (which the
+	// engine also trims) compares equal.
+	if request.Reason != "suspected key compromise" {
+		t.Fatalf("unexpected reason: [%v]", request.Reason)
+	}
+
+	if _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload("", "reason"); err == nil {
+		t.Fatal("expected an empty session ID to be rejected")
+	}
+	// A whitespace-only reason must not arm the switch with no justification.
+	if _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload("session", "   "); err == nil {
+		t.Fatal("expected a whitespace-only reason to be rejected")
+	}
+	if _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
+		strings.Repeat("s", maximumTBTCSignerEmergencyRekeySessionIDLength+1),
+		"reason",
+	); err == nil {
+		t.Fatal("expected an over-long session ID to be rejected")
+	}
+	if _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload("bad session", "reason"); err == nil {
+		t.Fatal("expected a session ID with disallowed characters to be rejected")
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse(t *testing.T) {
+	// The engine retargets a per-signing session to the wallet session it
+	// serves, so a session ID that differs from the request is expected.
+	rekey, err := decodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse(
+		[]byte(`{"session_id":"wallet-session","emergency_rekey_required":true,"reason":"compromise","triggered_at_unix":1700000000,"recommended_new_session_id":"wallet-session-rekey-1700000000"}`),
+		"compromise",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if rekey.SessionID != "wallet-session" ||
+		rekey.RecommendedNewSessionID != "wallet-session-rekey-1700000000" ||
+		rekey.TriggeredAtUnix != 1700000000 {
+		t.Fatalf("unexpected rekey record: [%+v]", rekey)
+	}
+
+	for name, payload := range map[string]string{
+		"malformed payload":           `{`,
+		"rekey not reported required": `{"session_id":"s","emergency_rekey_required":false,"reason":"compromise","triggered_at_unix":1,"recommended_new_session_id":"r"}`,
+		"reason mismatch":             `{"session_id":"s","emergency_rekey_required":true,"reason":"other","triggered_at_unix":1,"recommended_new_session_id":"r"}`,
+		"empty session ID":            `{"session_id":"","emergency_rekey_required":true,"reason":"compromise","triggered_at_unix":1,"recommended_new_session_id":"r"}`,
+		"zero trigger timestamp":      `{"session_id":"s","emergency_rekey_required":true,"reason":"compromise","triggered_at_unix":0,"recommended_new_session_id":"r"}`,
+		"empty recommended session":   `{"session_id":"s","emergency_rekey_required":true,"reason":"compromise","triggered_at_unix":1,"recommended_new_session_id":""}`,
+	} {
+		if _, err := decodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse(
+			[]byte(payload),
+			"compromise",
+		); err == nil {
+			t.Fatalf("expected [%v] to be rejected", name)
+		}
+	}
+}

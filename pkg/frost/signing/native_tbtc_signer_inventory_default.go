@@ -4,6 +4,16 @@ package signing
 
 import "fmt"
 
+func TriggerNativeTBTCSignerEmergencyRekey(
+	sessionID string,
+	reason string,
+) (*NativeTBTCSignerEmergencyRekey, error) {
+	return nil, fmt.Errorf(
+		"%w: tbtc-signer bridge operation [TriggerEmergencyRekey] is unavailable in this build",
+		ErrNativeCryptographyUnavailable,
+	)
+}
+
 func ReadNativeTBTCSignerRetainedKeyPackageInventory() (
 	*NativeTBTCSignerRetainedKeyPackageInventory,
 	error,
