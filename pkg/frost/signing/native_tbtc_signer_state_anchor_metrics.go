@@ -72,6 +72,18 @@ var (
 type nativeTBTCSignerStateAnchorHeadroomRecord struct {
 	revisions   uint64
 	generations uint64
+	// rotationWarning travels with the headroom pair rather than being derived
+	// at scrape time because it is not a function of the pair alone: the
+	// workload term needs the node's largest local seat count, which only the
+	// readiness inventory knows. Publishing it here is what makes the warning
+	// alertable without an auditor challenge.
+	rotationWarning bool
+	// largestLocalSeatCount is retained so a publisher that has fresh headroom
+	// but no fresh inventory - the anchor commit path - can recompute the
+	// warning against the last seat count observed. Seat count only changes on
+	// DKG and retirement, both of which force a full readiness reconciliation
+	// that republishes it.
+	largestLocalSeatCount uint64
 }
 
 // nativeTBTCSignerStateAnchorMetricsApplication is the clientinfo
@@ -84,6 +96,7 @@ const (
 	nativeTBTCSignerStateAnchorRevisionHeadroomMetricName     = "restartable_revision_headroom"
 	nativeTBTCSignerStateAnchorGenerationHeadroomMetricName   = "restartable_generation_headroom"
 	nativeTBTCSignerStateAnchorHeadroomObservationsMetricName = "headroom_observations_total"
+	nativeTBTCSignerStateAnchorRotationWarningMetricName      = "rotation_warning"
 )
 
 // RegisterNativeTBTCSignerStateAnchorMetrics registers the state-anchor health
@@ -138,6 +151,18 @@ func nativeTBTCSignerStateAnchorMetricSources() map[string]clientinfo.Source {
 				nativeTBTCSignerStateAnchorHeadroomObservations.Load(),
 			)
 		},
+		// Reports 0 both when no rotation is due and when nothing has ever
+		// published, exactly as the headroom gauges do. Alerts on this gauge
+		// carry the same obligation: require headroom_observations_total > 0,
+		// or a node that has never run an anchored workflow reads the same as
+		// a healthy one.
+		nativeTBTCSignerStateAnchorRotationWarningMetricName: func() float64 {
+			record := nativeTBTCSignerStateAnchorHeadroomSignal.Load()
+			if record == nil || !record.rotationWarning {
+				return 0
+			}
+			return 1
+		},
 	}
 }
 
@@ -155,14 +180,48 @@ func nativeTBTCSignerStateAnchorMetricSources() map[string]clientinfo.Source {
 func RecordNativeTBTCSignerStateAnchorRestartableHeadroom(
 	revisions uint64,
 	generations uint64,
+	rotationWarning bool,
+	largestLocalSeatCount uint64,
 ) {
 	nativeTBTCSignerStateAnchorHeadroomSignal.Store(
 		&nativeTBTCSignerStateAnchorHeadroomRecord{
-			revisions:   revisions,
-			generations: generations,
+			revisions:             revisions,
+			generations:           generations,
+			rotationWarning:       rotationWarning,
+			largestLocalSeatCount: largestLocalSeatCount,
 		},
 	)
 	nativeTBTCSignerStateAnchorHeadroomObservations.Add(1)
+}
+
+// NativeTBTCSignerStateAnchorLargestLocalSeatCount returns the seat count that
+// travelled with the last published headroom, and whether anything has
+// published one.
+//
+// It exists for the anchor commit path, which has authenticated headroom on
+// every successful compare-and-swap but no inventory of its own. Without this
+// the commit path could publish headroom but not the warning derived from it,
+// which is how the gauge ends up refreshing only on readiness reconciliation -
+// the exact staleness this mirror is meant to remove.
+func NativeTBTCSignerStateAnchorLargestLocalSeatCount() (
+	seats uint64,
+	observed bool,
+) {
+	record := nativeTBTCSignerStateAnchorHeadroomSignal.Load()
+	if record == nil {
+		return 0, false
+	}
+	return record.largestLocalSeatCount, true
+}
+
+// NativeTBTCSignerStateAnchorRotationWarning returns the mirrored rotation
+// warning and whether anything has ever published one.
+func NativeTBTCSignerStateAnchorRotationWarning() (warning bool, observed bool) {
+	record := nativeTBTCSignerStateAnchorHeadroomSignal.Load()
+	if record == nil {
+		return false, false
+	}
+	return record.rotationWarning, true
 }
 
 // NativeTBTCSignerStateAnchorRestartableHeadroom returns the mirrored headroom

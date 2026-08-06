@@ -779,3 +779,65 @@ func setTestAnchorBindingTipAnchor(
 	tip.AnchorEventRoot = reference.EventRoot
 	tip.AnchorAcknowledgementDigest = reference.AcknowledgementDigest
 }
+
+// Headroom must refresh when the anchor acknowledges a tip, not only when a
+// full readiness reconciliation succeeds. Without this a node signing steadily
+// and a node that has stalled are indistinguishable at the scrape, and pre-sign
+// authorization caches readiness per finality window, so an entire authorized
+// batch can burn window invisibly inside one window.
+func TestFrostNativeSignerAnchorBindingPublishesHeadroomOnAcknowledgement(
+	t *testing.T,
+) {
+	fixture := newTestAnchorBindingFixture(t, false)
+
+	// The mirror is process-global and its reset helper is unexported, so this
+	// test establishes its own baseline rather than clearing it. Every
+	// assertion below is relative to this publication.
+	//
+	// It also supplies the seat count the commit path reuses: that path has
+	// authenticated headroom but no inventory of its own.
+	frostsigning.RecordNativeTBTCSignerStateAnchorRestartableHeadroom(
+		4096,
+		4096,
+		false,
+		4,
+	)
+
+	tip := fixture.tip
+	tip.AnchorServiceEpoch = fixture.floor.ServiceEpoch
+	tip.AnchorRevision = fixture.floor.Revision + 96
+	tip.Generation = fixture.floor.Checkpoint.Generation + 96
+	fixture.binding.publishRestartableHeadroomLocked(&tip)
+
+	revisions, generations, observed :=
+		frostsigning.NativeTBTCSignerStateAnchorRestartableHeadroom()
+	if !observed ||
+		revisions != FrostNativeSignerAnchorMaximumHistoryEvents-96 ||
+		generations != FrostNativeSignerAnchorMaximumHistoryProofEntries-96 {
+		t.Fatalf(
+			"acknowledged tip did not refresh the headroom mirror: (%d, %d, %v)",
+			revisions,
+			generations,
+			observed,
+		)
+	}
+	if seats, _ :=
+		frostsigning.NativeTBTCSignerStateAnchorLargestLocalSeatCount(); seats != 4 {
+		t.Fatalf("seat count was not carried forward: got %d want 4", seats)
+	}
+
+	// A tip outside the certified floor leaves the previous reading standing
+	// rather than publishing a partial or misleading pair.
+	before, _, _ := frostsigning.NativeTBTCSignerStateAnchorRestartableHeadroom()
+	outside := tip
+	outside.AnchorServiceEpoch = fixture.floor.ServiceEpoch + 1
+	fixture.binding.publishRestartableHeadroomLocked(&outside)
+	if after, _, _ :=
+		frostsigning.NativeTBTCSignerStateAnchorRestartableHeadroom(); after != before {
+		t.Fatalf(
+			"unauthenticated tip overwrote the mirror: got %d want %d",
+			after,
+			before,
+		)
+	}
+}

@@ -475,6 +475,7 @@ func (binding *frostNativeSignerAnchorBinding) installAcknowledgementLocked(
 			"native signer did not durably install the exact signed acknowledgement",
 		)
 	}
+	binding.publishRestartableHeadroomLocked(readback)
 	return readback, nil
 }
 
@@ -682,6 +683,58 @@ func (binding *frostNativeSignerAnchorBinding) restartableGenerationHeadroom(
 		)
 	}
 	return FrostNativeSignerAnchorMaximumHistoryProofEntries - distance, nil
+}
+
+// publishRestartableHeadroomLocked mirrors the headroom carried by a tip the
+// anchor has just acknowledged.
+//
+// Without this the mirror refreshes only when a full readiness reconciliation
+// succeeds, so a node that is signing steadily and a node that has stalled
+// look identical at the scrape until the next reconciliation - and pre-sign
+// authorization caches readiness per finality window, so an entire authorized
+// batch can burn window invisibly inside one window. Every successful
+// compare-and-swap already holds an authenticated tip, which is precisely when
+// these numbers are both fresh and free.
+//
+// The rotation warning is recomputed from the seat count that travelled with
+// the previous publication, because this path has authenticated headroom but
+// no inventory. Seat count only changes on DKG and retirement, both of which
+// force a full reconciliation that republishes it.
+//
+// Failure to compute either half leaves the previous mirror value standing
+// rather than publishing a partial pair: the two are only meaningful together,
+// and a stale pair is more honest than a half-fresh one. The caller must hold
+// the binding mutex.
+func (binding *frostNativeSignerAnchorBinding) publishRestartableHeadroomLocked(
+	tip *frostsigning.NativeTBTCSignerStateWitnessTip,
+) {
+	if binding == nil || tip == nil {
+		return
+	}
+	revisionHeadroom, err := binding.restartableRevisionHeadroom(
+		tip.AnchorServiceEpoch,
+		tip.AnchorRevision,
+	)
+	if err != nil {
+		return
+	}
+	generationHeadroom, err := binding.restartableGenerationHeadroom(
+		tip.Generation,
+	)
+	if err != nil {
+		return
+	}
+	seats, _ := frostsigning.NativeTBTCSignerStateAnchorLargestLocalSeatCount()
+	frostsigning.RecordNativeTBTCSignerStateAnchorRestartableHeadroom(
+		revisionHeadroom,
+		generationHeadroom,
+		frostNativeSignerAnchorWorkloadRotationWarning(
+			revisionHeadroom,
+			generationHeadroom,
+			seats,
+		),
+		seats,
+	)
 }
 
 func (binding *frostNativeSignerAnchorBinding) localTipMatchesRemoteRecord(
