@@ -1331,6 +1331,17 @@ pub(crate) fn validate_state_anchor_trust_reference_descendant(
     candidate: &StateAnchorTrustReferenceModel,
     label: &str,
 ) -> Result<(), EngineError> {
+    // A certified floor is always revision 1 of its service epoch: bootstrap
+    // and rotation endpoints both force it, so every call site here already
+    // passes one. Asserting it matches the Go validator, which rejects a
+    // non-revision-1 floor outright. Where the two disagree about which
+    // references are admissible, one tree accepts a chain the other refuses on
+    // every store open - a fail-closed brick with no truncation path back.
+    if floor.revision != 1 {
+        return Err(EngineError::Validation(format!(
+            "{label} is measured against a floor that is not its service-epoch genesis"
+        )));
+    }
     if candidate.service_epoch != floor.service_epoch || candidate.revision < floor.revision {
         return Err(EngineError::Validation(format!(
             "{label} must remain in the certified epoch and not precede its floor"
@@ -2586,6 +2597,69 @@ mod tests {
         too_far.revision = floor.revision + STATE_ANCHOR_TRUST_MAX_REVISION_DISTANCE + 1;
         assert!(
             validate_state_anchor_trust_reference_descendant(&floor, &too_far, "too-far").is_err()
+        );
+    }
+
+    // Parity with the Go validator, which rejects a floor whose revision is not
+    // 1. Both trees must admit the same references: where they disagree, one
+    // accepts a chain the other refuses on every store open, and there is no
+    // truncation path back from that.
+    #[test]
+    fn descendant_reference_requires_a_service_epoch_genesis_floor() {
+        let vector = shared_valid_vectors().remove(0);
+        let wire: StateAnchorTrustCertificate =
+            serde_json::from_slice(vector.canonical_json.as_bytes()).expect("bootstrap JSON");
+        let certificate = verify_state_anchor_trust_certificate(wire).expect("bootstrap verifies");
+        let floor = certificate.to.reference;
+        assert_eq!(floor.revision, 1, "certificate endpoints pin revision 1");
+
+        let mut later = floor.clone();
+        later.revision += 1;
+        later.previous_event_root = floor.event_root;
+        later.event_root = [0x71; 32];
+        later.checkpoint_ack_digest = [0x72; 32];
+
+        let mut mid_epoch_floor = floor.clone();
+        mid_epoch_floor.revision = 2;
+        let mut beyond = later.clone();
+        beyond.revision = 3;
+        assert!(
+            validate_state_anchor_trust_reference_descendant(
+                &mid_epoch_floor,
+                &beyond,
+                "mid-epoch-floor"
+            )
+            .is_err(),
+            "a floor that is not its service-epoch genesis must be refused"
+        );
+
+        // The genesis floor still accepts the same candidate, so the new rule
+        // rejects only the floor shape and not ordinary descendants.
+        validate_state_anchor_trust_reference_descendant(&floor, &later, "genesis-floor")
+            .expect("a revision-1 floor still admits its descendants");
+    }
+
+    // The store fingerprint may not change across generations. Go gained the
+    // mirrored check; this pins the Rust half so the pair cannot drift apart
+    // again.
+    #[test]
+    fn descendant_reference_rejects_a_store_fingerprint_change() {
+        let vector = shared_valid_vectors().remove(0);
+        let wire: StateAnchorTrustCertificate =
+            serde_json::from_slice(vector.canonical_json.as_bytes()).expect("bootstrap JSON");
+        let certificate = verify_state_anchor_trust_certificate(wire).expect("bootstrap verifies");
+        let floor = certificate.to.reference;
+
+        let mut rehomed = floor.clone();
+        rehomed.revision += 1;
+        rehomed.previous_event_root = floor.event_root;
+        rehomed.event_root = [0x73; 32];
+        rehomed.checkpoint_ack_digest = [0x74; 32];
+        rehomed.checkpoint.generation += 1;
+        rehomed.checkpoint.store_fingerprint[0] ^= 1;
+        assert!(
+            validate_state_anchor_trust_reference_descendant(&floor, &rehomed, "rehomed").is_err(),
+            "a descendant may not move to a different signer store"
         );
     }
 }
