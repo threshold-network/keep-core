@@ -576,10 +576,11 @@ func (reservation *frostNativeSignerAnchorRevisionReservation) Release() {
 // own lifetime, so a batch never needs more than one input's worth of
 // unconsumed window at any instant. Charging the whole batch up front was the
 // arithmetic error this replaces: at production parameters (21 inputs, 5
-// signing attempts) it admitted at most four local seats, which on a
-// hundred-seat wallet shared by around twenty operators excluded most of the
-// stake-weighted seats and left formed wallets unable to sweep the deposits
-// they had already received.
+// signing attempts) it admitted at most four local seats. Signers are
+// equal-weighted, so a hundred-seat wallet shared by around twenty operators
+// gives every operator about five - meaning that ceiling excluded every
+// operator, not merely the larger ones, and left formed wallets unable to
+// sweep the deposits they had already received.
 //
 // A ceiling still exists in principle, because both windows are finite. One
 // input costs 20*seats+6 revisions and 40*seats+15 generations, so the

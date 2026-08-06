@@ -300,30 +300,40 @@ full-size sweeps one at a time:
 |===
 | Local seats | Generations per 21-input sweep | Full-size sweeps per anchor epoch | Note
 
-| 1  | 105-210    | 18-36 | best case assumes one generation per anchored call
-| 2  | 168-336    | 11-22 |
-| 3  | 231-462    | 8-16  |
-| 4  | 294-588    | 6-13  |
-| 5  | 357-714    | 5-10  | the average mainnet holder; excluded entirely before this change
-| 20 | 1302-2604  | 1-2   |
-| 100| 6342-12684 | 0-0   | a single sweep consumes more than the whole window
+| 1  | 84-105    | 36-45 | best case is `k+3` per input; worst is `3k+2`
+| 2  | 105-168   | 22-36 |
+| 3  | 126-231   | 16-30 |
+| 4  | 147-294   | 13-26 |
+| 5  | 168-357   | 10-22 | the expected holder under equal weighting
+| 20 | 483-1302  | 2-7   | only reachable if the operator set shrinks to ~5
+| 100| 2163-6342 | 0-1   | not reachable under equal weighting; see below
 |===
 
 The 100-seat row is the honest edge of the model. Such a node is
-*admitted* for every input - the ceiling is gone - but a full sweep
-consumes more window than one epoch has, so it will be refused part way
-through and needs a rotation to finish. That is a throughput limit an
+*admitted* for every input - the ceiling is gone - but a full sweep can
+consume more window than one epoch has, so it may be refused part way
+through and need a rotation to finish. That is a throughput limit an
 offline ceremony fixes, not a permanent exclusion from the signing
-threshold, which is what the old ceiling was. It is also not a
-configuration any real wallet produces: one operator holding all 100
-seats of a 100-seat wallet is the protocol maximum, not a sortition
-result.
+threshold, which is what the old ceiling was.
 
-NOTE: An earlier operability assessment put these at "1-2 at 4 seats,
-about 5 at 3 seats, about 28 at 1 seat". Those figures were measured
-against the batch-wide reservation, where the *next* workflow's worst
-case, not consumption, decided when a node stopped. They no longer
-apply; use the ranges above.
+IMPORTANT: Seat count is `groupSize / operatorCount` because signers are
+equal-weighted, so the expected holder is around 5 seats and the high-seat
+rows are reachable only if the operator set shrinks a long way. Size
+against the 5-seat row, and treat 20 and 100 as sensitivity checks on
+operator-set size rather than as a stake-concentration tail.
+
+NOTE: Two earlier sets of figures in this document are wrong and should
+not be used. An operability assessment put these at "1-2 at 4 seats,
+about 5 at 3 seats, about 28 at 1 seat", measured against the batch-wide
+reservation, where the *next* workflow's worst case rather than
+consumption decided when a node stopped. A later revision of the table
+above used a single burn figure per input; real fault-free burn is a
+*range*, `k+3` to `3k+2` generations per input, because a call whose
+sweep prologue mutates state advances more than one generation. Any
+capacity or cadence number derived from a point value understates the
+window by roughly a factor of two. Use the ranges above, and confirm them
+by measurement on the live-testnet gate before relying on them for
+sizing.
 
 === Concurrency
 
@@ -662,10 +672,19 @@ under a 16 MiB bound and each certificate under a 120 KiB bound.
 
 WARNING: Because the file must always start at sequence 1 and may hold
 at most 64 entries, a signer store admits at most *63 rotations for its
-entire lifetime* - 64 anchor epochs counting the bootstrap. At 1-2
-full-size sweeps per epoch at 4 seats that is roughly 64-128 full-size
-sweeps before the chain can no longer be extended. Nothing in this tree
-implements what happens next. This is a gap, not a documented plan.
+entire lifetime* - 64 anchor epochs counting the bootstrap. At 10-22
+full-size sweeps per epoch at the expected 5 seats, that is roughly
+*630-1400 full-size sweeps* before the chain can no longer be extended.
+Nothing in this tree implements what happens next. This is a gap, not a
+documented plan.
++
+An earlier revision of this warning said "roughly 64-128 full-size
+sweeps", derived from the retracted 4-seat figures above; the real
+lifetime is about an order of magnitude larger. The cap is also a *size*
+artifact rather than a security property - each certificate must fit a
+bounded journal record, and 64 of them sit near half the request bound -
+so the ceiling is a consequence of the artifact having to be complete
+from sequence 1, not of anything the chain proves.
 
 === Restart, and the order of operations
 
