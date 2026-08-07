@@ -312,3 +312,83 @@ func buildTxOutpointKey(txHash bitcoin.Hash, outputIndex uint32) *big.Int {
 func (tc *TbtcChain) TxProofDifficultyFactor() (*big.Int, error) {
 	return tc.bridge.TxProofDifficultyFactor()
 }
+
+// GetReservation is not yet supported by the Ethereum chain implementation:
+// the reservation contract bindings will be regenerated once the reservation
+// Bridge API is published with the @keep-network/tbtc-v2 package.
+func (tc *TbtcChain) GetReservation(
+	reservationKey *big.Int,
+) (*tbtc.Reservation, error) {
+	return nil, fmt.Errorf(
+		"reservations not supported yet by the Ethereum chain implementation",
+	)
+}
+
+// ReservationParameters is not yet supported by the Ethereum chain
+// implementation: the reservation contract bindings will be regenerated once
+// the reservation Bridge API is published with the @keep-network/tbtc-v2
+// package.
+func (tc *TbtcChain) ReservationParameters() (
+	*tbtc.ReservationParameters,
+	error,
+) {
+	return nil, fmt.Errorf(
+		"reservations not supported yet by the Ethereum chain implementation",
+	)
+}
+
+// ValidateReservationAnchorProposal is not yet supported by the Ethereum
+// chain implementation: the reservation contract bindings will be
+// regenerated once the reservation Bridge API is published with the
+// @keep-network/tbtc-v2 package.
+func (tc *TbtcChain) ValidateReservationAnchorProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return fmt.Errorf(
+		"reservations not supported yet by the Ethereum chain implementation",
+	)
+}
+
+// ValidateReservedRedemptionProposal is not yet supported by the Ethereum
+// chain implementation: the reservation contract bindings will be
+// regenerated once the reservation Bridge API is published with the
+// @keep-network/tbtc-v2 package.
+func (tc *TbtcChain) ValidateReservedRedemptionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservedRedemptionProposal,
+) error {
+	return fmt.Errorf(
+		"reservations not supported yet by the Ethereum chain implementation",
+	)
+}
+
+// ValidateReservationReanchorProposal is not yet supported by the Ethereum
+// chain implementation: the reservation contract bindings will be
+// regenerated once the reservation Bridge API is published with the
+// @keep-network/tbtc-v2 package.
+func (tc *TbtcChain) ValidateReservationReanchorProposal(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationReanchorProposal,
+) error {
+	return fmt.Errorf(
+		"reservations not supported yet by the Ethereum chain implementation",
+	)
+}
+
+// ValidateReservationDissolutionProposal is not yet supported by the
+// Ethereum chain implementation: the reservation contract bindings will be
+// regenerated once the reservation Bridge API is published with the
+// @keep-network/tbtc-v2 package.
+func (tc *TbtcChain) ValidateReservationDissolutionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationDissolutionProposal,
+) error {
+	return fmt.Errorf(
+		"reservations not supported yet by the Ethereum chain implementation",
+	)
+}

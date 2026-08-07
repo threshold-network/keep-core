@@ -1,0 +1,440 @@
+package tbtc
+
+import (
+	"encoding/json"
+	"fmt"
+	"math/big"
+
+	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
+)
+
+const (
+	// reservationAnchorProposalValidityBlocks determines the reservation
+	// anchor proposal validity time expressed in blocks.
+	reservationAnchorProposalValidityBlocks = 600
+	// reservedRedemptionProposalValidityBlocks determines the reserved
+	// redemption proposal validity time expressed in blocks.
+	reservedRedemptionProposalValidityBlocks = 600
+	// reservationReanchorProposalValidityBlocks determines the reservation
+	// re-anchor proposal validity time expressed in blocks.
+	reservationReanchorProposalValidityBlocks = 600
+	// reservationDissolutionProposalValidityBlocks determines the reservation
+	// dissolution proposal validity time expressed in blocks.
+	reservationDissolutionProposalValidityBlocks = 600
+)
+
+// ReservationState represents the state of an on-chain UTXO reservation.
+type ReservationState uint8
+
+const (
+	// ReservationStateUnknown means the reservation is unknown to the Bridge.
+	ReservationStateUnknown ReservationState = iota
+	// ReservationStateActive means the reservation's anchor outpoint is under
+	// wallet custody.
+	ReservationStateActive
+	// ReservationStateRedemptionRequested means the reservation owner
+	// requested an in-kind redemption of the anchor outpoint.
+	ReservationStateRedemptionRequested
+	// ReservationStateClosed means the reservation was closed by an in-kind
+	// redemption or a dissolution.
+	ReservationStateClosed
+)
+
+// Reservation represents an on-chain UTXO reservation record. A reservation
+// is a deposit that was anchored by the wallet - spent in a 1-input-1-output
+// transaction into a fresh wallet-controlled output with no refund path -
+// instead of being swept into the wallet main UTXO. The anchor outpoint is
+// custodied without ever commingling with the pooled supply and is
+// redeemable in-kind by the reservation owner.
+type Reservation struct {
+	// Owner is the reservation owner's address on the host chain.
+	Owner chain.Address
+	// MintedAmount is the gross amount in satoshi credited to the owner at
+	// acceptance time.
+	MintedAmount uint64
+	// WalletPublicKeyHash is the 20-byte public key hash of the wallet
+	// custodying the current anchor outpoint.
+	WalletPublicKeyHash [20]byte
+	// AnchorUtxo is the reservation's current anchor outpoint, i.e. the
+	// wallet-controlled output holding the reserved coins.
+	AnchorUtxo *bitcoin.UnspentTransactionOutput
+	// ExpiresAt is the UNIX timestamp the custody term expires at.
+	ExpiresAt uint32
+	// State is the current state of the reservation.
+	State ReservationState
+	// RedemptionRequestedAt is the UNIX timestamp the pending reserved
+	// redemption was requested at. Zero when no redemption is pending.
+	RedemptionRequestedAt uint32
+	// RedemptionTxMaxFee is the maximum transaction fee in satoshi
+	// snapshotted at redemption request time.
+	RedemptionTxMaxFee uint64
+	// RedeemerOutputScript is the output script the pending reserved
+	// redemption must pay to. Empty when no redemption is pending.
+	RedeemerOutputScript bitcoin.Script
+}
+
+// ReservationParameters represents the on-chain values of the Bridge
+// reservation parameters.
+type ReservationParameters struct {
+	// ReservationVault is the address of the reservation vault. Deposits
+	// revealed with this vault address are treated as UTXO reservations.
+	ReservationVault chain.Address
+	// ReservationMinAmount is the minimal anchor output amount in satoshi
+	// accepted for a reservation.
+	ReservationMinAmount uint64
+	// ReservationTxMaxFee is the maximum transaction fee in satoshi for a
+	// single reservation lifecycle transaction.
+	ReservationTxMaxFee uint64
+	// ReservationTermSeconds is the custody term length in seconds.
+	ReservationTermSeconds uint32
+	// ReservationGracePeriod is the grace period in seconds after term
+	// expiry during which the reservation cannot be dissolved yet.
+	ReservationGracePeriod uint32
+}
+
+// ReservationAnchorProposal represents a reservation anchor proposal issued
+// by a wallet's coordination leader.
+type ReservationAnchorProposal struct {
+	// DepositFundingTxHash is the funding transaction hash of the reserved
+	// deposit to anchor.
+	DepositFundingTxHash bitcoin.Hash
+	// DepositFundingOutputIndex is the funding output index of the reserved
+	// deposit to anchor.
+	DepositFundingOutputIndex uint32
+	// AnchorTxFee is the proposed BTC fee for the anchor transaction.
+	AnchorTxFee *big.Int
+}
+
+// ActionType returns the specific type of the walletAction being subject
+// of this proposal.
+func (rap *ReservationAnchorProposal) ActionType() WalletActionType {
+	return ActionReservationAnchor
+}
+
+// ValidityBlocks returns the number of blocks for which the proposal is valid.
+func (rap *ReservationAnchorProposal) ValidityBlocks() uint64 {
+	return reservationAnchorProposalValidityBlocks
+}
+
+// Marshal converts the reservationAnchorProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rap)
+}
+
+// Unmarshal converts a byte array back to the reservationAnchorProposal.
+func (rap *ReservationAnchorProposal) Unmarshal(bytes []byte) error {
+	return json.Unmarshal(bytes, rap)
+}
+
+// ReservedRedemptionProposal represents a reserved redemption proposal
+// issued by a wallet's coordination leader.
+type ReservedRedemptionProposal struct {
+	// ReservationKey is the key of the reservation with the pending reserved
+	// redemption.
+	ReservationKey *big.Int
+	// RedemptionTxFee is the proposed BTC fee for the reserved redemption
+	// transaction.
+	RedemptionTxFee *big.Int
+}
+
+// ActionType returns the specific type of the walletAction being subject
+// of this proposal.
+func (rrp *ReservedRedemptionProposal) ActionType() WalletActionType {
+	return ActionReservedRedemption
+}
+
+// ValidityBlocks returns the number of blocks for which the proposal is valid.
+func (rrp *ReservedRedemptionProposal) ValidityBlocks() uint64 {
+	return reservedRedemptionProposalValidityBlocks
+}
+
+// Marshal converts the reservedRedemptionProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+func (rrp *ReservedRedemptionProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rrp)
+}
+
+// Unmarshal converts a byte array back to the reservedRedemptionProposal.
+func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
+	return json.Unmarshal(bytes, rrp)
+}
+
+// ReservationReanchorProposal represents a reservation re-anchor proposal
+// issued by a wallet's coordination leader, moving a reservation's anchor
+// outpoint to another wallet (e.g. during wallet migration).
+type ReservationReanchorProposal struct {
+	// ReservationKey is the key of the reservation to re-anchor.
+	ReservationKey *big.Int
+	// TargetWalletPublicKeyHash is the 20-byte public key hash of the wallet
+	// receiving the anchor.
+	TargetWalletPublicKeyHash [20]byte
+	// ReanchorTxFee is the proposed BTC fee for the re-anchor transaction.
+	ReanchorTxFee *big.Int
+}
+
+// ActionType returns the specific type of the walletAction being subject
+// of this proposal.
+func (rrp *ReservationReanchorProposal) ActionType() WalletActionType {
+	return ActionReservationReanchor
+}
+
+// ValidityBlocks returns the number of blocks for which the proposal is valid.
+func (rrp *ReservationReanchorProposal) ValidityBlocks() uint64 {
+	return reservationReanchorProposalValidityBlocks
+}
+
+// Marshal converts the reservationReanchorProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rrp)
+}
+
+// Unmarshal converts a byte array back to the reservationReanchorProposal.
+func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
+	return json.Unmarshal(bytes, rrp)
+}
+
+// ReservationDissolutionProposal represents a reservation dissolution
+// proposal issued by a wallet's coordination leader once the reservation's
+// custody term and grace period elapsed.
+type ReservationDissolutionProposal struct {
+	// ReservationKey is the key of the reservation to dissolve.
+	ReservationKey *big.Int
+	// DissolutionTxFee is the proposed BTC fee for the dissolution
+	// transaction.
+	DissolutionTxFee *big.Int
+}
+
+// ActionType returns the specific type of the walletAction being subject
+// of this proposal.
+func (rdp *ReservationDissolutionProposal) ActionType() WalletActionType {
+	return ActionReservationDissolution
+}
+
+// ValidityBlocks returns the number of blocks for which the proposal is valid.
+func (rdp *ReservationDissolutionProposal) ValidityBlocks() uint64 {
+	return reservationDissolutionProposalValidityBlocks
+}
+
+// Marshal converts the reservationDissolutionProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+func (rdp *ReservationDissolutionProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rdp)
+}
+
+// Unmarshal converts a byte array back to the reservationDissolutionProposal.
+func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
+	return json.Unmarshal(bytes, rdp)
+}
+
+// assembleReservationAnchorTransaction constructs an unsigned reservation
+// anchor transaction: a 1-input-1-output spend of the given reserved deposit
+// into a fresh output controlled by the given wallet. The anchor mirrors the
+// sweep's refund-disabling role without its consolidating role: the Bridge
+// credits the reservation owner only against the SPV proof of this
+// transaction.
+func assembleReservationAnchorTransaction(
+	bitcoinChain bitcoin.Chain,
+	deposit *Deposit,
+	walletPublicKeyHash [20]byte,
+	fee int64,
+) (*bitcoin.TransactionBuilder, error) {
+	if deposit == nil {
+		return nil, fmt.Errorf("deposit is required")
+	}
+
+	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
+
+	depositScript, err := deposit.Script()
+	if err != nil {
+		return nil, fmt.Errorf("cannot get deposit script: [%v]", err)
+	}
+
+	err = builder.AddScriptHashInput(deposit.Utxo, depositScript)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot add input pointing to deposit UTXO: [%v]",
+			err,
+		)
+	}
+
+	anchorValue := deposit.Utxo.Value - fee
+	if anchorValue <= 0 {
+		return nil, fmt.Errorf(
+			"transaction fee exceeds the deposit value",
+		)
+	}
+
+	anchorScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot compute anchor script: [%v]", err)
+	}
+
+	builder.AddOutput(&bitcoin.TransactionOutput{
+		Value:           anchorValue,
+		PublicKeyScript: anchorScript,
+	})
+
+	return builder, nil
+}
+
+// assembleReservedRedemptionTransaction constructs an unsigned reserved
+// redemption transaction: a 1-input-1-output spend of the reservation's
+// anchor outpoint to the redeemer output script. The full gross claim is
+// burned on the host chain upon the SPV proof of this transaction; the
+// Bitcoin miner fee is the only in-kind deduction.
+func assembleReservedRedemptionTransaction(
+	bitcoinChain bitcoin.Chain,
+	anchorUtxo *bitcoin.UnspentTransactionOutput,
+	redeemerOutputScript bitcoin.Script,
+	fee int64,
+) (*bitcoin.TransactionBuilder, error) {
+	if anchorUtxo == nil {
+		return nil, fmt.Errorf("anchor UTXO is required")
+	}
+	if len(redeemerOutputScript) == 0 {
+		return nil, fmt.Errorf("redeemer output script is required")
+	}
+
+	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
+
+	err := builder.AddPublicKeyHashInput(anchorUtxo)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot add input pointing to anchor UTXO: [%v]",
+			err,
+		)
+	}
+
+	redemptionValue := anchorUtxo.Value - fee
+	if redemptionValue <= 0 {
+		return nil, fmt.Errorf(
+			"transaction fee exceeds the anchor value",
+		)
+	}
+
+	builder.AddOutput(&bitcoin.TransactionOutput{
+		Value:           redemptionValue,
+		PublicKeyScript: redeemerOutputScript,
+	})
+
+	return builder, nil
+}
+
+// assembleReservationReanchorTransaction constructs an unsigned reservation
+// re-anchor transaction: a 1-input-1-output spend of the reservation's
+// anchor outpoint into a fresh output controlled by the target wallet. Used
+// during wallet migration so reservations never pin retiring wallets.
+func assembleReservationReanchorTransaction(
+	bitcoinChain bitcoin.Chain,
+	anchorUtxo *bitcoin.UnspentTransactionOutput,
+	targetWalletPublicKeyHash [20]byte,
+	fee int64,
+) (*bitcoin.TransactionBuilder, error) {
+	if anchorUtxo == nil {
+		return nil, fmt.Errorf("anchor UTXO is required")
+	}
+
+	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
+
+	err := builder.AddPublicKeyHashInput(anchorUtxo)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot add input pointing to anchor UTXO: [%v]",
+			err,
+		)
+	}
+
+	reanchorValue := anchorUtxo.Value - fee
+	if reanchorValue <= 0 {
+		return nil, fmt.Errorf(
+			"transaction fee exceeds the anchor value",
+		)
+	}
+
+	reanchorScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		targetWalletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot compute re-anchor script: [%v]", err)
+	}
+
+	builder.AddOutput(&bitcoin.TransactionOutput{
+		Value:           reanchorValue,
+		PublicKeyScript: reanchorScript,
+	})
+
+	return builder, nil
+}
+
+// assembleReservationDissolutionTransaction constructs an unsigned
+// reservation dissolution transaction merging an expired reservation's
+// anchor outpoint into the wallet main UTXO: the anchor outpoint is the
+// first input, the wallet main UTXO (if it exists) is the second input, and
+// the single output paying back to the wallet becomes its new main UTXO.
+func assembleReservationDissolutionTransaction(
+	bitcoinChain bitcoin.Chain,
+	anchorUtxo *bitcoin.UnspentTransactionOutput,
+	walletMainUtxo *bitcoin.UnspentTransactionOutput,
+	walletPublicKeyHash [20]byte,
+	fee int64,
+) (*bitcoin.TransactionBuilder, error) {
+	if anchorUtxo == nil {
+		return nil, fmt.Errorf("anchor UTXO is required")
+	}
+
+	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
+
+	// The Bridge requires the anchor outpoint to be the first input.
+	err := builder.AddPublicKeyHashInput(anchorUtxo)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot add input pointing to anchor UTXO: [%v]",
+			err,
+		)
+	}
+
+	totalInputsValue := anchorUtxo.Value
+
+	if walletMainUtxo != nil {
+		err = builder.AddPublicKeyHashInput(walletMainUtxo)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot add input pointing to wallet main UTXO: [%v]",
+				err,
+			)
+		}
+		totalInputsValue += walletMainUtxo.Value
+	}
+
+	dissolutionValue := totalInputsValue - fee
+	if dissolutionValue <= 0 {
+		return nil, fmt.Errorf(
+			"transaction fee exceeds the total inputs value",
+		)
+	}
+
+	dissolutionScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		walletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot compute dissolution script: [%v]", err)
+	}
+
+	builder.AddOutput(&bitcoin.TransactionOutput{
+		Value:           dissolutionValue,
+		PublicKeyScript: dissolutionScript,
+	})
+
+	return builder, nil
+}

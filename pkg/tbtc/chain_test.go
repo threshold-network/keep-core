@@ -1450,3 +1450,45 @@ func generateHandlerID() int {
 	// Local chain implementation doesn't require secure randomness.
 	return rand.Int()
 }
+
+func (lc *localChain) GetReservation(
+	reservationKey *big.Int,
+) (*Reservation, error) {
+	panic("unsupported")
+}
+
+func (lc *localChain) ReservationParameters() (*ReservationParameters, error) {
+	panic("unsupported")
+}
+
+func (lc *localChain) ValidateReservationAnchorProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) ValidateReservedRedemptionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *ReservedRedemptionProposal,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) ValidateReservationReanchorProposal(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *ReservationReanchorProposal,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) ValidateReservationDissolutionProposal(
+	walletPubKeyHash [20]byte,
+	proposal *ReservationDissolutionProposal,
+) error {
+	panic("unsupported")
+}
