@@ -53,9 +53,25 @@ func TestParseWalletActionType(t *testing.T) {
 			value:          5,
 			expectedAction: ActionMovedFundsSweep,
 		},
+		"reservation anchor": {
+			value:          6,
+			expectedAction: ActionReservationAnchor,
+		},
+		"reserved redemption": {
+			value:          7,
+			expectedAction: ActionReservedRedemption,
+		},
+		"reservation re-anchor": {
+			value:          8,
+			expectedAction: ActionReservationReanchor,
+		},
+		"reservation dissolution": {
+			value:          9,
+			expectedAction: ActionReservationDissolution,
+		},
 		"unknown": {
-			value:       6,
-			expectedErr: fmt.Errorf("unknown wallet action type [6]"),
+			value:       10,
+			expectedErr: fmt.Errorf("unknown wallet action type [10]"),
 		},
 	}
 

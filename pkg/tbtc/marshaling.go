@@ -229,12 +229,16 @@ func unmarshalCoordinationProposal(actionType uint32, payload []byte) (
 	}
 
 	proposal, ok := map[WalletActionType]CoordinationProposal{
-		ActionNoop:            &NoopProposal{},
-		ActionHeartbeat:       &HeartbeatProposal{},
-		ActionDepositSweep:    &DepositSweepProposal{},
-		ActionRedemption:      &RedemptionProposal{},
-		ActionMovingFunds:     &MovingFundsProposal{},
-		ActionMovedFundsSweep: &MovedFundsSweepProposal{},
+		ActionNoop:                   &NoopProposal{},
+		ActionHeartbeat:              &HeartbeatProposal{},
+		ActionDepositSweep:           &DepositSweepProposal{},
+		ActionRedemption:             &RedemptionProposal{},
+		ActionMovingFunds:            &MovingFundsProposal{},
+		ActionMovedFundsSweep:        &MovedFundsSweepProposal{},
+		ActionReservationAnchor:      &ReservationAnchorProposal{},
+		ActionReservedRedemption:     &ReservedRedemptionProposal{},
+		ActionReservationReanchor:    &ReservationReanchorProposal{},
+		ActionReservationDissolution: &ReservationDissolutionProposal{},
 	}[parsedActionType]
 	if !ok {
 		return nil, fmt.Errorf(

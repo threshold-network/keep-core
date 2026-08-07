@@ -32,6 +32,10 @@ const (
 	ActionRedemption
 	ActionMovingFunds
 	ActionMovedFundsSweep
+	ActionReservationAnchor
+	ActionReservedRedemption
+	ActionReservationReanchor
+	ActionReservationDissolution
 )
 
 // ParseWalletActionType parses the given value into a WalletActionType.
@@ -49,6 +53,14 @@ func ParseWalletActionType(value uint8) (WalletActionType, error) {
 		return ActionMovingFunds, nil
 	case 5:
 		return ActionMovedFundsSweep, nil
+	case 6:
+		return ActionReservationAnchor, nil
+	case 7:
+		return ActionReservedRedemption, nil
+	case 8:
+		return ActionReservationReanchor, nil
+	case 9:
+		return ActionReservationDissolution, nil
 	default:
 		return 0, fmt.Errorf("unknown wallet action type [%v]", value)
 	}
@@ -68,6 +80,14 @@ func (wat WalletActionType) String() string {
 		return "MovingFunds"
 	case ActionMovedFundsSweep:
 		return "MovedFundsSweep"
+	case ActionReservationAnchor:
+		return "ReservationAnchor"
+	case ActionReservedRedemption:
+		return "ReservedRedemption"
+	case ActionReservationReanchor:
+		return "ReservationReanchor"
+	case ActionReservationDissolution:
+		return "ReservationDissolution"
 	default:
 		panic("unknown wallet action type")
 	}

@@ -427,6 +427,50 @@ type WalletProposalValidatorChain interface {
 		},
 	) error
 
+	// GetReservation gets the on-chain reservation record for the given
+	// reservation key. Returns an error if the reservation was not found.
+	GetReservation(reservationKey *big.Int) (*Reservation, error)
+
+	// ReservationParameters gets the current on-chain values of the Bridge
+	// reservation parameters.
+	ReservationParameters() (*ReservationParameters, error)
+
+	// ValidateReservationAnchorProposal validates the given reservation
+	// anchor proposal against the chain. Returns an error if the proposal
+	// is not valid or nil otherwise.
+	ValidateReservationAnchorProposal(
+		walletPublicKeyHash [20]byte,
+		proposal *ReservationAnchorProposal,
+		depositExtraInfo struct {
+			*Deposit
+			FundingTx *bitcoin.Transaction
+		},
+	) error
+
+	// ValidateReservedRedemptionProposal validates the given reserved
+	// redemption proposal against the chain. Returns an error if the
+	// proposal is not valid or nil otherwise.
+	ValidateReservedRedemptionProposal(
+		walletPublicKeyHash [20]byte,
+		proposal *ReservedRedemptionProposal,
+	) error
+
+	// ValidateReservationReanchorProposal validates the given reservation
+	// re-anchor proposal against the chain. Returns an error if the
+	// proposal is not valid or nil otherwise.
+	ValidateReservationReanchorProposal(
+		sourceWalletPublicKeyHash [20]byte,
+		proposal *ReservationReanchorProposal,
+	) error
+
+	// ValidateReservationDissolutionProposal validates the given reservation
+	// dissolution proposal against the chain. Returns an error if the
+	// proposal is not valid or nil otherwise.
+	ValidateReservationDissolutionProposal(
+		walletPublicKeyHash [20]byte,
+		proposal *ReservationDissolutionProposal,
+	) error
+
 	// ValidateRedemptionProposal validates the given redemption proposal
 	// against the chain. Returns an error if the proposal is not valid or
 	// nil otherwise.
