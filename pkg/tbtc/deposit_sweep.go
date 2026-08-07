@@ -49,6 +49,20 @@ const (
 	// the transaction is known on the Bitcoin chain. This delay is needed
 	// as spreading the transaction over the Bitcoin network takes time.
 	depositSweepBroadcastCheckDelay = 1 * time.Minute
+	// MinSweepTxSatPerVByteFee mirrors tbtcpg.MinWalletTxSatPerVByteFee, the safe
+	// minimum sweep fee rate. It is duplicated here because pkg/tbtcpg imports
+	// pkg/tbtc, so this package cannot import the canonical constant without a
+	// dependency cycle; keep the two in sync. It is exported so the external
+	// tbtc_test package can compare it against the canonical tbtcpg value
+	// (guarded by TestSweepFeeConstantsMirrorTbtcpg). It backs a follower-side
+	// soft (log-only) check that the leader's proposed sweep fee is not below
+	// the floor (see threshold-network/keep-core#4171).
+	MinSweepTxSatPerVByteFee = 5
+	// DepositScriptByteSize mirrors tbtcpg.DepositScriptByteSize, the worst-case
+	// deposit script size used to estimate the sweep transaction virtual size.
+	// Exported alongside MinSweepTxSatPerVByteFee for the same cross-package
+	// drift guard.
+	DepositScriptByteSize = 126
 )
 
 // DepositSweepProposal represents a deposit sweep proposal issued by a
@@ -460,6 +474,61 @@ func ValidateDepositSweepProposal(
 	validateProposalLogger.Infof(
 		"deposit sweep proposal is valid",
 	)
+
+	// Follower-side soft check on the proposed fee. The on-chain
+	// WalletProposalValidator only bounds the sweep fee from above, not below,
+	// so a misbehaving or unpatched leader can propose a fee at the ~1 sat/vByte
+	// relay floor that this node would otherwise sign - the same underpricing
+	// that jams the wallet (see threshold-network/keep-core#4171). We recompute
+	// the safe minimum and warn if the proposal is below it.
+	//
+	// This is intentionally log-only, not a rejection: rejecting a below-floor
+	// proposal here would, during a mixed-version rollout, split signers (patched
+	// nodes reject, unpatched nodes sign) and could stall signing. Hard
+	// enforcement belongs on-chain in the WalletProposalValidator, or behind a
+	// coordinated all-nodes upgrade.
+	if sweepTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddScriptHashInputs(len(proposal.DepositsKeys), DepositScriptByteSize, true).
+		AddPublicKeyHashOutputs(1, true).
+		VirtualSize(); sizeErr != nil {
+		validateProposalLogger.Warnf(
+			"cannot estimate sweep tx size for the fee sanity check: [%v]",
+			sizeErr,
+		)
+	} else {
+		minSweepTxFee := big.NewInt(int64(MinSweepTxSatPerVByteFee) * sweepTxSize)
+
+		switch {
+		// This branch is defense-in-depth for test/mock chain implementations
+		// and is not expected to be reachable on the real production path: by
+		// the time control reaches this point, chain.ValidateDepositSweepProposal
+		// above has already ABI-packed proposal.SweepTxFee to call the on-chain
+		// WalletProposalValidator, which panics on a nil *big.Int before this
+		// code ever runs. Likewise, a proposal decoded off the wire
+		// (DepositSweepProposal.Unmarshal in marshaling.go) always constructs
+		// SweepTxFee via new(big.Int).SetBytes(...), which never yields nil.
+		case proposal.SweepTxFee == nil:
+			validateProposalLogger.Warnf(
+				"proposal has no sweep tx fee set; expected at least the safe "+
+					"minimum [%d] ([%d] sat/vByte * [%d] vByte)",
+				minSweepTxFee,
+				MinSweepTxSatPerVByteFee,
+				sweepTxSize,
+			)
+		case proposal.SweepTxFee.Cmp(minSweepTxFee) < 0:
+			validateProposalLogger.Warnf(
+				"proposed sweep tx fee [%v] is below the safe minimum [%d] "+
+					"([%d] sat/vByte * [%d] vByte); the leader may be underpricing "+
+					"the sweep, which risks it getting stuck in the mempool and "+
+					"jamming the wallet",
+				proposal.SweepTxFee,
+				minSweepTxFee,
+				MinSweepTxSatPerVByteFee,
+				sweepTxSize,
+			)
+		}
+	}
 
 	deposits := make([]*Deposit, len(depositExtraInfo))
 	for i, dei := range depositExtraInfo {

@@ -12,7 +12,7 @@ import (
 // with the given number of deposit inputs, mirroring the sizing that
 // EstimateDepositsSweepFee performs internally: 1 P2WPKH main-UTXO input,
 // depositsCount P2WSH deposit inputs, and 1 P2WPKH output. 126 ==
-// depositScriptByteSize.
+// DepositScriptByteSize.
 func sweepVirtualSize(t *testing.T, depositsCount int) int64 {
 	t.Helper()
 	size, err := bitcoin.NewTransactionSizeEstimator().
