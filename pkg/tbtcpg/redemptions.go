@@ -222,7 +222,7 @@ func (rt *RedemptionTask) ProposeRedemption(
 	if fee <= 0 {
 		taskLogger.Infof("estimating redemption transaction fee")
 
-		_, _, txMaxFee, txMaxTotalFee, _, _, _, err := rt.chain.GetRedemptionParameters()
+		redemptionParameters, err := rt.chain.GetRedemptionParameters()
 		if err != nil {
 			return nil, fmt.Errorf(
 				"cannot get redemption tx max total fee: [%w]",
@@ -233,7 +233,7 @@ func (rt *RedemptionTask) ProposeRedemption(
 		estimatedFee, err := EstimateRedemptionFee(
 			rt.btcChain,
 			redeemersOutputScripts,
-			txMaxTotalFee,
+			redemptionParameters.TxMaxTotalFee,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -259,13 +259,13 @@ func (rt *RedemptionTask) ProposeRedemption(
 		// diagnostic rather than an exact predictor.
 		requestsCount := int64(len(redeemersOutputScripts))
 		maxShare := fee/requestsCount + fee%requestsCount
-		if uint64(maxShare) > txMaxFee {
+		if uint64(maxShare) > redemptionParameters.TxMaxFee {
 			taskLogger.Warnf(
 				"floored redemption fee share [%d] exceeds the per-request "+
 					"maximum fee [%d]; the proposal will likely be rejected "+
 					"by on-chain validation",
 				maxShare,
-				txMaxFee,
+				redemptionParameters.TxMaxFee,
 			)
 		}
 	}
