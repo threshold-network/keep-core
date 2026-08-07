@@ -430,3 +430,58 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 		}
 	}
 }
+
+// TestDepositSweepMetricsRegistered tests that all deposit sweep counters and
+// duration metrics are registered upfront so they appear on the /metrics
+// endpoint before a deposit sweep action ever executes. Counters and
+// histograms recorded via IncrementCounter/RecordDuration are otherwise
+// created lazily on first use, which would leave them invisible to
+// Prometheus scraping until the metric first occurs - defeating their
+// purpose as an alerting signal.
+func TestDepositSweepMetricsRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry)
+
+	counters := []string{
+		MetricDepositSweepExecutionsTotal,
+		MetricDepositSweepExecutionsSuccessTotal,
+		MetricDepositSweepExecutionsFailedTotal,
+		MetricDepositSweepFeeBelowFloorTotal,
+	}
+
+	for _, counterName := range counters {
+		pm.countersMutex.RLock()
+		_, exists := pm.counters[counterName]
+		pm.countersMutex.RUnlock()
+		if !exists {
+			t.Errorf("counter %s should be registered upfront", counterName)
+			continue
+		}
+
+		if value := pm.GetCounterValue(counterName); value != 0 {
+			t.Errorf("counter %s should start at 0, got %v", counterName, value)
+		}
+
+		pm.IncrementCounter(counterName, 1)
+		if value := pm.GetCounterValue(counterName); value != 1 {
+			t.Errorf("counter %s should increment to 1, got %v", counterName, value)
+		}
+	}
+
+	histograms := []string{
+		MetricDepositSweepExecutionDurationSeconds,
+		MetricDepositSweepTxSigningDurationSeconds,
+	}
+
+	for _, histogramName := range histograms {
+		pm.histogramsMutex.RLock()
+		_, exists := pm.histograms[histogramName]
+		pm.histogramsMutex.RUnlock()
+		if !exists {
+			t.Errorf("histogram %s should be registered upfront", histogramName)
+		}
+	}
+}

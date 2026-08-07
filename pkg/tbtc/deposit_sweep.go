@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
 const (
@@ -148,7 +149,7 @@ func (dsa *depositSweepAction) execute() error {
 
 	// Record deposit sweep execution attempt
 	if dsa.metricsRecorder != nil {
-		dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_total", 1)
+		dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsTotal, 1)
 	}
 
 	validateProposalLogger := dsa.logger.With(
@@ -167,10 +168,25 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf("validate proposal step failed: [%v]", err)
+	}
+
+	// Follower-side observability for the below-floor sweep-fee soft check
+	// (threshold-network/keep-core#4171). ValidateDepositSweepProposal only warns
+	// in the logs when the leader's proposed fee is below the safe minimum;
+	// surface it as a counter too so operators can alert on underpriced proposals
+	// during a mixed-version rollout rather than grepping node logs. Log-only,
+	// like the check itself: the node still signs the proposal.
+	if dsa.metricsRecorder != nil {
+		if check, checkErr := checkSweepFeeFloor(dsa.proposal); checkErr == nil &&
+			check.belowFloor {
+			dsa.metricsRecorder.IncrementCounter(
+				clientinfo.MetricDepositSweepFeeBelowFloorTotal, 1,
+			)
+		}
 	}
 
 	walletMainUtxo, err := DetermineWalletMainUtxo(
@@ -180,8 +196,8 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf(
 			"error while determining wallet's main UTXO: [%v]",
@@ -197,8 +213,8 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf(
 			"error while ensuring wallet state is synced between "+
@@ -216,8 +232,8 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf(
 			"error while assembling deposit sweep transaction: [%v]",
@@ -232,8 +248,8 @@ func (dsa *depositSweepAction) execute() error {
 	// Just in case. This should never happen.
 	if dsa.proposalExpiryBlock < dsa.signingTimeoutSafetyMarginBlocks {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf("invalid proposal expiry block")
 	}
@@ -247,15 +263,15 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf("sign transaction step failed: [%v]", err)
 	}
 
 	// Record deposit sweep transaction signing duration
 	if dsa.metricsRecorder != nil {
-		dsa.metricsRecorder.RecordDuration("deposit_sweep_tx_signing_duration_seconds", time.Since(signingStartTime))
+		dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepTxSigningDurationSeconds, time.Since(signingStartTime))
 	}
 
 	broadcastTxLogger := dsa.logger.With(
@@ -271,16 +287,16 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf("broadcast transaction step failed: [%v]", err)
 	}
 
 	// Record successful deposit sweep execution
 	if dsa.metricsRecorder != nil {
-		dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_success_total", 1)
-		dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+		dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsSuccessTotal, 1)
+		dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 	}
 
 	return nil
@@ -487,47 +503,33 @@ func ValidateDepositSweepProposal(
 	// nodes reject, unpatched nodes sign) and could stall signing. Hard
 	// enforcement belongs on-chain in the WalletProposalValidator, or behind a
 	// coordinated all-nodes upgrade.
-	if sweepTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
-		AddPublicKeyHashInputs(1, true).
-		AddScriptHashInputs(len(proposal.DepositsKeys), DepositScriptByteSize, true).
-		AddPublicKeyHashOutputs(1, true).
-		VirtualSize(); sizeErr != nil {
+	check, checkErr := checkSweepFeeFloor(proposal)
+	switch {
+	case checkErr != nil:
 		validateProposalLogger.Warnf(
 			"cannot estimate sweep tx size for the fee sanity check: [%v]",
-			sizeErr,
+			checkErr,
 		)
-	} else {
-		minSweepTxFee := big.NewInt(int64(MinSweepTxSatPerVByteFee) * sweepTxSize)
+	case proposal.SweepTxFee == nil:
+		validateProposalLogger.Warnf(
+			"proposal has no sweep tx fee set; expected at least the safe "+
+				"minimum [%d] ([%d] sat/vByte * [%d] vByte)",
+			check.minSweepTxFee,
+			MinSweepTxSatPerVByteFee,
+			check.sweepTxSize,
+		)
+	case check.belowFloor:
+		validateProposalLogger.Warnf(
+			"proposed sweep tx fee [%v] is below the safe minimum [%d] "+
+				"([%d] sat/vByte * [%d] vByte); the leader may be underpricing "+
+				"the sweep, which risks it getting stuck in the mempool and "+
+				"jamming the wallet",
+			proposal.SweepTxFee,
+			check.minSweepTxFee,
+			MinSweepTxSatPerVByteFee,
+			check.sweepTxSize,
+		)
 
-		switch {
-		// This branch is defense-in-depth for test/mock chain implementations
-		// and is not expected to be reachable on the real production path: by
-		// the time control reaches this point, chain.ValidateDepositSweepProposal
-		// above has already ABI-packed proposal.SweepTxFee to call the on-chain
-		// WalletProposalValidator, which panics on a nil *big.Int before this
-		// code ever runs. Likewise, a proposal decoded off the wire
-		// (DepositSweepProposal.Unmarshal in marshaling.go) always constructs
-		// SweepTxFee via new(big.Int).SetBytes(...), which never yields nil.
-		case proposal.SweepTxFee == nil:
-			validateProposalLogger.Warnf(
-				"proposal has no sweep tx fee set; expected at least the safe "+
-					"minimum [%d] ([%d] sat/vByte * [%d] vByte)",
-				minSweepTxFee,
-				MinSweepTxSatPerVByteFee,
-				sweepTxSize,
-			)
-		case proposal.SweepTxFee.Cmp(minSweepTxFee) < 0:
-			validateProposalLogger.Warnf(
-				"proposed sweep tx fee [%v] is below the safe minimum [%d] "+
-					"([%d] sat/vByte * [%d] vByte); the leader may be underpricing "+
-					"the sweep, which risks it getting stuck in the mempool and "+
-					"jamming the wallet",
-				proposal.SweepTxFee,
-				minSweepTxFee,
-				MinSweepTxSatPerVByteFee,
-				sweepTxSize,
-			)
-		}
 	}
 
 	deposits := make([]*Deposit, len(depositExtraInfo))
@@ -536,6 +538,49 @@ func ValidateDepositSweepProposal(
 	}
 
 	return deposits, nil
+}
+
+// sweepFeeCheck is the result of the follower-side soft check that recomputes
+// the safe-minimum sweep fee and compares it against the leader's proposed fee.
+type sweepFeeCheck struct {
+	// sweepTxSize is the estimated virtual size, in vBytes, of the sweep
+	// transaction described by the proposal.
+	sweepTxSize int64
+	// minSweepTxFee is the safe-minimum total fee (MinSweepTxSatPerVByteFee *
+	// sweepTxSize) the proposal is expected to meet or exceed.
+	minSweepTxFee *big.Int
+	// belowFloor is true when the proposal fails to meet the safe minimum,
+	// either because the proposed fee is strictly below minSweepTxFee or because
+	// no fee is set at all (proposal.SweepTxFee == nil, treated as below floor).
+	belowFloor bool
+}
+
+// checkSweepFeeFloor recomputes the safe-minimum sweep fee for the given
+// proposal and reports whether the proposed fee is below it. Extracting the
+// decision from ValidateDepositSweepProposal keeps it directly testable (rather
+// than asserting on logger output) and lets the follower emit a below-floor
+// metric without recomputing the estimate inline. It returns an error only when
+// the sweep transaction virtual size cannot be estimated.
+func checkSweepFeeFloor(proposal *DepositSweepProposal) (sweepFeeCheck, error) {
+	sweepTxSize, err := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddScriptHashInputs(len(proposal.DepositsKeys), DepositScriptByteSize, true).
+		AddPublicKeyHashOutputs(1, true).
+		VirtualSize()
+	if err != nil {
+		return sweepFeeCheck{}, err
+	}
+
+	minSweepTxFee := big.NewInt(int64(MinSweepTxSatPerVByteFee) * sweepTxSize)
+
+	belowFloor := proposal.SweepTxFee == nil ||
+		proposal.SweepTxFee.Cmp(minSweepTxFee) < 0
+
+	return sweepFeeCheck{
+		sweepTxSize:   sweepTxSize,
+		minSweepTxFee: minSweepTxFee,
+		belowFloor:    belowFloor,
+	}, nil
 }
 
 func (dsa *depositSweepAction) wallet() wallet {

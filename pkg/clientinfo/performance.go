@@ -113,6 +113,10 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricSigningSuccessTotal,
 		MetricSigningFailedTotal,
 		MetricSigningTimeoutsTotal,
+		MetricDepositSweepExecutionsTotal,
+		MetricDepositSweepExecutionsSuccessTotal,
+		MetricDepositSweepExecutionsFailedTotal,
+		MetricDepositSweepFeeBelowFloorTotal,
 		MetricRedemptionExecutionsTotal,
 		MetricRedemptionExecutionsSuccessTotal,
 		MetricRedemptionExecutionsFailedTotal,
@@ -241,6 +245,8 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	durationMetrics := []string{
 		MetricDKGDurationSeconds,
 		MetricSigningDurationSeconds,
+		MetricDepositSweepExecutionDurationSeconds,
+		MetricDepositSweepTxSigningDurationSeconds,
 		MetricRedemptionActionDurationSeconds,
 		MetricWalletActionDurationSeconds,
 		MetricCoordinationDurationSeconds,
@@ -622,6 +628,17 @@ const (
 	MetricSigningDurationSeconds      = "signing_duration_seconds"
 	MetricSigningAttemptsPerOperation = "signing_attempts_per_operation"
 	MetricSigningTimeoutsTotal        = "signing_timeouts_total"
+
+	// Deposit Sweep Metrics
+	MetricDepositSweepExecutionsTotal          = "deposit_sweep_executions_total"
+	MetricDepositSweepExecutionsSuccessTotal   = "deposit_sweep_executions_success_total"
+	MetricDepositSweepExecutionsFailedTotal    = "deposit_sweep_executions_failed_total"
+	MetricDepositSweepExecutionDurationSeconds = "deposit_sweep_execution_duration_seconds"
+	MetricDepositSweepTxSigningDurationSeconds = "deposit_sweep_tx_signing_duration_seconds"
+	// MetricDepositSweepFeeBelowFloorTotal backs the follower-side soft check
+	// that the leader's proposed sweep fee is not below the safe minimum (see
+	// threshold-network/keep-core#4171).
+	MetricDepositSweepFeeBelowFloorTotal = "deposit_sweep_fee_below_floor_total"
 
 	// Redemption Metrics
 	MetricRedemptionExecutionsTotal        = "redemption_executions_total"
