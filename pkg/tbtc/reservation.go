@@ -127,7 +127,17 @@ func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
 
 // Unmarshal converts a byte array back to the reservationAnchorProposal.
 func (rap *ReservationAnchorProposal) Unmarshal(bytes []byte) error {
-	return json.Unmarshal(bytes, rap)
+	var proposal ReservationAnchorProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if proposal.AnchorTxFee == nil {
+		return fmt.Errorf("anchor transaction fee is required")
+	}
+
+	*rap = proposal
+
+	return nil
 }
 
 // ReservedRedemptionProposal represents a reserved redemption proposal
@@ -162,7 +172,20 @@ func (rrp *ReservedRedemptionProposal) Marshal() ([]byte, error) {
 
 // Unmarshal converts a byte array back to the reservedRedemptionProposal.
 func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
-	return json.Unmarshal(bytes, rrp)
+	var proposal ReservedRedemptionProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if proposal.ReservationKey == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	if proposal.RedemptionTxFee == nil {
+		return fmt.Errorf("redemption transaction fee is required")
+	}
+
+	*rrp = proposal
+
+	return nil
 }
 
 // ReservationReanchorProposal represents a reservation re-anchor proposal
@@ -199,7 +222,20 @@ func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
 
 // Unmarshal converts a byte array back to the reservationReanchorProposal.
 func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
-	return json.Unmarshal(bytes, rrp)
+	var proposal ReservationReanchorProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if proposal.ReservationKey == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	if proposal.ReanchorTxFee == nil {
+		return fmt.Errorf("re-anchor transaction fee is required")
+	}
+
+	*rrp = proposal
+
+	return nil
 }
 
 // ReservationDissolutionProposal represents a reservation dissolution
@@ -234,7 +270,20 @@ func (rdp *ReservationDissolutionProposal) Marshal() ([]byte, error) {
 
 // Unmarshal converts a byte array back to the reservationDissolutionProposal.
 func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
-	return json.Unmarshal(bytes, rdp)
+	var proposal ReservationDissolutionProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if proposal.ReservationKey == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	if proposal.DissolutionTxFee == nil {
+		return fmt.Errorf("dissolution transaction fee is required")
+	}
+
+	*rdp = proposal
+
+	return nil
 }
 
 // assembleReservationAnchorTransaction constructs an unsigned reservation

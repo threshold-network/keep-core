@@ -98,6 +98,32 @@ func TestParseWalletActionType(t *testing.T) {
 	}
 }
 
+func TestWalletActionType_MetricName(t *testing.T) {
+	tests := map[WalletActionType]string{
+		ActionNoop:                   "noop",
+		ActionHeartbeat:              "heartbeat",
+		ActionDepositSweep:           "deposit_sweep",
+		ActionRedemption:             "redemption",
+		ActionMovingFunds:            "moving_funds",
+		ActionMovedFundsSweep:        "moved_funds_sweep",
+		ActionReservationAnchor:      "reservation_anchor",
+		ActionReservedRedemption:     "reserved_redemption",
+		ActionReservationReanchor:    "reservation_reanchor",
+		ActionReservationDissolution: "reservation_dissolution",
+	}
+
+	for actionType, expected := range tests {
+		if actual := actionType.MetricName(); actual != expected {
+			t.Errorf(
+				"unexpected metric name for action type [%v]\nexpected: [%v]\nactual:   [%v]",
+				actionType,
+				expected,
+				actual,
+			)
+		}
+	}
+}
+
 func TestWalletDispatcher_Dispatch(t *testing.T) {
 	walletDispatcher := newWalletDispatcher()
 

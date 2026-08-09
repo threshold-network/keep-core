@@ -109,6 +109,14 @@ func (wat WalletActionType) MetricName() string {
 		return "moving_funds"
 	case ActionMovedFundsSweep:
 		return "moved_funds_sweep"
+	case ActionReservationAnchor:
+		return "reservation_anchor"
+	case ActionReservedRedemption:
+		return "reserved_redemption"
+	case ActionReservationReanchor:
+		return "reservation_reanchor"
+	case ActionReservationDissolution:
+		return "reservation_dissolution"
 	default:
 		panic("unknown wallet action type")
 	}
