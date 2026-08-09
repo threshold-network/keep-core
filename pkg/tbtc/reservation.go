@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/big"
 
+	"golang.org/x/crypto/sha3"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 )
@@ -31,14 +33,18 @@ const (
 	// ReservationStateUnknown means the reservation is unknown to the Bridge.
 	ReservationStateUnknown ReservationState = iota
 	// ReservationStateActive means the reservation's anchor outpoint is under
-	// wallet custody.
+	// wallet custody with no action in flight.
 	ReservationStateActive
-	// ReservationStateRedemptionRequested means the reservation owner
-	// requested an in-kind redemption of the anchor outpoint.
-	ReservationStateRedemptionRequested
+	// ReservationStateActionPending means a redemption, re-anchor, or
+	// dissolution action is pending. The action details are held in the
+	// nonce-keyed ReservationAction record.
+	ReservationStateActionPending
 	// ReservationStateClosed means the reservation was closed by an in-kind
-	// redemption or a dissolution.
+	// redemption, dissolution, or late settlement.
 	ReservationStateClosed
+	// ReservationStateStranded means the custodying wallet was terminated
+	// while the anchor was outstanding and the anchor is no longer tracked.
+	ReservationStateStranded
 )
 
 // Reservation represents an on-chain UTXO reservation record. A reservation
@@ -53,6 +59,8 @@ type Reservation struct {
 	// MintedAmount is the gross amount in satoshi credited to the owner at
 	// acceptance time.
 	MintedAmount uint64
+	// AcceptedAt is the UNIX timestamp the reservation was accepted at.
+	AcceptedAt uint32
 	// WalletPublicKeyHash is the 20-byte public key hash of the wallet
 	// custodying the current anchor outpoint.
 	WalletPublicKeyHash [20]byte
@@ -63,15 +71,75 @@ type Reservation struct {
 	ExpiresAt uint32
 	// State is the current state of the reservation.
 	State ReservationState
-	// RedemptionRequestedAt is the UNIX timestamp the pending reserved
-	// redemption was requested at. Zero when no redemption is pending.
-	RedemptionRequestedAt uint32
-	// RedemptionTxMaxFee is the maximum transaction fee in satoshi
-	// snapshotted at redemption request time.
-	RedemptionTxMaxFee uint64
-	// RedeemerOutputScript is the output script the pending reserved
-	// redemption must pay to. Empty when no redemption is pending.
-	RedeemerOutputScript bitcoin.Script
+	// RequestNonce is the current monotonic reservation action generation.
+	RequestNonce uint64
+	// RetryCredit indicates the owner has a single-use fee-free redemption
+	// retry entitlement after a fee-paid redemption timed out.
+	RetryCredit bool
+	// DissolutionEligibleAt is the UNIX timestamp at which the current term
+	// becomes eligible for dissolution.
+	DissolutionEligibleAt uint32
+}
+
+// ReservationActionType represents the type of a reservation action
+// generation.
+type ReservationActionType uint8
+
+const (
+	ReservationActionTypeNone ReservationActionType = iota
+	ReservationActionTypeAcceptance
+	ReservationActionTypeRedemption
+	ReservationActionTypeReanchor
+	ReservationActionTypeDissolution
+)
+
+// ReservationActionState represents the settlement state of a reservation
+// action generation.
+type ReservationActionState uint8
+
+const (
+	ReservationActionStateUnknown ReservationActionState = iota
+	ReservationActionStatePending
+	ReservationActionStateSettled
+	ReservationActionStateTimedOut
+	ReservationActionStateVetoed
+	ReservationActionStateSuperseded
+)
+
+// ReservationAction represents one nonce-bound generation of a reservation
+// action. All authorization data used to construct and settle the action is
+// snapshotted when the generation is requested.
+type ReservationAction struct {
+	// TargetWalletPublicKeyHash is the wallet an acceptance, re-anchor, or
+	// dissolution output must pay to. It is zero for redemptions.
+	TargetWalletPublicKeyHash [20]byte
+	// RequestedAt is the UNIX timestamp the action was requested at.
+	RequestedAt uint32
+	// TimeoutAt is the UNIX timestamp after which the action may time out.
+	TimeoutAt uint32
+	// TxMaxFee is the snapshotted maximum Bitcoin transaction fee in satoshi.
+	TxMaxFee uint64
+	// ActionType is the type of this action generation.
+	ActionType ReservationActionType
+	// State is the settlement state of this action generation.
+	State ReservationActionState
+	// FeePaid indicates the generation was created through a fee-paying vault
+	// entry point.
+	FeePaid bool
+	// Redeemer is the address that can reclaim escrow after a redemption
+	// timeout. It is empty for other action types.
+	Redeemer chain.Address
+	// Amount is the satoshi amount associated with the action generation.
+	Amount uint64
+	// RedeemerOutputScriptHash is the keccak256 hash of the length-prefixed
+	// output script authorized for a redemption.
+	RedeemerOutputScriptHash [32]byte
+	// ExpectedMainUtxoHash identifies the wallet main UTXO snapshotted for a
+	// dissolution. It is zero for other action types and no-main-UTXO wallets.
+	ExpectedMainUtxoHash [32]byte
+	// IsPartial indicates a redemption spends only Amount and must re-anchor
+	// the remaining reservation value back to the custodying wallet.
+	IsPartial bool
 }
 
 // ReservationParameters represents the on-chain values of the Bridge
@@ -88,9 +156,24 @@ type ReservationParameters struct {
 	ReservationTxMaxFee uint64
 	// ReservationTermSeconds is the custody term length in seconds.
 	ReservationTermSeconds uint32
-	// ReservationGracePeriod is the grace period in seconds after term
-	// expiry during which the reservation cannot be dissolved yet.
-	ReservationGracePeriod uint32
+	// ReservationDissolutionDelay is the delay snapshotted after term expiry
+	// before a reservation becomes dissolvable.
+	ReservationDissolutionDelay uint32
+	// ReservationMaxTotalAmount is the maximum total amount of all active
+	// reservations in satoshi.
+	ReservationMaxTotalAmount uint64
+	// ReservationTotalAmount is the current total amount of all active
+	// reservations in satoshi.
+	ReservationTotalAmount uint64
+	// MaxReservationsPerWallet is the maximum number of reservations a wallet
+	// may custody.
+	MaxReservationsPerWallet uint32
+	// ReservationActionTimeout is the timeout for reservation actions in
+	// seconds.
+	ReservationActionTimeout uint32
+	// ReservationRenewalWindowSeconds is the period before expiry during which
+	// a reservation can be renewed.
+	ReservationRenewalWindowSeconds uint32
 }
 
 // ReservationAnchorProposal represents a reservation anchor proposal issued
@@ -102,6 +185,8 @@ type ReservationAnchorProposal struct {
 	// DepositFundingOutputIndex is the funding output index of the reserved
 	// deposit to anchor.
 	DepositFundingOutputIndex uint32
+	// RequestNonce is the acceptance authorization generation being executed.
+	RequestNonce uint64
 	// AnchorTxFee is the proposed BTC fee for the anchor transaction.
 	AnchorTxFee *big.Int
 }
@@ -134,6 +219,9 @@ func (rap *ReservationAnchorProposal) Unmarshal(bytes []byte) error {
 	if proposal.AnchorTxFee == nil {
 		return fmt.Errorf("anchor transaction fee is required")
 	}
+	if proposal.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
 
 	*rap = proposal
 
@@ -146,6 +234,8 @@ type ReservedRedemptionProposal struct {
 	// ReservationKey is the key of the reservation with the pending reserved
 	// redemption.
 	ReservationKey *big.Int
+	// RequestNonce is the redemption request generation being executed.
+	RequestNonce uint64
 	// RedemptionTxFee is the proposed BTC fee for the reserved redemption
 	// transaction.
 	RedemptionTxFee *big.Int
@@ -179,6 +269,9 @@ func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
 	if proposal.ReservationKey == nil {
 		return fmt.Errorf("reservation key is required")
 	}
+	if proposal.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
 	if proposal.RedemptionTxFee == nil {
 		return fmt.Errorf("redemption transaction fee is required")
 	}
@@ -194,6 +287,8 @@ func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
 type ReservationReanchorProposal struct {
 	// ReservationKey is the key of the reservation to re-anchor.
 	ReservationKey *big.Int
+	// RequestNonce is the re-anchor authorization generation being executed.
+	RequestNonce uint64
 	// TargetWalletPublicKeyHash is the 20-byte public key hash of the wallet
 	// receiving the anchor.
 	TargetWalletPublicKeyHash [20]byte
@@ -229,6 +324,9 @@ func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
 	if proposal.ReservationKey == nil {
 		return fmt.Errorf("reservation key is required")
 	}
+	if proposal.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
 	if proposal.ReanchorTxFee == nil {
 		return fmt.Errorf("re-anchor transaction fee is required")
 	}
@@ -244,6 +342,8 @@ func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
 type ReservationDissolutionProposal struct {
 	// ReservationKey is the key of the reservation to dissolve.
 	ReservationKey *big.Int
+	// RequestNonce is the dissolution authorization generation being executed.
+	RequestNonce uint64
 	// DissolutionTxFee is the proposed BTC fee for the dissolution
 	// transaction.
 	DissolutionTxFee *big.Int
@@ -276,6 +376,9 @@ func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
 	}
 	if proposal.ReservationKey == nil {
 		return fmt.Errorf("reservation key is required")
+	}
+	if proposal.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
 	}
 	if proposal.DissolutionTxFee == nil {
 		return fmt.Errorf("dissolution transaction fee is required")
@@ -338,14 +441,17 @@ func assembleReservationAnchorTransaction(
 }
 
 // assembleReservedRedemptionTransaction constructs an unsigned reserved
-// redemption transaction: a 1-input-1-output spend of the reservation's
-// anchor outpoint to the redeemer output script. The full gross claim is
-// burned on the host chain upon the SPV proof of this transaction; the
-// Bitcoin miner fee is the only in-kind deduction.
+// redemption transaction for the given nonce-bound action. A whole redemption
+// is a 1-input-1-output spend to the redeemer. A partial redemption is a
+// 1-input-2-output spend whose first output pays the authorized amount less
+// the miner fee to the redeemer and whose second output re-anchors the exact
+// remainder to the custodying wallet.
 func assembleReservedRedemptionTransaction(
 	bitcoinChain bitcoin.Chain,
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
+	walletPublicKeyHash [20]byte,
 	redeemerOutputScript bitcoin.Script,
+	action *ReservationAction,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
 	if anchorUtxo == nil {
@@ -354,10 +460,56 @@ func assembleReservedRedemptionTransaction(
 	if len(redeemerOutputScript) == 0 {
 		return nil, fmt.Errorf("redeemer output script is required")
 	}
+	if action == nil {
+		return nil, fmt.Errorf("reservation action is required")
+	}
+	if action.ActionType != ReservationActionTypeRedemption {
+		return nil, fmt.Errorf("reservation action is not a redemption")
+	}
+	if action.State != ReservationActionStatePending {
+		return nil, fmt.Errorf("reservation action is not pending")
+	}
+	if anchorUtxo.Value <= 0 {
+		return nil, fmt.Errorf("anchor UTXO value must be positive")
+	}
+	if action.Amount == 0 {
+		return nil, fmt.Errorf("redemption amount must be positive")
+	}
+	if action.Amount > uint64(anchorUtxo.Value) {
+		return nil, fmt.Errorf("redemption amount exceeds the anchor value")
+	}
+	if fee <= 0 {
+		return nil, fmt.Errorf("transaction fee must be positive")
+	}
+	if uint64(fee) > action.TxMaxFee {
+		return nil, fmt.Errorf("transaction fee exceeds the action fee limit")
+	}
+
+	redeemerOutputScriptHash, err := computeReservationRedeemerOutputScriptHash(
+		redeemerOutputScript,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if redeemerOutputScriptHash != action.RedeemerOutputScriptHash {
+		return nil, fmt.Errorf("redeemer output script is not authorized")
+	}
+
+	if action.IsPartial {
+		if action.Amount == uint64(anchorUtxo.Value) {
+			return nil, fmt.Errorf(
+				"partial redemption amount must be less than the anchor value",
+			)
+		}
+	} else if action.Amount != uint64(anchorUtxo.Value) {
+		return nil, fmt.Errorf(
+			"whole redemption amount must equal the anchor value",
+		)
+	}
 
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
 
-	err := builder.AddPublicKeyHashInput(anchorUtxo)
+	err = builder.AddPublicKeyHashInput(anchorUtxo)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot add input pointing to anchor UTXO: [%v]",
@@ -365,10 +517,15 @@ func assembleReservedRedemptionTransaction(
 		)
 	}
 
-	redemptionValue := anchorUtxo.Value - fee
+	redemptionAmount := anchorUtxo.Value
+	if action.IsPartial {
+		redemptionAmount = int64(action.Amount)
+	}
+
+	redemptionValue := redemptionAmount - fee
 	if redemptionValue <= 0 {
 		return nil, fmt.Errorf(
-			"transaction fee exceeds the anchor value",
+			"transaction fee exceeds the redemption amount",
 		)
 	}
 
@@ -377,7 +534,44 @@ func assembleReservedRedemptionTransaction(
 		PublicKeyScript: redeemerOutputScript,
 	})
 
+	if action.IsPartial {
+		remainderScript, err := bitcoin.PayToWitnessPublicKeyHash(
+			walletPublicKeyHash,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("cannot compute remainder script: [%v]", err)
+		}
+
+		builder.AddOutput(&bitcoin.TransactionOutput{
+			Value:           anchorUtxo.Value - int64(action.Amount),
+			PublicKeyScript: remainderScript,
+		})
+	}
+
 	return builder, nil
+}
+
+// computeReservationRedeemerOutputScriptHash computes the authorization hash
+// stored in a reservation action. The Bridge hashes the Bitcoin output script
+// including its CompactSize length prefix.
+func computeReservationRedeemerOutputScriptHash(
+	redeemerOutputScript bitcoin.Script,
+) ([32]byte, error) {
+	prefixedScript, err := redeemerOutputScript.ToVarLenData()
+	if err != nil {
+		return [32]byte{}, fmt.Errorf(
+			"cannot build prefixed redeemer output script: [%v]",
+			err,
+		)
+	}
+
+	hasher := sha3.NewLegacyKeccak256()
+	_, _ = hasher.Write(prefixedScript)
+
+	var result [32]byte
+	copy(result[:], hasher.Sum(nil))
+
+	return result, nil
 }
 
 // assembleReservationReanchorTransaction constructs an unsigned reservation

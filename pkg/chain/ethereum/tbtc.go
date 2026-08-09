@@ -2420,6 +2420,19 @@ func (tc *TbtcChain) GetReservation(
 	)
 }
 
+// GetReservationAction is not yet supported by the Ethereum chain
+// implementation: the reservation contract bindings will be regenerated once
+// the reservation Bridge API is published with the @keep-network/tbtc-v2
+// package.
+func (tc *TbtcChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationAction, error) {
+	return nil, fmt.Errorf(
+		"reservations not supported yet by the Ethereum chain implementation",
+	)
+}
+
 // ReservationParameters is not yet supported by the Ethereum chain
 // implementation: the reservation contract bindings will be regenerated once
 // the reservation Bridge API is published with the @keep-network/tbtc-v2
