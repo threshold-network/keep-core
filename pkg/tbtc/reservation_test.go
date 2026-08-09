@@ -339,32 +339,12 @@ func TestAssembleReservedRedemptionTransaction(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			sigHashes, err := builder.ComputeSignatureHashes()
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			privateKey := &ecdsa.PrivateKey{
-				PublicKey: *wallet.publicKey,
-				D:         privateKeyValue,
-			}
-			signatures := make([]*bitcoin.SignatureContainer, len(sigHashes))
-			for i, sigHash := range sigHashes {
-				r, s, err := ecdsa.Sign(rand.Reader, privateKey, sigHash.Bytes())
-				if err != nil {
-					t.Fatal(err)
-				}
-				signatures[i] = &bitcoin.SignatureContainer{
-					R:         r,
-					S:         s,
-					PublicKey: wallet.publicKey,
-				}
-			}
-
-			transaction, err := builder.AddSignatures(signatures)
-			if err != nil {
-				t.Fatal(err)
-			}
+			transaction := signReservationTransaction(
+				t,
+				builder,
+				wallet.publicKey,
+				privateKeyValue,
+			)
 
 			if !reflect.DeepEqual(test.expectedOutputs, transaction.Outputs) {
 				t.Errorf(
@@ -377,8 +357,196 @@ func TestAssembleReservedRedemptionTransaction(t *testing.T) {
 	}
 }
 
+func TestAssembleReservationDissolutionTransaction(t *testing.T) {
+	bitcoinChain := newLocalBitcoinChain()
+	bridgeChain := Connect()
+
+	privateKeyValue := big.NewInt(100)
+	wallet := generateWallet(privateKeyValue)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
+	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x01},
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: walletScript,
+			},
+			{
+				Value:           200000,
+				PublicKeyScript: walletScript,
+			},
+		},
+	}
+	if err := bitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	anchorUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: fundingTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	}
+	walletMainUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: fundingTransaction.Hash(),
+			OutputIndex:     1,
+		},
+		Value: 200000,
+	}
+
+	baseAction := ReservationAction{
+		TargetWalletPublicKeyHash: walletPublicKeyHash,
+		TxMaxFee:                  2000,
+		ActionType:                ReservationActionTypeDissolution,
+		State:                     ReservationActionStatePending,
+		Amount:                    100000,
+	}
+
+	tests := map[string]struct {
+		action              *ReservationAction
+		expectedInputUtxos  []*bitcoin.UnspentTransactionOutput
+		expectedOutputValue int64
+	}{
+		"snapshotted main UTXO": {
+			action: func() *ReservationAction {
+				action := baseAction
+				action.ExpectedMainUtxoHash = bridgeChain.ComputeMainUtxoHash(
+					walletMainUtxo,
+				)
+				return &action
+			}(),
+			expectedInputUtxos: []*bitcoin.UnspentTransactionOutput{
+				anchorUtxo,
+				walletMainUtxo,
+			},
+			expectedOutputValue: 298500,
+		},
+		"no-main-UTXO snapshot with newly current main UTXO": {
+			action: &baseAction,
+			expectedInputUtxos: []*bitcoin.UnspentTransactionOutput{
+				anchorUtxo,
+			},
+			expectedOutputValue: 98500,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			builder, err := assembleReservationDissolutionTransaction(
+				bitcoinChain,
+				bridgeChain,
+				anchorUtxo,
+				walletMainUtxo,
+				walletPublicKeyHash,
+				test.action,
+				1500,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			transaction := signReservationTransaction(
+				t,
+				builder,
+				wallet.publicKey,
+				privateKeyValue,
+			)
+
+			if len(transaction.Inputs) != len(test.expectedInputUtxos) {
+				t.Fatalf(
+					"unexpected input count\nexpected: [%v]\nactual:   [%v]",
+					len(test.expectedInputUtxos),
+					len(transaction.Inputs),
+				)
+			}
+			for i, expectedInputUtxo := range test.expectedInputUtxos {
+				if !reflect.DeepEqual(
+					expectedInputUtxo.Outpoint,
+					transaction.Inputs[i].Outpoint,
+				) {
+					t.Errorf(
+						"unexpected input at index [%v]\nexpected: [%+v]\nactual:   [%+v]",
+						i,
+						expectedInputUtxo.Outpoint,
+						transaction.Inputs[i].Outpoint,
+					)
+				}
+			}
+
+			expectedOutputs := []*bitcoin.TransactionOutput{
+				{
+					Value:           test.expectedOutputValue,
+					PublicKeyScript: walletScript,
+				},
+			}
+			if !reflect.DeepEqual(expectedOutputs, transaction.Outputs) {
+				t.Errorf(
+					"unexpected outputs\nexpected: [%+v]\nactual:   [%+v]",
+					expectedOutputs,
+					transaction.Outputs,
+				)
+			}
+		})
+	}
+}
+
+func signReservationTransaction(
+	t *testing.T,
+	builder *bitcoin.TransactionBuilder,
+	publicKey *ecdsa.PublicKey,
+	privateKeyValue *big.Int,
+) *bitcoin.Transaction {
+	t.Helper()
+
+	sigHashes, err := builder.ComputeSignatureHashes()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	privateKey := &ecdsa.PrivateKey{
+		PublicKey: *publicKey,
+		D:         privateKeyValue,
+	}
+	signatures := make([]*bitcoin.SignatureContainer, len(sigHashes))
+	for i, sigHash := range sigHashes {
+		r, s, err := ecdsa.Sign(rand.Reader, privateKey, sigHash.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		signatures[i] = &bitcoin.SignatureContainer{
+			R:         r,
+			S:         s,
+			PublicKey: publicKey,
+		}
+	}
+
+	transaction, err := builder.AddSignatures(signatures)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return transaction
+}
+
 func TestAssembleReservationTransactions_InputValidation(t *testing.T) {
 	bitcoinChain := newLocalBitcoinChain()
+	bridgeChain := Connect()
 	walletPublicKeyHash := [20]byte{0x01}
 	redeemerScript := bitcoin.Script{0x00, 0x14, 0x02}
 
@@ -401,6 +569,13 @@ func TestAssembleReservationTransactions_InputValidation(t *testing.T) {
 		State:                    ReservationActionStatePending,
 		Amount:                   100000,
 		RedeemerOutputScriptHash: redeemerOutputScriptHash,
+	}
+	dissolutionAction := &ReservationAction{
+		TargetWalletPublicKeyHash: walletPublicKeyHash,
+		TxMaxFee:                  2000,
+		ActionType:                ReservationActionTypeDissolution,
+		State:                     ReservationActionStatePending,
+		Amount:                    100000,
 	}
 
 	assertError := func(err error, expected string) {
@@ -530,10 +705,66 @@ func TestAssembleReservationTransactions_InputValidation(t *testing.T) {
 
 	_, err = assembleReservationDissolutionTransaction(
 		bitcoinChain,
+		bridgeChain,
 		nil,
 		nil,
 		walletPublicKeyHash,
+		dissolutionAction,
 		1500,
 	)
 	assertError(err, "anchor UTXO is required")
+
+	_, err = assembleReservationDissolutionTransaction(
+		bitcoinChain,
+		bridgeChain,
+		anchorUtxo,
+		nil,
+		walletPublicKeyHash,
+		nil,
+		1500,
+	)
+	assertError(err, "reservation action is required")
+
+	snapshottedMainUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: bitcoin.Hash{0x04},
+			OutputIndex:     1,
+		},
+		Value: 200000,
+	}
+	actionWithMainUtxo := *dissolutionAction
+	actionWithMainUtxo.ExpectedMainUtxoHash = bridgeChain.ComputeMainUtxoHash(
+		snapshottedMainUtxo,
+	)
+	_, err = assembleReservationDissolutionTransaction(
+		bitcoinChain,
+		bridgeChain,
+		anchorUtxo,
+		nil,
+		walletPublicKeyHash,
+		&actionWithMainUtxo,
+		1500,
+	)
+	assertError(err, "wallet main UTXO is required by the dissolution action")
+
+	currentMainUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: bitcoin.Hash{0x05},
+			OutputIndex:     2,
+		},
+		Value: 300000,
+	}
+	_, err = assembleReservationDissolutionTransaction(
+		bitcoinChain,
+		bridgeChain,
+		anchorUtxo,
+		currentMainUtxo,
+		walletPublicKeyHash,
+		&actionWithMainUtxo,
+		1500,
+	)
+	assertError(
+		err,
+		"wallet main UTXO does not match the dissolution action snapshot",
+	)
 }
