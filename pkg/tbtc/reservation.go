@@ -621,19 +621,65 @@ func assembleReservationReanchorTransaction(
 }
 
 // assembleReservationDissolutionTransaction constructs an unsigned
-// reservation dissolution transaction merging an expired reservation's
-// anchor outpoint into the wallet main UTXO: the anchor outpoint is the
-// first input, the wallet main UTXO (if it exists) is the second input, and
-// the single output paying back to the wallet becomes its new main UTXO.
+// reservation dissolution transaction for the given nonce-bound action. The
+// anchor outpoint is the first input. The wallet main UTXO is the second input
+// only when it is present in the action snapshot and matches that snapshot
+// exactly. The single output pays back to the custodying wallet.
 func assembleReservationDissolutionTransaction(
 	bitcoinChain bitcoin.Chain,
+	bridgeChain BridgeChain,
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
 	walletMainUtxo *bitcoin.UnspentTransactionOutput,
 	walletPublicKeyHash [20]byte,
+	action *ReservationAction,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
+	}
+	if action == nil {
+		return nil, fmt.Errorf("reservation action is required")
+	}
+	if action.ActionType != ReservationActionTypeDissolution {
+		return nil, fmt.Errorf("reservation action is not a dissolution")
+	}
+	if action.State != ReservationActionStatePending {
+		return nil, fmt.Errorf("reservation action is not pending")
+	}
+	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
+		return nil, fmt.Errorf("dissolution action targets a different wallet")
+	}
+	if anchorUtxo.Value <= 0 {
+		return nil, fmt.Errorf("anchor UTXO value must be positive")
+	}
+	if action.Amount != uint64(anchorUtxo.Value) {
+		return nil, fmt.Errorf(
+			"dissolution action amount does not match the anchor value",
+		)
+	}
+	if fee <= 0 {
+		return nil, fmt.Errorf("transaction fee must be positive")
+	}
+	if uint64(fee) > action.TxMaxFee {
+		return nil, fmt.Errorf("transaction fee exceeds the action fee limit")
+	}
+
+	mainUtxoExpected := action.ExpectedMainUtxoHash != [32]byte{}
+	if mainUtxoExpected {
+		if bridgeChain == nil {
+			return nil, fmt.Errorf("bridge chain is required")
+		}
+		if walletMainUtxo == nil {
+			return nil, fmt.Errorf(
+				"wallet main UTXO is required by the dissolution action",
+			)
+		}
+		if bridgeChain.ComputeMainUtxoHash(walletMainUtxo) !=
+			action.ExpectedMainUtxoHash {
+			return nil, fmt.Errorf(
+				"wallet main UTXO does not match the dissolution action snapshot",
+			)
+		}
 	}
 
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
@@ -649,7 +695,7 @@ func assembleReservationDissolutionTransaction(
 
 	totalInputsValue := anchorUtxo.Value
 
-	if walletMainUtxo != nil {
+	if mainUtxoExpected {
 		err = builder.AddPublicKeyHashInput(walletMainUtxo)
 		if err != nil {
 			return nil, fmt.Errorf(
