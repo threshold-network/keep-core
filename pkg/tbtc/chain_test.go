@@ -1457,6 +1457,13 @@ func (lc *localChain) GetReservation(
 	panic("unsupported")
 }
 
+func (lc *localChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*ReservationAction, error) {
+	panic("unsupported")
+}
+
 func (lc *localChain) ReservationParameters() (*ReservationParameters, error) {
 	panic("unsupported")
 }

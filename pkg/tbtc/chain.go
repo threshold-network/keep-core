@@ -431,6 +431,14 @@ type WalletProposalValidatorChain interface {
 	// reservation key. Returns an error if the reservation was not found.
 	GetReservation(reservationKey *big.Int) (*Reservation, error)
 
+	// GetReservationAction gets the on-chain action record for the given
+	// reservation key and request nonce. Returns an error if the action
+	// generation was not found.
+	GetReservationAction(
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) (*ReservationAction, error)
+
 	// ReservationParameters gets the current on-chain values of the Bridge
 	// reservation parameters.
 	ReservationParameters() (*ReservationParameters, error)
