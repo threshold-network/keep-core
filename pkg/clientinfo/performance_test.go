@@ -430,3 +430,54 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 		}
 	}
 }
+
+func TestWalletActionMetricsRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry)
+
+	expectedActionTypes := []string{
+		"heartbeat",
+		"deposit_sweep",
+		"redemption",
+		"moving_funds",
+		"moved_funds_sweep",
+		"reservation_anchor",
+		"reserved_redemption",
+		"reservation_reanchor",
+		"reservation_dissolution",
+	}
+
+	for _, actionType := range expectedActionTypes {
+		for _, metricType := range []string{
+			"total",
+			"success_total",
+			"failed_total",
+		} {
+			metricName := WalletActionMetricName(actionType, metricType)
+
+			pm.countersMutex.RLock()
+			_, exists := pm.counters[metricName]
+			pm.countersMutex.RUnlock()
+			if !exists {
+				t.Errorf("counter %s should be registered upfront", metricName)
+			}
+		}
+
+		durationMetricName := WalletActionMetricName(
+			actionType,
+			"duration_seconds",
+		)
+		pm.histogramsMutex.RLock()
+		_, exists := pm.histograms[durationMetricName]
+		pm.histogramsMutex.RUnlock()
+		if !exists {
+			t.Errorf(
+				"histogram %s should be registered upfront",
+				durationMetricName,
+			)
+		}
+	}
+}

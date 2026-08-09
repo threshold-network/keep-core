@@ -79,6 +79,71 @@ func TestReservationProposals_MarshalingRoundtrip(t *testing.T) {
 	roundtrip(dissolutionProposal, &ReservationDissolutionProposal{})
 }
 
+func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
+	tests := map[string]struct {
+		actionType    WalletActionType
+		payload       string
+		expectedError string
+	}{
+		"anchor empty object": {
+			actionType:    ActionReservationAnchor,
+			payload:       `{}`,
+			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
+		},
+		"anchor null payload": {
+			actionType:    ActionReservationAnchor,
+			payload:       `null`,
+			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
+		},
+		"reserved redemption null payload": {
+			actionType:    ActionReservedRedemption,
+			payload:       `null`,
+			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
+		},
+		"reserved redemption missing fee": {
+			actionType:    ActionReservedRedemption,
+			payload:       `{"ReservationKey":12345}`,
+			expectedError: "cannot unmarshal proposal payload: [redemption transaction fee is required]",
+		},
+		"re-anchor null payload": {
+			actionType:    ActionReservationReanchor,
+			payload:       `null`,
+			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
+		},
+		"re-anchor missing fee": {
+			actionType:    ActionReservationReanchor,
+			payload:       `{"ReservationKey":54321}`,
+			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
+		},
+		"dissolution null payload": {
+			actionType:    ActionReservationDissolution,
+			payload:       `null`,
+			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
+		},
+		"dissolution missing fee": {
+			actionType:    ActionReservationDissolution,
+			payload:       `{"ReservationKey":99999}`,
+			expectedError: "cannot unmarshal proposal payload: [dissolution transaction fee is required]",
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			_, err := unmarshalCoordinationProposal(
+				uint32(test.actionType),
+				[]byte(test.payload),
+			)
+			if err == nil || err.Error() != test.expectedError {
+				t.Errorf(
+					"unexpected error\nexpected: [%v]\nactual:   [%v]",
+					test.expectedError,
+					err,
+				)
+			}
+		})
+	}
+}
+
 func TestAssembleReservationTransactions_InputValidation(t *testing.T) {
 	bitcoinChain := newLocalBitcoinChain()
 	walletPublicKeyHash := [20]byte{0x01}
