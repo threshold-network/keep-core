@@ -53,16 +53,26 @@ var runnerTransportType = map[RunnerMessageType]string{
 	RunnerMsgTransitionBundle: "frost/roast_runner/transition_bundle",
 }
 
+var runnerActivationTransportType = map[RunnerMessageType]string{
+	RunnerMsgCommitments:      "frost/roast_runner/v2/commitments",
+	RunnerMsgSigningPackage:   "frost/roast_runner/v2/signing_package",
+	RunnerMsgShareSubmission:  "frost/roast_runner/v2/share_submission",
+	RunnerMsgEvidenceSnapshot: "frost/roast_runner/v2/evidence_snapshot",
+	RunnerMsgTransitionBundle: "frost/roast_runner/v2/transition_bundle",
+}
+
 // runnerTransportMessage is the wire envelope for one RunnerMessage. The five
 // runner stream types share this body and are distinguished by the Type()
 // string (set per registered unmarshaler), matching the RegisterUnmarshallers
 // convention. The body carries the CLAIMED sender seat, the attempt context
 // hash, and the opaque runner payload.
 type runnerTransportMessage struct {
-	messageType RunnerMessageType
-	sender      group.MemberIndex
-	attempt     [attemptContextHashLength]byte
-	payload     []byte
+	messageType     RunnerMessageType
+	sender          group.MemberIndex
+	attempt         [attemptContextHashLength]byte
+	payload         []byte
+	activationBound bool
+	activationLease []byte
 }
 
 // attemptContextHashLength is the fixed wire length of the attempt context hash
@@ -72,6 +82,9 @@ const attemptContextHashLength = sha256.Size
 
 // Type returns the pkg/net dispatch tag for this message's runner type.
 func (m *runnerTransportMessage) Type() string {
+	if m.activationBound {
+		return runnerActivationTransportType[m.messageType]
+	}
 	return runnerTransportType[m.messageType]
 }
 
@@ -82,10 +95,23 @@ func (m *runnerTransportMessage) Marshal() ([]byte, error) {
 	if m.sender == 0 {
 		return nil, fmt.Errorf("runner transport: sender is zero")
 	}
-	out := make([]byte, 4+attemptContextHashLength+len(m.payload))
+	leasePrefix := 0
+	if m.activationBound {
+		if len(m.activationLease) > 1024*1024 {
+			return nil, fmt.Errorf("runner transport: activation lease exceeds the 1 MiB cap")
+		}
+		leasePrefix = 4 + len(m.activationLease)
+	}
+	out := make([]byte, 4+attemptContextHashLength+leasePrefix+len(m.payload))
 	binary.BigEndian.PutUint32(out[0:4], uint32(m.sender))
 	copy(out[4:4+attemptContextHashLength], m.attempt[:])
-	copy(out[4+attemptContextHashLength:], m.payload)
+	offset := 4 + attemptContextHashLength
+	if m.activationBound {
+		binary.BigEndian.PutUint32(out[offset:offset+4], uint32(len(m.activationLease)))
+		offset += 4
+		offset += copy(out[offset:], m.activationLease)
+	}
+	copy(out[offset:], m.payload)
 	return out, nil
 }
 
@@ -114,18 +140,35 @@ func (m *runnerTransportMessage) Unmarshal(data []byte) error {
 	}
 	m.sender = group.MemberIndex(rawSender)
 	copy(m.attempt[:], data[4:prefix])
-	m.payload = append([]byte(nil), data[prefix:]...)
+	offset := prefix
+	if m.activationBound {
+		if len(data) < offset+4 {
+			return fmt.Errorf("runner transport: activation lease length is truncated")
+		}
+		leaseLength := int(binary.BigEndian.Uint32(data[offset : offset+4]))
+		offset += 4
+		if leaseLength > 1024*1024 || len(data) < offset+leaseLength {
+			return fmt.Errorf("runner transport: activation lease is truncated or oversized")
+		}
+		m.activationLease = append([]byte(nil), data[offset:offset+leaseLength]...)
+		offset += leaseLength
+	}
+	m.payload = append([]byte(nil), data[offset:]...)
 	return nil
 }
 
 // registerRunnerTransportUnmarshalers registers one unmarshaler per runner
 // stream type, each presetting messageType so Type() and the demux know the
 // stream without a wire type tag.
-func registerRunnerTransportUnmarshalers(channel net.BroadcastChannel) {
-	for messageType := range runnerTransportType {
+func registerRunnerTransportUnmarshalers(channel net.BroadcastChannel, activationBound bool) {
+	transportTypes := runnerTransportType
+	if activationBound {
+		transportTypes = runnerActivationTransportType
+	}
+	for messageType := range transportTypes {
 		mt := messageType
 		channel.SetUnmarshaler(func() net.TaggedUnmarshaler {
-			return &runnerTransportMessage{messageType: mt}
+			return &runnerTransportMessage{messageType: mt, activationBound: activationBound}
 		})
 	}
 }
@@ -156,6 +199,8 @@ type broadcastChannelRunnerBus struct {
 	membershipValidator *group.MembershipValidator
 	streamBuffer        int
 	seenBound           int
+	activationKeyGroup  string
+	activationBound     bool
 
 	mu          sync.Mutex
 	subscribers []*RunnerBusSubscriber
@@ -174,6 +219,46 @@ func NewBroadcastChannelRunnerBus(
 	channel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
 ) (RunnerBus, error) {
+	return newBroadcastChannelRunnerBus(
+		ctx,
+		logger,
+		channel,
+		membershipValidator,
+		"",
+		false,
+	)
+}
+
+// NewActivationBoundBroadcastChannelRunnerBus switches to the v2 transport
+// and enforces the authority-signed active-store lease whenever a recovery
+// registry is installed or a locally recovered seat is awaiting cutover. With
+// neither condition it preserves the v1 transport for pre-recovery fleets.
+func NewActivationBoundBroadcastChannelRunnerBus(
+	ctx context.Context,
+	logger log.StandardLogger,
+	channel net.BroadcastChannel,
+	membershipValidator *group.MembershipValidator,
+	keyGroup string,
+) (RunnerBus, error) {
+	activationBound := ShareRepairActivationTransportRequired()
+	return newBroadcastChannelRunnerBus(
+		ctx,
+		logger,
+		channel,
+		membershipValidator,
+		keyGroup,
+		activationBound,
+	)
+}
+
+func newBroadcastChannelRunnerBus(
+	ctx context.Context,
+	logger log.StandardLogger,
+	channel net.BroadcastChannel,
+	membershipValidator *group.MembershipValidator,
+	keyGroup string,
+	activationBound bool,
+) (RunnerBus, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("runner bus: context is nil")
 	}
@@ -182,6 +267,9 @@ func NewBroadcastChannelRunnerBus(
 	}
 	if membershipValidator == nil {
 		return nil, fmt.Errorf("runner bus: membership validator is nil")
+	}
+	if activationBound && keyGroup == "" {
+		return nil, fmt.Errorf("runner bus: activation-bound key group is empty")
 	}
 	if logger == nil {
 		logger = log.Logger("frost-roast-runner-bus")
@@ -194,9 +282,11 @@ func NewBroadcastChannelRunnerBus(
 		membershipValidator: membershipValidator,
 		streamBuffer:        defaultRunnerBusStreamBuffer,
 		seenBound:           defaultRunnerBusSeenBound,
+		activationKeyGroup:  keyGroup,
+		activationBound:     activationBound,
 	}
 
-	registerRunnerTransportUnmarshalers(channel)
+	registerRunnerTransportUnmarshalers(channel, activationBound)
 
 	return b, nil
 }
@@ -234,10 +324,22 @@ func (b *broadcastChannelRunnerBus) Subscribe() *RunnerBusSubscriber {
 // records its OWN produced messages directly rather than relying on self-echo.
 func (b *broadcastChannelRunnerBus) Broadcast(msg RunnerMessage) {
 	wire := &runnerTransportMessage{
-		messageType: msg.Type,
-		sender:      msg.Sender,
-		attempt:     msg.Attempt,
-		payload:     msg.Payload,
+		messageType:     msg.Type,
+		sender:          msg.Sender,
+		attempt:         msg.Attempt,
+		payload:         msg.Payload,
+		activationBound: b.activationBound,
+	}
+	if b.activationBound {
+		lease, err := shareRepairActivationLeaseForBroadcast(
+			b.activationKeyGroup,
+			msg.Sender,
+		)
+		if err != nil {
+			b.logger.Warnf("runner bus: refusing stale recovered seat [%d]: [%v]", msg.Sender, err)
+			return
+		}
+		wire.activationLease = lease
 	}
 	if err := b.channel.Send(b.ctx, wire); err != nil {
 		b.logger.Warnf("runner bus: failed to broadcast [%s] message: [%v]", wire.Type(), err)
@@ -265,6 +367,19 @@ func (b *broadcastChannelRunnerBus) handleMessage(m net.Message) {
 			wire.Type(), wire.sender,
 		)
 		return
+	}
+	if b.activationBound {
+		if err := validateShareRepairActivationLeaseForMessage(
+			b.activationKeyGroup,
+			wire.sender,
+			wire.activationLease,
+		); err != nil {
+			b.logger.Warnf(
+				"runner bus: dropping [%s] message from seat [%d] with invalid active-store lease: [%v]",
+				wire.Type(), wire.sender, err,
+			)
+			return
+		}
 	}
 
 	msg := RunnerMessage{

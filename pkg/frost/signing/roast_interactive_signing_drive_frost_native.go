@@ -92,6 +92,15 @@ func driveInteractiveRoastSigningIfEnabled(
 
 	// From here the node has COMMITTED to interactive signing: gate on, engine
 	// present, orchestration active. Every failure below HARD-FAILS.
+	if err := ValidateLocalShareRepairSeatActivation(
+		attemptCtx.KeyGroupID,
+		request.MemberIndex,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"interactive ROAST signing: recovered-seat activation: %w",
+			err,
+		)
+	}
 	dkgGroupPublicKey, err := ExtractDkgGroupPublicKeyFromMaterial(request.SignerMaterial)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -122,8 +131,12 @@ func driveInteractiveRoastSigningIfEnabled(
 		return nil, fmt.Errorf("interactive ROAST signing: bind attempt: %w", err)
 	}
 
-	bus, err := NewBroadcastChannelRunnerBus(
-		ctx, logger, request.Channel, request.MembershipValidator,
+	bus, err := NewActivationBoundBroadcastChannelRunnerBus(
+		ctx,
+		logger,
+		request.Channel,
+		request.MembershipValidator,
+		attemptCtx.KeyGroupID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("interactive ROAST signing: build transport bus: %w", err)

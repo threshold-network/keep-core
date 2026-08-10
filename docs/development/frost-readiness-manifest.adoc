@@ -15,6 +15,9 @@ This manifest was originally planned for the tBTC monorepo's
 binaries adopt the `frost_roast_retry` build tag once the gates
 below read `present`
 (`docs/development/frost-roast-retry-rollout.adoc`).
+Share repair is a separately gated disaster-recovery capability; its
+ceremony, crash matrix, and production-shape test are specified in
+`docs/development/frost-share-repair.adoc`.
 
 == Gates
 

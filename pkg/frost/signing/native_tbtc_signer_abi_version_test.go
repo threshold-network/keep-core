@@ -95,9 +95,9 @@ func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	// benign filesystem change alters the lock file, directory inode, or device.
 	// Minor 3 adds the trust transition/head and bootstrap-facts surface used
 	// before production signing can start. Minor 4 adds durable distributed-DKG
-	// retirement. The matching library version is compatible; ABI 4.3 and a
+	// retirement. Minor 5 adds share repair. The matching library version is compatible; ABI 4.4 and a
 	// different major are not.
-	if requiredTBTCSignerABIMajor != 4 || requiredTBTCSignerABIMinMinor != 4 {
+	if requiredTBTCSignerABIMajor != 4 || requiredTBTCSignerABIMinMinor != 5 {
 		t.Fatalf(
 			"unexpected required tbtc-signer ABI: [%d.%d]",
 			requiredTBTCSignerABIMajor,
@@ -118,6 +118,9 @@ func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 3); err == nil {
 		t.Fatal("ABI 4.3 without distributed-DKG retirement must be incompatible")
+	}
+	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 4); err == nil {
+		t.Fatal("ABI 4.4 without share-repair symbols must be incompatible")
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor+1, requiredTBTCSignerABIMinMinor); err == nil {
 		t.Fatal("a higher major must be incompatible")

@@ -214,6 +214,12 @@ func newNode(
 	if err != nil {
 		return nil, fmt.Errorf("cannot get node's operator address: [%v]", err)
 	}
+	if config.FrostShareRepairAuthorizationPath != "" &&
+		!config.EnableFrostPreSignAuthorization {
+		return nil, fmt.Errorf(
+			"FROST share-repair maintenance requires the production activation and state-anchor barrier",
+		)
+	}
 
 	if shouldRunLegacyECDSA(config) {
 		// TODO: This chicken and egg problem should be solved when
@@ -706,6 +712,33 @@ func newNode(
 				err,
 			)
 		}
+		maintenanceRequested, err := runFrostShareRepairMaintenance(
+			context.Background(),
+			config.FrostShareRepairAuthorizationPath,
+			config.FrostShareRepairMaintenanceTimeout,
+			runtimeManifest,
+			node,
+			operatorAddress,
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf("FROST share-repair maintenance failed: [%w]", err)
+		}
+		if maintenanceRequested {
+			_ = outbox.close()
+			return nil, ErrFrostShareRepairMaintenanceComplete
+		}
+		if err := installFrostShareRepairActivationRegistry(
+			config.FrostShareRepairActivationRegistryPath,
+			runtimeManifest,
+			storeBinding,
+		); err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot install FROST share-repair activation registry: [%w]",
+				err,
+			)
+		}
 		inventoryBinding, err := newFrostNativeSignerInventoryBinding(
 			storeBinding,
 			anchorBinding,
@@ -788,7 +821,12 @@ func newNode(
 		}
 		journal.orphanedDKGReconciler = orphanedDKGReconciler
 		readiness, err := newFrostProductionSignerReadiness(
-			currentFrostInteractiveSigningReadiness,
+			func() bool {
+				return currentFrostInteractiveSigningReadiness() &&
+					frostShareRepairActivationReady(
+						runtimeManifest.ShareRepairActivationRegistryRoot,
+					)
+			},
 			journal,
 			inventoryBinding,
 		)

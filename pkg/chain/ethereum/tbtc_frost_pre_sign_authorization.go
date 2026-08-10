@@ -272,6 +272,7 @@ type frostPreSignManifestNativeSignerAnchor struct {
 type frostPreSignManifestFrostSigner struct {
 	TrustDomainID                       string                                 `json:"trustDomainID"`
 	DurableSessionStoreFingerprint      string                                 `json:"durableSessionStoreFingerprint"`
+	ShareRepairActivationRegistryRoot   string                                 `json:"shareRepairActivationRegistryRoot,omitempty"`
 	ProtocolID                          string                                 `json:"protocolID"`
 	ReservationProtocolID               string                                 `json:"reservationProtocolID"`
 	BitcoinOutboxProtocolID             string                                 `json:"bitcoinOutboxProtocolID"`
@@ -1019,6 +1020,14 @@ func validateFrostPreSignActivationManifest(
 	)
 	if err != nil || durableSessionStoreFingerprint == [32]byte{} {
 		return fmt.Errorf("invalid FROST durable session store fingerprint")
+	}
+	if frost.ShareRepairActivationRegistryRoot != "" {
+		shareRepairActivationRegistryRoot, err := frostPreSignParseBytes32(
+			frost.ShareRepairActivationRegistryRoot,
+		)
+		if err != nil || shareRepairActivationRegistryRoot == [32]byte{} {
+			return fmt.Errorf("invalid FROST share-repair activation registry root")
+		}
 	}
 	anchorManifest, err := frostPreSignNativeSignerAnchorManifest(manifest)
 	if err != nil {
@@ -2923,31 +2932,43 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
 	}
+	shareRepairActivationRegistryRoot := [32]byte{}
+	if frost.ShareRepairActivationRegistryRoot != "" {
+		shareRepairActivationRegistryRoot, err = parse(
+			frost.ShareRepairActivationRegistryRoot,
+		)
+		if err != nil || shareRepairActivationRegistryRoot == [32]byte{} {
+			return tbtc.FrostPreSignActivationRuntimeManifest{}, fmt.Errorf(
+				"invalid FROST share-repair activation registry root",
+			)
+		}
+	}
 	return tbtc.FrostPreSignActivationRuntimeManifest{
-		ManifestHash:                     adapter.profile.ActivationManifestHash,
-		ActivationAuthorityKeyHash:       adapter.manifest.activationAuthorityKeyHash,
-		VerifierOperatorFingerprint:      verifierOperatorFingerprint,
-		HandshakeOperatorFingerprint:     handshakeOperatorFingerprint,
-		DomainChainID:                    adapter.profile.DomainChainID,
-		GenesisBlockHash:                 genesisBlockHash,
-		ProfileHash:                      adapter.profile.ProfileHash,
-		ImplementationSetHash:            adapter.profile.ImplementationSetHash,
-		LinkedLibraryDescriptorSetHash:   linkedLibraryDescriptorSetHash,
-		EndpointIdentitySetHash:          endpointIdentitySetHash,
-		Deployments:                      frostPreSignRuntimeDeploymentEvidence(adapter.deployments),
-		SignerProtocolID:                 signerProtocolID,
-		ReservationProtocolID:            adapter.profile.ReservationProtocolID,
-		BitcoinOutboxProtocolID:          bitcoinOutboxProtocolID,
-		SigningPolicyHash:                adapter.profile.SigningPolicyHash,
-		DurableSessionStoreFingerprint:   frost.DurableSessionStoreFingerprint,
-		CompleteRouterAddress:            adapter.profile.CompleteRouter,
-		AuthorizationRegistryAddress:     adapter.profile.RegistryAddress,
-		AttestationSignerKeyHash:         attestationSignerKeyHash,
-		Threshold:                        frost.Threshold,
-		MaximumGroupSize:                 frost.MaximumGroupSize,
-		RetainedGroupInventoryProtocolID: retainedGroupInventoryProtocolID,
-		NativeSignerAnchor:               nativeSignerAnchor,
-		ActivationAuthorityPublicKey:     adapter.manifest.activationAuthorityPublicKey,
+		ManifestHash:                      adapter.profile.ActivationManifestHash,
+		ActivationAuthorityKeyHash:        adapter.manifest.activationAuthorityKeyHash,
+		VerifierOperatorFingerprint:       verifierOperatorFingerprint,
+		HandshakeOperatorFingerprint:      handshakeOperatorFingerprint,
+		DomainChainID:                     adapter.profile.DomainChainID,
+		GenesisBlockHash:                  genesisBlockHash,
+		ProfileHash:                       adapter.profile.ProfileHash,
+		ImplementationSetHash:             adapter.profile.ImplementationSetHash,
+		LinkedLibraryDescriptorSetHash:    linkedLibraryDescriptorSetHash,
+		EndpointIdentitySetHash:           endpointIdentitySetHash,
+		Deployments:                       frostPreSignRuntimeDeploymentEvidence(adapter.deployments),
+		SignerProtocolID:                  signerProtocolID,
+		ReservationProtocolID:             adapter.profile.ReservationProtocolID,
+		BitcoinOutboxProtocolID:           bitcoinOutboxProtocolID,
+		SigningPolicyHash:                 adapter.profile.SigningPolicyHash,
+		DurableSessionStoreFingerprint:    frost.DurableSessionStoreFingerprint,
+		ShareRepairActivationRegistryRoot: shareRepairActivationRegistryRoot,
+		CompleteRouterAddress:             adapter.profile.CompleteRouter,
+		AuthorizationRegistryAddress:      adapter.profile.RegistryAddress,
+		AttestationSignerKeyHash:          attestationSignerKeyHash,
+		Threshold:                         frost.Threshold,
+		MaximumGroupSize:                  frost.MaximumGroupSize,
+		RetainedGroupInventoryProtocolID:  retainedGroupInventoryProtocolID,
+		NativeSignerAnchor:                nativeSignerAnchor,
+		ActivationAuthorityPublicKey:      adapter.manifest.activationAuthorityPublicKey,
 		CanonicalJournal: tbtc.FrostRetainedGroupCanonicalJournalManifest{
 			StoreID:            journal.StoreID,
 			StoreFingerprint:   storeFingerprint,

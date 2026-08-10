@@ -98,6 +98,99 @@ func TestNativeTBTCSignerInventoryCommitmentMatchesRustFrozenVector(t *testing.T
 	}
 }
 
+func TestNativeTBTCSignerRecoveryActivationCommitmentMatchesRustFrozenVector(t *testing.T) {
+	seats := []NativeTBTCSignerRecoveredSeat{
+		{
+			WalletID:               repeatedNativeTBTCSignerBytes32(0x11),
+			KeyGroup:               "02" + strings.Repeat("11", 32),
+			ParticipantSeat:        3,
+			RecoveryEpoch:          7,
+			AuthorizationDigest:    repeatedNativeTBTCSignerBytes32(0x22),
+			ActiveStoreFingerprint: repeatedNativeTBTCSignerBytes32(0x33),
+		},
+	}
+
+	actual := ComputeNativeTBTCSignerRecoveredSeatActivationCommitment(seats)
+	const expected = "48484643db480de91c011eece129e51fb32864f33887975009f993e54f7a2f20"
+	if hex.EncodeToString(actual[:]) != expected {
+		t.Fatalf("unexpected recovery activation commitment: [%x]", actual)
+	}
+}
+
+func TestDecodeNativeTBTCSignerRetainedKeyPackageInventoryV2(t *testing.T) {
+	wire := testNativeTBTCSignerRetainedKeyPackageInventoryWire()
+	wire.Schema = NativeTBTCSignerRetainedKeyPackageInventoryRecoverySchema
+	recoveredSeats := []nativeTBTCSignerRecoveredSeatWire{
+		{
+			WalletID:               (*wire.Entries)[0].WalletID,
+			KeyGroup:               (*wire.Entries)[0].KeyGroup,
+			ParticipantSeat:        3,
+			RecoveryEpoch:          7,
+			AuthorizationDigest:    nativeTBTCSignerBytes32([32]byte{0x07}),
+			ActiveStoreFingerprint: wire.StoreFingerprint,
+		},
+	}
+	wire.RecoveredSeats = &recoveredSeats
+	commitment := ComputeNativeTBTCSignerRecoveredSeatActivationCommitment(
+		[]NativeTBTCSignerRecoveredSeat{
+			{
+				WalletID:               [32]byte{0x04},
+				KeyGroup:               (*wire.Entries)[0].KeyGroup,
+				ParticipantSeat:        3,
+				RecoveryEpoch:          7,
+				AuthorizationDigest:    [32]byte{0x07},
+				ActiveStoreFingerprint: [32]byte{0x01},
+			},
+		},
+	)
+	commitmentWire := nativeTBTCSignerBytes32(commitment)
+	wire.RecoveryActivationCommitment = &commitmentWire
+
+	payload, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := DecodeNativeTBTCSignerRetainedKeyPackageInventory(payload)
+	if err != nil {
+		t.Fatalf("valid v2 native inventory was rejected: [%v]", err)
+	}
+	if inventory.Schema != NativeTBTCSignerRetainedKeyPackageInventoryRecoverySchema ||
+		len(inventory.RecoveredSeats) != 1 ||
+		inventory.RecoveredSeats[0].RecoveryEpoch != 7 ||
+		inventory.RecoveryActivationCommitment != commitment {
+		t.Fatalf("unexpected decoded v2 inventory: %+v", inventory)
+	}
+}
+
+func TestDecodeNativeTBTCSignerRetainedKeyPackageInventoryRejectsRecoverySubstitution(
+	t *testing.T,
+) {
+	tests := map[string]func(*nativeTBTCSignerRetainedKeyPackageInventoryWire){
+		"v1 recovery fields": func(wire *nativeTBTCSignerRetainedKeyPackageInventoryWire) {
+			recovered := []nativeTBTCSignerRecoveredSeatWire{}
+			commitment := nativeTBTCSignerBytes32([32]byte{0x01})
+			wire.RecoveredSeats = &recovered
+			wire.RecoveryActivationCommitment = &commitment
+		},
+		"v2 missing recovery fields": func(wire *nativeTBTCSignerRetainedKeyPackageInventoryWire) {
+			wire.Schema = NativeTBTCSignerRetainedKeyPackageInventoryRecoverySchema
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			wire := testNativeTBTCSignerRetainedKeyPackageInventoryWire()
+			mutate(wire)
+			payload, err := json.Marshal(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeNativeTBTCSignerRetainedKeyPackageInventory(payload); err == nil {
+				t.Fatal("substituted recovered-seat inventory was accepted")
+			}
+		})
+	}
+}
+
 func TestNativeTBTCSignerStateWitnessCommitmentMatchesRustV2Vector(t *testing.T) {
 	storeFingerprint := repeatedNativeTBTCSignerBytes32(0x11)
 	genesis := ComputeNativeTBTCSignerStateWitnessGenesis(storeFingerprint)

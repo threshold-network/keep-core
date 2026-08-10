@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -109,6 +110,23 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 			ErrNativeCryptographyUnavailable,
 			err,
 		)
+	}
+}
+
+func TestRealCgoShareRepairSymbolsResolve(t *testing.T) {
+	resetTBTCSignerABIOnceForTest()
+	t.Cleanup(resetTBTCSignerABIOnceForTest)
+	if err := assertTBTCSignerABICompatible(); errors.Is(
+		err,
+		ErrNativeCryptographyUnavailable,
+	) {
+		t.Skip("libfrost_tbtc is not linked")
+	} else if err != nil {
+		t.Fatalf("linked signer ABI is incompatible: %v", err)
+	}
+
+	if !buildTaggedTBTCSignerShareRepairSymbolsAvailable() {
+		t.Fatal("ABI 4.5 library is missing one or more share-repair symbols")
 	}
 }
 
@@ -328,6 +346,168 @@ func TestBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesPayloadAndResponse(
 		keyGroup,
 	); err == nil {
 		t.Fatal("inconsistent retirement response was accepted")
+	}
+}
+
+func TestBuildTaggedTBTCSignerShareRepairPayloadsAndResponses(t *testing.T) {
+	authorization, _ := testShareRepairAuthorization(t)
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextDigest := fmt.Sprintf("0x%x", digest)
+	secret := bytes.Repeat([]byte{0xab}, 32)
+	defer zeroBytes(secret)
+	delta := &NativeShareRepairDelta{
+		ContextDigest:       contextDigest,
+		SenderIdentifier:    1,
+		RecipientIdentifier: 2,
+		Data:                secret,
+	}
+
+	part2Payload, err := buildTaggedTBTCSignerShareRepairPart2RequestPayload(
+		authorization,
+		2,
+		[]*NativeShareRepairDelta{delta},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroBytes(part2Payload)
+	part2Request := &buildTaggedTBTCSignerShareRepairPart2Request{}
+	if err := json.Unmarshal(part2Payload, part2Request); err != nil {
+		t.Fatal(err)
+	}
+	if part2Request.Authorization == nil ||
+		part2Request.Authorization.SessionID != authorization.SessionID ||
+		part2Request.HelperIdentifier != 2 || len(part2Request.Deltas) != 1 {
+		t.Fatal("share-repair Part2 bridge request lost its authorization or endpoint")
+	}
+	decodedDelta, err := decodeShareRepairSecretHexJSON(
+		part2Request.Deltas[0].DataHex,
+	)
+	zeroBytes(part2Request.Deltas[0].DataHex)
+	if err != nil || !bytes.Equal(decodedDelta, secret) {
+		zeroBytes(decodedDelta)
+		t.Fatalf("share-repair Part2 bridge secret did not round trip: %v", err)
+	}
+	zeroBytes(decodedDelta)
+
+	secretWire, err := encodeShareRepairSecretHexJSON(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part1Wire := buildTaggedTBTCSignerShareRepairPart1Response{
+		ContextDigest:    contextDigest,
+		HelperIdentifier: 1,
+		PublicKeyPackage: &buildTaggedTBTCSignerNativeFROSTPublicKeyPackage{
+			VerifyingShares: map[string]string{"1": "share-1"},
+			VerifyingKey:    "group-key",
+		},
+		Deltas: []buildTaggedTBTCSignerShareRepairDelta{{
+			ContextDigest:       contextDigest,
+			SenderIdentifier:    1,
+			RecipientIdentifier: 2,
+			DataHex:             secretWire,
+		}},
+	}
+	part1Payload, err := json.Marshal(part1Wire)
+	zeroBytes(secretWire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroBytes(part1Payload)
+	part1, err := decodeBuildTaggedTBTCSignerShareRepairPart1Response(part1Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(part1.Deltas) != 1 || !bytes.Equal(part1.Deltas[0].Data, secret) {
+		t.Fatal("share-repair Part1 bridge response lost its secret delta")
+	}
+	zeroBytes(part1.Deltas[0].Data)
+
+	secretWire, err = encodeShareRepairSecretHexJSON(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part2ResponsePayload, err := json.Marshal(
+		buildTaggedTBTCSignerShareRepairPart2Response{
+			ContextDigest: contextDigest,
+			Sigma: &buildTaggedTBTCSignerShareRepairSigma{
+				ContextDigest:    contextDigest,
+				HelperIdentifier: 1,
+				DataHex:          secretWire,
+			},
+		},
+	)
+	zeroBytes(secretWire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroBytes(part2ResponsePayload)
+	part2, err := decodeBuildTaggedTBTCSignerShareRepairPart2Response(
+		part2ResponsePayload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if part2.Sigma == nil || !bytes.Equal(part2.Sigma.Data, secret) {
+		t.Fatal("share-repair Part2 bridge response lost its secret sigma")
+	}
+
+	installPayload, err := buildTaggedTBTCSignerInstallRepairedShareRequestPayload(
+		authorization,
+		&NativeFROSTPublicKeyPackage{
+			VerifyingShares: map[string]string{"1": "share-1"},
+			VerifyingKey:    "group-key",
+		},
+		[]*NativeShareRepairSigma{part2.Sigma},
+	)
+	zeroBytes(part2.Sigma.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroBytes(installPayload)
+	installRequest := &buildTaggedTBTCSignerInstallRepairedShareRequest{}
+	if err := json.Unmarshal(installPayload, installRequest); err != nil {
+		t.Fatal(err)
+	}
+	if installRequest.Authorization == nil ||
+		installRequest.Authorization.SessionID != authorization.SessionID ||
+		len(installRequest.Sigmas) != 1 {
+		t.Fatal("share-repair install bridge request lost its bound inputs")
+	}
+	decodedSigma, err := decodeShareRepairSecretHexJSON(
+		installRequest.Sigmas[0].DataHex,
+	)
+	zeroBytes(installRequest.Sigmas[0].DataHex)
+	if err != nil || !bytes.Equal(decodedSigma, secret) {
+		zeroBytes(decodedSigma)
+		t.Fatalf("share-repair install bridge secret did not round trip: %v", err)
+	}
+	zeroBytes(decodedSigma)
+
+	installResponsePayload, err := json.Marshal(
+		buildTaggedTBTCSignerInstallRepairedShareResponse{
+			Schema:                 ShareRepairInstallResultSchema,
+			SessionID:              authorization.SessionID,
+			KeyGroup:               authorization.KeyGroup,
+			TargetIdentifier:       authorization.TargetIdentifier,
+			RecoveryEpoch:          authorization.RecoveryEpoch,
+			AuthorizationDigest:    contextDigest,
+			ActiveStoreFingerprint: authorization.NewStoreFingerprint,
+			Idempotent:             true,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := decodeBuildTaggedTBTCSignerInstallRepairedShareResponse(
+		installResponsePayload,
+		authorization,
+	)
+	if err != nil || installed == nil || !installed.Idempotent {
+		t.Fatalf("share-repair install bridge response was rejected: %v", err)
 	}
 }
 

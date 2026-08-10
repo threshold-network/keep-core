@@ -1465,31 +1465,32 @@ func frostPreSignWriteCommitmentUint64(
 }
 
 type FrostPreSignActivationRuntimeManifest struct {
-	ManifestHash                     [32]byte
-	ActivationAuthorityKeyHash       [32]byte
-	VerifierOperatorFingerprint      [32]byte
-	HandshakeOperatorFingerprint     [32]byte
-	DomainChainID                    [32]byte
-	GenesisBlockHash                 [32]byte
-	ProfileHash                      [32]byte
-	ImplementationSetHash            [32]byte
-	LinkedLibraryDescriptorSetHash   [32]byte
-	EndpointIdentitySetHash          [32]byte
-	Deployments                      []FrostPreSignDeploymentEvidence
-	SignerProtocolID                 [32]byte
-	ReservationProtocolID            [32]byte
-	BitcoinOutboxProtocolID          [32]byte
-	SigningPolicyHash                [32]byte
-	DurableSessionStoreFingerprint   string
-	CompleteRouterAddress            [20]byte
-	AuthorizationRegistryAddress     [20]byte
-	AttestationSignerKeyHash         [32]byte
-	Threshold                        uint64
-	MaximumGroupSize                 uint64
-	RetainedGroupInventoryProtocolID [32]byte
-	CanonicalJournal                 FrostRetainedGroupCanonicalJournalManifest
-	QuarantineJournal                FrostRetainedGroupQuarantineJournalManifest
-	NativeSignerAnchor               FrostNativeSignerAnchorManifest
+	ManifestHash                      [32]byte
+	ActivationAuthorityKeyHash        [32]byte
+	VerifierOperatorFingerprint       [32]byte
+	HandshakeOperatorFingerprint      [32]byte
+	DomainChainID                     [32]byte
+	GenesisBlockHash                  [32]byte
+	ProfileHash                       [32]byte
+	ImplementationSetHash             [32]byte
+	LinkedLibraryDescriptorSetHash    [32]byte
+	EndpointIdentitySetHash           [32]byte
+	Deployments                       []FrostPreSignDeploymentEvidence
+	SignerProtocolID                  [32]byte
+	ReservationProtocolID             [32]byte
+	BitcoinOutboxProtocolID           [32]byte
+	SigningPolicyHash                 [32]byte
+	DurableSessionStoreFingerprint    string
+	ShareRepairActivationRegistryRoot [32]byte
+	CompleteRouterAddress             [20]byte
+	AuthorizationRegistryAddress      [20]byte
+	AttestationSignerKeyHash          [32]byte
+	Threshold                         uint64
+	MaximumGroupSize                  uint64
+	RetainedGroupInventoryProtocolID  [32]byte
+	CanonicalJournal                  FrostRetainedGroupCanonicalJournalManifest
+	QuarantineJournal                 FrostRetainedGroupQuarantineJournalManifest
+	NativeSignerAnchor                FrostNativeSignerAnchorManifest
 	// ActivationAuthorityPublicKey is the raw Ed25519 key from the already
 	// verified activation envelope. Its SPKI hash is pinned by
 	// NativeSignerAnchor.Identity.OfflineAuthorityHash. Runtime trust

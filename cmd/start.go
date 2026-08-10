@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -249,6 +250,10 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Ethereum.Network,
 		)
 		if err != nil {
+			if errors.Is(err, tbtc.ErrFrostShareRepairMaintenanceComplete) {
+				logger.Infof("%v", tbtc.ErrFrostShareRepairMaintenanceComplete)
+				return nil
+			}
 			return fmt.Errorf("error initializing TBTC: [%v]", err)
 		}
 	}

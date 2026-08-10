@@ -30,9 +30,9 @@ import (
 )
 
 const (
-	frostActivationHandshakeSchema                = "tbtc-p2tr-production-activation-handshake/v5"
+	frostActivationHandshakeSchema                = "tbtc-p2tr-production-activation-handshake/v6"
 	frostActivationInventorySchema                = "tbtc-p2tr-frost-wallet-group-inventory/v1"
-	frostActivationHandshakeSignatureDomain       = "tbtc-p2tr-production-activation-handshake-signature/v3\x00"
+	frostActivationHandshakeSignatureDomain       = "tbtc-p2tr-production-activation-handshake-signature/v4\x00"
 	frostActivationHandshakeReconciliationTimeout = frostRetainedGroupMaximumReconciliationDuration
 	frostActivationHandshakeRequestTimeout        = 5 * time.Second
 	frostActivationHandshakeQuickCheckTimeout     = 2 * time.Second
@@ -168,6 +168,7 @@ type frostActivationHandshakeState struct {
 	BitcoinOutboxProtocolID                   string                                `json:"bitcoinOutboxProtocolID"`
 	SigningPolicyHash                         string                                `json:"signingPolicyHash"`
 	DurableSessionStoreFingerprint            string                                `json:"durableSessionStoreFingerprint"`
+	ShareRepairActivationRegistryRoot         string                                `json:"shareRepairActivationRegistryRoot"`
 	CompleteRouterAddress                     string                                `json:"completeRouterAddress"`
 	AuthorizationRegistryAddress              string                                `json:"authorizationRegistryAddress"`
 	Threshold                                 uint64                                `json:"threshold"`
@@ -308,6 +309,13 @@ func newFrostActivationHandshakeExporter(
 	if err != nil || boundStoreFingerprint != durableSessionStoreFingerprint {
 		return nil, fmt.Errorf(
 			"FROST activation handshake durable session store is not bound to the signed manifest",
+		)
+	}
+	if !frostShareRepairActivationReady(
+		manifest.ShareRepairActivationRegistryRoot,
+	) {
+		return nil, fmt.Errorf(
+			"FROST share-repair activation state is not ready for the signed manifest",
 		)
 	}
 	privateKey, publicKeyDER, err := loadFrostActivationAttestationKey(privateKeyPath)
@@ -1094,11 +1102,14 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		)
 	}
 	state := frostActivationHandshakeState{
-		ProtocolID:                       frostActivationHex32(fahe.manifest.SignerProtocolID),
-		ReservationProtocolID:            frostActivationHex32(fahe.manifest.ReservationProtocolID),
-		BitcoinOutboxProtocolID:          frostActivationHex32(fahe.manifest.BitcoinOutboxProtocolID),
-		SigningPolicyHash:                frostActivationHex32(fahe.manifest.SigningPolicyHash),
-		DurableSessionStoreFingerprint:   frostActivationHex32(durableSessionStoreFingerprint),
+		ProtocolID:                     frostActivationHex32(fahe.manifest.SignerProtocolID),
+		ReservationProtocolID:          frostActivationHex32(fahe.manifest.ReservationProtocolID),
+		BitcoinOutboxProtocolID:        frostActivationHex32(fahe.manifest.BitcoinOutboxProtocolID),
+		SigningPolicyHash:              frostActivationHex32(fahe.manifest.SigningPolicyHash),
+		DurableSessionStoreFingerprint: frostActivationHex32(durableSessionStoreFingerprint),
+		ShareRepairActivationRegistryRoot: frostActivationHex32(
+			currentFrostShareRepairActivationRegistryRoot(),
+		),
 		CompleteRouterAddress:            frostActivationHex20(fahe.manifest.CompleteRouterAddress),
 		AuthorizationRegistryAddress:     frostActivationHex20(fahe.manifest.AuthorizationRegistryAddress),
 		Threshold:                        fahe.manifest.Threshold,

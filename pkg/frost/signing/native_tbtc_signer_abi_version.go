@@ -41,7 +41,10 @@ const (
 	//
 	// Minor 4 adds durable distributed-DKG key-package retirement. Failed DKG
 	// reconciliation must reject ABI 4.3 rather than preserving orphaned keys.
-	requiredTBTCSignerABIMinMinor uint32 = 4
+	//
+	// Minor 5 adds the three context-bound share-repair symbols. A DR-capable
+	// host must reject ABI 4.4 before it can reach a missing dlsym entry.
+	requiredTBTCSignerABIMinMinor uint32 = 5
 )
 
 // ErrTBTCSignerABIIncompatible marks a linked libfrost_tbtc whose FFI contract version

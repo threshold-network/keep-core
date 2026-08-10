@@ -25,6 +25,14 @@ import (
 
 var logger = log.Logger("keep-tbtc")
 
+// ErrFrostShareRepairMaintenanceComplete is returned after the explicitly
+// configured one-shot recovery protocol finishes. The start command treats it
+// as a clean maintenance exit so operators must remove the authorization path
+// and deliberately restart into either pending-cutover or production mode.
+var ErrFrostShareRepairMaintenanceComplete = errors.New(
+	"FROST share-repair maintenance completed; remove the authorization path and restart",
+)
+
 // ProtocolName denotes the name of the protocol defined by this package.
 const ProtocolName = "tbtc"
 
@@ -135,6 +143,19 @@ type Config struct {
 	// commitments are verified at a finalized Ethereum block during startup.
 	// Production chain adapters reject activation without this file.
 	FrostPreSignActivationManifestPath string
+	// FrostShareRepairActivationRegistryPath points at the owner-only public
+	// cutover registry pinned by the signed activation manifest. It is required
+	// exactly when that manifest declares a non-zero share-repair registry root.
+	FrostShareRepairActivationRegistryPath string
+	// FrostShareRepairAuthorizationPath selects one-shot disaster-recovery mode
+	// using an owner-only, offline-authority-signed authorization. Every helper
+	// and the target exits cleanly after the bounded protocol; this path must be
+	// removed before restart. Normal production startup never runs recovery.
+	FrostShareRepairAuthorizationPath string
+	// FrostShareRepairMaintenanceTimeout bounds the one-shot authenticated
+	// network protocol. Zero selects ten minutes; non-zero values must be from
+	// ten seconds through one hour.
+	FrostShareRepairMaintenanceTimeout time.Duration
 	// FrostPreSignActivationEnvelopeSignerKeyHash is the lowercase 0x-prefixed
 	// SHA-256 digest of the DER SubjectPublicKeyInfo for the Ed25519 activation
 	// authority. It authenticates the signed production manifest independently
@@ -285,7 +306,7 @@ func Initialize(
 		config,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
+		return fmt.Errorf("cannot set up TBTC node: [%w]", err)
 	}
 	node.frostGroupParameters = frostGroupParameters
 
