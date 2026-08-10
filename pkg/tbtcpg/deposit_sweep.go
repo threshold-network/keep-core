@@ -590,7 +590,7 @@ func EstimateDepositsSweepFee(
 	} else {
 		sweepMaxSize, err := chain.GetDepositSweepMaxSize()
 		if err != nil {
-			return nil, fmt.Errorf("cannot get sweep max size: [%v]", err)
+			return nil, fmt.Errorf("cannot get sweep max size: [%w]", err)
 		}
 
 		for i := 1; i <= int(sweepMaxSize); i++ {

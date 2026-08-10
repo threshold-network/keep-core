@@ -154,6 +154,13 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 						test.expectErrorContains, err,
 					)
 				}
+				if test.sweepMaxSizeErr != nil &&
+					!errors.Is(err, test.sweepMaxSizeErr) {
+					t.Fatalf(
+						"expected error to wrap [%v]; got [%v]",
+						test.sweepMaxSizeErr, err,
+					)
+				}
 				return
 			}
 			if err != nil {
