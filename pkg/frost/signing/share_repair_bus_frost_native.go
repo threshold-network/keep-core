@@ -17,11 +17,13 @@ import (
 type shareRepairMessageType uint8
 
 const (
-	shareRepairAnnouncementMessage  shareRepairMessageType = 1
-	shareRepairDeltaMessage         shareRepairMessageType = 2
-	shareRepairSigmaMessage         shareRepairMessageType = 3
-	shareRepairInstalledMessage     shareRepairMessageType = 4
-	shareRepairPublicPackageMessage shareRepairMessageType = 5
+	shareRepairAnnouncementMessage             shareRepairMessageType = 1
+	shareRepairDeltaMessage                    shareRepairMessageType = 2
+	shareRepairSigmaMessage                    shareRepairMessageType = 3
+	shareRepairInstalledMessage                shareRepairMessageType = 4
+	shareRepairPublicPackageMessage            shareRepairMessageType = 5
+	shareRepairInstalledAcknowledgementMessage shareRepairMessageType = 6
+	shareRepairCompletionMessage               shareRepairMessageType = 7
 )
 
 type shareRepairMessage struct {
@@ -47,7 +49,9 @@ func (message shareRepairMessage) contentHash() [32]byte {
 type shareRepairBus interface {
 	Subscribe(group.MemberIndex) <-chan shareRepairMessage
 	Start()
-	Broadcast(shareRepairMessage)
+	// Broadcast delivers the message and returns a function that stops its
+	// network retransmissions without canceling any other protocol message.
+	Broadcast(shareRepairMessage) context.CancelFunc
 }
 
 type shareRepairBusSubscriber struct {
@@ -112,13 +116,16 @@ func (bus *inProcessShareRepairBus) Subscribe(member group.MemberIndex) <-chan s
 
 func (*inProcessShareRepairBus) Start() {}
 
-func (bus *inProcessShareRepairBus) Broadcast(message shareRepairMessage) {
+func (bus *inProcessShareRepairBus) Broadcast(
+	message shareRepairMessage,
+) context.CancelFunc {
 	bus.mutex.Lock()
 	subscribers := append([]*shareRepairBusSubscriber(nil), bus.subscribers...)
 	bus.mutex.Unlock()
 	for _, subscriber := range subscribers {
 		subscriber.deliver(message, 4096)
 	}
+	return func() {}
 }
 
 const shareRepairTransportType = "frost/share_repair/v1"
@@ -139,7 +146,8 @@ func (*shareRepairTransportMessage) Type() string { return shareRepairTransportT
 // ephemeral-key-length(2) || ephemeral-key || payload.
 func (message *shareRepairTransportMessage) Marshal() ([]byte, error) {
 	value := message.message
-	if value.Type < shareRepairAnnouncementMessage || value.Type > shareRepairPublicPackageMessage ||
+	if value.Type < shareRepairAnnouncementMessage ||
+		value.Type > shareRepairCompletionMessage ||
 		value.Sender == 0 || value.ContextDigest == [32]byte{} ||
 		len(value.Payload) > shareRepairMaximumPublicPayload {
 		return nil, fmt.Errorf("share-repair transport message is invalid")
@@ -159,6 +167,16 @@ func (message *shareRepairTransportMessage) Marshal() ([]byte, error) {
 	case shareRepairPublicPackageMessage:
 		if value.Recipient != 0 || len(value.EphemeralPublicKey) != 0 || len(value.Payload) == 0 {
 			return nil, fmt.Errorf("share-repair public-package message shape is invalid")
+		}
+	case shareRepairInstalledAcknowledgementMessage:
+		if value.Recipient == 0 || len(value.EphemeralPublicKey) != 0 ||
+			len(value.Payload) != sha256.Size {
+			return nil, fmt.Errorf("share-repair installed acknowledgement shape is invalid")
+		}
+	case shareRepairCompletionMessage:
+		if value.Recipient != 0 || len(value.EphemeralPublicKey) != 0 ||
+			len(value.Payload) != sha256.Size {
+			return nil, fmt.Errorf("share-repair completion shape is invalid")
 		}
 	default:
 		if value.Recipient == 0 || len(value.EphemeralPublicKey) != 0 ||
@@ -185,7 +203,8 @@ func (message *shareRepairTransportMessage) Unmarshal(data []byte) error {
 	messageType := shareRepairMessageType(data[0])
 	rawSender := binary.BigEndian.Uint32(data[1:5])
 	rawRecipient := binary.BigEndian.Uint32(data[5:9])
-	if messageType < shareRepairAnnouncementMessage || messageType > shareRepairPublicPackageMessage ||
+	if messageType < shareRepairAnnouncementMessage ||
+		messageType > shareRepairCompletionMessage ||
 		rawSender == 0 || rawSender > uint32(group.MaxMemberIndex) ||
 		rawRecipient > uint32(group.MaxMemberIndex) {
 		return fmt.Errorf("share-repair transport header is invalid")
@@ -223,6 +242,14 @@ func (message *shareRepairTransportMessage) Unmarshal(data []byte) error {
 	case shareRepairPublicPackageMessage:
 		if rawRecipient != 0 || ephemeralLength != 0 || len(value.Payload) == 0 {
 			return fmt.Errorf("share-repair public-package message shape is invalid")
+		}
+	case shareRepairInstalledAcknowledgementMessage:
+		if rawRecipient == 0 || ephemeralLength != 0 || len(value.Payload) != sha256.Size {
+			return fmt.Errorf("share-repair installed acknowledgement shape is invalid")
+		}
+	case shareRepairCompletionMessage:
+		if rawRecipient != 0 || ephemeralLength != 0 || len(value.Payload) != sha256.Size {
+			return fmt.Errorf("share-repair completion shape is invalid")
 		}
 	default:
 		if rawRecipient == 0 || ephemeralLength != 0 || len(value.Payload) == 0 ||
@@ -294,16 +321,20 @@ func (bus *broadcastChannelShareRepairBus) deliver(message shareRepairMessage) {
 	}
 }
 
-func (bus *broadcastChannelShareRepairBus) Broadcast(message shareRepairMessage) {
+func (bus *broadcastChannelShareRepairBus) Broadcast(
+	message shareRepairMessage,
+) context.CancelFunc {
+	sendContext, cancel := context.WithCancel(bus.ctx)
 	// Deliver locally first. A channel implementation may not echo the sender;
 	// the content hash suppresses a later network echo.
 	bus.deliver(message)
 	if err := bus.channel.Send(
-		bus.ctx,
+		sendContext,
 		&shareRepairTransportMessage{message: message},
 	); err != nil {
 		bus.logger.Warnf("share-repair bus send failed: [%v]", err)
 	}
+	return cancel
 }
 
 func (bus *broadcastChannelShareRepairBus) handleMessage(message net.Message) {

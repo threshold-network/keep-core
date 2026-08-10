@@ -6,10 +6,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
@@ -212,28 +212,12 @@ func (runner *shareRepairRunner) run(
 		ContextDigest:      runner.authorizationDigest,
 		EphemeralPublicKey: runner.ephemeralPublic,
 	}
-	runner.bus.Broadcast(announcement)
-	stopAnnouncements := make(chan struct{})
-	announcementsStopped := make(chan struct{})
-	go func() {
-		defer close(announcementsStopped)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-stopAnnouncements:
-				return
-			case <-ticker.C:
-				runner.bus.Broadcast(announcement)
-			}
-		}
-	}()
-	defer func() {
-		close(stopAnnouncements)
-		<-announcementsStopped
-	}()
+	// BroadcastChannel.Send owns context-lifetime retransmission. Publishing
+	// this announcement again at the application layer would register another
+	// independent retransmission handler on every repeat and turn a missing-peer
+	// timeout into quadratic traffic growth.
+	cancelAnnouncement := runner.bus.Broadcast(announcement)
+	defer cancelAnnouncement()
 
 	publicKeys, err := runner.collectAnnouncements(ctx)
 	if err != nil {
@@ -245,7 +229,7 @@ func (runner *shareRepairRunner) run(
 	if _, helper := runner.helperSet[runner.member]; !helper {
 		return nil, fmt.Errorf("seat is neither target nor helper")
 	}
-	return nil, runner.runHelper(ctx, publicKeys)
+	return nil, runner.runHelper(ctx, publicKeys, cancelAnnouncement)
 }
 
 func (runner *shareRepairRunner) collectAnnouncements(
@@ -363,6 +347,7 @@ func decodeShareRepairSealedSecret(
 func (runner *shareRepairRunner) runHelper(
 	ctx context.Context,
 	publicKeys map[group.MemberIndex]*ephemeral.PublicKey,
+	cancelAnnouncement context.CancelFunc,
 ) error {
 	part1, err := runner.engine.ShareRepairPart1(
 		runner.authorization,
@@ -395,12 +380,29 @@ func (runner *shareRepairRunner) runHelper(
 	if len(publicPackage) > shareRepairMaximumPublicPayload {
 		return fmt.Errorf("repair public key package exceeds the transport cap")
 	}
-	runner.bus.Broadcast(shareRepairMessage{
+	// A participant cannot cancel its announcement merely because it has heard
+	// every peer: another peer may still be missing this participant. The
+	// installed receipt proves all helpers crossed rendezvous, so retain the
+	// announcement with the helper's other pre-receipt messages until then.
+	preReceiptBroadcasts := make(
+		[]context.CancelFunc,
+		0,
+		len(runner.helperSet)+3,
+	)
+	preReceiptBroadcasts = append(preReceiptBroadcasts, cancelAnnouncement)
+	cancelPreReceiptBroadcasts := func() {
+		for _, cancel := range preReceiptBroadcasts {
+			cancel()
+		}
+		preReceiptBroadcasts = nil
+	}
+	defer cancelPreReceiptBroadcasts()
+	preReceiptBroadcasts = append(preReceiptBroadcasts, runner.bus.Broadcast(shareRepairMessage{
 		Type:          shareRepairPublicPackageMessage,
 		Sender:        runner.member,
 		ContextDigest: runner.authorizationDigest,
 		Payload:       publicPackage,
-	})
+	}))
 	for index, recipient := range runner.authorization.HelperIdentifiers {
 		delta := part1.Deltas[index]
 		if delta == nil || delta.ContextDigest != runner.contextWire ||
@@ -429,13 +431,13 @@ func (runner *shareRepairRunner) runHelper(
 			return fmt.Errorf("seal repair delta for [%d]: %w", recipient, err)
 		}
 		zeroBytes(delta.Data)
-		runner.bus.Broadcast(shareRepairMessage{
+		preReceiptBroadcasts = append(preReceiptBroadcasts, runner.bus.Broadcast(shareRepairMessage{
 			Type:          shareRepairDeltaMessage,
 			Sender:        runner.member,
 			Recipient:     group.MemberIndex(recipient),
 			ContextDigest: runner.authorizationDigest,
 			Payload:       sealed,
-		})
+		}))
 	}
 
 	deltas := make(map[uint16]*NativeShareRepairDelta, len(runner.helperSet))
@@ -528,14 +530,14 @@ func (runner *shareRepairRunner) runHelper(
 		return fmt.Errorf("seal repair sigma: %w", err)
 	}
 	zeroBytes(part2.Sigma.Data)
-	runner.bus.Broadcast(shareRepairMessage{
+	preReceiptBroadcasts = append(preReceiptBroadcasts, runner.bus.Broadcast(shareRepairMessage{
 		Type:          shareRepairSigmaMessage,
 		Sender:        runner.member,
 		Recipient:     group.MemberIndex(runner.authorization.TargetIdentifier),
 		ContextDigest: runner.authorizationDigest,
 		Payload:       sealed,
-	})
-	return runner.waitForInstalledReceipt(ctx)
+	}))
+	return runner.waitForInstalledReceipt(ctx, cancelPreReceiptBroadcasts)
 }
 
 func (runner *shareRepairRunner) runTarget(
@@ -651,6 +653,22 @@ func (runner *shareRepairRunner) runTarget(
 	if err := recordInstalledShareRepair(result); err != nil {
 		return nil, fmt.Errorf("arm repaired-seat activation guard: %w", err)
 	}
+	if err := runner.publishInstalledReceiptAndWaitForAcknowledgements(
+		ctx,
+		result,
+	); err != nil {
+		return result, fmt.Errorf(
+			"repaired share was durably installed and anchor-acknowledged, but receipt acknowledgements are incomplete: %w",
+			err,
+		)
+	}
+	return result, nil
+}
+
+func (runner *shareRepairRunner) publishInstalledReceiptAndWaitForAcknowledgements(
+	ctx context.Context,
+	result *NativeShareRepairInstallResult,
+) error {
 	receipt, err := json.Marshal(shareRepairInstalledWire{
 		Schema:                 result.Schema,
 		SessionID:              result.SessionID,
@@ -662,18 +680,72 @@ func (runner *shareRepairRunner) runTarget(
 		Idempotent:             result.Idempotent,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encode repaired-share installed receipt: %w", err)
+		return fmt.Errorf("encode repaired-share installed receipt: %w", err)
 	}
-	runner.bus.Broadcast(shareRepairMessage{
+	receiptDigest := sha256.Sum256(receipt)
+	// Publish once. The network layer keeps this exact sequence number alive
+	// while the target waits below, until every authorized helper proves it saw
+	// the durable, anchor-acknowledged result or the maintenance deadline fires.
+	cancelReceipt := runner.bus.Broadcast(shareRepairMessage{
 		Type:          shareRepairInstalledMessage,
 		Sender:        runner.member,
 		ContextDigest: runner.authorizationDigest,
 		Payload:       receipt,
 	})
-	return result, nil
+	defer cancelReceipt()
+	if err := runner.waitForInstalledAcknowledgements(ctx, receiptDigest); err != nil {
+		return fmt.Errorf("confirm repaired-share installed receipt: %w", err)
+	}
+	cancelReceipt()
+	// This final signal is only an early-release optimization for helpers. A
+	// helper already knows the install is durable from the validated receipt;
+	// if this signal is lost, it safely keeps its one acknowledgement
+	// retransmitter alive until the maintenance deadline instead of adding
+	// application-level repeats.
+	cancelCompletion := runner.bus.Broadcast(shareRepairMessage{
+		Type:          shareRepairCompletionMessage,
+		Sender:        runner.member,
+		ContextDigest: runner.authorizationDigest,
+		Payload:       append([]byte(nil), receiptDigest[:]...),
+	})
+	cancelCompletion()
+	return nil
 }
 
-func (runner *shareRepairRunner) waitForInstalledReceipt(ctx context.Context) error {
+func (runner *shareRepairRunner) waitForInstalledAcknowledgements(
+	ctx context.Context,
+	receiptDigest [sha256.Size]byte,
+) error {
+	acknowledged := make(map[group.MemberIndex]struct{}, len(runner.helperSet))
+	for len(acknowledged) < len(runner.helperSet) {
+		message, err := runner.nextMessage(ctx)
+		if err != nil {
+			return fmt.Errorf("wait for repaired-share receipt acknowledgements: %w", err)
+		}
+		if message.Type != shareRepairInstalledAcknowledgementMessage ||
+			message.ContextDigest != runner.authorizationDigest ||
+			message.Recipient != runner.member {
+			continue
+		}
+		if _, expected := runner.helperSet[message.Sender]; !expected {
+			continue
+		}
+		if len(message.Payload) != sha256.Size ||
+			!bytes.Equal(message.Payload, receiptDigest[:]) {
+			return fmt.Errorf(
+				"helper [%d] acknowledged a different installed receipt",
+				message.Sender,
+			)
+		}
+		acknowledged[message.Sender] = struct{}{}
+	}
+	return nil
+}
+
+func (runner *shareRepairRunner) waitForInstalledReceipt(
+	ctx context.Context,
+	cancelPreReceiptBroadcasts context.CancelFunc,
+) error {
 	for {
 		message, err := runner.nextMessage(ctx)
 		if err != nil {
@@ -701,6 +773,46 @@ func (runner *shareRepairRunner) waitForInstalledReceipt(ctx context.Context) er
 			receipt.AuthorizationDigest != runner.contextWire ||
 			receipt.ActiveStoreFingerprint != runner.authorization.NewStoreFingerprint {
 			return fmt.Errorf("repaired-share installed receipt does not match authorization")
+		}
+		receiptDigest := sha256.Sum256(message.Payload)
+		cancelPreReceiptBroadcasts()
+		cancelAcknowledgement := runner.bus.Broadcast(shareRepairMessage{
+			Type:          shareRepairInstalledAcknowledgementMessage,
+			Sender:        runner.member,
+			Recipient:     group.MemberIndex(runner.authorization.TargetIdentifier),
+			ContextDigest: runner.authorizationDigest,
+			Payload:       append([]byte(nil), receiptDigest[:]...),
+		})
+		defer cancelAcknowledgement()
+		return runner.waitForShareRepairCompletion(ctx, receiptDigest)
+	}
+}
+
+func (runner *shareRepairRunner) waitForShareRepairCompletion(
+	ctx context.Context,
+	receiptDigest [sha256.Size]byte,
+) error {
+	for {
+		message, err := runner.nextMessage(ctx)
+		if err != nil {
+			// Receipt validation already proved the target durably installed and
+			// anchor-acknowledged the share. Waiting keeps this helper's single ACK
+			// retransmitter alive; exhausting the enclosing maintenance window does
+			// not invalidate that completed repair.
+			if ctx.Err() == context.DeadlineExceeded {
+				return nil
+			}
+			return fmt.Errorf("wait for share-repair completion: %w", err)
+		}
+		if message.Type != shareRepairCompletionMessage ||
+			message.ContextDigest != runner.authorizationDigest ||
+			message.Sender != group.MemberIndex(runner.authorization.TargetIdentifier) ||
+			message.Recipient != 0 {
+			continue
+		}
+		if len(message.Payload) != sha256.Size ||
+			!bytes.Equal(message.Payload, receiptDigest[:]) {
+			return fmt.Errorf("target completed a different installed receipt")
 		}
 		return nil
 	}

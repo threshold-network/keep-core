@@ -73,6 +73,16 @@ The target log confirms that Rust durably installed the repaired seat and the
 external anchor acknowledged the new state tip. Helper completion never means
 that a helper store changed.
 
+The target publishes one installed receipt whose network retransmitter remains
+active until every exact authorized helper validates it and acknowledges the
+receipt digest. Each helper keeps its single acknowledgement retransmitter alive
+until the target confirms the exact acknowledgement set or the maintenance
+deadline expires; the target confirmation merely permits early helper exit. A
+target timeout while waiting for acknowledgements is reported as a maintenance
+failure even though the target result states that installation and anchor
+acknowledgement already completed. In that case, do not repeat the repair
+arithmetic; follow the post-install recovery procedure below.
+
 An exact target install is idempotent. Rust permits the install endpoint to
 recognize the identical recovered-seat record after authorization expiry, but
 the Go maintenance protocol does not use an expired authorization and helpers
@@ -139,6 +149,12 @@ recovered seat's legacy, missing, or stale lease frames.
 | After anchor acknowledgement, before the in-process Go guard records it
 | Restart. The Rust v2 inventory independently reconstructs the pending-seat
   guard and refuses production signing.
+
+| After the Go guard records the install, before every helper acknowledges the receipt
+| Treat the target share as durably repaired. Remove the maintenance
+  authorization path and restart without repeating repair arithmetic. Startup
+  reconciliation authenticates the target's v2 inventory and anchor history;
+  helpers that missed the receipt may have reported a timeout.
 
 | After maintenance, before old-store tombstone or activation
 | Keep the target offline. A zero registry root is not ready when recovered-seat
