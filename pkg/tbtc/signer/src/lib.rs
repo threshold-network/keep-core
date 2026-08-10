@@ -8,13 +8,14 @@ use api::{
     AcknowledgeStateWitnessCheckpointRequest, BuildTaprootTxRequest,
     DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest, DkgPart1Request,
     DkgPart2Request, DkgPart3Request, DurableStoreIdentityResult, FrostTbtcAbiVersionResult,
-    InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
-    InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
-    NewSigningPackageRequest, PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest,
-    QuarantineStatusRequest, RecoverStateWitnessCheckpointRequest, RefreshCadenceStatusRequest,
-    RefreshSharesRequest, RetireDistributedDkgKeyPackagesRequest, RollbackCanaryRequest,
-    StateWitnessProofRequest, TranscriptAuditRequest, TransitionStateWitnessAnchorRequest,
-    TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+    InitSignerConfigRequest, InstallRepairedShareRequest, InteractiveAggregateRequest,
+    InteractiveRound1Request, InteractiveRound2Request, InteractiveSessionAbortRequest,
+    InteractiveSessionOpenRequest, NewSigningPackageRequest,
+    PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest, QuarantineStatusRequest,
+    RecoverStateWitnessCheckpointRequest, RefreshCadenceStatusRequest, RefreshSharesRequest,
+    RetireDistributedDkgKeyPackagesRequest, RollbackCanaryRequest, ShareRepairPart1Request,
+    ShareRepairPart2Request, StateWitnessProofRequest, TranscriptAuditRequest,
+    TransitionStateWitnessAnchorRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -58,7 +59,9 @@ const TBTC_SIGNER_ABI_MAJOR: u32 = 4;
 // ABI 4.3 so a published 4.2 library cannot pass negotiation then fail dlsym.
 // Minor 4 adds idempotent durable retirement of distributed-DKG key packages,
 // allowing the host to reconcile packages whose DKG result was never accepted.
-const TBTC_SIGNER_ABI_MINOR: u32 = 4;
+// Minor 5 adds offline-authorized, context-bound share-repair Part1/Part2 and
+// atomic repaired-share installation. Existing response shapes are unchanged.
+const TBTC_SIGNER_ABI_MINOR: u32 = 5;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
 
@@ -427,6 +430,47 @@ pub extern "C" fn frost_tbtc_retire_distributed_dkg_key_packages(
             parse_request(request_ptr, request_len)?;
         let response = engine::retire_distributed_dkg_key_packages(request)?;
         serialize_response(&response)
+    })
+}
+
+/// Generates one authorized helper's context-bound repair deltas. Every delta
+/// is secret and must be delivered only to its named helper recipient over an
+/// authenticated confidential channel.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_share_repair_part1(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: ShareRepairPart1Request = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::share_repair_part1(request)?)
+    })
+}
+
+/// Combines the exact authorized delta sender set at one helper and returns a
+/// context-bound secret sigma for the recovering target.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_share_repair_part2(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: ShareRepairPart2Request = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::share_repair_part2(request)?)
+    })
+}
+
+/// Reconstructs, publicly verifies, and atomically persists the repaired share
+/// in the authorization's exact fresh durable store. No raw KeyPackage crosses
+/// from Rust into the host process.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_install_repaired_share(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: InstallRepairedShareRequest = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::install_repaired_share(request)?)
     })
 }
 
@@ -939,9 +983,10 @@ mod tests {
         // RefreshShares call from a synthetic success response to a terminal error;
         // minor 2 adds the signed external-anchor tip/acknowledgement/recovery symbols;
         // minor 3 adds offline trust transition/head and provisioning bootstrap facts;
-        // minor 4 adds durable distributed-DKG key-package retirement.
+        // minor 4 adds durable distributed-DKG key-package retirement;
+        // minor 5 adds context-bound share repair and atomic installation.
         assert_eq!(abi.abi_major, 4);
-        assert_eq!(abi.abi_minor, 4);
+        assert_eq!(abi.abi_minor, 5);
     }
 
     #[test]

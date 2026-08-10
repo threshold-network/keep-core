@@ -4,12 +4,14 @@ use super::*;
 
 use crate::api::{
     RetainedKeyPackageInventoryEntry, RetainedKeyPackageInventoryPackage,
-    RetainedKeyPackageInventoryResult, StateWitnessProofEntry, StateWitnessProofRequest,
-    StateWitnessProofResult,
+    RetainedKeyPackageInventoryRecoveredSeat, RetainedKeyPackageInventoryResult,
+    StateWitnessProofEntry, StateWitnessProofRequest, StateWitnessProofResult,
 };
 
 pub(crate) const TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_SCHEMA: &str =
     "tbtc-signer-retained-key-package-inventory/v1";
+pub(crate) const TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_RECOVERY_SCHEMA: &str =
+    "tbtc-signer-retained-key-package-inventory/v2";
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_PROOF_REQUEST_SCHEMA: &str =
     "tbtc-signer-state-witness-proof-request/v1";
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_PROOF_SCHEMA: &str =
@@ -20,6 +22,8 @@ const INVENTORY_COMMITMENT_DOMAIN: &[u8] =
 const PUBLIC_KEY_PACKAGE_COMMITMENT_DOMAIN: &[u8] =
     b"tbtc-signer-retained-public-key-package-commitment-v1\0";
 const KEY_PACKAGE_COMMITMENT_DOMAIN: &[u8] = b"tbtc-signer-retained-key-package-commitment-v1\0";
+const RECOVERY_ACTIVATION_COMMITMENT_DOMAIN: &[u8] =
+    b"tbtc-signer-recovered-seat-activation-commitment-v1\0";
 
 #[derive(Clone)]
 struct ValidatedInventoryPackage {
@@ -38,6 +42,16 @@ struct ValidatedInventoryEntry {
     key_packages: Vec<ValidatedInventoryPackage>,
 }
 
+#[derive(Clone)]
+struct ValidatedRecoveredSeat {
+    wallet_id: [u8; 32],
+    key_group: String,
+    participant_seat: u16,
+    recovery_epoch: u64,
+    authorization_digest: [u8; 32],
+    active_store_fingerprint: [u8; 32],
+}
+
 pub(crate) fn retained_key_package_inventory(
 ) -> Result<RetainedKeyPackageInventoryResult, EngineError> {
     // Keep the engine guard through store-tip capture. Every state mutation
@@ -49,6 +63,7 @@ pub(crate) fn retained_key_package_inventory(
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
 
     let mut validated_entries = Vec::new();
+    let mut recovered_seats = Vec::new();
     for (session_id, session) in &guard.sessions {
         let Some(dkg_result) = session.dkg_result.as_ref() else {
             if session.dkg_key_packages.is_some() || session.dkg_public_key_package.is_some() {
@@ -58,7 +73,31 @@ pub(crate) fn retained_key_package_inventory(
             }
             continue;
         };
-        validated_entries.push(validate_inventory_entry(session_id, session, dkg_result)?);
+        let validated = validate_inventory_entry(session_id, session, dkg_result)?;
+        for (participant_seat, recovery) in &session.recovered_seats {
+            if recovery.participant_identifier != *participant_seat
+                || recovery.recovery_epoch == 0
+                || recovery.authorization_digest == [0u8; 32]
+                || recovery.active_store_fingerprint == [0u8; 32]
+                || !validated
+                    .key_packages
+                    .iter()
+                    .any(|package| package.participant_seat == *participant_seat)
+            {
+                return Err(EngineError::Internal(format!(
+                    "session [{session_id}] has inconsistent recovered-seat metadata"
+                )));
+            }
+            recovered_seats.push(ValidatedRecoveredSeat {
+                wallet_id: validated.wallet_id,
+                key_group: validated.key_group.clone(),
+                participant_seat: *participant_seat,
+                recovery_epoch: recovery.recovery_epoch,
+                authorization_digest: recovery.authorization_digest,
+                active_store_fingerprint: recovery.active_store_fingerprint,
+            });
+        }
+        validated_entries.push(validated);
     }
     validated_entries.sort_by_key(|entry| entry.wallet_id);
     for pair in validated_entries.windows(2) {
@@ -70,12 +109,39 @@ pub(crate) fn retained_key_package_inventory(
         }
     }
     let inventory_commitment = compute_inventory_commitment(&validated_entries)?;
+    recovered_seats.sort_by(|left, right| {
+        left.wallet_id
+            .cmp(&right.wallet_id)
+            .then(left.participant_seat.cmp(&right.participant_seat))
+    });
+    for pair in recovered_seats.windows(2) {
+        if pair[0].wallet_id == pair[1].wallet_id
+            && pair[0].participant_seat == pair[1].participant_seat
+        {
+            return Err(EngineError::Internal(
+                "duplicate recovered-seat activation metadata".to_string(),
+            ));
+        }
+    }
 
     let (store_identity, state_tip) = with_state_file_lock(|store| {
         let identity = store.identity()?;
         let tip = store.state_witness_tip()?;
         Ok((identity, tip))
     })?;
+    if recovered_seats
+        .iter()
+        .any(|seat| seat.active_store_fingerprint != store_identity.fingerprint)
+    {
+        return Err(EngineError::Internal(
+            "recovered-seat activation metadata belongs to another durable store".to_string(),
+        ));
+    }
+    let recovery_activation_commitment = if recovered_seats.is_empty() {
+        None
+    } else {
+        Some(compute_recovery_activation_commitment(&recovered_seats)?)
+    };
 
     let entries = validated_entries
         .into_iter()
@@ -98,7 +164,12 @@ pub(crate) fn retained_key_package_inventory(
         .collect();
 
     Ok(RetainedKeyPackageInventoryResult {
-        schema: TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_SCHEMA.to_string(),
+        schema: if recovered_seats.is_empty() {
+            TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_SCHEMA
+        } else {
+            TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_RECOVERY_SCHEMA
+        }
+        .to_string(),
         store_fingerprint: bytes32_hex(store_identity.fingerprint),
         state_generation: state_tip.generation,
         state_commitment: bytes32_hex(state_tip.commitment),
@@ -106,6 +177,18 @@ pub(crate) fn retained_key_package_inventory(
         state_image_digest: bytes32_hex(state_tip.state_image_digest),
         inventory_commitment: bytes32_hex(inventory_commitment),
         entries,
+        recovered_seats: recovered_seats
+            .into_iter()
+            .map(|seat| RetainedKeyPackageInventoryRecoveredSeat {
+                wallet_id: bytes32_hex(seat.wallet_id),
+                key_group: seat.key_group,
+                participant_seat: seat.participant_seat,
+                recovery_epoch: seat.recovery_epoch,
+                authorization_digest: bytes32_hex(seat.authorization_digest),
+                active_store_fingerprint: bytes32_hex(seat.active_store_fingerprint),
+            })
+            .collect(),
+        recovery_activation_commitment: recovery_activation_commitment.map(bytes32_hex),
     })
 }
 
@@ -376,7 +459,7 @@ pub(crate) fn bytes32_hex(value: [u8; 32]) -> String {
     format!("0x{}", hex::encode(value))
 }
 
-fn public_key_package_commitment(
+pub(crate) fn public_key_package_commitment(
     wallet_id: &[u8; 32],
     key_group: &str,
     threshold: u16,
@@ -449,6 +532,26 @@ fn compute_inventory_commitment(
     Ok(digest.finalize().into())
 }
 
+fn compute_recovery_activation_commitment(
+    seats: &[ValidatedRecoveredSeat],
+) -> Result<[u8; 32], EngineError> {
+    let count = u32::try_from(seats.len()).map_err(|_| {
+        EngineError::Internal("recovered-seat inventory has too many entries".to_string())
+    })?;
+    let mut digest = Sha256::new();
+    digest.update(RECOVERY_ACTIVATION_COMMITMENT_DOMAIN);
+    digest.update(count.to_be_bytes());
+    for seat in seats {
+        digest.update(seat.wallet_id);
+        write_length_prefixed(&mut digest, seat.key_group.as_bytes());
+        digest.update(seat.participant_seat.to_be_bytes());
+        digest.update(seat.recovery_epoch.to_be_bytes());
+        digest.update(seat.authorization_digest);
+        digest.update(seat.active_store_fingerprint);
+    }
+    Ok(digest.finalize().into())
+}
+
 fn write_length_prefixed(destination: &mut Sha256, value: &[u8]) {
     destination.update((value.len() as u32).to_be_bytes());
     destination.update(value);
@@ -482,6 +585,26 @@ mod inventory_transcript_tests {
         assert_eq!(
             hex::encode(compute_inventory_commitment(&entries).expect("inventory commitment")),
             "bd6ec36fa27a57dd9926883bb2ff4dee7ececd28de940df7294f0e0f0dedd150"
+        );
+    }
+
+    #[test]
+    fn recovery_activation_commitment_matches_frozen_go_v1_vector() {
+        let seats = vec![ValidatedRecoveredSeat {
+            wallet_id: [0x11; 32],
+            key_group: format!("02{}", "11".repeat(32)),
+            participant_seat: 3,
+            recovery_epoch: 7,
+            authorization_digest: [0x22; 32],
+            active_store_fingerprint: [0x33; 32],
+        }];
+
+        assert_eq!(
+            hex::encode(
+                compute_recovery_activation_commitment(&seats)
+                    .expect("recovery activation commitment")
+            ),
+            "48484643db480de91c011eece129e51fb32864f33887975009f993e54f7a2f20"
         );
     }
 }

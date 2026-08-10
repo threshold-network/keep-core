@@ -743,6 +743,7 @@ fn persisted_session_state_fixture() -> PersistedSessionState {
         dkg_public_key_package_hex: None,
         dkg_result: None,
         dkg_share_epoch: 0,
+        recovered_seats: Vec::new(),
         sign_request_fingerprint: None,
         sign_message_hex: None,
         round_state: None,
@@ -1130,14 +1131,24 @@ fn sample_distributed_dkg_native_material(
     crate::api::NativeFrostPublicKeyPackage,
     BTreeMap<u16, crate::api::NativeFrostKeyPackage>,
 ) {
-    let identifiers = [1_u16, 2, 3]
-        .iter()
-        .map(|m| participant_identifier_to_frost_identifier(*m).expect("frost identifier"))
+    sample_distributed_dkg_native_material_with_parameters(seed, 3, 2)
+}
+
+fn sample_distributed_dkg_native_material_with_parameters(
+    seed: u8,
+    participant_count: u16,
+    threshold: u16,
+) -> (
+    crate::api::NativeFrostPublicKeyPackage,
+    BTreeMap<u16, crate::api::NativeFrostKeyPackage>,
+) {
+    let identifiers = (1..=participant_count)
+        .map(|member| participant_identifier_to_frost_identifier(member).expect("frost identifier"))
         .collect::<Vec<_>>();
     let rng = ZeroizingChaCha20Rng::from_seed([seed; 32]);
     let (shares, public_key_package) = frost::keys::generate_with_dealer(
-        3,
-        2,
+        participant_count,
+        threshold,
         frost::keys::IdentifierList::Custom(&identifiers),
         rng,
     )
@@ -1152,7 +1163,7 @@ fn sample_distributed_dkg_native_material(
         native_public_key_package_from_frost(&public_key_package).expect("native public package");
 
     let mut native_key_packages = BTreeMap::new();
-    for member in [1_u16, 2, 3] {
+    for member in 1..=participant_count {
         let frost_id =
             participant_identifier_to_frost_identifier(member).expect("frost identifier");
         let share = shares.get(&frost_id).expect("share for member").clone();
@@ -1170,6 +1181,522 @@ fn sample_distributed_dkg_native_material(
     }
 
     (native_public, native_key_packages)
+}
+
+fn signed_share_repair_authorization(
+    signing_key: &ed25519_dalek::SigningKey,
+    session_id: &str,
+    key_group: &str,
+    public_key_package: &NativeFrostPublicKeyPackage,
+    new_store_fingerprint: [u8; 32],
+) -> ShareRepairAuthorization {
+    signed_share_repair_authorization_with_shape(
+        signing_key,
+        session_id,
+        key_group,
+        public_key_package,
+        new_store_fingerprint,
+        2,
+        3,
+        3,
+        vec![1, 2],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signed_share_repair_authorization_with_shape(
+    signing_key: &ed25519_dalek::SigningKey,
+    session_id: &str,
+    key_group: &str,
+    public_key_package: &NativeFrostPublicKeyPackage,
+    new_store_fingerprint: [u8; 32],
+    threshold: u16,
+    participant_count: u16,
+    target_identifier: u16,
+    helper_identifiers: Vec<u16>,
+) -> ShareRepairAuthorization {
+    use ed25519_dalek::Signer as _;
+
+    let stored_public =
+        native_public_key_package_to_frost("repair-test", public_key_package).expect("public");
+    let serialized_public = stored_public.serialize().expect("serialize public");
+    let (wallet_id, _) = super::inventory::parse_key_group(key_group).expect("key group");
+    let public_commitment = public_key_package_commitment(
+        &wallet_id,
+        key_group,
+        threshold,
+        participant_count,
+        0,
+        &serialized_public,
+    );
+    let now = now_unix();
+    let mut authorization = ShareRepairAuthorization {
+        schema: TBTC_SIGNER_SHARE_REPAIR_AUTHORIZATION_SCHEMA.to_string(),
+        session_id: session_id.to_string(),
+        wallet_id: bytes32_hex(wallet_id),
+        key_group: key_group.to_string(),
+        public_key_package_commitment: bytes32_hex(public_commitment),
+        target_identifier,
+        helper_identifiers,
+        threshold,
+        participant_count,
+        old_store_fingerprint: bytes32_hex([0x91; 32]),
+        new_store_fingerprint: bytes32_hex(new_store_fingerprint),
+        recovery_epoch: 1,
+        issued_at_unix: now.saturating_sub(1),
+        not_before_unix: now.saturating_sub(1),
+        expires_at_unix: now.saturating_add(3600),
+        nonce: bytes32_hex([0x92; 32]),
+        signature_hex: format!("0x{}", "00".repeat(64)),
+    };
+    let digest =
+        share_repair_authorization_digest_for_tests(&authorization).expect("authorization digest");
+    authorization.signature_hex =
+        format!("0x{}", hex::encode(signing_key.sign(&digest).to_bytes()));
+    authorization
+}
+
+#[test]
+fn share_repair_authorization_digest_matches_go_frozen_vector() {
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let secret_key = bitcoin::secp256k1::SecretKey::from_slice(&[0x09; 32]).expect("secret key");
+    let public_key = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+    let compressed = public_key.serialize();
+    let authorization = ShareRepairAuthorization {
+        schema: TBTC_SIGNER_SHARE_REPAIR_AUTHORIZATION_SCHEMA.to_string(),
+        session_id: "repair-wallet-a-seat-3-epoch-1".to_string(),
+        wallet_id: format!("0x{}", hex::encode(&compressed[1..])),
+        key_group: hex::encode(compressed),
+        public_key_package_commitment: bytes32_hex([0x31; 32]),
+        target_identifier: 3,
+        helper_identifiers: vec![1, 2],
+        threshold: 2,
+        participant_count: 3,
+        old_store_fingerprint: bytes32_hex([0x51; 32]),
+        new_store_fingerprint: bytes32_hex([0x52; 32]),
+        recovery_epoch: 1,
+        issued_at_unix: 1_700_000_000,
+        not_before_unix: 1_700_000_000,
+        expires_at_unix: 1_700_003_600,
+        nonce: bytes32_hex([0x61; 32]),
+        signature_hex: format!("0x{}", "00".repeat(64)),
+    };
+    let digest =
+        share_repair_authorization_digest_for_tests(&authorization).expect("authorization digest");
+    assert_eq!(
+        "aa8e36cbf287d988c6ed34bf0c38fd64c177500c768fbd3ea7c184b031d7511b",
+        hex::encode(digest)
+    );
+}
+
+fn resign_share_repair_authorization(
+    authorization: &mut ShareRepairAuthorization,
+    signing_key: &ed25519_dalek::SigningKey,
+) {
+    use ed25519_dalek::Signer as _;
+
+    let digest =
+        share_repair_authorization_digest_for_tests(authorization).expect("authorization digest");
+    authorization.signature_hex =
+        format!("0x{}", hex::encode(signing_key.sign(&digest).to_bytes()));
+}
+
+fn share_repair_sigmas(
+    authorization: &ShareRepairAuthorization,
+) -> (Vec<ShareRepairPart1Result>, Vec<ShareRepairSigma>) {
+    let part1 = authorization
+        .helper_identifiers
+        .iter()
+        .map(|helper| {
+            share_repair_part1(ShareRepairPart1Request {
+                authorization: authorization.clone(),
+                helper_identifier: *helper,
+            })
+            .expect("repair part1")
+        })
+        .collect::<Vec<_>>();
+
+    let sigmas = authorization
+        .helper_identifiers
+        .iter()
+        .map(|recipient| {
+            let deltas = authorization
+                .helper_identifiers
+                .iter()
+                .map(|sender| {
+                    part1
+                        .iter()
+                        .find(|result| result.helper_identifier == *sender)
+                        .and_then(|result| {
+                            result
+                                .deltas
+                                .iter()
+                                .find(|delta| delta.recipient_identifier == *recipient)
+                        })
+                        .expect("sender/recipient delta")
+                        .clone()
+                })
+                .collect();
+            share_repair_part2(ShareRepairPart2Request {
+                authorization: authorization.clone(),
+                helper_identifier: *recipient,
+                deltas,
+            })
+            .expect("repair part2")
+            .sigma
+        })
+        .collect();
+    (part1, sigmas)
+}
+
+#[test]
+fn share_repair_installs_exact_share_durably_and_replays_idempotently() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("share_repair_happy_path");
+    reset_for_tests();
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0xa5; 32]);
+    set_share_repair_authority_for_tests(Some(signing_key.verifying_key().to_bytes()));
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(37);
+    let session_id = "share-repair-wallet-owner";
+    let mut persisted = None;
+    for helper in [1_u16, 2] {
+        persisted = Some(
+            persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+                session_id: session_id.to_string(),
+                participant_identifier: helper,
+                threshold: 2,
+                participant_count: 3,
+                key_package: native_key_packages[&helper].clone(),
+                public_key_package: native_public.clone(),
+            })
+            .expect("persist helper"),
+        );
+    }
+    let persisted = persisted.expect("persisted DKG");
+    let store_fingerprint = durable_store_identity()
+        .expect("store identity")
+        .fingerprint;
+    let authorization = signed_share_repair_authorization(
+        &signing_key,
+        session_id,
+        &persisted.key_group,
+        &native_public,
+        store_fingerprint,
+    );
+    let (_, sigmas) = share_repair_sigmas(&authorization);
+    let install_request = InstallRepairedShareRequest {
+        authorization: authorization.clone(),
+        public_key_package: native_public.clone(),
+        sigmas,
+    };
+    let installed =
+        install_repaired_share(install_request.clone()).expect("install repaired share");
+    assert!(!installed.idempotent);
+    assert_eq!(installed.target_identifier, 3);
+    assert_eq!(
+        installed.active_store_fingerprint,
+        bytes32_hex(store_fingerprint)
+    );
+    let recovered_inventory =
+        retained_key_package_inventory().expect("recovered retained inventory");
+    assert_eq!(
+        recovered_inventory.schema,
+        TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_RECOVERY_SCHEMA
+    );
+    assert_eq!(recovered_inventory.recovered_seats.len(), 1);
+    assert_eq!(
+        recovered_inventory.recovered_seats[0].authorization_digest,
+        installed.authorization_digest
+    );
+    assert_eq!(
+        recovered_inventory.recovered_seats[0].active_store_fingerprint,
+        installed.active_store_fingerprint
+    );
+    assert!(recovered_inventory.recovery_activation_commitment.is_some());
+
+    let expected = decode_key_package(
+        "repair-test",
+        &native_key_packages[&3].identifier,
+        native_key_packages[&3].data_hex.expose_secret(),
+    )
+    .expect("decode expected target share");
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        let session = &guard.sessions[session_id];
+        assert_eq!(
+            session.dkg_key_packages.as_ref().expect("packages")[&3],
+            expected
+        );
+        let recovered = &session.recovered_seats[&3];
+        assert_eq!(recovered.recovery_epoch, 1);
+        assert_eq!(
+            bytes32_hex(recovered.authorization_digest),
+            installed.authorization_digest
+        );
+        assert_eq!(recovered.active_store_fingerprint, store_fingerprint);
+        assert_eq!(session.dkg_share_epoch, 0);
+        let persisted_state = PersistedEngineState::try_from(&*guard).expect("persisted state");
+        assert_eq!(
+            persisted_state.schema_version,
+            PERSISTED_STATE_SCHEMA_VERSION
+        );
+        assert_eq!(
+            persisted_state.sessions[session_id].recovered_seats,
+            vec![recovered.clone()]
+        );
+        let mut forged_legacy = persisted_state;
+        forged_legacy.schema_version = PERSISTED_STATE_SCHEMA_VERSION_LEGACY;
+        assert!(matches!(
+            EngineState::try_from(forged_legacy),
+            Err(EngineError::Internal(message))
+                if message.contains("legacy signer state contains schema-2")
+        ));
+    }
+
+    let mut replay = install_request;
+    replay.sigmas.clear();
+    let replayed = install_repaired_share(replay).expect("exact installed replay");
+    assert!(replayed.idempotent);
+    assert_eq!(
+        replayed.authorization_digest,
+        installed.authorization_digest
+    );
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    let guard = state().expect("state").lock().expect("engine lock");
+    assert_eq!(
+        guard.sessions[session_id]
+            .dkg_key_packages
+            .as_ref()
+            .unwrap()[&3],
+        expected
+    );
+    assert_eq!(
+        guard.sessions[session_id].recovered_seats[&3].recovery_epoch,
+        1
+    );
+    drop(guard);
+    let restarted_inventory =
+        retained_key_package_inventory().expect("restarted recovered inventory");
+    assert_eq!(
+        restarted_inventory.recovery_activation_commitment,
+        recovered_inventory.recovery_activation_commitment
+    );
+
+    set_share_repair_authority_for_tests(None);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[ignore = "production-scale 51-of-100 share-repair launch gate"]
+fn share_repair_production_scale_51_of_100_launch_gate() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("share_repair_51_of_100");
+    reset_for_tests();
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0xb5; 32]);
+    set_share_repair_authority_for_tests(Some(signing_key.verifying_key().to_bytes()));
+    let (native_public, native_key_packages) =
+        sample_distributed_dkg_native_material_with_parameters(73, 100, 51);
+    let session_id = "share-repair-production-scale-wallet";
+    let mut persisted = None;
+    for helper in 1_u16..=51 {
+        persisted = Some(
+            persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+                session_id: session_id.to_string(),
+                participant_identifier: helper,
+                threshold: 51,
+                participant_count: 100,
+                key_package: native_key_packages[&helper].clone(),
+                public_key_package: native_public.clone(),
+            })
+            .expect("persist production-scale helper"),
+        );
+    }
+    let persisted = persisted.expect("persisted production-scale DKG");
+    let store_fingerprint = durable_store_identity()
+        .expect("store identity")
+        .fingerprint;
+    let authorization = signed_share_repair_authorization_with_shape(
+        &signing_key,
+        session_id,
+        &persisted.key_group,
+        &native_public,
+        store_fingerprint,
+        51,
+        100,
+        100,
+        (1_u16..=51).collect(),
+    );
+    let (_, sigmas) = share_repair_sigmas(&authorization);
+    let installed = install_repaired_share(InstallRepairedShareRequest {
+        authorization,
+        public_key_package: native_public,
+        sigmas,
+    })
+    .expect("install production-scale repaired share");
+    assert_eq!(installed.target_identifier, 100);
+
+    let expected = decode_key_package(
+        "repair-production-scale",
+        &native_key_packages[&100].identifier,
+        native_key_packages[&100].data_hex.expose_secret(),
+    )
+    .expect("decode expected production-scale target share");
+    let guard = state().expect("state").lock().expect("engine lock");
+    assert_eq!(
+        guard.sessions[session_id]
+            .dkg_key_packages
+            .as_ref()
+            .expect("production-scale packages")[&100],
+        expected
+    );
+    drop(guard);
+    let inventory = retained_key_package_inventory().expect("production-scale inventory");
+    assert_eq!(
+        inventory.schema,
+        TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_RECOVERY_SCHEMA
+    );
+    assert_eq!(inventory.recovered_seats.len(), 1);
+
+    set_share_repair_authority_for_tests(None);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("share_repair_rejections");
+    reset_for_tests();
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0xa6; 32]);
+    set_share_repair_authority_for_tests(Some(signing_key.verifying_key().to_bytes()));
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(41);
+    let session_id = "share-repair-rejection-wallet";
+    let mut persisted = None;
+    for helper in [1_u16, 2] {
+        persisted = Some(
+            persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+                session_id: session_id.to_string(),
+                participant_identifier: helper,
+                threshold: 2,
+                participant_count: 3,
+                key_package: native_key_packages[&helper].clone(),
+                public_key_package: native_public.clone(),
+            })
+            .expect("persist helper"),
+        );
+    }
+    let persisted = persisted.unwrap();
+    let store_fingerprint = durable_store_identity()
+        .expect("store identity")
+        .fingerprint;
+    let authorization = signed_share_repair_authorization(
+        &signing_key,
+        session_id,
+        &persisted.key_group,
+        &native_public,
+        store_fingerprint,
+    );
+    let (part1, sigmas) = share_repair_sigmas(&authorization);
+
+    let incomplete = share_repair_part2(ShareRepairPart2Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        deltas: vec![part1[0].deltas[0].clone()],
+    })
+    .expect_err("incomplete delta set");
+    assert!(matches!(incomplete, EngineError::Validation(_)));
+
+    let mut cross_context = part1[0].deltas[0].clone();
+    cross_context.context_digest = bytes32_hex([0x55; 32]);
+    let cross_context_error = share_repair_part2(ShareRepairPart2Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        deltas: vec![cross_context, part1[1].deltas[0].clone()],
+    })
+    .expect_err("cross-context delta");
+    assert!(matches!(cross_context_error, EngineError::Validation(_)));
+
+    let missing_sigma = install_repaired_share(InstallRepairedShareRequest {
+        authorization: authorization.clone(),
+        public_key_package: native_public.clone(),
+        sigmas: vec![sigmas[0].clone()],
+    })
+    .expect_err("incomplete sigma set");
+    assert!(matches!(missing_sigma, EngineError::Validation(_)));
+
+    // A second valid Part1 transcript has the same authorization context but
+    // independent randomness. Substituting just one of its deltas passes the
+    // wire/context checks and must be caught by the target public-share check.
+    let (alternate_part1, _) = share_repair_sigmas(&authorization);
+    let substituted = share_repair_part2(ShareRepairPart2Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        deltas: vec![
+            alternate_part1[0].deltas[0].clone(),
+            part1[1].deltas[0].clone(),
+        ],
+    })
+    .expect("well-shaped but inconsistent deltas")
+    .sigma;
+    let corrupted = install_repaired_share(InstallRepairedShareRequest {
+        authorization: authorization.clone(),
+        public_key_package: native_public.clone(),
+        sigmas: vec![substituted, sigmas[1].clone()],
+    })
+    .expect_err("reconstructed share must match public commitment");
+    assert!(matches!(corrupted, EngineError::Validation(_)));
+    assert!(!state()
+        .expect("state")
+        .lock()
+        .expect("engine lock")
+        .sessions[session_id]
+        .dkg_key_packages
+        .as_ref()
+        .unwrap()
+        .contains_key(&3));
+
+    let mut wrong_store = authorization.clone();
+    wrong_store.new_store_fingerprint = bytes32_hex([0x77; 32]);
+    resign_share_repair_authorization(&mut wrong_store, &signing_key);
+    let wrong_store_error = install_repaired_share(InstallRepairedShareRequest {
+        authorization: wrong_store,
+        public_key_package: native_public.clone(),
+        sigmas: Vec::new(),
+    })
+    .expect_err("wrong durable store");
+    assert!(matches!(wrong_store_error, EngineError::Validation(_)));
+
+    let mut oversized_group = authorization.clone();
+    oversized_group.participant_count = 101;
+    resign_share_repair_authorization(&mut oversized_group, &signing_key);
+    let oversized_group_error = share_repair_part1(ShareRepairPart1Request {
+        authorization: oversized_group,
+        helper_identifier: 1,
+    })
+    .expect_err("participant count above the production group bound");
+    assert!(matches!(oversized_group_error, EngineError::Validation(_)));
+
+    let mut bad_signature = authorization;
+    bad_signature.signature_hex = format!("0x{}", "11".repeat(64));
+    let signature_error = share_repair_part1(ShareRepairPart1Request {
+        authorization: bad_signature,
+        helper_identifier: 1,
+    })
+    .expect_err("bad authority signature");
+    assert!(matches!(signature_error, EngineError::Validation(_)));
+
+    set_share_repair_authority_for_tests(None);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 // A multi-seat operator persists several local seats of the SAME distributed DKG

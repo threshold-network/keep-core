@@ -145,6 +145,106 @@ pub struct RetireDistributedDkgKeyPackagesResult {
     pub retired_key_package_count: u16,
 }
 
+/// Offline-authority authorization for one bounded repair of one participant
+/// share. The signature covers every field except `signature_hex` using the
+/// frozen `tbtc-frost-share-repair-authorization/v1` transcript.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareRepairAuthorization {
+    pub schema: String,
+    pub session_id: String,
+    pub wallet_id: String,
+    pub key_group: String,
+    pub public_key_package_commitment: String,
+    pub target_identifier: u16,
+    pub helper_identifiers: Vec<u16>,
+    pub threshold: u16,
+    pub participant_count: u16,
+    pub old_store_fingerprint: String,
+    pub new_store_fingerprint: String,
+    pub recovery_epoch: u64,
+    pub issued_at_unix: u64,
+    pub not_before_unix: u64,
+    pub expires_at_unix: u64,
+    pub nonce: String,
+    pub signature_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareRepairPart1Request {
+    pub authorization: ShareRepairAuthorization,
+    pub helper_identifier: u16,
+}
+
+/// One secret repair delta. The context digest and explicit endpoints prevent
+/// the application from accidentally accepting a scalar from another repair
+/// session even though the upstream arithmetic type itself has no context.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareRepairDelta {
+    pub context_digest: String,
+    pub sender_identifier: u16,
+    pub recipient_identifier: u16,
+    pub data_hex: SecretHex,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareRepairPart1Result {
+    pub context_digest: String,
+    pub helper_identifier: u16,
+    /// Public package independently read and commitment-checked from this
+    /// helper's retained session. The target obtains it from the exact helper
+    /// set; no pre-existing target-store material is required.
+    pub public_key_package: NativeFrostPublicKeyPackage,
+    pub deltas: Vec<ShareRepairDelta>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareRepairPart2Request {
+    pub authorization: ShareRepairAuthorization,
+    pub helper_identifier: u16,
+    pub deltas: Vec<ShareRepairDelta>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareRepairSigma {
+    pub context_digest: String,
+    pub helper_identifier: u16,
+    pub data_hex: SecretHex,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareRepairPart2Result {
+    pub context_digest: String,
+    pub sigma: ShareRepairSigma,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallRepairedShareRequest {
+    pub authorization: ShareRepairAuthorization,
+    pub public_key_package: NativeFrostPublicKeyPackage,
+    pub sigmas: Vec<ShareRepairSigma>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallRepairedShareResult {
+    pub schema: String,
+    pub session_id: String,
+    pub key_group: String,
+    pub target_identifier: u16,
+    pub recovery_epoch: u64,
+    pub authorization_digest: String,
+    pub active_store_fingerprint: String,
+    pub idempotent: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostCommitment {
     pub identifier: String,
@@ -728,6 +828,17 @@ pub struct RetainedKeyPackageInventoryEntry {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RetainedKeyPackageInventoryRecoveredSeat {
+    pub wallet_id: String,
+    pub key_group: String,
+    pub participant_seat: u16,
+    pub recovery_epoch: u64,
+    pub authorization_digest: String,
+    pub active_store_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RetainedKeyPackageInventoryResult {
     pub schema: String,
     pub store_fingerprint: String,
@@ -737,6 +848,10 @@ pub struct RetainedKeyPackageInventoryResult {
     pub state_image_digest: String,
     pub inventory_commitment: String,
     pub entries: Vec<RetainedKeyPackageInventoryEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovered_seats: Vec<RetainedKeyPackageInventoryRecoveredSeat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_activation_commitment: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]

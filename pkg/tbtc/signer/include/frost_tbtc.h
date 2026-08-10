@@ -129,6 +129,16 @@ TbtcSignerResult frost_tbtc_dkg_part2(const uint8_t* request_ptr, size_t request
 TbtcSignerResult frost_tbtc_dkg_part3(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_persist_distributed_dkg_key_package(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_retire_distributed_dkg_key_packages(const uint8_t* request_ptr, size_t request_len);
+/*
+ * Offline-authorized disaster-recovery protocol. Part1 deltas and Part2
+ * sigmas are secret and must use authenticated confidential transport. Install
+ * validates the exact context/helper set and writes the reconstructed share
+ * directly to the authorization-bound fresh durable store; no KeyPackage is
+ * returned across this ABI.
+ */
+TbtcSignerResult frost_tbtc_share_repair_part1(const uint8_t* request_ptr, size_t request_len);
+TbtcSignerResult frost_tbtc_share_repair_part2(const uint8_t* request_ptr, size_t request_len);
+TbtcSignerResult frost_tbtc_install_repaired_share(const uint8_t* request_ptr, size_t request_len);
 
 TbtcSignerResult frost_tbtc_new_signing_package(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_build_taproot_tx(const uint8_t* request_ptr, size_t request_len);

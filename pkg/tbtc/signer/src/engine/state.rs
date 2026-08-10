@@ -96,6 +96,19 @@ impl Drop for InteractiveRound1State {
     }
 }
 
+/// Durable activation metadata for a share reconstructed into this store.
+/// `recovery_epoch` is operational, not a cryptographic share epoch: repair
+/// recreates the same Shamir share and public package. The signed authorization
+/// digest and store fingerprint let the Go activation layer bind this seat to
+/// exactly one repaired store instance.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct RecoveredSeatState {
+    pub(crate) participant_identifier: u16,
+    pub(crate) recovery_epoch: u64,
+    pub(crate) authorization_digest: [u8; 32],
+    pub(crate) active_store_fingerprint: [u8; 32],
+}
+
 #[derive(Default)]
 pub(crate) struct SessionState {
     pub(crate) dkg_request_fingerprint: Option<String>,
@@ -106,6 +119,10 @@ pub(crate) struct SessionState {
     /// signer deliberately rejects synthetic share refresh, so zero is the only
     /// supported value until a real atomic replacement protocol is introduced.
     pub(crate) dkg_share_epoch: u64,
+    /// Per-seat operational recovery/cutover metadata. This is intentionally
+    /// separate from `dkg_share_epoch`: repairing a lost share does not rotate
+    /// the wallet polynomial or invalidate the original share.
+    pub(crate) recovered_seats: BTreeMap<u16, RecoveredSeatState>,
     pub(crate) sign_request_fingerprint: Option<String>,
     pub(crate) sign_message_bytes: Option<SecretBytes>,
     pub(crate) round_state: Option<RoundState>,
@@ -665,6 +682,7 @@ pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
         dkg_public_key_package,
         dkg_result,
         dkg_share_epoch,
+        recovered_seats,
         sign_request_fingerprint,
         sign_message_bytes,
         round_state,
@@ -720,6 +738,7 @@ pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
         authorized_interactive_aggregate_markers,
         aggregated_interactive_attempt_markers,
         dkg_share_epoch,
+        recovered_seats,
     );
 
     bound_key_group.is_some()
@@ -728,6 +747,7 @@ pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
         && dkg_public_key_package.is_none()
         && dkg_result.is_none()
         && *dkg_share_epoch == 0
+        && recovered_seats.is_empty()
 }
 
 pub(crate) fn retire_idle_per_message_sessions(

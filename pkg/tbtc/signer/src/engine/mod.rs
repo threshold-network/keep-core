@@ -65,21 +65,23 @@ use crate::api::{
     DifferentialDivergence, DifferentialFuzzRequest, DifferentialFuzzResult, DkgPart1Request,
     DkgPart1Result, DkgPart2Request, DkgPart2Result, DkgPart3Request, DkgPart3Result, DkgResult,
     DkgRound1Package, DkgRound2Package, InitSignerConfigRequest, InitSignerConfigResult,
-    InteractiveAggregateRequest, InteractiveAggregateResult, InteractiveRound1Request,
-    InteractiveRound1Result, InteractiveRound2Request, InteractiveRound2Result,
-    InteractiveSessionAbortRequest, InteractiveSessionAbortResult, InteractiveSessionOpenRequest,
-    InteractiveSessionOpenResult, InteractiveSigningIntent, NativeFrostCommitment,
-    NativeFrostKeyPackage, NativeFrostPublicKeyPackage, NativeFrostSignatureShare,
-    NewSigningPackageRequest, NewSigningPackageResult, ParticipantFrostIdentifier,
-    PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest, PromoteCanaryResult,
-    QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
-    RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
-    RetireDistributedDkgKeyPackagesRequest, RetireDistributedDkgKeyPackagesResult,
-    RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState, SecretHex,
-    SignatureResult, SignerHardeningMetricsResult, StateAnchorBootstrapFactsResult,
-    StateAnchorTrustCertificate, StateAnchorTrustCheckpoint, StateAnchorTrustEndpoint,
-    StateAnchorTrustHeadResult, StateAnchorTrustReference, TransactionResult,
-    TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
+    InstallRepairedShareRequest, InstallRepairedShareResult, InteractiveAggregateRequest,
+    InteractiveAggregateResult, InteractiveRound1Request, InteractiveRound1Result,
+    InteractiveRound2Request, InteractiveRound2Result, InteractiveSessionAbortRequest,
+    InteractiveSessionAbortResult, InteractiveSessionOpenRequest, InteractiveSessionOpenResult,
+    InteractiveSigningIntent, NativeFrostCommitment, NativeFrostKeyPackage,
+    NativeFrostPublicKeyPackage, NativeFrostSignatureShare, NewSigningPackageRequest,
+    NewSigningPackageResult, ParticipantFrostIdentifier, PersistDistributedDkgKeyPackageRequest,
+    PromoteCanaryRequest, PromoteCanaryResult, QuarantineStatusRequest, QuarantineStatusResult,
+    RefreshCadenceStatusRequest, RefreshCadenceStatusResult, RefreshSharesRequest,
+    RefreshSharesResult, RetireDistributedDkgKeyPackagesRequest,
+    RetireDistributedDkgKeyPackagesResult, RoastLivenessPolicyResult, RollbackCanaryRequest,
+    RollbackCanaryResult, RoundState, SecretHex, ShareRepairAuthorization, ShareRepairDelta,
+    ShareRepairPart1Request, ShareRepairPart1Result, ShareRepairPart2Request,
+    ShareRepairPart2Result, ShareRepairSigma, SignatureResult, SignerHardeningMetricsResult,
+    StateAnchorBootstrapFactsResult, StateAnchorTrustCertificate, StateAnchorTrustCheckpoint,
+    StateAnchorTrustEndpoint, StateAnchorTrustHeadResult, StateAnchorTrustReference,
+    TransactionResult, TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
     TransitionStateWitnessAnchorRequest, TransitionStateWitnessAnchorResult,
     TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
 };
@@ -100,6 +102,7 @@ mod lifecycle;
 mod persistence;
 mod policy;
 mod provenance;
+mod repair;
 mod roast;
 mod state;
 mod store;
@@ -125,6 +128,7 @@ pub(crate) use lifecycle::*;
 pub(crate) use persistence::*;
 pub(crate) use policy::*;
 pub(crate) use provenance::*;
+pub(crate) use repair::*;
 pub(crate) use roast::*;
 pub(crate) use state::*;
 pub(crate) use store::*;
