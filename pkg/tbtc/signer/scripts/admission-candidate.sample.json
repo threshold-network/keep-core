@@ -1,0 +1,9 @@
+{
+  "operator_id": "operator-gcp-us-central1-1",
+  "provider": "gcp",
+  "region": "us-central1",
+  "custody_class": "kms",
+  "attestation_status": "approved",
+  "patch_sla_expires_at_unix": 2000000000,
+  "incident_response_contact": "oncall@example.org"
+}

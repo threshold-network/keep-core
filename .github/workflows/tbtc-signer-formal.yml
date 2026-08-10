@@ -1,0 +1,116 @@
+name: tBTC Signer Formal Verification
+
+on:
+  pull_request:
+    paths:
+      - pkg/tbtc/signer/**
+      - .github/workflows/tbtc-signer-formal.yml
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tbtc-signer-formal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signer-rust-checks:
+    name: Signer Rust checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Name the toolchain explicitly so it is self-documenting and
+          # independent of the pinned action's default. (This action version
+          # already defaults `toolchain` to `stable`; older versions instead
+          # derived it from the action ref, which would resolve to the SHA
+          # under this supply-chain pin -- so being explicit is the safe form.)
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path pkg/tbtc/signer/Cargo.toml -- --check
+
+      - name: Run clippy
+        run: cargo clippy --locked --manifest-path pkg/tbtc/signer/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run signer tests
+        env:
+          TBTC_SIGNER_STATE_PATH: /tmp/tbtc-signer-ci-state-${{ github.run_id }}-${{ github.run_attempt }}.json
+        run: cargo test --locked --manifest-path pkg/tbtc/signer/Cargo.toml
+
+  signer-dependency-audit:
+    name: Signer dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Check RustSec advisories
+        # Blocking gate: a newly-published advisory against any locked
+        # dependency fails the build. Accepted/unfixable advisories are
+        # recorded with rationale in pkg/tbtc/signer/deny.toml.
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
+        with:
+          manifest-path: pkg/tbtc/signer/Cargo.toml
+          command: check advisories
+
+  signer-formal-invariants:
+    name: Signer formal invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Explicit toolchain, independent of the pinned action's default
+          # (see the Setup Rust step above).
+          toolchain: stable
+
+      - name: Run signer formal invariant tests
+        # Filters cargo test by the formal_verification_ prefix so only
+        # the formal-invariant test cases run (faster + clearer signal
+        # than the full suite). Matches the convention used in the
+        # source monorepo's ci-formal-verification.yml.
+        run: cargo test --locked --manifest-path pkg/tbtc/signer/Cargo.toml formal_verification_
+
+  tla-model-checks:
+    name: TLA model checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Java
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Run TLA model checks
+        # Iterates over every .cfg under pkg/tbtc/signer/docs/formal/models/
+        # and runs TLC against the matching .tla module. MODELS_PATH defaults
+        # to the canonical signer-relative path; override via env var for
+        # alternate environments (set in extraction/frost-signer-mirror PR).
+        run: pkg/tbtc/signer/scripts/formal/run_tla_models.sh
