@@ -106,18 +106,20 @@ type shareRepairInstalledWire struct {
 }
 
 type shareRepairRunner struct {
-	member              group.MemberIndex
-	authorization       *ShareRepairAuthorization
-	transportRoster     *ShareRepairTransportRoster
-	authorizationDigest [32]byte
-	contextWire         string
-	participants        map[group.MemberIndex]struct{}
-	helperSet           map[group.MemberIndex]struct{}
-	engine              NativeTBTCSignerShareRepairEngine
-	bus                 shareRepairBus
-	stream              <-chan shareRepairMessage
-	ephemeralPublic     []byte
-	pending             []shareRepairMessage
+	member               group.MemberIndex
+	authorization        *ShareRepairAuthorization
+	transportRoster      *ShareRepairTransportRoster
+	authorizationDigest  [32]byte
+	contextWire          string
+	participants         map[group.MemberIndex]struct{}
+	helperSet            map[group.MemberIndex]struct{}
+	engine               NativeTBTCSignerShareRepairEngine
+	bus                  shareRepairBus
+	stream               <-chan shareRepairMessage
+	ephemeralPublic      []byte
+	pending              []shareRepairMessage
+	pendingBytes         int
+	pendingBytesBySender map[group.MemberIndex]int
 }
 
 type shareRepairRunnerOutcome struct {
@@ -167,6 +169,7 @@ func RunShareRepair(
 		channel,
 		membershipValidator,
 		shareRepairParticipantSet(authorization),
+		validated.digest,
 	)
 	if err != nil {
 		return nil, err
@@ -424,12 +427,9 @@ func (runner *shareRepairRunner) collectAnnouncements(
 			continue
 		}
 		if message.Type != shareRepairAnnouncementMessage {
-			if len(runner.pending) >= shareRepairMaximumPendingMessages {
-				return nil, fmt.Errorf(
-					"share-repair pending-message limit exceeded before announcements completed",
-				)
+			if err := runner.bufferPendingMessage(message); err != nil {
+				return nil, err
 			}
-			runner.pending = append(runner.pending, message)
 			continue
 		}
 		parsed, err := btcec.ParsePubKey(message.EphemeralPublicKey)
@@ -456,6 +456,36 @@ func (runner *shareRepairRunner) collectAnnouncements(
 		publicKeys[message.Sender] = parsedWire
 	}
 	return publicKeys, nil
+}
+
+func (runner *shareRepairRunner) bufferPendingMessage(
+	message shareRepairMessage,
+) error {
+	if len(runner.pending) >= shareRepairMaximumPendingMessages {
+		return fmt.Errorf(
+			"share-repair pending-message limit exceeded before announcements completed",
+		)
+	}
+	messageBytes := shareRepairMessageRetainedBytes(message)
+	if messageBytes > shareRepairMaximumSessionBytesPerSender-
+		runner.pendingBytesBySender[message.Sender] {
+		return fmt.Errorf(
+			"share-repair pending-byte limit exceeded for sender [%d] before announcements completed",
+			message.Sender,
+		)
+	}
+	if messageBytes > shareRepairMaximumSessionBytes-runner.pendingBytes {
+		return fmt.Errorf(
+			"share-repair total pending-byte limit exceeded before announcements completed",
+		)
+	}
+	if runner.pendingBytesBySender == nil {
+		runner.pendingBytesBySender = make(map[group.MemberIndex]int)
+	}
+	runner.pending = append(runner.pending, message)
+	runner.pendingBytes += messageBytes
+	runner.pendingBytesBySender[message.Sender] += messageBytes
+	return nil
 }
 
 func shareRepairRosterPublicKey(
@@ -501,8 +531,26 @@ func (runner *shareRepairRunner) nextMessage(
 ) (shareRepairMessage, error) {
 	if len(runner.pending) > 0 {
 		message := runner.pending[0]
+		messageBytes := shareRepairMessageRetainedBytes(message)
+		if messageBytes >= runner.pendingBytesBySender[message.Sender] {
+			delete(runner.pendingBytesBySender, message.Sender)
+		} else {
+			runner.pendingBytesBySender[message.Sender] -= messageBytes
+		}
+		if messageBytes >= runner.pendingBytes {
+			runner.pendingBytes = 0
+		} else {
+			runner.pendingBytes -= messageBytes
+		}
 		runner.pending[0] = shareRepairMessage{}
 		runner.pending = runner.pending[1:]
+		if len(runner.pending) == 0 {
+			// Drop the backing array as soon as rendezvous traffic has drained so
+			// no payload references or stale accounting survive into later phases.
+			runner.pending = nil
+			runner.pendingBytes = 0
+			runner.pendingBytesBySender = nil
+		}
 		return message, nil
 	}
 	select {
@@ -510,6 +558,40 @@ func (runner *shareRepairRunner) nextMessage(
 		return shareRepairMessage{}, ctx.Err()
 	case message := <-runner.stream:
 		return message, nil
+	}
+}
+
+func retainFirstShareRepairDelta(
+	deltas map[uint16]*NativeShareRepairEncryptedDelta,
+	message shareRepairMessage,
+	contextWire string,
+	recipientIdentifier uint16,
+) {
+	senderIdentifier := uint16(message.Sender)
+	if deltas[senderIdentifier] != nil {
+		return
+	}
+	deltas[senderIdentifier] = &NativeShareRepairEncryptedDelta{
+		ContextDigest:       contextWire,
+		SenderIdentifier:    senderIdentifier,
+		RecipientIdentifier: recipientIdentifier,
+		Payload:             append([]byte(nil), message.Payload...),
+	}
+}
+
+func retainFirstShareRepairSigma(
+	sigmas map[uint16]*NativeShareRepairEncryptedSigma,
+	message shareRepairMessage,
+	contextWire string,
+) {
+	helperIdentifier := uint16(message.Sender)
+	if sigmas[helperIdentifier] != nil {
+		return
+	}
+	sigmas[helperIdentifier] = &NativeShareRepairEncryptedSigma{
+		ContextDigest:    contextWire,
+		HelperIdentifier: helperIdentifier,
+		Payload:          append([]byte(nil), message.Payload...),
 	}
 }
 
@@ -596,18 +678,18 @@ func (runner *shareRepairRunner) runHelper(
 			continue
 		}
 		senderIdentifier := uint16(message.Sender)
-		if existing := deltas[senderIdentifier]; existing != nil {
-			if !bytes.Equal(existing.Payload, message.Payload) {
-				return fmt.Errorf("repair helper [%d] equivocated its delta", message.Sender)
-			}
+		if deltas[senderIdentifier] != nil {
+			// Native Part1 rows are deterministic for the exact signed bundle, but
+			// every ECIES envelope is freshly randomized. Retain one bounded
+			// candidate; byte inequality is not semantic equivocation.
 			continue
 		}
-		deltas[senderIdentifier] = &NativeShareRepairEncryptedDelta{
-			ContextDigest:       runner.contextWire,
-			SenderIdentifier:    senderIdentifier,
-			RecipientIdentifier: uint16(runner.member),
-			Payload:             append([]byte(nil), message.Payload...),
-		}
+		retainFirstShareRepairDelta(
+			deltas,
+			message,
+			runner.contextWire,
+			uint16(runner.member),
+		)
 	}
 	ordered := make([]*NativeShareRepairEncryptedDelta, 0, len(deltas))
 	for _, sender := range runner.authorization.HelperIdentifiers {
@@ -694,17 +776,13 @@ func (runner *shareRepairRunner) runTarget(
 			continue
 		}
 		helperIdentifier := uint16(message.Sender)
-		if existing := sigmas[helperIdentifier]; existing != nil {
-			if !bytes.Equal(existing.Payload, message.Payload) {
-				return nil, fmt.Errorf("repair helper [%d] equivocated its sigma", message.Sender)
-			}
+		if sigmas[helperIdentifier] != nil {
+			// Retries may carry a fresh ECIES encoding of the same deterministic
+			// bundle slot. Keep the first candidate and bound memory to one sigma
+			// per authorized helper.
 			continue
 		}
-		sigmas[helperIdentifier] = &NativeShareRepairEncryptedSigma{
-			ContextDigest:    runner.contextWire,
-			HelperIdentifier: helperIdentifier,
-			Payload:          append([]byte(nil), message.Payload...),
-		}
+		retainFirstShareRepairSigma(sigmas, message, runner.contextWire)
 	}
 	ordered := make([]*NativeShareRepairEncryptedSigma, 0, len(sigmas))
 	for _, helper := range runner.authorization.HelperIdentifiers {

@@ -55,10 +55,12 @@ type shareRepairBus interface {
 }
 
 type shareRepairBusSubscriber struct {
-	member group.MemberIndex
-	stream chan shareRepairMessage
-	mutex  sync.Mutex
-	seen   map[[32]byte]struct{}
+	member                group.MemberIndex
+	stream                chan shareRepairMessage
+	mutex                 sync.Mutex
+	seen                  map[[32]byte]struct{}
+	acceptedBytes         int
+	acceptedBytesBySender map[group.MemberIndex]int
 }
 
 func (subscriber *shareRepairBusSubscriber) deliver(
@@ -68,21 +70,44 @@ func (subscriber *shareRepairBusSubscriber) deliver(
 	if message.Recipient != 0 && message.Recipient != subscriber.member {
 		return
 	}
+	if err := validateShareRepairMessage(message); err != nil {
+		return
+	}
 	hash := message.contentHash()
-	delivered := message
-	delivered.EphemeralPublicKey = append([]byte(nil), message.EphemeralPublicKey...)
-	delivered.Payload = append([]byte(nil), message.Payload...)
+	messageBytes := shareRepairMessageRetainedBytes(message)
 	subscriber.mutex.Lock()
 	defer subscriber.mutex.Unlock()
+	if subscriber.seen == nil {
+		subscriber.seen = make(map[[32]byte]struct{})
+	}
 	if _, exists := subscriber.seen[hash]; exists {
 		return
 	}
+	if messageBytes > shareRepairMaximumSessionBytesPerSender-
+		subscriber.acceptedBytesBySender[message.Sender] ||
+		messageBytes > shareRepairMaximumSessionBytes-subscriber.acceptedBytes {
+		return
+	}
+	// Check capacity before retaining attacker-controlled slices. Deliver is
+	// serialized per subscriber, so no other producer can fill this stream
+	// between this check and the non-blocking send below.
+	if len(subscriber.stream) >= cap(subscriber.stream) {
+		return
+	}
+	delivered := message
+	delivered.EphemeralPublicKey = append([]byte(nil), message.EphemeralPublicKey...)
+	delivered.Payload = append([]byte(nil), message.Payload...)
 	select {
 	case subscriber.stream <- delivered:
 		if seenBound > 0 && len(subscriber.seen) >= seenBound {
 			subscriber.seen = make(map[[32]byte]struct{})
 		}
 		subscriber.seen[hash] = struct{}{}
+		if subscriber.acceptedBytesBySender == nil {
+			subscriber.acceptedBytesBySender = make(map[group.MemberIndex]int)
+		}
+		subscriber.acceptedBytes += messageBytes
+		subscriber.acceptedBytesBySender[message.Sender] += messageBytes
 	default:
 		// Honest traffic is O(threshold); a full stream means flooding. Drop the
 		// newest and let the bounded recovery context time out fail-closed.
@@ -104,9 +129,10 @@ func newInProcessShareRepairBus(bufferSize int) shareRepairBus {
 
 func (bus *inProcessShareRepairBus) Subscribe(member group.MemberIndex) <-chan shareRepairMessage {
 	subscriber := &shareRepairBusSubscriber{
-		member: member,
-		stream: make(chan shareRepairMessage, bus.bufferSize),
-		seen:   make(map[[32]byte]struct{}),
+		member:                member,
+		stream:                make(chan shareRepairMessage, bus.bufferSize),
+		seen:                  make(map[[32]byte]struct{}),
+		acceptedBytesBySender: make(map[group.MemberIndex]int),
 	}
 	bus.mutex.Lock()
 	bus.subscribers = append(bus.subscribers, subscriber)
@@ -138,8 +164,78 @@ const (
 	// putting plaintext scalars on the wire.
 	shareRepairEncryptedScalarPayloadLength = 33 + 24 + 32 + 16
 	shareRepairMaximumSecretPayload         = 4 * 1024
-	shareRepairMaximumPublicPayload         = 256 * 1024
+	// A 100-seat native public-key package currently serializes below 14 KiB.
+	// Sixteen KiB leaves format headroom without allowing one frame to dominate
+	// the maintenance process's receive queues.
+	shareRepairMaximumPublicPayload = 16 * 1024
+	// One honest helper contributes one maximum public package, one encrypted
+	// scalar to a given local seat, its announcement, and at most one receipt
+	// acknowledgement. Twenty KiB covers that traffic with room to spare; the
+	// aggregate cap covers the complete 100-seat authorization.
+	shareRepairMaximumSessionBytesPerSender = 20 * 1024
+	shareRepairMaximumSessionBytes          = 2 * 1024 * 1024
+	shareRepairSubscriberStreamBuffer       = 1024
 )
+
+func shareRepairMessageRetainedBytes(message shareRepairMessage) int {
+	return len(message.EphemeralPublicKey) + len(message.Payload)
+}
+
+func validateShareRepairMessage(message shareRepairMessage) error {
+	if message.Type < shareRepairAnnouncementMessage ||
+		message.Type > shareRepairCompletionMessage ||
+		message.Sender == 0 || message.ContextDigest == [32]byte{} {
+		return fmt.Errorf("share-repair transport message is invalid")
+	}
+	return validateShareRepairMessageShape(
+		message.Type,
+		message.Recipient,
+		len(message.EphemeralPublicKey),
+		len(message.Payload),
+	)
+}
+
+func validateShareRepairMessageShape(
+	messageType shareRepairMessageType,
+	recipient group.MemberIndex,
+	ephemeralLength int,
+	payloadLength int,
+) error {
+	switch messageType {
+	case shareRepairAnnouncementMessage:
+		if recipient != 0 ||
+			ephemeralLength != shareRepairEphemeralPublicKeyLength ||
+			payloadLength != 0 {
+			return fmt.Errorf("share-repair announcement shape is invalid")
+		}
+	case shareRepairInstalledMessage:
+		if recipient != 0 || ephemeralLength != 0 || payloadLength == 0 ||
+			payloadLength > shareRepairMaximumSecretPayload {
+			return fmt.Errorf("share-repair installed receipt shape is invalid")
+		}
+	case shareRepairPublicPackageMessage:
+		if recipient != 0 || ephemeralLength != 0 || payloadLength == 0 ||
+			payloadLength > shareRepairMaximumPublicPayload {
+			return fmt.Errorf("share-repair public-package message shape is invalid")
+		}
+	case shareRepairInstalledAcknowledgementMessage:
+		if recipient == 0 || ephemeralLength != 0 || payloadLength != sha256.Size {
+			return fmt.Errorf("share-repair installed acknowledgement shape is invalid")
+		}
+	case shareRepairCompletionMessage:
+		if recipient != 0 || ephemeralLength != 0 || payloadLength != sha256.Size {
+			return fmt.Errorf("share-repair completion shape is invalid")
+		}
+	case shareRepairDeltaMessage, shareRepairSigmaMessage:
+		if recipient == 0 || ephemeralLength != 0 ||
+			payloadLength != shareRepairEncryptedScalarPayloadLength {
+			return fmt.Errorf("share-repair secret message shape is invalid")
+		}
+	default:
+		return fmt.Errorf("share-repair transport message is invalid")
+	}
+	return nil
+}
 
 type shareRepairTransportMessage struct {
 	message shareRepairMessage
@@ -151,43 +247,8 @@ func (*shareRepairTransportMessage) Type() string { return shareRepairTransportT
 // ephemeral-key-length(2) || ephemeral-key || payload.
 func (message *shareRepairTransportMessage) Marshal() ([]byte, error) {
 	value := message.message
-	if value.Type < shareRepairAnnouncementMessage ||
-		value.Type > shareRepairCompletionMessage ||
-		value.Sender == 0 || value.ContextDigest == [32]byte{} ||
-		len(value.Payload) > shareRepairMaximumPublicPayload {
-		return nil, fmt.Errorf("share-repair transport message is invalid")
-	}
-	switch value.Type {
-	case shareRepairAnnouncementMessage:
-		if value.Recipient != 0 ||
-			len(value.EphemeralPublicKey) != shareRepairEphemeralPublicKeyLength ||
-			len(value.Payload) != 0 {
-			return nil, fmt.Errorf("share-repair announcement shape is invalid")
-		}
-	case shareRepairInstalledMessage:
-		if value.Recipient != 0 || len(value.EphemeralPublicKey) != 0 ||
-			len(value.Payload) == 0 || len(value.Payload) > shareRepairMaximumSecretPayload {
-			return nil, fmt.Errorf("share-repair installed receipt shape is invalid")
-		}
-	case shareRepairPublicPackageMessage:
-		if value.Recipient != 0 || len(value.EphemeralPublicKey) != 0 || len(value.Payload) == 0 {
-			return nil, fmt.Errorf("share-repair public-package message shape is invalid")
-		}
-	case shareRepairInstalledAcknowledgementMessage:
-		if value.Recipient == 0 || len(value.EphemeralPublicKey) != 0 ||
-			len(value.Payload) != sha256.Size {
-			return nil, fmt.Errorf("share-repair installed acknowledgement shape is invalid")
-		}
-	case shareRepairCompletionMessage:
-		if value.Recipient != 0 || len(value.EphemeralPublicKey) != 0 ||
-			len(value.Payload) != sha256.Size {
-			return nil, fmt.Errorf("share-repair completion shape is invalid")
-		}
-	case shareRepairDeltaMessage, shareRepairSigmaMessage:
-		if value.Recipient == 0 || len(value.EphemeralPublicKey) != 0 ||
-			len(value.Payload) != shareRepairEncryptedScalarPayloadLength {
-			return nil, fmt.Errorf("share-repair secret message shape is invalid")
-		}
+	if err := validateShareRepairMessage(value); err != nil {
+		return nil, err
 	}
 	result := make([]byte, 43+len(value.EphemeralPublicKey)+len(value.Payload))
 	result[0] = byte(value.Type)
@@ -220,9 +281,17 @@ func (message *shareRepairTransportMessage) Unmarshal(data []byte) error {
 		return fmt.Errorf("share-repair context digest is zero")
 	}
 	ephemeralLength := int(binary.BigEndian.Uint16(data[41:43]))
-	if len(data) < 43+ephemeralLength ||
-		len(data)-(43+ephemeralLength) > shareRepairMaximumPublicPayload {
+	if len(data) < 43+ephemeralLength {
 		return fmt.Errorf("share-repair ephemeral key is truncated")
+	}
+	payloadLength := len(data) - (43 + ephemeralLength)
+	if err := validateShareRepairMessageShape(
+		messageType,
+		group.MemberIndex(rawRecipient),
+		ephemeralLength,
+		payloadLength,
+	); err != nil {
+		return err
 	}
 	value := shareRepairMessage{
 		Type:               messageType,
@@ -231,36 +300,6 @@ func (message *shareRepairTransportMessage) Unmarshal(data []byte) error {
 		ContextDigest:      contextDigest,
 		EphemeralPublicKey: append([]byte(nil), data[43:43+ephemeralLength]...),
 		Payload:            append([]byte(nil), data[43+ephemeralLength:]...),
-	}
-	switch messageType {
-	case shareRepairAnnouncementMessage:
-		if rawRecipient != 0 ||
-			ephemeralLength != shareRepairEphemeralPublicKeyLength ||
-			len(value.Payload) != 0 {
-			return fmt.Errorf("share-repair announcement shape is invalid")
-		}
-	case shareRepairInstalledMessage:
-		if rawRecipient != 0 || ephemeralLength != 0 || len(value.Payload) == 0 ||
-			len(value.Payload) > shareRepairMaximumSecretPayload {
-			return fmt.Errorf("share-repair installed receipt shape is invalid")
-		}
-	case shareRepairPublicPackageMessage:
-		if rawRecipient != 0 || ephemeralLength != 0 || len(value.Payload) == 0 {
-			return fmt.Errorf("share-repair public-package message shape is invalid")
-		}
-	case shareRepairInstalledAcknowledgementMessage:
-		if rawRecipient == 0 || ephemeralLength != 0 || len(value.Payload) != sha256.Size {
-			return fmt.Errorf("share-repair installed acknowledgement shape is invalid")
-		}
-	case shareRepairCompletionMessage:
-		if rawRecipient != 0 || ephemeralLength != 0 || len(value.Payload) != sha256.Size {
-			return fmt.Errorf("share-repair completion shape is invalid")
-		}
-	case shareRepairDeltaMessage, shareRepairSigmaMessage:
-		if rawRecipient == 0 || ephemeralLength != 0 || len(value.Payload) == 0 ||
-			len(value.Payload) != shareRepairEncryptedScalarPayloadLength {
-			return fmt.Errorf("share-repair secret message shape is invalid")
-		}
 	}
 	message.message = value
 	return nil
@@ -272,6 +311,7 @@ type broadcastChannelShareRepairBus struct {
 	channel             net.BroadcastChannel
 	membershipValidator *group.MembershipValidator
 	participants        map[group.MemberIndex]struct{}
+	expectedContext     [32]byte
 	mutex               sync.Mutex
 	subscribers         []*shareRepairBusSubscriber
 	startOnce           sync.Once
@@ -283,9 +323,10 @@ func newBroadcastChannelShareRepairBus(
 	channel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
 	participants map[group.MemberIndex]struct{},
+	expectedContext [32]byte,
 ) (shareRepairBus, error) {
 	if ctx == nil || channel == nil || membershipValidator == nil ||
-		len(participants) == 0 {
+		len(participants) == 0 || expectedContext == [32]byte{} {
 		return nil, fmt.Errorf("share-repair bus dependencies are incomplete")
 	}
 	participantCopy := make(map[group.MemberIndex]struct{}, len(participants))
@@ -307,6 +348,7 @@ func newBroadcastChannelShareRepairBus(
 		channel:             channel,
 		membershipValidator: membershipValidator,
 		participants:        participantCopy,
+		expectedContext:     expectedContext,
 	}, nil
 }
 
@@ -314,9 +356,10 @@ func (bus *broadcastChannelShareRepairBus) Subscribe(
 	member group.MemberIndex,
 ) <-chan shareRepairMessage {
 	subscriber := &shareRepairBusSubscriber{
-		member: member,
-		stream: make(chan shareRepairMessage, 1024),
-		seen:   make(map[[32]byte]struct{}),
+		member:                member,
+		stream:                make(chan shareRepairMessage, shareRepairSubscriberStreamBuffer),
+		seen:                  make(map[[32]byte]struct{}),
+		acceptedBytesBySender: make(map[group.MemberIndex]int),
 	}
 	bus.mutex.Lock()
 	bus.subscribers = append(bus.subscribers, subscriber)
@@ -329,6 +372,9 @@ func (bus *broadcastChannelShareRepairBus) Start() {
 }
 
 func (bus *broadcastChannelShareRepairBus) deliver(message shareRepairMessage) {
+	if message.ContextDigest != bus.expectedContext {
+		return
+	}
 	bus.mutex.Lock()
 	subscribers := append([]*shareRepairBusSubscriber(nil), bus.subscribers...)
 	bus.mutex.Unlock()
@@ -356,6 +402,9 @@ func (bus *broadcastChannelShareRepairBus) Broadcast(
 func (bus *broadcastChannelShareRepairBus) handleMessage(message net.Message) {
 	wire, ok := message.Payload().(*shareRepairTransportMessage)
 	if !ok {
+		return
+	}
+	if wire.message.ContextDigest != bus.expectedContext {
 		return
 	}
 	// Full wallet membership is broader than the exact helper/target set named

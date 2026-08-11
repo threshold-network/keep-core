@@ -130,6 +130,22 @@ authenticates the normal manifest and anchor first, then runs only the dedicated
 `frost/share_repair/v1` protocol on a channel scoped by the authorization and
 roster digests. Every announcement must equal the signed native key/store
 entry. Only locally controlled seats named by the authorization participate.
+Public-package frames are capped at 16 KiB. Each receiver admits at most 20
+KiB from one sender and 2 MiB total during the maintenance run, while the
+pre-rendezvous queue independently applies those byte caps plus its 1,024-frame
+cap. Exceeding a cap fails closed or causes the bounded maintenance run to time
+out; it is not a reason to increase the limits during an incident.
+
+One exact signed authorization-and-roster bundle defines one deterministic
+native plaintext repair transcript, including across
+`FinishShareRepairSession` and process restart. ECIES envelope randomness is
+independent, so retransmissions of the same valid slot can have different
+ciphertext bytes; receivers retain only the first correctly shaped candidate
+per sender/slot. A same-bundle retry is allowed only with the same frozen
+transport and derivation version and unchanged participant stores/state-key
+roots. If the signer algorithm or version changes, stop every old
+retransmitter and issue a fresh nonce, authorization, preflight roster, and
+bundle before restarting repair.
 
 All participating processes exit successfully when maintenance completes.
 This is intentional. Remove `FrostShareRepairAuthorizationPath` before every

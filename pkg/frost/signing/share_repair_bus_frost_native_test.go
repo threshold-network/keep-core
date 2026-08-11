@@ -6,6 +6,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/keep-network/keep-core/internal/testutils"
@@ -16,6 +20,83 @@ import (
 type contextRecordingShareRepairChannel struct {
 	immediateRecvBroadcastChannel
 	sendContexts []context.Context
+}
+
+func TestShareRepairPublicPackageTransportPayloadCap(t *testing.T) {
+	message := shareRepairMessage{
+		Type:          shareRepairPublicPackageMessage,
+		Sender:        1,
+		ContextDigest: [32]byte{0x44},
+		Payload:       bytes.Repeat([]byte{0x55}, shareRepairMaximumPublicPayload),
+	}
+	wire, err := (&shareRepairTransportMessage{message: message}).Marshal()
+	if err != nil {
+		t.Fatalf("public package at the cap was rejected: %v", err)
+	}
+	decoded := &shareRepairTransportMessage{}
+	if err := decoded.Unmarshal(wire); err != nil {
+		t.Fatalf("public package at the cap failed decoding: %v", err)
+	}
+	if len(decoded.message.Payload) != shareRepairMaximumPublicPayload {
+		t.Fatalf("decoded public package length is [%d]", len(decoded.message.Payload))
+	}
+
+	overCap := message
+	overCap.Payload = append(append([]byte(nil), message.Payload...), 0x56)
+	if _, err := (&shareRepairTransportMessage{message: overCap}).Marshal(); err == nil {
+		t.Fatal("public package above the cap was marshaled")
+	}
+	// Append directly so the receive boundary is tested independently from
+	// Marshal. Unmarshal must reject the shape before assigning copied slices.
+	overCapWire := append(append([]byte(nil), wire...), 0x56)
+	rejected := &shareRepairTransportMessage{}
+	if err := rejected.Unmarshal(overCapWire); err == nil {
+		t.Fatal("public package above the cap was decoded")
+	}
+	if rejected.message.Payload != nil || rejected.message.EphemeralPublicKey != nil {
+		t.Fatal("rejected public package populated retained message slices")
+	}
+}
+
+func TestShareRepairPublicPackageProductionScale100SeatCap(t *testing.T) {
+	verifyingShares := make(map[string]string, 100)
+	for identifier := 1; identifier <= 100; identifier++ {
+		// Rust's bridge representation intentionally carries the 32-byte FROST
+		// identifier as a JSON-string-wrapped hex string. Preserve the quotes
+		// here so JSON map-key escaping is included in the launch-gate size.
+		wireIdentifier := fmt.Sprintf("\"%064x\"", identifier)
+		verifyingShares[wireIdentifier] = "03" + strings.Repeat("f", 64)
+	}
+	publicPackage, err := json.Marshal(&NativeFROSTPublicKeyPackage{
+		VerifyingShares: verifyingShares,
+		VerifyingKey:    strings.Repeat("f", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(publicPackage) >= shareRepairMaximumPublicPayload {
+		t.Fatalf(
+			"100-seat native public package is [%d] bytes, cap is [%d]",
+			len(publicPackage),
+			shareRepairMaximumPublicPayload,
+		)
+	}
+	wire, err := (&shareRepairTransportMessage{message: shareRepairMessage{
+		Type:          shareRepairPublicPackageMessage,
+		Sender:        1,
+		ContextDigest: [32]byte{0x44},
+		Payload:       publicPackage,
+	}}).Marshal()
+	if err != nil {
+		t.Fatalf("100-seat native public package exceeded transport shape: %v", err)
+	}
+	decoded := &shareRepairTransportMessage{}
+	if err := decoded.Unmarshal(wire); err != nil {
+		t.Fatalf("100-seat native public package failed transport decoding: %v", err)
+	}
+	if !bytes.Equal(decoded.message.Payload, publicPackage) {
+		t.Fatal("100-seat native public package changed across transport")
+	}
 }
 
 func (channel *contextRecordingShareRepairChannel) Send(
@@ -152,6 +233,7 @@ func TestShareRepairBusCancelsRetransmissionsPerMessage(t *testing.T) {
 		channel,
 		fixture.validator,
 		map[group.MemberIndex]struct{}{1: {}, 2: {}},
+		[32]byte{0x44},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -197,6 +279,7 @@ func TestShareRepairBusAuthenticatesSenderAndSuppressesReplay(t *testing.T) {
 		channel,
 		fixture.validator,
 		map[group.MemberIndex]struct{}{1: {}, 2: {}},
+		[32]byte{0x44},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -216,6 +299,24 @@ func TestShareRepairBusAuthenticatesSenderAndSuppressesReplay(t *testing.T) {
 		t.Fatal("claimed sender authenticated by the wrong operator was delivered")
 	default:
 	}
+
+	wrongContext := message
+	wrongContext.ContextDigest = [32]byte{0x45}
+	bus.handleMessage(fakeNetMessage{
+		senderPublicKey: fixture.operatorA,
+		payload:         &shareRepairTransportMessage{message: wrongContext},
+	})
+	select {
+	case <-stream:
+		t.Fatal("wrong-context share-repair message was delivered")
+	default:
+	}
+	bus.subscribers[0].mutex.Lock()
+	if bus.subscribers[0].acceptedBytes != 0 {
+		bus.subscribers[0].mutex.Unlock()
+		t.Fatal("wrong-context message consumed subscriber budget")
+	}
+	bus.subscribers[0].mutex.Unlock()
 
 	authenticated := fakeNetMessage{senderPublicKey: fixture.operatorA, payload: wire}
 	bus.handleMessage(authenticated)
@@ -243,6 +344,7 @@ func TestShareRepairBusRejectsAuthenticatedNonparticipantBeforeDelivery(t *testi
 		&immediateRecvBroadcastChannel{},
 		fixture.validator,
 		map[group.MemberIndex]struct{}{1: {}, 2: {}},
+		[32]byte{0x44},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +360,7 @@ func TestShareRepairBusRejectsAuthenticatedNonparticipantBeforeDelivery(t *testi
 		Sender:        3,
 		Recipient:     2,
 		ContextDigest: [32]byte{0x44},
-		Payload:       []byte("nonparticipant-ciphertext"),
+		Payload:       bytes.Repeat([]byte{0x31}, shareRepairEncryptedScalarPayloadLength),
 	}}
 	bus.handleMessage(fakeNetMessage{
 		senderPublicKey: fixture.operatorA,
@@ -277,7 +379,7 @@ func TestShareRepairBusRejectsAuthenticatedNonparticipantBeforeDelivery(t *testi
 		Sender:        1,
 		Recipient:     2,
 		ContextDigest: [32]byte{0x44},
-		Payload:       []byte("participant-ciphertext"),
+		Payload:       bytes.Repeat([]byte{0x32}, shareRepairEncryptedScalarPayloadLength),
 	}}
 	bus.handleMessage(fakeNetMessage{
 		senderPublicKey: fixture.operatorA,
@@ -290,5 +392,177 @@ func TestShareRepairBusRejectsAuthenticatedNonparticipantBeforeDelivery(t *testi
 		}
 	default:
 		t.Fatal("authorized early phase frame was not delivered")
+	}
+}
+
+func TestShareRepairSubscriberPerSenderByteBudget(t *testing.T) {
+	subscriber := &shareRepairBusSubscriber{
+		member:                1,
+		stream:                make(chan shareRepairMessage, 4),
+		seen:                  make(map[[32]byte]struct{}),
+		acceptedBytesBySender: make(map[group.MemberIndex]int),
+	}
+	contextDigest := [32]byte{0x44}
+	publicPackage := shareRepairMessage{
+		Type:          shareRepairPublicPackageMessage,
+		Sender:        2,
+		ContextDigest: contextDigest,
+		Payload:       bytes.Repeat([]byte{0x41}, shareRepairMaximumPublicPayload),
+	}
+	installed := shareRepairMessage{
+		Type:          shareRepairInstalledMessage,
+		Sender:        2,
+		ContextDigest: contextDigest,
+		Payload:       bytes.Repeat([]byte{0x42}, shareRepairMaximumSecretPayload),
+	}
+	subscriber.deliver(publicPackage, 4096)
+	subscriber.deliver(installed, 4096)
+	if subscriber.acceptedBytes != shareRepairMaximumSessionBytesPerSender ||
+		subscriber.acceptedBytesBySender[2] != shareRepairMaximumSessionBytesPerSender ||
+		len(subscriber.stream) != 2 {
+		t.Fatalf(
+			"subscriber accepted [%d]/[%d] bytes and [%d] messages",
+			subscriber.acceptedBytes,
+			subscriber.acceptedBytesBySender[2],
+			len(subscriber.stream),
+		)
+	}
+	subscriber.deliver(shareRepairMessage{
+		Type:          shareRepairCompletionMessage,
+		Sender:        2,
+		ContextDigest: contextDigest,
+		Payload:       bytes.Repeat([]byte{0x43}, sha256.Size),
+	}, 4096)
+	if subscriber.acceptedBytes != shareRepairMaximumSessionBytesPerSender ||
+		len(subscriber.stream) != 2 {
+		t.Fatal("over-budget sender consumed subscriber capacity")
+	}
+}
+
+func TestShareRepairSubscriberTotalByteBudget(t *testing.T) {
+	subscriber := &shareRepairBusSubscriber{
+		member:                200,
+		stream:                make(chan shareRepairMessage, 256),
+		seen:                  make(map[[32]byte]struct{}),
+		acceptedBytesBySender: make(map[group.MemberIndex]int),
+	}
+	contextDigest := [32]byte{0x44}
+	for rawSender := 1; rawSender <= 102; rawSender++ {
+		sender := group.MemberIndex(rawSender)
+		subscriber.deliver(shareRepairMessage{
+			Type:          shareRepairPublicPackageMessage,
+			Sender:        sender,
+			ContextDigest: contextDigest,
+			Payload:       bytes.Repeat([]byte{byte(sender)}, shareRepairMaximumPublicPayload),
+		}, 4096)
+		subscriber.deliver(shareRepairMessage{
+			Type:          shareRepairInstalledMessage,
+			Sender:        sender,
+			ContextDigest: contextDigest,
+			Payload:       bytes.Repeat([]byte{byte(sender)}, shareRepairMaximumSecretPayload),
+		}, 4096)
+	}
+	remaining := shareRepairMaximumSessionBytes - subscriber.acceptedBytes
+	if remaining <= 0 || remaining > shareRepairMaximumPublicPayload {
+		t.Fatalf("unexpected remaining total budget [%d]", remaining)
+	}
+	subscriber.deliver(shareRepairMessage{
+		Type:          shareRepairPublicPackageMessage,
+		Sender:        103,
+		ContextDigest: contextDigest,
+		Payload:       bytes.Repeat([]byte{0x67}, remaining),
+	}, 4096)
+	if subscriber.acceptedBytes != shareRepairMaximumSessionBytes {
+		t.Fatalf("subscriber accepted [%d] total bytes", subscriber.acceptedBytes)
+	}
+	acceptedMessages := len(subscriber.stream)
+	subscriber.deliver(shareRepairMessage{
+		Type:               shareRepairAnnouncementMessage,
+		Sender:             104,
+		ContextDigest:      contextDigest,
+		EphemeralPublicKey: bytes.Repeat([]byte{0x02}, shareRepairEphemeralPublicKeyLength),
+	}, 4096)
+	if subscriber.acceptedBytes != shareRepairMaximumSessionBytes ||
+		len(subscriber.stream) != acceptedMessages {
+		t.Fatal("message above the total subscriber budget was retained")
+	}
+}
+
+func TestShareRepairSubscriberDuplicateAndFullStreamDoNotCharge(t *testing.T) {
+	subscriber := &shareRepairBusSubscriber{
+		member:                3,
+		stream:                make(chan shareRepairMessage, 1),
+		seen:                  make(map[[32]byte]struct{}),
+		acceptedBytesBySender: make(map[group.MemberIndex]int),
+	}
+	first := shareRepairMessage{
+		Type:               shareRepairAnnouncementMessage,
+		Sender:             1,
+		ContextDigest:      [32]byte{0x44},
+		EphemeralPublicKey: bytes.Repeat([]byte{0x02}, shareRepairEphemeralPublicKeyLength),
+	}
+	second := first
+	second.Sender = 2
+	second.EphemeralPublicKey = bytes.Repeat(
+		[]byte{0x03},
+		shareRepairEphemeralPublicKeyLength,
+	)
+	subscriber.deliver(first, 4096)
+	subscriber.deliver(first, 4096)
+	subscriber.deliver(second, 4096)
+	if subscriber.acceptedBytes != shareRepairEphemeralPublicKeyLength ||
+		subscriber.acceptedBytesBySender[2] != 0 || len(subscriber.stream) != 1 {
+		t.Fatal("duplicate or full-stream delivery consumed subscriber budget")
+	}
+	if _, seen := subscriber.seen[second.contentHash()]; seen {
+		t.Fatal("full-stream delivery was marked as seen")
+	}
+	<-subscriber.stream
+	subscriber.deliver(second, 4096)
+	if subscriber.acceptedBytes != 2*shareRepairEphemeralPublicKeyLength ||
+		subscriber.acceptedBytesBySender[2] != shareRepairEphemeralPublicKeyLength ||
+		len(subscriber.stream) != 1 {
+		t.Fatal("previously full-stream delivery could not be retried")
+	}
+}
+
+func TestShareRepairSubscriberConcurrentDeliveryIsRaceSafe(t *testing.T) {
+	const senderCount = 64
+	const messagesPerSender = 8
+	subscriber := &shareRepairBusSubscriber{
+		member:                100,
+		stream:                make(chan shareRepairMessage, senderCount*messagesPerSender),
+		seen:                  make(map[[32]byte]struct{}),
+		acceptedBytesBySender: make(map[group.MemberIndex]int),
+	}
+	var waitGroup sync.WaitGroup
+	for rawSender := 1; rawSender <= senderCount; rawSender++ {
+		sender := group.MemberIndex(rawSender)
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for sequence := 0; sequence < messagesPerSender; sequence++ {
+				payload := make([]byte, sha256.Size)
+				payload[0] = byte(sender)
+				payload[1] = byte(sequence)
+				subscriber.deliver(shareRepairMessage{
+					Type:          shareRepairCompletionMessage,
+					Sender:        sender,
+					ContextDigest: [32]byte{0x44},
+					Payload:       payload,
+				}, 4096)
+			}
+		}()
+	}
+	waitGroup.Wait()
+	expectedMessages := senderCount * messagesPerSender
+	expectedBytes := expectedMessages * sha256.Size
+	if len(subscriber.stream) != expectedMessages ||
+		subscriber.acceptedBytes != expectedBytes {
+		t.Fatalf(
+			"concurrent delivery retained [%d] messages and [%d] bytes",
+			len(subscriber.stream),
+			subscriber.acceptedBytes,
+		)
 	}
 }

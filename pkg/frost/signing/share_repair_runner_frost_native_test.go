@@ -32,6 +32,36 @@ type testShareRepairSessionOverrideEngine struct {
 	mutate      func(*NativeShareRepairSession)
 }
 
+type captureShareRepairPart2Engine struct {
+	*testShareRepairEngine
+	deltas []*NativeShareRepairEncryptedDelta
+}
+
+func (engine *captureShareRepairPart2Engine) ShareRepairPart2(
+	_ *ShareRepairAuthorization,
+	_ uint16,
+	deltas []*NativeShareRepairEncryptedDelta,
+	_ *ShareRepairTransportRoster,
+) (*NativeShareRepairPart2Result, error) {
+	engine.deltas = append([]*NativeShareRepairEncryptedDelta(nil), deltas...)
+	return nil, fmt.Errorf("stop after part2 input")
+}
+
+type captureShareRepairInstallEngine struct {
+	*testShareRepairEngine
+	sigmas []*NativeShareRepairEncryptedSigma
+}
+
+func (engine *captureShareRepairInstallEngine) InstallRepairedShare(
+	_ *ShareRepairAuthorization,
+	_ *NativeFROSTPublicKeyPackage,
+	sigmas []*NativeShareRepairEncryptedSigma,
+	_ *ShareRepairTransportRoster,
+) (*NativeShareRepairInstallResult, error) {
+	engine.sigmas = append([]*NativeShareRepairEncryptedSigma(nil), sigmas...)
+	return nil, fmt.Errorf("stop after install input")
+}
+
 func (engine *testShareRepairSessionOverrideEngine) BeginShareRepairSession(
 	authorization *ShareRepairAuthorization,
 	participantIdentifier uint16,
@@ -1090,6 +1120,363 @@ func TestShareRepairRunnerRejectsPendingMessageFlood(t *testing.T) {
 	_, err = runner.collectAnnouncements(ctx)
 	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("pending-message limit")) {
 		t.Fatalf("expected pending-message flood rejection, got [%v]", err)
+	}
+}
+
+func TestShareRepairRunnerRejectsPendingByteFloodBeforeCountLimit(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := make(chan shareRepairMessage, 3)
+	stream <- shareRepairMessage{
+		Type:          shareRepairPublicPackageMessage,
+		Sender:        2,
+		ContextDigest: digest,
+		Payload:       bytes.Repeat([]byte{0x41}, shareRepairMaximumPublicPayload),
+	}
+	stream <- shareRepairMessage{
+		Type:          shareRepairInstalledMessage,
+		Sender:        2,
+		ContextDigest: digest,
+		Payload:       bytes.Repeat([]byte{0x42}, shareRepairMaximumSecretPayload),
+	}
+	stream <- shareRepairMessage{
+		Type:          shareRepairDeltaMessage,
+		Sender:        2,
+		Recipient:     1,
+		ContextDigest: digest,
+		Payload:       testShareRepairCiphertext(1, 2, 1),
+	}
+	runner := &shareRepairRunner{
+		member:              1,
+		authorizationDigest: digest,
+		transportRoster:     transportRoster,
+		participants: map[group.MemberIndex]struct{}{
+			1: {},
+			2: {},
+		},
+		stream:          stream,
+		ephemeralPublic: testShareRepairPublicKey(1),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = runner.collectAnnouncements(ctx)
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("pending-byte limit")) {
+		t.Fatalf("expected pending-byte flood rejection, got [%v]", err)
+	}
+	if len(runner.pending) != 2 || runner.pendingBytes != shareRepairMaximumSessionBytesPerSender {
+		t.Fatalf(
+			"pending-byte rejection retained [%d] messages and [%d] bytes",
+			len(runner.pending),
+			runner.pendingBytes,
+		)
+	}
+}
+
+func TestShareRepairRunnerPendingQuotaDoesNotBlockOtherSender(t *testing.T) {
+	runner := &shareRepairRunner{}
+	for _, message := range []shareRepairMessage{
+		{
+			Type:          shareRepairPublicPackageMessage,
+			Sender:        2,
+			ContextDigest: [32]byte{0x44},
+			Payload:       bytes.Repeat([]byte{0x41}, shareRepairMaximumPublicPayload),
+		},
+		{
+			Type:          shareRepairInstalledMessage,
+			Sender:        2,
+			ContextDigest: [32]byte{0x44},
+			Payload:       bytes.Repeat([]byte{0x42}, shareRepairMaximumSecretPayload),
+		},
+	} {
+		if err := runner.bufferPendingMessage(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	otherSender := shareRepairMessage{
+		Type:          shareRepairCompletionMessage,
+		Sender:        3,
+		ContextDigest: [32]byte{0x44},
+		Payload:       bytes.Repeat([]byte{0x43}, sha256.Size),
+	}
+	if err := runner.bufferPendingMessage(otherSender); err != nil {
+		t.Fatalf("another sender was blocked by the first sender's quota: %v", err)
+	}
+	if err := runner.bufferPendingMessage(shareRepairMessage{
+		Type:          shareRepairCompletionMessage,
+		Sender:        2,
+		ContextDigest: [32]byte{0x44},
+		Payload:       bytes.Repeat([]byte{0x44}, sha256.Size),
+	}); err == nil || !bytes.Contains([]byte(err.Error()), []byte("for sender [2]")) {
+		t.Fatalf("over-quota sender was not rejected independently: %v", err)
+	}
+	if len(runner.pending) != 3 || runner.pendingBytesBySender[3] != sha256.Size {
+		t.Fatal("other sender's pending message was not retained")
+	}
+}
+
+func TestShareRepairRunnerEnforcesTotalPendingByteBudget(t *testing.T) {
+	runner := &shareRepairRunner{}
+	for rawSender := 1; rawSender <= 102; rawSender++ {
+		sender := group.MemberIndex(rawSender)
+		for _, message := range []shareRepairMessage{
+			{
+				Type:          shareRepairPublicPackageMessage,
+				Sender:        sender,
+				ContextDigest: [32]byte{0x44},
+				Payload:       bytes.Repeat([]byte{byte(sender)}, shareRepairMaximumPublicPayload),
+			},
+			{
+				Type:          shareRepairInstalledMessage,
+				Sender:        sender,
+				ContextDigest: [32]byte{0x44},
+				Payload:       bytes.Repeat([]byte{byte(sender)}, shareRepairMaximumSecretPayload),
+			},
+		} {
+			if err := runner.bufferPendingMessage(message); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	remaining := shareRepairMaximumSessionBytes - runner.pendingBytes
+	if err := runner.bufferPendingMessage(shareRepairMessage{
+		Type:          shareRepairPublicPackageMessage,
+		Sender:        103,
+		ContextDigest: [32]byte{0x44},
+		Payload:       bytes.Repeat([]byte{0x67}, remaining),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if runner.pendingBytes != shareRepairMaximumSessionBytes {
+		t.Fatalf("runner retained [%d] total pending bytes", runner.pendingBytes)
+	}
+	if err := runner.bufferPendingMessage(shareRepairMessage{
+		Type:          shareRepairCompletionMessage,
+		Sender:        104,
+		ContextDigest: [32]byte{0x44},
+		Payload:       bytes.Repeat([]byte{0x68}, sha256.Size),
+	}); err == nil || !bytes.Contains([]byte(err.Error()), []byte("total pending-byte")) {
+		t.Fatalf("runner did not enforce its total pending-byte budget: %v", err)
+	}
+}
+
+func TestShareRepairRunnerRetainsMaximumHonestEarlyTraffic(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := make(chan shareRepairMessage, 3)
+	stream <- shareRepairMessage{
+		Type:          shareRepairPublicPackageMessage,
+		Sender:        2,
+		ContextDigest: digest,
+		Payload:       bytes.Repeat([]byte{0x41}, shareRepairMaximumPublicPayload),
+	}
+	stream <- shareRepairMessage{
+		Type:          shareRepairDeltaMessage,
+		Sender:        2,
+		Recipient:     1,
+		ContextDigest: digest,
+		Payload:       testShareRepairCiphertext(1, 2, 1),
+	}
+	stream <- shareRepairMessage{
+		Type:               shareRepairAnnouncementMessage,
+		Sender:             2,
+		ContextDigest:      digest,
+		EphemeralPublicKey: testShareRepairPublicKey(2),
+	}
+	runner := &shareRepairRunner{
+		member:              1,
+		authorizationDigest: digest,
+		transportRoster:     transportRoster,
+		participants: map[group.MemberIndex]struct{}{
+			1: {},
+			2: {},
+		},
+		stream:          stream,
+		ephemeralPublic: testShareRepairPublicKey(1),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := runner.collectAnnouncements(ctx); err != nil {
+		t.Fatalf("maximum honest early traffic was rejected: %v", err)
+	}
+	expectedBytes := shareRepairMaximumPublicPayload + shareRepairEncryptedScalarPayloadLength
+	if len(runner.pending) != 2 || runner.pendingBytes != expectedBytes ||
+		runner.pendingBytesBySender[2] != expectedBytes {
+		t.Fatalf("honest early traffic accounting is %+v", runner)
+	}
+	if _, err := runner.nextMessage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if runner.pendingBytes != shareRepairEncryptedScalarPayloadLength || len(runner.pending) != 1 {
+		t.Fatal("pending accounting did not decrement after the first message")
+	}
+	if _, err := runner.nextMessage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if runner.pending != nil || runner.pendingBytes != 0 || runner.pendingBytesBySender != nil {
+		t.Fatal("pending payload references or accounting survived the final dequeue")
+	}
+}
+
+func TestShareRepairRunnerFirstWinsRandomizedDeltaEncoding(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testShareRepairCiphertext(1, 2, 1)
+	alternate := append([]byte(nil), first...)
+	alternate[len(alternate)-1] ^= 0xff
+	stream := make(chan shareRepairMessage, 3)
+	for _, message := range []shareRepairMessage{
+		{
+			Type:          shareRepairDeltaMessage,
+			Sender:        2,
+			Recipient:     1,
+			ContextDigest: digest,
+			Payload:       first,
+		},
+		{
+			Type:          shareRepairDeltaMessage,
+			Sender:        2,
+			Recipient:     1,
+			ContextDigest: digest,
+			Payload:       alternate,
+		},
+		{
+			Type:          shareRepairDeltaMessage,
+			Sender:        1,
+			Recipient:     1,
+			ContextDigest: digest,
+			Payload:       testShareRepairCiphertext(1, 1, 1),
+		},
+	} {
+		stream <- message
+	}
+	engine := &captureShareRepairPart2Engine{testShareRepairEngine: &testShareRepairEngine{}}
+	runner := &shareRepairRunner{
+		member:              1,
+		authorization:       authorization,
+		transportRoster:     transportRoster,
+		authorizationDigest: digest,
+		contextWire:         fmt.Sprintf("0x%x", digest),
+		helperSet: map[group.MemberIndex]struct{}{
+			1: {},
+			2: {},
+		},
+		engine: engine,
+		bus:    &manualShareRepairBus{broadcasts: make(chan shareRepairMessage, 8)},
+		stream: stream,
+	}
+	err = runner.runHelper(context.Background(), func() {})
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("stop after part2 input")) {
+		t.Fatalf("helper did not reach native Part2: %v", err)
+	}
+	if len(engine.deltas) != 2 || engine.deltas[1].SenderIdentifier != 2 ||
+		!bytes.Equal(engine.deltas[1].Payload, first) {
+		t.Fatalf("helper did not retain exactly the first delta: %+v", engine.deltas)
+	}
+}
+
+func TestShareRepairRunnerFirstWinsRandomizedSigmaEncoding(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicPackage, err := json.Marshal(testShareRepairPublicKeyPackage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testShareRepairCiphertext(2, 1, authorization.TargetIdentifier)
+	alternate := append([]byte(nil), first...)
+	alternate[len(alternate)-1] ^= 0xff
+	stream := make(chan shareRepairMessage, 5)
+	for _, message := range []shareRepairMessage{
+		{Type: shareRepairPublicPackageMessage, Sender: 1, ContextDigest: digest, Payload: publicPackage},
+		{Type: shareRepairPublicPackageMessage, Sender: 2, ContextDigest: digest, Payload: publicPackage},
+		{Type: shareRepairSigmaMessage, Sender: 1, Recipient: 3, ContextDigest: digest, Payload: first},
+		{Type: shareRepairSigmaMessage, Sender: 1, Recipient: 3, ContextDigest: digest, Payload: alternate},
+		{Type: shareRepairSigmaMessage, Sender: 2, Recipient: 3, ContextDigest: digest, Payload: testShareRepairCiphertext(2, 2, 3)},
+	} {
+		stream <- message
+	}
+	engine := &captureShareRepairInstallEngine{testShareRepairEngine: &testShareRepairEngine{}}
+	runner := &shareRepairRunner{
+		member:              3,
+		authorization:       authorization,
+		transportRoster:     transportRoster,
+		authorizationDigest: digest,
+		contextWire:         fmt.Sprintf("0x%x", digest),
+		helperSet: map[group.MemberIndex]struct{}{
+			1: {},
+			2: {},
+		},
+		engine: engine,
+		stream: stream,
+	}
+	_, err = runner.runTarget(context.Background())
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("stop after install input")) {
+		t.Fatalf("target did not reach native install: %v", err)
+	}
+	if len(engine.sigmas) != 2 || engine.sigmas[0].HelperIdentifier != 1 ||
+		!bytes.Equal(engine.sigmas[0].Payload, first) {
+		t.Fatalf("target did not retain exactly the first sigma: %+v", engine.sigmas)
+	}
+}
+
+func TestShareRepairRunnerStillRejectsPublicPackageEquivocation(t *testing.T) {
+	authorization, _ := testShareRepairAuthorization(t)
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := json.Marshal(testShareRepairPublicKeyPackage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedPackage := testShareRepairPublicKeyPackage()
+	changedPackage.VerifyingKey = "different-group-verifying-key"
+	changed, err := json.Marshal(changedPackage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := make(chan shareRepairMessage, 2)
+	stream <- shareRepairMessage{
+		Type:          shareRepairPublicPackageMessage,
+		Sender:        1,
+		ContextDigest: digest,
+		Payload:       first,
+	}
+	stream <- shareRepairMessage{
+		Type:          shareRepairPublicPackageMessage,
+		Sender:        1,
+		ContextDigest: digest,
+		Payload:       changed,
+	}
+	runner := &shareRepairRunner{
+		member:              3,
+		authorization:       authorization,
+		authorizationDigest: digest,
+		contextWire:         fmt.Sprintf("0x%x", digest),
+		helperSet: map[group.MemberIndex]struct{}{
+			1: {},
+			2: {},
+		},
+		stream: stream,
+	}
+	_, err = runner.runTarget(context.Background())
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("equivocated its public package")) {
+		t.Fatalf("target accepted public-package equivocation: %v", err)
 	}
 }
 
