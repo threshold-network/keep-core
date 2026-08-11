@@ -1925,6 +1925,190 @@ fn share_repair_production_scale_51_of_100_launch_gate() {
 }
 
 #[test]
+fn share_repair_same_bundle_partial_restart_replays_plaintext_transcript() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("share_repair_partial_restart_replay");
+    reset_for_tests();
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0xb6; 32]);
+    set_share_repair_authority_for_tests(Some(signing_key.verifying_key().to_bytes()));
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(79);
+    let session_id = "share-repair-partial-restart-replay";
+    let mut persisted = None;
+    for helper in [1_u16, 2] {
+        persisted = Some(
+            persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+                session_id: session_id.to_string(),
+                participant_identifier: helper,
+                threshold: 2,
+                participant_count: 3,
+                key_package: native_key_packages[&helper].clone(),
+                public_key_package: native_public.clone(),
+            })
+            .expect("persist replay helper"),
+        );
+    }
+    let persisted = persisted.expect("persisted replay DKG");
+    let store_fingerprint = durable_store_identity()
+        .expect("replay store identity")
+        .fingerprint;
+    let authorization = signed_share_repair_authorization(
+        &signing_key,
+        session_id,
+        &persisted.key_group,
+        &native_public,
+        store_fingerprint,
+    );
+    let (part1, _, transport_roster) = share_repair_sigmas(&authorization, &signing_key);
+    let original_delta_plaintext = share_repair_delta_plaintext_for_tests(
+        &authorization,
+        &transport_roster,
+        &part1[0].deltas[0],
+    )
+    .expect("decrypt original Part1 slot");
+
+    assert!(
+        finish_share_repair_session(FinishShareRepairSessionRequest {
+            authorization: authorization.clone(),
+            participant_identifier: 1,
+        })
+        .expect("finish helper before same-bundle replay")
+        .finished
+    );
+    begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: authorization.clone(),
+        participant_identifier: 1,
+    })
+    .expect("reopen helper after Finish");
+    let after_finish_part1 = share_repair_part1(ShareRepairPart1Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        transport_roster: transport_roster.clone(),
+    })
+    .expect("replay Part1 after Finish");
+    assert_ne!(
+        part1[0].deltas[0].payload_hex,
+        after_finish_part1.deltas[0].payload_hex
+    );
+    let after_finish_delta_plaintext = share_repair_delta_plaintext_for_tests(
+        &authorization,
+        &transport_roster,
+        &after_finish_part1.deltas[0],
+    )
+    .expect("decrypt after-Finish Part1 slot");
+    assert_eq!(
+        &original_delta_plaintext[..],
+        &after_finish_delta_plaintext[..]
+    );
+
+    // This saved Part1/sigma material represents surviving peers' active
+    // retransmitters. Only helper one loses its local operation state; the
+    // restarted process rederives the same transport key and plaintext row.
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    for participant_identifier in [1_u16, 2, authorization.target_identifier] {
+        begin_share_repair_session(BeginShareRepairSessionRequest {
+            authorization: authorization.clone(),
+            participant_identifier,
+        })
+        .expect("reopen native repair session after process restart");
+    }
+    let restarted_part1 = share_repair_part1(ShareRepairPart1Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        transport_roster: transport_roster.clone(),
+    })
+    .expect("replay Part1 after process restart");
+    assert_ne!(
+        after_finish_part1.deltas[1].payload_hex,
+        restarted_part1.deltas[1].payload_hex
+    );
+    let restarted_delta_plaintext = share_repair_delta_plaintext_for_tests(
+        &authorization,
+        &transport_roster,
+        &restarted_part1.deltas[0],
+    )
+    .expect("decrypt restarted Part1 slot");
+    assert_eq!(
+        &original_delta_plaintext[..],
+        &restarted_delta_plaintext[..]
+    );
+
+    let mut fresh_authorization = authorization.clone();
+    fresh_authorization.recovery_epoch = fresh_authorization
+        .recovery_epoch
+        .checked_add(1)
+        .expect("fresh recovery epoch");
+    fresh_authorization.nonce = bytes32_hex([0xb7; 32]);
+    resign_share_repair_authorization(&mut fresh_authorization, &signing_key);
+    let (fresh_part1, _, fresh_transport_roster) =
+        share_repair_sigmas(&fresh_authorization, &signing_key);
+    let fresh_delta_plaintext = share_repair_delta_plaintext_for_tests(
+        &fresh_authorization,
+        &fresh_transport_roster,
+        &fresh_part1[0].deltas[0],
+    )
+    .expect("decrypt fresh-authorization Part1 slot");
+    assert_ne!(&original_delta_plaintext[..], &fresh_delta_plaintext[..]);
+
+    let restarted_sigma_one = share_repair_part2(ShareRepairPart2Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        deltas: vec![
+            restarted_part1.deltas[0].clone(),
+            part1[1].deltas[0].clone(),
+        ],
+        transport_roster: transport_roster.clone(),
+    })
+    .expect("aggregate restarted self delta with surviving old peer delta")
+    .sigma;
+    let replayed_sigma_two = share_repair_part2(ShareRepairPart2Request {
+        authorization: authorization.clone(),
+        helper_identifier: 2,
+        deltas: vec![
+            after_finish_part1.deltas[1].clone(),
+            part1[1].deltas[1].clone(),
+        ],
+        transport_roster: transport_roster.clone(),
+    })
+    .expect("aggregate after-Finish delta with surviving old self delta after restart")
+    .sigma;
+    let installed = install_repaired_share(InstallRepairedShareRequest {
+        authorization: authorization.clone(),
+        public_key_package: native_public.clone(),
+        sigmas: vec![restarted_sigma_one, replayed_sigma_two],
+        transport_roster,
+    })
+    .expect("same-bundle mixed old/new ciphertext generations install");
+    assert!(!installed.idempotent);
+
+    let expected = decode_key_package(
+        "repair-partial-restart-replay",
+        &native_key_packages[&authorization.target_identifier].identifier,
+        native_key_packages[&authorization.target_identifier]
+            .data_hex
+            .expose_secret(),
+    )
+    .expect("decode expected replayed target share");
+    assert_eq!(
+        state()
+            .expect("state")
+            .lock()
+            .expect("engine lock")
+            .sessions[session_id]
+            .dkg_key_packages
+            .as_ref()
+            .expect("replayed packages")[&authorization.target_identifier],
+        expected
+    );
+
+    set_share_repair_authority_for_tests(None);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("share_repair_rejections");
@@ -1990,29 +2174,45 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
     .expect_err("incomplete sigma set");
     assert!(matches!(missing_sigma, EngineError::Validation(_)));
 
-    // A second valid Part1 transcript has the same authorization context but
-    // independent randomness. Substituting just one of its deltas passes the
-    // wire/context checks and must be caught by the target public-share check.
-    let (alternate_part1, _, _) = share_repair_sigmas(&authorization, &signing_key);
-    let substituted = share_repair_part2(ShareRepairPart2Request {
+    // A valid sender-static AEAD can still carry an algebraically inconsistent
+    // scalar. Part2 accepts and aggregates the authentic shape; the target's
+    // public-share check must reject it before any repaired package persists.
+    let corrupted_delta = corrupt_share_repair_delta_plaintext_for_tests(
+        &authorization,
+        &transport_roster,
+        &part1[0].deltas[0],
+    )
+    .expect("construct legitimately authenticated but altered delta");
+    let original_plaintext = share_repair_delta_plaintext_for_tests(
+        &authorization,
+        &transport_roster,
+        &part1[0].deltas[0],
+    )
+    .expect("decrypt original negative-test delta");
+    let corrupted_plaintext =
+        share_repair_delta_plaintext_for_tests(&authorization, &transport_roster, &corrupted_delta)
+            .expect("decrypt altered negative-test delta");
+    assert_ne!(&original_plaintext[..], &corrupted_plaintext[..]);
+    let corrupted_sigma = share_repair_part2(ShareRepairPart2Request {
         authorization: authorization.clone(),
         helper_identifier: 1,
-        deltas: vec![
-            alternate_part1[0].deltas[0].clone(),
-            part1[1].deltas[0].clone(),
-        ],
+        deltas: vec![corrupted_delta, part1[1].deltas[0].clone()],
         transport_roster: transport_roster.clone(),
     })
-    .expect("well-shaped but inconsistent deltas")
+    .expect("Part2 accepts an authentic altered delta")
     .sigma;
-    let corrupted = install_repaired_share(InstallRepairedShareRequest {
+    let algebraic_corruption = install_repaired_share(InstallRepairedShareRequest {
         authorization: authorization.clone(),
         public_key_package: native_public.clone(),
-        sigmas: vec![substituted, sigmas[1].clone()],
+        sigmas: vec![corrupted_sigma, sigmas[1].clone()],
         transport_roster: transport_roster.clone(),
     })
-    .expect_err("reconstructed share must match public commitment");
-    assert!(matches!(corrupted, EngineError::Validation(_)));
+    .expect_err("target public-share check rejects algebraic corruption");
+    assert!(matches!(
+        algebraic_corruption,
+        EngineError::Validation(ref message)
+            if message.contains("reconstructed share does not match")
+    ));
     assert!(!state()
         .expect("state")
         .lock()
@@ -2020,8 +2220,8 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
         .sessions[session_id]
         .dkg_key_packages
         .as_ref()
-        .unwrap()
-        .contains_key(&3));
+        .expect("helper packages")
+        .contains_key(&authorization.target_identifier));
 
     let mut wrong_store = authorization.clone();
     wrong_store.new_store_fingerprint = bytes32_hex([0x77; 32]);

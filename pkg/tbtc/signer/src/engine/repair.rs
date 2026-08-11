@@ -13,7 +13,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use hkdf::Hkdf;
 use k256::{
     ecdh::{diffie_hellman, EphemeralSecret},
-    elliptic_curve::{sec1::ToEncodedPoint, Field as K256Field, PrimeField},
+    elliptic_curve::{sec1::ToEncodedPoint, PrimeField},
     PublicKey as RepairPublicKey, Scalar as RepairScalar, SecretKey as RepairSecretKey,
 };
 use zeroize::ZeroizeOnDrop;
@@ -30,6 +30,14 @@ const SHARE_REPAIR_TRANSPORT_ROSTER_DOMAIN: &[u8] =
     b"tbtc-frost-share-repair-transport-roster/v1\0";
 const SHARE_REPAIR_TRANSPORT_SECRET_DERIVATION_DOMAIN: &[u8] =
     b"tbtc-frost-share-repair-transport-secret/v1\0";
+// A signed authorization and transport roster define one replayable Part1
+// plaintext transcript. This derivation is frozen for transport v1. Any
+// algorithm or domain change must also bump the transport/AAD/ABI version and
+// require a uniform launch; otherwise two signer versions could disagree about
+// a sender/recipient slot while accepting the same recovery bundle. The frozen
+// known-answer test below catches accidental drift within v1.
+const SHARE_REPAIR_PART1_DELTA_DERIVATION_DOMAIN: &[u8] =
+    b"tbtc-frost-share-repair-part1-delta/v1\0";
 const SHARE_REPAIR_MAX_AUTHORIZATION_LIFETIME_SECONDS: u64 = 24 * 60 * 60;
 const SHARE_REPAIR_TRANSPORT_VERSION: u8 = 1;
 const SHARE_REPAIR_TRANSPORT_KDF_DOMAIN: &[u8] = b"tbtc-frost-share-repair-kdf/v1\0";
@@ -123,11 +131,6 @@ impl Drop for SecretRepairScalar {
 impl SecretRepairScalar {
     fn zero() -> Self {
         Self(Zeroizing::new([0u8; SHARE_REPAIR_TRANSPORT_SCALAR_BYTES]))
-    }
-
-    fn random(rng: &mut (impl RngCore + CryptoRng)) -> Self {
-        let scalar = Zeroizing::new(RepairScalar::random(rng));
-        Self::from_scalar(&scalar)
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self, EngineError> {
@@ -340,6 +343,52 @@ fn derive_share_repair_transport_secret(
     }
     Err(EngineError::Internal(
         "share-repair transport key derivation exhausted its counter".to_string(),
+    ))
+}
+
+fn derive_share_repair_part1_delta(
+    transport_secret: &RepairSecretKey,
+    authorization_digest: [u8; 32],
+    transport_roster_digest: [u8; 32],
+    sender_identifier: u16,
+    recipient_identifier: u16,
+) -> Result<SecretRepairScalar, EngineError> {
+    // The transport secret is itself authorization-, role-, store-, provider-,
+    // and state-root-bound. Keying the per-slot PRF with it makes an exact
+    // signed bundle replay the same plaintext row after Finish/restart while a
+    // root or roster change produces an independent transcript. Each slot is
+    // sampled independently so code changes cannot shift a sequential DRBG and
+    // silently change every later recipient.
+    let transport_secret_bytes = Zeroizing::new(transport_secret.to_bytes());
+    let kdf = ZeroizingHkdfSha256::new(
+        SHARE_REPAIR_PART1_DELTA_DERIVATION_DOMAIN,
+        transport_secret_bytes.as_slice(),
+    );
+    for counter in 0..=u32::MAX {
+        let mut info = Zeroizing::new(Vec::with_capacity(
+            SHARE_REPAIR_PART1_DELTA_DERIVATION_DOMAIN.len()
+                + 1
+                + authorization_digest.len()
+                + transport_roster_digest.len()
+                + 2
+                + 2
+                + 4,
+        ));
+        info.extend_from_slice(SHARE_REPAIR_PART1_DELTA_DERIVATION_DOMAIN);
+        info.push(SHARE_REPAIR_TRANSPORT_VERSION);
+        info.extend_from_slice(&authorization_digest);
+        info.extend_from_slice(&transport_roster_digest);
+        info.extend_from_slice(&sender_identifier.to_be_bytes());
+        info.extend_from_slice(&recipient_identifier.to_be_bytes());
+        info.extend_from_slice(&counter.to_be_bytes());
+        let mut candidate = Zeroizing::new([0u8; SHARE_REPAIR_TRANSPORT_SCALAR_BYTES]);
+        kdf.expand(info.as_slice(), candidate.as_mut())?;
+        if let Ok(delta) = SecretRepairScalar::deserialize(candidate.as_ref()) {
+            return Ok(delta);
+        }
+    }
+    Err(EngineError::Internal(
+        "share-repair Part1 delta derivation exhausted its counter".to_string(),
     ))
 }
 
@@ -625,6 +674,131 @@ fn decrypt_repair_scalar(
             operation,
             format!("{} payload contains an invalid scalar", kind.label()),
         )
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn share_repair_delta_plaintext_for_tests(
+    authorization: &ShareRepairAuthorization,
+    transport_roster: &ShareRepairTransportRoster,
+    delta: &ShareRepairDelta,
+) -> Result<Zeroizing<[u8; SHARE_REPAIR_TRANSPORT_SCALAR_BYTES]>, EngineError> {
+    const OP: &str = "share_repair_delta_plaintext_for_tests";
+    let validated = validate_share_repair_authorization(OP, authorization, true)?;
+    let transport_roster =
+        validate_share_repair_transport_roster(OP, authorization, &validated, transport_roster)?;
+    if delta.context_digest != bytes32_hex(validated.digest)
+        || authorization
+            .helper_identifiers
+            .binary_search(&delta.sender_identifier)
+            .is_err()
+        || authorization
+            .helper_identifiers
+            .binary_search(&delta.recipient_identifier)
+            .is_err()
+    {
+        return Err(validation_error(OP, "delta has invalid routing bindings"));
+    }
+    let local_store_fingerprint = durable_store_identity()?.fingerprint;
+    let recipient_endpoint = transport_roster
+        .endpoints
+        .get(&delta.recipient_identifier)
+        .ok_or_else(|| validation_error(OP, "recipient endpoint is missing"))?;
+    if recipient_endpoint.store_fingerprint != local_store_fingerprint {
+        return Err(validation_error(
+            OP,
+            "recipient endpoint does not use the active test store",
+        ));
+    }
+    let recipient_secret = derive_share_repair_transport_secret(
+        validated.digest,
+        delta.recipient_identifier,
+        ShareRepairTransportRole::Helper,
+        local_store_fingerprint,
+    )?;
+    if recipient_secret.public_key() != recipient_endpoint.public_key {
+        return Err(validation_error(
+            OP,
+            "recipient endpoint does not match its derived test key",
+        ));
+    }
+    let sender_endpoint = transport_roster
+        .endpoints
+        .get(&delta.sender_identifier)
+        .ok_or_else(|| validation_error(OP, "sender endpoint is missing"))?;
+    Ok(decrypt_repair_scalar(
+        &recipient_secret,
+        &sender_endpoint.public_key,
+        &delta.payload_hex,
+        ShareRepairEnvelopeKind::Delta,
+        validated.digest,
+        transport_roster.digest,
+        delta.sender_identifier,
+        delta.recipient_identifier,
+    )?
+    .serialize())
+}
+
+#[cfg(test)]
+pub(crate) fn corrupt_share_repair_delta_plaintext_for_tests(
+    authorization: &ShareRepairAuthorization,
+    transport_roster: &ShareRepairTransportRoster,
+    delta: &ShareRepairDelta,
+) -> Result<ShareRepairDelta, EngineError> {
+    const OP: &str = "corrupt_share_repair_delta_plaintext_for_tests";
+    let plaintext = share_repair_delta_plaintext_for_tests(authorization, transport_roster, delta)?;
+    let mut altered = SecretRepairScalar::deserialize(plaintext.as_ref())?;
+    let mut one_bytes = Zeroizing::new([0u8; SHARE_REPAIR_TRANSPORT_SCALAR_BYTES]);
+    one_bytes[SHARE_REPAIR_TRANSPORT_SCALAR_BYTES - 1] = 1;
+    let one = SecretRepairScalar::deserialize(one_bytes.as_ref())?;
+    altered.add_assign(&one);
+
+    let validated = validate_share_repair_authorization(OP, authorization, true)?;
+    let transport_roster =
+        validate_share_repair_transport_roster(OP, authorization, &validated, transport_roster)?;
+    let local_store_fingerprint = durable_store_identity()?.fingerprint;
+    let sender_endpoint = transport_roster
+        .endpoints
+        .get(&delta.sender_identifier)
+        .ok_or_else(|| validation_error(OP, "sender endpoint is missing"))?;
+    if sender_endpoint.store_fingerprint != local_store_fingerprint {
+        return Err(validation_error(
+            OP,
+            "sender endpoint does not use the active test store",
+        ));
+    }
+    let sender_secret = derive_share_repair_transport_secret(
+        validated.digest,
+        delta.sender_identifier,
+        ShareRepairTransportRole::Helper,
+        local_store_fingerprint,
+    )?;
+    if sender_secret.public_key() != sender_endpoint.public_key {
+        return Err(validation_error(
+            OP,
+            "sender endpoint does not match its derived test key",
+        ));
+    }
+    let recipient_endpoint = transport_roster
+        .endpoints
+        .get(&delta.recipient_identifier)
+        .ok_or_else(|| validation_error(OP, "recipient endpoint is missing"))?;
+    let mut rng = zeroizing_rng_from_os();
+    Ok(ShareRepairDelta {
+        context_digest: delta.context_digest.clone(),
+        sender_identifier: delta.sender_identifier,
+        recipient_identifier: delta.recipient_identifier,
+        payload_hex: encrypt_repair_scalar(
+            &altered,
+            &sender_secret,
+            &recipient_endpoint.public_key,
+            ShareRepairEnvelopeKind::Delta,
+            validated.digest,
+            transport_roster.digest,
+            delta.sender_identifier,
+            delta.recipient_identifier,
+            &mut rng,
+        )?,
     })
 }
 
@@ -1595,7 +1769,11 @@ pub(crate) fn share_repair_part1(
         request.authorization.target_identifier,
     )?;
     let mut weighted_share = signing_share.multiply_public(lagrange);
-    let mut rng = zeroizing_rng_from_os();
+    // Plaintext delta slots are deterministic for this exact signed bundle so
+    // a helper restart cannot mix a new row with peers' still-retransmitted old
+    // rows. The ECIES envelopes below deliberately retain fresh OS randomness;
+    // authenticated alternate encodings of a slot decrypt to this same value.
+    let mut envelope_rng = zeroizing_rng_from_os();
     let context_digest = bytes32_hex(validated.digest);
     let mut result_deltas = Vec::with_capacity(request.authorization.helper_identifiers.len());
     let mut running_sum = SecretRepairScalar::zero();
@@ -1619,7 +1797,13 @@ pub(crate) fn share_repair_part1(
             weighted_share.subtract_assign(&running_sum);
             &weighted_share
         } else {
-            let random_delta = SecretRepairScalar::random(&mut rng);
+            let random_delta = derive_share_repair_part1_delta(
+                &current_transport_secret,
+                validated.digest,
+                transport_roster.digest,
+                request.helper_identifier,
+                *recipient_identifier,
+            )?;
             running_sum.add_assign(&random_delta);
             result_deltas.push(ShareRepairDelta {
                 context_digest: context_digest.clone(),
@@ -1634,7 +1818,7 @@ pub(crate) fn share_repair_part1(
                     transport_roster.digest,
                     request.helper_identifier,
                     *recipient_identifier,
-                    &mut rng,
+                    &mut envelope_rng,
                 )?,
             });
             continue;
@@ -1652,7 +1836,7 @@ pub(crate) fn share_repair_part1(
                 transport_roster.digest,
                 request.helper_identifier,
                 *recipient_identifier,
-                &mut rng,
+                &mut envelope_rng,
             )?,
         });
     }
@@ -2183,6 +2367,91 @@ mod repair_secret_tests {
     }
 
     #[test]
+    fn part1_delta_derivation_is_replay_stable_and_context_separated() {
+        let transport_secret =
+            RepairSecretKey::from_slice(&[0x61; 32]).expect("fixed transport secret");
+        let authorization_digest = [0x31; 32];
+        let transport_roster_digest = [0x41; 32];
+        let first = derive_share_repair_part1_delta(
+            &transport_secret,
+            authorization_digest,
+            transport_roster_digest,
+            1,
+            2,
+        )
+        .expect("derive first replay delta");
+        // Deriving an unrelated slot in between must not advance shared state
+        // or change this slot's result.
+        let _other_slot = derive_share_repair_part1_delta(
+            &transport_secret,
+            authorization_digest,
+            transport_roster_digest,
+            1,
+            3,
+        )
+        .expect("derive other replay slot");
+        let replay = derive_share_repair_part1_delta(
+            &transport_secret,
+            authorization_digest,
+            transport_roster_digest,
+            1,
+            2,
+        )
+        .expect("rederive replay delta");
+        let first_bytes = first.serialize();
+        assert_eq!(
+            "6bdeabf1aabfd58ae11dc11d7b3c685f6d13397cbabd1670507a3067f80ff0a6",
+            hex::encode(&first_bytes[..])
+        );
+        assert_eq!(&first_bytes[..], &replay.serialize()[..]);
+
+        for separated in [
+            derive_share_repair_part1_delta(
+                &transport_secret,
+                [0x32; 32],
+                transport_roster_digest,
+                1,
+                2,
+            ),
+            derive_share_repair_part1_delta(
+                &transport_secret,
+                authorization_digest,
+                [0x42; 32],
+                1,
+                2,
+            ),
+            derive_share_repair_part1_delta(
+                &transport_secret,
+                authorization_digest,
+                transport_roster_digest,
+                2,
+                2,
+            ),
+            derive_share_repair_part1_delta(
+                &transport_secret,
+                authorization_digest,
+                transport_roster_digest,
+                1,
+                3,
+            ),
+        ] {
+            let separated = separated.expect("derive separated replay delta");
+            assert_ne!(&first_bytes[..], &separated.serialize()[..]);
+        }
+        let other_transport_secret =
+            RepairSecretKey::from_slice(&[0x62; 32]).expect("other transport secret");
+        let other_key = derive_share_repair_part1_delta(
+            &other_transport_secret,
+            authorization_digest,
+            transport_roster_digest,
+            1,
+            2,
+        )
+        .expect("derive other-key replay delta");
+        assert_ne!(&first_bytes[..], &other_key.serialize()[..]);
+    }
+
+    #[test]
     fn repair_envelope_authenticates_every_routing_binding() {
         let mut rng = zeroizing_rng_from_os();
         let sender_secret = RepairSecretKey::random(&mut rng);
@@ -2208,6 +2477,19 @@ mod repair_secret_tests {
         .expect("encrypt scalar");
         assert_eq!(payload.len(), SHARE_REPAIR_TRANSPORT_PAYLOAD_BYTES * 2);
         assert!(!payload.contains(&hex::encode(scalar_bytes)));
+        let alternate_encoding = encrypt_repair_scalar(
+            &scalar,
+            &sender_secret,
+            &recipient_public,
+            ShareRepairEnvelopeKind::Delta,
+            context_digest,
+            transport_roster_digest,
+            1,
+            2,
+            &mut rng,
+        )
+        .expect("encrypt alternate scalar encoding");
+        assert_ne!(payload, alternate_encoding);
 
         let decrypted = decrypt_repair_scalar(
             &recipient_secret,
@@ -2221,6 +2503,18 @@ mod repair_secret_tests {
         )
         .expect("decrypt scalar");
         assert_eq!(decrypted.serialize().as_ref(), scalar_bytes);
+        let alternate_decrypted = decrypt_repair_scalar(
+            &recipient_secret,
+            &sender_public,
+            &alternate_encoding,
+            ShareRepairEnvelopeKind::Delta,
+            context_digest,
+            transport_roster_digest,
+            1,
+            2,
+        )
+        .expect("decrypt alternate scalar encoding");
+        assert_eq!(alternate_decrypted.serialize().as_ref(), scalar_bytes);
 
         for invalid in [
             decrypt_repair_scalar(
