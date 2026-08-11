@@ -8,8 +8,17 @@
 // expiry, and are NEVER serialized into a response or persisted state.
 // The only durable artifacts are per-attempt consumption markers,
 // written BEFORE a signature share leaves the engine
-// (consumption-before-release), so a restart can never lead to a
-// second share under the same nonces.
+// (consumption-before-release).
+//
+// Be precise about what those markers buy, because it is easy to credit
+// them with the wrong guarantee. A second share under the SAME nonces is
+// impossible regardless of them: nonces live only in memory, are
+// zeroized at first use, and are never restored on load, so no restart
+// and no durable-state rollback can hand a process a usable nonce. What
+// the markers give is at-most-once re-execution of an ATTEMPT - a
+// consumed attempt_id cannot be re-opened to mint fresh nonces against
+// the same coordinator-visible attempt - and, once externally
+// acknowledged, evidence that the release happened.
 //
 // Attempt contexts are strict-mode only: there is no legacy-shape
 // fallback on this path. All entry points are idempotent or fail

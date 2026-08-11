@@ -472,6 +472,15 @@ storage guarantees for that hardware-level failure boundary.
     firewall enabled and restrict `TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES`
     to the intended output classes, such as `p2tr`.
 - Transcript accountability / quarantine config:
+  - **Runtime fault recording is not implemented.** The engine enforces a
+    quarantine set and fault scores wherever they are read, but nothing at
+    runtime ever writes them: they are only loaded from persisted state. So
+    enabling `TBTC_SIGNER_ENABLE_AUTO_QUARANTINE` validates its configuration
+    and then does nothing - no operator is ever scored, and no operator is ever
+    automatically quarantined. Enforcement of a quarantine set that is already
+    present in the store does work, and the failure direction is safe (no
+    operator can be falsely quarantined), but do not rely on automatic
+    exclusion. Operator removal is out-of-band today.
   - `TBTC_SIGNER_ENABLE_AUTO_QUARANTINE`
   - `TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD`
   - `TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY`

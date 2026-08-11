@@ -48,6 +48,14 @@ TEEs as prerequisites, while remaining compatible with either in future.
 | `P1-M3` Active-active coordinators + anti-DoS transport limits | Coordinator failover protocol, authenticated transport budget/rate limits, replay-resistant request envelopes | Protocol + Platform | Coordinator loss does not halt signing; abuse load is rate-limited without breaking healthy flow |
 | `P1-M4` Chaos and fault-injection program | Monthly drills (coordinator crash, signer loss, partition, stale attempt replay), drill runbook, corrective action tracker | Ops + Security | Drills run on schedule and unresolved critical findings block promotion |
 
+> **Status note on `P1-M2`.** Only the enforcement half has landed. The engine
+> honors a quarantine set and fault scores wherever it reads them, but no
+> runtime path writes either — they are populated from persisted state only, so
+> the scoring model and auto-exclusion threshold are unimplemented and the exit
+> criterion above is not met. `TBTC_SIGNER_ENABLE_AUTO_QUARANTINE` therefore
+> configures a mechanism that cannot fire. Operator exclusion is out-of-band
+> until the scoring writers exist.
+
 ### Phase P2 (Weeks 12-20): Lifecycle + Deployment Safety
 
 | Milestone | Deliverables | Primary owners | Exit criteria |
