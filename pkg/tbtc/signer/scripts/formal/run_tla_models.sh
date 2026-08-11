@@ -13,10 +13,10 @@ TLA_TOOLS_VERSION="${TLA_TOOLS_VERSION:-v1.8.0}"
 TLA_TOOLS_JAR="${TLA_TOOLS_JAR:-/tmp/tla2tools-${TLA_TOOLS_VERSION}.jar}"
 TLA_TOOLS_URL="${TLA_TOOLS_URL:-https://github.com/tlaplus/tlaplus/releases/download/${TLA_TOOLS_VERSION}/tla2tools.jar}"
 # Pin the SHA-256 of the upstream tla2tools.jar (github.com/tlaplus/tlaplus
-# release v1.8.0). Re-pin this when the upstream release asset is rebuilt and the
-# download-verification gate below reports a mismatch, after confirming the new
-# jar comes from the official release URL.
-TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-cc4803dce2a8ffaf0f5920a9dc39df4b5ee34ab4cb53fb58ac557277a7e516b3}"
+# rolling release v1.8.0 asset). Upstream may delete and rebuild this asset from
+# master. Re-pin only after confirming the replacement digest in GitHub's
+# official release metadata; the gate below must continue to fail closed.
+TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-ab323b79802aedc3203b3f9af37c6aca3ed43f4e0225b36f2aa77b26de46c05f}"
 
 if ! command -v java >/dev/null 2>&1; then
   echo "java is required to run TLC model checks" >&2
