@@ -1,5 +1,20 @@
 use thiserror::Error;
 
+#[derive(Debug)]
+pub struct StateAnchorTrustRecoveryContext {
+    pub store_fingerprint: [u8; 32],
+    pub certificate_sequences: Vec<u64>,
+    pub certificate_digests: Vec<[u8; 32]>,
+    pub target_binding_hash: [u8; 32],
+    pub target_service_epoch: u64,
+    pub target_revision: u64,
+    pub target_checkpoint_store_fingerprint: [u8; 32],
+    pub target_checkpoint_generation: u64,
+    pub target_checkpoint_previous_state_commitment: [u8; 32],
+    pub target_checkpoint_state_image_digest: [u8; 32],
+    pub target_checkpoint_state_commitment: [u8; 32],
+}
+
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("validation failed: {0}")]
@@ -91,6 +106,29 @@ pub enum EngineError {
         attempt_id: String,
         candidate_culprits: Vec<u16>,
     },
+    /// The requested witness ancestor predates the independently acknowledged
+    /// retained base. It cannot be recovered by retrying this signer; the host
+    /// must use its independent checkpoint/anchor evidence.
+    #[error(
+        "state witness history pruned: requested generation [{requested_generation}] precedes retained base [{witness_base_generation}]"
+    )]
+    HistoryPruned {
+        requested_generation: u64,
+        witness_base_generation: u64,
+    },
+    /// No offline-certified state-anchor trust head has been committed for the
+    /// durable signer store. This is distinct from malformed or corrupt trust
+    /// state: the operator must complete bootstrap/adoption before retrying a
+    /// trust-head-dependent operation.
+    #[error("state-anchor trust head is absent")]
+    StateAnchorTrustHeadAbsent,
+    /// A durable transition intent exists, but local replayable bytes are not
+    /// freshness authority. The host must select the exact configured
+    /// certificate chain and resubmit it with a newly signed Read wrapper.
+    #[error("state-anchor trust recovery requires a fresh signed Read")]
+    StateAnchorTrustRecoveryRequired {
+        context: Box<StateAnchorTrustRecoveryContext>,
+    },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -115,6 +153,9 @@ impl EngineError {
                 "interactive_attempt_already_aggregated"
             }
             Self::AggregateShareVerificationFailed { .. } => "aggregate_share_verification_failed",
+            Self::HistoryPruned { .. } => "history_pruned",
+            Self::StateAnchorTrustHeadAbsent => "state_anchor_trust_head_absent",
+            Self::StateAnchorTrustRecoveryRequired { .. } => "state_anchor_trust_recovery_required",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -145,6 +186,9 @@ impl EngineError {
             // produce a signature, so this is recoverable: the caller mints a
             // new attempt after the Go host adjudicates blame.
             Self::AggregateShareVerificationFailed { .. } => "recoverable",
+            Self::HistoryPruned { .. } => "terminal",
+            Self::StateAnchorTrustHeadAbsent => "terminal",
+            Self::StateAnchorTrustRecoveryRequired { .. } => "recoverable",
             Self::SessionFinalized { .. } => "terminal",
             Self::SessionNotFound { .. } => "terminal",
             Self::Internal(_) => "terminal",
@@ -161,6 +205,13 @@ impl EngineError {
                 candidate_culprits, ..
             } => candidate_culprits,
             _ => &[],
+        }
+    }
+
+    pub fn state_anchor_trust_recovery(&self) -> Option<&StateAnchorTrustRecoveryContext> {
+        match self {
+            Self::StateAnchorTrustRecoveryRequired { context } => Some(context),
+            _ => None,
         }
     }
 }
@@ -223,6 +274,13 @@ mod tests {
         assert_eq!(
             EngineError::Internal("panic".to_string()).recovery_class(),
             "terminal"
+        );
+        let absent_trust_head = EngineError::StateAnchorTrustHeadAbsent;
+        assert_eq!(absent_trust_head.code(), "state_anchor_trust_head_absent");
+        assert_eq!(absent_trust_head.recovery_class(), "terminal");
+        assert_eq!(
+            absent_trust_head.to_string(),
+            "state-anchor trust head is absent"
         );
         let unsupported_refresh = EngineError::CryptographicRefreshNotSupported {
             session_id: "session-refresh".to_string(),

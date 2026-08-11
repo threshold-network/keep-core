@@ -12,12 +12,14 @@
 //! - [`dkg`] — distributed-DKG key-package persistence (`persist_distributed_dkg_key_package`).
 //! - [`frost_ops`] — Stateless FROST primitives: dkg_part1..3 and signing-package assembly.
 //! - [`interactive`] — Phase 7.1 hardened interactive signing session: engine-held nonce custody, Round1/Round2, consumption markers.
+//! - [`inventory`] — Public retained-key inventory and bounded witness-proof responses.
 //! - [`lifecycle`] — Operational lifecycle: canary rollout, refresh cadence/shares, emergency rekey, quarantine status.
 //! - [`persistence`] — Encrypted state-file persistence: envelope codec, key providers, corruption recovery, persisted<->live conversions.
 //! - [`policy`] — Admission, signing-policy firewall, rate limiting, and auto-quarantine enforcement.
 //! - [`provenance`] — Runtime provenance attestation gate.
 //! - [`roast`] — ROAST/RFC-21 attempt machinery: request fingerprints, round/attempt ids, attempt-context and transition-evidence validation.
-//! - [`state`] — In-memory engine/session state, the state-file lock, and registry capacity guards.
+//! - [`state`] — In-memory engine/session state and registry capacity guards.
+//! - [`store`] — Descriptor-bound durable identity, atomic state replacement, and append-only witness journal.
 //! - [`telemetry`] — Hardening telemetry: latency trackers and metrics reporting.
 //! - [`transaction`] — Taproot transaction building.
 //! - [`testsupport`] — Cross-module test helpers (cfg(test)): state lock, reset, restart simulation.
@@ -36,13 +38,9 @@ use bitcoin::{
 };
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-#[cfg(unix)]
-use libc::{flock, EAGAIN, EWOULDBLOCK, LOCK_EX, LOCK_NB};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{Read, Write};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -76,14 +74,20 @@ use crate::api::{
     PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest, PromoteCanaryResult,
     QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
     RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
+    RetireDistributedDkgKeyPackagesRequest, RetireDistributedDkgKeyPackagesResult,
     RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState, SecretHex,
-    SignatureResult, SignerHardeningMetricsResult, TransactionResult, TranscriptAuditRecord,
-    TranscriptAuditRequest, TranscriptAuditResult, TriggerEmergencyRekeyRequest,
-    TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
+    SignatureResult, SignerHardeningMetricsResult, StateAnchorBootstrapFactsResult,
+    StateAnchorTrustCertificate, StateAnchorTrustCheckpoint, StateAnchorTrustEndpoint,
+    StateAnchorTrustHeadResult, StateAnchorTrustReference, TransactionResult,
+    TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
+    TransitionStateWitnessAnchorRequest, TransitionStateWitnessAnchorResult,
+    TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
 };
-use crate::errors::EngineError;
+use crate::errors::{EngineError, StateAnchorTrustRecoveryContext};
 use crate::go_math_rand::select_coordinator_identifier;
 
+mod anchor;
+mod anchor_trust;
 mod audit;
 mod codec;
 mod config;
@@ -91,12 +95,14 @@ mod dkg;
 mod frost_ops;
 mod init_config;
 mod interactive;
+mod inventory;
 mod lifecycle;
 mod persistence;
 mod policy;
 mod provenance;
 mod roast;
 mod state;
+mod store;
 mod telemetry;
 #[cfg(test)]
 mod tests;
@@ -105,6 +111,8 @@ mod testsupport;
 mod transaction;
 mod verify_share;
 
+pub(crate) use anchor::*;
+pub(crate) use anchor_trust::*;
 pub(crate) use audit::*;
 pub(crate) use codec::*;
 pub(crate) use config::*;
@@ -112,12 +120,14 @@ pub(crate) use dkg::*;
 pub(crate) use frost_ops::*;
 pub(crate) use init_config::*;
 pub(crate) use interactive::*;
+pub(crate) use inventory::*;
 pub(crate) use lifecycle::*;
 pub(crate) use persistence::*;
 pub(crate) use policy::*;
 pub(crate) use provenance::*;
 pub(crate) use roast::*;
 pub(crate) use state::*;
+pub(crate) use store::*;
 pub(crate) use telemetry::*;
 #[cfg(test)]
 pub(crate) use testsupport::*;

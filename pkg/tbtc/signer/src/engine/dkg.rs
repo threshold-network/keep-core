@@ -311,3 +311,102 @@ pub fn persist_distributed_dkg_key_package(
 
     Ok(result)
 }
+
+/// Durably retires the wallet-owner session holding the exact distributed-DKG
+/// key group. Removing the owner session atomically removes every local seat's
+/// secret package and the corresponding public package. Absence is a successful
+/// no-op, which makes recovery safe after a crash that committed the native
+/// removal before the caller archived its local wallet registry entry.
+pub fn retire_distributed_dkg_key_packages(
+    request: RetireDistributedDkgKeyPackagesRequest,
+) -> Result<RetireDistributedDkgKeyPackagesResult, EngineError> {
+    const OP: &str = "retire_distributed_dkg_key_packages";
+
+    enforce_provenance_gate()?;
+    super::inventory::parse_key_group(&request.key_group).map_err(|error| {
+        EngineError::Validation(format!(
+            "{OP}: key_group is not canonical compressed SEC1: {error}"
+        ))
+    })?;
+
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+
+    let mut owner_session_id = None;
+    for (session_id, session) in &guard.sessions {
+        if session
+            .dkg_result
+            .as_ref()
+            .is_some_and(|result| result.key_group == request.key_group)
+        {
+            if owner_session_id.is_some() {
+                return Err(EngineError::Internal(format!(
+                    "{OP}: key group has multiple owner sessions"
+                )));
+            }
+            owner_session_id = Some(session_id.clone());
+        }
+    }
+
+    let Some(owner_session_id) = owner_session_id else {
+        return Ok(RetireDistributedDkgKeyPackagesResult {
+            key_group: request.key_group,
+            retired: false,
+            retired_key_package_count: 0,
+        });
+    };
+
+    let owner_session = guard
+        .sessions
+        .get(&owner_session_id)
+        .ok_or_else(|| EngineError::Internal(format!("{OP}: owner session disappeared")))?;
+    let dkg_result = owner_session
+        .dkg_result
+        .as_ref()
+        .ok_or_else(|| EngineError::Internal(format!("{OP}: owner has no DKG result")))?;
+    if dkg_result.session_id != owner_session_id {
+        return Err(EngineError::Internal(format!(
+            "{OP}: DKG result session does not match its owner"
+        )));
+    }
+    if owner_session.bound_key_group.is_some() || !owner_session.interactive_signing.is_empty() {
+        return Err(EngineError::SessionConflict {
+            session_id: owner_session_id,
+        });
+    }
+    let retired_key_package_count = u16::try_from(
+        owner_session
+            .dkg_key_packages
+            .as_ref()
+            .ok_or_else(|| {
+                EngineError::Internal(format!("{OP}: owner has no retained key packages"))
+            })?
+            .len(),
+    )
+    .map_err(|_| EngineError::Internal(format!("{OP}: retained key-package count overflow")))?;
+    if retired_key_package_count == 0 {
+        return Err(EngineError::Internal(format!(
+            "{OP}: owner has an empty retained key-package set"
+        )));
+    }
+
+    let removed_session = guard
+        .sessions
+        .remove(&owner_session_id)
+        .ok_or_else(|| EngineError::Internal(format!("{OP}: owner session disappeared")))?;
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
+        if !state_file_replaced {
+            guard.sessions.insert(owner_session_id, removed_session);
+        }
+        return Err(persist_error);
+    }
+
+    Ok(RetireDistributedDkgKeyPackagesResult {
+        key_group: request.key_group,
+        retired: true,
+        retired_key_package_count,
+    })
+}

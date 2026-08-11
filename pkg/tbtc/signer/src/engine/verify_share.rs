@@ -81,19 +81,18 @@ pub fn verify_signature_share(
     // never the request - mirroring InteractiveAggregate. A missing session or
     // incomplete DKG is not the member's fault -> indeterminate.
     let public_key_package = {
-        let mut guard = state()?
+        let guard = state()?
             .lock()
             .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-        // Verify-share takes the engine lock like every other interactive entry
-        // point, so it sweeps expired interactive state too: the nonce-TTL
-        // guarantee (an abandoned interactive nonce handle gone within the TTL of
-        // inactivity) must hold even when the only post-expiry traffic is
-        // verify-share blame rechecks. Mirrors InteractiveAggregate.
-        sweep_expired_interactive_state_durably(&mut guard)?;
-        // The public key package is a WALLET-level asset resolved by key_group, so a
-        // per-signing session (a distinct RoastSessionID) can be blame-checked. The
-        // key_group is this signing session's own DKG (co-located) or the one bound at
-        // Open; a missing session/binding/DKG is not the member's fault -> indeterminate.
+        // Delayed blame verification is intentionally read-only and remains
+        // available after the interactive nonce TTL. It resolves only public,
+        // wallet-scoped DKG material and must not sweep, retire, repair, or
+        // persist any interactive state. The next nonce-bearing/mutating
+        // endpoint performs the durable TTL sweep before secret release.
+        //
+        // The key_group is this signing session's own DKG (co-located) or the
+        // one bound at Open; a missing session/binding/DKG is not the member's
+        // fault -> indeterminate.
         let key_group = match guard.sessions.get(&request.session_id) {
             Some(session) => session
                 .dkg_result

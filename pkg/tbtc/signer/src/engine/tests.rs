@@ -590,6 +590,7 @@ fn configure_test_state_path(suffix: &str) -> PathBuf {
 fn clear_state_storage_policy_overrides() {
     std::env::remove_var(TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV);
     std::env::remove_var(TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV);
+    std::env::remove_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV);
     std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
     std::env::remove_var(TBTC_SIGNER_ENABLE_ROAST_STRICT_ENV);
     std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
@@ -707,6 +708,8 @@ fn configure_valid_provenance_attestation_for_tests() {
 fn cleanup_test_state_artifacts(path: &Path) {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(state_lock_file_path(path));
+    let _ = std::fs::remove_file(durable_store_id_file_path(path));
+    let _ = std::fs::remove_file(state_witness_file_path(path));
     let _ = std::fs::remove_file(path.with_extension(format!("tmp-{}", std::process::id())));
 
     if let Ok(backups) = sorted_corrupted_state_backups(path) {
@@ -716,12 +719,30 @@ fn cleanup_test_state_artifacts(path: &Path) {
     }
 }
 
+/// Recreates the on-disk shape of a store written before the witness journal
+/// existed. Overwriting only the state image after `reset_for_tests` would be a
+/// real rollback against an already-committed witness, not a migration fixture.
+fn make_store_pre_witness_for_legacy_fixture(state_path: &Path) {
+    if let Ok(mut lock_slot) = state_file_lock_slot().lock() {
+        *lock_slot = None;
+    }
+    let _ = std::fs::remove_file(state_witness_file_path(state_path));
+}
+
+fn write_legacy_state_fixture(state_path: &Path, bytes: &[u8], label: &str) {
+    std::fs::write(state_path, bytes).unwrap_or_else(|error| panic!("{label}: {error}"));
+    #[cfg(unix)]
+    std::fs::set_permissions(state_path, std::fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|error| panic!("secure {label} permissions: {error}"));
+}
+
 fn persisted_session_state_fixture() -> PersistedSessionState {
     PersistedSessionState {
         dkg_request_fingerprint: None,
         dkg_key_packages: None,
         dkg_public_key_package_hex: None,
         dkg_result: None,
+        dkg_share_epoch: 0,
         sign_request_fingerprint: None,
         sign_message_hex: None,
         round_state: None,
@@ -756,6 +777,23 @@ fn expect_internal_error_contains(err: EngineError, expected_substring: &str) {
         message.contains(expected_substring),
         "unexpected internal error message: {message}"
     );
+}
+
+fn expect_validation_error_contains(err: EngineError, expected_substring: &str) {
+    let EngineError::Validation(message) = err else {
+        panic!("unexpected error variant");
+    };
+    assert!(
+        message.contains(expected_substring),
+        "unexpected validation error message: {message}"
+    );
+}
+
+#[cfg(unix)]
+fn write_witness_journal_fixture(witness_path: &Path, bytes: &[u8]) {
+    std::fs::write(witness_path, bytes).expect("write witness journal fixture");
+    std::fs::set_permissions(witness_path, std::fs::Permissions::from_mode(0o600))
+        .expect("secure witness journal fixture permissions");
 }
 
 fn persist_state_for_key_provider_test(session_id: &str) -> Result<(), EngineError> {
@@ -1186,6 +1224,142 @@ fn persist_distributed_dkg_key_package_accumulates_seats_under_one_session() {
         key_packages.keys().collect::<Vec<_>>()
     );
     assert!(session.dkg_public_key_package.is_some());
+}
+
+#[test]
+fn retire_distributed_dkg_key_packages_removes_every_seat_and_is_idempotent() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(11);
+    let session_id = "session-distributed-retirement".to_string();
+    let mut key_group = String::new();
+    for participant_identifier in [1_u16, 2] {
+        let result = persist_distributed_dkg_key_package(
+            crate::api::PersistDistributedDkgKeyPackageRequest {
+                session_id: session_id.clone(),
+                participant_identifier,
+                threshold: 2,
+                participant_count: 3,
+                key_package: native_key_packages
+                    .get(&participant_identifier)
+                    .expect("local seat")
+                    .clone(),
+                public_key_package: native_public.clone(),
+            },
+        )
+        .expect("persist distributed DKG seat");
+        key_group = result.key_group;
+    }
+
+    let retired =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: key_group.clone(),
+        })
+        .expect("retire distributed DKG packages");
+    assert_eq!(retired.key_group, key_group);
+    assert!(retired.retired);
+    assert_eq!(retired.retired_key_package_count, 2);
+    assert!(!state()
+        .expect("state")
+        .lock()
+        .expect("engine lock")
+        .sessions
+        .contains_key(&session_id));
+
+    let repeated =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: key_group.clone(),
+        })
+        .expect("repeat distributed DKG retirement");
+    assert_eq!(repeated.key_group, key_group);
+    assert!(!repeated.retired);
+    assert_eq!(repeated.retired_key_package_count, 0);
+}
+
+#[test]
+fn retire_distributed_dkg_key_packages_does_not_remove_another_group() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(13);
+    let session_id = "session-distributed-retirement-exact-match".to_string();
+    let persisted =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("local seat").clone(),
+            public_key_package: native_public,
+        })
+        .expect("persist distributed DKG seat");
+
+    let result =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+                .to_string(),
+        })
+        .expect("unrelated retirement is an idempotent no-op");
+    assert!(!result.retired);
+    assert_eq!(result.retired_key_package_count, 0);
+    let guard = state().expect("state").lock().expect("engine lock");
+    assert_eq!(
+        guard.sessions[&session_id]
+            .dkg_result
+            .as_ref()
+            .expect("retained DKG result")
+            .key_group,
+        persisted.key_group
+    );
+}
+
+#[test]
+fn retire_distributed_dkg_key_packages_pre_replace_failure_restores_owner() {
+    let _guard = lock_test_state();
+    let _state_path = configure_test_state_path("distributed_dkg_retirement_rollback");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(15);
+    let session_id = "session-distributed-retirement-rollback".to_string();
+    let persisted =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("local seat").clone(),
+            public_key_package: native_public,
+        })
+        .expect("persist distributed DKG seat");
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let error =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: persisted.key_group.clone(),
+        })
+        .expect_err("pre-replacement retirement failure must roll back");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(state()
+        .expect("state")
+        .lock()
+        .expect("engine lock")
+        .sessions
+        .contains_key(&session_id));
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    assert!(state()
+        .expect("state")
+        .lock()
+        .expect("engine lock")
+        .sessions
+        .contains_key(&session_id));
 }
 
 #[test]
@@ -2685,7 +2859,7 @@ fn completed_canary_rollback_retries_are_idempotent() {
 }
 
 #[test]
-fn fresh_canary_rollback_noop_does_not_require_a_state_parent_directory() {
+fn fresh_canary_rollback_noop_initializes_anchors_without_replacing_state() {
     let _guard = lock_test_state();
     clear_state_storage_policy_overrides();
 
@@ -2698,11 +2872,24 @@ fn fresh_canary_rollback_noop_does_not_require_a_state_parent_directory() {
     let _ = std::fs::remove_dir(&missing_parent);
     std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
     reset_for_tests();
+    if let Ok(mut lock_slot) = state_file_lock_slot().lock() {
+        *lock_slot = None;
+    }
     cleanup_test_state_artifacts(&state_path);
     let _ = std::fs::remove_dir(&missing_parent);
     assert!(!missing_parent.exists());
 
     let status_before = canary_rollout_status().expect("fresh canary rollout status");
+    assert!(
+        missing_parent.exists(),
+        "the first stateful access must initialize the descriptor-bound store"
+    );
+    assert!(durable_store_id_file_path(&state_path).exists());
+    assert!(state_witness_file_path(&state_path).exists());
+    assert!(
+        !state_path.exists(),
+        "reading fresh state must not synthesize a state image"
+    );
     let directory_syncs_before = state_file_parent_directory_syncs_for_tests();
     let rollback = rollback_canary(RollbackCanaryRequest {
         reason: "fresh state no-op".to_string(),
@@ -2719,11 +2906,11 @@ fn fresh_canary_rollback_noop_does_not_require_a_state_parent_directory() {
     assert_eq!(
         state_file_parent_directory_syncs_for_tests(),
         directory_syncs_before,
-        "an absent state file must not trigger a parent-directory sync"
+        "the no-op rollback must not perform a state-image replacement"
     );
     assert!(
-        !missing_parent.exists(),
-        "a fresh-state no-op must not create persistence directories"
+        !state_path.exists(),
+        "a fresh-state no-op must not create a state image"
     );
 
     std::env::remove_var(TBTC_SIGNER_STATE_PATH_ENV);
@@ -4645,8 +4832,12 @@ fn persisted_engine_state_compacts_migrated_idle_entries_to_legacy_total_bound()
     let key_material = state_encryption_key_material().expect("test state key");
     let oversized_envelope =
         encode_encrypted_state_envelope(&persisted, &key_material).expect("oversized envelope");
-    std::fs::write(&state_path, oversized_envelope.as_slice())
-        .expect("write intermediate oversized state");
+    make_store_pre_witness_for_legacy_fixture(&state_path);
+    write_legacy_state_fixture(
+        &state_path,
+        oversized_envelope.as_slice(),
+        "write intermediate oversized state",
+    );
     let reloaded = load_engine_state_from_storage().expect("load compacts and rewrites state");
     assert_eq!(reloaded.sessions.len(), 2);
 
@@ -5939,7 +6130,7 @@ fn dangling_state_file_symlink_fails_closed() {
         Err(err) => err,
     };
     assert!(
-        matches!(err, EngineError::Internal(ref message) if message.contains("failed to read signer state file")),
+        matches!(err, EngineError::Internal(ref message) if message.contains("removed, replaced, linked, or redirected")),
         "unexpected error: {err:?}"
     );
     assert!(
@@ -5978,6 +6169,146 @@ fn corrupt_state_file_quarantines_and_resets_when_enabled() {
     assert_eq!(backups.len(), 1);
     let backup_contents = std::fs::read(&backups[0]).expect("read backup file contents");
     assert_eq!(backup_contents, b"{invalid-state");
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn identity_preflight_preserves_configured_corruption_recovery() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("identity_preflight_corruption_recovery");
+    reset_for_tests();
+
+    std::env::set_var(
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_QUARANTINE_AND_RESET,
+    );
+    std::fs::write(&state_path, b"{invalid-state-after-identity")
+        .expect("write corrupt state file");
+
+    let identity =
+        durable_store_identity().expect("identity preflight must remain structural and available");
+    assert_ne!(identity.store_id, [0u8; 32]);
+
+    let loaded = load_engine_state_from_storage()
+        .expect("state load after identity preflight must apply corruption policy");
+    assert!(loaded.sessions.is_empty());
+    assert!(!state_path.exists());
+    let backups =
+        sorted_corrupted_state_backups(&state_path).expect("list corrupted state backups");
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        std::fs::read(&backups[0]).expect("read quarantined state"),
+        b"{invalid-state-after-identity"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn authenticated_state_rollback_fails_closed_even_when_corruption_reset_is_enabled() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("authenticated_rollback_fail_closed");
+    reset_for_tests();
+
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.refresh_epoch_counter = 1;
+        persist_engine_state_to_storage(&guard).expect("persist rollback candidate");
+    }
+    let rolled_back_bytes = std::fs::read(&state_path).expect("read rollback candidate");
+
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.refresh_epoch_counter = 2;
+        persist_engine_state_to_storage(&guard).expect("advance committed witness");
+    }
+    simulate_process_restart_for_tests();
+    std::fs::write(&state_path, &rolled_back_bytes).expect("restore valid old state image");
+    std::env::set_var(
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_QUARANTINE_AND_RESET,
+    );
+
+    let error = match load_engine_state_from_storage() {
+        Ok(_) => panic!("authenticated rollback evidence must not reset signer state"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("authenticated rollback evidence is always fail-closed"),
+        "unexpected rollback error: {error}"
+    );
+    assert!(
+        state_path.exists(),
+        "rolled-back evidence was quarantined away"
+    );
+    assert!(
+        sorted_corrupted_state_backups(&state_path)
+            .expect("enumerate corrupt-state backups")
+            .is_empty(),
+        "authenticated rollback was routed through generic corruption backup handling"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn startup_validation_binds_the_exact_decoded_state_image() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("exact_loaded_image_validation");
+    reset_for_tests();
+
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.refresh_epoch_counter = 1;
+        persist_engine_state_to_storage(&guard).expect("persist rollback candidate");
+    }
+    let rolled_back_bytes = std::fs::read(&state_path).expect("read rollback candidate");
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.refresh_epoch_counter = 2;
+        persist_engine_state_to_storage(&guard).expect("persist current state");
+    }
+    let current_bytes = std::fs::read(&state_path).expect("read current state");
+
+    simulate_process_restart_for_tests();
+    std::fs::write(&state_path, &rolled_back_bytes).expect("serve rollback candidate to loader");
+    let loaded_image =
+        with_state_file_lock_for_load(|store| store.read_state_for_load()).expect("stable load");
+    let loaded_bytes = loaded_image.bytes.as_ref().expect("loaded state bytes");
+    let loaded_state: EngineState = match decode_persisted_state_storage_format(loaded_bytes)
+        .expect("old image remains a valid authenticated envelope")
+    {
+        PersistedStateStorageFormat::EncryptedEnvelope { persisted, .. }
+        | PersistedStateStorageFormat::LegacyPlaintext(persisted) => persisted
+            .try_into()
+            .expect("old image remains semantically valid"),
+    };
+    assert_eq!(loaded_state.refresh_epoch_counter, 1);
+
+    // Restore the current image before validation. A fresh descriptor reread
+    // now passes, reproducing the former time-of-check/time-of-use bypass.
+    std::fs::write(&state_path, &current_bytes).expect("restore current bytes before validation");
+    with_state_file_lock_for_load(|store| store.validate_state_image())
+        .expect("fresh reread sees the current committed image");
+
+    let error = with_state_file_lock_for_load(|store| {
+        store.validate_loaded_state_image(loaded_image.digest)
+    })
+    .expect_err("the exact bytes supplied to the decoder must fail witness validation");
+    expect_internal_error_contains(
+        error,
+        "signer state image does not match the committed witness tip",
+    );
 
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);
@@ -6125,8 +6456,17 @@ fn corrupt_state_backup_retention_evicts_old_backups() {
     std::env::set_var(TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV, "2");
 
     for seed in 0..4 {
+        // Each fixture models a separate startup. Once a held store observes
+        // the state entry absent after quarantine, a file appearing there
+        // out-of-band is correctly treated as replacement.
+        if let Ok(mut lock_slot) = state_file_lock_slot().lock() {
+            *lock_slot = None;
+        }
         std::fs::write(&state_path, format!("{{invalid-state-{seed}"))
             .expect("write corrupt state");
+        #[cfg(unix)]
+        std::fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupt-state fixture permissions");
         let loaded =
             load_engine_state_from_storage().expect("recover from corrupt state iteration");
         assert!(loaded.sessions.is_empty());
@@ -6162,7 +6502,8 @@ fn legacy_plaintext_state_migrates_to_encrypted_envelope_on_load() {
         canary_rollout: CanaryRolloutState::default(),
     };
     let plaintext_bytes = serde_json::to_vec(&plaintext_state).expect("encode plaintext state");
-    std::fs::write(&state_path, &plaintext_bytes).expect("write plaintext state file");
+    make_store_pre_witness_for_legacy_fixture(&state_path);
+    write_legacy_state_fixture(&state_path, &plaintext_bytes, "write plaintext state file");
 
     // Without the opt-in rollback flag the unauthenticated plaintext is refused
     // (fail-closed), even in a non-production profile.
@@ -6231,11 +6572,12 @@ fn legacy_v2_encrypted_state_rewrites_with_current_key_id() {
     };
     ciphertext_and_tag.zeroize();
     authentication_tag.zeroize();
-    std::fs::write(
+    make_store_pre_witness_for_legacy_fixture(&state_path);
+    write_legacy_state_fixture(
         &state_path,
-        serde_json::to_vec(&envelope).expect("encode legacy v2 envelope"),
-    )
-    .expect("write legacy v2 envelope");
+        &serde_json::to_vec(&envelope).expect("encode legacy v2 envelope"),
+        "write legacy v2 envelope",
+    );
 
     let loaded = load_engine_state_from_storage().expect("load legacy v2 envelope");
     assert_eq!(loaded.refresh_epoch_counter, 11);
@@ -13730,6 +14072,390 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
     );
 }
 
+#[test]
+fn verify_signature_share_is_read_only_across_ttl_and_pending_repair() {
+    use crate::api::ShareVerificationVerdict;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("verify_share_read_only");
+    reset_for_tests();
+
+    let session_id = "verify-share-read-only-session";
+    let key_group = "interactive-test-key-group";
+    let message = [0x79u8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("open interactive attempt");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 share");
+
+    advance_interactive_clock_for_tests(interactive_session_ttl_seconds().saturating_add(1));
+    mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+        session_id: session_id.to_string(),
+    });
+    let tip_before = state_witness_tip().expect("tip before verify");
+    let state_before = std::fs::read(&state_path).expect("state image before verify");
+    let witness_before =
+        std::fs::read(state_witness_file_path(&state_path)).expect("witness before verify");
+    assert!(interactive_state_persistence_pending());
+
+    let result = verify_signature_share(crate::api::VerifySignatureShareRequest {
+        session_id: session_id.to_string(),
+        signing_package_hex,
+        signature_share_hex: member2_share.signature_share.data_hex,
+        member_identifier: 2,
+        taproot_merkle_root_hex: None,
+    })
+    .expect("delayed share verification");
+    assert_eq!(result.verdict, ShareVerificationVerdict::Valid);
+    assert_eq!(
+        state_witness_tip().expect("tip after verify"),
+        tip_before,
+        "read-only verification must not advance the durable witness"
+    );
+    assert_eq!(
+        std::fs::read(&state_path).expect("state image after verify"),
+        state_before,
+        "read-only verification must not rewrite signer state"
+    );
+    assert_eq!(
+        std::fs::read(state_witness_file_path(&state_path)).expect("witness after verify"),
+        witness_before,
+        "read-only verification must not rewrite the witness journal"
+    );
+    assert!(
+        interactive_state_persistence_pending(),
+        "verification must not consume a pending mutation repair"
+    );
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(
+            !guard.sessions[session_id].interactive_signing.is_empty(),
+            "verification must not sweep expired nonce state"
+        );
+    }
+
+    interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: "verify-share-read-only-unrelated".to_string(),
+        attempt_id: None,
+    })
+    .expect("next mutating endpoint repairs and sweeps");
+    assert!(
+        !interactive_state_persistence_pending(),
+        "mutating endpoint must durably clear the pending repair"
+    );
+    assert_ne!(
+        state_witness_tip().expect("tip after mutating sweep"),
+        tip_before,
+        "durable sweep must advance the witness before returning"
+    );
+    let guard = state().expect("state").lock().expect("lock");
+    assert!(
+        guard.sessions[session_id].interactive_signing.is_empty(),
+        "next mutating endpoint must sweep expired nonce state"
+    );
+    drop(guard);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_anchored_calls_advance_at_most_three_generations_with_repairs() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_generation_bound");
+    reset_for_tests();
+
+    let key_group = "generation-bound-key-group";
+    let wallet_session = "generation-bound-wallet";
+    let included = [1u16, 2];
+    let current_generation = || {
+        state_witness_tip()
+            .expect("current witness tip")
+            .generation
+            .parse::<u64>()
+            .expect("canonical generation")
+    };
+    let assert_bound = |label: &str, before: u64| {
+        let after = current_generation();
+        assert!(
+            after >= before && after - before <= 3,
+            "{label} advanced {} generations; anchored-call bound is 3",
+            after.saturating_sub(before)
+        );
+    };
+    let open_bound = |session_id: &str, message: [u8; 32]| {
+        interactive_session_open(InteractiveSessionOpenRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: hex::encode(message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            signing_intent: None,
+            attempt_context: interactive_test_attempt_context(
+                session_id, key_group, &message, &included, 1,
+            ),
+        })
+        .expect("bound session opens")
+    };
+    let seed_expired_pending = |session_id: &str, message: [u8; 32]| {
+        let opened = open_bound(session_id, message);
+        interactive_round1(InteractiveRound1Request {
+            session_id: session_id.to_string(),
+            attempt_id: opened.attempt_id,
+            member_identifier: 1,
+        })
+        .expect("expired fixture reaches round 1");
+        {
+            let mut guard = state().expect("state").lock().expect("lock");
+            let stale = interactive_now()
+                .checked_sub(Duration::from_secs(
+                    interactive_session_ttl_seconds().saturating_add(1),
+                ))
+                .expect("interactive clock supports stale instant");
+            for interactive in guard
+                .sessions
+                .get_mut(session_id)
+                .expect("expired fixture session")
+                .interactive_signing
+                .values_mut()
+            {
+                interactive.last_activity_at = stale;
+            }
+        }
+        mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+            session_id: session_id.to_string(),
+        });
+    };
+    let mark_nonmatching_repairs = |suffix: &str| {
+        mark_persistence_pending(PersistencePendingOperation::InteractiveRound2 {
+            session_id: format!("missing-round2-{suffix}"),
+            consumed_marker: format!("missing-marker-{suffix}"),
+        });
+        mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
+            session_id: format!("missing-aggregate-{suffix}"),
+            aggregated_marker: format!("missing-aggregate-marker-{suffix}"),
+        });
+    };
+
+    // Open: expiry repair (the sweep snapshot also covers protected
+    // retirement) + Open's binding snapshot stays within the three-generation
+    // hard bound even if a prior prepared witness must first be reconciled.
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    seed_expired_pending("generation-open-expired", [0x31; 32]);
+    mark_nonmatching_repairs("open");
+    let open_request = InteractiveSessionOpenRequest {
+        session_id: "generation-open-target".to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode([0x32; 32]),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            "generation-open-target",
+            key_group,
+            &[0x32; 32],
+            &included,
+            1,
+        ),
+    };
+    let before = current_generation();
+    interactive_session_open(open_request).expect("bounded Open");
+    assert_bound("Open", before);
+
+    reset_for_tests();
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    let round1_target = open_bound("generation-round1-target", [0x41; 32]);
+    seed_expired_pending("generation-round1-expired", [0x42; 32]);
+    mark_nonmatching_repairs("round1");
+    let before = current_generation();
+    interactive_round1(InteractiveRound1Request {
+        session_id: "generation-round1-target".to_string(),
+        attempt_id: round1_target.attempt_id,
+        member_identifier: 1,
+    })
+    .expect("bounded Round1");
+    assert_bound("Round1", before);
+
+    reset_for_tests();
+    let key_packages = ensure_interactive_dkg_session(wallet_session, key_group);
+    let round2_target = open_bound("generation-round2-target", [0x51; 32]);
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: "generation-round2-target".to_string(),
+        attempt_id: round2_target.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("Round2 fixture round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("Round2 fixture member 2");
+    let signing_package_hex = interactive_package_for_test(
+        &[0x51; 32],
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let round2_request = InteractiveRound2Request {
+        session_id: "generation-round2-target".to_string(),
+        attempt_id: round2_target.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    };
+    seed_expired_pending("generation-round2-expired", [0x52; 32]);
+    mark_nonmatching_repairs("round2");
+    let before = current_generation();
+    interactive_round2(round2_request.clone()).expect("bounded Round2");
+    assert_bound("Round2", before);
+
+    // Matching Round2 repair is covered by the sweep snapshot and cannot add
+    // a write beyond the three-generation bound; the replay then fails closed.
+    let consumed_marker = interactive_consumed_marker(&round2_target.attempt_id, 1);
+    mark_persistence_pending(PersistencePendingOperation::InteractiveRound2 {
+        session_id: round2_request.session_id.clone(),
+        consumed_marker,
+    });
+    seed_expired_pending("generation-round2-match-expired", [0x53; 32]);
+    let before = current_generation();
+    let replay = interactive_round2(round2_request)
+        .expect_err("matching Round2 repair reaches consumed replay gate");
+    assert!(matches!(replay, EngineError::ConsumedNonceReplay { .. }));
+    assert_bound("Round2 matching repair", before);
+
+    reset_for_tests();
+    let key_packages = ensure_interactive_dkg_session(wallet_session, key_group);
+    let aggregate_target = open_bound("generation-aggregate-target", [0x61; 32]);
+    let aggregate_round1 = interactive_round1(InteractiveRound1Request {
+        session_id: "generation-aggregate-target".to_string(),
+        attempt_id: aggregate_target.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("Aggregate fixture round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("Aggregate fixture member 2");
+    let member2_nonces = member2.nonces_hex.clone();
+    let aggregate_package = interactive_package_for_test(
+        &[0x61; 32],
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: aggregate_round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let member1_share = interactive_round2(InteractiveRound2Request {
+        session_id: "generation-aggregate-target".to_string(),
+        attempt_id: aggregate_target.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: aggregate_package.clone(),
+    })
+    .expect("Aggregate fixture member 1 share");
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: aggregate_package.clone(),
+        nonces_hex: member2_nonces,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("Aggregate fixture member 2 share");
+    let aggregate_request = InteractiveAggregateRequest {
+        session_id: "generation-aggregate-target".to_string(),
+        attempt_id: aggregate_target.attempt_id.clone(),
+        signing_package_hex: aggregate_package,
+        signature_shares: vec![
+            NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: member1_share.signature_share_hex,
+            },
+            member2_share.signature_share,
+        ],
+        taproot_merkle_root_hex: None,
+    };
+    seed_expired_pending("generation-aggregate-expired", [0x62; 32]);
+    mark_nonmatching_repairs("aggregate");
+    let before = current_generation();
+    interactive_aggregate(aggregate_request.clone()).expect("bounded Aggregate");
+    assert_bound("Aggregate", before);
+
+    let aggregated_marker =
+        interactive_aggregated_marker(&aggregate_target.attempt_id, &hash_hex(&[0x61; 32]), None);
+    mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
+        session_id: aggregate_request.session_id.clone(),
+        aggregated_marker,
+    });
+    seed_expired_pending("generation-aggregate-match-expired", [0x63; 32]);
+    let before = current_generation();
+    let replay = interactive_aggregate(aggregate_request)
+        .expect_err("matching Aggregate repair reaches completed replay gate");
+    assert!(matches!(
+        replay,
+        EngineError::InteractiveAttemptAlreadyAggregated { .. }
+    ));
+    assert_bound("Aggregate matching repair", before);
+
+    reset_for_tests();
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    let abort_target = open_bound("generation-abort-target", [0x71; 32]);
+    interactive_round1(InteractiveRound1Request {
+        session_id: "generation-abort-target".to_string(),
+        attempt_id: abort_target.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("Abort fixture round 1");
+    seed_expired_pending("generation-abort-expired", [0x72; 32]);
+    mark_nonmatching_repairs("abort");
+    let before = current_generation();
+    let aborted = interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: "generation-abort-target".to_string(),
+        attempt_id: Some(abort_target.attempt_id),
+    })
+    .expect("bounded Abort");
+    assert!(aborted.aborted);
+    assert_bound("Abort", before);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
 // Script-path (tweaked-root) companion to the equivalence test above: the
 // None-root case pins parity on the untweaked path; this pins it on the taproot
 // tweak path, where the even-Y/tweak machinery is exercised. Shares are produced
@@ -14001,5 +14727,307 @@ fn enforce_provenance_gate_rejects_signed_attestation_runtime_version_mismatch()
     };
     assert_eq!(reason_code, "runtime_version_not_attested");
 
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn durable_store_identity_survives_restart_and_atomic_state_replacement() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("durable_store_identity_restart");
+
+    let mut first = StateFileLock::acquire(&state_path).expect("open first durable store");
+    let first_identity = first.identity().expect("read first identity");
+    assert_ne!(first_identity.store_id, [0u8; 32]);
+    first
+        .replace_state(b"first atomic state image")
+        .expect("first replacement");
+    assert_eq!(
+        first.identity().expect("identity after first write"),
+        first_identity
+    );
+    first
+        .replace_state(b"second atomic state image")
+        .expect("second replacement");
+    assert_eq!(
+        first.identity().expect("identity after second write"),
+        first_identity
+    );
+    drop(first);
+
+    let mut restarted = StateFileLock::acquire(&state_path).expect("reopen durable store");
+    assert_eq!(
+        restarted.identity().expect("restarted identity"),
+        first_identity
+    );
+    assert_eq!(
+        restarted.read_state().expect("restarted state"),
+        Some(b"second atomic state image".to_vec())
+    );
+    drop(restarted);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn durable_store_fingerprint_vectors_pin_v2_and_retired_v1_transcripts() {
+    assert_eq!(
+        hex::encode(durable_store_fingerprint(&[0x11; 32])),
+        "8bb8d21c69e78916e8f165b0c861c0d84c5d7af5393f75b0321fe048f772abba"
+    );
+    assert_eq!(
+        hex::encode(durable_store_fingerprint_v1(
+            &[0x11; 32],
+            &[0x22; 32],
+            &[0x33; 32],
+            &[0x44; 32],
+        )),
+        "4d6aae1b6ac64f36ddc58d43ea89bc8eaa5bcece511f53d631d662392313f6c9"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn pending_commit_refuses_to_absorb_same_length_prefix_corruption() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_pending_prefix_corruption");
+    clear_persist_fault_injection_for_tests();
+
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    store
+        .replace_state(b"baseline state")
+        .expect("persist baseline");
+    let baseline = store.state_witness_tip().expect("baseline tip");
+
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let interrupted = store
+        .replace_state(b"prepared replacement")
+        .expect_err("stop after PREPARE and rename");
+    assert!(interrupted.replaced());
+    clear_persist_fault_injection_for_tests();
+
+    let witness_path = state_witness_file_path(&state_path);
+    let prepared_journal = std::fs::read(&witness_path).expect("prepared journal");
+    let prepared_length = prepared_journal.len();
+    let mut corrupted = prepared_journal.clone();
+    let old_commitment_offset =
+        TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH + 80;
+    corrupted[old_commitment_offset] ^= 0x80;
+    write_witness_journal_fixture(&witness_path, &corrupted);
+
+    expect_internal_error_contains(
+        store
+            .state_witness_tip()
+            .expect_err("COMMIT must verify the complete pre-append prefix"),
+        "invalid commitment",
+    );
+    assert_eq!(
+        std::fs::metadata(&witness_path)
+            .expect("corrupted journal metadata")
+            .len() as usize,
+        prepared_length,
+        "a failed verification must not append COMMIT"
+    );
+    assert_eq!(
+        std::fs::read(&witness_path).expect("corrupted journal after rejection"),
+        corrupted,
+        "the rejection must not rewrite attacker-visible evidence"
+    );
+
+    write_witness_journal_fixture(&witness_path, &prepared_journal);
+    let recovered = store
+        .state_witness_tip()
+        .expect("restored PREPARE reconciles");
+    assert_eq!(recovered.generation, baseline.generation + 1);
+    assert_eq!(
+        store.read_state().expect("prepared replacement state"),
+        Some(b"prepared replacement".to_vec())
+    );
+    drop(store);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn state_witness_record_ceiling_fails_closed_before_prepare_and_on_restart() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_record_ceiling");
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+
+    let mut store = StateFileLock::acquire(&state_path).expect("open capped durable store");
+    store
+        .replace_state(b"only permitted replacement")
+        .expect("fill the record budget");
+    let full_tip = store.state_witness_tip().expect("tip at record ceiling");
+    assert_eq!(full_tip.generation, 2);
+
+    let rejected = store
+        .replace_state(b"must not be installed")
+        .expect_err("a new PREPARE must reserve its terminal record");
+    assert!(!rejected.replaced());
+    expect_internal_error_contains(rejected.into_engine_error(), "record ceiling [4] reached");
+    assert_eq!(
+        store.read_state().expect("state after ceiling rejection"),
+        Some(b"only permitted replacement".to_vec())
+    );
+    drop(store);
+
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "2");
+    expect_internal_error_contains(
+        match StateFileLock::acquire(&state_path) {
+            Ok(_) => panic!("startup must reject a journal over the configured ceiling"),
+            Err(error) => error,
+        },
+        "exceeding the configured fail-closed ceiling [2]",
+    );
+
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+    let mut reopened = StateFileLock::acquire(&state_path).expect("reopen with adequate ceiling");
+    assert_eq!(
+        reopened.state_witness_tip().expect("reopened tip"),
+        full_tip
+    );
+    drop(reopened);
+
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "1");
+    expect_validation_error_contains(
+        state_witness_max_records().expect_err("genesis requires two records"),
+        "must be between 2 and 1000000",
+    );
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn state_witness_verification_cost_stays_constant_as_history_grows() {
+    const PERSISTS: usize = 24;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_incremental_cost");
+    reset_witness_verification_counters();
+
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    let (full_after_open, _, bytes_after_open) = witness_verification_counters();
+    assert_eq!(full_after_open, 1);
+    for index in 0..PERSISTS {
+        store
+            .replace_state(format!("incremental image {index}").as_bytes())
+            .expect("persist through durable store");
+    }
+
+    let (full, incremental, bytes_read) = witness_verification_counters();
+    assert_eq!(
+        full, 1,
+        "steady-state writes must not reparse historical records"
+    );
+    assert!(incremental >= (PERSISTS * 4) as u64);
+    let bytes_per_persist = (bytes_read - bytes_after_open) / PERSISTS as u64;
+    assert!(
+        bytes_per_persist < 2_048,
+        "verification must remain O(1), got {bytes_per_persist} bytes per persist"
+    );
+    let journal_length = std::fs::metadata(state_witness_file_path(&state_path))
+        .expect("journal metadata")
+        .len();
+    assert!(
+        bytes_per_persist < journal_length,
+        "constant verification reads must stay below the growing journal"
+    );
+    drop(store);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn retained_inventory_is_public_sorted_and_bound_to_the_witness_tip() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("retained_inventory");
+    reset_for_tests();
+
+    let baseline = retained_key_package_inventory().expect("baseline inventory");
+    assert!(baseline.entries.is_empty());
+    assert_eq!(
+        baseline.schema,
+        TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_SCHEMA
+    );
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(61);
+    for seat in [3u16, 1u16] {
+        persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+            session_id: "inventory-wallet".to_string(),
+            participant_identifier: seat,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&seat).expect("local seat").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect("persist local DKG seat");
+    }
+
+    let inventory = retained_key_package_inventory().expect("retained inventory");
+    assert!(inventory.state_generation > baseline.state_generation);
+    assert_ne!(inventory.state_commitment, baseline.state_commitment);
+    assert_eq!(inventory.entries.len(), 1);
+    let entry = &inventory.entries[0];
+    assert_eq!(entry.wallet_id, format!("0x{}", &entry.key_group[2..]));
+    assert_eq!(entry.threshold, 2);
+    assert_eq!(entry.participant_count, 3);
+    assert_eq!(entry.share_epoch, 0);
+    assert_eq!(
+        entry
+            .key_packages
+            .iter()
+            .map(|package| package.participant_seat)
+            .collect::<Vec<_>>(),
+        vec![1, 3]
+    );
+
+    let inventory_json = serde_json::to_string(&inventory).expect("inventory JSON");
+    for package in native_key_packages.values() {
+        assert!(
+            !inventory_json.contains(package.data_hex.expose_secret()),
+            "the public inventory must not expose a serialized secret key package"
+        );
+    }
+
+    {
+        let engine = state().expect("engine state");
+        let mut guard = engine.lock().expect("engine lock");
+        guard.operator_fault_scores.insert(65000, 1);
+        persist_engine_state_to_storage(&guard).expect("persist unrelated durable state");
+    }
+    let advanced = retained_key_package_inventory().expect("advanced inventory");
+    assert!(advanced.state_generation > inventory.state_generation);
+    assert_eq!(
+        advanced.inventory_commitment,
+        inventory.inventory_commitment
+    );
+    assert_eq!(advanced.entries, inventory.entries);
+
+    {
+        let engine = state().expect("engine state");
+        let mut guard = engine.lock().expect("engine lock");
+        guard
+            .sessions
+            .get_mut("inventory-wallet")
+            .expect("wallet session")
+            .dkg_share_epoch = 1;
+    }
+    expect_internal_error_contains(
+        retained_key_package_inventory().expect_err("unsupported nonzero epoch must fail closed"),
+        "unsupported key-package share epoch",
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
 }

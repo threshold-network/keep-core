@@ -48,6 +48,74 @@ fn validation_candidate() -> Option<Arc<InstalledSignerConfig>> {
 pub(crate) struct InstalledSignerConfig {
     pub(crate) values: HashMap<String, String>,
     pub(crate) fingerprint: String,
+    purpose: SignerConfigPurpose,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SignerConfigPurpose {
+    NormalSigner,
+    StateAnchorBootstrapProvisioning,
+}
+
+const STATE_ANCHOR_BOOTSTRAP_PROVISIONING_WITNESS_MAX_RECORDS: u64 = 4;
+
+fn parse_signer_config_purpose(purpose: Option<&str>) -> Result<SignerConfigPurpose, EngineError> {
+    match purpose.unwrap_or("normal_signer") {
+        "normal_signer" => Ok(SignerConfigPurpose::NormalSigner),
+        "state_anchor_bootstrap_provisioning" => {
+            Ok(SignerConfigPurpose::StateAnchorBootstrapProvisioning)
+        }
+        value => Err(EngineError::Validation(format!(
+            "signer config purpose must be 'normal_signer' or \
+             'state_anchor_bootstrap_provisioning'; got [{value}]"
+        ))),
+    }
+}
+
+/// Trust transitions are deliberately unavailable through the transitional
+/// environment fallback. The offline-certified operation must run only after
+/// the host has atomically installed and validated its complete static policy.
+pub(crate) fn require_installed_signer_config() -> Result<(), EngineError> {
+    match installed_signer_config() {
+        Some(config) if config.purpose == SignerConfigPurpose::NormalSigner => Ok(()),
+        Some(_) => Err(EngineError::Validation(
+            "operation requires a normal_signer config; bootstrap provisioning config exposes \
+             only state-anchor bootstrap facts"
+                .to_string(),
+        )),
+        None => Err(EngineError::Validation(
+            "operation requires an installed normal_signer config".to_string(),
+        )),
+    }
+}
+
+pub(crate) fn require_normal_signer_purpose() -> Result<(), EngineError> {
+    match installed_signer_config() {
+        Some(config) if config.purpose != SignerConfigPurpose::NormalSigner => {
+            Err(EngineError::Validation(
+                "operation requires a normal_signer config; bootstrap provisioning config \
+                 exposes only state-anchor bootstrap facts"
+                    .to_string(),
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(crate) fn require_state_anchor_bootstrap_provisioning_config() -> Result<(), EngineError> {
+    match installed_signer_config() {
+        Some(config) if config.purpose == SignerConfigPurpose::StateAnchorBootstrapProvisioning => {
+            Ok(())
+        }
+        Some(_) => Err(EngineError::Validation(
+            "state-anchor bootstrap facts require a \
+             state_anchor_bootstrap_provisioning config"
+                .to_string(),
+        )),
+        None => Err(EngineError::Validation(
+            "state-anchor bootstrap facts require an installed provisioning config".to_string(),
+        )),
+    }
 }
 
 fn installed_signer_config_slot() -> &'static RwLock<Option<Arc<InstalledSignerConfig>>> {
@@ -107,11 +175,14 @@ pub fn init_signer_config(
     request: InitSignerConfigRequest,
 ) -> Result<InitSignerConfigResult, EngineError> {
     let config_fingerprint = fingerprint(&request)?;
+    let purpose = parse_signer_config_purpose(request.purpose.as_deref())?;
+    validate_provisioning_request_shape(&request, purpose)?;
     let values = config_values_from_request(&request)?;
     let configured_key_count = values.len() as u32;
     let candidate = Arc::new(InstalledSignerConfig {
         values,
         fingerprint: config_fingerprint.clone(),
+        purpose,
     });
 
     // Fast path against an already-installed (and therefore already
@@ -153,6 +224,65 @@ pub fn init_signer_config(
     })
 }
 
+fn validate_provisioning_request_shape(
+    request: &InitSignerConfigRequest,
+    purpose: SignerConfigPurpose,
+) -> Result<(), EngineError> {
+    if purpose != SignerConfigPurpose::StateAnchorBootstrapProvisioning {
+        return Ok(());
+    }
+
+    if request.profile.as_deref() != Some("production") {
+        return Err(EngineError::Validation(
+            "state-anchor bootstrap provisioning requires profile 'production'".to_string(),
+        ));
+    }
+    if request
+        .state_path
+        .as_deref()
+        .is_none_or(|path| path.trim().is_empty())
+    {
+        return Err(EngineError::Validation(
+            "state-anchor bootstrap provisioning requires an explicit non-empty state_path"
+                .to_string(),
+        ));
+    }
+    if request.state_witness_max_records
+        != Some(STATE_ANCHOR_BOOTSTRAP_PROVISIONING_WITNESS_MAX_RECORDS)
+    {
+        return Err(EngineError::Validation(format!(
+            "state-anchor bootstrap provisioning requires state_witness_max_records [{}]",
+            STATE_ANCHOR_BOOTSTRAP_PROVISIONING_WITNESS_MAX_RECORDS
+        )));
+    }
+
+    let serialized = serde_json::to_value(request).map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to inspect bootstrap provisioning config fields: {error}"
+        ))
+    })?;
+    let object = serialized.as_object().ok_or_else(|| {
+        EngineError::Internal(
+            "bootstrap provisioning config did not serialize as an object".to_string(),
+        )
+    })?;
+    const ALLOWED_FIELDS: [&str; 4] = [
+        "purpose",
+        "profile",
+        "state_path",
+        "state_witness_max_records",
+    ];
+    if let Some(field) = object
+        .keys()
+        .find(|field| !ALLOWED_FIELDS.contains(&field.as_str()))
+    {
+        return Err(EngineError::Validation(format!(
+            "state-anchor bootstrap provisioning config forbids populated field [{field}]"
+        )));
+    }
+    Ok(())
+}
+
 fn reinit_result(
     existing: &InstalledSignerConfig,
     config_fingerprint: &str,
@@ -173,6 +303,29 @@ fn reinit_result(
 }
 
 fn validate_candidate_config() -> Result<(), EngineError> {
+    let purpose = validation_candidate()
+        .map(|candidate| candidate.purpose)
+        .ok_or_else(|| {
+            EngineError::Internal(
+                "signer config validation ran without a candidate purpose".to_string(),
+            )
+        })?;
+    if purpose == SignerConfigPurpose::StateAnchorBootstrapProvisioning {
+        // Provisioning is intentionally incapable of loading signer state or
+        // accepting online/offline anchor policy. It may only establish the
+        // stable store ID plus pristine genesis witness needed by the offline
+        // bootstrap ceremony.
+        state_file_path()?;
+        state_witness_max_records()?;
+        if configured_state_anchor()?.is_some() {
+            return Err(EngineError::Validation(
+                "state-anchor bootstrap provisioning config must omit every anchor/trust pin"
+                    .to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
     load_admission_policy_config()?;
     load_signing_policy_firewall_config()?;
     heartbeat_rate_limit_per_minute()?;
@@ -181,6 +334,20 @@ fn validate_candidate_config() -> Result<(), EngineError> {
     // explicit state path; surfacing this at init beats failing the first
     // state access after a host migrates to the config FFI.
     state_file_path()?;
+    // The append-only witness has no unsigned/local-only compaction path.
+    // Reject unusable ceilings at init instead of discovering them after the
+    // signer has begun serving stateful operations.
+    state_witness_max_records()?;
+    // Validate the complete anchor pin set and rotation threshold while the
+    // candidate remains thread-local; a partial/non-canonical set must never
+    // become the process-global signer configuration.
+    validate_state_anchor_configuration()?;
+    if configured_state_anchor()?.is_some_and(|configuration| configuration.trust.is_none()) {
+        return Err(EngineError::Validation(
+            "init-time state-anchor configuration requires the complete trust-head pin set"
+                .to_string(),
+        ));
+    }
     // The key-provider settings must be structurally usable too (production
     // forbids the env provider; the command provider requires a command).
     // Resolved WITHOUT reading the secret or executing the key command.
@@ -270,6 +437,16 @@ pub(crate) fn config_values_from_request(
         &mut values,
         TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV,
         request.state_corrupt_backup_limit,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
+        request.state_witness_max_records,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
+        request.state_witness_rotation_threshold_records,
     );
     insert_u64(
         &mut values,
@@ -399,6 +576,61 @@ pub(crate) fn config_values_from_request(
     );
 
     insert_string(&mut values, TBTC_SIGNER_STATE_PATH_ENV, &request.state_path)?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_BINDING_HASH_ENV,
+        &request.state_anchor_binding_hash,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_ENV,
+        &request.state_anchor_response_public_key,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_SPKI_SHA256_ENV,
+        &request.state_anchor_response_public_key_spki_sha256,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_PROTOCOL_ID_ENV,
+        &request.state_anchor_protocol_id,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_STREAM_ID_ENV,
+        &request.state_anchor_stream_id,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_ACTIVATION_MANIFEST_HASH_ENV,
+        &request.state_anchor_activation_manifest_hash,
+    )?;
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_ACTIVATION_MANIFEST_SEQUENCE_ENV,
+        request.state_anchor_activation_manifest_sequence,
+    );
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_ENV,
+        &request.state_anchor_offline_authority_public_key,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_SPKI_SHA256_ENV,
+        &request.state_anchor_offline_authority_public_key_spki_sha256,
+    )?;
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_TRUST_CERTIFICATE_SEQUENCE_ENV,
+        request.state_anchor_trust_certificate_sequence,
+    );
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_TRUST_CERTIFICATE_DIGEST_ENV,
+        &request.state_anchor_trust_certificate_digest,
+    )?;
     insert_string(
         &mut values,
         TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
@@ -537,4 +769,81 @@ pub(crate) fn clear_installed_signer_config_for_tests() {
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = None;
+}
+
+#[cfg(test)]
+mod provisioning_tests {
+    use super::*;
+
+    fn valid_request() -> InitSignerConfigRequest {
+        InitSignerConfigRequest {
+            purpose: Some("state_anchor_bootstrap_provisioning".to_string()),
+            profile: Some("production".to_string()),
+            state_path: Some("/tmp/tbtc-signer-bootstrap-provisioning-test".to_string()),
+            state_witness_max_records: Some(
+                STATE_ANCHOR_BOOTSTRAP_PROVISIONING_WITNESS_MAX_RECORDS,
+            ),
+            ..InitSignerConfigRequest::default()
+        }
+    }
+
+    #[test]
+    fn provisioning_request_shape_is_an_exhaustive_minimal_allowlist() {
+        validate_provisioning_request_shape(
+            &valid_request(),
+            SignerConfigPurpose::StateAnchorBootstrapProvisioning,
+        )
+        .expect("minimal production provisioning request");
+
+        let mut cases = Vec::new();
+
+        let mut development = valid_request();
+        development.profile = Some("development".to_string());
+        cases.push(("development profile", development));
+
+        let mut missing_path = valid_request();
+        missing_path.state_path = None;
+        cases.push(("missing state path", missing_path));
+
+        let mut empty_path = valid_request();
+        empty_path.state_path = Some("  ".to_string());
+        cases.push(("empty state path", empty_path));
+
+        let mut missing_geometry = valid_request();
+        missing_geometry.state_witness_max_records = None;
+        cases.push(("missing witness geometry", missing_geometry));
+
+        let mut different_geometry = valid_request();
+        different_geometry.state_witness_max_records =
+            Some(STATE_ANCHOR_BOOTSTRAP_PROVISIONING_WITNESS_MAX_RECORDS + 1);
+        cases.push(("different witness geometry", different_geometry));
+
+        let mut bootstrap_knob = valid_request();
+        bootstrap_knob.allow_bootstrap = Some(false);
+        cases.push(("unrelated false boolean", bootstrap_knob));
+
+        let mut key_provider = valid_request();
+        key_provider.state_key_provider = Some("env".to_string());
+        cases.push(("key-provider knob", key_provider));
+
+        let mut session_limit = valid_request();
+        session_limit.max_sessions = Some(1);
+        cases.push(("session knob", session_limit));
+
+        let mut anchor_pin = valid_request();
+        anchor_pin.state_anchor_binding_hash = Some("41".repeat(32));
+        cases.push(("anchor pin", anchor_pin));
+
+        for (label, request) in cases {
+            let error = validate_provisioning_request_shape(
+                &request,
+                SignerConfigPurpose::StateAnchorBootstrapProvisioning,
+            )
+            .expect_err(label);
+            assert!(
+                error.to_string().contains("provisioning"),
+                "{label}: {error}"
+            );
+        }
+    }
 }

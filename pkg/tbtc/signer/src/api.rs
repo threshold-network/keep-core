@@ -129,6 +129,22 @@ pub struct PersistDistributedDkgKeyPackageRequest {
     pub public_key_package: NativeFrostPublicKeyPackage,
 }
 
+/// Durably removes all locally retained key packages for an exact distributed
+/// DKG key group. The operation is idempotent so startup reconciliation can
+/// safely repeat it after a crash between native retirement and Go registry
+/// archival.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct RetireDistributedDkgKeyPackagesRequest {
+    pub key_group: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct RetireDistributedDkgKeyPackagesResult {
+    pub key_group: String,
+    pub retired: bool,
+    pub retired_key_package_count: u16,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostCommitment {
     pub identifier: String,
@@ -672,6 +688,358 @@ pub struct FrostTbtcAbiVersionResult {
     pub abi_minor: u32,
 }
 
+/// Runtime identity of the exact durable session store the signer opened and
+/// locked. The affirmative safety claims are mandatory on the Go side; this
+/// response is emitted only after descriptor/path revalidation succeeds.
+/// This stable identity does not attest state freshness or key inventory.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DurableStoreIdentityResult {
+    pub schema: String,
+    pub backend: String,
+    pub store_id: String,
+    pub canonical_path_fingerprint: String,
+    pub filesystem_fingerprint: String,
+    pub lock_fingerprint: String,
+    pub fingerprint: String,
+    pub durable: bool,
+    pub exclusive_lock_held: bool,
+    pub symlink_free: bool,
+    pub replacement_protected: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedKeyPackageInventoryPackage {
+    pub participant_seat: u16,
+    pub key_package_commitment: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedKeyPackageInventoryEntry {
+    pub wallet_id: String,
+    pub key_group: String,
+    pub threshold: u16,
+    pub participant_count: u16,
+    pub share_epoch: u64,
+    pub public_key_package_commitment: String,
+    pub key_packages: Vec<RetainedKeyPackageInventoryPackage>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedKeyPackageInventoryResult {
+    pub schema: String,
+    pub store_fingerprint: String,
+    pub state_generation: u64,
+    pub state_commitment: String,
+    pub previous_state_commitment: String,
+    pub state_image_digest: String,
+    pub inventory_commitment: String,
+    pub entries: Vec<RetainedKeyPackageInventoryEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateWitnessProofRequest {
+    pub schema: String,
+    pub store_fingerprint: String,
+    pub ancestor_generation: u64,
+    pub ancestor_commitment: String,
+    pub target_generation: u64,
+    pub target_commitment: String,
+    pub maximum_entries: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateWitnessProofEntry {
+    pub generation: u64,
+    pub previous_state_commitment: String,
+    pub state_commitment: String,
+    pub state_image_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateWitnessProofResult {
+    pub schema: String,
+    pub store_fingerprint: String,
+    pub ancestor_generation: u64,
+    pub ancestor_commitment: String,
+    pub target_generation: u64,
+    pub target_commitment: String,
+    pub complete: bool,
+    pub entries: Vec<StateWitnessProofEntry>,
+}
+
+/// Exact committed state-witness tip plus the latest independently signed
+/// anchor acknowledgement retained by the signer. All counters are canonical
+/// decimal strings so the JSON contract is lossless for non-Rust consumers.
+/// Before the first accepted acknowledgement, every `anchor*` field is zero.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateWitnessTipResult {
+    pub schema: String,
+    pub store_fingerprint: String,
+    pub generation: String,
+    pub previous_state_commitment: String,
+    pub state_image_digest: String,
+    pub state_commitment: String,
+    pub witness_base_generation: String,
+    pub witness_base_commitment: String,
+    pub anchor_binding_hash: String,
+    pub anchor_service_epoch: String,
+    pub anchor_revision: String,
+    pub anchor_event_root: String,
+    pub anchor_acknowledgement_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateWitnessCheckpointRequest {
+    pub store_fingerprint: String,
+    pub generation: String,
+    pub previous_state_commitment: String,
+    pub state_image_digest: String,
+    pub state_commitment: String,
+}
+
+/// Signed response from the independent state-anchor service. Canonical
+/// bytes/decimal parsing, expiry, pin, signature, monotonic-CAS, and idempotency
+/// checks are performed by the engine.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AcknowledgeStateWitnessCheckpointRequest {
+    pub schema: String,
+    pub binding_hash: String,
+    pub request_digest: String,
+    pub nonce: String,
+    pub status: String,
+    pub service_epoch: String,
+    pub revision: String,
+    pub previous_event_root: String,
+    pub event_root: String,
+    pub checkpoint: StateWitnessCheckpointRequest,
+    #[serde(rename = "operationID")]
+    pub operation_id: String,
+    pub transition_digest: String,
+    pub committed_at_unix_ms: String,
+    pub expires_at_unix_ms: String,
+    pub signature: String,
+}
+
+/// Fresh signed read wrapper used only to recover a history-service CAS whose
+/// original acknowledgement may have expired before the signer could persist
+/// it. `checkpoint_ack` retains the exact nested JSON bytes so the wrapper's
+/// raw acknowledgement hash cannot be changed by parsing or reserialization.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RecoverStateWitnessCheckpointRequest {
+    pub schema: String,
+    pub binding_hash: String,
+    pub request_digest: String,
+    pub nonce: String,
+    pub status: String,
+    pub service_epoch: String,
+    pub revision: String,
+    pub event_root: String,
+    pub checkpoint: StateWitnessCheckpointRequest,
+    #[serde(rename = "operationID")]
+    pub operation_id: String,
+    pub transition_digest: String,
+    pub committed_at_unix_ms: String,
+    pub expires_at_unix_ms: String,
+    pub checkpoint_ack: Box<serde_json::value::RawValue>,
+    pub checkpoint_ack_digest: String,
+    pub signature: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcknowledgeStateWitnessCheckpointResult {
+    pub schema: String,
+    pub acknowledged: bool,
+    pub idempotent: bool,
+    pub rotated: bool,
+    pub store_fingerprint: String,
+    pub generation: String,
+    pub state_commitment: String,
+    pub witness_base_generation: String,
+    pub witness_base_commitment: String,
+    pub anchor_service_epoch: String,
+    pub anchor_service_revision: String,
+    pub anchor_event_root: String,
+    pub anchor_acknowledgement_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverStateWitnessCheckpointResult {
+    pub schema: String,
+    pub recovered: bool,
+    pub idempotent: bool,
+    pub rotated: bool,
+    pub store_fingerprint: String,
+    pub generation: String,
+    pub state_commitment: String,
+    pub witness_base_generation: String,
+    pub witness_base_commitment: String,
+    pub anchor_service_epoch: String,
+    pub anchor_service_revision: String,
+    pub anchor_event_root: String,
+    pub anchor_acknowledgement_digest: String,
+}
+
+/// Exact durable-state checkpoint used by the offline-certified state-anchor
+/// trust-transition contract. Every counter is a canonical decimal string so
+/// the JSON remains lossless across the Go/Rust boundary.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateAnchorTrustCheckpoint {
+    pub store_fingerprint: String,
+    pub generation: String,
+    pub previous_state_commitment: String,
+    pub state_image_digest: String,
+    pub state_commitment: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateAnchorTrustReference {
+    pub service_epoch: String,
+    pub revision: String,
+    pub previous_event_root: String,
+    pub event_root: String,
+    pub checkpoint_ack_digest: String,
+    pub checkpoint: StateAnchorTrustCheckpoint,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateAnchorTrustEndpoint {
+    pub activation_manifest_hash: String,
+    pub activation_manifest_sequence: String,
+    pub binding_hash: String,
+    pub response_public_key: String,
+    pub response_public_key_spki_sha256: String,
+    pub offline_authority_public_key: String,
+    pub offline_authority_spki_sha256: String,
+    pub witness_maximum_records: String,
+    pub witness_rotation_threshold_records: String,
+    pub reference: StateAnchorTrustReference,
+}
+
+/// A required nullable field. Unlike `Option<T>`'s normal serde behavior,
+/// wrapping the option makes an omitted `from` field an error while still
+/// accepting the explicit JSON `null` required for bootstrap certificates.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct RequiredNullableStateAnchorTrustEndpoint(pub Option<StateAnchorTrustEndpoint>);
+
+impl<'de> Deserialize<'de> for RequiredNullableStateAnchorTrustEndpoint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Option::<StateAnchorTrustEndpoint>::deserialize(deserializer).map(Self)
+    }
+}
+
+/// Two-stage offline-authority certificate. The JSON organization is nested,
+/// but its signed transcripts are the frozen fixed-width direct concatenations
+/// implemented in `engine::anchor_trust`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateAnchorTrustCertificate {
+    pub schema: String,
+    pub kind: String,
+    pub certificate_sequence: String,
+    pub previous_certificate_digest: String,
+    #[serde(rename = "protocolID")]
+    pub protocol_id: String,
+    #[serde(rename = "streamID")]
+    pub stream_id: String,
+    pub signer_store_fingerprint: String,
+    pub from: RequiredNullableStateAnchorTrustEndpoint,
+    pub to: StateAnchorTrustEndpoint,
+    pub core_digest: String,
+    pub core_signature: String,
+    #[serde(rename = "operationID")]
+    pub operation_id: String,
+    pub transition_digest: String,
+    pub target_acknowledgement_base64: String,
+    #[serde(rename = "targetAcknowledgementSHA256")]
+    pub target_acknowledgement_sha256: String,
+    pub final_signature: String,
+    pub certificate_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TransitionStateWitnessAnchorRequest {
+    pub schema: String,
+    pub certificate_chain: Vec<StateAnchorTrustCertificate>,
+    pub target_read_response_base64: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateAnchorTrustHeadResult {
+    pub schema: String,
+    pub certificate_sequence: String,
+    pub certificate_digest: String,
+    pub activation_manifest_sequence: String,
+    pub activation_manifest_hash: String,
+    pub binding_hash: String,
+    pub response_public_key_spki_sha256: String,
+    pub offline_authority_spki_sha256: String,
+    pub service_epoch: String,
+    pub certified_floor: StateAnchorTrustReference,
+    pub witness_maximum_records: String,
+    pub witness_rotation_threshold_records: String,
+}
+
+/// Bounded, unauthoritative selector for a durable trust-transition intent.
+/// The host must match it against its configured certificate artifact and
+/// obtain a new signed Read; these fields never authorize local recovery.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateAnchorTrustRecoveryRequired {
+    pub schema: String,
+    pub store_fingerprint: String,
+    pub certificate_count: String,
+    pub first_certificate_sequence: String,
+    pub ordered_certificate_digests: Vec<String>,
+    pub final_certificate_sequence: String,
+    pub final_certificate_digest: String,
+    pub target_binding_hash: String,
+    pub target_service_epoch: String,
+    pub target_revision: String,
+    pub target_checkpoint: StateAnchorTrustCheckpoint,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateAnchorBootstrapFactsResult {
+    pub schema: String,
+    pub store_fingerprint: String,
+    pub current_checkpoint: StateAnchorTrustCheckpoint,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TransitionStateWitnessAnchorResult {
+    pub schema: String,
+    pub installed: bool,
+    pub idempotent: bool,
+    pub applied_certificate_count: String,
+    pub trust_head: StateAnchorTrustHeadResult,
+    pub current_checkpoint: StateAnchorTrustCheckpoint,
+    pub witness_base_checkpoint: StateAnchorTrustCheckpoint,
+    pub current_anchor_reference: StateAnchorTrustReference,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct SignerHardeningMetricsResult {
     pub runtime_version: String,
@@ -757,6 +1125,12 @@ pub struct ErrorResponse {
     pub code: String,
     pub message: String,
     pub recovery_class: String,
+    /// Populated only for `history_pruned`, so callers can recover against the
+    /// independently anchored retained base without parsing a human message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witness_base_generation: Option<u64>,
     /// CANDIDATE culprits for an `aggregate_share_verification_failed` error:
     /// the u16 Go member identifiers whose FROST signature shares failed
     /// verification (the same identifier space as `excluded_member_identifiers`).
@@ -766,6 +1140,11 @@ pub struct ErrorResponse {
     /// adjudication (frozen Phase 7.2b spec, section 6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_culprits: Vec<u16>,
+    /// Present only for `state_anchor_trust_recovery_required`. This is a
+    /// selector for the configured certificate artifact, not authorization to
+    /// recover without a newly verified signed Read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_trust_recovery: Option<StateAnchorTrustRecoveryRequired>,
 }
 
 /// Init-time signer configuration installed once by the host over FFI.
@@ -781,6 +1160,12 @@ pub struct ErrorResponse {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InitSignerConfigRequest {
+    /// Startup authority for this installed snapshot. Omitted preserves the
+    /// normal signer purpose; `state_anchor_bootstrap_provisioning` is a
+    /// production-only, minimal config exposing only the pristine
+    /// bootstrap-facts preflight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -799,6 +1184,32 @@ pub struct InitSignerConfigRequest {
     pub state_corruption_policy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_corrupt_backup_limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_witness_max_records: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_binding_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_response_public_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_response_public_key_spki_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_witness_rotation_threshold_records: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_protocol_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_stream_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_activation_manifest_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_activation_manifest_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_offline_authority_public_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_offline_authority_public_key_spki_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_trust_certificate_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_anchor_trust_certificate_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permit_plaintext_state_rollback: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

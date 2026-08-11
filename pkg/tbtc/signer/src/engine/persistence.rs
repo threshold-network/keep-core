@@ -28,6 +28,8 @@ pub(crate) struct PersistedSessionState {
     pub(crate) dkg_key_packages: Option<Vec<PersistedKeyPackage>>,
     pub(crate) dkg_public_key_package_hex: Option<String>,
     pub(crate) dkg_result: Option<DkgResult>,
+    #[serde(default)]
+    pub(crate) dkg_share_epoch: u64,
     pub(crate) sign_request_fingerprint: Option<String>,
     pub(crate) sign_message_hex: Option<SecretString>,
     pub(crate) round_state: Option<RoundState>,
@@ -97,6 +99,7 @@ impl std::fmt::Debug for PersistedSessionState {
                 &self.dkg_public_key_package_hex,
             )
             .field("dkg_result", &self.dkg_result)
+            .field("dkg_share_epoch", &self.dkg_share_epoch)
             .field("sign_request_fingerprint", &self.sign_request_fingerprint)
             .field(
                 "sign_message_hex",
@@ -758,13 +761,7 @@ set {}={} to quarantine the file and continue with clean state",
         ))),
         CorruptStatePolicy::QuarantineAndReset => {
             let backup_path = corrupted_state_backup_path(path);
-            fs::rename(path, &backup_path).map_err(|e| {
-                EngineError::Internal(format!(
-                    "failed to quarantine corrupted signer state file [{}] to [{}]: {e}",
-                    path.display(),
-                    backup_path.display()
-                ))
-            })?;
+            with_state_file_lock_for_load(|store| store.quarantine_state(&backup_path))?;
 
             eprintln!(
                 "warning: quarantined corrupted signer state file [{}] to [{}]: {}",
@@ -1376,26 +1373,17 @@ pub(crate) fn decode_persisted_state_storage_format(
 }
 
 pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineError> {
+    ensure_state_file_lock_for_load()?;
     let path = active_state_file_path()?;
-    match fs::symlink_metadata(&path) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(EngineState::default())
-        }
-        Err(error) => {
-            return Err(EngineError::Internal(format!(
-                "failed to inspect signer state file [{}]: {error}",
-                path.display()
-            )))
-        }
-    }
-
-    let mut bytes = fs::read(&path).map_err(|e| {
-        EngineError::Internal(format!(
-            "failed to read signer state file [{}]: {e}",
-            path.display()
-        ))
-    })?;
+    let loaded_image = with_state_file_lock_for_load(|store| store.read_state_for_load())?;
+    let loaded_digest = loaded_image.digest;
+    let Some(mut bytes) = loaded_image.bytes else {
+        // Absence is itself an authenticated state image. A removed live state
+        // file must not silently become a clean signer merely because there are
+        // no bytes to decode.
+        validate_loaded_state_image(&path, loaded_digest)?;
+        return Ok(EngineState::default());
+    };
     if bytes.is_empty() {
         bytes.zeroize();
         return recover_or_fail_from_corrupted_state_file(
@@ -1444,6 +1432,14 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
         ),
     };
 
+    // A syntactically and cryptographically valid old image is authenticated
+    // rollback evidence unless it matches the committed witness tip. Check
+    // only after decoding so malformed images retain the explicit corruption
+    // policy, but never let that policy reset authenticated rollback evidence.
+    if !recovered_from_corruption {
+        validate_loaded_state_image(&path, loaded_digest)?;
+    }
+
     // Quarantine-and-reset intentionally renames the corrupt file away. Do not
     // recreate it as a migrated clean state during the same load; the next real
     // mutation will create a fresh encrypted state file. This explicit recovery
@@ -1459,6 +1455,20 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
     }
 
     Ok(engine_state)
+}
+
+fn validate_loaded_state_image(path: &Path, loaded_digest: [u8; 32]) -> Result<(), EngineError> {
+    if let Err(error) =
+        with_state_file_lock_for_load(|store| store.validate_loaded_state_image(loaded_digest))
+    {
+        return Err(EngineError::Internal(format!(
+            "signer state file [{}] does not match its committed state witness: {error}; \
+             authenticated rollback evidence is always fail-closed and cannot be handled by \
+             the generic corruption reset policy",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1546,72 +1556,26 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
     engine_state: &EngineState,
     key_material: &StateEncryptionKeyMaterial,
 ) -> Result<(), PersistEngineStateError> {
-    let path =
-        active_state_file_path().map_err(PersistEngineStateError::before_state_file_replacement)?;
     let persisted: PersistedEngineState = engine_state
         .try_into()
         .map_err(PersistEngineStateError::before_state_file_replacement)?;
     let mut bytes = encode_encrypted_state_envelope(&persisted, key_material)
         .map_err(PersistEngineStateError::before_state_file_replacement)?;
     drop(persisted);
-    let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
-    let mut state_file_replaced = false;
-    let persist_result = (|| -> Result<(), EngineError> {
-        if let Some(parent) = state_file_parent_directory(&path) {
-            fs::create_dir_all(parent).map_err(|e| {
-                EngineError::Internal(format!(
-                    "failed to create signer state directory [{}]: {e}",
-                    parent.display()
-                ))
-            })?;
-        }
-
-        {
-            let mut temp_file = {
-                let mut options = fs::OpenOptions::new();
-                options.create(true).truncate(true).write(true);
-                #[cfg(unix)]
-                options.mode(0o600);
-                options.open(&temp_path).map_err(|e| {
-                    EngineError::Internal(format!(
-                        "failed to open signer state temp file [{}]: {e}",
-                        temp_path.display()
-                    ))
-                })?
-            };
-            temp_file.write_all(bytes.as_ref()).map_err(|e| {
-                EngineError::Internal(format!(
-                    "failed to write signer state temp file [{}]: {e}",
-                    temp_path.display()
-                ))
-            })?;
-            temp_file.sync_all().map_err(|e| {
-                EngineError::Internal(format!(
-                    "failed to sync signer state temp file [{}]: {e}",
-                    temp_path.display()
-                ))
-            })?;
-        }
-        maybe_inject_persist_fault(PersistFaultInjectionPoint::AfterTempSyncBeforeRename)?;
-
-        fs::rename(&temp_path, &path).map_err(|e| {
-            EngineError::Internal(format!(
-                "failed to move signer state temp file [{}] to [{}]: {e}",
-                temp_path.display(),
-                path.display()
+    let persist_result = {
+        ensure_state_file_lock().map_err(PersistEngineStateError::before_state_file_replacement)?;
+        let mut lock_slot = state_file_lock_slot().lock().map_err(|_| {
+            PersistEngineStateError::before_state_file_replacement(EngineError::Internal(
+                "state file lock mutex poisoned".to_string(),
             ))
         })?;
-        state_file_replaced = true;
-        maybe_inject_persist_fault(PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync)?;
-
-        sync_state_file_parent_directory(&path)?;
-
-        Ok(())
-    })();
-
-    if persist_result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
+        let store = lock_slot.as_mut().ok_or_else(|| {
+            PersistEngineStateError::before_state_file_replacement(EngineError::Internal(
+                "signer durable store lock is not initialized".to_string(),
+            ))
+        })?;
+        store.replace_state(bytes.as_ref())
+    };
 
     bytes.zeroize();
     match persist_result {
@@ -1619,11 +1583,11 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
             clear_snapshot_covered_operations(engine_state);
             Ok(())
         }
-        Err(error) if state_file_replaced => {
-            Err(PersistEngineStateError::after_state_file_replacement(error))
-        }
+        Err(error) if error.replaced() => Err(
+            PersistEngineStateError::after_state_file_replacement(error.into_engine_error()),
+        ),
         Err(error) => Err(PersistEngineStateError::before_state_file_replacement(
-            error,
+            error.into_engine_error(),
         )),
     }
 }
@@ -1755,6 +1719,13 @@ impl TryFrom<PersistedSessionState> for SessionState {
     type Error = EngineError;
 
     fn try_from(persisted: PersistedSessionState) -> Result<Self, Self::Error> {
+        if persisted.dkg_share_epoch != 0 {
+            return Err(EngineError::Internal(format!(
+                "persisted key-package share epoch [{}] is unsupported; this signer accepts only \
+                 epoch 0 until cryptographic refresh is implemented",
+                persisted.dkg_share_epoch
+            )));
+        }
         let dkg_key_packages = persisted
             .dkg_key_packages
             .map(|persisted_key_packages| {
@@ -2017,6 +1988,7 @@ impl TryFrom<PersistedSessionState> for SessionState {
             dkg_key_packages,
             dkg_public_key_package,
             dkg_result: persisted.dkg_result,
+            dkg_share_epoch: persisted.dkg_share_epoch,
             sign_request_fingerprint: persisted.sign_request_fingerprint,
             sign_message_bytes,
             round_state: persisted.round_state,
@@ -2072,6 +2044,13 @@ impl TryFrom<&SessionState> for PersistedSessionState {
     type Error = EngineError;
 
     fn try_from(session_state: &SessionState) -> Result<Self, Self::Error> {
+        if session_state.dkg_share_epoch != 0 {
+            return Err(EngineError::Internal(format!(
+                "key-package share epoch [{}] is unsupported; refusing to persist synthetic \
+                 refresh state",
+                session_state.dkg_share_epoch
+            )));
+        }
         let dkg_key_packages = session_state
             .dkg_key_packages
             .as_ref()
@@ -2196,6 +2175,7 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             dkg_key_packages,
             dkg_public_key_package_hex,
             dkg_result: session_state.dkg_result.clone(),
+            dkg_share_epoch: session_state.dkg_share_epoch,
             sign_request_fingerprint: session_state.sign_request_fingerprint.clone(),
             sign_message_hex,
             round_state: session_state.round_state.clone(),

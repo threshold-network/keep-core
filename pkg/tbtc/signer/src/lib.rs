@@ -5,14 +5,16 @@ mod ffi;
 mod go_math_rand;
 
 use api::{
-    BuildTaprootTxRequest, DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest,
-    DkgPart1Request, DkgPart2Request, DkgPart3Request, FrostTbtcAbiVersionResult,
+    AcknowledgeStateWitnessCheckpointRequest, BuildTaprootTxRequest,
+    DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest, DkgPart1Request,
+    DkgPart2Request, DkgPart3Request, DurableStoreIdentityResult, FrostTbtcAbiVersionResult,
     InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
     InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
     NewSigningPackageRequest, PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest,
-    QuarantineStatusRequest, RefreshCadenceStatusRequest, RefreshSharesRequest,
-    RollbackCanaryRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
-    VerifyBlameProofRequest,
+    QuarantineStatusRequest, RecoverStateWitnessCheckpointRequest, RefreshCadenceStatusRequest,
+    RefreshSharesRequest, RetireDistributedDkgKeyPackagesRequest, RollbackCanaryRequest,
+    StateWitnessProofRequest, TranscriptAuditRequest, TransitionStateWitnessAnchorRequest,
+    TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -44,12 +46,37 @@ const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
 // JSON meaning is incompatible, so ABI-3 bridges must reject the library during
 // negotiation rather than discovering the change at refresh time.
 const TBTC_SIGNER_ABI_MAJOR: u32 = 4;
-// Major bumps reset the additive minor version. ABI 3.1-3.3 introduced the typed
-// heartbeat intent, its rate-limit configuration/metric, and optional canary
-// evidence configuration; all remain present in ABI 4.0.
-const TBTC_SIGNER_ABI_MINOR: u32 = 0;
+// Minor 1 adds the descriptor-bound durable-store identity, retained-key-package
+// inventory, and paginated state-witness proof symbols. Minor 2 additionally
+// adds the constant-size witness-tip readback plus signed external-checkpoint
+// acknowledgement and recovery symbols. These are additive symbols and response types;
+// older ABI-4 callers remain valid and safely ignore them. Consumers enforcing
+// the external rollback/output barrier require ABI 4.2 so a 4.1 library cannot
+// pass preflight and then fail late on a missing symbol. Minor 3 adds the
+// offline-certified anchor trust-transition, trust-head inspection, and
+// bootstrap-facts provisioning symbols; consumers of those surfaces require
+// ABI 4.3 so a published 4.2 library cannot pass negotiation then fail dlsym.
+// Minor 4 adds idempotent durable retirement of distributed-DKG key packages,
+// allowing the host to reconcile packages whose DKG result was never accepted.
+const TBTC_SIGNER_ABI_MINOR: u32 = 4;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
+
+/// Default boundary for every operational FFI export.
+///
+/// A bootstrap-provisioning config is deliberately capability-minimal: after
+/// it is installed, only init-time compatibility discovery and the bootstrap
+/// facts export remain available. Keeping this check at the FFI boundary also
+/// covers stateless cryptographic helpers that never initialize engine state.
+fn normal_ffi_entry<F>(operation: F) -> TbtcSignerResult
+where
+    F: FnOnce() -> Result<Vec<u8>, errors::EngineError>,
+{
+    ffi_entry(|| {
+        engine::require_normal_signer_purpose()?;
+        operation()
+    })
+}
 
 /// FFI ownership contract:
 /// - On return, `TbtcSignerResult.buffer` (if non-null) is owned by the caller.
@@ -74,6 +101,136 @@ pub extern "C" fn frost_tbtc_abi_version() -> TbtcSignerResult {
     })
 }
 
+/// Returns the identity of the durable store actually opened and locked by the
+/// signer. This call initializes the descriptor-bound store before any state
+/// access if it has not already been opened, then revalidates every stable
+/// anchor and the current atomic state entry before making safety claims.
+/// State freshness and retained key inventory are separate ABI contracts.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_durable_store_identity() -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let identity = engine::durable_store_identity()?;
+        let encode = |value: [u8; 32]| format!("0x{}", hex::encode(value));
+        serialize_response(&DurableStoreIdentityResult {
+            schema: engine::TBTC_SIGNER_DURABLE_STORE_IDENTITY_SCHEMA.to_string(),
+            backend: engine::TBTC_SIGNER_DURABLE_STORE_BACKEND.to_string(),
+            store_id: encode(identity.store_id),
+            canonical_path_fingerprint: encode(identity.canonical_path_fingerprint),
+            filesystem_fingerprint: encode(identity.filesystem_fingerprint),
+            lock_fingerprint: encode(identity.lock_fingerprint),
+            fingerprint: encode(identity.fingerprint),
+            durable: true,
+            exclusive_lock_held: true,
+            symlink_free: true,
+            replacement_protected: true,
+        })
+    })
+}
+
+/// Returns a validated, public-only inventory of every locally retained FROST
+/// key package together with the exact committed durable-state witness tip.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_retained_key_package_inventory() -> TbtcSignerResult {
+    normal_ffi_entry(|| serialize_response(&engine::retained_key_package_inventory()?))
+}
+
+/// Proves a bounded, contiguous segment of the append-only durable-state
+/// witness chain. Callers paginate against a target captured from the inventory
+/// response and persist accepted tips outside this store.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_state_witness_proof(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: StateWitnessProofRequest = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::state_witness_proof(request)?)
+    })
+}
+
+/// Returns the exact durable state-witness tip and latest independently signed
+/// anchor acknowledgement using tbtc-signer-state-witness-tip/v1. All anchor
+/// fields are zero before an acknowledgement has been durably accepted.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_state_witness_tip() -> TbtcSignerResult {
+    normal_ffi_entry(|| serialize_response(&engine::state_witness_tip()?))
+}
+
+/// Verifies and durably applies (or idempotently replays) a signed external
+/// state-witness checkpoint acknowledgement. Unknown JSON fields fail parsing
+/// before engine validation.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_acknowledge_state_witness_checkpoint(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: AcknowledgeStateWitnessCheckpointRequest =
+            parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::acknowledge_state_witness_checkpoint(request)?)
+    })
+}
+
+/// Recovers a remotely committed checkpoint from a fresh signed history-service
+/// read wrapper. The nested original acknowledgement is retained byte-for-byte;
+/// only its historical wall-clock expiry is waived after the fresh wrapper
+/// authenticates its raw SHA-256 digest and exact summary.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_recover_state_witness_checkpoint(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: RecoverStateWitnessCheckpointRequest =
+            parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::recover_state_witness_checkpoint(request)?)
+    })
+}
+
+/// Verifies and applies a strict
+/// tbtc-signer-state-anchor-trust-transition/v1 request while the signer is
+/// still behind its startup gate. The supplied certificate suffix and fresh
+/// target Read are retained in the durable intent until the transition
+/// completes, while the full verified certificate chain and each certificate's
+/// raw embedded target acknowledgement remain in the durable audit journal.
+/// Callers MUST invoke `frost_tbtc_state_anchor_trust_head` first on every
+/// startup. If it reports `state_anchor_trust_recovery_required`, select the
+/// exact configured certificate chain using the bounded recovery metadata,
+/// obtain a newly signed target Read wrapper, and resubmit this request. Local
+/// intent bytes never waive external freshness.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_transition_state_witness_anchor(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: TransitionStateWitnessAnchorRequest = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::transition_state_witness_anchor(request)?)
+    })
+}
+
+/// Required startup preflight that returns the committed
+/// tbtc-signer-state-anchor-trust-head/v1 record without turning inspection
+/// into ordinary engine/store initialization. A durable in-progress intent is
+/// reported without mutation as `state_anchor_trust_recovery_required`; the
+/// caller must resume it through the transition symbol with a fresh signed
+/// target Read.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_state_anchor_trust_head() -> TbtcSignerResult {
+    normal_ffi_entry(|| serialize_response(&engine::state_anchor_trust_head()?))
+}
+
+/// Provisioning-only startup preflight returning the stable store fingerprint
+/// and exact pristine genesis checkpoint needed to obtain the first offline
+/// trust certificate. Requires an installed
+/// `state_anchor_bootstrap_provisioning` config with no anchor/trust pins,
+/// leaves both process-wide state slots untouched, and rejects any non-pristine
+/// store.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_state_anchor_bootstrap_facts() -> TbtcSignerResult {
+    ffi_entry(|| serialize_response(&engine::state_anchor_bootstrap_facts()?))
+}
+
 #[no_mangle]
 pub extern "C" fn frost_tbtc_init_signer_config(
     request_ptr: *const u8,
@@ -88,12 +245,12 @@ pub extern "C" fn frost_tbtc_init_signer_config(
 
 #[no_mangle]
 pub extern "C" fn frost_tbtc_roast_liveness_policy() -> TbtcSignerResult {
-    ffi_entry(|| serialize_response(&engine::roast_liveness_policy()))
+    normal_ffi_entry(|| serialize_response(&engine::roast_liveness_policy()))
 }
 
 #[no_mangle]
 pub extern "C" fn frost_tbtc_hardening_metrics() -> TbtcSignerResult {
-    ffi_entry(|| serialize_response(&engine::hardening_metrics()))
+    normal_ffi_entry(|| serialize_response(&engine::hardening_metrics()))
 }
 
 #[no_mangle]
@@ -101,7 +258,7 @@ pub extern "C" fn frost_tbtc_roast_transcript_audit(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: TranscriptAuditRequest = parse_request(request_ptr, request_len)?;
         let response = engine::roast_transcript_audit(request)?;
         serialize_response(&response)
@@ -113,7 +270,7 @@ pub extern "C" fn frost_tbtc_verify_blame_proof(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: VerifyBlameProofRequest = parse_request(request_ptr, request_len)?;
         let response = engine::verify_blame_proof(request)?;
         serialize_response(&response)
@@ -125,7 +282,7 @@ pub extern "C" fn frost_tbtc_quarantine_status(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: QuarantineStatusRequest = parse_request(request_ptr, request_len)?;
         let response = engine::quarantine_status(request)?;
         serialize_response(&response)
@@ -137,7 +294,7 @@ pub extern "C" fn frost_tbtc_refresh_cadence_status(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: RefreshCadenceStatusRequest = parse_request(request_ptr, request_len)?;
         let response = engine::refresh_cadence_status(request)?;
         serialize_response(&response)
@@ -149,7 +306,7 @@ pub extern "C" fn frost_tbtc_trigger_emergency_rekey(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: TriggerEmergencyRekeyRequest = parse_request(request_ptr, request_len)?;
         let response = engine::trigger_emergency_rekey(request)?;
         serialize_response(&response)
@@ -161,7 +318,7 @@ pub extern "C" fn frost_tbtc_run_differential_fuzzing(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: DifferentialFuzzRequest = parse_request(request_ptr, request_len)?;
         let response = engine::run_differential_fuzzing(request)?;
         serialize_response(&response)
@@ -170,7 +327,7 @@ pub extern "C" fn frost_tbtc_run_differential_fuzzing(
 
 #[no_mangle]
 pub extern "C" fn frost_tbtc_canary_rollout_status() -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let response = engine::canary_rollout_status()?;
         serialize_response(&response)
     })
@@ -181,7 +338,7 @@ pub extern "C" fn frost_tbtc_promote_canary(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: PromoteCanaryRequest = parse_request(request_ptr, request_len)?;
         let response = engine::promote_canary(request)?;
         serialize_response(&response)
@@ -193,7 +350,7 @@ pub extern "C" fn frost_tbtc_rollback_canary(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: RollbackCanaryRequest = parse_request(request_ptr, request_len)?;
         let response = engine::rollback_canary(request)?;
         serialize_response(&response)
@@ -216,7 +373,7 @@ pub extern "C" fn frost_tbtc_dkg_part1(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: DkgPart1Request = parse_request(request_ptr, request_len)?;
         let response = engine::dkg_part1(request)?;
         serialize_response(&response)
@@ -228,7 +385,7 @@ pub extern "C" fn frost_tbtc_dkg_part2(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: DkgPart2Request = parse_request(request_ptr, request_len)?;
         let response = engine::dkg_part2(request)?;
         serialize_response(&response)
@@ -240,7 +397,7 @@ pub extern "C" fn frost_tbtc_dkg_part3(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: DkgPart3Request = parse_request(request_ptr, request_len)?;
         let response = engine::dkg_part3(request)?;
         serialize_response(&response)
@@ -252,10 +409,23 @@ pub extern "C" fn frost_tbtc_persist_distributed_dkg_key_package(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: PersistDistributedDkgKeyPackageRequest =
             parse_request(request_ptr, request_len)?;
         let response = engine::persist_distributed_dkg_key_package(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_retire_distributed_dkg_key_packages(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: RetireDistributedDkgKeyPackagesRequest =
+            parse_request(request_ptr, request_len)?;
+        let response = engine::retire_distributed_dkg_key_packages(request)?;
         serialize_response(&response)
     })
 }
@@ -265,7 +435,7 @@ pub extern "C" fn frost_tbtc_new_signing_package(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: NewSigningPackageRequest = parse_request(request_ptr, request_len)?;
         let response = engine::new_signing_package(request)?;
         serialize_response(&response)
@@ -277,7 +447,7 @@ pub extern "C" fn frost_tbtc_verify_signature_share(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: crate::api::VerifySignatureShareRequest =
             parse_request(request_ptr, request_len)?;
         let response = engine::verify_signature_share(request)?;
@@ -295,7 +465,7 @@ pub extern "C" fn frost_tbtc_interactive_session_open(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: InteractiveSessionOpenRequest = parse_request(request_ptr, request_len)?;
         let response = engine::interactive_session_open(request)?;
         serialize_response(&response)
@@ -307,7 +477,7 @@ pub extern "C" fn frost_tbtc_interactive_round1(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: InteractiveRound1Request = parse_request(request_ptr, request_len)?;
         let response = engine::interactive_round1(request)?;
         serialize_response(&response)
@@ -319,7 +489,7 @@ pub extern "C" fn frost_tbtc_interactive_round2(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: InteractiveRound2Request = parse_request(request_ptr, request_len)?;
         let response = engine::interactive_round2(request)?;
         serialize_response(&response)
@@ -331,7 +501,7 @@ pub extern "C" fn frost_tbtc_interactive_session_abort(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: InteractiveSessionAbortRequest = parse_request(request_ptr, request_len)?;
         let response = engine::interactive_session_abort(request)?;
         serialize_response(&response)
@@ -343,7 +513,7 @@ pub extern "C" fn frost_tbtc_interactive_aggregate(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: InteractiveAggregateRequest = parse_request(request_ptr, request_len)?;
         let response = engine::interactive_aggregate(request)?;
         serialize_response(&response)
@@ -355,7 +525,7 @@ pub extern "C" fn frost_tbtc_derive_interactive_attempt_context(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: DeriveInteractiveAttemptContextRequest =
             parse_request(request_ptr, request_len)?;
         let response = engine::derive_interactive_attempt_context(request)?;
@@ -368,7 +538,7 @@ pub extern "C" fn frost_tbtc_build_taproot_tx(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: BuildTaprootTxRequest = parse_request(request_ptr, request_len)?;
         let response = engine::build_taproot_tx(request)?;
         serialize_response(&response)
@@ -380,7 +550,7 @@ pub extern "C" fn frost_tbtc_refresh_shares(
     request_ptr: *const u8,
     request_len: usize,
 ) -> TbtcSignerResult {
-    ffi_entry(|| {
+    normal_ffi_entry(|| {
         let request: RefreshSharesRequest = parse_request(request_ptr, request_len)?;
         let response = engine::refresh_shares(request)?;
         serialize_response(&response)
@@ -396,21 +566,26 @@ mod tests {
     use crate::api::{
         BuildTaprootTxRequest, CanaryRolloutStatusResult, DifferentialFuzzRequest,
         DifferentialFuzzResult, DkgPart1Request, DkgPart1Result, DkgPart2Request, DkgPart2Result,
-        DkgPart3Request, DkgPart3Result, DkgRound1Package, DkgRound2Package, ErrorResponse,
-        FrostTbtcAbiVersionResult, PromoteCanaryRequest, QuarantineStatusRequest,
-        QuarantineStatusResult, RefreshCadenceStatusRequest, RefreshCadenceStatusResult,
-        RefreshSharesRequest, RoastLivenessPolicyResult, RollbackCanaryRequest,
-        SignerHardeningMetricsResult, TransactionResult, TranscriptAuditRequest,
-        TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+        DkgPart3Request, DkgPart3Result, DkgRound1Package, DkgRound2Package,
+        DurableStoreIdentityResult, ErrorResponse, FrostTbtcAbiVersionResult, PromoteCanaryRequest,
+        QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
+        RefreshCadenceStatusResult, RefreshSharesRequest, RetainedKeyPackageInventoryResult,
+        RoastLivenessPolicyResult, RollbackCanaryRequest, SignerHardeningMetricsResult,
+        StateWitnessProofRequest, StateWitnessProofResult, TransactionResult,
+        TranscriptAuditRequest, TransitionStateWitnessAnchorRequest, TriggerEmergencyRekeyRequest,
+        VerifyBlameProofRequest,
     };
     use crate::{
         frost_tbtc_abi_version, frost_tbtc_build_taproot_tx, frost_tbtc_canary_rollout_status,
-        frost_tbtc_dkg_part1, frost_tbtc_dkg_part2, frost_tbtc_dkg_part3, frost_tbtc_free_buffer,
-        frost_tbtc_hardening_metrics, frost_tbtc_promote_canary, frost_tbtc_quarantine_status,
-        frost_tbtc_refresh_cadence_status, frost_tbtc_refresh_shares,
+        frost_tbtc_dkg_part1, frost_tbtc_dkg_part2, frost_tbtc_dkg_part3,
+        frost_tbtc_durable_store_identity, frost_tbtc_free_buffer, frost_tbtc_hardening_metrics,
+        frost_tbtc_promote_canary, frost_tbtc_quarantine_status, frost_tbtc_refresh_cadence_status,
+        frost_tbtc_refresh_shares, frost_tbtc_retained_key_package_inventory,
         frost_tbtc_roast_liveness_policy, frost_tbtc_roast_transcript_audit,
         frost_tbtc_rollback_canary, frost_tbtc_run_differential_fuzzing,
-        frost_tbtc_trigger_emergency_rekey, frost_tbtc_verify_blame_proof,
+        frost_tbtc_state_anchor_trust_head, frost_tbtc_state_witness_proof,
+        frost_tbtc_transition_state_witness_anchor, frost_tbtc_trigger_emergency_rekey,
+        frost_tbtc_verify_blame_proof,
     };
 
     fn call_ffi<T: serde::Serialize>(
@@ -761,10 +936,183 @@ mod tests {
         // The enforced FFI contract starts at 1.0; bump deliberately per the
         // TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR rules. This test pins the
         // current value so an accidental bump is caught. ABI 4 changes a valid
-        // RefreshShares call from a synthetic success response to a terminal error,
-        // forcing ABI-3 consumers to fail closed during compatibility negotiation.
+        // RefreshShares call from a synthetic success response to a terminal error;
+        // minor 2 adds the signed external-anchor tip/acknowledgement/recovery symbols;
+        // minor 3 adds offline trust transition/head and provisioning bootstrap facts;
+        // minor 4 adds durable distributed-DKG key-package retirement.
         assert_eq!(abi.abi_major, 4);
-        assert_eq!(abi.abi_minor, 0);
+        assert_eq!(abi.abi_minor, 4);
+    }
+
+    #[test]
+    fn state_anchor_trust_ffi_symbols_have_frozen_signatures_and_dispatch() {
+        let transition_symbol: extern "C" fn(*const u8, usize) -> crate::ffi::TbtcSignerResult =
+            frost_tbtc_transition_state_witness_anchor;
+        let _head_symbol: extern "C" fn() -> crate::ffi::TbtcSignerResult =
+            frost_tbtc_state_anchor_trust_head;
+
+        // Empty chains are rejected before config/store access. This proves
+        // symbol -> strict request parse -> trust-transition verifier ->
+        // structured FFI error dispatch without mutating a durable fixture.
+        let request = TransitionStateWitnessAnchorRequest {
+            schema: crate::engine::STATE_ANCHOR_TRUST_TRANSITION_SCHEMA.to_string(),
+            certificate_chain: Vec::new(),
+            target_read_response_base64: String::new(),
+        };
+        let (status, payload) = call_ffi(&request, transition_symbol);
+        assert_ne!(status, 0);
+        let error: ErrorResponse =
+            serde_json::from_slice(&payload).expect("trust-transition error payload");
+        assert_eq!(error.code, "validation_error");
+        assert_eq!(error.recovery_class, "recoverable");
+        assert!(error.message.contains("certificateChain"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn durable_store_identity_ffi_has_exact_v2_wire_shape_and_transcript() {
+        let _guard = crate::engine::lock_test_state();
+        let path = std::env::temp_dir().join(format!(
+            "frost_tbtc_ffi_store_identity_{}.json",
+            std::process::id()
+        ));
+        let path_string = path.to_string_lossy().into_owned();
+        let _state_path = EnvVarGuard::set("TBTC_SIGNER_STATE_PATH", &path_string);
+        crate::engine::reset_for_tests();
+
+        let (status, payload) = call_ffi_no_input(frost_tbtc_durable_store_identity);
+        assert_eq!(status, 0);
+        let wire: DurableStoreIdentityResult =
+            serde_json::from_slice(&payload).expect("durable store identity payload");
+        assert_eq!(
+            wire.schema,
+            crate::engine::TBTC_SIGNER_DURABLE_STORE_IDENTITY_SCHEMA
+        );
+        assert_eq!(
+            wire.backend,
+            crate::engine::TBTC_SIGNER_DURABLE_STORE_BACKEND
+        );
+        assert!(
+            wire.durable
+                && wire.exclusive_lock_held
+                && wire.symlink_free
+                && wire.replacement_protected
+        );
+
+        let decode = |value: &str| -> [u8; 32] {
+            assert_eq!(value, value.to_ascii_lowercase());
+            assert!(value.starts_with("0x"));
+            assert_eq!(value.len(), 66);
+            let bytes = hex::decode(&value[2..]).expect("bytes32 hex");
+            let mut result = [0u8; 32];
+            result.copy_from_slice(&bytes);
+            assert_ne!(result, [0u8; 32]);
+            result
+        };
+        let store_id = decode(&wire.store_id);
+        decode(&wire.canonical_path_fingerprint);
+        decode(&wire.filesystem_fingerprint);
+        decode(&wire.lock_fingerprint);
+        assert_eq!(
+            decode(&wire.fingerprint),
+            crate::engine::durable_store_fingerprint(&store_id)
+        );
+
+        let (second_status, second_payload) = call_ffi_no_input(frost_tbtc_durable_store_identity);
+        assert_eq!(second_status, 0);
+        assert_eq!(second_payload, payload);
+
+        if let Ok(mut slot) = crate::engine::state_file_lock_slot().lock() {
+            *slot = None;
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::engine::state_lock_file_path(&path));
+        let _ = std::fs::remove_file(crate::engine::durable_store_id_file_path(&path));
+        let _ = std::fs::remove_file(crate::engine::state_witness_file_path(&path));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn inventory_and_state_witness_ffi_have_exact_wire_contracts() {
+        use std::collections::BTreeSet;
+
+        let _guard = crate::engine::lock_test_state();
+        let path = std::env::temp_dir().join(format!(
+            "frost_tbtc_ffi_state_witness_{}.json",
+            std::process::id()
+        ));
+        let path_string = path.to_string_lossy().into_owned();
+        let _state_path = EnvVarGuard::set("TBTC_SIGNER_STATE_PATH", &path_string);
+        crate::engine::reset_for_tests();
+
+        let (status, payload) = call_ffi_no_input(frost_tbtc_retained_key_package_inventory);
+        assert_eq!(status, 0);
+        let value: serde_json::Value =
+            serde_json::from_slice(&payload).expect("inventory JSON object");
+        let keys = value
+            .as_object()
+            .expect("inventory object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "entries",
+                "inventoryCommitment",
+                "previousStateCommitment",
+                "schema",
+                "stateCommitment",
+                "stateGeneration",
+                "stateImageDigest",
+                "storeFingerprint",
+            ])
+        );
+        let inventory: RetainedKeyPackageInventoryResult =
+            serde_json::from_slice(&payload).expect("inventory response");
+        assert_eq!(
+            inventory.schema,
+            crate::engine::TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_SCHEMA
+        );
+        assert!(inventory.state_generation > 0);
+        assert!(inventory.entries.is_empty());
+
+        let request = StateWitnessProofRequest {
+            schema: crate::engine::TBTC_SIGNER_STATE_WITNESS_PROOF_REQUEST_SCHEMA.to_string(),
+            store_fingerprint: inventory.store_fingerprint.clone(),
+            ancestor_generation: inventory.state_generation,
+            ancestor_commitment: inventory.state_commitment.clone(),
+            target_generation: inventory.state_generation,
+            target_commitment: inventory.state_commitment.clone(),
+            maximum_entries: 16,
+        };
+        let (proof_status, proof_payload) = call_ffi(&request, frost_tbtc_state_witness_proof);
+        assert_eq!(proof_status, 0);
+        let proof: StateWitnessProofResult =
+            serde_json::from_slice(&proof_payload).expect("state witness proof");
+        assert_eq!(
+            proof.schema,
+            crate::engine::TBTC_SIGNER_STATE_WITNESS_PROOF_SCHEMA
+        );
+        assert_eq!(proof.store_fingerprint, inventory.store_fingerprint);
+        assert_eq!(proof.ancestor_generation, inventory.state_generation);
+        assert_eq!(proof.target_generation, inventory.state_generation);
+        assert!(proof.complete);
+        assert!(proof.entries.is_empty());
+
+        let mut unknown_field_request =
+            serde_json::to_value(&request).expect("proof request value");
+        unknown_field_request["unexpectedField"] = serde_json::json!(true);
+        let (invalid_status, _) = call_ffi(&unknown_field_request, frost_tbtc_state_witness_proof);
+        assert_ne!(invalid_status, 0);
+
+        if let Ok(mut slot) = crate::engine::state_file_lock_slot().lock() {
+            *slot = None;
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::engine::state_lock_file_path(&path));
+        let _ = std::fs::remove_file(crate::engine::durable_store_id_file_path(&path));
+        let _ = std::fs::remove_file(crate::engine::state_witness_file_path(&path));
     }
 
     #[test]

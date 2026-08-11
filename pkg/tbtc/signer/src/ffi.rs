@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 
 use zeroize::Zeroize;
 
-use crate::api::ErrorResponse;
+use crate::api::{ErrorResponse, StateAnchorTrustCheckpoint, StateAnchorTrustRecoveryRequired};
 use crate::errors::EngineError;
 
 #[repr(C)]
@@ -133,11 +133,71 @@ pub fn free_buffer(ptr: *mut u8, len: usize) {
 }
 
 fn error_result(error: EngineError) -> TbtcSignerResult {
+    let (requested_generation, witness_base_generation) = match &error {
+        EngineError::HistoryPruned {
+            requested_generation,
+            witness_base_generation,
+        } => (Some(*requested_generation), Some(*witness_base_generation)),
+        _ => (None, None),
+    };
+    let state_anchor_trust_recovery = error.state_anchor_trust_recovery().map(|context| {
+        let bytes32 = |value: [u8; 32]| format!("0x{}", hex::encode(value));
+        let certificate_count = context.certificate_digests.len();
+        debug_assert_eq!(
+            certificate_count,
+            context.certificate_sequences.len(),
+            "verified recovery selector vectors remain aligned"
+        );
+        StateAnchorTrustRecoveryRequired {
+            schema: "tbtc-signer-state-anchor-trust-recovery-required/v1".to_string(),
+            store_fingerprint: bytes32(context.store_fingerprint),
+            certificate_count: certificate_count.to_string(),
+            first_certificate_sequence: context
+                .certificate_sequences
+                .first()
+                .copied()
+                .unwrap_or_default()
+                .to_string(),
+            ordered_certificate_digests: context
+                .certificate_digests
+                .iter()
+                .copied()
+                .map(bytes32)
+                .collect(),
+            final_certificate_sequence: context
+                .certificate_sequences
+                .last()
+                .copied()
+                .unwrap_or_default()
+                .to_string(),
+            final_certificate_digest: context
+                .certificate_digests
+                .last()
+                .copied()
+                .map(bytes32)
+                .unwrap_or_else(|| bytes32([0u8; 32])),
+            target_binding_hash: bytes32(context.target_binding_hash),
+            target_service_epoch: context.target_service_epoch.to_string(),
+            target_revision: context.target_revision.to_string(),
+            target_checkpoint: StateAnchorTrustCheckpoint {
+                store_fingerprint: bytes32(context.target_checkpoint_store_fingerprint),
+                generation: context.target_checkpoint_generation.to_string(),
+                previous_state_commitment: bytes32(
+                    context.target_checkpoint_previous_state_commitment,
+                ),
+                state_image_digest: bytes32(context.target_checkpoint_state_image_digest),
+                state_commitment: bytes32(context.target_checkpoint_state_commitment),
+            },
+        }
+    });
     let payload = ErrorResponse {
         code: error.code().to_string(),
         message: error.to_string(),
         recovery_class: error.recovery_class().to_string(),
+        requested_generation,
+        witness_base_generation,
         candidate_culprits: error.candidate_culprits().to_vec(),
+        state_anchor_trust_recovery,
     };
 
     let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| {
@@ -234,6 +294,22 @@ mod tests {
             message.contains("exceeds maximum"),
             "unexpected validation message: {message}"
         );
+    }
+
+    #[test]
+    fn history_pruned_error_exposes_machine_readable_generations() {
+        let result = error_result(EngineError::HistoryPruned {
+            requested_generation: 41,
+            witness_base_generation: 42,
+        });
+        assert_eq!(result.status_code, STATUS_ERROR);
+        let bytes = unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len) };
+        let response: ErrorResponse =
+            serde_json::from_slice(bytes).expect("decode history-pruned error");
+        assert_eq!(response.code, "history_pruned");
+        assert_eq!(response.requested_generation, Some(41));
+        assert_eq!(response.witness_base_generation, Some(42));
+        free_buffer(result.buffer.ptr, result.buffer.len);
     }
 
     // A panic payload may carry internal detail (paths, config). It must be
