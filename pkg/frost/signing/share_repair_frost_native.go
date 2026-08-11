@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
@@ -33,6 +34,7 @@ const (
 	shareRepairActivationRegistryDomain  = "tbtc-frost-share-repair-activation-registry/v1\x00"
 	shareRepairMaximumAuthorizationAge   = 24 * time.Hour
 	shareRepairMaximumActivationRegistry = 4096
+	shareRepairMaximumSessionIDLength    = 128
 )
 
 // ShareRepairAuthorization is the frozen offline-authority certificate used by
@@ -311,6 +313,30 @@ func writeShareRepairLengthPrefixed(buffer *bytes.Buffer, value []byte) error {
 	return nil
 }
 
+func isValidShareRepairSessionID(sessionID string) bool {
+	if len(sessionID) == 0 ||
+		len(sessionID) > shareRepairMaximumSessionIDLength ||
+		!utf8.ValidString(sessionID) {
+		return false
+	}
+
+	// Keep this byte-level grammar synchronized with Rust's
+	// validate_session_id. The signed value is forwarded unchanged across the
+	// FFI boundary, so Go must never authorize a value the native signer rejects.
+	for i := 0; i < len(sessionID); i++ {
+		value := sessionID[i]
+		if value <= 0x1f || value == 0x7f {
+			return false
+		}
+		switch value {
+		case ' ', '=', '"', '\\':
+			return false
+		}
+	}
+
+	return true
+}
+
 // ComputeShareRepairAuthorizationDigest implements the same frozen transcript
 // as Rust. It performs all structural validation but intentionally does not
 // check wall-clock validity or the signature.
@@ -324,9 +350,7 @@ func ComputeShareRepairAuthorizationDigest(
 	if authorization.Schema != ShareRepairAuthorizationSchema {
 		return result, fmt.Errorf("unsupported share-repair authorization schema")
 	}
-	if strings.TrimSpace(authorization.SessionID) == "" ||
-		authorization.SessionID != strings.TrimSpace(authorization.SessionID) ||
-		len(authorization.SessionID) > 256 {
+	if !isValidShareRepairSessionID(authorization.SessionID) {
 		return result, fmt.Errorf("share-repair session id is invalid")
 	}
 	if authorization.Threshold < 2 || authorization.ParticipantCount < authorization.Threshold ||

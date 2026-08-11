@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -650,6 +651,26 @@ func TestPrepareShareRepairTransportRosterEntry(t *testing.T) {
 		defer engine.mutex.Unlock()
 		if engine.beginCalls != 0 || engine.finishCalls != 0 {
 			t.Fatal("unauthorized seat reached the native engine")
+		}
+	})
+
+	t.Run("native-invalid session id is rejected before begin", func(t *testing.T) {
+		candidate := *authorization
+		candidate.SessionID = "repair wallet"
+		engine := &testShareRepairEngine{}
+		_, err := PrepareShareRepairTransportRosterEntry(
+			engine,
+			&candidate,
+			authorityPublicKey,
+			1,
+		)
+		if err == nil || !strings.Contains(err.Error(), "session id is invalid") {
+			t.Fatalf("transport preflight did not enforce the native session ID contract: %v", err)
+		}
+		engine.mutex.Lock()
+		defer engine.mutex.Unlock()
+		if engine.beginCalls != 0 || engine.finishCalls != 0 {
+			t.Fatal("native-invalid session ID reached the native engine")
 		}
 	})
 

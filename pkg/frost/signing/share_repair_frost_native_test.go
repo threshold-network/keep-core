@@ -179,6 +179,45 @@ func TestShareRepairAuthorizationDigestFrozenVector(t *testing.T) {
 	}
 }
 
+func TestShareRepairAuthorizationSessionIDMatchesNativeContract(t *testing.T) {
+	authorization, _ := testShareRepairAuthorization(t)
+
+	tests := []struct {
+		name      string
+		sessionID string
+		valid     bool
+	}{
+		{"one byte", "a", true},
+		{"maximum ASCII byte length", strings.Repeat("a", 128), true},
+		{"maximum UTF-8 byte length", strings.Repeat("é", 64), true},
+		{"allowed punctuation", "repair/a:b@c+%[]~", true},
+		{"native-valid Unicode whitespace", "\u00a0repair\u00a0", true},
+		{"empty", "", false},
+		{"over maximum ASCII byte length", strings.Repeat("a", 129), false},
+		{"over maximum UTF-8 byte length", strings.Repeat("é", 65), false},
+		{"embedded space", "repair wallet", false},
+		{"embedded control", "repair\x01wallet", false},
+		{"delete control", "repair\x7fwallet", false},
+		{"equals", "repair=wallet", false},
+		{"quote", "repair\"wallet", false},
+		{"backslash", `repair\wallet`, false},
+		{"invalid UTF-8", string([]byte{'r', 0xff}), false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := *authorization
+			candidate.SessionID = test.sessionID
+			_, err := ComputeShareRepairAuthorizationDigest(&candidate)
+			if test.valid && err != nil {
+				t.Fatalf("native-valid session ID was rejected: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("native-invalid session ID was accepted")
+			}
+		})
+	}
+}
+
 func TestShareRepairTransportRosterDigestFrozenVector(t *testing.T) {
 	authorization, authority := testShareRepairAuthorization(t)
 	roster := testShareRepairTransportRoster(t, authorization, authority)
