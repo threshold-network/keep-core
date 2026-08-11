@@ -129,6 +129,27 @@ TbtcSignerResult frost_tbtc_dkg_part2(const uint8_t* request_ptr, size_t request
 TbtcSignerResult frost_tbtc_dkg_part3(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_persist_distributed_dkg_key_package(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_retire_distributed_dkg_key_packages(const uint8_t* request_ptr, size_t request_len);
+/*
+ * Offline-authorized disaster-recovery protocol. Part1 deltas and Part2
+ * sigmas cross this ABI only as native AEAD ciphertexts under an
+ * authority-signed endpoint roster; the host transport must still preserve
+ * authenticated sender identity and delivery. Install validates the exact
+ * context/helper set and writes the reconstructed share directly to the
+ * authorization-bound fresh durable store; no KeyPackage is returned across
+ * this ABI. Finish wipes only the live key cache; Begin can rederive the same
+ * store-bound key until authorization expiry.
+ */
+TbtcSignerResult frost_tbtc_begin_share_repair_session(
+    const uint8_t* request_ptr,
+    size_t request_len
+);
+TbtcSignerResult frost_tbtc_finish_share_repair_session(
+    const uint8_t* request_ptr,
+    size_t request_len
+);
+TbtcSignerResult frost_tbtc_share_repair_part1(const uint8_t* request_ptr, size_t request_len);
+TbtcSignerResult frost_tbtc_share_repair_part2(const uint8_t* request_ptr, size_t request_len);
+TbtcSignerResult frost_tbtc_install_repaired_share(const uint8_t* request_ptr, size_t request_len);
 
 TbtcSignerResult frost_tbtc_new_signing_package(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_build_taproot_tx(const uint8_t* request_ptr, size_t request_len);

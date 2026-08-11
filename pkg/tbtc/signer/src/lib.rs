@@ -5,16 +5,18 @@ mod ffi;
 mod go_math_rand;
 
 use api::{
-    AcknowledgeStateWitnessCheckpointRequest, BuildTaprootTxRequest,
-    DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest, DkgPart1Request,
-    DkgPart2Request, DkgPart3Request, DurableStoreIdentityResult, FrostTbtcAbiVersionResult,
-    InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
+    AcknowledgeStateWitnessCheckpointRequest, BeginShareRepairSessionRequest,
+    BuildTaprootTxRequest, DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest,
+    DkgPart1Request, DkgPart2Request, DkgPart3Request, DurableStoreIdentityResult,
+    FinishShareRepairSessionRequest, FrostTbtcAbiVersionResult, InitSignerConfigRequest,
+    InstallRepairedShareRequest, InteractiveAggregateRequest, InteractiveRound1Request,
     InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
     NewSigningPackageRequest, PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest,
     QuarantineStatusRequest, RecoverStateWitnessCheckpointRequest, RefreshCadenceStatusRequest,
     RefreshSharesRequest, RetireDistributedDkgKeyPackagesRequest, RollbackCanaryRequest,
-    StateWitnessProofRequest, TranscriptAuditRequest, TransitionStateWitnessAnchorRequest,
-    TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+    ShareRepairPart1Request, ShareRepairPart2Request, StateWitnessProofRequest,
+    TranscriptAuditRequest, TransitionStateWitnessAnchorRequest, TriggerEmergencyRekeyRequest,
+    VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -45,7 +47,12 @@ const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
 // exists. Changing status_code from success to error and replacing the response
 // JSON meaning is incompatible, so ABI-3 bridges must reject the library during
 // negotiation rather than discovering the change at refresh time.
-const TBTC_SIGNER_ABI_MAJOR: u32 = 4;
+// Major 5: share-repair transport private keys, plaintext delta aggregation,
+// sigma aggregation, and repaired-share reconstruction now remain inside Rust.
+// The former plaintext scalar request/response fields are replaced by native
+// session public keys and opaque AEAD envelopes, so ABI-4.5 bridges must fail
+// negotiation rather than decode the incompatible contract.
+const TBTC_SIGNER_ABI_MAJOR: u32 = 5;
 // Minor 1 adds the descriptor-bound durable-store identity, retained-key-package
 // inventory, and paginated state-witness proof symbols. Minor 2 additionally
 // adds the constant-size witness-tip readback plus signed external-checkpoint
@@ -58,7 +65,8 @@ const TBTC_SIGNER_ABI_MAJOR: u32 = 4;
 // ABI 4.3 so a published 4.2 library cannot pass negotiation then fail dlsym.
 // Minor 4 adds idempotent durable retirement of distributed-DKG key packages,
 // allowing the host to reconcile packages whose DKG result was never accepted.
-const TBTC_SIGNER_ABI_MINOR: u32 = 4;
+// ABI 5.0 starts with the native-custody share-repair transport contract.
+const TBTC_SIGNER_ABI_MINOR: u32 = 0;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
 
@@ -427,6 +435,76 @@ pub extern "C" fn frost_tbtc_retire_distributed_dkg_key_packages(
             parse_request(request_ptr, request_len)?;
         let response = engine::retire_distributed_dkg_key_packages(request)?;
         serialize_response(&response)
+    })
+}
+
+/// Opens an authorization-, participant-, role-, and durable-store-bound
+/// native repair transport session. Only the store fingerprint and compressed
+/// public key cross the FFI boundary. The zeroizing private key remains in the
+/// transient Rust cache and can be deterministically rederived from the native
+/// state root until the signed authorization expires.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_begin_share_repair_session(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: BeginShareRepairSessionRequest = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::begin_share_repair_session(request)?)
+    })
+}
+
+/// Wipes the live native repair transport key cache entry. Cleanup is
+/// idempotent and remains available after authorization expiry; before expiry,
+/// a later Begin can deterministically rederive the same store-bound key.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_finish_share_repair_session(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: FinishShareRepairSessionRequest = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::finish_share_repair_session(request)?)
+    })
+}
+
+/// Generates one authorized helper's context-bound repair deltas and encrypts
+/// each scalar inside Rust before returning opaque envelopes to the host.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_share_repair_part1(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: ShareRepairPart1Request = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::share_repair_part1(request)?)
+    })
+}
+
+/// Decrypts and stream-combines the exact authorized delta sender set inside
+/// Rust, then returns only an opaque sigma envelope for the recovering target.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_share_repair_part2(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: ShareRepairPart2Request = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::share_repair_part2(request)?)
+    })
+}
+
+/// Reconstructs, publicly verifies, and atomically persists the repaired share
+/// in the authorization's exact fresh durable store. No raw KeyPackage crosses
+/// from Rust into the host process.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_install_repaired_share(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: InstallRepairedShareRequest = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::install_repaired_share(request)?)
     })
 }
 
@@ -939,9 +1017,12 @@ mod tests {
         // RefreshShares call from a synthetic success response to a terminal error;
         // minor 2 adds the signed external-anchor tip/acknowledgement/recovery symbols;
         // minor 3 adds offline trust transition/head and provisioning bootstrap facts;
-        // minor 4 adds durable distributed-DKG key-package retirement.
-        assert_eq!(abi.abi_major, 4);
-        assert_eq!(abi.abi_minor, 4);
+        // minor 4 adds durable distributed-DKG key-package retirement;
+        // minor 5 adds context-bound share repair and atomic installation;
+        // ABI 5 replaces its plaintext scalar wire shape with native repair
+        // sessions and opaque authenticated ciphertexts.
+        assert_eq!(abi.abi_major, 5);
+        assert_eq!(abi.abi_minor, 0);
     }
 
     #[test]

@@ -13,8 +13,27 @@ use super::*;
 /// one session (same key group). There is NO production gate: this is the real
 /// distributed path, not the transitional dealer one.
 pub fn persist_distributed_dkg_key_package(
-    mut request: PersistDistributedDkgKeyPackageRequest,
+    request: PersistDistributedDkgKeyPackageRequest,
 ) -> Result<DkgResult, EngineError> {
+    persist_distributed_dkg_key_package_with_recovery(request, None).map(|outcome| outcome.result)
+}
+
+pub(crate) struct PersistDistributedDkgKeyPackageOutcome {
+    pub(crate) result: DkgResult,
+    pub(crate) idempotent: bool,
+}
+
+pub(crate) fn persist_repaired_dkg_key_package(
+    request: PersistDistributedDkgKeyPackageRequest,
+    recovered_seat: RecoveredSeatState,
+) -> Result<PersistDistributedDkgKeyPackageOutcome, EngineError> {
+    persist_distributed_dkg_key_package_with_recovery(request, Some(recovered_seat))
+}
+
+fn persist_distributed_dkg_key_package_with_recovery(
+    mut request: PersistDistributedDkgKeyPackageRequest,
+    recovered_seat: Option<RecoveredSeatState>,
+) -> Result<PersistDistributedDkgKeyPackageOutcome, EngineError> {
     const OP: &str = "persist_distributed_dkg_key_package";
     // data_hex is the serialized SECRET signing share. Move its redacting,
     // zeroizing holder out BEFORE any fallible check so it is wiped on every
@@ -37,6 +56,17 @@ pub fn persist_distributed_dkg_key_package(
             "{OP}: threshold [{}] must be between 2 and participant_count [{}]",
             request.threshold, request.participant_count
         )));
+    }
+    if let Some(recovered) = recovered_seat.as_ref() {
+        if recovered.participant_identifier != request.participant_identifier
+            || recovered.recovery_epoch == 0
+            || recovered.authorization_digest == [0u8; 32]
+            || recovered.active_store_fingerprint == [0u8; 32]
+        {
+            return Err(EngineError::Validation(format!(
+                "{OP}: recovered-seat metadata is incomplete or belongs to another participant"
+            )));
+        }
     }
 
     let public_key_package = native_public_key_package_to_frost(OP, &request.public_key_package)?;
@@ -211,6 +241,67 @@ pub fn persist_distributed_dkg_key_package(
         });
     }
 
+    // A target may retry after the Rust state replacement succeeded but the Go
+    // anchor acknowledgement was interrupted. Detect the exact replay before
+    // capacity compaction or any mutation so it consumes no new witness record.
+    if let Some(recovered) = recovered_seat.as_ref() {
+        if let Some(existing_session) = guard.sessions.get(&request.session_id) {
+            let exact_result = existing_session.dkg_result.as_ref().is_some_and(|result| {
+                result.key_group == key_group
+                    && result.threshold == request.threshold
+                    && result.participant_count == request.participant_count
+            });
+            if exact_result
+                && existing_session.dkg_public_key_package.as_ref() == Some(&public_key_package)
+                && existing_session
+                    .dkg_key_packages
+                    .as_ref()
+                    .and_then(|packages| packages.get(&request.participant_identifier))
+                    == Some(&key_package)
+                && existing_session
+                    .recovered_seats
+                    .get(&request.participant_identifier)
+                    == Some(recovered)
+            {
+                return Ok(PersistDistributedDkgKeyPackageOutcome {
+                    result: existing_session
+                        .dkg_result
+                        .clone()
+                        .expect("exact_result requires a DKG result"),
+                    idempotent: true,
+                });
+            }
+        }
+    }
+
+    // Reject recovery-generation conflicts before the capacity helper has any
+    // opportunity to compact a retired tombstone. These failures are expected
+    // protocol outcomes, not persistence failures, so they must leave memory
+    // and disk exactly unchanged.
+    if let Some(existing_session) = guard.sessions.get(&request.session_id) {
+        match (
+            recovered_seat.as_ref(),
+            existing_session
+                .recovered_seats
+                .get(&request.participant_identifier),
+        ) {
+            (None, Some(_)) => {
+                return Err(EngineError::Validation(format!(
+                    "{OP}: ordinary DKG persistence cannot replace a recovered seat"
+                )))
+            }
+            (Some(candidate), Some(existing_recovery))
+                if candidate.recovery_epoch <= existing_recovery.recovery_epoch =>
+            {
+                return Err(EngineError::Validation(format!(
+                    "{OP}: recovery epoch [{}] does not advance stored epoch [{}]",
+                    candidate.recovery_epoch, existing_recovery.recovery_epoch
+                )))
+            }
+            _ => {}
+        }
+    }
+
     // Reserve a total-registry slot only after every rejection that can apply
     // to a fresh DKG session. If the ensuing durable write fails before file
     // replacement, restore any retired tombstone evicted for this slot.
@@ -224,6 +315,10 @@ pub fn persist_distributed_dkg_key_package(
         .or_insert_with(SessionState::default);
     let previous_dkg_result = session.dkg_result.clone();
     let previous_dkg_public_key_package = session.dkg_public_key_package.clone();
+    let previous_recovered_seat = session
+        .recovered_seats
+        .get(&request.participant_identifier)
+        .cloned();
     let key_package_map_was_absent = session.dkg_key_packages.is_none();
 
     // A session may already hold a DKG result: this seat re-persisting (idempotent)
@@ -268,6 +363,11 @@ pub fn persist_distributed_dkg_key_package(
         .dkg_key_packages
         .get_or_insert_with(BTreeMap::new)
         .insert(request.participant_identifier, key_package);
+    if let Some(recovered_seat) = recovered_seat {
+        session
+            .recovered_seats
+            .insert(request.participant_identifier, recovered_seat);
+    }
 
     // Clone the result before the `&guard` persist call so the mutable `session`
     // borrow ends here (mirrors run_dkg's ordering).
@@ -287,6 +387,14 @@ pub fn persist_distributed_dkg_key_package(
                 })?;
                 rollback_session.dkg_result = previous_dkg_result;
                 rollback_session.dkg_public_key_package = previous_dkg_public_key_package;
+                rollback_session
+                    .recovered_seats
+                    .remove(&request.participant_identifier);
+                if let Some(previous_recovered_seat) = previous_recovered_seat {
+                    rollback_session
+                        .recovered_seats
+                        .insert(request.participant_identifier, previous_recovered_seat);
+                }
                 if let Some(key_packages) = rollback_session.dkg_key_packages.as_mut() {
                     key_packages.remove(&request.participant_identifier);
                     if let Some(previous_key_package) = replaced_key_package {
@@ -309,7 +417,10 @@ pub fn persist_distributed_dkg_key_package(
         return Err(persist_error);
     }
 
-    Ok(result)
+    Ok(PersistDistributedDkgKeyPackageOutcome {
+        result,
+        idempotent: false,
+    })
 }
 
 /// Durably retires the wallet-owner session holding the exact distributed-DKG

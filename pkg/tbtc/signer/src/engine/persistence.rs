@@ -30,6 +30,8 @@ pub(crate) struct PersistedSessionState {
     pub(crate) dkg_result: Option<DkgResult>,
     #[serde(default)]
     pub(crate) dkg_share_epoch: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) recovered_seats: Vec<RecoveredSeatState>,
     pub(crate) sign_request_fingerprint: Option<String>,
     pub(crate) sign_message_hex: Option<SecretString>,
     pub(crate) round_state: Option<RoundState>,
@@ -100,6 +102,7 @@ impl std::fmt::Debug for PersistedSessionState {
             )
             .field("dkg_result", &self.dkg_result)
             .field("dkg_share_epoch", &self.dkg_share_epoch)
+            .field("recovered_seats", &self.recovered_seats)
             .field("sign_request_fingerprint", &self.sign_request_fingerprint)
             .field(
                 "sign_message_hex",
@@ -197,7 +200,12 @@ pub(crate) struct StateEncryptionKeyMaterial {
     pub(crate) key_id: String,
 }
 
-pub(crate) const PERSISTED_STATE_SCHEMA_VERSION: u16 = 1;
+// Schema 2 makes repaired-seat activation metadata downgrade-resistant. New
+// binaries continue writing schema 1 until the first repair is installed; from
+// that point the store is schema 2, so an older binary fails closed instead of
+// silently dropping the recovered-seat binding.
+pub(crate) const PERSISTED_STATE_SCHEMA_VERSION: u16 = 2;
+pub(crate) const PERSISTED_STATE_SCHEMA_VERSION_LEGACY: u16 = 1;
 
 pub(crate) const PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V2: u16 = 2;
 
@@ -1596,16 +1604,28 @@ impl TryFrom<PersistedEngineState> for EngineState {
     type Error = EngineError;
 
     fn try_from(persisted: PersistedEngineState) -> Result<Self, Self::Error> {
-        if persisted.schema_version != PERSISTED_STATE_SCHEMA_VERSION {
+        if persisted.schema_version != PERSISTED_STATE_SCHEMA_VERSION
+            && persisted.schema_version != PERSISTED_STATE_SCHEMA_VERSION_LEGACY
+        {
             return Err(EngineError::Internal(format!(
-                "unsupported signer state schema version: expected [{}], got [{}]",
-                PERSISTED_STATE_SCHEMA_VERSION, persisted.schema_version
+                "unsupported signer state schema version: expected [{}] or legacy [{}], got [{}]",
+                PERSISTED_STATE_SCHEMA_VERSION,
+                PERSISTED_STATE_SCHEMA_VERSION_LEGACY,
+                persisted.schema_version
             )));
         }
 
+        let schema_version = persisted.schema_version;
         let mut sessions = HashMap::new();
         let mut key_group_owners = HashMap::<String, String>::new();
         for (session_id, session_state) in persisted.sessions {
+            if schema_version == PERSISTED_STATE_SCHEMA_VERSION_LEGACY
+                && !session_state.recovered_seats.is_empty()
+            {
+                return Err(EngineError::Internal(
+                    "legacy signer state contains schema-2 recovered-seat metadata".to_string(),
+                ));
+            }
             let session_state: SessionState = session_state.try_into()?;
             if let Some(dkg_result) = session_state.dkg_result.as_ref() {
                 if let Some(existing_owner) =
@@ -1674,6 +1694,7 @@ impl TryFrom<PersistedEngineState> for EngineState {
 
         let mut engine_state = EngineState {
             sessions,
+            share_repair_sessions: HashMap::new(),
             refresh_epoch_counter: persisted.refresh_epoch_counter,
             operator_fault_scores: persisted.operator_fault_scores,
             quarantined_operator_identifiers,
@@ -1704,8 +1725,17 @@ impl TryFrom<&EngineState> for PersistedEngineState {
             .collect::<Vec<_>>();
         quarantined_operator_identifiers.sort_unstable();
 
+        let schema_version = if engine_state
+            .sessions
+            .values()
+            .any(|session| !session.recovered_seats.is_empty())
+        {
+            PERSISTED_STATE_SCHEMA_VERSION
+        } else {
+            PERSISTED_STATE_SCHEMA_VERSION_LEGACY
+        };
         Ok(PersistedEngineState {
-            schema_version: PERSISTED_STATE_SCHEMA_VERSION,
+            schema_version,
             sessions,
             refresh_epoch_counter: engine_state.refresh_epoch_counter,
             operator_fault_scores: engine_state.operator_fault_scores.clone(),
@@ -1725,6 +1755,27 @@ impl TryFrom<PersistedSessionState> for SessionState {
                  epoch 0 until cryptographic refresh is implemented",
                 persisted.dkg_share_epoch
             )));
+        }
+        let mut recovered_seats = BTreeMap::new();
+        for recovered in persisted.recovered_seats {
+            if recovered.participant_identifier == 0
+                || recovered.recovery_epoch == 0
+                || recovered.authorization_digest == [0u8; 32]
+                || recovered.active_store_fingerprint == [0u8; 32]
+            {
+                return Err(EngineError::Internal(
+                    "persisted recovered-seat metadata is incomplete".to_string(),
+                ));
+            }
+            let participant_identifier = recovered.participant_identifier;
+            if recovered_seats
+                .insert(participant_identifier, recovered)
+                .is_some()
+            {
+                return Err(EngineError::Internal(format!(
+                    "duplicate persisted recovered-seat identifier [{participant_identifier}]"
+                )));
+            }
         }
         let dkg_key_packages = persisted
             .dkg_key_packages
@@ -1989,6 +2040,7 @@ impl TryFrom<PersistedSessionState> for SessionState {
             dkg_public_key_package,
             dkg_result: persisted.dkg_result,
             dkg_share_epoch: persisted.dkg_share_epoch,
+            recovered_seats,
             sign_request_fingerprint: persisted.sign_request_fingerprint,
             sign_message_bytes,
             round_state: persisted.round_state,
@@ -2029,6 +2081,25 @@ impl TryFrom<PersistedSessionState> for SessionState {
             authorized_interactive_aggregate_markers,
             aggregated_interactive_attempt_markers,
         };
+        if !session.recovered_seats.is_empty() {
+            if session.dkg_result.is_none() || session.dkg_public_key_package.is_none() {
+                return Err(EngineError::Internal(
+                    "persisted recovered-seat metadata has no wallet DKG owner".to_string(),
+                ));
+            }
+            let key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+                EngineError::Internal(
+                    "persisted recovered-seat metadata has no key packages".to_string(),
+                )
+            })?;
+            for participant_identifier in session.recovered_seats.keys() {
+                if !key_packages.contains_key(participant_identifier) {
+                    return Err(EngineError::Internal(format!(
+                        "persisted recovered seat [{participant_identifier}] has no key package"
+                    )));
+                }
+            }
+        }
         if session.retired_interactive_at_unix.is_some()
             && !per_message_interactive_session(&session)
         {
@@ -2176,6 +2247,7 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             dkg_public_key_package_hex,
             dkg_result: session_state.dkg_result.clone(),
             dkg_share_epoch: session_state.dkg_share_epoch,
+            recovered_seats: session_state.recovered_seats.values().cloned().collect(),
             sign_request_fingerprint: session_state.sign_request_fingerprint.clone(),
             sign_message_hex,
             round_state: session_state.round_state.clone(),

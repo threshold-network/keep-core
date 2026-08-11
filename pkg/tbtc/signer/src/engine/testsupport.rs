@@ -35,6 +35,7 @@ pub fn lock_test_state() -> std::sync::MutexGuard<'static, ()> {
 // raw set_var without per-site teardown.
 #[cfg(test)]
 pub(crate) fn establish_clean_signer_test_env() {
+    set_share_repair_authority_for_tests(None);
     // Iterate with vars_os, not vars: std::env::vars panics if ANY env
     // var in the process (name or value) is not valid UTF-8 - even one
     // unrelated to the signer - which would abort every locked test in
@@ -92,6 +93,7 @@ pub fn reset_for_tests() {
     if let Ok(state) = state() {
         if let Ok(mut guard) = state.lock() {
             guard.sessions.clear();
+            guard.share_repair_sessions.clear();
             guard.refresh_epoch_counter = 0;
             guard.operator_fault_scores.clear();
             guard.quarantined_operator_identifiers.clear();
@@ -123,6 +125,7 @@ pub fn simulate_process_restart_for_tests() {
     if let Some(state) = ENGINE_STATE.get() {
         if let Ok(mut guard) = state.lock() {
             guard.sessions.clear();
+            guard.share_repair_sessions.clear();
             guard.refresh_epoch_counter = 0;
             guard.operator_fault_scores.clear();
             guard.quarantined_operator_identifiers.clear();
