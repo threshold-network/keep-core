@@ -115,7 +115,7 @@ pub(crate) struct SessionState {
     pub(crate) dkg_key_packages: Option<BTreeMap<u16, frost::keys::KeyPackage>>,
     pub(crate) dkg_public_key_package: Option<frost::keys::PublicKeyPackage>,
     pub(crate) dkg_result: Option<DkgResult>,
-    /// Epoch of the retained cryptographic key packages. The current ABI-4
+    /// Epoch of the retained cryptographic key packages. The current ABI-5
     /// signer deliberately rejects synthetic share refresh, so zero is the only
     /// supported value until a real atomic replacement protocol is introduced.
     pub(crate) dkg_share_epoch: u64,
@@ -192,6 +192,13 @@ pub(crate) struct SessionState {
 #[derive(Default)]
 pub(crate) struct EngineState {
     pub(crate) sessions: HashMap<String, SessionState>,
+    /// Live authorization-, seat-, role-, and store-bound repair transport
+    /// keys. The cache is deliberately transient and its native private keys
+    /// are zeroized on Finish/restart. A still-valid signed authorization can
+    /// deterministically rederive the same key from the state root after a
+    /// restart so offline roster authoring and retry remain stable.
+    pub(crate) share_repair_sessions:
+        HashMap<ShareRepairTransportSessionKey, ShareRepairTransportSession>,
     pub(crate) refresh_epoch_counter: u64,
     pub(crate) operator_fault_scores: BTreeMap<u16, u64>,
     pub(crate) quarantined_operator_identifiers: HashSet<u16>,

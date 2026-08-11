@@ -93,6 +93,7 @@ pub fn reset_for_tests() {
     if let Ok(state) = state() {
         if let Ok(mut guard) = state.lock() {
             guard.sessions.clear();
+            guard.share_repair_sessions.clear();
             guard.refresh_epoch_counter = 0;
             guard.operator_fault_scores.clear();
             guard.quarantined_operator_identifiers.clear();
@@ -124,6 +125,7 @@ pub fn simulate_process_restart_for_tests() {
     if let Some(state) = ENGINE_STATE.get() {
         if let Ok(mut guard) = state.lock() {
             guard.sessions.clear();
+            guard.share_repair_sessions.clear();
             guard.refresh_epoch_counter = 0;
             guard.operator_fault_scores.clear();
             guard.quarantined_operator_identifiers.clear();

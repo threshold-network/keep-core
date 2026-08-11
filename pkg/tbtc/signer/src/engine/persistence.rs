@@ -1694,6 +1694,7 @@ impl TryFrom<PersistedEngineState> for EngineState {
 
         let mut engine_state = EngineState {
             sessions,
+            share_repair_sessions: HashMap::new(),
             refresh_epoch_counter: persisted.refresh_epoch_counter,
             operator_fault_scores: persisted.operator_fault_scores,
             quarantined_operator_identifiers,

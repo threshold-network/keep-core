@@ -3,6 +3,7 @@
 // docs reference them; splitting this file would break those contracts.
 
 use super::*;
+use crate::api::ShareRepairEndpointPublicKey;
 use proptest::prelude::*;
 use serde::Deserialize;
 #[cfg(unix)]
@@ -1289,6 +1290,65 @@ fn share_repair_authorization_digest_matches_go_frozen_vector() {
     );
 }
 
+#[test]
+fn share_repair_transport_roster_digest_matches_go_frozen_vector() {
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let secret_key = bitcoin::secp256k1::SecretKey::from_slice(&[0x09; 32]).expect("secret key");
+    let public_key = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+    let compressed = public_key.serialize();
+    let authorization = ShareRepairAuthorization {
+        schema: TBTC_SIGNER_SHARE_REPAIR_AUTHORIZATION_SCHEMA.to_string(),
+        session_id: "repair-wallet-a-seat-3-epoch-1".to_string(),
+        wallet_id: format!("0x{}", hex::encode(&compressed[1..])),
+        key_group: hex::encode(compressed),
+        public_key_package_commitment: bytes32_hex([0x31; 32]),
+        target_identifier: 3,
+        helper_identifiers: vec![1, 2],
+        threshold: 2,
+        participant_count: 3,
+        old_store_fingerprint: bytes32_hex([0x51; 32]),
+        new_store_fingerprint: bytes32_hex([0x52; 32]),
+        recovery_epoch: 1,
+        issued_at_unix: 1_700_000_000,
+        not_before_unix: 1_700_000_000,
+        expires_at_unix: 1_700_003_600,
+        nonce: bytes32_hex([0x61; 32]),
+        signature_hex: format!("0x{}", "00".repeat(64)),
+    };
+    let roster = ShareRepairTransportRoster {
+        schema: TBTC_SIGNER_SHARE_REPAIR_TRANSPORT_ROSTER_SCHEMA.to_string(),
+        authorization_digest: "0xaa8e36cbf287d988c6ed34bf0c38fd64c177500c768fbd3ea7c184b031d7511b"
+            .to_string(),
+        participant_public_keys: vec![
+            ShareRepairEndpointPublicKey {
+                participant_identifier: 1,
+                store_fingerprint: bytes32_hex([0x52; 32]),
+                public_key_hex:
+                    "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa".to_string(),
+            },
+            ShareRepairEndpointPublicKey {
+                participant_identifier: 2,
+                store_fingerprint: bytes32_hex([0x52; 32]),
+                public_key_hex:
+                    "02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27".to_string(),
+            },
+            ShareRepairEndpointPublicKey {
+                participant_identifier: 3,
+                store_fingerprint: bytes32_hex([0x52; 32]),
+                public_key_hex:
+                    "023c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1".to_string(),
+            },
+        ],
+        signature_hex: format!("0x{}", "00".repeat(64)),
+    };
+    let digest = share_repair_transport_roster_digest_for_tests(&authorization, &roster)
+        .expect("roster digest");
+    assert_eq!(
+        "1a46b993431f075de1adef58a668e8133cca8ca7070eb5d6ffbedee92d224364",
+        hex::encode(digest)
+    );
+}
+
 fn resign_share_repair_authorization(
     authorization: &mut ShareRepairAuthorization,
     signing_key: &ed25519_dalek::SigningKey,
@@ -1301,9 +1361,64 @@ fn resign_share_repair_authorization(
         format!("0x{}", hex::encode(signing_key.sign(&digest).to_bytes()));
 }
 
+fn resign_share_repair_transport_roster(
+    authorization: &ShareRepairAuthorization,
+    roster: &mut ShareRepairTransportRoster,
+    signing_key: &ed25519_dalek::SigningKey,
+) {
+    use ed25519_dalek::Signer as _;
+
+    let digest = share_repair_transport_roster_digest_for_tests(authorization, roster)
+        .expect("transport roster digest");
+    roster.signature_hex = format!("0x{}", hex::encode(signing_key.sign(&digest).to_bytes()));
+}
+
 fn share_repair_sigmas(
     authorization: &ShareRepairAuthorization,
-) -> (Vec<ShareRepairPart1Result>, Vec<ShareRepairSigma>) {
+    signing_key: &ed25519_dalek::SigningKey,
+) -> (
+    Vec<ShareRepairPart1Result>,
+    Vec<ShareRepairSigma>,
+    ShareRepairTransportRoster,
+) {
+    let transport_public_keys = authorization
+        .helper_identifiers
+        .iter()
+        .copied()
+        .chain(std::iter::once(authorization.target_identifier))
+        .map(|participant_identifier| {
+            let session = begin_share_repair_session(BeginShareRepairSessionRequest {
+                authorization: authorization.clone(),
+                participant_identifier,
+            })
+            .expect("begin native repair transport session");
+            (
+                participant_identifier,
+                (session.store_fingerprint, session.transport_public_key_hex),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let participant_public_keys = authorization
+        .helper_identifiers
+        .iter()
+        .copied()
+        .chain(std::iter::once(authorization.target_identifier))
+        .map(|participant_identifier| ShareRepairEndpointPublicKey {
+            participant_identifier,
+            store_fingerprint: transport_public_keys[&participant_identifier].0.clone(),
+            public_key_hex: transport_public_keys[&participant_identifier].1.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut transport_roster = ShareRepairTransportRoster {
+        schema: TBTC_SIGNER_SHARE_REPAIR_TRANSPORT_ROSTER_SCHEMA.to_string(),
+        authorization_digest: bytes32_hex(
+            share_repair_authorization_digest_for_tests(authorization)
+                .expect("authorization digest"),
+        ),
+        participant_public_keys,
+        signature_hex: format!("0x{}", "00".repeat(64)),
+    };
+    resign_share_repair_transport_roster(authorization, &mut transport_roster, signing_key);
     let part1 = authorization
         .helper_identifiers
         .iter()
@@ -1311,6 +1426,7 @@ fn share_repair_sigmas(
             share_repair_part1(ShareRepairPart1Request {
                 authorization: authorization.clone(),
                 helper_identifier: *helper,
+                transport_roster: transport_roster.clone(),
             })
             .expect("repair part1")
         })
@@ -1341,12 +1457,179 @@ fn share_repair_sigmas(
                 authorization: authorization.clone(),
                 helper_identifier: *recipient,
                 deltas,
+                transport_roster: transport_roster.clone(),
             })
             .expect("repair part2")
             .sigma
         })
         .collect();
-    (part1, sigmas)
+    (part1, sigmas, transport_roster)
+}
+
+#[test]
+fn share_repair_transport_preflight_is_restart_stable_and_time_bounded() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("share_repair_transport_preflight");
+    reset_for_tests();
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0xa4; 32]);
+    set_share_repair_authority_for_tests(Some(signing_key.verifying_key().to_bytes()));
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(35);
+    let session_id = "share-repair-transport-preflight";
+    let mut persisted = None;
+    for helper in [1_u16, 2] {
+        persisted = Some(
+            persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+                session_id: session_id.to_string(),
+                participant_identifier: helper,
+                threshold: 2,
+                participant_count: 3,
+                key_package: native_key_packages[&helper].clone(),
+                public_key_package: native_public.clone(),
+            })
+            .expect("persist helper for transport preflight"),
+        );
+    }
+    let persisted = persisted.expect("persisted DKG");
+    let store_fingerprint = durable_store_identity()
+        .expect("store identity")
+        .fingerprint;
+    let authorization = signed_share_repair_authorization(
+        &signing_key,
+        session_id,
+        &persisted.key_group,
+        &native_public,
+        store_fingerprint,
+    );
+
+    let first_helper = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: authorization.clone(),
+        participant_identifier: 1,
+    })
+    .expect("begin helper transport preflight");
+    let first_target = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: authorization.clone(),
+        participant_identifier: 3,
+    })
+    .expect("begin target transport preflight");
+    assert_eq!(
+        first_helper.store_fingerprint,
+        bytes32_hex(store_fingerprint)
+    );
+    assert_eq!(
+        first_target.store_fingerprint,
+        bytes32_hex(store_fingerprint)
+    );
+    assert_ne!(
+        first_helper.transport_public_key_hex,
+        first_target.transport_public_key_hex
+    );
+
+    assert!(
+        finish_share_repair_session(FinishShareRepairSessionRequest {
+            authorization: authorization.clone(),
+            participant_identifier: 1,
+        })
+        .expect("finish helper transport cache")
+        .finished
+    );
+    assert!(
+        finish_share_repair_session(FinishShareRepairSessionRequest {
+            authorization: authorization.clone(),
+            participant_identifier: 1,
+        })
+        .expect("repeat finished helper transport cache")
+        .finished
+    );
+    let after_finish = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: authorization.clone(),
+        participant_identifier: 1,
+    })
+    .expect("rederive helper transport after Finish");
+    assert_eq!(
+        first_helper.transport_public_key_hex,
+        after_finish.transport_public_key_hex
+    );
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    let restarted_helper = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: authorization.clone(),
+        participant_identifier: 1,
+    })
+    .expect("rederive helper transport after restart");
+    let restarted_target = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: authorization.clone(),
+        participant_identifier: 3,
+    })
+    .expect("rederive target transport after restart");
+    assert_eq!(
+        first_helper.transport_public_key_hex,
+        restarted_helper.transport_public_key_hex
+    );
+    assert_eq!(
+        first_target.transport_public_key_hex,
+        restarted_target.transport_public_key_hex
+    );
+
+    let now = now_unix();
+    let mut pre_not_before = authorization.clone();
+    pre_not_before.issued_at_unix = now.saturating_sub(1);
+    pre_not_before.not_before_unix = now.saturating_add(60);
+    pre_not_before.expires_at_unix = now.saturating_add(120);
+    pre_not_before.nonce = bytes32_hex([0x93; 32]);
+    resign_share_repair_authorization(&mut pre_not_before, &signing_key);
+    let prepared = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: pre_not_before.clone(),
+        participant_identifier: 3,
+    })
+    .expect("native roster preflight is allowed before not_before");
+    assert_eq!(prepared.store_fingerprint, bytes32_hex(store_fingerprint));
+    assert!(
+        finish_share_repair_session(FinishShareRepairSessionRequest {
+            authorization: pre_not_before,
+            participant_identifier: 3,
+        })
+        .expect("pre-not-before transport cleanup")
+        .finished
+    );
+
+    let mut pre_issued = authorization.clone();
+    pre_issued.issued_at_unix = now.saturating_add(60);
+    pre_issued.not_before_unix = now.saturating_add(60);
+    pre_issued.expires_at_unix = now.saturating_add(120);
+    pre_issued.nonce = bytes32_hex([0x94; 32]);
+    resign_share_repair_authorization(&mut pre_issued, &signing_key);
+    let pre_issued_error = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: pre_issued,
+        participant_identifier: 3,
+    })
+    .expect_err("transport preflight before issued_at must fail");
+    assert!(matches!(
+        pre_issued_error,
+        EngineError::Validation(ref message) if message.contains("not issued until")
+    ));
+
+    let mut expired = authorization;
+    expired.issued_at_unix = now.saturating_sub(10);
+    expired.not_before_unix = now.saturating_sub(5);
+    expired.expires_at_unix = now;
+    expired.nonce = bytes32_hex([0x95; 32]);
+    resign_share_repair_authorization(&mut expired, &signing_key);
+    let expired_error = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: expired,
+        participant_identifier: 3,
+    })
+    .expect_err("expired transport preflight must fail");
+    assert!(matches!(
+        expired_error,
+        EngineError::Validation(ref message) if message.contains("expired at")
+    ));
+
+    set_share_repair_authority_for_tests(None);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 #[test]
@@ -1384,11 +1667,52 @@ fn share_repair_installs_exact_share_durably_and_replays_idempotently() {
         &native_public,
         store_fingerprint,
     );
-    let (_, sigmas) = share_repair_sigmas(&authorization);
+    let (part1, sigmas, transport_roster) = share_repair_sigmas(&authorization, &signing_key);
+    for result in &part1 {
+        for delta in &result.deltas {
+            assert_eq!(
+                delta.payload_hex.len(),
+                SHARE_REPAIR_TRANSPORT_PAYLOAD_BYTES * 2
+            );
+        }
+        let json = serde_json::to_string(result).expect("serialize opaque Part1 result");
+        assert!(json.contains("payload_hex"));
+        assert!(!json.contains("data_hex"));
+    }
+    for sigma in &sigmas {
+        assert_eq!(
+            sigma.payload_hex.len(),
+            SHARE_REPAIR_TRANSPORT_PAYLOAD_BYTES * 2
+        );
+    }
+    let target_session = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: authorization.clone(),
+        participant_identifier: authorization.target_identifier,
+    })
+    .expect("idempotent target transport begin");
+    let repeated_target_session = begin_share_repair_session(BeginShareRepairSessionRequest {
+        authorization: authorization.clone(),
+        participant_identifier: authorization.target_identifier,
+    })
+    .expect("repeated target transport begin");
+    assert_eq!(
+        target_session.transport_public_key_hex,
+        repeated_target_session.transport_public_key_hex
+    );
+    assert_eq!(
+        state()
+            .expect("state")
+            .lock()
+            .expect("engine lock")
+            .share_repair_sessions
+            .len(),
+        3
+    );
     let install_request = InstallRepairedShareRequest {
         authorization: authorization.clone(),
         public_key_package: native_public.clone(),
         sigmas,
+        transport_roster,
     };
     let installed =
         install_repaired_share(install_request.clone()).expect("install repaired share");
@@ -1414,6 +1738,36 @@ fn share_repair_installs_exact_share_durably_and_replays_idempotently() {
         installed.active_store_fingerprint
     );
     assert!(recovered_inventory.recovery_activation_commitment.is_some());
+
+    for participant_identifier in authorization
+        .helper_identifiers
+        .iter()
+        .copied()
+        .chain(std::iter::once(authorization.target_identifier))
+    {
+        assert!(
+            finish_share_repair_session(FinishShareRepairSessionRequest {
+                authorization: authorization.clone(),
+                participant_identifier,
+            })
+            .expect("finish native repair transport session")
+            .finished
+        );
+    }
+    assert!(
+        finish_share_repair_session(FinishShareRepairSessionRequest {
+            authorization: authorization.clone(),
+            participant_identifier: authorization.target_identifier,
+        })
+        .expect("idempotent transport finish")
+        .finished
+    );
+    assert!(state()
+        .expect("state")
+        .lock()
+        .expect("engine lock")
+        .share_repair_sessions
+        .is_empty());
 
     let expected = decode_key_package(
         "repair-test",
@@ -1532,11 +1886,12 @@ fn share_repair_production_scale_51_of_100_launch_gate() {
         100,
         (1_u16..=51).collect(),
     );
-    let (_, sigmas) = share_repair_sigmas(&authorization);
+    let (_, sigmas, transport_roster) = share_repair_sigmas(&authorization, &signing_key);
     let installed = install_repaired_share(InstallRepairedShareRequest {
         authorization,
         public_key_package: native_public,
         sigmas,
+        transport_roster,
     })
     .expect("install production-scale repaired share");
     assert_eq!(installed.target_identifier, 100);
@@ -1604,12 +1959,13 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
         &native_public,
         store_fingerprint,
     );
-    let (part1, sigmas) = share_repair_sigmas(&authorization);
+    let (part1, sigmas, transport_roster) = share_repair_sigmas(&authorization, &signing_key);
 
     let incomplete = share_repair_part2(ShareRepairPart2Request {
         authorization: authorization.clone(),
         helper_identifier: 1,
         deltas: vec![part1[0].deltas[0].clone()],
+        transport_roster: transport_roster.clone(),
     })
     .expect_err("incomplete delta set");
     assert!(matches!(incomplete, EngineError::Validation(_)));
@@ -1620,6 +1976,7 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
         authorization: authorization.clone(),
         helper_identifier: 1,
         deltas: vec![cross_context, part1[1].deltas[0].clone()],
+        transport_roster: transport_roster.clone(),
     })
     .expect_err("cross-context delta");
     assert!(matches!(cross_context_error, EngineError::Validation(_)));
@@ -1628,6 +1985,7 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
         authorization: authorization.clone(),
         public_key_package: native_public.clone(),
         sigmas: vec![sigmas[0].clone()],
+        transport_roster: transport_roster.clone(),
     })
     .expect_err("incomplete sigma set");
     assert!(matches!(missing_sigma, EngineError::Validation(_)));
@@ -1635,7 +1993,7 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
     // A second valid Part1 transcript has the same authorization context but
     // independent randomness. Substituting just one of its deltas passes the
     // wire/context checks and must be caught by the target public-share check.
-    let (alternate_part1, _) = share_repair_sigmas(&authorization);
+    let (alternate_part1, _, _) = share_repair_sigmas(&authorization, &signing_key);
     let substituted = share_repair_part2(ShareRepairPart2Request {
         authorization: authorization.clone(),
         helper_identifier: 1,
@@ -1643,6 +2001,7 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
             alternate_part1[0].deltas[0].clone(),
             part1[1].deltas[0].clone(),
         ],
+        transport_roster: transport_roster.clone(),
     })
     .expect("well-shaped but inconsistent deltas")
     .sigma;
@@ -1650,6 +2009,7 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
         authorization: authorization.clone(),
         public_key_package: native_public.clone(),
         sigmas: vec![substituted, sigmas[1].clone()],
+        transport_roster: transport_roster.clone(),
     })
     .expect_err("reconstructed share must match public commitment");
     assert!(matches!(corrupted, EngineError::Validation(_)));
@@ -1670,9 +2030,164 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
         authorization: wrong_store,
         public_key_package: native_public.clone(),
         sigmas: Vec::new(),
+        transport_roster: transport_roster.clone(),
     })
     .expect_err("wrong durable store");
     assert!(matches!(wrong_store_error, EngineError::Validation(_)));
+
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let chosen_secret =
+        bitcoin::secp256k1::SecretKey::from_slice(&[0x42; 32]).expect("chosen transport secret");
+    let chosen_public = hex::encode(
+        bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &chosen_secret).serialize(),
+    );
+
+    // A caller cannot substitute a chosen recipient key after the offline
+    // authority signs the native preflight roster.
+    let mut unsigned_key_substitution = transport_roster.clone();
+    unsigned_key_substitution.participant_public_keys[0].public_key_hex = chosen_public.clone();
+    let unsigned_key_error = share_repair_part1(ShareRepairPart1Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        transport_roster: unsigned_key_substitution,
+    })
+    .expect_err("caller key substitution must invalidate the roster signature");
+    assert!(matches!(
+        unsigned_key_error,
+        EngineError::Validation(ref message) if message.contains("transport-roster signature")
+    ));
+
+    // Even an authority-signed roster cannot make a local native endpoint use
+    // a key that it did not derive for this authorization and seat.
+    let mut signed_local_key_mismatch = transport_roster.clone();
+    signed_local_key_mismatch.participant_public_keys[0].public_key_hex = chosen_public.clone();
+    resign_share_repair_transport_roster(
+        &authorization,
+        &mut signed_local_key_mismatch,
+        &signing_key,
+    );
+    let signed_local_key_error = share_repair_part1(ShareRepairPart1Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        transport_roster: signed_local_key_mismatch,
+    })
+    .expect_err("signed chosen local key must not bypass native key ownership");
+    assert!(matches!(
+        signed_local_key_error,
+        EngineError::Validation(ref message) if message.contains("local native repair session")
+    ));
+
+    let mut signed_local_store_mismatch = transport_roster.clone();
+    signed_local_store_mismatch.participant_public_keys[0].store_fingerprint =
+        bytes32_hex([0x55; 32]);
+    resign_share_repair_transport_roster(
+        &authorization,
+        &mut signed_local_store_mismatch,
+        &signing_key,
+    );
+    let signed_local_store_error = share_repair_part1(ShareRepairPart1Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        transport_roster: signed_local_store_mismatch,
+    })
+    .expect_err("signed wrong local store must not bypass store ownership");
+    assert!(matches!(
+        signed_local_store_error,
+        EngineError::Validation(ref message) if message.contains("active durable store")
+    ));
+
+    let mut signed_target_key_mismatch = transport_roster.clone();
+    signed_target_key_mismatch
+        .participant_public_keys
+        .last_mut()
+        .expect("target roster entry")
+        .public_key_hex = chosen_public;
+    resign_share_repair_transport_roster(
+        &authorization,
+        &mut signed_target_key_mismatch,
+        &signing_key,
+    );
+    let signed_target_key_error = install_repaired_share(InstallRepairedShareRequest {
+        authorization: authorization.clone(),
+        public_key_package: native_public.clone(),
+        sigmas: sigmas.clone(),
+        transport_roster: signed_target_key_mismatch,
+    })
+    .expect_err("signed chosen target key must not bypass native key ownership");
+    assert!(matches!(
+        signed_target_key_error,
+        EngineError::Validation(ref message) if message.contains("local native repair session")
+    ));
+
+    let mut alternate_signed_roster = transport_roster.clone();
+    alternate_signed_roster.participant_public_keys[1].store_fingerprint = bytes32_hex([0x56; 32]);
+    resign_share_repair_transport_roster(
+        &authorization,
+        &mut alternate_signed_roster,
+        &signing_key,
+    );
+    let alternate_roster_error = share_repair_part1(ShareRepairPart1Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        transport_roster: alternate_signed_roster,
+    })
+    .expect_err("one live native session must not serve two signed rosters");
+    assert!(matches!(
+        alternate_roster_error,
+        EngineError::Validation(ref message) if message.contains("different signed transport roster")
+    ));
+
+    let mut duplicate_key_roster = transport_roster.clone();
+    duplicate_key_roster.participant_public_keys[1].public_key_hex = duplicate_key_roster
+        .participant_public_keys[0]
+        .public_key_hex
+        .clone();
+    let duplicate_key_error = share_repair_part1(ShareRepairPart1Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        transport_roster: duplicate_key_roster,
+    })
+    .expect_err("duplicate native transport keys must be rejected before signature use");
+    assert!(matches!(
+        duplicate_key_error,
+        EngineError::Validation(ref message) if message.contains("duplicate public keys")
+    ));
+
+    let mut target_store_mismatch_roster = transport_roster.clone();
+    target_store_mismatch_roster
+        .participant_public_keys
+        .last_mut()
+        .expect("target roster entry")
+        .store_fingerprint = bytes32_hex([0x57; 32]);
+    let target_store_roster_error = share_repair_part1(ShareRepairPart1Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        transport_roster: target_store_mismatch_roster,
+    })
+    .expect_err("target roster store must be the authorization's new store");
+    assert!(matches!(
+        target_store_roster_error,
+        EngineError::Validation(ref message) if message.contains("new_store_fingerprint")
+    ));
+
+    std::env::set_var(
+        TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV,
+        hex::encode([0x58; 32]),
+    );
+    let rotated_state_root_error = share_repair_part1(ShareRepairPart1Request {
+        authorization: authorization.clone(),
+        helper_identifier: 1,
+        transport_roster: transport_roster.clone(),
+    })
+    .expect_err("cached transport key must not bridge a state-root rotation");
+    std::env::set_var(
+        TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV,
+        TEST_STATE_ENCRYPTION_KEY_HEX,
+    );
+    assert!(matches!(
+        rotated_state_root_error,
+        EngineError::Validation(ref message) if message.contains("current state-root-bound key")
+    ));
 
     let mut oversized_group = authorization.clone();
     oversized_group.participant_count = 101;
@@ -1680,6 +2195,7 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
     let oversized_group_error = share_repair_part1(ShareRepairPart1Request {
         authorization: oversized_group,
         helper_identifier: 1,
+        transport_roster: transport_roster.clone(),
     })
     .expect_err("participant count above the production group bound");
     assert!(matches!(oversized_group_error, EngineError::Validation(_)));
@@ -1689,6 +2205,7 @@ fn share_repair_rejects_incomplete_cross_context_corrupt_and_wrong_store_inputs(
     let signature_error = share_repair_part1(ShareRepairPart1Request {
         authorization: bad_signature,
         helper_identifier: 1,
+        transport_roster,
     })
     .expect_err("bad authority signature");
     assert!(matches!(signature_error, EngineError::Validation(_)));

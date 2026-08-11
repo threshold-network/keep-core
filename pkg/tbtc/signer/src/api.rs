@@ -172,21 +172,74 @@ pub struct ShareRepairAuthorization {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct BeginShareRepairSessionRequest {
+    pub authorization: ShareRepairAuthorization,
+    pub participant_identifier: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BeginShareRepairSessionResult {
+    pub context_digest: String,
+    pub participant_identifier: u16,
+    /// Fingerprint of the exact durable store admitted for transport-key
+    /// derivation. The offline authority signs this value into the transport
+    /// roster together with the native public key.
+    pub store_fingerprint: String,
+    /// Authorization-scoped native transport key. It is deterministic through
+    /// authorization expiry; only per-envelope ECDH keys are ephemeral.
+    pub transport_public_key_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FinishShareRepairSessionRequest {
+    pub authorization: ShareRepairAuthorization,
+    pub participant_identifier: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FinishShareRepairSessionResult {
+    pub context_digest: String,
+    pub participant_identifier: u16,
+    pub finished: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareRepairEndpointPublicKey {
+    pub participant_identifier: u16,
+    pub store_fingerprint: String,
+    pub public_key_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareRepairTransportRoster {
+    pub schema: String,
+    pub authorization_digest: String,
+    pub participant_public_keys: Vec<ShareRepairEndpointPublicKey>,
+    pub signature_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShareRepairPart1Request {
     pub authorization: ShareRepairAuthorization,
     pub helper_identifier: u16,
+    pub transport_roster: ShareRepairTransportRoster,
 }
 
-/// One secret repair delta. The context digest and explicit endpoints prevent
-/// the application from accidentally accepting a scalar from another repair
-/// session even though the upstream arithmetic type itself has no context.
+/// One opaque, native-encrypted repair delta. The scalar plaintext and native
+/// transport private key never cross the FFI boundary.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShareRepairDelta {
     pub context_digest: String,
     pub sender_identifier: u16,
     pub recipient_identifier: u16,
-    pub data_hex: SecretHex,
+    pub payload_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -207,6 +260,7 @@ pub struct ShareRepairPart2Request {
     pub authorization: ShareRepairAuthorization,
     pub helper_identifier: u16,
     pub deltas: Vec<ShareRepairDelta>,
+    pub transport_roster: ShareRepairTransportRoster,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -214,7 +268,7 @@ pub struct ShareRepairPart2Request {
 pub struct ShareRepairSigma {
     pub context_digest: String,
     pub helper_identifier: u16,
-    pub data_hex: SecretHex,
+    pub payload_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -230,6 +284,7 @@ pub struct InstallRepairedShareRequest {
     pub authorization: ShareRepairAuthorization,
     pub public_key_package: NativeFrostPublicKeyPackage,
     pub sigmas: Vec<ShareRepairSigma>,
+    pub transport_roster: ShareRepairTransportRoster,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
