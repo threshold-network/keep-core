@@ -30,7 +30,7 @@ var logger = log.Logger("keep-tbtc")
 // as a clean maintenance exit so operators must remove the authorization path
 // and deliberately restart into either pending-cutover or production mode.
 var ErrFrostShareRepairMaintenanceComplete = errors.New(
-	"FROST share-repair maintenance completed; remove the authorization path and restart",
+	"FROST share-repair one-shot operation completed; remove the configured preparation or recovery path and restart",
 )
 
 // ProtocolName denotes the name of the protocol defined by this package.
@@ -147,10 +147,21 @@ type Config struct {
 	// cutover registry pinned by the signed activation manifest. It is required
 	// exactly when that manifest declares a non-zero share-repair registry root.
 	FrostShareRepairActivationRegistryPath string
+	// FrostShareRepairTransportPreflightAuthorizationPath selects the first,
+	// non-networked recovery ceremony step. It contains the signed base
+	// authorization. Each locally owned named seat asks Rust for its
+	// authorization/store-bound public transport key and exits after publishing
+	// an immutable owner-only preflight artifact.
+	FrostShareRepairTransportPreflightAuthorizationPath string
+	// FrostShareRepairTransportPreflightOutputPath is the canonical absolute,
+	// initially absent path for the immutable public preflight artifact. It is
+	// required exactly with FrostShareRepairTransportPreflightAuthorizationPath.
+	FrostShareRepairTransportPreflightOutputPath string
 	// FrostShareRepairAuthorizationPath selects one-shot disaster-recovery mode
-	// using an owner-only, offline-authority-signed authorization. Every helper
-	// and the target exits cleanly after the bounded protocol; this path must be
-	// removed before restart. Normal production startup never runs recovery.
+	// using an owner-only recovery bundle containing both the signed base
+	// authorization and the separately signed exact native-key/store roster.
+	// Every helper and the target exits cleanly after the bounded protocol; this
+	// path must be removed before restart. Normal startup never runs recovery.
 	FrostShareRepairAuthorizationPath string
 	// FrostShareRepairMaintenanceTimeout bounds the one-shot authenticated
 	// network protocol. Zero selects ten minutes; non-zero values must be from

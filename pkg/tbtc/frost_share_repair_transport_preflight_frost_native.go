@@ -3,63 +3,68 @@
 package tbtc
 
 import (
-	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-const defaultFrostShareRepairMaintenanceTimeout = 10 * time.Minute
+const frostShareRepairTransportPreflightMaximumBytes int64 = 256 * 1024
 
-func runFrostShareRepairMaintenance(
-	ctx context.Context,
+// runFrostShareRepairTransportPreflight is the non-networked first half of the
+// recovery ceremony. It runs only after manifest verification, state-anchor
+// reconciliation, and installation of the native output barrier. The emitted
+// artifact is public but immutable/owner-only so the offline authority can
+// authenticate its operator source and bind the exact seat, store, and native
+// transport key in the signed roster.
+func runFrostShareRepairTransportPreflight(
 	authorizationPath string,
-	timeout time.Duration,
+	outputPath string,
 	manifest FrostPreSignActivationRuntimeManifest,
 	node *node,
 	operatorAddress chain.Address,
 ) (bool, error) {
-	if authorizationPath == "" {
+	if authorizationPath == "" && outputPath == "" {
 		return false, nil
 	}
-	if ctx == nil || node == nil || node.walletRegistry == nil ||
-		node.netProvider == nil || manifest.ActivationAuthorityPublicKey == [32]byte{} {
-		return true, fmt.Errorf("share-repair maintenance dependencies are incomplete")
+	if authorizationPath == "" || outputPath == "" {
+		return true, fmt.Errorf(
+			"share-repair transport preflight input and output paths must be configured together",
+		)
 	}
-	if timeout == 0 {
-		timeout = defaultFrostShareRepairMaintenanceTimeout
-	}
-	if timeout < 10*time.Second || timeout > time.Hour {
-		return true, fmt.Errorf("share-repair maintenance timeout must be from 10s through 1h")
+	if node == nil || node.walletRegistry == nil ||
+		manifest.ActivationAuthorityPublicKey == [32]byte{} {
+		return true, fmt.Errorf("share-repair transport preflight dependencies are incomplete")
 	}
 
-	payload, err := readSecureFrostActivationFile(authorizationPath, 256*1024)
+	payload, err := ReadFrostNativeSignerAnchorProvisioningArtifact(
+		authorizationPath,
+		frostShareRepairTransportPreflightMaximumBytes,
+	)
 	if err != nil {
-		return true, fmt.Errorf("cannot read secure share-repair recovery bundle: %w", err)
+		return true, fmt.Errorf("cannot read share-repair preflight authorization: %w", err)
 	}
-	bundle, err := frostsigning.DecodeShareRepairRecoveryBundle(payload)
+	authorization, err := frostsigning.DecodeShareRepairAuthorization(payload)
 	if err != nil {
 		return true, err
 	}
-	authorization := &bundle.Authorization
 	digest, err := frostsigning.ComputeShareRepairAuthorizationDigest(authorization)
 	if err != nil {
 		return true, err
 	}
 	walletIDBytes, err := hex.DecodeString(authorization.WalletID[2:])
 	if err != nil || len(walletIDBytes) != 32 {
-		return true, fmt.Errorf("share-repair authorization wallet ID is invalid")
+		return true, fmt.Errorf("share-repair preflight wallet ID is invalid")
 	}
 	var walletID [32]byte
 	copy(walletID[:], walletIDBytes)
 	if err := validateFrostKeyGroupForWallet(authorization.KeyGroup, walletID); err != nil {
-		return true, fmt.Errorf("share-repair authorization key group is invalid: %w", err)
+		return true, fmt.Errorf("share-repair preflight key group is invalid: %w", err)
 	}
 
 	wallet, found := node.walletRegistry.getWalletByID(walletID)
@@ -107,63 +112,49 @@ func runFrostShareRepairMaintenance(
 	}
 	slices.Sort(localMemberIndexes)
 
-	membershipValidator := group.NewMembershipValidator(
-		logger,
-		wallet.signingGroupOperators,
-		node.chain.Signing(),
-	)
-	rosterDigest, err := frostsigning.ComputeShareRepairTransportRosterDigest(
-		&bundle.TransportRoster,
-		authorization,
-	)
-	if err != nil {
-		return true, err
-	}
-	channelName := fmt.Sprintf(
-		"%s-frost-share-repair-%x-%x",
-		ProtocolName,
-		digest,
-		rosterDigest,
-	)
-	channel, err := node.netProvider.BroadcastChannelFor(channelName)
-	if err != nil {
-		return true, fmt.Errorf("cannot open share-repair broadcast channel: %w", err)
-	}
-	if err := channel.SetFilter(membershipValidator.IsInGroup); err != nil {
-		return true, fmt.Errorf("cannot authenticate share-repair broadcast channel: %w", err)
-	}
 	engine, ok := frostsigning.CurrentNativeTBTCSignerEngine().(frostsigning.NativeTBTCSignerShareRepairEngine)
 	if !ok || engine == nil {
 		return true, fmt.Errorf("registered native signer does not support share repair")
 	}
-
-	repairContext, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	result, err := frostsigning.RunShareRepair(
-		repairContext,
-		logger,
-		channel,
-		membershipValidator,
-		engine,
-		authorization,
-		&bundle.TransportRoster,
-		ed25519.PublicKey(manifest.ActivationAuthorityPublicKey[:]),
-		localMemberIndexes,
+	entries := make(
+		[]frostsigning.ShareRepairTransportPublicKey,
+		0,
+		len(localMemberIndexes),
 	)
+	for _, member := range localMemberIndexes {
+		entry, err := frostsigning.PrepareShareRepairTransportRosterEntry(
+			engine,
+			authorization,
+			ed25519.PublicKey(manifest.ActivationAuthorityPublicKey[:]),
+			uint16(member),
+		)
+		if err != nil {
+			return true, fmt.Errorf(
+				"prepare native share-repair transport entry for seat [%d]: %w",
+				member,
+				err,
+			)
+		}
+		entries = append(entries, *entry)
+	}
+	artifact, err := json.Marshal(frostsigning.ShareRepairTransportPreflight{
+		Schema:                frostsigning.ShareRepairTransportPreflightSchema,
+		AuthorizationDigest:   "0x" + hex.EncodeToString(digest[:]),
+		ParticipantPublicKeys: entries,
+	})
 	if err != nil {
-		return true, err
+		return true, fmt.Errorf("encode share-repair transport preflight: %w", err)
 	}
-	if result == nil {
-		logger.Infof(
-			"FROST share-repair helper maintenance completed for authorization [0x%x]",
-			digest,
-		)
-	} else {
-		logger.Infof(
-			"FROST share-repair target seat [%d] durably installed and anchor-acknowledged authorization [0x%x]; production remains disabled pending old-store tombstone and signed activation",
-			result.TargetIdentifier,
-			digest,
-		)
+	if err := WriteFrostNativeSignerAnchorProvisioningArtifact(
+		outputPath,
+		artifact,
+	); err != nil {
+		return true, fmt.Errorf("publish share-repair transport preflight: %w", err)
 	}
+	logger.Infof(
+		"published FROST share-repair transport preflight for authorization [0x%x] with [%d] local seat(s); remove preflight paths before restart",
+		digest,
+		len(entries),
+	)
 	return true, nil
 }

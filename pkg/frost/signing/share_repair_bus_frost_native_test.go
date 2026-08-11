@@ -151,6 +151,7 @@ func TestShareRepairBusCancelsRetransmissionsPerMessage(t *testing.T) {
 		&testutils.MockLogger{},
 		channel,
 		fixture.validator,
+		map[group.MemberIndex]struct{}{1: {}, 2: {}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -195,6 +196,7 @@ func TestShareRepairBusAuthenticatesSenderAndSuppressesReplay(t *testing.T) {
 		&testutils.MockLogger{},
 		channel,
 		fixture.validator,
+		map[group.MemberIndex]struct{}{1: {}, 2: {}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -230,5 +232,63 @@ func TestShareRepairBusAuthenticatesSenderAndSuppressesReplay(t *testing.T) {
 	case <-stream:
 		t.Fatal("replayed share-repair message was delivered twice")
 	default:
+	}
+}
+
+func TestShareRepairBusRejectsAuthenticatedNonparticipantBeforeDelivery(t *testing.T) {
+	fixture := newRunnerBusAuthFixture(t, 8)
+	busInterface, err := newBroadcastChannelShareRepairBus(
+		context.Background(),
+		&testutils.MockLogger{},
+		&immediateRecvBroadcastChannel{},
+		fixture.validator,
+		map[group.MemberIndex]struct{}{1: {}, 2: {}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bus := busInterface.(*broadcastChannelShareRepairBus)
+	stream := bus.Subscribe(group.MemberIndex(2))
+
+	// Operator A legitimately owns both seat 1 and seat 3 in the wallet, but
+	// this repair authorization names only seats 1 and 2. Seat 3 must be
+	// rejected before it consumes subscriber capacity.
+	nonparticipant := &shareRepairTransportMessage{message: shareRepairMessage{
+		Type:          shareRepairDeltaMessage,
+		Sender:        3,
+		Recipient:     2,
+		ContextDigest: [32]byte{0x44},
+		Payload:       []byte("nonparticipant-ciphertext"),
+	}}
+	bus.handleMessage(fakeNetMessage{
+		senderPublicKey: fixture.operatorA,
+		payload:         nonparticipant,
+	})
+	select {
+	case <-stream:
+		t.Fatal("authenticated nonparticipant frame was delivered")
+	default:
+	}
+
+	// Early phase frames from an exact participant remain valid while another
+	// subscriber may still be collecting announcements.
+	participant := &shareRepairTransportMessage{message: shareRepairMessage{
+		Type:          shareRepairDeltaMessage,
+		Sender:        1,
+		Recipient:     2,
+		ContextDigest: [32]byte{0x44},
+		Payload:       []byte("participant-ciphertext"),
+	}}
+	bus.handleMessage(fakeNetMessage{
+		senderPublicKey: fixture.operatorA,
+		payload:         participant,
+	})
+	select {
+	case received := <-stream:
+		if received.Sender != 1 || received.Type != shareRepairDeltaMessage {
+			t.Fatalf("unexpected participant frame: %+v", received)
+		}
+	default:
+		t.Fatal("authorized early phase frame was not delivered")
 	}
 }

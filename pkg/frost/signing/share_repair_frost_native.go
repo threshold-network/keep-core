@@ -21,10 +21,14 @@ import (
 
 const (
 	ShareRepairAuthorizationSchema       = "tbtc-frost-share-repair-authorization/v1"
+	ShareRepairTransportRosterSchema     = "tbtc-frost-share-repair-transport-roster/v1"
+	ShareRepairRecoveryBundleSchema      = "tbtc-frost-share-repair-bundle/v1"
+	ShareRepairTransportPreflightSchema  = "tbtc-frost-share-repair-transport-preflight/v1"
 	ShareRepairInstallResultSchema       = "tbtc-frost-share-repair-install-result/v1"
 	ShareRepairActivationLeaseSchema     = "tbtc-frost-share-repair-activation/v1"
 	ShareRepairActivationRegistrySchema  = "tbtc-frost-share-repair-activation-registry/v1"
 	shareRepairAuthorizationDomain       = "tbtc-frost-share-repair-authorization/v1\x00"
+	shareRepairTransportRosterDomain     = "tbtc-frost-share-repair-transport-roster/v1\x00"
 	shareRepairActivationLeaseDomain     = "tbtc-frost-share-repair-activation/v1\x00"
 	shareRepairActivationRegistryDomain  = "tbtc-frost-share-repair-activation-registry/v1\x00"
 	shareRepairMaximumAuthorizationAge   = 24 * time.Hour
@@ -54,31 +58,86 @@ type ShareRepairAuthorization struct {
 	SignatureHex               string   `json:"signature_hex"`
 }
 
-// NativeShareRepairDelta and NativeShareRepairSigma contain secret scalars.
-// Callers must zero Data as soon as the next native phase has copied it.
-type NativeShareRepairDelta struct {
+// ShareRepairTransportPublicKey binds one authorized participant and native
+// store to the public half of its Rust-derived, authorization-scoped repair
+// transport key.
+type ShareRepairTransportPublicKey struct {
+	ParticipantIdentifier uint16 `json:"participant_identifier"`
+	StoreFingerprint      string `json:"store_fingerprint"`
+	PublicKeyHex          string `json:"public_key_hex"`
+}
+
+// ShareRepairTransportRoster is the offline-authority-signed rendezvous
+// artifact. Its signature prevents the Go host from substituting a transport
+// key it controls when asking Rust to encrypt a repair scalar.
+type ShareRepairTransportRoster struct {
+	Schema                string                          `json:"schema"`
+	AuthorizationDigest   string                          `json:"authorization_digest"`
+	ParticipantPublicKeys []ShareRepairTransportPublicKey `json:"participant_public_keys"`
+	SignatureHex          string                          `json:"signature_hex"`
+}
+
+// ShareRepairRecoveryBundle is the single owner-only maintenance artifact.
+// The authorization and transport roster carry independent signatures from
+// the same offline authority; the outer schema only makes file decoding
+// explicit and downgrade-safe.
+type ShareRepairRecoveryBundle struct {
+	Schema          string                     `json:"schema"`
+	Authorization   ShareRepairAuthorization   `json:"authorization"`
+	TransportRoster ShareRepairTransportRoster `json:"transport_roster"`
+}
+
+// ShareRepairTransportPreflight is an unsigned, public ceremony artifact
+// emitted by one operator after the native signer proves local seat/store
+// possession to the API. The offline authority authenticates its source and
+// workload out of band, merges the exact participant set, and signs
+// ShareRepairTransportRoster. This artifact is not hardware attestation.
+type ShareRepairTransportPreflight struct {
+	Schema                string                          `json:"schema"`
+	AuthorizationDigest   string                          `json:"authorization_digest"`
+	ParticipantPublicKeys []ShareRepairTransportPublicKey `json:"participant_public_keys"`
+}
+
+// NativeShareRepairSession exposes only the public half and store binding of an
+// authorization-scoped repair transport key. The matching derived private key
+// and every plaintext repair scalar remain behind the native API. Finish evicts
+// the live cache; the key remains re-derivable from the protected state root
+// until the signed authorization expires.
+type NativeShareRepairSession struct {
+	ContextDigest         string
+	ParticipantIdentifier uint16
+	StoreFingerprint      string
+	TransportPublicKey    []byte
+}
+
+// NativeShareRepairEncryptedDelta and NativeShareRepairEncryptedSigma contain
+// opaque authenticated ciphertexts. Protocol-conformant Go may route and
+// retransmit Payload but receives no decryption capability; complete plaintext
+// scalar sets never appear in FFI requests or responses. This API property is
+// not process isolation from arbitrary same-address-space memory access.
+type NativeShareRepairEncryptedDelta struct {
 	ContextDigest       string
 	SenderIdentifier    uint16
 	RecipientIdentifier uint16
-	Data                []byte
+	Payload             []byte
 }
 
-type NativeShareRepairSigma struct {
+type NativeShareRepairEncryptedSigma struct {
 	ContextDigest    string
 	HelperIdentifier uint16
-	Data             []byte
+	Payload          []byte
 }
 
 type NativeShareRepairPart1Result struct {
 	ContextDigest    string
 	HelperIdentifier uint16
 	PublicKeyPackage *NativeFROSTPublicKeyPackage
-	Deltas           []*NativeShareRepairDelta
+	Deltas           []*NativeShareRepairEncryptedDelta
 }
 
 type NativeShareRepairPart2Result struct {
 	ContextDigest string
-	Sigma         *NativeShareRepairSigma
+	Sigma         *NativeShareRepairEncryptedSigma
 }
 
 type NativeShareRepairInstallResult struct {
@@ -95,19 +154,30 @@ type NativeShareRepairInstallResult struct {
 // NativeTBTCSignerShareRepairEngine is kept separate from the ordinary DKG
 // capability so a stale ABI cannot accidentally be treated as DR-capable.
 type NativeTBTCSignerShareRepairEngine interface {
+	BeginShareRepairSession(
+		authorization *ShareRepairAuthorization,
+		participantIdentifier uint16,
+	) (*NativeShareRepairSession, error)
+	FinishShareRepairSession(
+		authorization *ShareRepairAuthorization,
+		participantIdentifier uint16,
+	) error
 	ShareRepairPart1(
 		authorization *ShareRepairAuthorization,
 		helperIdentifier uint16,
+		transportRoster *ShareRepairTransportRoster,
 	) (*NativeShareRepairPart1Result, error)
 	ShareRepairPart2(
 		authorization *ShareRepairAuthorization,
 		helperIdentifier uint16,
-		deltas []*NativeShareRepairDelta,
+		deltas []*NativeShareRepairEncryptedDelta,
+		transportRoster *ShareRepairTransportRoster,
 	) (*NativeShareRepairPart2Result, error)
 	InstallRepairedShare(
 		authorization *ShareRepairAuthorization,
 		publicKeyPackage *NativeFROSTPublicKeyPackage,
-		sigmas []*NativeShareRepairSigma,
+		sigmas []*NativeShareRepairEncryptedSigma,
+		transportRoster *ShareRepairTransportRoster,
 	) (*NativeShareRepairInstallResult, error)
 }
 
@@ -160,6 +230,49 @@ func DecodeShareRepairAuthorization(payload []byte) (*ShareRepairAuthorization, 
 	return authorization, nil
 }
 
+// DecodeShareRepairRecoveryBundle strictly decodes the one-shot maintenance
+// artifact. Authority and time validation remain in RunShareRepair, after the
+// manifest-pinned authority key is available.
+func DecodeShareRepairRecoveryBundle(
+	payload []byte,
+) (*ShareRepairRecoveryBundle, error) {
+	if len(payload) == 0 || len(payload) > 256*1024 {
+		return nil, fmt.Errorf("share-repair recovery bundle size is invalid")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	bundle := &ShareRepairRecoveryBundle{}
+	if err := decoder.Decode(bundle); err != nil {
+		return nil, fmt.Errorf("cannot decode share-repair recovery bundle: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("share-repair recovery bundle has trailing JSON")
+	}
+	if bundle.Schema != ShareRepairRecoveryBundleSchema {
+		return nil, fmt.Errorf("unsupported share-repair recovery bundle schema")
+	}
+	if _, err := ComputeShareRepairAuthorizationDigest(&bundle.Authorization); err != nil {
+		return nil, err
+	}
+	if _, err := parseCanonicalShareRepairSignature(
+		bundle.Authorization.SignatureHex,
+	); err != nil {
+		return nil, err
+	}
+	if _, err := ComputeShareRepairTransportRosterDigest(
+		&bundle.TransportRoster,
+		&bundle.Authorization,
+	); err != nil {
+		return nil, err
+	}
+	if _, err := parseCanonicalShareRepairSignature(
+		bundle.TransportRoster.SignatureHex,
+	); err != nil {
+		return nil, err
+	}
+	return bundle, nil
+}
+
 func parseCanonicalShareRepairHex32(value string, label string) ([32]byte, error) {
 	result := [32]byte{}
 	if len(value) != 66 || !strings.HasPrefix(value, "0x") || value != strings.ToLower(value) {
@@ -185,38 +298,6 @@ func parseCanonicalShareRepairSignature(value string) ([]byte, error) {
 		return nil, fmt.Errorf("signature must be canonical lowercase 0x-prefixed 64-byte hex")
 	}
 	return decoded, nil
-}
-
-// encodeShareRepairSecretHexJSON and decodeShareRepairSecretHexJSON keep repair
-// scalars in mutable byte slices. Using ordinary Go strings here would leave
-// immutable plaintext hex copies behind after the FFI or ECIES operation.
-func encodeShareRepairSecretHexJSON(data []byte) (json.RawMessage, error) {
-	if len(data) != 32 {
-		return nil, fmt.Errorf("share-repair secret scalar must be 32 bytes")
-	}
-	result := make([]byte, 66)
-	result[0] = '"'
-	hex.Encode(result[1:65], data)
-	result[65] = '"'
-	return json.RawMessage(result), nil
-}
-
-func decodeShareRepairSecretHexJSON(data json.RawMessage) ([]byte, error) {
-	if len(data) != 66 || data[0] != '"' || data[65] != '"' {
-		return nil, fmt.Errorf("share-repair secret scalar is not canonical JSON hex")
-	}
-	for _, value := range data[1:65] {
-		if value >= 'A' && value <= 'F' {
-			return nil, fmt.Errorf("share-repair secret scalar is not lowercase hex")
-		}
-	}
-	result := make([]byte, 32)
-	decoded, err := hex.Decode(result, data[1:65])
-	if err != nil || decoded != len(result) {
-		zeroBytes(result)
-		return nil, fmt.Errorf("share-repair secret scalar is invalid")
-	}
-	return result, nil
 }
 
 func writeShareRepairLengthPrefixed(buffer *bytes.Buffer, value []byte) error {
@@ -350,6 +431,131 @@ func ComputeShareRepairAuthorizationDigest(
 	return sha256.Sum256(transcript.Bytes()), nil
 }
 
+func parseCanonicalShareRepairTransportPublicKey(
+	value string,
+	label string,
+) ([33]byte, error) {
+	result := [33]byte{}
+	if len(value) != 66 || value != strings.ToLower(value) {
+		return result, fmt.Errorf(
+			"%s must be canonical lowercase unprefixed 33-byte compressed SEC1 hex",
+			label,
+		)
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != len(result) {
+		return result, fmt.Errorf(
+			"%s must be canonical lowercase unprefixed 33-byte compressed SEC1 hex",
+			label,
+		)
+	}
+	publicKey, err := btcec.ParsePubKey(decoded)
+	if err != nil || !bytes.Equal(publicKey.SerializeCompressed(), decoded) {
+		return result, fmt.Errorf(
+			"%s must be canonical lowercase unprefixed 33-byte compressed SEC1 hex",
+			label,
+		)
+	}
+	copy(result[:], decoded)
+	return result, nil
+}
+
+// ComputeShareRepairTransportRosterDigest implements the frozen transcript
+// shared with Rust. It validates the exact helper-then-target participant
+// ordering and public-key encoding, but intentionally does not verify either
+// offline-authority signature.
+func ComputeShareRepairTransportRosterDigest(
+	transportRoster *ShareRepairTransportRoster,
+	authorization *ShareRepairAuthorization,
+) ([32]byte, error) {
+	result := [32]byte{}
+	authorizationDigest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		return result, err
+	}
+	if transportRoster == nil {
+		return result, fmt.Errorf("share-repair transport roster is nil")
+	}
+	if transportRoster.Schema != ShareRepairTransportRosterSchema {
+		return result, fmt.Errorf("unsupported share-repair transport roster schema")
+	}
+	wireAuthorizationDigest, err := parseCanonicalShareRepairHex32(
+		transportRoster.AuthorizationDigest,
+		"transport roster authorization_digest",
+	)
+	if err != nil {
+		return result, err
+	}
+	if wireAuthorizationDigest != authorizationDigest {
+		return result, fmt.Errorf("share-repair transport roster authorization digest mismatch")
+	}
+	targetStoreFingerprint, err := parseCanonicalShareRepairHex32(
+		authorization.NewStoreFingerprint,
+		"new_store_fingerprint",
+	)
+	if err != nil {
+		return result, err
+	}
+
+	expectedCount := len(authorization.HelperIdentifiers) + 1
+	if len(transportRoster.ParticipantPublicKeys) != expectedCount {
+		return result, fmt.Errorf(
+			"share-repair transport roster must contain the exact helper and target set",
+		)
+	}
+
+	transcript := bytes.NewBuffer(nil)
+	transcript.WriteString(shareRepairTransportRosterDomain)
+	transcript.Write(authorizationDigest[:])
+	_ = binary.Write(transcript, binary.BigEndian, uint16(expectedCount))
+	seenPublicKeys := make(map[[33]byte]struct{}, expectedCount)
+	for index, participantPublicKey := range transportRoster.ParticipantPublicKeys {
+		expectedIdentifier := authorization.TargetIdentifier
+		if index < len(authorization.HelperIdentifiers) {
+			expectedIdentifier = authorization.HelperIdentifiers[index]
+		}
+		if participantPublicKey.ParticipantIdentifier != expectedIdentifier {
+			return result, fmt.Errorf(
+				"share-repair transport roster participant [%d] is invalid or out of order",
+				index,
+			)
+		}
+		storeFingerprint, err := parseCanonicalShareRepairHex32(
+			participantPublicKey.StoreFingerprint,
+			fmt.Sprintf("transport roster store fingerprint [%d]", index),
+		)
+		if err != nil {
+			return result, err
+		}
+		if participantPublicKey.ParticipantIdentifier == authorization.TargetIdentifier &&
+			storeFingerprint != targetStoreFingerprint {
+			return result, fmt.Errorf(
+				"share-repair target transport roster entry does not name new_store_fingerprint",
+			)
+		}
+		publicKey, err := parseCanonicalShareRepairTransportPublicKey(
+			participantPublicKey.PublicKeyHex,
+			fmt.Sprintf("transport roster public key [%d]", index),
+		)
+		if err != nil {
+			return result, err
+		}
+		if _, duplicate := seenPublicKeys[publicKey]; duplicate {
+			return result, fmt.Errorf("share-repair transport roster public keys must be unique")
+		}
+		seenPublicKeys[publicKey] = struct{}{}
+		_ = binary.Write(
+			transcript,
+			binary.BigEndian,
+			participantPublicKey.ParticipantIdentifier,
+		)
+		transcript.Write(storeFingerprint[:])
+		transcript.Write(publicKey[:])
+	}
+
+	return sha256.Sum256(transcript.Bytes()), nil
+}
+
 func validateShareRepairAuthorization(
 	authorization *ShareRepairAuthorization,
 	authorityPublicKey ed25519.PublicKey,
@@ -385,6 +591,38 @@ func validateShareRepairAuthorization(
 		walletID:            walletID,
 		newStoreFingerprint: newStore,
 	}, nil
+}
+
+// ValidateShareRepairTransportRoster verifies that the authorization and its
+// exact transport roster were signed by the same manifest-pinned authority.
+// The caller remains responsible for enforcing the authorization time window.
+func ValidateShareRepairTransportRoster(
+	transportRoster *ShareRepairTransportRoster,
+	authorization *ShareRepairAuthorization,
+	authorityPublicKey ed25519.PublicKey,
+) error {
+	if _, err := validateShareRepairAuthorization(
+		authorization,
+		authorityPublicKey,
+		false,
+	); err != nil {
+		return fmt.Errorf("invalid share-repair transport roster authorization: %w", err)
+	}
+	digest, err := ComputeShareRepairTransportRosterDigest(
+		transportRoster,
+		authorization,
+	)
+	if err != nil {
+		return err
+	}
+	signature, err := parseCanonicalShareRepairSignature(transportRoster.SignatureHex)
+	if err != nil {
+		return fmt.Errorf("invalid share-repair transport roster signature encoding: %w", err)
+	}
+	if !ed25519.Verify(authorityPublicKey, digest[:], signature) {
+		return fmt.Errorf("share-repair transport roster signature is invalid")
+	}
+	return nil
 }
 
 func computeShareRepairActivationLeaseDigest(

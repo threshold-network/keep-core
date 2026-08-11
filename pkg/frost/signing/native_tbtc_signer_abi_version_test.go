@@ -89,15 +89,11 @@ func TestParseTBTCSignerABIVersion(t *testing.T) {
 }
 
 func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
-	// Pins the bridge's current required contract: major 4 moves the durable-store
-	// identity schema and the state-witness transcript to v2, so that state
-	// commitments bind only the stable `.store-id` and no longer break when a
-	// benign filesystem change alters the lock file, directory inode, or device.
-	// Minor 3 adds the trust transition/head and bootstrap-facts surface used
-	// before production signing can start. Minor 4 adds durable distributed-DKG
-	// retirement. Minor 5 adds share repair. The matching library version is compatible; ABI 4.4 and a
-	// different major are not.
-	if requiredTBTCSignerABIMajor != 4 || requiredTBTCSignerABIMinMinor != 5 {
+	// ABI 5.0 replaces the plaintext ABI-4.5 repair scalar contract with
+	// Rust-owned transport sessions and ciphertext-only Delta/Sigma messages.
+	// The matching library version is compatible; ABI 4.5 and every different
+	// major are not.
+	if requiredTBTCSignerABIMajor != 5 || requiredTBTCSignerABIMinMinor != 0 {
 		t.Fatalf(
 			"unexpected required tbtc-signer ABI: [%d.%d]",
 			requiredTBTCSignerABIMajor,
@@ -107,20 +103,8 @@ func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, requiredTBTCSignerABIMinMinor); err != nil {
 		t.Fatalf("the required contract version must be self-compatible: %v", err)
 	}
-	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 0); err == nil {
-		t.Fatal("ABI 4.0 without readiness readbacks must be incompatible")
-	}
-	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 1); err == nil {
-		t.Fatal("ABI 4.1 without the output-barrier tip/ack symbols must be incompatible")
-	}
-	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 2); err == nil {
-		t.Fatal("ABI 4.2 without trust transition and bootstrap-facts symbols must be incompatible")
-	}
-	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 3); err == nil {
-		t.Fatal("ABI 4.3 without distributed-DKG retirement must be incompatible")
-	}
-	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 4); err == nil {
-		t.Fatal("ABI 4.4 without share-repair symbols must be incompatible")
+	if err := checkTBTCSignerABICompatibility(4, 5); err == nil {
+		t.Fatal("ABI 4.5 exposing plaintext repair scalars must be incompatible")
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor+1, requiredTBTCSignerABIMinMinor); err == nil {
 		t.Fatal("a higher major must be incompatible")

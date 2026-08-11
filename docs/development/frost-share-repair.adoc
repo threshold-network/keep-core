@@ -6,11 +6,14 @@ capacity mechanism: it does not increase the threshold, group size, signer
 state budget, or anchor history budget. If fewer than `threshold` healthy
 shares remain, this procedure cannot recover the wallet.
 
-The repair primitive is wrapped by three independent safety boundaries:
+The repair primitive is wrapped by four independent safety boundaries:
 
 * one short-lived, offline-authority-signed authorization names the wallet,
   key group, target seat, exact helper set, old and new stores, recovery epoch,
   public-package commitment, and nonce;
+* a second signature from that authority binds the authorization digest to the
+  exact helper-then-target list of native transport public keys and native
+  store fingerprints;
 * the repaired Rust state is not returned to Go until the existing external
   state-anchor CAS acknowledges it; and
 * the repaired seat remains disabled until a second offline-authority-signed
@@ -18,9 +21,15 @@ The repair primitive is wrapped by three independent safety boundaries:
   pinned in the production activation manifest and exchanged on every message
   from a recovered seat.
 
-No raw key package or signing share crosses the Rust ABI. Helper deltas and
-sigmas are encrypted to per-run ephemeral keys, are endpoint/context bound,
-and are zeroed after use.
+No raw key package, complete delta/sigma scalar set, or signing share crosses
+the Rust ABI. Rust derives authorization-, seat-, role-, and store-bound
+transport keys from the same protected state-encryption root that already
+guards the native share store. Only compressed public keys and fixed-size
+authenticated ciphertexts cross the ABI. Plaintext repair scalars use owned,
+zeroizing Rust containers and are stream-combined inside the native signer.
+This minimizes secret residency in Go; an in-process FFI library is not a
+hardware isolation boundary against arbitrary code that can inspect its own
+address space.
 
 == Preconditions
 
@@ -39,7 +48,8 @@ Do not start recovery until all of these are true:
 . The target's non-secret wallet registry metadata has been restored. It must
   identify the same wallet, group operators, target seat, and key-group handle.
 . Every participant has reconciled the independently authenticated state
-  anchor, installed the protocol-output barrier, and uses ABI 4.5 or newer.
+  anchor, installed the protocol-output barrier, uses ABI 5.0 or newer, and
+  has the production command-backed state-key provider available.
 . The offline authority can verify the authorization inputs independently. An
   authorization is valid for at most 24 hours and contains exactly
   `threshold` sorted, distinct helpers; the target cannot also be a helper.
@@ -47,24 +57,79 @@ Do not start recovery until all of these are true:
 Choose the helper set once. Adding a replacement helper after signing the
 authorization is prohibited; issue a new nonce and authorization instead.
 
+== Native transport preflight and roster ceremony
+
+The roster is a mandatory second authorization step. Once issued from trusted
+native preflight evidence, it prevents the runtime API from substituting a
+caller-controlled recipient key and asking Rust to encrypt a complete
+repair-scalar set to that key. Do not hand-author a roster from caller-supplied
+public keys.
+
+. Place the signed base authorization in an owner-only `0600` regular file on
+  every named operator. Configure an initially absent output path in an
+  owner-only `0700` directory:
+
+[source,toml]
+----
+[tbtc]
+FrostShareRepairTransportPreflightAuthorizationPath = "/canonical/absolute/path/share-repair-authorization.json"
+FrostShareRepairTransportPreflightOutputPath = "/canonical/absolute/path/share-repair-transport-preflight.json"
+----
+
+. Start the production binary. It verifies the production manifest, reconciles
+  the state anchor, and installs the native output barrier before preflight.
+  For every locally owned named seat, Rust validates the signed authorization,
+  proves the role (a helper must load its retained key package; the target must
+  be running the signed `new_store_fingerprint`), and emits the derived public
+  transport key plus that exact store fingerprint. The artifact is published
+  atomically with no-replace semantics, then the process exits cleanly.
+. Collect every operator artifact through an independently authenticated
+  incident channel. The offline authority must verify each artifact's source,
+  authorization digest, participant ownership, role, and store fingerprint.
+  In particular, the target entry must name `new_store_fingerprint`. Accepting
+  a target key supplied only by the Go host defeats scalar confidentiality.
+  The artifact is not a native hardware attestation: if the incident threat
+  model includes a modified host during preflight, require independent
+  machine/workload attestation or collect the entry through a directly
+  controlled native/KMS provisioning path. Keep the production launch gate
+  closed when neither control is available.
+. Build the canonical roster with helpers in the authorization's ascending
+  order followed by the target. Reject missing, extra, reordered,
+  duplicate-key, or mismatched-store entries. Sign the
+  `tbtc-frost-share-repair-transport-roster/v1` digest with the same offline
+  authority, then place the base authorization and roster in one
+  `tbtc-frost-share-repair-bundle/v1` JSON object.
+. Remove both preflight paths before restarting. Deploy the final owner-only
+  bundle on every participant. A state-key rotation, store replacement, seat
+  change, authorization change, or altered roster changes the derived key or
+  binding and fails closed; rerun preflight and issue a new roster.
+
+Preflight is allowed from `issued_at_unix` through (but not including)
+`expires_at_unix`, including before `not_before_unix`; repair arithmetic still
+requires the full not-before window. `FinishShareRepairSession` wipes only the
+in-memory derived-key cache. The key can be re-derived from the protected state
+root while the signed authorization remains unexpired; authorization expiry is
+the API erasure boundary.
+
 == One-shot maintenance phase
 
-Place the signed authorization in an owner-only regular file on exactly the
+Place the signed recovery bundle in an owner-only regular file on exactly the
 operators that control a named helper or target seat. On each participating
 operator, configure:
 
 [source,toml]
 ----
 [tbtc]
-FrostShareRepairAuthorizationPath = "/canonical/absolute/path/share-repair-authorization.json"
+FrostShareRepairAuthorizationPath = "/canonical/absolute/path/share-repair-bundle.json"
 FrostShareRepairMaintenanceTimeout = "10m"
 ----
 
 `FrostShareRepairMaintenanceTimeout` defaults to ten minutes and must be from
 ten seconds through one hour. Start the normal production binary. Startup
 authenticates the normal manifest and anchor first, then runs only the dedicated
-`frost/share_repair/v1` protocol on a channel scoped by the authorization
-digest. Only locally controlled seats named by the authorization participate.
+`frost/share_repair/v1` protocol on a channel scoped by the authorization and
+roster digests. Every announcement must equal the signed native key/store
+entry. Only locally controlled seats named by the authorization participate.
 
 All participating processes exit successfully when maintenance completes.
 This is intentional. Remove `FrostShareRepairAuthorizationPath` before every
@@ -137,8 +202,10 @@ recovered seat's legacy, missing, or stale lease frames.
 | Crash point | Required response
 
 | Before target install
-| Retry the same signed authorization while it remains valid. Partial network
-  deltas and sigmas are not durable.
+| Retry the same signed bundle while it remains valid and the participant
+  stores/state-key roots are unchanged. Partial network deltas and sigmas are
+  not durable. If any roster binding changed, rerun preflight and sign a new
+  roster before retrying.
 
 | After Rust persistence, before anchor acknowledgement reaches Go
 | Remove the maintenance authorization path and restart. Startup reconciliation
@@ -187,9 +254,10 @@ cargo test share_repair_ -- --nocapture
 cargo test share_repair_production_scale_51_of_100_launch_gate \
   -- --ignored --nocapture
 
-# Go authorization, confidentiality, exact-set, activation, and restart guard
+# Go authorization, native preflight/roster, confidentiality, exact-set,
+# activation, and restart guard
 go test -tags=frost_native ./pkg/frost/signing \
-  -run 'TestShareRepair|TestRunShareRepair|TestActivationBound'
+  -run 'TestShareRepair|TestPrepareShareRepair|TestRunShareRepair|TestActivationBound'
 
 # Build/readiness compatibility
 go test ./pkg/tbtc ./cmd
@@ -199,7 +267,11 @@ go test -tags=frost_native ./pkg/tbtc ./cmd
 In addition, stage a multi-process rehearsal using the intended anchor service
 and a disposable 51-of-100 wallet. Exercise loss of the target process in every
 crash-matrix row, duplicate-old-store startup, expired authorization, helper
-timeout, malformed ciphertext, and a partially upgraded fleet. Capture the
-v2 inventory commitment, anchor acknowledgement, old-stream tombstone,
-activation registry root, and fleet handshake attestations as the incident
-record. Never capture scalar payloads, key packages, or debug memory dumps.
+timeout, malformed ciphertext, state-key/store changes between preflight and
+repair, a caller-substituted target key, and a partially upgraded fleet. The
+authority-side rehearsal must authenticate every native preflight source and
+prove that a caller-supplied or wrong-store target entry cannot obtain a signed
+roster. Capture the preflight artifacts, signed roster digest, v2 inventory
+commitment, anchor acknowledgement, old-stream tombstone, activation registry
+root, and fleet handshake attestations as the incident record. Never capture
+scalar plaintexts, key packages, state roots, or debug memory dumps.

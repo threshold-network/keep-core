@@ -146,6 +146,11 @@ jobs:
             frost_tbtc_state_anchor_bootstrap_facts \
             frost_tbtc_acknowledge_state_witness_checkpoint \
             frost_tbtc_recover_state_witness_checkpoint \
+            frost_tbtc_begin_share_repair_session \
+            frost_tbtc_finish_share_repair_session \
+            frost_tbtc_share_repair_part1 \
+            frost_tbtc_share_repair_part2 \
+            frost_tbtc_install_repaired_share \
             frost_tbtc_version \
             frost_tbtc_abi_version; do
             if ! nm -D --defined-only "$lib" | grep -q " ${sym}$"; then

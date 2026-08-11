@@ -132,8 +132,13 @@ const shareRepairTransportType = "frost/share_repair/v1"
 
 const (
 	shareRepairEphemeralPublicKeyLength = 33
-	shareRepairMaximumSecretPayload     = 4 * 1024
-	shareRepairMaximumPublicPayload     = 256 * 1024
+	// A native repair envelope is compressed ephemeral SEC1 (33), XChaCha20
+	// nonce (24), encrypted scalar (32), and Poly1305 tag (16). Keeping this
+	// exact at the transport boundary prevents a stale or custom engine from
+	// putting plaintext scalars on the wire.
+	shareRepairEncryptedScalarPayloadLength = 33 + 24 + 32 + 16
+	shareRepairMaximumSecretPayload         = 4 * 1024
+	shareRepairMaximumPublicPayload         = 256 * 1024
 )
 
 type shareRepairTransportMessage struct {
@@ -178,9 +183,9 @@ func (message *shareRepairTransportMessage) Marshal() ([]byte, error) {
 			len(value.Payload) != sha256.Size {
 			return nil, fmt.Errorf("share-repair completion shape is invalid")
 		}
-	default:
+	case shareRepairDeltaMessage, shareRepairSigmaMessage:
 		if value.Recipient == 0 || len(value.EphemeralPublicKey) != 0 ||
-			len(value.Payload) == 0 || len(value.Payload) > shareRepairMaximumSecretPayload {
+			len(value.Payload) != shareRepairEncryptedScalarPayloadLength {
 			return nil, fmt.Errorf("share-repair secret message shape is invalid")
 		}
 	}
@@ -251,9 +256,9 @@ func (message *shareRepairTransportMessage) Unmarshal(data []byte) error {
 		if rawRecipient != 0 || ephemeralLength != 0 || len(value.Payload) != sha256.Size {
 			return fmt.Errorf("share-repair completion shape is invalid")
 		}
-	default:
+	case shareRepairDeltaMessage, shareRepairSigmaMessage:
 		if rawRecipient == 0 || ephemeralLength != 0 || len(value.Payload) == 0 ||
-			len(value.Payload) > shareRepairMaximumSecretPayload {
+			len(value.Payload) != shareRepairEncryptedScalarPayloadLength {
 			return fmt.Errorf("share-repair secret message shape is invalid")
 		}
 	}
@@ -266,6 +271,7 @@ type broadcastChannelShareRepairBus struct {
 	logger              log.StandardLogger
 	channel             net.BroadcastChannel
 	membershipValidator *group.MembershipValidator
+	participants        map[group.MemberIndex]struct{}
 	mutex               sync.Mutex
 	subscribers         []*shareRepairBusSubscriber
 	startOnce           sync.Once
@@ -276,9 +282,18 @@ func newBroadcastChannelShareRepairBus(
 	logger log.StandardLogger,
 	channel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
+	participants map[group.MemberIndex]struct{},
 ) (shareRepairBus, error) {
-	if ctx == nil || channel == nil || membershipValidator == nil {
+	if ctx == nil || channel == nil || membershipValidator == nil ||
+		len(participants) == 0 {
 		return nil, fmt.Errorf("share-repair bus dependencies are incomplete")
+	}
+	participantCopy := make(map[group.MemberIndex]struct{}, len(participants))
+	for participant := range participants {
+		if participant == 0 || participant > group.MaxMemberIndex {
+			return nil, fmt.Errorf("share-repair participant [%d] is invalid", participant)
+		}
+		participantCopy[participant] = struct{}{}
 	}
 	if logger == nil {
 		logger = log.Logger("frost-share-repair-bus")
@@ -291,6 +306,7 @@ func newBroadcastChannelShareRepairBus(
 		logger:              logger,
 		channel:             channel,
 		membershipValidator: membershipValidator,
+		participants:        participantCopy,
 	}, nil
 }
 
@@ -340,6 +356,15 @@ func (bus *broadcastChannelShareRepairBus) Broadcast(
 func (bus *broadcastChannelShareRepairBus) handleMessage(message net.Message) {
 	wire, ok := message.Payload().(*shareRepairTransportMessage)
 	if !ok {
+		return
+	}
+	// Full wallet membership is broader than the exact helper/target set named
+	// by this recovery authorization. Drop an authenticated but unauthorized
+	// wallet seat before it can consume subscriber or pre-rendezvous capacity.
+	if _, participant := bus.participants[wire.message.Sender]; !participant {
+		// This path is attacker-controlled by any authenticated wallet seat not
+		// named in the repair certificate. Drop silently so admission control
+		// cannot be repurposed into warning-log amplification.
 		return
 	}
 	if !bus.membershipValidator.IsValidMembership(

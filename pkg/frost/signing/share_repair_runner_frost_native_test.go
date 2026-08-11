@@ -5,6 +5,7 @@ package signing
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,15 +14,56 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 type testShareRepairEngine struct {
-	mutex         sync.Mutex
-	secretBuffers [][]byte
-	installCalls  int
+	mutex        sync.Mutex
+	beginCalls   int
+	finishCalls  int
+	installCalls int
 }
+
+type testShareRepairSessionOverrideEngine struct {
+	*testShareRepairEngine
+	beginError  error
+	finishError error
+	mutate      func(*NativeShareRepairSession)
+}
+
+func (engine *testShareRepairSessionOverrideEngine) BeginShareRepairSession(
+	authorization *ShareRepairAuthorization,
+	participantIdentifier uint16,
+) (*NativeShareRepairSession, error) {
+	if engine.beginError != nil {
+		engine.mutex.Lock()
+		engine.beginCalls++
+		engine.mutex.Unlock()
+		return nil, engine.beginError
+	}
+	session, err := engine.testShareRepairEngine.BeginShareRepairSession(
+		authorization,
+		participantIdentifier,
+	)
+	if session != nil && engine.mutate != nil {
+		engine.mutate(session)
+	}
+	return session, err
+}
+
+func (engine *testShareRepairSessionOverrideEngine) FinishShareRepairSession(
+	authorization *ShareRepairAuthorization,
+	participantIdentifier uint16,
+) error {
+	_ = engine.testShareRepairEngine.FinishShareRepairSession(
+		authorization,
+		participantIdentifier,
+	)
+	return engine.finishError
+}
+
+const testShareRepairCiphertextLength = shareRepairEncryptedScalarPayloadLength
 
 func testShareRepairSecret(value byte) []byte {
 	return bytes.Repeat([]byte{value}, 32)
@@ -38,16 +80,82 @@ func testShareRepairPublicKeyPackage() *NativeFROSTPublicKeyPackage {
 	}
 }
 
-func (engine *testShareRepairEngine) rememberSecret(value []byte) {
+func testShareRepairPublicKey(identifier uint16) []byte {
+	privateBytes := bytes.Repeat([]byte{byte(0x11 * identifier)}, 32)
+	_, publicKey := btcec.PrivKeyFromBytes(privateBytes)
+	return publicKey.SerializeCompressed()
+}
+
+func testShareRepairCiphertext(kind byte, sender, recipient uint16) []byte {
+	result := bytes.Repeat([]byte{0xa5}, testShareRepairCiphertextLength)
+	result[0] = kind
+	result[1] = byte(sender >> 8)
+	result[2] = byte(sender)
+	result[3] = byte(recipient >> 8)
+	result[4] = byte(recipient)
+	return result
+}
+
+func currentTestShareRepairAuthorization(
+	t *testing.T,
+) (*ShareRepairAuthorization, ed25519.PrivateKey) {
+	t.Helper()
+	authorization, authority := testShareRepairAuthorization(t)
+	now := uint64(time.Now().Unix())
+	authorization.IssuedAtUnix = now - 60
+	// Preflight is intentionally allowed before the recovery not-before time.
+	authorization.NotBeforeUnix = now + 300
+	authorization.ExpiresAtUnix = now + 3600
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization.SignatureHex = "0x" + hex.EncodeToString(
+		ed25519.Sign(authority, digest[:]),
+	)
+	return authorization, authority
+}
+
+func (engine *testShareRepairEngine) BeginShareRepairSession(
+	authorization *ShareRepairAuthorization,
+	participantIdentifier uint16,
+) (*NativeShareRepairSession, error) {
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		return nil, err
+	}
 	engine.mutex.Lock()
-	defer engine.mutex.Unlock()
-	engine.secretBuffers = append(engine.secretBuffers, value)
+	engine.beginCalls++
+	engine.mutex.Unlock()
+	return &NativeShareRepairSession{
+		ContextDigest:         fmt.Sprintf("0x%x", digest),
+		ParticipantIdentifier: participantIdentifier,
+		StoreFingerprint:      authorization.NewStoreFingerprint,
+		TransportPublicKey:    testShareRepairPublicKey(participantIdentifier),
+	}, nil
+}
+
+func (engine *testShareRepairEngine) FinishShareRepairSession(
+	_ *ShareRepairAuthorization,
+	_ uint16,
+) error {
+	engine.mutex.Lock()
+	engine.finishCalls++
+	engine.mutex.Unlock()
+	return nil
 }
 
 func (engine *testShareRepairEngine) ShareRepairPart1(
 	authorization *ShareRepairAuthorization,
 	helperIdentifier uint16,
+	transportRoster *ShareRepairTransportRoster,
 ) (*NativeShareRepairPart1Result, error) {
+	if _, err := ComputeShareRepairTransportRosterDigest(
+		transportRoster,
+		authorization,
+	); err != nil {
+		return nil, fmt.Errorf("invalid transport roster: %w", err)
+	}
 	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
 	if err != nil {
 		return nil, err
@@ -58,14 +166,18 @@ func (engine *testShareRepairEngine) ShareRepairPart1(
 		HelperIdentifier: helperIdentifier,
 		PublicKeyPackage: testShareRepairPublicKeyPackage(),
 	}
-	for _, recipient := range authorization.HelperIdentifiers {
-		secret := testShareRepairSecret(byte(helperIdentifier*10 + recipient))
-		engine.rememberSecret(secret)
-		result.Deltas = append(result.Deltas, &NativeShareRepairDelta{
+	for index, recipient := range authorization.HelperIdentifiers {
+		endpoint := transportRoster.ParticipantPublicKeys[index]
+		publicKey, _ := hex.DecodeString(endpoint.PublicKeyHex)
+		if endpoint.ParticipantIdentifier != recipient ||
+			!bytes.Equal(publicKey, testShareRepairPublicKey(recipient)) {
+			return nil, fmt.Errorf("wrong recipient key [%d]", index)
+		}
+		result.Deltas = append(result.Deltas, &NativeShareRepairEncryptedDelta{
 			ContextDigest:       contextWire,
 			SenderIdentifier:    helperIdentifier,
 			RecipientIdentifier: recipient,
-			Data:                secret,
+			Payload:             testShareRepairCiphertext(1, helperIdentifier, recipient),
 		})
 	}
 	return result, nil
@@ -74,8 +186,15 @@ func (engine *testShareRepairEngine) ShareRepairPart1(
 func (engine *testShareRepairEngine) ShareRepairPart2(
 	authorization *ShareRepairAuthorization,
 	helperIdentifier uint16,
-	deltas []*NativeShareRepairDelta,
+	deltas []*NativeShareRepairEncryptedDelta,
+	transportRoster *ShareRepairTransportRoster,
 ) (*NativeShareRepairPart2Result, error) {
+	if _, err := ComputeShareRepairTransportRosterDigest(
+		transportRoster,
+		authorization,
+	); err != nil {
+		return nil, fmt.Errorf("invalid transport roster: %w", err)
+	}
 	if len(deltas) != len(authorization.HelperIdentifiers) {
 		return nil, fmt.Errorf("wrong delta count")
 	}
@@ -83,20 +202,31 @@ func (engine *testShareRepairEngine) ShareRepairPart2(
 		delta := deltas[index]
 		if delta == nil || delta.SenderIdentifier != sender ||
 			delta.RecipientIdentifier != helperIdentifier ||
-			!bytes.Equal(delta.Data, testShareRepairSecret(byte(sender*10+helperIdentifier))) {
+			!bytes.Equal(delta.Payload, testShareRepairCiphertext(1, sender, helperIdentifier)) {
 			return nil, fmt.Errorf("wrong delta [%d]", index)
 		}
 	}
+	targetPublicKey, _ := hex.DecodeString(
+		transportRoster.ParticipantPublicKeys[len(transportRoster.ParticipantPublicKeys)-1].PublicKeyHex,
+	)
+	if !bytes.Equal(
+		targetPublicKey,
+		testShareRepairPublicKey(authorization.TargetIdentifier),
+	) {
+		return nil, fmt.Errorf("wrong target public key")
+	}
 	digest, _ := ComputeShareRepairAuthorizationDigest(authorization)
-	secret := testShareRepairSecret(byte(100 + helperIdentifier))
-	engine.rememberSecret(secret)
 	contextWire := fmt.Sprintf("0x%x", digest)
 	return &NativeShareRepairPart2Result{
 		ContextDigest: contextWire,
-		Sigma: &NativeShareRepairSigma{
+		Sigma: &NativeShareRepairEncryptedSigma{
 			ContextDigest:    contextWire,
 			HelperIdentifier: helperIdentifier,
-			Data:             secret,
+			Payload: testShareRepairCiphertext(
+				2,
+				helperIdentifier,
+				authorization.TargetIdentifier,
+			),
 		},
 	}, nil
 }
@@ -104,8 +234,15 @@ func (engine *testShareRepairEngine) ShareRepairPart2(
 func (engine *testShareRepairEngine) InstallRepairedShare(
 	authorization *ShareRepairAuthorization,
 	publicKeyPackage *NativeFROSTPublicKeyPackage,
-	sigmas []*NativeShareRepairSigma,
+	sigmas []*NativeShareRepairEncryptedSigma,
+	transportRoster *ShareRepairTransportRoster,
 ) (*NativeShareRepairInstallResult, error) {
+	if _, err := ComputeShareRepairTransportRosterDigest(
+		transportRoster,
+		authorization,
+	); err != nil {
+		return nil, fmt.Errorf("invalid transport roster: %w", err)
+	}
 	if publicKeyPackage == nil || publicKeyPackage.VerifyingKey != "group-verifying-key" ||
 		len(publicKeyPackage.VerifyingShares) != 3 {
 		return nil, fmt.Errorf("wrong public key package")
@@ -116,7 +253,10 @@ func (engine *testShareRepairEngine) InstallRepairedShare(
 	for index, helper := range authorization.HelperIdentifiers {
 		sigma := sigmas[index]
 		if sigma == nil || sigma.HelperIdentifier != helper ||
-			!bytes.Equal(sigma.Data, testShareRepairSecret(byte(100+helper))) {
+			!bytes.Equal(
+				sigma.Payload,
+				testShareRepairCiphertext(2, helper, authorization.TargetIdentifier),
+			) {
 			return nil, fmt.Errorf("wrong sigma [%d]", index)
 		}
 	}
@@ -184,7 +324,8 @@ func (bus *subscriptionBarrierShareRepairBus) Broadcast(
 func TestRunShareRepairOnBusConfidentialExactSetAndInstall(t *testing.T) {
 	resetShareRepairActivationRegistryForTest()
 	t.Cleanup(resetShareRepairActivationRegistryForTest)
-	authorization, _ := testShareRepairAuthorization(t)
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
 	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
 	if err != nil {
 		t.Fatal(err)
@@ -213,6 +354,7 @@ func TestRunShareRepairOnBusConfidentialExactSetAndInstall(t *testing.T) {
 				ctx,
 				engine,
 				authorization,
+				transportRoster,
 				digest,
 				[]group.MemberIndex{member},
 				bus,
@@ -241,11 +383,13 @@ func TestRunShareRepairOnBusConfidentialExactSetAndInstall(t *testing.T) {
 		engine.mutex.Unlock()
 		t.Fatalf("expected one native install, got [%d]", engine.installCalls)
 	}
-	for index, secret := range engine.secretBuffers {
-		if !bytes.Equal(secret, make([]byte, len(secret))) {
-			engine.mutex.Unlock()
-			t.Fatalf("native secret buffer [%d] was not scrubbed", index)
-		}
+	if engine.beginCalls != 3 || engine.finishCalls != 3 {
+		engine.mutex.Unlock()
+		t.Fatalf(
+			"expected three native session begin/finish calls, got [%d]/[%d]",
+			engine.beginCalls,
+			engine.finishCalls,
+		)
 	}
 	engine.mutex.Unlock()
 
@@ -322,15 +466,18 @@ func TestRunShareRepairOnBusConfidentialExactSetAndInstall(t *testing.T) {
 func TestRunShareRepairOnBusTimesOutWithoutExactParticipantSet(t *testing.T) {
 	resetShareRepairActivationRegistryForTest()
 	t.Cleanup(resetShareRepairActivationRegistryForTest)
-	authorization, _ := testShareRepairAuthorization(t)
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
 	digest, _ := ComputeShareRepairAuthorizationDigest(authorization)
 	bus := &recordingShareRepairBus{shareRepairBus: newInProcessShareRepairBus(16)}
+	engine := &testShareRepairEngine{}
 	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
 	defer cancel()
 	_, err := runShareRepairOnBus(
 		ctx,
-		&testShareRepairEngine{},
+		engine,
 		authorization,
+		transportRoster,
 		digest,
 		[]group.MemberIndex{1},
 		bus,
@@ -338,6 +485,16 @@ func TestRunShareRepairOnBusTimesOutWithoutExactParticipantSet(t *testing.T) {
 	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("context deadline exceeded")) {
 		t.Fatalf("expected exact-set announcement timeout, got [%v]", err)
 	}
+	engine.mutex.Lock()
+	if engine.beginCalls != 1 || engine.finishCalls != 1 {
+		engine.mutex.Unlock()
+		t.Fatalf(
+			"native timeout cleanup was incomplete: begin [%d], finish [%d]",
+			engine.beginCalls,
+			engine.finishCalls,
+		)
+	}
+	engine.mutex.Unlock()
 	bus.mutex.Lock()
 	defer bus.mutex.Unlock()
 	announcementCount := 0
@@ -351,6 +508,197 @@ func TestRunShareRepairOnBusTimesOutWithoutExactParticipantSet(t *testing.T) {
 			"application layer must publish one announcement, got [%d]",
 			announcementCount,
 		)
+	}
+}
+
+func TestPrepareShareRepairTransportRosterEntry(t *testing.T) {
+	authorization, authority := currentTestShareRepairAuthorization(t)
+	authorityPublicKey := authority.Public().(ed25519.PublicKey)
+
+	t.Run("success before not-before", func(t *testing.T) {
+		engine := &testShareRepairEngine{}
+		entry, err := PrepareShareRepairTransportRosterEntry(
+			engine,
+			authorization,
+			authorityPublicKey,
+			1,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if entry.ParticipantIdentifier != 1 ||
+			entry.StoreFingerprint != authorization.NewStoreFingerprint ||
+			entry.PublicKeyHex != hex.EncodeToString(testShareRepairPublicKey(1)) {
+			t.Fatalf("unexpected transport preflight entry: %+v", entry)
+		}
+		engine.mutex.Lock()
+		defer engine.mutex.Unlock()
+		if engine.beginCalls != 1 || engine.finishCalls != 1 {
+			t.Fatalf(
+				"transport preflight lifecycle was [%d]/[%d], expected 1/1",
+				engine.beginCalls,
+				engine.finishCalls,
+			)
+		}
+	})
+
+	t.Run("begin error still cleans up", func(t *testing.T) {
+		engine := &testShareRepairSessionOverrideEngine{
+			testShareRepairEngine: &testShareRepairEngine{},
+			beginError:            fmt.Errorf("response decode failed after native begin"),
+		}
+		if _, err := PrepareShareRepairTransportRosterEntry(
+			engine,
+			authorization,
+			authorityPublicKey,
+			1,
+		); err == nil {
+			t.Fatal("transport preflight accepted a failed native begin")
+		}
+		engine.mutex.Lock()
+		defer engine.mutex.Unlock()
+		if engine.beginCalls != 1 || engine.finishCalls != 1 {
+			t.Fatalf("failed begin cleanup was [%d]/[%d]", engine.beginCalls, engine.finishCalls)
+		}
+	})
+
+	for name, mutate := range map[string]func(*NativeShareRepairSession){
+		"invalid public key": func(session *NativeShareRepairSession) {
+			session.TransportPublicKey = bytes.Repeat([]byte{0xff}, shareRepairEphemeralPublicKeyLength)
+		},
+		"invalid store fingerprint": func(session *NativeShareRepairSession) {
+			session.StoreFingerprint = "0x00"
+		},
+	} {
+		t.Run(name+" cleans up", func(t *testing.T) {
+			engine := &testShareRepairSessionOverrideEngine{
+				testShareRepairEngine: &testShareRepairEngine{},
+				mutate:                mutate,
+			}
+			if _, err := PrepareShareRepairTransportRosterEntry(
+				engine,
+				authorization,
+				authorityPublicKey,
+				1,
+			); err == nil {
+				t.Fatal("transport preflight accepted an invalid native session")
+			}
+			engine.mutex.Lock()
+			defer engine.mutex.Unlock()
+			if engine.beginCalls != 1 || engine.finishCalls != 1 {
+				t.Fatalf("invalid session cleanup was [%d]/[%d]", engine.beginCalls, engine.finishCalls)
+			}
+		})
+	}
+
+	t.Run("finish error is reported", func(t *testing.T) {
+		engine := &testShareRepairSessionOverrideEngine{
+			testShareRepairEngine: &testShareRepairEngine{},
+			finishError:           fmt.Errorf("native cleanup failed"),
+		}
+		if _, err := PrepareShareRepairTransportRosterEntry(
+			engine,
+			authorization,
+			authorityPublicKey,
+			1,
+		); err == nil || !bytes.Contains([]byte(err.Error()), []byte("cleanup failed")) {
+			t.Fatalf("transport preflight hid finish failure: %v", err)
+		}
+	})
+
+	t.Run("unauthorized seat is rejected before begin", func(t *testing.T) {
+		engine := &testShareRepairEngine{}
+		if _, err := PrepareShareRepairTransportRosterEntry(
+			engine,
+			authorization,
+			authorityPublicKey,
+			99,
+		); err == nil {
+			t.Fatal("transport preflight accepted an unauthorized seat")
+		}
+		engine.mutex.Lock()
+		defer engine.mutex.Unlock()
+		if engine.beginCalls != 0 || engine.finishCalls != 0 {
+			t.Fatal("unauthorized seat reached the native engine")
+		}
+	})
+
+	for name, timestamp := range map[string]func(*ShareRepairAuthorization){
+		"before issued": func(candidate *ShareRepairAuthorization) {
+			candidate.IssuedAtUnix = uint64(time.Now().Unix()) + 60
+			candidate.NotBeforeUnix = candidate.IssuedAtUnix
+			candidate.ExpiresAtUnix = candidate.IssuedAtUnix + 60
+		},
+		"expired": func(candidate *ShareRepairAuthorization) {
+			candidate.IssuedAtUnix = 1
+			candidate.NotBeforeUnix = 1
+			candidate.ExpiresAtUnix = 2
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := *authorization
+			timestamp(&candidate)
+			digest, err := ComputeShareRepairAuthorizationDigest(&candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate.SignatureHex = "0x" + hex.EncodeToString(
+				ed25519.Sign(authority, digest[:]),
+			)
+			engine := &testShareRepairEngine{}
+			if _, err := PrepareShareRepairTransportRosterEntry(
+				engine,
+				&candidate,
+				authorityPublicKey,
+				1,
+			); err == nil {
+				t.Fatalf("transport preflight accepted authorization %s", name)
+			}
+		})
+	}
+}
+
+func TestRunShareRepairRejectsNativeSessionOutsideSignedRoster(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := map[string]func(*NativeShareRepairSession){
+		"public key": func(session *NativeShareRepairSession) {
+			session.TransportPublicKey = testShareRepairPublicKey(2)
+		},
+		"store fingerprint": func(session *NativeShareRepairSession) {
+			session.StoreFingerprint = testShareRepairHex32(0x99)
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			base := &testShareRepairEngine{}
+			engine := &testShareRepairSessionOverrideEngine{
+				testShareRepairEngine: base,
+				mutate:                mutate,
+			}
+			_, err := runShareRepairOnBus(
+				context.Background(),
+				engine,
+				authorization,
+				transportRoster,
+				digest,
+				[]group.MemberIndex{1},
+				newInProcessShareRepairBus(4),
+			)
+			if err == nil || !bytes.Contains([]byte(err.Error()), []byte("signed")) {
+				t.Fatalf("native %s mismatch was accepted: %v", name, err)
+			}
+			base.mutex.Lock()
+			defer base.mutex.Unlock()
+			if base.beginCalls != 1 || base.finishCalls != 1 {
+				t.Fatalf("mismatch lifecycle was [%d]/[%d]", base.beginCalls, base.finishCalls)
+			}
+		})
 	}
 }
 
@@ -414,16 +762,12 @@ func assertShareRepairStillWaiting(
 }
 
 func TestShareRepairAnnouncementRemainsLivePastLocalRendezvous(t *testing.T) {
-	authorization, _ := testShareRepairAuthorization(t)
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
 	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
 	if err != nil {
 		t.Fatal(err)
 	}
-	localKeyPair, err := ephemeral.GenerateKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer localKeyPair.PrivateKey.Zero()
 	bus := &cancelTrackingShareRepairBus{
 		broadcasts: make(chan *cancelTrackingShareRepairBroadcast, 8),
 	}
@@ -431,6 +775,7 @@ func TestShareRepairAnnouncementRemainsLivePastLocalRendezvous(t *testing.T) {
 	runner := &shareRepairRunner{
 		member:              1,
 		authorization:       authorization,
+		transportRoster:     transportRoster,
 		authorizationDigest: digest,
 		contextWire:         fmt.Sprintf("0x%x", digest),
 		participants: map[group.MemberIndex]struct{}{
@@ -442,11 +787,10 @@ func TestShareRepairAnnouncementRemainsLivePastLocalRendezvous(t *testing.T) {
 			1: {},
 			2: {},
 		},
-		engine:           &testShareRepairEngine{},
-		bus:              bus,
-		stream:           stream,
-		ephemeralPrivate: localKeyPair.PrivateKey,
-		ephemeralPublic:  localKeyPair.PublicKey.Marshal(),
+		engine:          &testShareRepairEngine{},
+		bus:             bus,
+		stream:          stream,
+		ephemeralPublic: testShareRepairPublicKey(1),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -461,17 +805,12 @@ func TestShareRepairAnnouncementRemainsLivePastLocalRendezvous(t *testing.T) {
 		t.Fatalf("runner first published the wrong message: %+v", announcement.message)
 	}
 	for _, peer := range []group.MemberIndex{2, 3} {
-		peerKeyPair, err := ephemeral.GenerateKeyPair()
-		if err != nil {
-			t.Fatal(err)
-		}
 		stream <- shareRepairMessage{
 			Type:               shareRepairAnnouncementMessage,
 			Sender:             peer,
 			ContextDigest:      digest,
-			EphemeralPublicKey: peerKeyPair.PublicKey.Marshal(),
+			EphemeralPublicKey: testShareRepairPublicKey(uint16(peer)),
 		}
-		peerKeyPair.PrivateKey.Zero()
 	}
 
 	for {
@@ -719,17 +1058,12 @@ func TestShareRepairHelperRelayDeadlineAfterReceiptIsSuccessful(t *testing.T) {
 }
 
 func TestShareRepairRunnerRejectsPendingMessageFlood(t *testing.T) {
-	authorization, _ := testShareRepairAuthorization(t)
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
 	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyPair, err := ephemeral.GenerateKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer keyPair.PrivateKey.Zero()
-
 	stream := make(chan shareRepairMessage, shareRepairMaximumPendingMessages+1)
 	for index := 0; index <= shareRepairMaximumPendingMessages; index++ {
 		stream <- shareRepairMessage{
@@ -743,17 +1077,67 @@ func TestShareRepairRunnerRejectsPendingMessageFlood(t *testing.T) {
 	runner := &shareRepairRunner{
 		member:              1,
 		authorizationDigest: digest,
+		transportRoster:     transportRoster,
 		participants: map[group.MemberIndex]struct{}{
 			1: {},
 			2: {},
 		},
 		stream:          stream,
-		ephemeralPublic: keyPair.PublicKey.Marshal(),
+		ephemeralPublic: testShareRepairPublicKey(1),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err = runner.collectAnnouncements(ctx)
 	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("pending-message limit")) {
 		t.Fatalf("expected pending-message flood rejection, got [%v]", err)
+	}
+}
+
+func TestShareRepairRunnerDropsNonparticipantFramesBeforePendingBuffer(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := make(chan shareRepairMessage, shareRepairMaximumPendingMessages+2)
+	for index := 0; index <= shareRepairMaximumPendingMessages; index++ {
+		stream <- shareRepairMessage{
+			Type:          shareRepairDeltaMessage,
+			Sender:        3,
+			Recipient:     1,
+			ContextDigest: digest,
+			Payload:       []byte{byte(index >> 8), byte(index)},
+		}
+	}
+	stream <- shareRepairMessage{
+		Type:               shareRepairAnnouncementMessage,
+		Sender:             2,
+		ContextDigest:      digest,
+		EphemeralPublicKey: testShareRepairPublicKey(2),
+	}
+	runner := &shareRepairRunner{
+		member:              1,
+		authorizationDigest: digest,
+		transportRoster:     transportRoster,
+		participants: map[group.MemberIndex]struct{}{
+			1: {},
+			2: {},
+		},
+		stream:          stream,
+		ephemeralPublic: testShareRepairPublicKey(1),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	publicKeys, err := runner.collectAnnouncements(ctx)
+	if err != nil {
+		t.Fatalf("nonparticipant frames aborted rendezvous: %v", err)
+	}
+	if len(publicKeys) != 2 || len(runner.pending) != 0 {
+		t.Fatalf(
+			"nonparticipant frames reached protocol state: keys [%d], pending [%d]",
+			len(publicKeys),
+			len(runner.pending),
+		)
 	}
 }

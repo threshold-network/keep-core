@@ -54,6 +54,58 @@ func testShareRepairAuthorization(
 	return authorization, authority
 }
 
+func testShareRepairTransportRoster(
+	t *testing.T,
+	authorization *ShareRepairAuthorization,
+	authority ed25519.PrivateKey,
+) *ShareRepairTransportRoster {
+	t.Helper()
+	authorizationDigest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatalf("compute authorization digest: %v", err)
+	}
+	participantIdentifiers := append(
+		append([]uint16(nil), authorization.HelperIdentifiers...),
+		authorization.TargetIdentifier,
+	)
+	participantPublicKeys := make(
+		[]ShareRepairTransportPublicKey,
+		len(participantIdentifiers),
+	)
+	for index, participantIdentifier := range participantIdentifiers {
+		_, publicKey := btcec.PrivKeyFromBytes(
+			bytes.Repeat([]byte{byte(0x11 * (index + 1))}, 32),
+		)
+		participantPublicKeys[index] = ShareRepairTransportPublicKey{
+			ParticipantIdentifier: participantIdentifier,
+			StoreFingerprint:      authorization.NewStoreFingerprint,
+			PublicKeyHex:          hex.EncodeToString(publicKey.SerializeCompressed()),
+		}
+	}
+	roster := &ShareRepairTransportRoster{
+		Schema:                ShareRepairTransportRosterSchema,
+		AuthorizationDigest:   "0x" + hex.EncodeToString(authorizationDigest[:]),
+		ParticipantPublicKeys: participantPublicKeys,
+	}
+	digest, err := ComputeShareRepairTransportRosterDigest(roster, authorization)
+	if err != nil {
+		t.Fatalf("compute transport roster digest: %v", err)
+	}
+	roster.SignatureHex = "0x" + hex.EncodeToString(ed25519.Sign(authority, digest[:]))
+	return roster
+}
+
+func cloneShareRepairTransportRoster(
+	roster *ShareRepairTransportRoster,
+) *ShareRepairTransportRoster {
+	cloned := *roster
+	cloned.ParticipantPublicKeys = append(
+		[]ShareRepairTransportPublicKey(nil),
+		roster.ParticipantPublicKeys...,
+	)
+	return &cloned
+}
+
 func testShareRepairActivationLease(
 	t *testing.T,
 	authorization *ShareRepairAuthorization,
@@ -127,29 +179,157 @@ func TestShareRepairAuthorizationDigestFrozenVector(t *testing.T) {
 	}
 }
 
-func TestShareRepairSecretHexJSONUsesCanonicalMutableBytes(t *testing.T) {
-	secret := bytes.Repeat([]byte{0xab}, 32)
-	wire, err := encodeShareRepairSecretHexJSON(secret)
+func TestShareRepairTransportRosterDigestFrozenVector(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	roster := testShareRepairTransportRoster(t, authorization, authority)
+	digest, err := ComputeShareRepairTransportRosterDigest(roster, authorization)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(wire) != 66 || wire[0] != '"' || wire[65] != '"' ||
-		bytes.Contains(wire, []byte("AB")) {
-		t.Fatalf("unexpected canonical secret wire: %q", wire)
+	const expected = "1a46b993431f075de1adef58a668e8133cca8ca7070eb5d6ffbedee92d224364"
+	if actual := hex.EncodeToString(digest[:]); actual != expected {
+		t.Fatalf("transport roster digest changed: got [%s], want [%s]", actual, expected)
 	}
-	decoded, err := decodeShareRepairSecretHexJSON(wire)
-	if err != nil || !bytes.Equal(decoded, secret) {
-		t.Fatalf("canonical secret wire did not round trip: %v", err)
+	if err := ValidateShareRepairTransportRoster(
+		roster,
+		authorization,
+		authority.Public().(ed25519.PublicKey),
+	); err != nil {
+		t.Fatalf("validate transport roster: %v", err)
 	}
-	zeroBytes(decoded)
-	upper := append(json.RawMessage(nil), wire...)
-	upper[1] = 'A'
-	if _, err := decodeShareRepairSecretHexJSON(upper); err == nil {
-		t.Fatal("uppercase secret hex was accepted")
+}
+
+func TestShareRepairTransportRosterRejectsMalformedAndSubstitutedKeys(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	roster := testShareRepairTransportRoster(t, authorization, authority)
+
+	tests := map[string]func(*ShareRepairTransportRoster){
+		"wrong schema": func(candidate *ShareRepairTransportRoster) {
+			candidate.Schema = "tbtc-frost-share-repair-transport-roster/v2"
+		},
+		"wrong authorization digest": func(candidate *ShareRepairTransportRoster) {
+			candidate.AuthorizationDigest = testShareRepairHex32(0x99)
+		},
+		"wrong participant order": func(candidate *ShareRepairTransportRoster) {
+			candidate.ParticipantPublicKeys[0], candidate.ParticipantPublicKeys[1] =
+				candidate.ParticipantPublicKeys[1], candidate.ParticipantPublicKeys[0]
+		},
+		"missing target": func(candidate *ShareRepairTransportRoster) {
+			candidate.ParticipantPublicKeys = candidate.ParticipantPublicKeys[:2]
+		},
+		"duplicate public key": func(candidate *ShareRepairTransportRoster) {
+			candidate.ParticipantPublicKeys[1].PublicKeyHex =
+				candidate.ParticipantPublicKeys[0].PublicKeyHex
+		},
+		"uppercase public key": func(candidate *ShareRepairTransportRoster) {
+			candidate.ParticipantPublicKeys[0].PublicKeyHex =
+				strings.ToUpper(candidate.ParticipantPublicKeys[0].PublicKeyHex)
+		},
+		"prefixed public key": func(candidate *ShareRepairTransportRoster) {
+			candidate.ParticipantPublicKeys[0].PublicKeyHex =
+				"0x" + candidate.ParticipantPublicKeys[0].PublicKeyHex
+		},
+		"invalid SEC1 public key": func(candidate *ShareRepairTransportRoster) {
+			candidate.ParticipantPublicKeys[0].PublicKeyHex = strings.Repeat("00", 33)
+		},
+		"invalid store fingerprint": func(candidate *ShareRepairTransportRoster) {
+			candidate.ParticipantPublicKeys[0].StoreFingerprint = "0x00"
+		},
+		"target wrong store": func(candidate *ShareRepairTransportRoster) {
+			candidate.ParticipantPublicKeys[len(candidate.ParticipantPublicKeys)-1].StoreFingerprint =
+				testShareRepairHex32(0x99)
+		},
 	}
-	zeroBytes(wire)
-	if !bytes.Equal(wire, make([]byte, len(wire))) {
-		t.Fatal("secret JSON wire could not be scrubbed")
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneShareRepairTransportRoster(roster)
+			mutate(candidate)
+			if _, err := ComputeShareRepairTransportRosterDigest(
+				candidate,
+				authorization,
+			); err == nil {
+				t.Fatal("malformed transport roster was accepted")
+			}
+		})
+	}
+
+	t.Run("caller key substitution", func(t *testing.T) {
+		candidate := cloneShareRepairTransportRoster(roster)
+		_, substitutedPublicKey := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{0x44}, 32))
+		candidate.ParticipantPublicKeys[0].PublicKeyHex =
+			hex.EncodeToString(substitutedPublicKey.SerializeCompressed())
+		if _, err := ComputeShareRepairTransportRosterDigest(
+			candidate,
+			authorization,
+		); err != nil {
+			t.Fatalf("structurally valid substituted roster was rejected too early: %v", err)
+		}
+		if err := ValidateShareRepairTransportRoster(
+			candidate,
+			authorization,
+			authority.Public().(ed25519.PublicKey),
+		); err == nil || !strings.Contains(err.Error(), "signature is invalid") {
+			t.Fatalf("authority-unapproved key substitution was accepted: %v", err)
+		}
+	})
+
+	t.Run("noncanonical signature", func(t *testing.T) {
+		candidate := cloneShareRepairTransportRoster(roster)
+		candidate.SignatureHex = strings.ToUpper(candidate.SignatureHex)
+		if err := ValidateShareRepairTransportRoster(
+			candidate,
+			authorization,
+			authority.Public().(ed25519.PublicKey),
+		); err == nil {
+			t.Fatal("noncanonical transport roster signature was accepted")
+		}
+	})
+
+	t.Run("different authority", func(t *testing.T) {
+		differentAuthority := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x24}, 32))
+		if err := ValidateShareRepairTransportRoster(
+			roster,
+			authorization,
+			differentAuthority.Public().(ed25519.PublicKey),
+		); err == nil {
+			t.Fatal("transport roster from a different authority was accepted")
+		}
+	})
+}
+
+func TestShareRepairRecoveryBundleStrictDecode(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	bundle := ShareRepairRecoveryBundle{
+		Schema:          ShareRepairRecoveryBundleSchema,
+		Authorization:   *authorization,
+		TransportRoster: *testShareRepairTransportRoster(t, authorization, authority),
+	}
+	payload, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeShareRepairRecoveryBundle(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Schema != bundle.Schema ||
+		decoded.TransportRoster.SignatureHex != bundle.TransportRoster.SignatureHex {
+		t.Fatalf("recovery bundle changed across strict decode: %+v", decoded)
+	}
+	if _, err := DecodeShareRepairRecoveryBundle(
+		append(payload, []byte(`{}`)...),
+	); err == nil || !strings.Contains(err.Error(), "trailing JSON") {
+		t.Fatalf("recovery bundle accepted trailing JSON: %v", err)
+	}
+
+	wrongSchema := bundle
+	wrongSchema.Schema = "tbtc-frost-share-repair-bundle/v2"
+	payload, err = json.Marshal(wrongSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeShareRepairRecoveryBundle(payload); err == nil {
+		t.Fatal("recovery bundle accepted an unsupported schema")
 	}
 }
 

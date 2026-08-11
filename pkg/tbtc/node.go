@@ -214,7 +214,21 @@ func newNode(
 	if err != nil {
 		return nil, fmt.Errorf("cannot get node's operator address: [%v]", err)
 	}
-	if config.FrostShareRepairAuthorizationPath != "" &&
+	preflightInputConfigured :=
+		config.FrostShareRepairTransportPreflightAuthorizationPath != ""
+	preflightOutputConfigured :=
+		config.FrostShareRepairTransportPreflightOutputPath != ""
+	if preflightInputConfigured != preflightOutputConfigured {
+		return nil, fmt.Errorf(
+			"FROST share-repair transport preflight input and output paths must be configured together",
+		)
+	}
+	if preflightInputConfigured && config.FrostShareRepairAuthorizationPath != "" {
+		return nil, fmt.Errorf(
+			"FROST share-repair transport preflight and recovery bundle modes are mutually exclusive",
+		)
+	}
+	if (preflightInputConfigured || config.FrostShareRepairAuthorizationPath != "") &&
 		!config.EnableFrostPreSignAuthorization {
 		return nil, fmt.Errorf(
 			"FROST share-repair maintenance requires the production activation and state-anchor barrier",
@@ -711,6 +725,24 @@ func newNode(
 				"cannot install native signer protocol-output barrier: [%w]",
 				err,
 			)
+		}
+		preflightRequested, err := runFrostShareRepairTransportPreflight(
+			config.FrostShareRepairTransportPreflightAuthorizationPath,
+			config.FrostShareRepairTransportPreflightOutputPath,
+			runtimeManifest,
+			node,
+			operatorAddress,
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"FROST share-repair transport preflight failed: [%w]",
+				err,
+			)
+		}
+		if preflightRequested {
+			_ = outbox.close()
+			return nil, ErrFrostShareRepairMaintenanceComplete
 		}
 		maintenanceRequested, err := runFrostShareRepairMaintenance(
 			context.Background(),
