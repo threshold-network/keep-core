@@ -434,6 +434,56 @@ func (c *Connection) GetTransactionsForPublicKeyHash(
 	return transactions, nil
 }
 
+// GetTransactionsForPublicKeyScripts gets confirmed transactions that pay to
+// any of the given public key scripts. The returned transactions are ordered
+// by block height in ascending order, i.e. the latest transaction is at the
+// end of the list.
+func (c *Connection) GetTransactionsForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+	limit int,
+) ([]*bitcoin.Transaction, error) {
+	txHashes, err := c.GetTxHashesForPublicKeyScripts(publicKeyScripts)
+	if err != nil {
+		return nil, err
+	}
+
+	selectedTxHashes := selectLatestUniqueTxHashes(txHashes, limit)
+
+	transactions := make([]*bitcoin.Transaction, len(selectedTxHashes))
+	for i, txHash := range selectedTxHashes {
+		transaction, err := c.GetTransaction(txHash)
+		if err != nil {
+			return nil, fmt.Errorf("cannot get transaction: [%v]", err)
+		}
+
+		transactions[i] = transaction
+	}
+
+	return transactions, nil
+}
+
+func selectLatestUniqueTxHashes(
+	txHashes []bitcoin.Hash,
+	limit int,
+) []bitcoin.Hash {
+	uniqueTxHashes := make([]bitcoin.Hash, 0, len(txHashes))
+	seen := make(map[bitcoin.Hash]bool)
+	for _, txHash := range txHashes {
+		if seen[txHash] {
+			continue
+		}
+
+		seen[txHash] = true
+		uniqueTxHashes = append(uniqueTxHashes, txHash)
+	}
+
+	if len(uniqueTxHashes) > limit {
+		return uniqueTxHashes[len(uniqueTxHashes)-limit:]
+	}
+
+	return uniqueTxHashes
+}
+
 // GetTxHashesForPublicKeyHash gets hashes of confirmed transactions that pays
 // the given public key hash using either a P2PKH or P2WPKH script. The returned
 // transactions hashes are ordered by block height in the ascending order, i.e.
@@ -461,25 +511,18 @@ func (c *Connection) GetTxHashesForPublicKeyHash(
 		)
 	}
 
-	p2pkhItems, err := c.getConfirmedScriptHistory(p2pkh)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2PKH history for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
-	}
+	return c.GetTxHashesForPublicKeyScripts([]bitcoin.Script{p2pkh, p2wpkh})
+}
 
-	p2wpkhItems, err := c.getConfirmedScriptHistory(p2wpkh)
+// GetTxHashesForPublicKeyScripts gets hashes of confirmed transactions that
+// pay to any of the given public key scripts.
+func (c *Connection) GetTxHashesForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+) ([]bitcoin.Hash, error) {
+	items, err := c.getConfirmedScriptHistories(publicKeyScripts)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2WPKH history for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
+		return nil, err
 	}
-
-	items := append(p2pkhItems, p2wpkhItems...)
 
 	sort.SliceStable(
 		items,
@@ -494,6 +537,27 @@ func (c *Connection) GetTxHashesForPublicKeyHash(
 	}
 
 	return txHashes, nil
+}
+
+func (c *Connection) getConfirmedScriptHistories(
+	publicKeyScripts []bitcoin.Script,
+) ([]*scriptHistoryItem, error) {
+	items := make([]*scriptHistoryItem, 0)
+
+	for _, publicKeyScript := range publicKeyScripts {
+		scriptItems, err := c.getConfirmedScriptHistory(publicKeyScript)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get history for script [0x%x]: [%v]",
+				publicKeyScript,
+				err,
+			)
+		}
+
+		items = append(items, scriptItems...)
+	}
+
+	return items, nil
 }
 
 type scriptHistoryItem struct {
@@ -752,45 +816,15 @@ func (c *Connection) GetUtxosForPublicKeyHash(
 		)
 	}
 
-	p2pkhItems, err := c.getScriptUtxos(p2pkh, true)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2PKH UTXOs for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
-	}
+	return c.GetUtxosForPublicKeyScripts([]bitcoin.Script{p2pkh, p2wpkh})
+}
 
-	p2wpkhItems, err := c.getScriptUtxos(p2wpkh, true)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2WPKH UTXOs for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
-	}
-
-	items := append(p2pkhItems, p2wpkhItems...)
-
-	sort.SliceStable(
-		items,
-		func(i, j int) bool {
-			return items[i].blockHeight < items[j].blockHeight
-		},
-	)
-
-	utxos := make([]*bitcoin.UnspentTransactionOutput, len(items))
-	for i, item := range items {
-		utxos[i] = &bitcoin.UnspentTransactionOutput{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: item.txHash,
-				OutputIndex:     item.outputIndex,
-			},
-			Value: int64(item.value),
-		}
-	}
-
-	return utxos, nil
+// GetUtxosForPublicKeyScripts gets unspent outputs of confirmed transactions
+// that are controlled by any of the given public key scripts.
+func (c *Connection) GetUtxosForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	return c.getUtxosForPublicKeyScripts(publicKeyScripts, true)
 }
 
 // GetMempoolUtxosForPublicKeyHash gets unspent outputs of unconfirmed transactions
@@ -820,25 +854,34 @@ func (c *Connection) GetMempoolUtxosForPublicKeyHash(
 		)
 	}
 
-	p2pkhItems, err := c.getScriptUtxos(p2pkh, false)
+	return c.GetMempoolUtxosForPublicKeyScripts([]bitcoin.Script{p2pkh, p2wpkh})
+}
+
+// GetMempoolUtxosForPublicKeyScripts gets unspent outputs of unconfirmed
+// transactions that are controlled by any of the given public key scripts.
+func (c *Connection) GetMempoolUtxosForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	return c.getUtxosForPublicKeyScripts(publicKeyScripts, false)
+}
+
+func (c *Connection) getUtxosForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+	confirmed bool,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	items, err := c.getScriptUtxosForScripts(publicKeyScripts, confirmed)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2PKH UTXOs for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
+		return nil, err
 	}
 
-	p2wpkhItems, err := c.getScriptUtxos(p2wpkh, false)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2WPKH UTXOs for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
+	if confirmed {
+		sort.SliceStable(
+			items,
+			func(i, j int) bool {
+				return items[i].blockHeight < items[j].blockHeight
+			},
 		)
 	}
-
-	items := append(p2pkhItems, p2wpkhItems...)
 
 	utxos := make([]*bitcoin.UnspentTransactionOutput, len(items))
 	for i, item := range items {
@@ -852,6 +895,28 @@ func (c *Connection) GetMempoolUtxosForPublicKeyHash(
 	}
 
 	return utxos, nil
+}
+
+func (c *Connection) getScriptUtxosForScripts(
+	publicKeyScripts []bitcoin.Script,
+	confirmed bool,
+) ([]*scriptUtxoItem, error) {
+	items := make([]*scriptUtxoItem, 0)
+
+	for _, publicKeyScript := range publicKeyScripts {
+		scriptItems, err := c.getScriptUtxos(publicKeyScript, confirmed)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get UTXOs for script [0x%x]: [%v]",
+				publicKeyScript,
+				err,
+			)
+		}
+
+		items = append(items, scriptItems...)
+	}
+
+	return items, nil
 }
 
 type scriptUtxoItem struct {

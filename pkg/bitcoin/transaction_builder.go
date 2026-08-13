@@ -1,11 +1,16 @@
 package bitcoin
 
 import (
+	"bytes"
 	"crypto/ecdsa"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
@@ -45,8 +50,41 @@ func NewTransactionBuilder(chain Chain) *TransactionBuilder {
 	}
 }
 
+// HasTaprootKeyPathInputs returns true if the builder has at least one P2TR
+// input intended to be spent using the Taproot key path.
+func (tb *TransactionBuilder) HasTaprootKeyPathInputs() bool {
+	for _, sigHashArgs := range tb.sigHashArgs {
+		if sigHashArgs.scriptType == P2TRScript {
+			return true
+		}
+	}
+
+	return false
+}
+
+// HasOnlyTaprootKeyPathInputs returns true if every input in the builder is a
+// P2TR input intended to be spent using the Taproot key path.
+func (tb *TransactionBuilder) HasOnlyTaprootKeyPathInputs() bool {
+	if len(tb.sigHashArgs) == 0 {
+		return false
+	}
+
+	for _, sigHashArgs := range tb.sigHashArgs {
+		if sigHashArgs.scriptType != P2TRScript {
+			return false
+		}
+	}
+
+	return true
+}
+
 // AddPublicKeyHashInput adds an unsigned input pointing to a UTXO locked
 // using a P2PKH or P2WPKH script.
+//
+// For backward compatibility with wallet-action construction that discovers
+// the input script type from the chain, this method also accepts P2TR direct
+// key-path inputs. New Taproot-specific code should prefer
+// AddTaprootKeyPathInput to make that spend policy explicit.
 func (tb *TransactionBuilder) AddPublicKeyHashInput(
 	utxo *UnspentTransactionOutput,
 ) error {
@@ -59,25 +97,133 @@ func (tb *TransactionBuilder) AddPublicKeyHashInput(
 		)
 	}
 
-	class := txscript.GetScriptClass(utxoScript)
-	isPublicKeyHashScript := class == txscript.PubKeyHashTy ||
-		class == txscript.WitnessV0PubKeyHashTy
-	if !isPublicKeyHashScript {
+	scriptType := GetScriptType(utxoScript)
+	isDirectKeySpendScript := scriptType == P2PKHScript ||
+		scriptType == P2WPKHScript ||
+		scriptType == P2TRScript
+	if !isDirectKeySpendScript {
 		return fmt.Errorf(
-			"UTXO pointed by the input is not P2PKH/P2WPKH",
+			"UTXO pointed by the input is not P2PKH/P2WPKH/P2TR",
 		)
 	}
 
-	// The UTXO was locked using a P2PKH/P2WPKH script so, the scriptCode
-	// required to build the sighash is equivalent to that script. Worth
-	// noting that the P2WPKH script is actually converted to the P2PKH script
-	// when used as a scriptCode, according to BIP-0143. For reference see,
+	return tb.addDirectKeySpendInput(utxo, utxoScript, scriptType, nil)
+}
+
+// AddTaprootKeyPathInput adds an unsigned input pointing to a UTXO locked
+// using a P2TR script and intended to be spent using the Taproot key path.
+//
+// The script's x-only key is treated as the final Taproot output key. The
+// builder does not apply a BIP-341/BIP-86 tap tweak during signing; callers
+// must ensure the FROST signer can produce signatures for the exact output key
+// committed to by the scriptPubKey.
+func (tb *TransactionBuilder) AddTaprootKeyPathInput(
+	utxo *UnspentTransactionOutput,
+) error {
+	utxoScript, err := tb.getScript(utxo)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot get locking script for UTXO pointed "+
+				"by the input: [%v]",
+			err,
+		)
+	}
+
+	scriptType := GetScriptType(utxoScript)
+	if scriptType != P2TRScript {
+		return fmt.Errorf(
+			"UTXO pointed by the input is not P2TR",
+		)
+	}
+
+	return tb.addDirectKeySpendInput(utxo, utxoScript, scriptType, nil)
+}
+
+// AddTaprootKeyPathInputWithMerkleRoot adds an unsigned input pointing to a
+// UTXO locked using a BIP-341 tweaked P2TR output key and intended to be spent
+// using the Taproot key path.
+//
+// The provided internal key and script merkle root must derive the output key
+// committed to by the UTXO script. The merkle root is retained as signing
+// metadata so the FROST signer can produce a key-path signature under the same
+// Taproot tweak.
+func (tb *TransactionBuilder) AddTaprootKeyPathInputWithMerkleRoot(
+	utxo *UnspentTransactionOutput,
+	internalKey [32]byte,
+	merkleRoot [32]byte,
+) error {
+	utxoScript, err := tb.getScript(utxo)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot get locking script for UTXO pointed "+
+				"by the input: [%v]",
+			err,
+		)
+	}
+
+	scriptType := GetScriptType(utxoScript)
+	if scriptType != P2TRScript {
+		return fmt.Errorf(
+			"UTXO pointed by the input is not P2TR",
+		)
+	}
+
+	outputKey, err := ExtractTaprootKey(utxoScript)
+	if err != nil {
+		return fmt.Errorf("cannot extract taproot output key: [%v]", err)
+	}
+
+	expectedOutputKey, err := TaprootOutputKey(internalKey, &merkleRoot)
+	if err != nil {
+		return fmt.Errorf("cannot derive taproot output key: [%v]", err)
+	}
+
+	if !bytes.Equal(outputKey[:], expectedOutputKey[:]) {
+		return fmt.Errorf(
+			"taproot output key does not match internal key and merkle root",
+		)
+	}
+
+	return tb.addDirectKeySpendInput(utxo, utxoScript, scriptType, &merkleRoot)
+}
+
+// TaprootKeyPathInputMerkleRoots returns per-input Taproot script merkle roots
+// retained by the builder. The returned slice is aligned with transaction
+// inputs. Non-Taproot inputs and untweaked Taproot inputs have nil entries.
+func (tb *TransactionBuilder) TaprootKeyPathInputMerkleRoots() []*[32]byte {
+	merkleRoots := make([]*[32]byte, len(tb.sigHashArgs))
+
+	for i, sigHashArgs := range tb.sigHashArgs {
+		if sigHashArgs.taprootMerkleRoot == nil {
+			continue
+		}
+
+		merkleRoots[i] = new([32]byte)
+		copy(merkleRoots[i][:], sigHashArgs.taprootMerkleRoot[:])
+	}
+
+	return merkleRoots
+}
+
+func (tb *TransactionBuilder) addDirectKeySpendInput(
+	utxo *UnspentTransactionOutput,
+	utxoScript Script,
+	scriptType ScriptType,
+	taprootMerkleRoot *[32]byte,
+) error {
+	// The UTXO was locked using a direct key-spend script, so the scriptCode
+	// required to build the sighash is equivalent to that script. Worth noting
+	// that the P2WPKH script is actually converted to the P2PKH script when
+	// used as a scriptCode, according to BIP-0143. For reference see,
 	// https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki#specification.
 	// That conversion is handled within the `txscript.CalcWitnessSigHash` call.
 	sigHashArgs := &inputSigHashArgs{
-		value:      utxo.Value,
-		scriptCode: utxoScript,
-		witness:    txscript.IsWitnessProgram(utxoScript),
+		value:             utxo.Value,
+		publicKeyScript:   utxoScript,
+		scriptCode:        utxoScript,
+		scriptType:        scriptType,
+		taprootMerkleRoot: taprootMerkleRoot,
+		witness:           scriptType == P2WPKHScript || scriptType == P2TRScript,
 	}
 
 	hash := chainhash.Hash(utxo.Outpoint.TransactionHash)
@@ -109,10 +255,10 @@ func (tb *TransactionBuilder) AddScriptHashInput(
 		)
 	}
 
-	class := txscript.GetScriptClass(utxoScript)
-	isPublicKeyHashScript := class == txscript.ScriptHashTy ||
-		class == txscript.WitnessV0ScriptHashTy
-	if !isPublicKeyHashScript {
+	scriptType := GetScriptType(utxoScript)
+	isScriptHashScript := scriptType == P2SHScript ||
+		scriptType == P2WSHScript
+	if !isScriptHashScript {
 		return fmt.Errorf(
 			"UTXO pointed by the input is not P2SH/P2WSH",
 		)
@@ -122,9 +268,11 @@ func (tb *TransactionBuilder) AddScriptHashInput(
 	// to build the sighash is equivalent to the plain-text redeem script whose
 	// hash is included in the P2SH/P2WSH script.
 	sigHashArgs := &inputSigHashArgs{
-		value:      utxo.Value,
-		scriptCode: redeemScript,
-		witness:    txscript.IsWitnessProgram(utxoScript),
+		value:           utxo.Value,
+		publicKeyScript: utxoScript,
+		scriptCode:      redeemScript,
+		scriptType:      scriptType,
+		witness:         scriptType == P2WSHScript,
 	}
 
 	hash := chainhash.Hash(utxo.Outpoint.TransactionHash)
@@ -211,13 +359,34 @@ func (tb *TransactionBuilder) ComputeSignatureHashes() ([]*big.Int, error) {
 		tb.prevOuts,
 	)
 
+	var taprootSigHashMidstate *taprootSignatureHashMidstate
+	if tb.HasTaprootKeyPathInputs() {
+		var err error
+		taprootSigHashMidstate, err = tb.taprootSignatureHashMidstate(
+			tb.internal.MsgTx,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot calculate taproot sighash midstate: [%v]",
+				err,
+			)
+		}
+	}
+
 	for i := range tb.internal.TxIn {
 		sigHashArgs := tb.sigHashArgs[i]
 
 		var sigHashBytes []byte
 		var err error
 
-		if sigHashArgs.witness {
+		switch sigHashArgs.scriptType {
+		case P2TRScript:
+			sigHashBytes, err = tb.calcTaprootKeyPathSignatureHash(
+				tb.internal.MsgTx,
+				i,
+				taprootSigHashMidstate,
+			)
+		case P2WPKHScript, P2WSHScript:
 			sigHashBytes, err = txscript.CalcWitnessSigHash(
 				sigHashArgs.scriptCode,
 				witnessSigHashFragments,
@@ -226,7 +395,7 @@ func (tb *TransactionBuilder) ComputeSignatureHashes() ([]*big.Int, error) {
 				i,
 				sigHashArgs.value,
 			)
-		} else {
+		default:
 			sigHashBytes, err = txscript.CalcSignatureHash(
 				sigHashArgs.scriptCode,
 				txscript.SigHashAll,
@@ -278,6 +447,14 @@ func (tb *TransactionBuilder) AddSignatures(
 
 	for i, input := range tb.internal.TxIn {
 		signature := signatures[i]
+		sigHashArgs := tb.sigHashArgs[i]
+
+		if sigHashArgs.scriptType == P2TRScript {
+			return nil, fmt.Errorf(
+				"input [%v] is P2TR; use AddTaprootKeyPathSignatures",
+				i,
+			)
+		}
 
 		// Make a sanity check to avoid producing crap transactions.
 		if !ecdsa.Verify(
@@ -296,8 +473,6 @@ func (tb *TransactionBuilder) AddSignatures(
 		publicKeyBytes := (*btcec.PublicKey)(
 			signature.PublicKey,
 		).SerializeCompressed()
-
-		sigHashArgs := tb.sigHashArgs[i]
 
 		if sigHashArgs.witness {
 			witness := wire.TxWitness{
@@ -341,6 +516,81 @@ func (tb *TransactionBuilder) AddSignatures(
 	return tb.internal.toTransaction(), nil
 }
 
+// SchnorrSignatureContainer is a helper type holding a serialized 64-byte
+// BIP-340 Schnorr signature.
+type SchnorrSignatureContainer struct {
+	Signature [64]byte
+}
+
+// AddTaprootKeyPathSignatures adds Schnorr signature data for P2TR key-path
+// transaction inputs and returns a signed Transaction instance.
+func (tb *TransactionBuilder) AddTaprootKeyPathSignatures(
+	signatures []*SchnorrSignatureContainer,
+) (*Transaction, error) {
+	if len(tb.sigHashes) == 0 {
+		return nil, fmt.Errorf("signature hashes must be computed first")
+	}
+
+	if len(signatures) != len(tb.internal.TxIn) {
+		return nil, fmt.Errorf("wrong signatures count")
+	}
+
+	if !tb.HasOnlyTaprootKeyPathInputs() {
+		return nil, fmt.Errorf(
+			"taproot key-path signatures require all inputs to be P2TR",
+		)
+	}
+
+	for i, input := range tb.internal.TxIn {
+		signature := signatures[i]
+		if signature == nil {
+			return nil, fmt.Errorf("signature for input [%v] is nil", i)
+		}
+
+		signatureBytes := make([]byte, len(signature.Signature))
+		copy(signatureBytes, signature.Signature[:])
+
+		taprootKey, err := ExtractTaprootKey(tb.sigHashArgs[i].publicKeyScript)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot extract taproot key for input [%v]: [%v]",
+				i,
+				err,
+			)
+		}
+
+		taprootPublicKey, err := schnorr.ParsePubKey(taprootKey[:])
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot parse taproot key for input [%v]: [%v]",
+				i,
+				err,
+			)
+		}
+
+		taprootSignature, err := schnorr.ParseSignature(signatureBytes)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot parse taproot key-path signature for input [%v]: [%v]",
+				i,
+				err,
+			)
+		}
+
+		sigHashBytes := tb.sigHashes[i].FillBytes(make([]byte, sha256.Size))
+		if !taprootSignature.Verify(sigHashBytes, taprootPublicKey) {
+			return nil, fmt.Errorf(
+				"invalid taproot key-path signature for input [%v]",
+				i,
+			)
+		}
+
+		input.Witness = wire.TxWitness{signatureBytes}
+	}
+
+	return tb.internal.toTransaction(), nil
+}
+
 // TotalInputsValue returns the total value of transaction inputs.
 func (tb *TransactionBuilder) TotalInputsValue() int64 {
 	totalInputsValue := int64(0)
@@ -352,15 +602,412 @@ func (tb *TransactionBuilder) TotalInputsValue() int64 {
 	return totalInputsValue
 }
 
+// ReplaceUnsignedTransaction replaces the internal unsigned transaction while
+// preserving per-input sighash metadata collected during builder input setup.
+func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
+	transaction *Transaction,
+) error {
+	if transaction == nil {
+		return fmt.Errorf("transaction is nil")
+	}
+
+	if len(transaction.Inputs) != len(tb.sigHashArgs) {
+		return fmt.Errorf(
+			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
+			len(transaction.Inputs),
+			len(tb.sigHashArgs),
+		)
+	}
+
+	previousInputs := tb.internal.TxIn
+
+	replacedInternal := newInternalTransaction()
+	replacedInternal.fromTransaction(transaction)
+
+	for i := range replacedInternal.TxIn {
+		previousInput := previousInputs[i]
+		replacedInput := replacedInternal.TxIn[i]
+
+		if previousInput == nil || replacedInput == nil {
+			continue
+		}
+
+		if len(replacedInput.SignatureScript) > 0 {
+			return fmt.Errorf(
+				"replacement transaction input [%d] has unexpected non-empty signature script",
+				i,
+			)
+		}
+
+		if len(replacedInput.Witness) > 0 {
+			return fmt.Errorf(
+				"replacement transaction input [%d] has unexpected non-empty witness",
+				i,
+			)
+		}
+
+		// The replacement's SignatureScript and Witness are both empty here
+		// because of the two refusals above, so the per-input restore below
+		// only has to decide what to copy *from* the previous input.
+		if tb.sigHashArgs[i].witness {
+			// Witness inputs may carry a single-element pre-signing witness
+			// that holds a P2WSH-style redeem script. Multi-element witnesses
+			// belong to P2TR script-path spends or other workflows that are
+			// not in scope for the current FROST migration, and silently
+			// dropping them produced malformed transactions later — refuse
+			// instead so the unsupported case fails loudly. Lifting this to
+			// support multi-element witnesses requires a per-input policy
+			// rather than a blanket copy because the replacement could
+			// legitimately differ in witness shape from the previous input.
+			switch len(previousInput.Witness) {
+			case 0:
+				// Nothing to restore (typical P2TR key-path or P2WPKH).
+			case 1:
+				redeemScript := append([]byte{}, previousInput.Witness[0]...)
+				replacedInput.Witness = wire.TxWitness{redeemScript}
+			default:
+				return fmt.Errorf(
+					"replacement transaction input [%d] previous witness has "+
+						"[%d] elements; only zero- or single-element "+
+						"pre-signing witnesses are currently supported for "+
+						"restoration",
+					i,
+					len(previousInput.Witness),
+				)
+			}
+		} else if len(previousInput.SignatureScript) > 0 {
+			replacedInput.SignatureScript = append(
+				[]byte{},
+				previousInput.SignatureScript...,
+			)
+		}
+	}
+
+	tb.internal = replacedInternal
+	tb.sigHashes = nil
+
+	return nil
+}
+
+// UnsignedTransaction returns the current unsigned transaction builder state.
+func (tb *TransactionBuilder) UnsignedTransaction() *Transaction {
+	return tb.internal.toTransaction()
+}
+
+// UnsignedTransactionInput carries canonical unsigned input metadata extracted
+// from the builder state.
+type UnsignedTransactionInput struct {
+	TxIDHex         string
+	Vout            uint32
+	ValueSats       uint64
+	ScriptPubKeyHex string
+}
+
+// UnsignedTransactionOutput carries canonical unsigned output metadata
+// extracted from the builder state.
+type UnsignedTransactionOutput struct {
+	ScriptPubKeyHex string
+	ValueSats       uint64
+}
+
+// UnsignedTransactionIO returns canonical unsigned transaction input/output
+// metadata from the builder state.
+func (tb *TransactionBuilder) UnsignedTransactionIO() (
+	[]UnsignedTransactionInput,
+	[]UnsignedTransactionOutput,
+	error,
+) {
+	if len(tb.internal.TxIn) != len(tb.sigHashArgs) {
+		return nil, nil, fmt.Errorf(
+			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
+			len(tb.internal.TxIn),
+			len(tb.sigHashArgs),
+		)
+	}
+
+	inputs := make([]UnsignedTransactionInput, 0, len(tb.internal.TxIn))
+	for i, input := range tb.internal.TxIn {
+		value := tb.sigHashArgs[i].value
+		if value < 0 {
+			return nil, nil, fmt.Errorf("input [%d] value is negative", i)
+		}
+
+		inputs = append(
+			inputs,
+			UnsignedTransactionInput{
+				// chainhash.Hash.String renders txid in standard Bitcoin display
+				// (RPC/explorer) byte order, i.e. reversed vs internal bytes.
+				TxIDHex:   input.PreviousOutPoint.Hash.String(),
+				Vout:      input.PreviousOutPoint.Index,
+				ValueSats: uint64(value),
+				ScriptPubKeyHex: hex.EncodeToString(
+					tb.sigHashArgs[i].publicKeyScript,
+				),
+			},
+		)
+	}
+
+	outputs := make([]UnsignedTransactionOutput, 0, len(tb.internal.TxOut))
+	for i, output := range tb.internal.TxOut {
+		if output.Value < 0 {
+			return nil, nil, fmt.Errorf("output [%d] value is negative", i)
+		}
+
+		outputs = append(
+			outputs,
+			UnsignedTransactionOutput{
+				ScriptPubKeyHex: hex.EncodeToString(output.PkScript),
+				ValueSats:       uint64(output.Value),
+			},
+		)
+	}
+
+	return inputs, outputs, nil
+}
+
+func (tb *TransactionBuilder) calcTaprootKeyPathSignatureHash(
+	tx *wire.MsgTx,
+	inputIndex int,
+	midstate *taprootSignatureHashMidstate,
+) ([]byte, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("transaction is nil")
+	}
+	if midstate == nil {
+		return nil, fmt.Errorf("taproot sighash midstate is nil")
+	}
+
+	if inputIndex < 0 || inputIndex >= len(tx.TxIn) {
+		return nil, fmt.Errorf(
+			"input index [%d] out of range for [%d] inputs",
+			inputIndex,
+			len(tx.TxIn),
+		)
+	}
+
+	if len(tx.TxIn) != len(tb.sigHashArgs) {
+		return nil, fmt.Errorf(
+			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
+			len(tx.TxIn),
+			len(tb.sigHashArgs),
+		)
+	}
+
+	var sigMsg bytes.Buffer
+
+	// BIP-341 defines the final digest as tagged_hash("TapSighash",
+	// 0x00 || SigMsg(0x00, 0)). The first byte is the epoch and the second
+	// byte is SIGHASH_DEFAULT.
+	sigMsg.WriteByte(0x00)
+	sigMsg.WriteByte(0x00)
+
+	if err := binary.Write(&sigMsg, binary.LittleEndian, tx.Version); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(&sigMsg, binary.LittleEndian, tx.LockTime); err != nil {
+		return nil, err
+	}
+
+	sigMsg.Write(midstate.hashPrevOuts[:])
+	sigMsg.Write(midstate.hashInputAmounts[:])
+	sigMsg.Write(midstate.hashInputScripts[:])
+	sigMsg.Write(midstate.hashSequences[:])
+	sigMsg.Write(midstate.hashOutputs[:])
+
+	// Key-path spends use ext_flag=0 and this implementation does not attach
+	// a Taproot annex, so spend_type is 0.
+	sigMsg.WriteByte(0x00)
+
+	if err := binary.Write(
+		&sigMsg,
+		binary.LittleEndian,
+		uint32(inputIndex),
+	); err != nil {
+		return nil, err
+	}
+
+	hash := chainhash.TaggedHash([]byte("TapSighash"), sigMsg.Bytes())
+	return hash.CloneBytes(), nil
+}
+
+type taprootSignatureHashMidstate struct {
+	hashPrevOuts     [chainhash.HashSize]byte
+	hashInputAmounts [chainhash.HashSize]byte
+	hashInputScripts [chainhash.HashSize]byte
+	hashSequences    [chainhash.HashSize]byte
+	hashOutputs      [chainhash.HashSize]byte
+}
+
+func (tb *TransactionBuilder) taprootSignatureHashMidstate(
+	tx *wire.MsgTx,
+) (*taprootSignatureHashMidstate, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("transaction is nil")
+	}
+
+	if len(tx.TxIn) != len(tb.sigHashArgs) {
+		return nil, fmt.Errorf(
+			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
+			len(tx.TxIn),
+			len(tb.sigHashArgs),
+		)
+	}
+
+	hashPrevOuts, err := tb.taprootHashPrevOuts(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	hashInputAmounts, err := tb.taprootHashInputAmounts()
+	if err != nil {
+		return nil, err
+	}
+
+	hashInputScripts, err := tb.taprootHashInputScripts()
+	if err != nil {
+		return nil, err
+	}
+
+	hashSequences, err := tb.taprootHashSequences(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	hashOutputs, err := tb.taprootHashOutputs(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &taprootSignatureHashMidstate{
+		hashPrevOuts:     hashPrevOuts,
+		hashInputAmounts: hashInputAmounts,
+		hashInputScripts: hashInputScripts,
+		hashSequences:    hashSequences,
+		hashOutputs:      hashOutputs,
+	}, nil
+}
+
+func (tb *TransactionBuilder) taprootHashPrevOuts(
+	tx *wire.MsgTx,
+) ([chainhash.HashSize]byte, error) {
+	var buffer bytes.Buffer
+	for _, input := range tx.TxIn {
+		if err := writeOutPoint(&buffer, &input.PreviousOutPoint); err != nil {
+			return [chainhash.HashSize]byte{}, err
+		}
+	}
+
+	return chainhash.HashH(buffer.Bytes()), nil
+}
+
+func (tb *TransactionBuilder) taprootHashInputAmounts() (
+	[chainhash.HashSize]byte,
+	error,
+) {
+	var buffer bytes.Buffer
+	for i, sigHashArgs := range tb.sigHashArgs {
+		if sigHashArgs.value < 0 {
+			return [chainhash.HashSize]byte{}, fmt.Errorf(
+				"input [%d] value is negative",
+				i,
+			)
+		}
+
+		if err := binary.Write(
+			&buffer,
+			binary.LittleEndian,
+			uint64(sigHashArgs.value),
+		); err != nil {
+			return [chainhash.HashSize]byte{}, err
+		}
+	}
+
+	return chainhash.HashH(buffer.Bytes()), nil
+}
+
+func (tb *TransactionBuilder) taprootHashInputScripts() (
+	[chainhash.HashSize]byte,
+	error,
+) {
+	var buffer bytes.Buffer
+	for i, sigHashArgs := range tb.sigHashArgs {
+		if err := wire.WriteVarBytes(
+			&buffer,
+			0,
+			sigHashArgs.publicKeyScript,
+		); err != nil {
+			return [chainhash.HashSize]byte{}, fmt.Errorf(
+				"cannot write public key script for input [%d]: [%v]",
+				i,
+				err,
+			)
+		}
+	}
+
+	return chainhash.HashH(buffer.Bytes()), nil
+}
+
+func (tb *TransactionBuilder) taprootHashSequences(
+	tx *wire.MsgTx,
+) ([chainhash.HashSize]byte, error) {
+	var buffer bytes.Buffer
+	for _, input := range tx.TxIn {
+		if err := binary.Write(
+			&buffer,
+			binary.LittleEndian,
+			input.Sequence,
+		); err != nil {
+			return [chainhash.HashSize]byte{}, err
+		}
+	}
+
+	return chainhash.HashH(buffer.Bytes()), nil
+}
+
+func (tb *TransactionBuilder) taprootHashOutputs(
+	tx *wire.MsgTx,
+) ([chainhash.HashSize]byte, error) {
+	var buffer bytes.Buffer
+	for i, output := range tx.TxOut {
+		if err := wire.WriteTxOut(&buffer, 0, 0, output); err != nil {
+			return [chainhash.HashSize]byte{}, fmt.Errorf(
+				"cannot write output [%d]: [%v]",
+				i,
+				err,
+			)
+		}
+	}
+
+	return chainhash.HashH(buffer.Bytes()), nil
+}
+
+func writeOutPoint(buffer *bytes.Buffer, outpoint *wire.OutPoint) error {
+	if _, err := buffer.Write(outpoint.Hash[:]); err != nil {
+		return err
+	}
+
+	return binary.Write(buffer, binary.LittleEndian, outpoint.Index)
+}
+
 // inputSigHashArgs is a helper structure holding some arguments required to
 // compute a sighash for the given input.
 type inputSigHashArgs struct {
 	// value denotes the satoshi value of the UTXO pointed by the given input.
 	value int64
+	// publicKeyScript is the locking script of the UTXO pointed by the given
+	// input.
+	publicKeyScript []byte
 	// scriptCode is a component of the input's sighash and is the script that
 	// is actually executed while unlocking the given UTXO. The scriptCode
 	// depends on the script type that was used to lock the given UTXO.
 	scriptCode []byte
+	// scriptType denotes the locking script type of the UTXO pointed by the
+	// given input.
+	scriptType ScriptType
+	// taprootMerkleRoot denotes the BIP-341 script merkle root used to tweak
+	// the P2TR input's output key. It is nil for untweaked P2TR inputs and
+	// non-Taproot inputs.
+	taprootMerkleRoot *[32]byte
 	// witness denotes whether the given input point's to a UTXO locked using
 	// a witness script.
 	witness bool

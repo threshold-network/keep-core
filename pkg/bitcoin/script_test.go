@@ -6,6 +6,9 @@ import (
 	"reflect"
 	"testing"
 
+	btcec2 "github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
+
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 )
@@ -329,6 +332,137 @@ func TestPayToScriptHash(t *testing.T) {
 	testutils.AssertBytesEqual(t, expectedResult, result[:])
 }
 
+func TestPayToTaproot(t *testing.T) {
+	outputKeyBytes, err := hex.DecodeString(
+		"1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var outputKey [32]byte
+	copy(outputKey[:], outputKeyBytes)
+
+	result, err := PayToTaproot(outputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedResult, err := hex.DecodeString(
+		"51201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertBytesEqual(t, expectedResult, result[:])
+}
+
+func TestTaprootLeafHash(t *testing.T) {
+	script := Script(hexToSlice(
+		t,
+		"76a9140102030405060708090a0b0c0d0e0f101112131488ac",
+	))
+
+	result, err := TaprootLeafHash(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedResult := hexToSlice(
+		t,
+		"37a57b86de2819d2b72a173df46238a7ad295ea1485d3b40e9415daa82b4fdcb",
+	)
+
+	testutils.AssertBytesEqual(t, expectedResult, result[:])
+}
+
+func TestTaprootTweakAndOutputKey(t *testing.T) {
+	privateKey, _ := btcec2.PrivKeyFromBytes(
+		hexToSlice(
+			t,
+			"0101010101010101010101010101010101010101010101010101010101010101",
+		),
+	)
+
+	var internalKey [32]byte
+	copy(internalKey[:], schnorr.SerializePubKey(privateKey.PubKey()))
+
+	refundLeaf := Script(hexToSlice(
+		t,
+		"76a9140102030405060708090a0b0c0d0e0f101112131488ac",
+	))
+
+	merkleRoot, err := TaprootLeafHash(refundLeaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tweak, err := TaprootTweak(internalKey, &merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedTweak := hexToSlice(
+		t,
+		"6ca66b4600554f36d490d227669ba78c2d4778a8ecc07565ae2f9e87c28f124a",
+	)
+
+	testutils.AssertBytesEqual(t, expectedTweak, tweak[:])
+
+	outputKey, err := TaprootOutputKey(internalKey, &merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedOutputKey := hexToSlice(
+		t,
+		"b31d6b4f10bcea1dfcace63ce7defda9e718a4340b4b5befef6194488780ef17",
+	)
+
+	testutils.AssertBytesEqual(t, expectedOutputKey, outputKey[:])
+}
+
+func TestPayToTaprootWithScriptTree(t *testing.T) {
+	privateKey, _ := btcec2.PrivKeyFromBytes(
+		hexToSlice(
+			t,
+			"0202020202020202020202020202020202020202020202020202020202020202",
+		),
+	)
+
+	var internalKey [32]byte
+	copy(internalKey[:], schnorr.SerializePubKey(privateKey.PubKey()))
+
+	merkleRootBytes := hexToSlice(
+		t,
+		"b2c459126150e0d47063ea7b6d0474a24c39e25908aae5740dd4787b67c6e19a",
+	)
+	var merkleRoot [32]byte
+	copy(merkleRoot[:], merkleRootBytes)
+
+	result, err := PayToTaprootWithScriptTree(internalKey, merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedOutputKey := hexToSlice(
+		t,
+		"e339710a2348c113ade4a4e7d52bd1c12bc69818f1af7f41e161142701b93c96",
+	)
+
+	// Rebuild the expected P2TR script directly to avoid reusing
+	// PayToTaprootWithScriptTree.
+	var expectedKey [32]byte
+	copy(expectedKey[:], expectedOutputKey)
+	expectedResult, err := PayToTaproot(expectedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertBytesEqual(t, expectedResult, result)
+}
+
 func TestGetScriptType(t *testing.T) {
 	fromHex := func(hexString string) []byte {
 		bytes, err := hex.DecodeString(hexString)
@@ -358,6 +492,10 @@ func TestGetScriptType(t *testing.T) {
 			script:       fromHex("002086a303cdd2e2eab1d1679f1a813835dc5a1b65321077cdccaf08f98cbf04ca96"),
 			expectedType: P2WSHScript,
 		},
+		"p2tr script": {
+			script:       fromHex("51201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"),
+			expectedType: P2TRScript,
+		},
 		"non-standard script": {
 			script: fromHex(
 				"14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d0003" +
@@ -378,6 +516,59 @@ func TestGetScriptType(t *testing.T) {
 				int(test.expectedType),
 				int(actualType),
 			)
+		})
+	}
+}
+
+func TestExtractTaprootKey(t *testing.T) {
+	fromHex := func(hexString string) []byte {
+		bytes, err := hex.DecodeString(hexString)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes
+	}
+
+	var outputKey [32]byte
+	copy(
+		outputKey[:],
+		fromHex("1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"),
+	)
+
+	var tests = map[string]struct {
+		script            Script
+		expectedOutputKey [32]byte
+		expectedErr       error
+	}{
+		"P2TR script": {
+			script:            fromHex("51201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"),
+			expectedOutputKey: outputKey,
+		},
+		"other script": {
+			script:      fromHex("00148db50eb52063ea9d98b3eac91489a90f738986f6"),
+			expectedErr: fmt.Errorf("not a P2TR script"),
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actualOutputKey, err := ExtractTaprootKey(test.script)
+
+			if !reflect.DeepEqual(test.expectedErr, err) {
+				t.Errorf(
+					"unexpected error\nexpected: %+v\nactual:   %+v\n",
+					test.expectedErr,
+					err,
+				)
+			}
+
+			if test.expectedOutputKey != actualOutputKey {
+				t.Errorf(
+					"unexpected taproot output key\nexpected: 0x%x\nactual:   0x%x\n",
+					test.expectedOutputKey,
+					actualOutputKey,
+				)
+			}
 		})
 	}
 }

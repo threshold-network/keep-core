@@ -7,9 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	btcec2 "github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
-
 	"github.com/keep-network/keep-core/internal/testutils"
 )
 
@@ -129,6 +130,267 @@ func TestTransactionBuilder_AddPublicKeyHashInput(t *testing.T) {
 				int(registered.Value),
 			)
 		})
+	}
+}
+
+func TestTransactionBuilder_AddPublicKeyHashInput_AcceptsTaprootKeyPathInputForBackwardCompatibility(
+	t *testing.T,
+) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	var taprootOutputKey [32]byte
+	copy(
+		taprootOutputKey[:],
+		hexToSlice(
+			t,
+			"1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+		),
+	)
+
+	lockingScript, err := PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputTransaction := &Transaction{
+		Version: 1,
+		Inputs: []*TransactionInput{
+			{
+				Outpoint: &TransactionOutpoint{
+					TransactionHash: Hash{0x01},
+					OutputIndex:     0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: lockingScript,
+			},
+		},
+		Locktime: 0,
+	}
+
+	if err := localChain.addTransaction(inputTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	inputTransactionUtxo := &UnspentTransactionOutput{
+		Outpoint: &TransactionOutpoint{
+			TransactionHash: inputTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	}
+
+	if err := builder.AddPublicKeyHashInput(inputTransactionUtxo); err != nil {
+		t.Fatal(err)
+	}
+
+	if !builder.HasTaprootKeyPathInputs() {
+		t.Fatal("expected builder to have taproot key-path inputs")
+	}
+	if !builder.HasOnlyTaprootKeyPathInputs() {
+		t.Fatal("expected builder to have only taproot key-path inputs")
+	}
+
+	assertSigHashArgs(
+		t,
+		&inputSigHashArgs{
+			value:           inputTransactionUtxo.Value,
+			publicKeyScript: lockingScript,
+			scriptCode:      lockingScript,
+			scriptType:      P2TRScript,
+			witness:         true,
+		},
+		builder.sigHashArgs[0],
+	)
+	assertInternalInput(t, builder, 0, &TransactionInput{
+		Outpoint:        inputTransactionUtxo.Outpoint,
+		SignatureScript: nil,
+		Witness:         nil,
+		Sequence:        0xffffffff,
+	})
+}
+
+func TestTransactionBuilder_AddTaprootKeyPathInputWithMerkleRoot(t *testing.T) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	privateKey, _ := btcec2.PrivKeyFromBytes(
+		hexToSlice(
+			t,
+			"0101010101010101010101010101010101010101010101010101010101010101",
+		),
+	)
+
+	var internalKey [32]byte
+	copy(internalKey[:], schnorr.SerializePubKey(privateKey.PubKey()))
+
+	refundLeaf := Script(hexToSlice(
+		t,
+		"76a9140102030405060708090a0b0c0d0e0f101112131488ac",
+	))
+	merkleRoot, err := TaprootLeafHash(refundLeaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outputKey, err := TaprootOutputKey(internalKey, &merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lockingScript, err := PayToTaproot(outputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputTransaction := &Transaction{
+		Version: 1,
+		Inputs: []*TransactionInput{
+			{
+				Outpoint: &TransactionOutpoint{
+					TransactionHash: Hash{0x01},
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: lockingScript,
+			},
+		},
+		Locktime: 0,
+	}
+
+	if err := localChain.addTransaction(inputTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	inputTransactionUtxo := &UnspentTransactionOutput{
+		Outpoint: &TransactionOutpoint{
+			TransactionHash: inputTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	}
+
+	if err := builder.AddTaprootKeyPathInputWithMerkleRoot(
+		inputTransactionUtxo,
+		internalKey,
+		merkleRoot,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSigHashArgs(
+		t,
+		&inputSigHashArgs{
+			value:             inputTransactionUtxo.Value,
+			publicKeyScript:   lockingScript,
+			scriptCode:        lockingScript,
+			scriptType:        P2TRScript,
+			taprootMerkleRoot: &merkleRoot,
+			witness:           true,
+		},
+		builder.sigHashArgs[0],
+	)
+
+	merkleRoots := builder.TaprootKeyPathInputMerkleRoots()
+	if len(merkleRoots) != 1 {
+		t.Fatalf("unexpected merkle roots count: [%v]", len(merkleRoots))
+	}
+	testutils.AssertBytesEqual(t, merkleRoot[:], merkleRoots[0][:])
+}
+
+func TestTransactionBuilder_AddTaprootKeyPathInputWithMerkleRootRejectsMismatch(
+	t *testing.T,
+) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	privateKey, _ := btcec2.PrivKeyFromBytes(
+		hexToSlice(
+			t,
+			"0101010101010101010101010101010101010101010101010101010101010101",
+		),
+	)
+
+	var internalKey [32]byte
+	copy(internalKey[:], schnorr.SerializePubKey(privateKey.PubKey()))
+
+	merkleRoot, err := TaprootLeafHash(Script(hexToSlice(
+		t,
+		"76a9140102030405060708090a0b0c0d0e0f101112131488ac",
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrongMerkleRoot, err := TaprootLeafHash(Script(hexToSlice(
+		t,
+		"76a914ffffffffffffffffffffffffffffffffffffffff88ac",
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outputKey, err := TaprootOutputKey(internalKey, &merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lockingScript, err := PayToTaproot(outputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputTransaction := &Transaction{
+		Version: 1,
+		Inputs: []*TransactionInput{
+			{
+				Outpoint: &TransactionOutpoint{
+					TransactionHash: Hash{0x01},
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: lockingScript,
+			},
+		},
+		Locktime: 0,
+	}
+
+	if err := localChain.addTransaction(inputTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	err = builder.AddTaprootKeyPathInputWithMerkleRoot(
+		&UnspentTransactionOutput{
+			Outpoint: &TransactionOutpoint{
+				TransactionHash: inputTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		},
+		internalKey,
+		wrongMerkleRoot,
+	)
+	if err == nil {
+		t.Fatal("expected taproot output key mismatch error")
+	}
+	if !strings.Contains(err.Error(), "taproot output key does not match") {
+		t.Fatalf("unexpected error: [%v]", err)
 	}
 }
 
@@ -279,6 +541,755 @@ func TestTransactionBuilder_AddOutput(t *testing.T) {
 	builder.AddOutput(output)
 
 	assertInternalOutput(t, builder, 0, output)
+}
+
+func TestTransactionBuilder_AddTaprootKeyPathSignatures(t *testing.T) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	privateKeyBytes := hexToSlice(
+		t,
+		"0101010101010101010101010101010101010101010101010101010101010101",
+	)
+	privateKey, publicKey := btcec2.PrivKeyFromBytes(privateKeyBytes)
+
+	var taprootOutputKey [32]byte
+	copy(taprootOutputKey[:], schnorr.SerializePubKey(publicKey))
+
+	inputScript, err := PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var outputPublicKeyHash [20]byte
+	copy(
+		outputPublicKeyHash[:],
+		hexToSlice(t, "0202020202020202020202020202020202020202"),
+	)
+	outputScript, err := PayToWitnessPublicKeyHash(outputPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	previousTransaction := &Transaction{
+		Version: 1,
+		Inputs: []*TransactionInput{
+			{
+				Outpoint: &TransactionOutpoint{
+					TransactionHash: Hash{
+						0x10, 0x11, 0x12, 0x13,
+						0x14, 0x15, 0x16, 0x17,
+						0x18, 0x19, 0x1a, 0x1b,
+						0x1c, 0x1d, 0x1e, 0x1f,
+						0x20, 0x21, 0x22, 0x23,
+						0x24, 0x25, 0x26, 0x27,
+						0x28, 0x29, 0x2a, 0x2b,
+						0x2c, 0x2d, 0x2e, 0x2f,
+					},
+					OutputIndex: 0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: inputScript,
+			},
+		},
+		Locktime: 0,
+	}
+
+	if err := localChain.addTransaction(previousTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	err = builder.AddTaprootKeyPathInput(&UnspentTransactionOutput{
+		Outpoint: &TransactionOutpoint{
+			TransactionHash: previousTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	builder.AddOutput(&TransactionOutput{
+		Value:           90000,
+		PublicKeyScript: outputScript,
+	})
+
+	if !builder.HasTaprootKeyPathInputs() {
+		t.Fatal("expected builder to have taproot key-path inputs")
+	}
+	if !builder.HasOnlyTaprootKeyPathInputs() {
+		t.Fatal("expected builder to have only taproot key-path inputs")
+	}
+
+	sigHashes, err := builder.ComputeSignatureHashes()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(t, "signature hashes count", 1, len(sigHashes))
+
+	expectedSigHash := hexToSlice(
+		t,
+		"96653d19d603d309d22cfe2ccd0ba445e40629dea18d46108caa601055ec4318",
+	)
+	// This vector was generated with btcd v0.23.4's BIP-341
+	// CalcTaprootSignatureHash implementation and independently
+	// cross-checked by reviewers.
+	sigHashBytes := sigHashes[0].FillBytes(make([]byte, 32))
+	testutils.AssertBytesEqual(t, expectedSigHash, sigHashBytes)
+
+	signature, err := schnorr.Sign(privateKey, sigHashBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signatureBytes := signature.Serialize()
+
+	expectedSignature := hexToSlice(
+		t,
+		"5e847a0c22486f3b89ff80edd5afaf4be550aa411a0a7e28cff19d2b5924d77102bbf9a0a51100f4fdfc8435d0e8ff0f61dfdeccd464b78c553b1b4414ac0877",
+	)
+	testutils.AssertBytesEqual(t, expectedSignature, signatureBytes)
+
+	var signatureContainer [64]byte
+	copy(signatureContainer[:], signatureBytes)
+
+	transaction, err := builder.AddTaprootKeyPathSignatures(
+		[]*SchnorrSignatureContainer{
+			{
+				Signature: signatureContainer,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"transaction inputs count",
+		1,
+		len(transaction.Inputs),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"taproot witness elements count",
+		1,
+		len(transaction.Inputs[0].Witness),
+	)
+	testutils.AssertBytesEqual(
+		t,
+		expectedSignature,
+		transaction.Inputs[0].Witness[0],
+	)
+	testutils.AssertBytesEqual(t, nil, transaction.Inputs[0].SignatureScript)
+}
+
+func TestTransactionBuilder_AddTaprootKeyPathSignatures_MultipleInputs(
+	t *testing.T,
+) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	privateKeyBytes := hexToSlice(
+		t,
+		"0101010101010101010101010101010101010101010101010101010101010101",
+	)
+	privateKey, publicKey := btcec2.PrivKeyFromBytes(privateKeyBytes)
+
+	var taprootOutputKey [32]byte
+	copy(taprootOutputKey[:], schnorr.SerializePubKey(publicKey))
+
+	inputScript, err := PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var outputPublicKeyHash [20]byte
+	copy(
+		outputPublicKeyHash[:],
+		hexToSlice(t, "0202020202020202020202020202020202020202"),
+	)
+	outputScript, err := PayToWitnessPublicKeyHash(outputPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputValues := []int64{100000, 110000}
+	for i, value := range inputValues {
+		previousTransaction := &Transaction{
+			Version: 1,
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash{byte(0x20 + i)},
+						OutputIndex:     0,
+					},
+					SignatureScript: []byte{0x51},
+					Sequence:        0xffffffff,
+				},
+			},
+			Outputs: []*TransactionOutput{
+				{
+					Value:           value,
+					PublicKeyScript: inputScript,
+				},
+			},
+			Locktime: 0,
+		}
+
+		if err := localChain.addTransaction(previousTransaction); err != nil {
+			t.Fatal(err)
+		}
+
+		err = builder.AddTaprootKeyPathInput(&UnspentTransactionOutput{
+			Outpoint: &TransactionOutpoint{
+				TransactionHash: previousTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: value,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	builder.AddOutput(&TransactionOutput{
+		Value:           209000,
+		PublicKeyScript: outputScript,
+	})
+
+	sigHashes, err := builder.ComputeSignatureHashes()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(t, "signature hashes count", 2, len(sigHashes))
+	if sigHashes[0].Cmp(sigHashes[1]) == 0 {
+		t.Fatal("expected distinct taproot signature hashes")
+	}
+
+	signatures := make([]*SchnorrSignatureContainer, len(sigHashes))
+	expectedSignatures := make([][]byte, len(sigHashes))
+	for i, sigHash := range sigHashes {
+		signature, err := schnorr.Sign(
+			privateKey,
+			sigHash.FillBytes(make([]byte, 32)),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		signatureBytes := signature.Serialize()
+		expectedSignatures[i] = signatureBytes
+
+		var signatureContainer [64]byte
+		copy(signatureContainer[:], signatureBytes)
+		signatures[i] = &SchnorrSignatureContainer{
+			Signature: signatureContainer,
+		}
+	}
+
+	transaction, err := builder.AddTaprootKeyPathSignatures(signatures)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"transaction inputs count",
+		2,
+		len(transaction.Inputs),
+	)
+	for i, input := range transaction.Inputs {
+		testutils.AssertIntsEqual(
+			t,
+			fmt.Sprintf("taproot witness elements count for input [%d]", i),
+			1,
+			len(input.Witness),
+		)
+		testutils.AssertBytesEqual(t, expectedSignatures[i], input.Witness[0])
+		testutils.AssertBytesEqual(t, nil, input.SignatureScript)
+	}
+}
+
+func TestTransactionBuilder_AddSignaturesRejectsTaprootInput(t *testing.T) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	var taprootOutputKey [32]byte
+	copy(
+		taprootOutputKey[:],
+		hexToSlice(
+			t,
+			"1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+		),
+	)
+	inputScript, err := PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	previousTransaction := &Transaction{
+		Version: 1,
+		Inputs: []*TransactionInput{
+			{
+				Outpoint: &TransactionOutpoint{
+					TransactionHash: Hash{0x01},
+					OutputIndex:     0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: inputScript,
+			},
+		},
+		Locktime: 0,
+	}
+
+	if err := localChain.addTransaction(previousTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	err = builder.AddTaprootKeyPathInput(&UnspentTransactionOutput{
+		Outpoint: &TransactionOutpoint{
+			TransactionHash: previousTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var outputPublicKeyHash [20]byte
+	outputScript, err := PayToWitnessPublicKeyHash(outputPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder.AddOutput(&TransactionOutput{
+		Value:           90000,
+		PublicKeyScript: outputScript,
+	})
+
+	if _, err := builder.ComputeSignatureHashes(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = builder.AddSignatures([]*SignatureContainer{
+		{
+			R: big.NewInt(1),
+			S: big.NewInt(1),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected AddSignatures to reject a taproot input")
+	}
+	if !strings.Contains(err.Error(), "use AddTaprootKeyPathSignatures") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction(t *testing.T) {
+	builder := NewTransactionBuilder(nil)
+
+	var initialInputHash1 chainhash.Hash
+	var initialInputHash2 chainhash.Hash
+	initialInputHash1[0] = 0x11
+	initialInputHash2[0] = 0x22
+
+	builder.internal.AddTxIn(
+		wire.NewTxIn(
+			wire.NewOutPoint(&initialInputHash1, 1),
+			[]byte{0xde, 0xad},
+			nil,
+		),
+	)
+	builder.internal.AddTxIn(
+		wire.NewTxIn(
+			wire.NewOutPoint(&initialInputHash2, 2),
+			nil,
+			[][]byte{{0xbe, 0xef}},
+		),
+	)
+	builder.sigHashArgs = append(
+		builder.sigHashArgs,
+		&inputSigHashArgs{value: 111, scriptCode: []byte{0x51}, witness: false},
+		&inputSigHashArgs{value: 222, scriptCode: []byte{0x52}, witness: true},
+	)
+	builder.sigHashes = []*big.Int{big.NewInt(1), big.NewInt(2)}
+
+	var replacementInputHash1 chainhash.Hash
+	var replacementInputHash2 chainhash.Hash
+	replacementInputHash1[0] = 0x33
+	replacementInputHash2[0] = 0x44
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Version: 2,
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(replacementInputHash1),
+						OutputIndex:     7,
+					},
+					Sequence: 0xffffffff,
+				},
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(replacementInputHash2),
+						OutputIndex:     8,
+					},
+					Sequence: 0xffffffff,
+				},
+			},
+			Outputs: []*TransactionOutput{
+				{
+					Value:           1000,
+					PublicKeyScript: hexToSlice(t, "0014deadbeef"),
+				},
+			},
+			Locktime: 0,
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected replacement error: [%v]", err)
+	}
+
+	if len(builder.sigHashes) != 0 {
+		t.Fatalf("expected sighashes reset after replacement: [%d]", len(builder.sigHashes))
+	}
+
+	// Preserve P2SH/P2WSH placeholder scripts needed for final signature
+	// application while replacing tx skeleton.
+	if !reflect.DeepEqual([]byte{0xde, 0xad}, builder.internal.TxIn[0].SignatureScript) {
+		t.Fatalf(
+			"unexpected preserved signature script\nexpected: [%x]\nactual:   [%x]",
+			[]byte{0xde, 0xad},
+			builder.internal.TxIn[0].SignatureScript,
+		)
+	}
+
+	if len(builder.internal.TxIn[1].Witness) != 1 {
+		t.Fatalf("unexpected preserved witness length: [%d]", len(builder.internal.TxIn[1].Witness))
+	}
+
+	if !reflect.DeepEqual([]byte{0xbe, 0xef}, builder.internal.TxIn[1].Witness[0]) {
+		t.Fatalf(
+			"unexpected preserved witness script\nexpected: [%x]\nactual:   [%x]",
+			[]byte{0xbe, 0xef},
+			builder.internal.TxIn[1].Witness[0],
+		)
+	}
+
+	inputs, outputs, err := builder.UnsignedTransactionIO()
+	if err != nil {
+		t.Fatalf("unexpected extraction error after replacement: [%v]", err)
+	}
+
+	if len(inputs) != 2 {
+		t.Fatalf("unexpected input count after replacement: [%d]", len(inputs))
+	}
+
+	if inputs[0].TxIDHex != replacementInputHash1.String() || inputs[0].Vout != 7 {
+		t.Fatalf("unexpected first input after replacement: [%+v]", inputs[0])
+	}
+
+	if inputs[1].TxIDHex != replacementInputHash2.String() || inputs[1].Vout != 8 {
+		t.Fatalf("unexpected second input after replacement: [%+v]", inputs[1])
+	}
+
+	if len(outputs) != 1 {
+		t.Fatalf("unexpected output count after replacement: [%d]", len(outputs))
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsInputMetadataMismatch(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{value: 1})
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     0,
+					},
+				},
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     1,
+					},
+				},
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected input metadata mismatch error")
+	}
+
+	if !reflect.DeepEqual(
+		fmt.Sprintf(
+			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
+			2,
+			1,
+		),
+		err.Error(),
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsNonEmptyReplacementSignatureScript(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(
+		builder.sigHashArgs,
+		&inputSigHashArgs{value: 1, scriptCode: []byte{0x51}, witness: false},
+	)
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     0,
+					},
+					SignatureScript: []byte{0xaa},
+					Sequence:        0xffffffff,
+				},
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected replacement signature script error")
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"replacement transaction input [0] has unexpected non-empty signature script",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsNonEmptyReplacementWitness(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(
+		builder.sigHashArgs,
+		&inputSigHashArgs{value: 1, scriptCode: []byte{0x51}, witness: true},
+	)
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     0,
+					},
+					Witness:  wire.TxWitness{[]byte{0xbb}},
+					Sequence: 0xffffffff,
+				},
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected replacement witness error")
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"replacement transaction input [0] has unexpected non-empty witness",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsMultiElementPreviousWitness(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	previousInput := wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil)
+	// Pre-signing witness that mimics a P2TR script-path spend: [script,
+	// controlBlock]. The restoration path supports only zero- or
+	// single-element previous witnesses today; the multi-element case must
+	// fail loudly rather than silently dropping data later in signing.
+	previousInput.Witness = wire.TxWitness{
+		[]byte{0x51, 0x52},
+		[]byte{0xc0, 0xab, 0xcd},
+	}
+	builder.internal.AddTxIn(previousInput)
+	builder.sigHashArgs = append(
+		builder.sigHashArgs,
+		&inputSigHashArgs{value: 1, scriptCode: []byte{0x51}, witness: true},
+	)
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     0,
+					},
+					Sequence: 0xffffffff,
+				},
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected multi-element witness restoration error")
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"previous witness has [2] elements",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if !strings.Contains(
+		err.Error(),
+		"only zero- or single-element",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_UnsignedTransactionIO(t *testing.T) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	for i := range txHash {
+		txHash[i] = byte(i + 1)
+	}
+	const expectedTxIDHex = "201f1e1d1c1b1a191817161514131211100f0e0d0c0b0a090807060504030201"
+
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 7), nil, nil))
+	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{
+		value:           1234,
+		publicKeyScript: hexToSlice(t, "5120"+strings.Repeat("22", 32)),
+	})
+	builder.AddOutput(&TransactionOutput{
+		Value:           1000,
+		PublicKeyScript: hexToSlice(t, "0014deadbeef"),
+	})
+
+	inputs, outputs, err := builder.UnsignedTransactionIO()
+	if err != nil {
+		t.Fatalf("unexpected extraction error: [%v]", err)
+	}
+
+	if len(inputs) != 1 {
+		t.Fatalf("unexpected input count: [%d]", len(inputs))
+	}
+
+	if inputs[0].TxIDHex != expectedTxIDHex {
+		t.Fatalf(
+			"unexpected input txid\nexpected: [%v]\nactual:   [%v]",
+			expectedTxIDHex,
+			inputs[0].TxIDHex,
+		)
+	}
+
+	if inputs[0].Vout != 7 {
+		t.Fatalf("unexpected input vout: [%d]", inputs[0].Vout)
+	}
+
+	if inputs[0].ValueSats != 1234 {
+		t.Fatalf("unexpected input value: [%d]", inputs[0].ValueSats)
+	}
+
+	if inputs[0].ScriptPubKeyHex != "5120"+strings.Repeat("22", 32) {
+		t.Fatalf(
+			"unexpected input script\nexpected: [%v]\nactual:   [%v]",
+			"5120"+strings.Repeat("22", 32),
+			inputs[0].ScriptPubKeyHex,
+		)
+	}
+
+	if len(outputs) != 1 {
+		t.Fatalf("unexpected output count: [%d]", len(outputs))
+	}
+
+	if outputs[0].ScriptPubKeyHex != "0014deadbeef" {
+		t.Fatalf(
+			"unexpected output script\nexpected: [%v]\nactual:   [%v]",
+			"0014deadbeef",
+			outputs[0].ScriptPubKeyHex,
+		)
+	}
+
+	if outputs[0].ValueSats != 1000 {
+		t.Fatalf("unexpected output value: [%d]", outputs[0].ValueSats)
+	}
+}
+
+func TestTransactionBuilder_UnsignedTransactionIO_RejectsNegativeInputValue(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{value: -1})
+	builder.AddOutput(&TransactionOutput{
+		Value:           1,
+		PublicKeyScript: hexToSlice(t, "0014aa"),
+	})
+
+	_, _, err := builder.UnsignedTransactionIO()
+	if err == nil {
+		t.Fatal("expected extraction error")
+	}
+}
+
+func TestTransactionBuilder_UnsignedTransactionIO_RejectsNegativeOutputValue(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{value: 1})
+	builder.AddOutput(&TransactionOutput{
+		Value:           -1,
+		PublicKeyScript: hexToSlice(t, "0014aa"),
+	})
+
+	_, _, err := builder.UnsignedTransactionIO()
+	if err == nil {
+		t.Fatal("expected extraction error")
+	}
 }
 
 // The goal of this test is making sure that the TransactionBuilder can
@@ -508,6 +1519,37 @@ func assertSigHashArgs(t *testing.T, expected, actual *inputSigHashArgs) {
 		expected.scriptCode,
 		actual.scriptCode,
 	)
+
+	if expected.publicKeyScript != nil {
+		testutils.AssertBytesEqual(
+			t,
+			expected.publicKeyScript,
+			actual.publicKeyScript,
+		)
+	}
+
+	if expected.scriptType != NonStandardScript {
+		testutils.AssertIntsEqual(
+			t,
+			"sighash args script type",
+			int(expected.scriptType),
+			int(actual.scriptType),
+		)
+	}
+
+	if expected.taprootMerkleRoot != nil {
+		if actual.taprootMerkleRoot == nil {
+			t.Fatal("expected taproot merkle root")
+		}
+
+		testutils.AssertBytesEqual(
+			t,
+			expected.taprootMerkleRoot[:],
+			actual.taprootMerkleRoot[:],
+		)
+	} else if actual.taprootMerkleRoot != nil {
+		t.Fatal("unexpected taproot merkle root")
+	}
 
 	testutils.AssertBoolsEqual(
 		t,
