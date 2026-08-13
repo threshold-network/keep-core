@@ -222,13 +222,15 @@ func (rt *RedemptionTask) ProposeRedemption(
 	if fee <= 0 {
 		taskLogger.Infof("estimating redemption transaction fee")
 
-		_, _, txMaxFee, txMaxTotalFee, _, _, _, err := rt.chain.GetRedemptionParameters()
+		redemptionParameters, err := rt.chain.GetRedemptionParameters()
 		if err != nil {
 			return nil, fmt.Errorf(
 				"cannot get redemption tx max total fee: [%w]",
 				err,
 			)
 		}
+		txMaxFee := redemptionParameters.TxMaxFee
+		txMaxTotalFee := redemptionParameters.TxMaxTotalFee
 
 		estimatedFee, err := EstimateRedemptionFee(
 			rt.btcChain,

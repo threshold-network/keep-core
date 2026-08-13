@@ -6,6 +6,9 @@ on:
   push:
     branches:
       - main
+      # Long-lived FROST integration branch: it takes direct pushes and usually has
+      # no open PR, so without this it is never compiled by CI.
+      - frost-upgrade
     paths-ignore:
       - "docs/**"
       - "infrastructure/**"
