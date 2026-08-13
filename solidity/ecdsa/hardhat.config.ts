@@ -118,6 +118,13 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {
+      // Configuring a `MockContract` is a transaction, and a transaction mines
+      // a block. Without this, Hardhat forces every block to be at least one
+      // second after its parent, so setting up a mock silently advances the
+      // chain clock and any test asserting on a deadline boundary inverts.
+      // `test/helpers/mock.ts` pins the next block's timestamp before each
+      // write; this option is what lets it reuse the current one.
+      allowBlocksWithSameTimestamp: true,
       forking: {
         // forking is enabled only if FORKING_URL env is provided
         enabled: !!process.env.FORKING_URL,

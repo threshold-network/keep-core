@@ -1,17 +1,15 @@
 import { ethers } from "hardhat"
-import { smock } from "@defi-wonderland/smock"
-import chai from "chai"
+
+import { createMock } from "../helpers/mock"
 
 import type { BigNumber } from "ethers"
 import type { WalletRegistry, IRandomBeacon } from "../../typechain"
-import type { FakeContract } from "@defi-wonderland/smock"
-
-chai.use(smock.matchers)
+import type { Mock } from "../helpers/mock"
 
 export async function fakeRandomBeacon(
   walletRegistry: WalletRegistry
-): Promise<FakeContract<IRandomBeacon>> {
-  const randomBeacon = await smock.fake<IRandomBeacon>("IRandomBeacon", {
+): Promise<Mock<IRandomBeacon>> {
+  const randomBeacon = await createMock<IRandomBeacon>("IRandomBeacon", {
     address: await walletRegistry.callStatic.randomBeacon(),
   })
 
@@ -25,13 +23,9 @@ export async function fakeRandomBeacon(
   return randomBeacon
 }
 
-export function resetMock(randomBeacon: FakeContract<IRandomBeacon>): void {
-  randomBeacon.requestRelayEntry.reset()
-}
-
 export async function submitRelayEntry(
   walletRegistry: WalletRegistry,
-  randomBeacon?: FakeContract<IRandomBeacon>
+  randomBeacon?: Mock<IRandomBeacon>
 ): Promise<{
   startBlock: number
   dkgSeed: BigNumber

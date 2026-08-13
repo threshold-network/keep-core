@@ -43,7 +43,8 @@
  */
 
 import { deployments, ethers, helpers } from "hardhat"
-import { smock } from "@defi-wonderland/smock"
+
+import { createMock } from "../helpers/mock"
 
 // eslint-disable-next-line import/no-cycle
 import { registerOperators } from "../utils/operators"
@@ -63,7 +64,7 @@ import type {
   IRandomBeacon,
   Allowlist,
 } from "../../typechain"
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "../helpers/mock"
 
 const { to1e18 } = helpers.number
 
@@ -118,8 +119,8 @@ const createWalletRegistryFixture = (options: { useAllowlist: boolean }) => {
       sortitionPool: SortitionPool
       reimbursementPool: ReimbursementPool
       staking: TokenStaking
-      randomBeacon: FakeContract<IRandomBeacon>
-      walletOwner: FakeContract<IWalletOwner>
+      randomBeacon: Mock<IRandomBeacon>
+      walletOwner: Mock<IWalletOwner>
       deployer: SignerWithAddress
       governance: SignerWithAddress
       thirdParty: SignerWithAddress
@@ -147,7 +148,7 @@ const createWalletRegistryFixture = (options: { useAllowlist: boolean }) => {
       const reimbursementPool: ReimbursementPool =
         await helpers.contracts.getContract("ReimbursementPool")
 
-      const randomBeacon: FakeContract<IRandomBeacon> = await fakeRandomBeacon(
+      const randomBeacon: Mock<IRandomBeacon> = await fakeRandomBeacon(
         walletRegistry
       )
 
@@ -193,8 +194,10 @@ const createWalletRegistryFixture = (options: { useAllowlist: boolean }) => {
       await fundReimbursementPool(deployer, reimbursementPool)
 
       // Mock Wallet Owner contract.
-      const walletOwner: FakeContract<IWalletOwner> =
-        await initializeWalletOwner(walletRegistryGovernance, governance)
+      const walletOwner: Mock<IWalletOwner> = await initializeWalletOwner(
+        walletRegistryGovernance,
+        governance
+      )
 
       return {
         tToken,
@@ -349,11 +352,12 @@ export async function updateWalletRegistryParams(
 export async function initializeWalletOwner(
   walletRegistryGovernance: WalletRegistryGovernance,
   governance: SignerWithAddress
-): Promise<FakeContract<IWalletOwner>> {
+): Promise<Mock<IWalletOwner>> {
   const { deployer } = await helpers.signers.getNamedSigners()
 
-  const walletOwner: FakeContract<IWalletOwner> =
-    await smock.fake<IWalletOwner>("IWalletOwner")
+  const walletOwner: Mock<IWalletOwner> = await createMock<IWalletOwner>(
+    "IWalletOwner"
+  )
 
   await deployer.sendTransaction({
     to: walletOwner.address,

@@ -340,20 +340,7 @@ func ValidateMovingFundsProposal(
 
 		GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
 
-		GetMovingFundsParameters() (
-			txMaxTotalFee uint64,
-			dustThreshold uint64,
-			timeoutResetDelay uint32,
-			timeout uint32,
-			timeoutSlashingAmount *big.Int,
-			timeoutNotifierRewardMultiplier uint32,
-			commitmentGasOffset uint16,
-			sweepTxMaxTotalFee uint64,
-			sweepTimeout uint32,
-			sweepTimeoutSlashingAmount *big.Int,
-			sweepTimeoutNotifierRewardMultiplier uint32,
-			err error,
-		)
+		GetMovingFundsParameters() (MovingFundsParameters, error)
 
 		PastMovingFundsCommitmentSubmittedEvents(
 			filter *MovingFundsCommitmentSubmittedEventFilter,
@@ -403,20 +390,7 @@ func ValidateMovingFundsSafetyMargin(
 
 		GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
 
-		GetMovingFundsParameters() (
-			txMaxTotalFee uint64,
-			dustThreshold uint64,
-			timeoutResetDelay uint32,
-			timeout uint32,
-			timeoutSlashingAmount *big.Int,
-			timeoutNotifierRewardMultiplier uint32,
-			commitmentGasOffset uint16,
-			sweepTxMaxTotalFee uint64,
-			sweepTimeout uint32,
-			sweepTimeoutSlashingAmount *big.Int,
-			sweepTimeoutNotifierRewardMultiplier uint32,
-			err error,
-		)
+		GetMovingFundsParameters() (MovingFundsParameters, error)
 
 		PastMovingFundsCommitmentSubmittedEvents(
 			filter *MovingFundsCommitmentSubmittedEventFilter,
@@ -450,13 +424,12 @@ func ValidateMovingFundsSafetyMargin(
 	// As the moving funds procedure is time constrained, we must ensure the
 	// safety margin does not exceed half of the moving funds timeout parameter.
 	// This should give the wallet enough time to complete moving funds.
-	_, _, _, movingFundsTimeout, _, _, _, _, _, _, _, err :=
-		chain.GetMovingFundsParameters()
+	movingFundsParameters, err := chain.GetMovingFundsParameters()
 	if err != nil {
 		return fmt.Errorf("cannot get moving funds parameters: [%w]", err)
 	}
 
-	maxAllowedSafetyMargin := time.Duration(movingFundsTimeout/2) * time.Second
+	maxAllowedSafetyMargin := time.Duration(movingFundsParameters.Timeout/2) * time.Second
 
 	if safetyMargin > maxAllowedSafetyMargin {
 		safetyMargin = maxAllowedSafetyMargin
@@ -494,20 +467,7 @@ func isWalletPendingMovingFundsTarget(
 
 		GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
 
-		GetMovingFundsParameters() (
-			txMaxTotalFee uint64,
-			dustThreshold uint64,
-			timeoutResetDelay uint32,
-			timeout uint32,
-			timeoutSlashingAmount *big.Int,
-			timeoutNotifierRewardMultiplier uint32,
-			commitmentGasOffset uint16,
-			sweepTxMaxTotalFee uint64,
-			sweepTimeout uint32,
-			sweepTimeoutSlashingAmount *big.Int,
-			sweepTimeoutNotifierRewardMultiplier uint32,
-			err error,
-		)
+		GetMovingFundsParameters() (MovingFundsParameters, error)
 
 		PastMovingFundsCommitmentSubmittedEvents(
 			filter *MovingFundsCommitmentSubmittedEventFilter,

@@ -367,7 +367,9 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 			expectedProposal: &tbtc.MovedFundsSweepProposal{
 				MovingFundsTxHash:        movingFundsTxHash,
 				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
-				SweepTxFee:               big.NewInt(4450),
+				// raw 4450 (178 vByte * 25 sat/vByte), buffered to
+				// ceil(25*1.25)=32 sat/vByte * 178 = 5696, below the 6000 cap.
+				SweepTxFee: big.NewInt(5696),
 			},
 		},
 		"fresh FROST wallet fee estimated": {
@@ -377,7 +379,10 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 			expectedProposal: &tbtc.MovedFundsSweepProposal{
 				MovingFundsTxHash:        movingFundsTxHash,
 				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
-				SweepTxFee:               big.NewInt(2775),
+				// A fresh FROST wallet sweeps a single P2TR input: raw 2775
+				// (111 vByte * 25 sat/vByte), buffered to
+				// ceil(25*1.25)=32 sat/vByte * 111 = 3552, below the 6000 cap.
+				SweepTxFee: big.NewInt(3552),
 			},
 		},
 	}
@@ -467,6 +472,7 @@ func TestEstimateMovedFundsSweepFeeForScripts(t *testing.T) {
 	var tests = map[string]struct {
 		movedFundsOutputScript bitcoin.Script
 		walletOutputScript     bitcoin.Script
+		estimateSatPerVByte    int64
 		sweepTxMaxTotalFee     uint64
 		hasMainUtxo            bool
 		expectedFee            uint64
@@ -475,49 +481,86 @@ func TestEstimateMovedFundsSweepFeeForScripts(t *testing.T) {
 		"legacy scripts, one input": {
 			movedFundsOutputScript: legacyWalletScript,
 			walletOutputScript:     legacyWalletScript,
+			estimateSatPerVByte:    16,
 			sweepTxMaxTotalFee:     3000,
 			hasMainUtxo:            false,
-			expectedFee:            1760,
-			expectedError:          nil,
+			// raw 1760 (110 vByte * 16 sat/vByte), buffered to
+			// ceil(16*1.25)=20 sat/vByte * 110 = 2200, below the cap.
+			expectedFee:   2200,
+			expectedError: nil,
 		},
 		"legacy scripts, two inputs": {
 			movedFundsOutputScript: legacyWalletScript,
 			walletOutputScript:     legacyWalletScript,
+			estimateSatPerVByte:    16,
 			sweepTxMaxTotalFee:     3000,
 			hasMainUtxo:            true,
-			expectedFee:            2848,
-			expectedError:          nil,
+			// raw 2848 (178 vByte * 16 sat/vByte); buffered 20 sat/vByte * 178
+			// = 3560 exceeds the 3000 cap, so it is bounded down to the cap.
+			expectedFee:   3000,
+			expectedError: nil,
 		},
 		"Taproot scripts, one input": {
 			movedFundsOutputScript: taprootWalletScript,
 			walletOutputScript:     taprootWalletScript,
+			estimateSatPerVByte:    16,
 			sweepTxMaxTotalFee:     3000,
 			hasMainUtxo:            false,
-			expectedFee:            1776,
-			expectedError:          nil,
+			// The P2TR shape is one virtual byte larger than the legacy one:
+			// raw 1776 (111 vByte * 16 sat/vByte), buffered to 20 * 111 = 2220.
+			expectedFee:   2220,
+			expectedError: nil,
 		},
 		"Taproot scripts, two inputs": {
 			movedFundsOutputScript: taprootWalletScript,
 			walletOutputScript:     taprootWalletScript,
-			sweepTxMaxTotalFee:     3000,
+			estimateSatPerVByte:    16,
+			sweepTxMaxTotalFee:     6000,
 			hasMainUtxo:            true,
-			expectedFee:            2704,
-			expectedError:          nil,
+			// raw 2704 (169 vByte * 16 sat/vByte), buffered to
+			// 20 sat/vByte * 169 = 3380, below the cap.
+			expectedFee:   3380,
+			expectedError: nil,
+		},
+		"low estimate is raised to the minimum floor": {
+			movedFundsOutputScript: legacyWalletScript,
+			walletOutputScript:     legacyWalletScript,
+			estimateSatPerVByte:    1,
+			sweepTxMaxTotalFee:     3000,
+			hasMainUtxo:            false,
+			// raw 110 (110 vByte * 1 sat/vByte), buffered ceil(1*1.25)=2 is
+			// below the 5 sat/vByte floor, so clamped to 5 * 110 = 550.
+			expectedFee:   550,
+			expectedError: nil,
 		},
 		"estimated Taproot fee too high": {
 			movedFundsOutputScript: taprootWalletScript,
 			walletOutputScript:     taprootWalletScript,
+			estimateSatPerVByte:    16,
 			sweepTxMaxTotalFee:     2700,
 			hasMainUtxo:            true,
-			expectedFee:            0,
-			expectedError:          tbtcpg.ErrSweepTxFeeTooHigh,
+			// The raw 2704 estimate already exceeds the cap.
+			expectedFee:   0,
+			expectedError: tbtcpg.ErrSweepTxFeeTooHigh,
+		},
+		"minimum floor exceeds the max total fee": {
+			movedFundsOutputScript: legacyWalletScript,
+			walletOutputScript:     legacyWalletScript,
+			estimateSatPerVByte:    1,
+			// raw 110 (110 vByte * 1 sat/vByte) is below the cap, so it passes
+			// the raw-estimate guard, but the 5 sat/vByte floor total (550)
+			// exceeds the cap, so a safe sweep cannot be built.
+			sweepTxMaxTotalFee: 400,
+			hasMainUtxo:        false,
+			expectedFee:        0,
+			expectedError:      tbtcpg.ErrMaxFeeTooLow,
 		},
 	}
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
 			btcChain := tbtcpg.NewLocalBitcoinChain()
-			btcChain.SetEstimateSatPerVByteFee(1, 16)
+			btcChain.SetEstimateSatPerVByteFee(1, test.estimateSatPerVByte)
 
 			actualFee, err := tbtcpg.EstimateMovedFundsSweepFeeForScripts(
 				btcChain,
@@ -544,15 +587,84 @@ func TestEstimateMovedFundsSweepFeeForScripts(t *testing.T) {
 }
 
 func TestEstimateMovedFundsSweepFee(t *testing.T) {
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-	btcChain.SetEstimateSatPerVByteFee(1, 16)
-
-	actualFee, err := tbtcpg.EstimateMovedFundsSweepFee(btcChain, true, 3000)
-	if err != nil {
-		t.Fatal(err)
+	var tests = map[string]struct {
+		estimateSatPerVByte int64
+		sweepTxMaxTotalFee  uint64
+		hasMainUtxo         bool
+		expectedFee         uint64
+		expectedError       error
+	}{
+		"estimated fee correct, one input": {
+			estimateSatPerVByte: 16,
+			sweepTxMaxTotalFee:  3000,
+			hasMainUtxo:         false,
+			// raw 1760 (110 vByte * 16 sat/vByte), buffered to
+			// ceil(16*1.25)=20 sat/vByte * 110 = 2200, below the cap.
+			expectedFee:   2200,
+			expectedError: nil,
+		},
+		"estimated fee correct, two inputs": {
+			estimateSatPerVByte: 16,
+			sweepTxMaxTotalFee:  3000,
+			hasMainUtxo:         true,
+			// raw 2848 (178 vByte * 16 sat/vByte); buffered 20 sat/vByte * 178
+			// = 3560 exceeds the 3000 cap, so it is bounded down to the cap.
+			expectedFee:   3000,
+			expectedError: nil,
+		},
+		"low estimate is raised to the minimum floor": {
+			estimateSatPerVByte: 1,
+			sweepTxMaxTotalFee:  3000,
+			hasMainUtxo:         false,
+			// raw 110 (110 vByte * 1 sat/vByte), buffered ceil(1*1.25)=2 is
+			// below the 5 sat/vByte floor, so clamped to 5 * 110 = 550.
+			expectedFee:   550,
+			expectedError: nil,
+		},
+		"estimated fee too high": {
+			estimateSatPerVByte: 16,
+			sweepTxMaxTotalFee:  2500,
+			hasMainUtxo:         true,
+			expectedFee:         0,
+			expectedError:       tbtcpg.ErrSweepTxFeeTooHigh,
+		},
+		"minimum floor exceeds the max total fee": {
+			estimateSatPerVByte: 1,
+			// raw 110 (110 vByte * 1 sat/vByte) is below the cap, so it passes
+			// the raw-estimate guard, but the 5 sat/vByte floor total (550)
+			// exceeds the cap, so a safe sweep cannot be built.
+			sweepTxMaxTotalFee: 400,
+			hasMainUtxo:        false,
+			expectedFee:        0,
+			expectedError:      tbtcpg.ErrMaxFeeTooLow,
+		},
 	}
 
-	testutils.AssertUintsEqual(t, "fee", 2848, uint64(actualFee))
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			btcChain := tbtcpg.NewLocalBitcoinChain()
+			btcChain.SetEstimateSatPerVByteFee(1, test.estimateSatPerVByte)
+
+			actualFee, err := tbtcpg.EstimateMovedFundsSweepFee(
+				btcChain,
+				test.hasMainUtxo,
+				test.sweepTxMaxTotalFee,
+			)
+
+			testutils.AssertUintsEqual(
+				t,
+				"fee",
+				test.expectedFee,
+				uint64(actualFee),
+			)
+
+			testutils.AssertAnyErrorInChainMatchesTarget(
+				t,
+				test.expectedError,
+				err,
+			)
+		})
+	}
 }
 
 func hashFromString(str string) bitcoin.Hash {

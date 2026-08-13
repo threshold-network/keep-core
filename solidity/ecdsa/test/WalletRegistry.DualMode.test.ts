@@ -1,9 +1,10 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 import { ethers, helpers } from "hardhat"
-import { smock } from "@defi-wonderland/smock"
 import { expect } from "chai"
 
-import type { FakeContract } from "@defi-wonderland/smock"
+import { createMock } from "./helpers/mock"
+
+import type { Mock } from "./helpers/mock"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { WalletRegistry, Allowlist, IStaking } from "../typechain"
 
@@ -13,8 +14,8 @@ const ZERO_ADDRESS = ethers.constants.AddressZero
 
 describe("WalletRegistry - Dual-Mode Authorization", () => {
   let walletRegistry: WalletRegistry
-  let allowlist: FakeContract<Allowlist>
-  let stakingContract: FakeContract<IStaking>
+  let allowlist: Mock<Allowlist>
+  let stakingContract: Mock<IStaking>
   let deployer: SignerWithAddress
   let governance: SignerWithAddress
   let stakingProvider: SignerWithAddress
@@ -42,14 +43,14 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
     await ecdsaInactivity.deployed()
 
     // Create fake contracts first
-    allowlist = await smock.fake<Allowlist>("Allowlist")
-    stakingContract = await smock.fake<IStaking>("IStaking")
+    allowlist = await createMock<Allowlist>("Allowlist")
+    stakingContract = await createMock<IStaking>("IStaking")
 
     // Deploy fake dependencies for initialize
-    const sortitionPool = await smock.fake("SortitionPool")
-    const dkgValidator = await smock.fake("EcdsaDkgValidator")
-    const randomBeacon = await smock.fake("IRandomBeacon")
-    const reimbursementPool = await smock.fake("ReimbursementPool")
+    const sortitionPool = await createMock("SortitionPool")
+    const dkgValidator = await createMock("EcdsaDkgValidator")
+    const randomBeacon = await createMock("IRandomBeacon")
+    const reimbursementPool = await createMock("ReimbursementPool")
 
     // Deploy WalletRegistry proxy using ERC1967Proxy directly instead of
     // @openzeppelin/hardhat-upgrades' upgrades.deployProxy(). Using
@@ -472,7 +473,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await walletRegistry.initializeV2(allowlist.address)
 
       // Attempt to change allowlist should fail
-      const newAllowlist = await smock.fake<Allowlist>("Allowlist")
+      const newAllowlist = await createMock<Allowlist>("Allowlist")
 
       await expect(
         walletRegistry.initializeV2(newAllowlist.address)

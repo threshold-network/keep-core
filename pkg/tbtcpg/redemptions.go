@@ -152,13 +152,14 @@ func (rt *RedemptionTask) FindPendingRedemptions(
 		)
 	}
 
-	_, _, _, _, requestTimeout, _, _, err := rt.chain.GetRedemptionParameters()
+	redemptionParameters, err := rt.chain.GetRedemptionParameters()
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to get redemption parameters: [%w]",
 			err,
 		)
 	}
+	requestTimeout := redemptionParameters.Timeout
 
 	taskLogger.Infof("fetching pending redemption requests")
 
@@ -210,12 +211,26 @@ func (rt *RedemptionTask) ProposeRedemption(
 
 	taskLogger.Infof("preparing a redemption proposal")
 
-	// Estimate fee if it's missing. Do not check the estimated fee against
-	// the maximum total and per-request fees allowed by the Bridge. This
-	// is done during the on-chain validation of the proposal so there is no
-	// need to do it here.
+	// Estimate fee if it's missing. Here we bound the estimate by the maximum
+	// total fee only. The per-request maximum fee (TxMaxFee, snapshotted per
+	// request at request creation) is enforced solely by the on-chain
+	// validation of the proposal and is not checked here. Note that the
+	// safe-minimum floor (see EstimateRedemptionFee) raises the total fee and
+	// therefore each request's fee share, so it can push a share above that
+	// request's per-request maximum even while the total stays within
+	// txMaxTotalFee; such a proposal is rejected only by on-chain validation.
 	if fee <= 0 {
 		taskLogger.Infof("estimating redemption transaction fee")
+
+		redemptionParameters, err := rt.chain.GetRedemptionParameters()
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get redemption tx max total fee: [%w]",
+				err,
+			)
+		}
+		txMaxFee := redemptionParameters.TxMaxFee
+		txMaxTotalFee := redemptionParameters.TxMaxTotalFee
 
 		walletChainData, err := rt.chain.GetWallet(walletPublicKeyHash)
 		if err != nil {
@@ -243,6 +258,7 @@ func (rt *RedemptionTask) ProposeRedemption(
 			rt.btcChain,
 			walletOutputScript,
 			redeemersOutputScripts,
+			txMaxTotalFee,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -252,6 +268,31 @@ func (rt *RedemptionTask) ProposeRedemption(
 		}
 
 		fee = estimatedFee
+
+		// The safe-minimum floor raises the total fee and therefore each
+		// request's fee share. When a share exceeds the per-request maximum
+		// fee, on-chain validation rejects the whole proposal and the batch is
+		// aborted with no lower-fee retry. Emit a distinct warning so operators
+		// can tell this apart from a generic validation failure. The largest
+		// share is the worst case to check: the on-chain fee distribution
+		// (see withRedemptionTotalFee) splits the total evenly and assigns the
+		// division remainder to the last request, so that request pays
+		// floor(total/count) + total%count. Checking only the even floor share
+		// would miss a rejection caused solely by the remainder. txMaxFee is
+		// the current governance parameter; the actually enforced cap is the
+		// value snapshotted per request at creation, so this is a best-effort
+		// diagnostic rather than an exact predictor.
+		requestsCount := int64(len(redeemersOutputScripts))
+		maxShare := fee/requestsCount + fee%requestsCount
+		if uint64(maxShare) > txMaxFee {
+			taskLogger.Warnf(
+				"floored redemption fee share [%d] exceeds the per-request "+
+					"maximum fee [%d]; the proposal will likely be rejected "+
+					"by on-chain validation",
+				maxShare,
+				txMaxFee,
+			)
+		}
 	}
 
 	taskLogger.Infof("redemption transaction fee: [%d]", fee)
@@ -492,10 +533,15 @@ redemptionRequestedLoop:
 // EstimateRedemptionFee estimates fee for a legacy P2WPKH redemption
 // transaction that pays the provided redeemers output scripts. Call
 // EstimateRedemptionFeeForWalletScript when the redeeming wallet may use
-// another output script type.
+// another output script type. The estimated fee is floored at a safe minimum
+// rate and bounded above by txMaxTotalFee (the Bridge total-fee maximum), so a
+// non-RBF redemption is not proposed below the floor where it could get stuck
+// and jam the wallet. Only the total fee is bounded here; the per-request
+// maximum fee is enforced separately by on-chain validation.
 func EstimateRedemptionFee(
 	btcChain bitcoin.Chain,
 	redeemersOutputScripts []bitcoin.Script,
+	txMaxTotalFee uint64,
 ) (int64, error) {
 	legacyWalletOutputScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{})
 	if err != nil {
@@ -506,16 +552,20 @@ func EstimateRedemptionFee(
 		btcChain,
 		legacyWalletOutputScript,
 		redeemersOutputScripts,
+		txMaxTotalFee,
 	)
 }
 
 // EstimateRedemptionFeeForWalletScript estimates fee for a redemption
 // transaction using the resolved redeeming wallet output script for both the
-// main UTXO input and the possible change output.
+// main UTXO input and the possible change output. The estimate is floored at a
+// safe minimum rate and bounded above by txMaxTotalFee, as described on
+// EstimateRedemptionFee.
 func EstimateRedemptionFeeForWalletScript(
 	btcChain bitcoin.Chain,
 	walletOutputScript bitcoin.Script,
 	redeemersOutputScripts []bitcoin.Script,
+	txMaxTotalFee uint64,
 ) (int64, error) {
 	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
 		AddPublicKeyScriptInput(walletOutputScript).
@@ -546,6 +596,20 @@ func EstimateRedemptionFeeForWalletScript(
 	totalFee, err := feeEstimator.EstimateFee(transactionSize)
 	if err != nil {
 		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
+	}
+
+	// A raw estimate already above the Bridge maximum means the redemption is
+	// uneconomical to perform at the required fee; return an error rather than
+	// clamping to the maximum and broadcasting an underpriced transaction.
+	if uint64(totalFee) > txMaxTotalFee {
+		return 0, fmt.Errorf("estimated fee exceeds the maximum fee")
+	}
+
+	// Enforce the safe minimum fee rate and buffer, bounded by the Bridge
+	// maximum.
+	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, txMaxTotalFee)
+	if err != nil {
+		return 0, err
 	}
 
 	return totalFee, nil

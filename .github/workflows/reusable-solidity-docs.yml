@@ -125,7 +125,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "18.15.0"
+          node-version: "22.23.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:

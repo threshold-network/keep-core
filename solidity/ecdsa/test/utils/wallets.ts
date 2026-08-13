@@ -4,9 +4,8 @@ import { params } from "../fixtures"
 import ecdsaData from "../data/ecdsa"
 
 import { noMisbehaved, signAndSubmitCorrectDkgResult } from "./dkg"
-import { resetMock } from "./randomBeacon"
 
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "../helpers/mock"
 import type { DkgResult } from "./dkg"
 import type { IRandomBeacon, WalletRegistry } from "../../typechain"
 import type { Operator } from "./operators"
@@ -19,7 +18,7 @@ const { keccak256 } = ethers.utils
 export async function createNewWallet(
   walletRegistry: WalletRegistry,
   walletOwner: Signer,
-  randomBeacon: FakeContract<IRandomBeacon>,
+  randomBeacon: Mock<IRandomBeacon>,
   publicKey: BytesLike = ecdsaData.group1.publicKey
 ): Promise<{
   members: Operator[]
@@ -57,8 +56,6 @@ export async function createNewWallet(
   const approveDkgResultTx = await walletRegistry
     .connect(submitter)
     .approveDkgResult(dkgResult)
-
-  resetMock(randomBeacon)
 
   return {
     members,

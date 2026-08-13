@@ -2463,25 +2463,18 @@ func (tc *TbtcChain) BuildRedemptionKey(
 	return buildRedemptionKey(walletPublicKeyHash, redeemerOutputScript)
 }
 
-func (tc *TbtcChain) GetDepositParameters() (
-	dustThreshold uint64,
-	treasuryFeeDivisor uint64,
-	txMaxFee uint64,
-	revealAheadPeriod uint32,
-	err error,
-) {
-	parameters, callErr := tc.bridge.DepositParameters()
-	if callErr != nil {
-		err = callErr
-		return
+func (tc *TbtcChain) GetDepositParameters() (tbtc.DepositParameters, error) {
+	parameters, err := tc.bridge.DepositParameters()
+	if err != nil {
+		return tbtc.DepositParameters{}, err
 	}
 
-	dustThreshold = parameters.DepositDustThreshold
-	treasuryFeeDivisor = parameters.DepositTreasuryFeeDivisor
-	txMaxFee = parameters.DepositTxMaxFee
-	revealAheadPeriod = parameters.DepositRevealAheadPeriod
-
-	return
+	return tbtc.DepositParameters{
+		DustThreshold:      parameters.DepositDustThreshold,
+		TreasuryFeeDivisor: parameters.DepositTreasuryFeeDivisor,
+		TxMaxFee:           parameters.DepositTxMaxFee,
+		RevealAheadPeriod:  parameters.DepositRevealAheadPeriod,
+	}, nil
 }
 
 func (tc *TbtcChain) GetPendingRedemptionRequest(
@@ -2649,58 +2642,38 @@ func (tc *TbtcChain) SubmitDepositSweepProofWithReimbursement(
 	return err
 }
 
-func (tc *TbtcChain) GetRedemptionParameters() (
-	dustThreshold uint64,
-	treasuryFeeDivisor uint64,
-	txMaxFee uint64,
-	txMaxTotalFee uint64,
-	timeout uint32,
-	timeoutSlashingAmount *big.Int,
-	timeoutNotifierRewardMultiplier uint32,
-	err error,
-) {
-	parameters, callErr := tc.bridge.RedemptionParameters()
-	if callErr != nil {
-		err = callErr
-		return
+func (tc *TbtcChain) GetRedemptionParameters() (tbtc.RedemptionParameters, error) {
+	parameters, err := tc.bridge.RedemptionParameters()
+	if err != nil {
+		return tbtc.RedemptionParameters{}, err
 	}
 
-	dustThreshold = parameters.RedemptionDustThreshold
-	treasuryFeeDivisor = parameters.RedemptionTreasuryFeeDivisor
-	txMaxFee = parameters.RedemptionTxMaxFee
-	txMaxTotalFee = parameters.RedemptionTxMaxTotalFee
-	timeout = parameters.RedemptionTimeout
-	timeoutSlashingAmount = parameters.RedemptionTimeoutSlashingAmount
-	timeoutNotifierRewardMultiplier = parameters.RedemptionTimeoutNotifierRewardMultiplier
-
-	return
+	return tbtc.RedemptionParameters{
+		DustThreshold:                   parameters.RedemptionDustThreshold,
+		TreasuryFeeDivisor:              parameters.RedemptionTreasuryFeeDivisor,
+		TxMaxFee:                        parameters.RedemptionTxMaxFee,
+		TxMaxTotalFee:                   parameters.RedemptionTxMaxTotalFee,
+		Timeout:                         parameters.RedemptionTimeout,
+		TimeoutSlashingAmount:           parameters.RedemptionTimeoutSlashingAmount,
+		TimeoutNotifierRewardMultiplier: parameters.RedemptionTimeoutNotifierRewardMultiplier,
+	}, nil
 }
 
-func (tc *TbtcChain) GetWalletParameters() (
-	creationPeriod uint32,
-	creationMinBtcBalance uint64,
-	creationMaxBtcBalance uint64,
-	closureMinBtcBalance uint64,
-	maxAge uint32,
-	maxBtcTransfer uint64,
-	closingPeriod uint32,
-	err error,
-) {
-	parameters, callErr := tc.bridge.WalletParameters()
-	if callErr != nil {
-		err = callErr
-		return
+func (tc *TbtcChain) GetWalletParameters() (tbtc.WalletParameters, error) {
+	parameters, err := tc.bridge.WalletParameters()
+	if err != nil {
+		return tbtc.WalletParameters{}, err
 	}
 
-	creationPeriod = parameters.WalletCreationPeriod
-	creationMinBtcBalance = parameters.WalletCreationMinBtcBalance
-	creationMaxBtcBalance = parameters.WalletCreationMaxBtcBalance
-	closureMinBtcBalance = parameters.WalletClosureMinBtcBalance
-	maxAge = parameters.WalletMaxAge
-	maxBtcTransfer = parameters.WalletMaxBtcTransfer
-	closingPeriod = parameters.WalletClosingPeriod
-
-	return
+	return tbtc.WalletParameters{
+		CreationPeriod:        parameters.WalletCreationPeriod,
+		CreationMinBtcBalance: parameters.WalletCreationMinBtcBalance,
+		CreationMaxBtcBalance: parameters.WalletCreationMaxBtcBalance,
+		ClosureMinBtcBalance:  parameters.WalletClosureMinBtcBalance,
+		MaxAge:                parameters.WalletMaxAge,
+		MaxBtcTransfer:        parameters.WalletMaxBtcTransfer,
+		ClosingPeriod:         parameters.WalletClosingPeriod,
+	}, nil
 }
 
 func (tc *TbtcChain) GetLiveWalletsCount() (uint32, error) {
@@ -3198,39 +3171,25 @@ func (tc *TbtcChain) ValidateHeartbeatProposal(
 	return nil
 }
 
-func (tc *TbtcChain) GetMovingFundsParameters() (
-	txMaxTotalFee uint64,
-	dustThreshold uint64,
-	timeoutResetDelay uint32,
-	timeout uint32,
-	timeoutSlashingAmount *big.Int,
-	timeoutNotifierRewardMultiplier uint32,
-	commitmentGasOffset uint16,
-	sweepTxMaxTotalFee uint64,
-	sweepTimeout uint32,
-	sweepTimeoutSlashingAmount *big.Int,
-	sweepTimeoutNotifierRewardMultiplier uint32,
-	err error,
-) {
-	parameters, callErr := tc.bridge.MovingFundsParameters()
-	if callErr != nil {
-		err = callErr
-		return
+func (tc *TbtcChain) GetMovingFundsParameters() (tbtc.MovingFundsParameters, error) {
+	parameters, err := tc.bridge.MovingFundsParameters()
+	if err != nil {
+		return tbtc.MovingFundsParameters{}, err
 	}
 
-	txMaxTotalFee = parameters.MovingFundsTxMaxTotalFee
-	dustThreshold = parameters.MovingFundsDustThreshold
-	timeoutResetDelay = parameters.MovingFundsTimeoutResetDelay
-	timeout = parameters.MovingFundsTimeout
-	timeoutSlashingAmount = parameters.MovingFundsTimeoutSlashingAmount
-	timeoutNotifierRewardMultiplier = parameters.MovingFundsTimeoutNotifierRewardMultiplier
-	commitmentGasOffset = parameters.MovingFundsCommitmentGasOffset
-	sweepTxMaxTotalFee = parameters.MovedFundsSweepTxMaxTotalFee
-	sweepTimeout = parameters.MovedFundsSweepTimeout
-	sweepTimeoutSlashingAmount = parameters.MovedFundsSweepTimeoutSlashingAmount
-	sweepTimeoutNotifierRewardMultiplier = parameters.MovedFundsSweepTimeoutNotifierRewardMultiplier
-
-	return
+	return tbtc.MovingFundsParameters{
+		TxMaxTotalFee:                        parameters.MovingFundsTxMaxTotalFee,
+		DustThreshold:                        parameters.MovingFundsDustThreshold,
+		TimeoutResetDelay:                    parameters.MovingFundsTimeoutResetDelay,
+		Timeout:                              parameters.MovingFundsTimeout,
+		TimeoutSlashingAmount:                parameters.MovingFundsTimeoutSlashingAmount,
+		TimeoutNotifierRewardMultiplier:      parameters.MovingFundsTimeoutNotifierRewardMultiplier,
+		CommitmentGasOffset:                  parameters.MovingFundsCommitmentGasOffset,
+		SweepTxMaxTotalFee:                   parameters.MovedFundsSweepTxMaxTotalFee,
+		SweepTimeout:                         parameters.MovedFundsSweepTimeout,
+		SweepTimeoutSlashingAmount:           parameters.MovedFundsSweepTimeoutSlashingAmount,
+		SweepTimeoutNotifierRewardMultiplier: parameters.MovedFundsSweepTimeoutNotifierRewardMultiplier,
+	}, nil
 }
 
 func (tc *TbtcChain) GetMovedFundsSweepRequest(

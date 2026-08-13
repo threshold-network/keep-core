@@ -17,7 +17,7 @@ import type {
   WalletRegistry,
   WalletRegistryStub,
 } from "../typechain"
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
@@ -53,8 +53,8 @@ const validTestData = [
 
 describe("WalletRegistry - Wallets", async () => {
   let walletRegistry: WalletRegistryStub & WalletRegistry
-  let randomBeacon: FakeContract<IRandomBeacon>
-  let walletOwner: FakeContract<IWalletOwner>
+  let randomBeacon: Mock<IRandomBeacon>
+  let walletOwner: Mock<IWalletOwner>
   let thirdParty: SignerWithAddress
 
   before("load test fixture", async () => {

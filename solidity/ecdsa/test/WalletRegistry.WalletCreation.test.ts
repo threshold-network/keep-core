@@ -31,7 +31,7 @@ import type {
   DkgChallenger,
 } from "../typechain"
 import type { DkgResult, DkgResultSubmittedEventArgs } from "./utils/dkg"
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 
 const { to1e18 } = helpers.number
 const { mineBlocks, mineBlocksTo } = helpers.time
@@ -92,8 +92,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
   let walletRegistry: WalletRegistryStub & WalletRegistry
   let sortitionPool: SortitionPool
   let staking: TokenStaking
-  let randomBeacon: FakeContract<IRandomBeacon>
-  let walletOwner: FakeContract<IWalletOwner>
+  let randomBeacon: Mock<IRandomBeacon>
+  let walletOwner: Mock<IWalletOwner>
 
   let deployer: SignerWithAddress
   let thirdParty: SignerWithAddress
@@ -112,6 +112,13 @@ describe("WalletRegistry - Wallet Creation", async () => {
       operators,
       staking,
     } = await walletRegistryFixture({ useAllowlist: true }))
+
+    // This suite asserts on the gas `approveDkgResult` costs, and that path
+    // calls into the wallet owner. Recording a call SSTOREs its calldata --
+    // ~175k here -- which smock did not have to pay for, so leaving it on
+    // measures the mock rather than the WalletRegistry. Nothing in this file
+    // inspects the wallet owner's calls.
+    await walletOwner.setRecording(false)
   })
 
   describe("requestNewWallet", async () => {
@@ -1705,8 +1712,15 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   )
                 })
 
-                it("should use close to 274 000 gas", async () => {
-                  await assertGasUsed(tx, 274_000)
+                it("should use close to 286 000 gas", async () => {
+                  // Was 274 000 while the wallet owner was a smock fake, which
+                  // cost nothing to call. It is a `MockContract` now, so the
+                  // dispatch through its fallback is real work: ~12k, with call
+                  // recording already switched off for this suite. The +/- 1000
+                  // still catches a WalletRegistry-side regression, it is just
+                  // measured from a higher floor. In production the wallet owner
+                  // is a real contract and costs more than either figure.
+                  await assertGasUsed(tx, 286_000)
                 })
               })
 
@@ -3001,10 +3015,15 @@ describe("WalletRegistry - Wallet Creation", async () => {
             context("with insufficient gas provided", async () => {
               it("should revert when gas check fails", async () => {
                 // This test verifies the gas check works correctly
+                // Above EIP-7623's intrinsic calldata floor, which hardhat
+                // 2.29 enforces before execution -- below it the node rejects
+                // the transaction outright and the contract's own gas check
+                // never runs, which is what this asserts on. Still far short of
+                // what `challengeDkgResult` needs to complete.
                 await expect(
                   walletRegistry
                     .connect(thirdParty)
-                    .challengeDkgResult(dkgResult, { gasLimit: 200000 })
+                    .challengeDkgResult(dkgResult, { gasLimit: 220000 })
                 ).to.be.reverted
               })
             })

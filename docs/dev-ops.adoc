@@ -16,4 +16,4 @@ we use the following pattern for each of our environments:
 - A LoadBalancer Service for each client.
 - A StatefulSet for each client.
 
-You can see our Testnet Kubernetes configurations link:https://github.com/keep-network/keep-core/tree/main/infrastructure/kube/keep-test[here].
+You can see our Testnet Kubernetes configurations link:https://github.com/threshold-network/keep-core/tree/main/infrastructure/kube/keep-test[here].

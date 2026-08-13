@@ -17,7 +17,7 @@ required_contracts := Bridge MaintainerProxy LightRelay LightRelayMaintainerProx
 # differently on GNU and BSD.
 #
 # TODO: Remove once go-ethereum is upgraded to v1.11. See issue:
-#       https://github.com/keep-network/keep-core/issues/3524
+#       https://github.com/threshold-network/keep-core/issues/3524
 define after_abi_hook
 	$(eval type := $(1))
 	$(if $(filter $(type),WalletProposalValidator),$(call fix_wallet_proposal_validator_collision))

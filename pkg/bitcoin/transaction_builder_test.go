@@ -111,6 +111,24 @@ func TestTransactionBuilder_AddPublicKeyHashInput(t *testing.T) {
 				Witness:         nil,
 				Sequence:        0xffffffff,
 			})
+			// Assert the Add* method also registered the UTXO in the
+			// prevOuts fetcher, not just in sigHashArgs and internal.TxIn.
+			// Without this direct assertion, the completeness check in
+			// ComputeSignatureHashes is exercised only indirectly via
+			// downstream sighash-fixture comparisons.
+			outpointHash := chainhash.Hash(inputTransactionUtxo.Outpoint.TransactionHash)
+			registered := builder.prevOuts.FetchPrevOutput(
+				wire.OutPoint{Hash: outpointHash, Index: inputTransactionUtxo.Outpoint.OutputIndex},
+			)
+			if registered == nil {
+				t.Fatal("expected prev-out to be registered in builder.prevOuts")
+			}
+			testutils.AssertIntsEqual(
+				t,
+				"registered prev-out value",
+				int(test.value),
+				int(registered.Value),
+			)
 		})
 	}
 }
@@ -493,6 +511,21 @@ func TestTransactionBuilder_AddScriptHashInput(t *testing.T) {
 				Witness:         expectedWitness,
 				Sequence:        0xffffffff,
 			})
+			// Mirror the M9 assertion from AddPublicKeyHashInput: confirm
+			// the script-hash path also registers the UTXO in prevOuts.
+			outpointHash := chainhash.Hash(inputTransactionUtxo.Outpoint.TransactionHash)
+			registered := builder.prevOuts.FetchPrevOutput(
+				wire.OutPoint{Hash: outpointHash, Index: inputTransactionUtxo.Outpoint.OutputIndex},
+			)
+			if registered == nil {
+				t.Fatal("expected prev-out to be registered in builder.prevOuts")
+			}
+			testutils.AssertIntsEqual(
+				t,
+				"registered prev-out value",
+				int(test.value),
+				int(registered.Value),
+			)
 		})
 	}
 }
@@ -1578,4 +1611,35 @@ func assertInternalOutput(
 	)
 
 	testutils.AssertBytesEqual(t, expected.PublicKeyScript, internalOutput.PkScript)
+}
+
+// TestTransactionBuilder_ComputeSignatureHashesMissingPrevOut exercises the
+// completeness check in ComputeSignatureHashes by appending a TxIn directly
+// via the internal transaction (bypassing the Add* methods that would also
+// register a prev-out) and asserts the exact "missing previous output for
+// input [0]" error. Without this test, the new defensive branch replacing
+// an unhandled panic is unreachable through any public API and untested.
+func TestTransactionBuilder_ComputeSignatureHashesMissingPrevOut(t *testing.T) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	// Construct a TxIn that has no matching entry in builder.prevOuts.
+	// We use a non-coinbase outpoint (zero hash + index 0); coinbase
+	// inputs are skipped by NewTxSigHashes, so the completeness check
+	// would not fire for them.
+	builder.internal.AddTxIn(
+		wire.NewTxIn(
+			&wire.OutPoint{Hash: chainhash.Hash{}, Index: 0},
+			nil,
+			nil,
+		),
+	)
+
+	_, err := builder.ComputeSignatureHashes()
+	if err == nil {
+		t.Fatal("expected missing previous output error")
+	}
+	if !strings.Contains(err.Error(), "missing previous output for input [0]") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
 }

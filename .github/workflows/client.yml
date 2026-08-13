@@ -61,6 +61,56 @@ jobs:
             path-filter:
               - './config/_electrum_urls/**'
               - './pkg/bitcoin/electrum/**'
+  btcec-vendor-byte-identity:
+    # Enforces the VENDOR.md byte-identity recipe and runs the
+    # vendored upstream test suite. The root module's `go test ./...`
+    # cannot reach third_party/btcsuite/btcec (it is its own Go
+    # module), so this job is the only automated gate. Cheap (checkout
+    # + go install + two short steps) and runs on every event, every
+    # branch - gating by path was producing broken `if:` combinations
+    # with no upside.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.1'
+
+      - name: Verify vendored btcec byte identity vs upstream v0.22.3
+        run: |
+          set -e
+          go mod download github.com/btcsuite/btcd@v0.22.3
+          upstream="$(go env GOMODCACHE)/github.com/btcsuite/btcd@v0.22.3/btcec"
+          rm -rf /tmp/btcec-upstream
+          cp -R "$upstream" /tmp/btcec-upstream
+          chmod -R u+w /tmp/btcec-upstream
+          gofmt -w /tmp/btcec-upstream
+
+          # Hash manifest comparison: every file in the upstream tree
+          # (minus the four vendoring-only files) must match the
+          # vendored copy byte-for-byte, and the file set must match
+          # exactly. Two small text streams reach `diff`, so this is
+          # tool-independent (BusyBox and GNU diff both handle it)
+          # and a non-zero exit is the gate directly.
+          manifest() {
+            ( cd "$1" && find . -type f \
+                ! -name go.mod ! -name go.sum ! -name LICENSE ! -name VENDOR.md \
+                -print0 | sort -z | xargs -0 sha256sum )
+          }
+          manifest /tmp/btcec-upstream | sort > /tmp/up.txt
+          manifest third_party/btcsuite/btcec | sort > /tmp/vend.txt
+          if ! diff -q /tmp/up.txt /tmp/vend.txt > /dev/null; then
+            echo '::error::Vendored btcec differs from upstream v0.22.3 beyond the four vendoring-only files:'
+            diff /tmp/up.txt /tmp/vend.txt | head -40
+            exit 1
+          fi
+          echo 'byte-identity OK'
+
+      - name: Run vendored btcec test suite
+        run: |
+          cd third_party/btcsuite/btcec && go test ./...
 
   client-build-test-publish:
     needs: client-detect-changes
