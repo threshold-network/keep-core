@@ -277,10 +277,11 @@ func (mft *MovingFundsTask) findNewTargetWallets(
 		"commitment not submitted yet; looking for new target wallets",
 	)
 
-	_, _, _, _, _, walletMaxBtcTransfer, _, err := mft.chain.GetWalletParameters()
+	walletParameters, err := mft.chain.GetWalletParameters()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get wallet parameters: [%w]", err)
 	}
+	walletMaxBtcTransfer := walletParameters.MaxBtcTransfer
 
 	if walletMaxBtcTransfer == 0 {
 		return nil, ErrMaxBtcTransferZero
@@ -594,13 +595,14 @@ func (mft *MovingFundsTask) ProposeMovingFunds(
 	if fee <= 0 {
 		taskLogger.Infof("estimating moving funds transaction fee")
 
-		txMaxTotalFee, _, _, _, _, _, _, _, _, _, _, err := mft.chain.GetMovingFundsParameters()
+		movingFundsParameters, err := mft.chain.GetMovingFundsParameters()
 		if err != nil {
 			return nil, fmt.Errorf(
 				"cannot get moving funds tx max total fee: [%w]",
 				err,
 			)
 		}
+		txMaxTotalFee := movingFundsParameters.TxMaxTotalFee
 
 		sourceWalletOutputScript, err := movingFundsMainUTXOOutputScript(
 			mft.btcChain,
@@ -805,6 +807,14 @@ func EstimateMovingFundsFeeForScripts(
 
 	if uint64(totalFee) > txMaxTotalFee {
 		return 0, ErrFeeTooHigh
+	}
+
+	// Enforce the safe minimum fee rate and buffer so a non-RBF moving funds
+	// transaction is never broadcast below the floor where it could get stuck
+	// and jam the wallet.
+	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, txMaxTotalFee)
+	if err != nil {
+		return 0, err
 	}
 
 	return totalFee, nil

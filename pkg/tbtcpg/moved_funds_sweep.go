@@ -324,13 +324,14 @@ func (mfst *MovedFundsSweepTask) ProposeMovedFundsSweep(
 	if fee <= 0 {
 		taskLogger.Infof("estimating moved funds sweep transaction fee")
 
-		_, _, _, _, _, _, _, sweepTxMaxTotalFee, _, _, _, err := mfst.chain.GetMovingFundsParameters()
+		movingFundsParameters, err := mfst.chain.GetMovingFundsParameters()
 		if err != nil {
 			return nil, fmt.Errorf(
 				"cannot get moved funds sweep tx max total fee: [%w]",
 				err,
 			)
 		}
+		sweepTxMaxTotalFee := movingFundsParameters.SweepTxMaxTotalFee
 
 		movedFundsOutputScript, err := movedFundsSweepOutputScript(
 			mfst.btcChain,
@@ -499,6 +500,14 @@ func EstimateMovedFundsSweepFeeForScripts(
 
 	if uint64(totalFee) > sweepTxMaxTotalFee {
 		return 0, ErrSweepTxFeeTooHigh
+	}
+
+	// Enforce the safe minimum fee rate and buffer so a non-RBF moved funds
+	// sweep transaction is never broadcast below the floor where it could get
+	// stuck and jam the wallet.
+	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, sweepTxMaxTotalFee)
+	if err != nil {
+		return 0, err
 	}
 
 	return totalFee, nil

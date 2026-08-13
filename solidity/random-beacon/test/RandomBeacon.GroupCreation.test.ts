@@ -23,7 +23,7 @@ import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { BigNumber, BytesLike, ContractTransaction } from "ethers"
 import type { Operator } from "./utils/operators"
 import type { BeaconDkg as DKG } from "../typechain/RandomBeaconStub"
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 import type { RandomBeacon, SortitionPool, T, TokenStaking } from "../typechain"
 
 const { mineBlocks, mineBlocksTo } = helpers.time
@@ -2504,16 +2504,15 @@ describe("RandomBeacon - Group Creation", () => {
             })
           })
 
-          // FIXME: Blocked by https://github.com/defi-wonderland/smock/issues/101
-          context.skip("with token staking seize call failure", async () => {
-            let tokenStakingFake: FakeContract<TokenStaking>
+          context("with token staking seize call failure", async () => {
+            let tokenStakingFake: Mock<TokenStaking>
             let tx: Promise<ContractTransaction>
 
             before(async () => {
               await createSnapshot()
 
               tokenStakingFake = await fakeTokenStaking(randomBeacon)
-              tokenStakingFake.seize.reverts("faked function revert")
+              await tokenStakingFake.seize.reverts("faked function revert")
 
               tx = randomBeacon
                 .connect(thirdParty)
@@ -2522,8 +2521,6 @@ describe("RandomBeacon - Group Creation", () => {
 
             after(async () => {
               await restoreSnapshot()
-
-              tokenStakingFake.seize.reset()
             })
 
             it("should succeed", async () => {

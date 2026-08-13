@@ -2,7 +2,9 @@ package tbtcpg_test
 
 import (
 	"encoding/hex"
+	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,8 +27,87 @@ func TestEstimateRedemptionFee(t *testing.T) {
 		return bytes
 	}
 
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-	btcChain.SetEstimateSatPerVByteFee(1, 16)
+	redeemersOutputScripts := []bitcoin.Script{
+		fromHex("76a9142cd680318747b720d67bf4246eb7403b476adb3488ac"),                   // P2PKH
+		fromHex("0014e6f9d74726b19b75f16fe1e9feaec048aa4fa1d0"),                         // P2WPKH
+		fromHex("a914011beb6fb8499e075a57027fb0a58384f2d3f78487"),                       // P2SH
+		fromHex("0020ef0b4d985752aa5ef6243e4c6f6bebc2a007e7d671ef27d4b1d0db8dcc93bc1c"), // P2WSH
+	}
+
+	// The fixture above yields a 250 vByte redemption transaction.
+	const vsize = 250
+
+	tests := map[string]struct {
+		estimateSatPerVByte int64
+		txMaxTotalFee       uint64
+		expectedFee         int
+		expectErrorContains string
+	}{
+		"estimate above the floor is buffered by 25%": {
+			estimateSatPerVByte: 16,
+			txMaxTotalFee:       100000,
+			expectedFee:         5000, // ceil(16*1.25)=20 sat/vByte * 250 vByte
+		},
+		"low estimate is raised to the minimum floor": {
+			estimateSatPerVByte: 1,
+			txMaxTotalFee:       100000,
+			expectedFee:         1250, // max(5, ceil(1*1.25)=2)=5 sat/vByte * 250 vByte
+		},
+		"minimum floor above the cap returns an error": {
+			estimateSatPerVByte: 1,
+			txMaxTotalFee:       uint64(3 * vsize), // below the 5 sat/vByte floor
+			expectErrorContains: "minimum safe transaction fee",
+		},
+		"raw estimate above the cap returns an error": {
+			estimateSatPerVByte: 16,   // raw 16*250 = 4000
+			txMaxTotalFee:       3000, // below the raw estimate
+			expectErrorContains: "estimated fee exceeds the maximum fee",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			btcChain := tbtcpg.NewLocalBitcoinChain()
+			btcChain.SetEstimateSatPerVByteFee(1, tc.estimateSatPerVByte)
+
+			actualFee, err := tbtcpg.EstimateRedemptionFee(
+				btcChain,
+				redeemersOutputScripts,
+				tc.txMaxTotalFee,
+			)
+
+			if tc.expectErrorContains != "" {
+				if err == nil {
+					t.Fatalf("expected an error, got fee [%d]", actualFee)
+				}
+				if !strings.Contains(err.Error(), tc.expectErrorContains) {
+					t.Fatalf(
+						"expected error containing [%s]; got [%v]",
+						tc.expectErrorContains, err,
+					)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			testutils.AssertIntsEqual(t, "fee", tc.expectedFee, int(actualFee))
+		})
+	}
+}
+
+// TestEstimateRedemptionFeeForWalletScript covers the wallet-script-aware
+// variant. A P2TR main UTXO input and change output make the transaction one
+// virtual byte larger than the legacy P2WPKH shape, so estimating a Taproot
+// wallet with the legacy shape would underpay.
+func TestEstimateRedemptionFeeForWalletScript(t *testing.T) {
+	fromHex := func(hexString string) []byte {
+		bytes, err := hex.DecodeString(hexString)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes
+	}
 
 	redeemersOutputScripts := []bitcoin.Script{
 		fromHex("76a9142cd680318747b720d67bf4246eb7403b476adb3488ac"),                   // P2PKH
@@ -35,34 +116,51 @@ func TestEstimateRedemptionFee(t *testing.T) {
 		fromHex("0020ef0b4d985752aa5ef6243e4c6f6bebc2a007e7d671ef27d4b1d0db8dcc93bc1c"), // P2WSH
 	}
 
-	actualFee, err := tbtcpg.EstimateRedemptionFee(btcChain, redeemersOutputScripts)
+	legacyWalletOutputScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{0x01})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	expectedFee := 4000 // transactionVirtualSize * satPerVByteFee = 250 * 16 = 4000
-	testutils.AssertIntsEqual(t, "fee", expectedFee, int(actualFee))
 
 	taprootWalletOutputScript, err := bitcoin.PayToTaproot([32]byte{0x01})
 	if err != nil {
 		t.Fatal(err)
 	}
-	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
-	actualTaprootFee, err := tbtcpg.EstimateRedemptionFeeForWalletScript(
-		btcChain,
-		taprootWalletOutputScript,
-		redeemersOutputScripts,
-	)
-	if err != nil {
-		t.Fatal(err)
+	tests := map[string]struct {
+		walletOutputScript bitcoin.Script
+		// The legacy fixture yields a 250 vByte transaction; the Taproot shape
+		// is one virtual byte larger. Both are below the 5 sat/vByte floor at
+		// an estimate of 1 sat/vByte, so each is clamped to floor * vsize.
+		expectedFee int
+	}{
+		"legacy P2WPKH wallet": {
+			walletOutputScript: legacyWalletOutputScript,
+			expectedFee:        1250, // 5 sat/vByte * 250 vByte
+		},
+		"Taproot wallet": {
+			walletOutputScript: taprootWalletOutputScript,
+			expectedFee:        1255, // 5 sat/vByte * 251 vByte
+		},
 	}
 
-	// The P2TR main UTXO input and change output make this transaction one
-	// virtual byte larger than the legacy P2WPKH shape. At the minimum relay
-	// rate, the old shape would underpay by exactly one satoshi.
-	expectedTaprootFee := 251 // transactionVirtualSize * satPerVByteFee = 251 * 1 = 251
-	testutils.AssertIntsEqual(t, "Taproot fee", expectedTaprootFee, int(actualTaprootFee))
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			btcChain := tbtcpg.NewLocalBitcoinChain()
+			btcChain.SetEstimateSatPerVByteFee(1, 1)
+
+			actualFee, err := tbtcpg.EstimateRedemptionFeeForWalletScript(
+				btcChain,
+				tc.walletOutputScript,
+				redeemersOutputScripts,
+				100000,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			testutils.AssertIntsEqual(t, "fee", tc.expectedFee, int(actualFee))
+		})
+	}
 }
 
 func TestRedemptionAction_FindPendingRedemptions(t *testing.T) {
@@ -280,7 +378,9 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 			fee: 0, // trigger fee estimation
 			expectedProposal: &tbtc.RedemptionProposal{
 				RedeemersOutputScripts: redeemersOutputScripts,
-				RedemptionTxFee:        big.NewInt(4300),
+				// raw 4300 (172 vByte * 25 sat/vByte), buffered to
+				// ceil(25*1.25)=32 sat/vByte * 172 = 5504, below the cap.
+				RedemptionTxFee: big.NewInt(5504),
 			},
 		},
 		"fee estimated for FROST wallet": {
@@ -288,7 +388,11 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 			walletID: [32]byte{0x01},
 			expectedProposal: &tbtc.RedemptionProposal{
 				RedeemersOutputScripts: redeemersOutputScripts,
-				RedemptionTxFee:        big.NewInt(4325),
+				// The P2TR main UTXO and change output make this one virtual
+				// byte larger than the legacy shape: raw 4325 (173 vByte *
+				// 25 sat/vByte), buffered to ceil(25*1.25)=32 sat/vByte * 173
+				// = 5536, below the cap.
+				RedemptionTxFee: big.NewInt(5536),
 			},
 		},
 	}
@@ -303,6 +407,10 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 				walletPublicKeyHash,
 				&tbtc.WalletChainData{WalletID: test.walletID},
 			)
+
+			// Fee estimation bounds the safe-minimum floor by the redemption
+			// tx max total fee; set a cap comfortably above the buffered fee.
+			tbtcChain.SetRedemptionParameters(0, 0, 0, 6000, 0, nil, 0)
 
 			for _, script := range redeemersOutputScripts {
 				tbtcChain.SetPendingRedemptionRequest(
@@ -336,6 +444,134 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 
 			if diff := deep.Equal(proposal, test.expectedProposal); diff != nil {
 				t.Errorf("invalid redemption proposal: %v", diff)
+			}
+		})
+	}
+}
+
+// warnCapturingLogger records Warnf messages so tests can assert on the
+// per-request fee warning emitted during redemption fee estimation. All other
+// log methods are inherited as no-ops from testutils.MockLogger.
+type warnCapturingLogger struct {
+	testutils.MockLogger
+	warnings []string
+}
+
+func (l *warnCapturingLogger) Warnf(format string, args ...interface{}) {
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+}
+
+// TestRedemptionAction_ProposeRedemption_PerRequestFeeWarning verifies that the
+// diagnostic warning about a floored fee share exceeding the per-request maximum
+// fee (TxMaxFee) is emitted for the worst-case (largest) share. The on-chain fee
+// distribution assigns the division remainder to the last request, so that
+// request pays floor(total/count)+total%count. The warning must reflect that
+// last-request share, not the smaller even share.
+func TestRedemptionAction_ProposeRedemption_PerRequestFeeWarning(t *testing.T) {
+	fromHex := func(hexString string) []byte {
+		bytes, err := hex.DecodeString(hexString)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes
+	}
+
+	var walletPublicKeyHash [20]byte
+	copy(walletPublicKeyHash[:], fromHex(""))
+
+	// Three redeemer output scripts make the estimated fee (6496 at 25 sat/vByte
+	// buffered to 32) indivisible by the request count: the even share is
+	// 6496/3 = 2165 and the last request pays 2165 + 6496%3 = 2166.
+	redeemersOutputScripts := []bitcoin.Script{
+		fromHex("00140000000000000000000000000000000000000001"),
+		fromHex("00140000000000000000000000000000000000000002"),
+		fromHex("00140000000000000000000000000000000000000003"),
+	}
+
+	var tests = map[string]struct {
+		txMaxFee      uint64
+		expectWarning bool
+	}{
+		"worst-case share within the per-request cap": {
+			txMaxFee:      3000, // 2166 <= 3000
+			expectWarning: false,
+		},
+		"even share at the cap but last-request share exceeds it": {
+			// The even share 2165 equals the cap (a floor-division check would
+			// not warn), but the last request pays 2166 and would be rejected.
+			txMaxFee:      2165,
+			expectWarning: true,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			tbtcChain := tbtcpg.NewLocalChain()
+			btcChain := tbtcpg.NewLocalBitcoinChain()
+
+			btcChain.SetEstimateSatPerVByteFee(1, 25)
+
+			// A legacy (zero wallet ID) wallet, so fee estimation resolves the
+			// P2WPKH output script shape the expectations below assume.
+			tbtcChain.SetWallet(
+				walletPublicKeyHash,
+				&tbtc.WalletChainData{},
+			)
+
+			// txMaxFee at index 2; txMaxTotalFee at index 3, set comfortably
+			// above the estimated total (6496) so it does not bound the fee.
+			tbtcChain.SetRedemptionParameters(0, 0, test.txMaxFee, 8000, 0, nil, 0)
+
+			for _, script := range redeemersOutputScripts {
+				tbtcChain.SetPendingRedemptionRequest(
+					walletPublicKeyHash,
+					&tbtc.RedemptionRequest{
+						RedeemerOutputScript: script,
+					},
+				)
+			}
+
+			expectedProposal := &tbtc.RedemptionProposal{
+				RedeemersOutputScripts: redeemersOutputScripts,
+				RedemptionTxFee:        big.NewInt(6496),
+			}
+
+			err := tbtcChain.SetRedemptionProposalValidationResult(
+				walletPublicKeyHash,
+				expectedProposal,
+				true,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			task := tbtcpg.NewRedemptionTask(tbtcChain, btcChain)
+
+			logger := &warnCapturingLogger{}
+
+			_, err = task.ProposeRedemption(
+				logger,
+				walletPublicKeyHash,
+				redeemersOutputScripts,
+				0, // trigger fee estimation
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			warned := false
+			for _, w := range logger.warnings {
+				if strings.Contains(w, "exceeds the per-request maximum fee") {
+					warned = true
+					break
+				}
+			}
+
+			if warned != test.expectWarning {
+				t.Errorf(
+					"per-request fee warning emitted = %v, want %v\nwarnings: %v",
+					warned, test.expectWarning, logger.warnings,
+				)
 			}
 		})
 	}

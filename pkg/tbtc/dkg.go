@@ -336,7 +336,7 @@ func (de *dkgExecutor) generateSigningGroup(
 
 			// TODO: This subscription has to be updated once we implement
 			//       re-submitting DKG result to the chain after a challenge.
-			//       See https://github.com/keep-network/keep-core/issues/3450
+			//       See https://github.com/threshold-network/keep-core/issues/3450
 			subscription := de.chain.OnDKGResultSubmitted(
 				func(event *DKGResultSubmittedEvent) {
 					defer cancelCtx()

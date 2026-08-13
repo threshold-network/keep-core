@@ -7,7 +7,7 @@ import { createNewWallet } from "./utils/wallets"
 import { signOperatorInactivityClaim } from "./utils/inactivity"
 
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 import type { Operator, OperatorID } from "./utils/operators"
 import type {
   SortitionPool,
@@ -48,8 +48,8 @@ describe("WalletRegistry - Rewards", () => {
   let staking: TokenStaking
   let walletRegistryGovernance: WalletRegistryGovernance
   let sortitionPool: SortitionPool
-  let randomBeacon: FakeContract<IRandomBeacon>
-  let walletOwner: FakeContract<IWalletOwner>
+  let randomBeacon: Mock<IRandomBeacon>
+  let walletOwner: Mock<IWalletOwner>
 
   let deployer: SignerWithAddress
   let governance: SignerWithAddress

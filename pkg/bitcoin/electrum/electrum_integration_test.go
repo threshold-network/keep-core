@@ -275,7 +275,7 @@ func TestGetTransactionConfirmations_Negative_Integration(t *testing.T) {
 
 // TODO: We should uncomment this test once https://github.com/checksum0/go-electrum/issues/10
 // is fixed. This test was added to validate the fix of the following issue
-// https://github.com/keep-network/keep-core/issues/3699 but at the same time
+// https://github.com/threshold-network/keep-core/issues/3699 but at the same time
 // made `panic: assignment to entry in nil map` happen very frequently which is
 // disturbing during the development and running the existing integration tests.
 

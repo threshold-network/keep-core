@@ -1,8 +1,8 @@
 = keep-core
 
-https://github.com/keep-network/keep-core/actions/workflows/contracts-ecdsa.yml[image:https://img.shields.io/github/actions/workflow/status/keep-network/keep-core/contracts-ecdsa.yml?branch=main&event=push&label=ECDSA%20contracts%20build[ECDSA contracts build status]]
-https://github.com/keep-network/keep-core/actions/workflows/contracts-random-beacon.yml[image:https://img.shields.io/github/actions/workflow/status/keep-network/keep-core/contracts-random-beacon.yml?branch=main&event=push&label=Random%20Beacon%20contracts%20build[Random Beacon contracts build status]]
-https://github.com/keep-network/keep-core/actions/workflows/client.yml[image:https://img.shields.io/github/actions/workflow/status/keep-network/keep-core/client.yml?branch=main&event=push&label=Client build[Go client build status]]
+https://github.com/threshold-network/keep-core/actions/workflows/contracts-ecdsa.yml[image:https://img.shields.io/github/actions/workflow/status/threshold-network/keep-core/contracts-ecdsa.yml?branch=main&event=push&label=ECDSA%20contracts%20build[ECDSA contracts build status]]
+https://github.com/threshold-network/keep-core/actions/workflows/contracts-random-beacon.yml[image:https://img.shields.io/github/actions/workflow/status/threshold-network/keep-core/contracts-random-beacon.yml?branch=main&event=push&label=Random%20Beacon%20contracts%20build[Random Beacon contracts build status]]
+https://github.com/threshold-network/keep-core/actions/workflows/client.yml[image:https://img.shields.io/github/actions/workflow/status/threshold-network/keep-core/client.yml?branch=main&event=push&label=Client build[Go client build status]]
 https://docs.threshold.network[image:https://img.shields.io/badge/docs-website-green.svg[Docs]]
 https://discord.gg/threshold[image:https://img.shields.io/badge/chat-Discord-5865f2.svg[Chat with us on Discord]]
 
@@ -41,7 +41,7 @@ A good place to start is link:docs/[the docs directory].
 To run your own node in the Keep Network, follow the
 link:docs/run-keep-node.adoc[Run Keep Node] doc. Feedback
 on this process and the documentation
-https://github.com/keep-network/keep-core/issues[is appreciated!]
+https://github.com/threshold-network/keep-core/issues[is appreciated!]
 
 === Moving to a new random beacon
 

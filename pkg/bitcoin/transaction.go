@@ -3,6 +3,7 @@ package bitcoin
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 
 	"github.com/btcsuite/btcd/wire"
 )
@@ -22,6 +23,29 @@ const (
 	// https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki#specification
 	Witness
 )
+
+// MaxTransactionByteLength is the maximum byte length of a serialized
+// transaction accepted by the deserialization routines. A consensus-valid
+// transaction can never reach it: a transaction's weight is
+// `3*base_size + total_size` and cannot exceed the maximum block weight of
+// 4,000,000 weight units, so its serialized length is always strictly below
+// that number.
+// Rejecting longer input keeps deserialization defensive against grossly
+// oversized, untrusted input, but this cap alone does NOT close the
+// underlying btcd decoder's panic. btcd slices every script and witness
+// item of a single transaction out of one shared, fixed-size 4,194,304-byte
+// buffer, and readScriptBuf only checks a declared item's length varint
+// against the flat 4,000,000-byte maxWitnessItemSize constant, never
+// against that buffer's actual remaining capacity. Because a declared
+// length does not need to be backed by that many delivered bytes for the
+// panicking slice expression to be evaluated, a transaction whose real
+// wire length is far below this cap can still reach the panic once earlier
+// scripts have consumed enough of the shared buffer. The recover() in
+// Deserialize below turns that slice-bounds panic into an error; it does
+// NOT cover fatal runtime errors such as out-of-memory from attacker-
+// declared varint counts that btcd's wire decoder honors before
+// reading backing bytes.
+const MaxTransactionByteLength = 4_000_000
 
 // Transaction represents a Bitcoin transaction. For reference, see:
 // https://developer.bitcoin.org/reference/transactions.html#raw-transaction-format
@@ -149,9 +173,33 @@ func (t *Transaction) SerializeLocktime() [4]byte {
 }
 
 // Deserialize deserializes the given byte array to a Transaction.
-func (t *Transaction) Deserialize(data []byte) error {
+func (t *Transaction) Deserialize(data []byte) (err error) {
+	if len(data) > MaxTransactionByteLength {
+		return fmt.Errorf(
+			"transaction byte length [%v] exceeds the maximum of [%v]",
+			len(data),
+			MaxTransactionByteLength,
+		)
+	}
+
+	// data ultimately originates from an untrusted source (e.g. an Electrum
+	// server) and the underlying btcd decoder can panic on carefully
+	// crafted input that stays well under MaxTransactionByteLength (see the
+	// doc comment on that constant). The recover() below turns that
+	// slice-bounds panic into an error; it does NOT cover fatal runtime
+	// errors such as out-of-memory from attacker-declared varint counts
+	// that btcd's wire decoder honors before reading backing bytes.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf(
+				"recovered from a panic while deserializing a transaction: [%v]",
+				r,
+			)
+		}
+	}()
+
 	internal := newInternalTransaction()
-	err := internal.Deserialize(bytes.NewReader(data))
+	err = internal.Deserialize(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}

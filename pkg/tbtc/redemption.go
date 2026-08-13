@@ -267,8 +267,7 @@ func (ra *redemptionAction) execute() error {
 		)
 	}
 
-	_, _, _, redemptionTxMaxTotalFee, _, _, _, err :=
-		ra.chain.GetRedemptionParameters()
+	redemptionParameters, err := ra.chain.GetRedemptionParameters()
 	if err != nil {
 		if ra.metricsRecorder != nil {
 			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
@@ -281,7 +280,7 @@ func (ra *redemptionAction) execute() error {
 
 	err = validateRedemptionTransactionFee(
 		unsignedRedemptionTx,
-		redemptionTxMaxTotalFee,
+		redemptionParameters.TxMaxTotalFee,
 	)
 	if err != nil {
 		if ra.metricsRecorder != nil {

@@ -1,12 +1,12 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 import { ethers, helpers } from "hardhat"
-import { smock } from "@defi-wonderland/smock"
+import { createMock } from "./helpers/mock"
 import { expect } from "chai"
 
 import { constants, params, randomBeaconDeployment } from "./fixtures"
 import { legacyTokenStakingAt } from "./utils/operators"
 
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 import type { BigNumber, BigNumberish, ContractTransaction } from "ethers"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
@@ -42,7 +42,7 @@ describe("RandomBeacon - Authorization", () => {
   let authorizer: SignerWithAddress
   let beneficiary: SignerWithAddress
   let thirdParty: SignerWithAddress
-  let slasher: FakeContract<IApplication>
+  let slasher: Mock<IApplication>
 
   const stakedAmount = to1e18(1_000_000) // 1MM T
   let minimumAuthorization: BigNumber
@@ -73,7 +73,7 @@ describe("RandomBeacon - Authorization", () => {
 
     // Initialize slasher - fake application capable of slashing the
     // staking provider.
-    slasher = await smock.fake<IApplication>("IApplication")
+    slasher = await createMock<IApplication>("IApplication")
     await legacyTokenStakingAt(staking, deployer).approveApplication(
       slasher.address
     )

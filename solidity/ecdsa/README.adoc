@@ -3,7 +3,7 @@
 
 = Keep ECDSA v2
 
-https://github.com/keep-network/keep-core/actions/workflows/contracts-ecdsa.yml[image:https://img.shields.io/github/actions/workflow/status/keep-network/keep-core/contracts-ecdsa.yml?branch=main&event=push&label=ECDSA%20contracts%20build[ECDSA contracts build status]]
+https://github.com/threshold-network/keep-core/actions/workflows/contracts-ecdsa.yml[image:https://img.shields.io/github/actions/workflow/status/threshold-network/keep-core/contracts-ecdsa.yml?branch=main&event=push&label=ECDSA%20contracts%20build[ECDSA contracts build status]]
 
 The Keep Network offers threshold ECDSA protocol to generate ECDSA wallets
 without any single signer having access to the corresponding private key. This

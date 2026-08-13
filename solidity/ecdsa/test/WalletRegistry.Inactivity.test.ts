@@ -2,6 +2,7 @@
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
+import { expectCalledWith, expectNotCalled } from "./helpers/mock"
 import ecdsaData from "./data/ecdsa"
 import { params, walletRegistryFixture } from "./fixtures"
 import { createNewWallet } from "./utils/wallets"
@@ -9,7 +10,7 @@ import { signOperatorInactivityClaim } from "./utils/inactivity"
 import { assertGasUsed } from "./helpers/gas"
 
 import type { BigNumber, ContractTransaction } from "ethers"
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
   SortitionPool,
@@ -25,8 +26,8 @@ const { provider } = ethers
 describe("WalletRegistry - Inactivity", () => {
   let walletRegistry: WalletRegistry
   let sortitionPool: SortitionPool
-  let randomBeacon: FakeContract<IRandomBeacon>
-  let walletOwner: FakeContract<IWalletOwner>
+  let randomBeacon: Mock<IRandomBeacon>
+  let walletOwner: Mock<IWalletOwner>
 
   let thirdParty: SignerWithAddress
 
@@ -310,16 +311,12 @@ describe("WalletRegistry - Inactivity", () => {
 
                     after(async () => {
                       await restoreSnapshot()
-                      walletOwner.__ecdsaWalletHeartbeatFailedCallback.reset()
                     })
 
                     it("should notify the wallet owner", async () => {
-                      await expect(
-                        walletOwner.__ecdsaWalletHeartbeatFailedCallback
-                      ).to.be.calledWith(
-                        walletID,
-                        walletPublicKeyX,
-                        walletPublicKeyY
+                      await expectCalledWith(
+                        walletOwner.__ecdsaWalletHeartbeatFailedCallback,
+                        [walletID, walletPublicKeyX, walletPublicKeyY]
                       )
                     })
                   })
@@ -360,9 +357,9 @@ describe("WalletRegistry - Inactivity", () => {
                     })
 
                     it("should not notify the wallet owner", async () => {
-                      await expect(
+                      await expectNotCalled(
                         walletOwner.__ecdsaWalletHeartbeatFailedCallback
-                      ).not.to.be.called
+                      )
                     })
                   })
                 })

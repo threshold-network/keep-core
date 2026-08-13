@@ -1,14 +1,13 @@
 /* eslint-disable no-underscore-dangle */
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
-import { smock } from "@defi-wonderland/smock"
 
+import { expectCalledWith } from "./helpers/mock"
 import { dkgState, walletRegistryFixture } from "./fixtures"
-import { resetMock } from "./utils/randomBeacon"
 import { upgradeRandomBeacon } from "./utils/governance"
 
 import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { MockContract, FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
   IRandomBeacon,
@@ -23,8 +22,8 @@ const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 describe("WalletRegistry - Random Beacon", async () => {
   let walletRegistry: WalletRegistryStub & WalletRegistry
-  let randomBeaconFake: FakeContract<IRandomBeacon>
-  let walletOwner: FakeContract<IWalletOwner>
+  let randomBeaconFake: Mock<IRandomBeacon>
+  let walletOwner: Mock<IWalletOwner>
   let thirdParty: SignerWithAddress
 
   before("load test fixture", async () => {
@@ -53,8 +52,6 @@ describe("WalletRegistry - Random Beacon", async () => {
 
       after(async () => {
         await restoreSnapshot()
-
-        resetMock(randomBeaconFake)
       })
 
       it("should revert", async () => {
@@ -82,9 +79,9 @@ describe("WalletRegistry - Random Beacon", async () => {
       })
 
       it("should call random beacon", async () => {
-        await expect(randomBeaconFake.requestRelayEntry).to.be.calledWith(
-          walletRegistry.address
-        )
+        await expectCalledWith(randomBeaconFake.requestRelayEntry, [
+          walletRegistry.address,
+        ])
       })
     })
   })
@@ -199,7 +196,7 @@ describe("WalletRegistry - Random Beacon", async () => {
       // set in the `RandomBeacon`'s `Callback` library is enough to cover
       // `WalletRegistry.__beaconCallback` execution.
       context("when called as a callback from random beacon", async () => {
-        let randomBeaconMock: MockContract<RandomBeaconStub>
+        let randomBeaconMock: RandomBeaconStub
 
         before(async () => {
           await createSnapshot()
@@ -232,15 +229,15 @@ describe("WalletRegistry - Random Beacon", async () => {
 
 async function mockRandomBeacon(
   walletRegistry: WalletRegistry
-): Promise<MockContract<RandomBeaconStub>> {
-  const randomBeaconFactory = await smock.mock<RandomBeaconStub__factory>(
-    "RandomBeaconStub"
-  )
-
-  const randomBeacon: MockContract<RandomBeaconStub> =
-    await randomBeaconFactory.deploy()
+): Promise<RandomBeaconStub> {
+  // This was a `smock.mock`, but it only ever supplied `.address` — none of
+  // smock's storage-override surface (`setVariable`, `getVariable`) was used,
+  // so an ordinary factory deploy of the same stub is equivalent.
+  const randomBeacon = await (
+    await ethers.getContractFactory("RandomBeaconStub")
+  ).deploy()
 
   await upgradeRandomBeacon(walletRegistry, randomBeacon.address)
 
-  return randomBeacon
+  return randomBeacon as RandomBeaconStub
 }
