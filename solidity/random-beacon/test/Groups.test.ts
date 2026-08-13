@@ -8,7 +8,7 @@ import { hashUint32Array } from "./utils/groups"
 
 import type { GroupsStub } from "../typechain"
 import type { ContractTransaction } from "ethers"
-import type { Groups } from "../typechain/GroupsStub"
+import type { Groups } from "../typechain/contracts/test/GroupsStub"
 
 const { keccak256 } = ethers.utils
 
