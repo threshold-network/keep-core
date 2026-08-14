@@ -825,9 +825,19 @@ func TestFrostNativeSignerAnchorBindingPublishesHeadroomOnAcknowledgement(
 		frostsigning.NativeTBTCSignerStateAnchorLargestLocalSeatCount(); seats != 4 {
 		t.Fatalf("seat count was not carried forward: got %d want 4", seats)
 	}
+	if warning, observed :=
+		frostsigning.NativeTBTCSignerStateAnchorRotationWarning(); !observed ||
+		warning {
+		t.Fatalf(
+			"healthy acknowledgement did not clear the rotation warning mirror: (%v, %v)",
+			warning,
+			observed,
+		)
+	}
 
 	// A tip outside the certified floor leaves the previous reading standing
 	// rather than publishing a partial or misleading pair.
+
 	before, _, _ := frostsigning.NativeTBTCSignerStateAnchorRestartableHeadroom()
 	outside := tip
 	outside.AnchorServiceEpoch = fixture.floor.ServiceEpoch + 1
@@ -838,6 +848,41 @@ func TestFrostNativeSignerAnchorBindingPublishesHeadroomOnAcknowledgement(
 			"unauthenticated tip overwrote the mirror: got %d want %d",
 			after,
 			before,
+		)
+	}
+
+	// A tip at the rotation floor (256 generations of restartable history
+	// remaining) flips the warning gauge back on: the mirror has to track
+	// that as faithfully as it tracks the healthy reading, or an operator
+	// staring at the scrape will not see a node that is about to stop
+	// admitting its own input.
+	near := tip
+	near.AnchorRevision = fixture.floor.Revision +
+		(FrostNativeSignerAnchorMaximumHistoryEvents -
+			FrostNativeSignerAnchorRotationWarningHeadroom)
+	near.Generation = fixture.floor.Checkpoint.Generation +
+		(FrostNativeSignerAnchorMaximumHistoryProofEntries -
+			FrostNativeSignerAnchorRotationWarningHeadroom)
+	fixture.binding.publishRestartableHeadroomLocked(&near)
+
+	revisions, generations, observed =
+		frostsigning.NativeTBTCSignerStateAnchorRestartableHeadroom()
+	if !observed ||
+		revisions != FrostNativeSignerAnchorRotationWarningHeadroom ||
+		generations != FrostNativeSignerAnchorRotationWarningHeadroom {
+		t.Fatalf(
+			"near-floor tip did not refresh the headroom mirror: (%d, %d, %v)",
+			revisions,
+			generations,
+			observed,
+		)
+	}
+	if warning, observed := frostsigning.NativeTBTCSignerStateAnchorRotationWarning(); !observed ||
+		!warning {
+		t.Fatalf(
+			"near-floor acknowledgement did not raise the rotation warning mirror: (%v, %v)",
+			warning,
+			observed,
 		)
 	}
 }

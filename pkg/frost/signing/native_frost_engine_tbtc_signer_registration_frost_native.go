@@ -354,6 +354,7 @@ import "C"
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -1147,40 +1148,46 @@ func decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
 func buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
 	sessionID string,
 	reason string,
-) ([]byte, error) {
+) ([]byte, string, error) {
 	const op = "TriggerEmergencyRekey"
 	if sessionID == "" {
-		return nil, buildTaggedTBTCSignerOperationError(op, "session ID is empty")
+		return nil, "", buildTaggedTBTCSignerOperationError(op, "session ID is empty")
 	}
 	// The engine validates the session ID too, but rejecting here keeps a
 	// malformed operator input from costing a barrier lease and an anchor round
 	// trip before it fails.
 	if len(sessionID) > maximumTBTCSignerEmergencyRekeySessionIDLength {
-		return nil, buildTaggedTBTCSignerOperationError(
+		return nil, "", buildTaggedTBTCSignerOperationError(
 			op,
 			"session ID is too long",
 		)
 	}
 	if strings.ContainsAny(sessionID, "\x00\n\r\t \"\\=") {
-		return nil, buildTaggedTBTCSignerOperationError(
+		return nil, "", buildTaggedTBTCSignerOperationError(
 			op,
 			"session ID contains disallowed characters",
 		)
 	}
 	// Trim before the emptiness check so a whitespace-only reason cannot arm the
 	// switch with no recorded justification; the engine trims identically, and
-	// the response echo is compared against the trimmed value.
+	// the response echo is compared against the trimmed value. Return the
+	// trimmed reason so the caller can use the same normalization for the
+	// byte-for-byte echo comparison instead of re-deriving it independently.
 	trimmedReason := strings.TrimSpace(reason)
 	if trimmedReason == "" {
-		return nil, buildTaggedTBTCSignerOperationError(op, "reason is empty")
+		return nil, "", buildTaggedTBTCSignerOperationError(op, "reason is empty")
 	}
-	return buildTaggedTBTCSignerMarshalRequest(
+	payload, err := buildTaggedTBTCSignerMarshalRequest(
 		op,
 		buildTaggedTBTCSignerTriggerEmergencyRekeyRequest{
 			SessionID: sessionID,
 			Reason:    trimmedReason,
 		},
 	)
+	if err != nil {
+		return nil, "", err
+	}
+	return payload, trimmedReason, nil
 }
 
 func decodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse(
@@ -2201,9 +2208,40 @@ func ReadNativeTBTCSignerDurableStoreIdentity() (
 	return identity, nil
 }
 
+// ErrNativeTBTCSignerEmergencyRekeyArmedButUnverified is returned by
+// TriggerNativeTBTCSignerEmergencyRekey when the underlying engine call
+// returned without error but the response could not be decoded into a
+// verified rekey record. At that point the engine has already armed the
+// emergency-rekey kill switch inside invoke() - the failure (a JSON decode
+// error, a missing expected field, or any of the contract checks in
+// decodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse) reflects only
+// that the Go host could not read back a fully verified acknowledgement,
+// not that the switch itself is still unprimed.
+//
+// Callers that observe this error must treat the switch as ARMED. Retrying
+// the trigger is useless: the engine treats an armed event as immutable and
+// a second commit is a no-op that only wastes barrier time. Use
+// ReadNativeTBTCSignerDurableStoreIdentity or a direct readback against the
+// engine to confirm durable state before any operator decision.
+var ErrNativeTBTCSignerEmergencyRekeyArmedButUnverified = errors.New(
+	"native tbtc signer emergency rekey: switch armed but response unverifiable",
+)
+
 // TriggerNativeTBTCSignerEmergencyRekey arms the wallet-level emergency rekey
-// kill switch through the state-anchored operation path, so the durable write
-// is compare-and-swapped onto the anchor stream before this call returns.
+// kill switch through the state-anchored operation path, so a call that
+// returns successfully has compare-and-swapped the durable write onto the
+// anchor stream before returning.
+//
+// That pairing is not atomic, and the failure path is the interesting one. The
+// engine arms the switch inside invoke(); the anchor only witnesses it in the
+// lease.commit() that follows. A commit refusal - or a crash in that window -
+// therefore returns an error from a call whose durable write already landed,
+// leaving the switch armed locally but unwitnessed by the anchor. Nothing
+// unwinds it: the discard path scrubs the Rust result buffer, not the engine's
+// durable state. Recovery is not automatic either. It depends on the local
+// store still being ahead of the anchor at the next boot, so reconciliation
+// observes the armed event and re-anchors it - which is exactly the evidence an
+// operator restoring a pre-rekey state file in that window destroys.
 //
 // Routing matters more than the call itself. The engine export has always
 // existed, but with no Go caller the only way to arm the switch was to stop the
@@ -2229,11 +2267,19 @@ func ReadNativeTBTCSignerDurableStoreIdentity() (
 // tens of seconds on the process-global barrier mutex; it is never refused for
 // that reason. Callers must be single-flight - the engine treats an armed event
 // as immutable, and no export clears it.
+
+// When decodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse fails on a
+// payload the engine has already produced, this wraps the underlying error
+// in ErrNativeTBTCSignerEmergencyRekeyArmedButUnverified so callers can
+// distinguish "the switch was never armed" from "the switch was armed but
+// the response was not verifiable". The wrapped error is terminal: do not
+// retry the trigger, since the engine treats an armed event as immutable
+// (see the single-flight paragraph above).
 func TriggerNativeTBTCSignerEmergencyRekey(
 	sessionID string,
 	reason string,
 ) (*NativeTBTCSignerEmergencyRekey, error) {
-	requestPayload, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
+	requestPayload, normalizedReason, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
 		sessionID,
 		reason,
 	)
@@ -2248,10 +2294,18 @@ func TriggerNativeTBTCSignerEmergencyRekey(
 		return nil, err
 	}
 
-	return decodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse(
+	result, err := decodeBuildTaggedTBTCSignerTriggerEmergencyRekeyResponse(
 		responsePayload,
-		strings.TrimSpace(reason),
+		normalizedReason,
 	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w: [%w]",
+			ErrNativeTBTCSignerEmergencyRekeyArmedButUnverified,
+			err,
+		)
+	}
+	return result, nil
 }
 
 // ----------------------------------------------------------------------------

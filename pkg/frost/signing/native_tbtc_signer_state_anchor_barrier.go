@@ -506,8 +506,9 @@ func (lease *nativeTBTCSignerStateAnchorLease) commit() error {
 	if *candidate == lease.expected {
 		// Nothing advanced, so nothing was consumed: no generation, and no
 		// revision either, because this path skips the CAS entirely. Counting
-		// it would inflate the burn-rate denominator's numerator with
-		// operations the anchor never had to witness.
+		// it would inflate the burn-rate numerator with operations the
+		// anchor never had to witness.
+
 		barrier.tip = *candidate
 		lease.completed = true
 		return nil

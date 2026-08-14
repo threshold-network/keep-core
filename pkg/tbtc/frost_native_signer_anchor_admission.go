@@ -279,13 +279,18 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserveDKG(
 		Generations: maximumPersistenceCalls,
 	}
 
-	return controller.reserve(
+	reservation, err := controller.reserve(
 		"FROST native DKG",
 		cost,
 		func() (frostNativeSignerAnchorCapacity, error) {
 			return controller.currentRestartableHeadroom(ctx)
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
+	recordFrostNativeSignerAnchorAdmittedDKG()
+	return reservation, nil
 }
 
 func (controller *frostNativeSignerAnchorAdmissionController) reserveDKGRetirement(
@@ -459,18 +464,8 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserve(
 			unreservedGenerations,
 		)
 	}
-
 	controller.reserved.Revisions += cost.Revisions
 	controller.reserved.Generations += cost.Generations
-	// The burn-rate denominator. Counted once per admitted workflow, which for
-	// pre-sign is once per input, so the anchor consumption counters divided by
-	// this yield real generations and revisions per unit of work.
-	//
-	// This is the measurement the capacity model is missing: fault-free burn is
-	// only bounded, between k+3 and 3k+2 generations per input, and every
-	// window-sizing and rotation-cadence figure so far is a code reading
-	// against that range rather than an observation of it.
-	frostNativeSignerAnchorAdmissions.Add(1)
 	return &frostNativeSignerAnchorRevisionReservation{
 		controller: controller,
 		cost:       cost,
@@ -585,11 +580,12 @@ func (reservation *frostNativeSignerAnchorRevisionReservation) Release() {
 // own lifetime, so a batch never needs more than one input's worth of
 // unconsumed window at any instant. Charging the whole batch up front was the
 // arithmetic error this replaces: at production parameters (21 inputs, 5
-// signing attempts) it admitted at most four local seats. Signers are
-// equal-weighted, so a hundred-seat wallet shared by around twenty operators
-// gives every operator about five - meaning that ceiling excluded every
-// operator, not merely the larger ones, and left formed wallets unable to
-// sweep the deposits they had already received.
+// signing attempts) it admitted at most four local seats. The sortition is
+// stake-weighted with replacement and has no per-operator cap, so a
+// hundred-seat wallet shared by roughly twenty operators gives the average
+// holder about five seats and a large staker holds many more - meaning that
+// ceiling excluded every operator, not merely the larger ones, and left
+// formed wallets unable to sweep the deposits they had already received.
 //
 // A ceiling still exists in principle, because both windows are finite. One
 // input costs 20*seats+6 revisions and 40*seats+15 generations, so the
@@ -871,14 +867,14 @@ func frostNativeSignerAnchorLargestAdmissibleWorkflowCost(
 	return cost, true
 }
 
-// FROST native signer anchor admission rejection counters.
+// FROST native signer anchor admission counters.
 //
 // A node that stops admitting FROST work does so silently: the refusals reach
 // the log wrapped inside a generic wallet-action failure, and nothing anchored
 // is registered with clientinfo at all, so a monitoring system cannot tell a
 // node that is refusing every signing request from one that simply has not been
-// asked. These process-wide cumulative counters make each refusal cause
-// countable on its own, because the six causes need six different responses:
+// asked. The six refusal counters make each cause countable on its own,
+// because the six causes need six different responses:
 //
 //   - seatCeiling is a CONFIGURATION signal. It never clears on its own and no
 //     rotation fixes it: this node holds more local seats than the certified
@@ -913,9 +909,28 @@ func frostNativeSignerAnchorLargestAdmissibleWorkflowCost(
 //     including the first input's, because at that point the relay has already
 //     happened either way.
 //
-// They follow the roast_interactive_signing_metrics.go pattern, are emitted in
-// every build, and stay at zero until an admission is actually refused - so
-// they are inert by default and registering them activates no behavior.
+// The three admission counters are the burn-rate denominators that make the
+// refusal counters usable. A single "admitted workflows" total would not line
+// up with what the consumption counters are reporting per unit, because each
+// workflow class has its own admission unit - one input, one batch's relay
+// gate, one DKG - so the counters are split along the same axes as their
+// consumption:
+//
+//   - frostNativeSignerAnchorAdmittedPresignInputs is the per-input
+//     denominator; the anchor consumption totals divided by this yield real
+//     generations and revisions per signed input.
+//   - frostNativeSignerAnchorAdmittedPresignRelayGates is the per-batch
+//     denominator for the up-front authorization relay gate; authorize()
+//     takes a one-input reservation and releases it before the per-input
+//     loop takes over, so a batch refused at input 7 has already incremented
+//     this counter.
+//   - frostNativeSignerAnchorAdmittedDKGs is the per-DKG denominator; each
+//     admitted native DKG workflow increments it once.
+//
+// All nine counters follow the roast_interactive_signing_metrics.go pattern,
+// are emitted in every build, and stay at zero until something is actually
+// recorded - so they are inert by default and registering them activates no
+// behavior.
 var (
 	frostNativeSignerAnchorSeatCeilingRejections           atomic.Uint64
 	frostNativeSignerAnchorReservationContentionRejections atomic.Uint64
@@ -924,14 +939,22 @@ var (
 	frostNativeSignerAnchorPoisonedRejections              atomic.Uint64
 	frostNativeSignerAnchorPreSignInputRejections          atomic.Uint64
 
-	// frostNativeSignerAnchorAdmissions counts admitted workflows - the
-	// denominator for the anchor consumption totals published by
-	// pkg/frost/signing. Every other counter here records a refusal; this one
-	// records work that was allowed to proceed, without which the consumption
-	// totals have no unit.
-	frostNativeSignerAnchorAdmissions atomic.Uint64
+	// frostNativeSignerAnchorAdmittedPresignInputs counts admitted pre-sign
+	// transaction inputs. This is the burn-rate denominator for pre-sign: the
+	// anchor consumption totals divided by this yield real generations and
+	// revisions per signed input. Admitted in admitInput, after the per-input
+	// reservation succeeds.
+	frostNativeSignerAnchorAdmittedPresignInputs     atomic.Uint64
+	// frostNativeSignerAnchorAdmittedPresignRelayGates counts admitted
+	// pre-sign authorization relay gates. authorize() takes a one-input
+	// reservation up front to gate the on-chain relay of an authorization, so
+	// this counts batches the relay gate admitted, not inputs the loop
+	// admitted.
+	frostNativeSignerAnchorAdmittedPresignRelayGates atomic.Uint64
+	// frostNativeSignerAnchorAdmittedDKGs counts admitted native DKG
+	// workflows. Admitted in reserveDKG, after the DKG reservation succeeds.
+	frostNativeSignerAnchorAdmittedDKGs              atomic.Uint64
 )
-
 // frostNativeSignerAnchorAdmissionMetricsApplication is the clientinfo
 // application-label prefix; the registry concatenates it with each per-source
 // name, so the final labels look like
@@ -945,7 +968,9 @@ const (
 	frostNativeSignerAnchorRotationFloorMetricName         = "rotation_floor_rejected_total"
 	frostNativeSignerAnchorPoisonedMetricName              = "poisoned_rejected_total"
 	frostNativeSignerAnchorPreSignInputMetricName          = "pre_sign_input_rejected_total"
-	frostNativeSignerAnchorAdmittedMetricName              = "admitted_total"
+	frostNativeSignerAnchorAdmittedPresignInputsMetricName     = "admitted_presign_input_total"
+	frostNativeSignerAnchorAdmittedPresignRelayGatesMetricName = "admitted_presign_relay_gate_total"
+	frostNativeSignerAnchorAdmittedDKGsMetricName              = "admitted_dkg_total"
 )
 
 // RegisterFrostNativeSignerAnchorAdmissionMetrics registers the cumulative
@@ -993,8 +1018,20 @@ func RegisterFrostNativeSignerAnchorAdmissionMetrics(
 					frostNativeSignerAnchorPreSignInputRejections.Load(),
 				)
 			},
-			frostNativeSignerAnchorAdmittedMetricName: func() float64 {
-				return float64(frostNativeSignerAnchorAdmissions.Load())
+			frostNativeSignerAnchorAdmittedPresignInputsMetricName: func() float64 {
+				return float64(
+					frostNativeSignerAnchorAdmittedPresignInputs.Load(),
+				)
+			},
+			frostNativeSignerAnchorAdmittedPresignRelayGatesMetricName: func() float64 {
+				return float64(
+					frostNativeSignerAnchorAdmittedPresignRelayGates.Load(),
+				)
+			},
+			frostNativeSignerAnchorAdmittedDKGsMetricName: func() float64 {
+				return float64(
+					frostNativeSignerAnchorAdmittedDKGs.Load(),
+				)
 			},
 		},
 	)
@@ -1040,6 +1077,29 @@ func recordFrostNativeSignerAnchorPreSignInputRejection() {
 	frostNativeSignerAnchorPreSignInputRejections.Add(1)
 }
 
+// recordFrostNativeSignerAnchorAdmittedPresignInput marks one pre-sign
+// transaction input admitted by the per-input reservation. Paired with
+// frostNativeSignerAnchorPreSignInputRejections, the two together let a
+// monitoring system distinguish "admitted N inputs" from "admitted N and
+// refused M of them".
+func recordFrostNativeSignerAnchorAdmittedPresignInput() {
+	frostNativeSignerAnchorAdmittedPresignInputs.Add(1)
+}
+
+// recordFrostNativeSignerAnchorAdmittedPresignRelayGate marks one pre-sign
+// authorization relay gate admitted by the up-front reservation. authorize()
+// takes the gate while it relays and finalizes the authorization on chain,
+// and releases it before the per-input reservations take over.
+func recordFrostNativeSignerAnchorAdmittedPresignRelayGate() {
+	frostNativeSignerAnchorAdmittedPresignRelayGates.Add(1)
+}
+
+// recordFrostNativeSignerAnchorAdmittedDKG marks one native DKG workflow
+// admitted by the DKG reservation.
+func recordFrostNativeSignerAnchorAdmittedDKG() {
+	frostNativeSignerAnchorAdmittedDKGs.Add(1)
+}
+
 // resetFrostNativeSignerAnchorAdmissionMetricsForTest clears the cumulative
 // counters. Exposed only for the package's own tests; not a production helper.
 func resetFrostNativeSignerAnchorAdmissionMetricsForTest() {
@@ -1049,4 +1109,7 @@ func resetFrostNativeSignerAnchorAdmissionMetricsForTest() {
 	frostNativeSignerAnchorRotationFloorRejections.Store(0)
 	frostNativeSignerAnchorPoisonedRejections.Store(0)
 	frostNativeSignerAnchorPreSignInputRejections.Store(0)
+	frostNativeSignerAnchorAdmittedPresignInputs.Store(0)
+	frostNativeSignerAnchorAdmittedPresignRelayGates.Store(0)
+	frostNativeSignerAnchorAdmittedDKGs.Store(0)
 }

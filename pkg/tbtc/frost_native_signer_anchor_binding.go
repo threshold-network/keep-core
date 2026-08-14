@@ -563,6 +563,7 @@ func (binding *frostNativeSignerAnchorBinding) recoverAcknowledgementLocked(
 			"native signer did not durably recover the exact signed acknowledgement",
 		)
 	}
+	binding.publishRestartableHeadroomLocked(readback)
 	return readback, nil
 }
 

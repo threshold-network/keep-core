@@ -1445,7 +1445,7 @@ func TestDecodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(t *t
 }
 
 func TestBuildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(t *testing.T) {
-	payload, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
+	payload, normalizedReason, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
 		"tbtc-frost-dkg-abcd-attempt-1",
 		"  suspected key compromise  ",
 	)
@@ -1464,21 +1464,27 @@ func TestBuildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(t *testing.T) 
 	if request.Reason != "suspected key compromise" {
 		t.Fatalf("unexpected reason: [%v]", request.Reason)
 	}
+	// The builder returns the same trimmed reason so the caller feeds an
+	// identical string into the response-echo comparison instead of trimming
+	// the original argument again.
+	if normalizedReason != "suspected key compromise" {
+		t.Fatalf("unexpected normalized reason: [%v]", normalizedReason)
+	}
 
-	if _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload("", "reason"); err == nil {
+	if _, _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload("", "reason"); err == nil {
 		t.Fatal("expected an empty session ID to be rejected")
 	}
 	// A whitespace-only reason must not arm the switch with no justification.
-	if _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload("session", "   "); err == nil {
+	if _, _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload("session", "   "); err == nil {
 		t.Fatal("expected a whitespace-only reason to be rejected")
 	}
-	if _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
+	if _, _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload(
 		strings.Repeat("s", maximumTBTCSignerEmergencyRekeySessionIDLength+1),
 		"reason",
 	); err == nil {
 		t.Fatal("expected an over-long session ID to be rejected")
 	}
-	if _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload("bad session", "reason"); err == nil {
+	if _, _, err := buildTaggedTBTCSignerTriggerEmergencyRekeyRequestPayload("bad session", "reason"); err == nil {
 		t.Fatal("expected a session ID with disallowed characters to be rejected")
 	}
 }
