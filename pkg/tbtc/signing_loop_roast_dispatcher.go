@@ -60,11 +60,15 @@ type signingParticipantSelector interface {
 }
 
 // participantSelection is one attempt's selection result: the member-level
-// included set, plus the members the prior ROAST transition parked for THIS
-// attempt ONLY (empty for the legacy path). The parked set is a subset of the
-// complement of the included set; the loop carries it so the attempt after this
-// one reinstates them -- without it a one-attempt (transient) park becomes a
-// permanent exclusion (RFC-21 Phase 7.3 PR2b-1b).
+// included set, plus the members this attempt parked for THIS attempt ONLY. The
+// parked set is a subset of the complement of the included set; the loop carries it
+// so the attempt after this one reinstates them -- without it a one-attempt
+// (transient) park becomes a permanent exclusion (RFC-21 Phase 7.3 PR2b-1b).
+//
+// Both selectors populate it. The ROAST selector carries forward what the prior
+// transition parked; the legacy selector parks every ready member its seeded
+// qualification shuffle did not include (see blamelessDrops). Announcement-silent
+// members are in neither set -- they are a real liveness fault and stay excluded.
 type participantSelection struct {
 	includedMembersIndexes          []group.MemberIndex
 	transientlyParkedMembersIndexes []group.MemberIndex

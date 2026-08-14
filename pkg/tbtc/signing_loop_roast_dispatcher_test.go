@@ -64,13 +64,43 @@ func TestLegacySigningParticipantSelector_DelegatesToRetryShuffle(t *testing.T) 
 	}
 	got := selection.includedMembersIndexes
 	// Five members are ready and the honest threshold is 3, so the
-	// surplus trim leaves exactly the threshold count included.
+	// qualification shuffle leaves exactly the threshold count included.
 	if len(got) != 3 {
 		t.Fatalf("expected 3 included members (the honest threshold), got %d", len(got))
 	}
-	// The legacy path never parks.
-	if len(selection.transientlyParkedMembersIndexes) != 0 {
-		t.Fatalf("legacy selection must not park members, got %v", selection.transientlyParkedMembersIndexes)
+	// Each operator holds a single seat here, so EvaluateRetryParticipantsForSigning
+	// stops at exactly honestThreshold qualified operators and the surplus trim never
+	// fires. The two ready members it did not qualify are blameless -- they lost a
+	// seeded shuffle -- so they must be reported as transiently parked, not folded
+	// into the permanent excluded set.
+	parked := selection.transientlyParkedMembersIndexes
+	if len(parked) != 2 {
+		t.Fatalf("expected 2 transiently parked members, got %v", parked)
+	}
+	// Parked and included must partition the ready set exactly.
+	seen := make(map[group.MemberIndex]int, len(readyMembers))
+	for _, memberIndex := range got {
+		seen[memberIndex]++
+	}
+	for _, memberIndex := range parked {
+		seen[memberIndex]++
+	}
+	for _, memberIndex := range readyMembers {
+		if seen[memberIndex] != 1 {
+			t.Fatalf(
+				"ready member %d appears %d times across included+parked, want 1: "+
+					"included %v, parked %v",
+				memberIndex,
+				seen[memberIndex],
+				got,
+				parked,
+			)
+		}
+	}
+	for i := 1; i < len(parked); i++ {
+		if parked[i] <= parked[i-1] {
+			t.Fatalf("expected parked members sorted ascending, got %v", parked)
+		}
 	}
 	// The result must be sorted ascending and contain only ready members.
 	for i := 1; i < len(got); i++ {

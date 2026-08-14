@@ -108,10 +108,11 @@ func TestSigningRetryLoop(t *testing.T) {
 			// excludes 4 members (6 is the honest threshold) from the first
 			// attempt: 3, 7, 8 and 10.
 			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 1,
-				startBlock:             206,
-				timeoutBlock:           236, // start block of the first attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
+				number:                          1,
+				startBlock:                      206,
+				timeoutBlock:                    236, // start block of the first attempt + 30
+				excludedMembersIndexes:          []group.MemberIndex{3, 7, 8, 10},
+				transientlyParkedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
 			},
 			outgoingAnnouncementsCount: 1,
 		},
@@ -227,6 +228,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			outgoingAnnouncementsCount: 2,
 		},
@@ -287,6 +292,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			outgoingAnnouncementsCount: 2,
 		},
@@ -347,6 +356,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			outgoingAnnouncementsCount: 2,
 		},
@@ -392,10 +405,11 @@ func TestSigningRetryLoop(t *testing.T) {
 			// and is the last attempt executed by this member because member
 			// 2 is excluded from the second attempt that produced the signature.
 			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 1,
-				startBlock:             206,
-				timeoutBlock:           236, // start block of the first attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
+				number:                          1,
+				startBlock:                      206,
+				timeoutBlock:                    236, // start block of the first attempt + 30
+				excludedMembersIndexes:          []group.MemberIndex{3, 7, 8, 10},
+				transientlyParkedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
 			},
 			// The second announcement is done at the beginning of the
 			// second attempt for which member 2 is eventually excluded.
@@ -474,6 +488,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			outgoingAnnouncementsCount: 2,
 		},
@@ -583,6 +601,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			// just the second announcement, the first one was skipped
 			outgoingAnnouncementsCount: 1,

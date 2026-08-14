@@ -115,6 +115,63 @@ func (legacySigningParticipantSelector) Select(
 	sort.Slice(includedMembersIndexes, func(i, j int) bool {
 		return includedMembersIndexes[i] < includedMembersIndexes[j]
 	})
-	// The legacy path never parks: parking is a ROAST-transition concept.
-	return participantSelection{includedMembersIndexes: includedMembersIndexes}, nil
+
+	return participantSelection{
+		includedMembersIndexes: includedMembersIndexes,
+		transientlyParkedMembersIndexes: blamelessDrops(
+			readyMembersIndexes,
+			includedMembersIndexes,
+		),
+	}, nil
+}
+
+// blamelessDrops returns the ready members this attempt did not include, in
+// canonical ascending order.
+//
+// A ready member is left out for one of two blameless reasons -- its operator lost
+// the seeded qualification shuffle, or it fell in the surplus tail trimmed for
+// performance -- and neither is a fault. Reporting them as transiently parked stops
+// a ROAST consumer from folding them into the permanent excluded set, which would
+// shrink the feasible set on every attempt until ErrAttemptInfeasible (see
+// roast.computeNextAttempt). Reporting only the surplus tail is not enough: in the
+// common single-seat-per-operator topology the trim never fires, because
+// EvaluateRetryParticipantsForSigning already stops at exactly honestThreshold
+// qualified operators, so every blameless drop is a shuffle loss instead.
+//
+// Announcement-silent members are deliberately absent: failing to announce is a
+// real liveness fault, so they stay in the excluded set the caller derives as the
+// complement of the included set.
+func blamelessDrops(
+	readyMembersIndexes []group.MemberIndex,
+	includedMembersIndexes []group.MemberIndex,
+) []group.MemberIndex {
+	// The included set is a subset of the ready set by construction above, so
+	// equal cardinality means nothing was dropped.
+	if len(readyMembersIndexes) == len(includedMembersIndexes) {
+		return nil
+	}
+
+	included := make(map[group.MemberIndex]bool, len(includedMembersIndexes))
+	for _, memberIndex := range includedMembersIndexes {
+		included[memberIndex] = true
+	}
+
+	parked := make(
+		[]group.MemberIndex,
+		0,
+		len(readyMembersIndexes)-len(includedMembersIndexes),
+	)
+	for _, memberIndex := range readyMembersIndexes {
+		if !included[memberIndex] {
+			parked = append(parked, memberIndex)
+		}
+	}
+
+	if len(parked) == 0 {
+		return nil
+	}
+
+	sort.Slice(parked, func(i, j int) bool { return parked[i] < parked[j] })
+
+	return parked
 }
