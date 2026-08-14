@@ -747,12 +747,26 @@ Go-implementation accident, not a portable contract.
 === Maximum evidence-message size
 
 *Decision: single `TransitionMessage` per transition; no
-chunking.*
+chunking. The pubsub transport limit is set explicitly to match the
+parser ceiling.*
 
 Under coordinator-aggregation, the per-transition payload is
-`O(N)` not `O(N^2)`. At a 100-signer group with all four
-quotas saturated the encoded bundle is ~10-20 KiB,
-comfortably within libp2p's per-message limits.
+`O(N)` not `O(N^2)`. This annex originally estimated ~10-20 KiB at a
+100-signer group with all four quotas saturated, and concluded the
+bundle sat comfortably within libp2p's per-message limits. Both halves
+of that were overtaken once snapshots began carrying coordinator package
+proofs: a proof is a whole signed FROST signing package, and every
+snapshot in the bundle repeats them.
+
+The measured worst case at the mainnet group size of 100 members, every
+member reporting saturated evidence with the maximum two proofs, is
+*~1.95 MiB* -- roughly 100x the original estimate, and above libp2p's
+1 MiB pubsub default. Relying on that default silently dropped
+maximum-evidence bundles at the transport, where the retry path observes
+only a stalled transition. The parser ceiling and the pubsub limit are
+therefore both set to 8 MiB, so the transport accepts exactly what the
+parser accepts, and the measurement is pinned by a test that fails if
+evidence-payload growth outgrows either limit.
 
 === Session-handle binding TTL eviction
 
@@ -855,6 +869,40 @@ Until the network has fully migrated off V1, the Phase 7 readiness
 manifest cannot flip to `present`. The migration tracking
 mechanism is out of scope for this RFC; the prerequisite is
 documented here as a hard dependency of Phase 7.
+
+=== Lost-sync scope and its residual
+
+*Decision: the lost-sync marker is charged to ONE attempt, not the
+session, and is consumed by the first read.*
+
+A seat that receives a transition bundle for an attempt it never
+observed has fallen behind the group's committed attempt chain.
+Selecting from that stale position would produce a divergent included
+set, so the seat must not select: it skips the attempt and lets the
+outer layer retry the whole signing from a fresh position.
+
+The scope of that reaction is the load-bearing part. A marker that
+latched for the session would let one message end the session, and the
+triggering bundle cannot be authenticated at the point it arrives:
+verifying it needs a local observe handle for an attempt this seat never
+created, so any authenticated group member can send one for an arbitrary
+hash. Charging the marker to a single attempt bounds the blast radius of
+a forged bundle to one attempt of added latency -- the cost of an
+ordinary missed attempt -- while keeping the fail-closed property that
+motivated it. The marker is consume-once for the same reason: an
+attacker must keep re-sending, attributably, to sustain a denial.
+
+*Accepted residual.* An authenticated seat can still spend one attempt
+per forged bundle, and the forgery is not attributable to a specific
+attempt the sender participated in. Three properties keep this out of
+P0 territory: the sender is an authenticated, operator-attributed group
+member; the cost is bounded and identical to a benign missed attempt, so
+no signature is produced under the wrong assumptions and no funds move;
+and the behaviour is gated off by default. An anonymous, costless,
+non-attributable variant of this would justify f+1 snapshot
+corroboration before accepting a bundle; this one does not, and the
+existing f+1 accuser-quorum machinery is where that would land if the
+cost/benefit ever changes.
 
 == Open questions
 

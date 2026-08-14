@@ -84,6 +84,29 @@ func installConfiguredTBTCSignerInitConfig() error {
 		return err
 	}
 
+	// The engine reports installation success two ways: a zero status code, which
+	// InstallNativeTBTCSignerConfig turns into a nil error, and this field. At the
+	// pinned engine ABI every success path hardcodes installed=true and every
+	// failure returns a non-zero status, so the two cannot disagree today. Assert
+	// it anyway rather than decoding and discarding: if a later engine ever
+	// reports a partial success, registration must fail closed here instead of
+	// continuing with no signer config installed.
+	if !result.Installed {
+		err = fmt.Errorf(
+			"install tbtc-signer init config from [%s]: engine reported "+
+				"success but did not install the config",
+			configPath,
+		)
+		registrationLogger.Errorf(
+			"tbtc-signer init config installation failed; FROST-native "+
+				"engine registration fails closed and the process will "+
+				"terminate at the end of registration (config-mode demand "+
+				"unmet): [%v]",
+			err,
+		)
+		return err
+	}
+
 	registrationLogger.Infof(
 		"installed tbtc-signer init config from [%s]: fingerprint [%s], "+
 			"configured keys [%d], idempotent [%v]",

@@ -45,6 +45,26 @@ pre-RFC-21 path. The behavioural rollback is therefore *configuration-
 only*: toggle the env var off and the next signing attempt uses
 the legacy retry shuffle.
 
+=== One env var can terminate an untagged binary
+
+The rollback story above covers `KEEP_CORE_FROST_ROAST_RETRY_ENABLED`
+only. `TBTC_SIGNER_INIT_CONFIG_PATH` is different in kind: setting it is
+read as an explicit *demand* for config-mode FROST operation, and any
+state in which the demand cannot be met is process-fatal rather than a
+degrade-to-legacy warning. That includes a binary built without the
+`frost_native` build tag, which cannot honor the demand at all
+(`pkg/frost/signing/native_init_config_demand.go`).
+
+So a node that would otherwise run the legacy path untouched will refuse
+to start if this variable is set and the binary is untagged, the config
+file is unreadable, or engine registration failed. Operators rolling out
+across a mixed fleet must set it only on `frost_native` binaries. It is
+deliberately unconditional on the configured profile: an unreadable
+config file cannot reveal its profile, and the signer treats a missing
+profile as production, so enforcing whenever the path is set is the only
+non-circular rule. Unsetting it restores the transitional env-fallback
+mode.
+
 == Behavioural matrix
 
 [options="header"]

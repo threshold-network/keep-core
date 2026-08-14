@@ -137,6 +137,13 @@ func bindTaprootTxViaNativeSigner(
 			"native tbtc-signer BuildTaprootTx returned a different unsigned transaction",
 		)
 	}
+	// Defence-in-depth, not a reachable failure at the pinned engine ABI: the
+	// engine builds the sighash vector in the same iteration over tx inputs that
+	// it builds the prevout vector from, and errors out when the two lengths
+	// disagree, so a status-0 response cannot carry fewer sighashes than inputs.
+	// Kept as cheap regression coverage on that invariant - it costs one
+	// comparison and converts a future engine-side length change from an
+	// out-of-range index into a named error.
 	if inputIndex < 0 || inputIndex >= len(result.TaprootKeySpendSighashesHex) {
 		return fmt.Errorf(
 			"native tbtc-signer BuildTaprootTx returned [%d] sighashes; input index [%d] is unavailable",

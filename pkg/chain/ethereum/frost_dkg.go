@@ -620,6 +620,14 @@ func (tc *TbtcChain) SelectFrostGroup() (*tbtc.GroupSelectionResult, error) {
 		return nil, err
 	}
 
+	// Should not happen as this is guaranteed by the contract but, just in case:
+	// the loop below indexes operatorsAddresses by len(operatorsIDs), so a shorter
+	// return would panic rather than error. Mirrors the legacy tECDSA path in
+	// tbtc.go.
+	if len(operatorsIDs) != len(operatorsAddresses) {
+		return nil, fmt.Errorf("operators IDs and addresses mismatch")
+	}
+
 	ids := make([]chain.OperatorID, len(operatorsIDs))
 	addresses := make([]chain.Address, len(operatorsIDs))
 	for i := range ids {
