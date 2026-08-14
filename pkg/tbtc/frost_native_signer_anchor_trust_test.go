@@ -803,6 +803,20 @@ func TestFrostNativeSignerAnchorTrustReferenceDescendantRules(t *testing.T) {
 				trustTestBytes32(0xa6),
 			)
 		},
+		// Mirrors the Rust descendant validator, which refuses a store
+		// fingerprint change across generations. The two trees must admit the
+		// same references or one accepts a chain the other refuses on every
+		// store open.
+		"store fingerprint change": func(candidate *FrostNativeSignerAnchorTrustReference) {
+			rehomed := floor.Checkpoint.StoreFingerprint
+			rehomed[0] ^= 1
+			candidate.Checkpoint = trustTestCheckpoint(
+				rehomed,
+				floor.Checkpoint.Generation+1,
+				trustTestBytes32(0xa7),
+				trustTestBytes32(0xa8),
+			)
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

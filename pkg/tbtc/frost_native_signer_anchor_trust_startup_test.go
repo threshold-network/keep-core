@@ -187,6 +187,55 @@ func TestReconstructFrostNativeSignerAnchorTrustPriorHead(t *testing.T) {
 	}
 }
 
+// The honest pending-rotation path must keep working: the durable head sits at
+// or below the configured pin, which is exactly what a node about to install a
+// new certificate looks like.
+func TestReconstructFrostNativeSignerAnchorTrustPriorHeadAcceptsConfiguredPin(
+	t *testing.T,
+) {
+	fixture, _, readback := newFrostNativeSignerAnchorTrustPriorStartupFixture()
+
+	if readback.CertificateSequence > fixture.installed.TrustCertificateSequence {
+		t.Fatalf(
+			"fixture is not representative: readback sequence [%v] already "+
+				"exceeds the installed pin [%v]",
+			readback.CertificateSequence,
+			fixture.installed.TrustCertificateSequence,
+		)
+	}
+	if _, err := reconstructFrostNativeSignerAnchorTrustPriorHead(
+		&readback,
+		fixture.runtime,
+		&fixture.installed,
+		&fixture.certificate,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Configuration rolled back while the signer store was not. This is a
+// diagnosability assertion over a state that already failed closed; it is not a
+// bound on operator rollback, which reverts both and leaves the two equal.
+func TestReconstructFrostNativeSignerAnchorTrustPriorHeadRejectsAheadDurableHead(
+	t *testing.T,
+) {
+	fixture, _, readback := newFrostNativeSignerAnchorTrustPriorStartupFixture()
+	readback.CertificateSequence = fixture.installed.TrustCertificateSequence + 1
+
+	_, err := reconstructFrostNativeSignerAnchorTrustPriorHead(
+		&readback,
+		fixture.runtime,
+		&fixture.installed,
+		&fixture.certificate,
+	)
+	if err == nil {
+		t.Fatal("expected a durable trust head ahead of the pin to be rejected")
+	}
+	if !strings.Contains(err.Error(), "ahead of the installed certificate pin") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
 func TestReconstructFrostNativeSignerAnchorTrustPriorHeadUsesCertifiedFloor(
 	t *testing.T,
 ) {

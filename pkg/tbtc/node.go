@@ -910,6 +910,8 @@ func (fnsaho *frostNativeSignerAnchorHeadroomObserver) verifyFrostProductionSign
 		signing.RecordNativeTBTCSignerStateAnchorRestartableHeadroom(
 			snapshot.Inventory.RestartableRevisionHeadroom,
 			snapshot.Inventory.RestartableGenerationHeadroom,
+			snapshot.Inventory.AnchorRotationWarning,
+			snapshot.Inventory.LargestLocalSeatCount,
 		)
 	}
 	return snapshot, err

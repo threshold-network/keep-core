@@ -1756,6 +1756,7 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 			err,
 		)
 	}
+	recordFrostNativeSignerAnchorAdmittedPresignRelayGate()
 	reservationTransferred := false
 	defer func() {
 		if !reservationTransferred {
@@ -1920,6 +1921,7 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) admitInput(
 		recordFrostNativeSignerAnchorPreSignInputRejection()
 		return nil, err
 	}
+	recordFrostNativeSignerAnchorAdmittedPresignInput()
 	return reservation.Release, nil
 }
 

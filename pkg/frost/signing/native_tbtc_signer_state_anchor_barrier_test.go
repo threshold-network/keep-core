@@ -343,7 +343,11 @@ func TestNativeTBTCSignerOutputBarrierDiscardsAndPoisonsOnInvokePanic(
 
 func TestNativeTBTCSignerStateAnchorBarrierCommitsBeforeCompletion(t *testing.T) {
 	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	resetNativeTBTCSignerStateAnchorMetricsForTest()
 	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+	t.Cleanup(resetNativeTBTCSignerStateAnchorMetricsForTest)
+
+	baseGenerations, baseRevisions := NativeTBTCSignerStateAnchorConsumption()
 
 	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
 	current := initial
@@ -401,11 +405,38 @@ func TestNativeTBTCSignerStateAnchorBarrierCommitsBeforeCompletion(t *testing.T)
 	if committer.verifyCalls != 2 {
 		t.Fatal("startup and pre-operation authenticated remote reads were not required")
 	}
+
+	// The burn-rate numerator records work the anchor witnessed. A commit
+	// that advances one generation and spends one CAS revision must move
+	// both totals by exactly that amount, and only AFTER the acknowledgement
+	// has been validated and durably read back - so the totals describe
+	// work the anchor witnessed rather than work attempted.
+	gotGenerations, gotRevisions := NativeTBTCSignerStateAnchorConsumption()
+	if gotGenerations != baseGenerations+1 {
+		t.Fatalf(
+			"consumption generations after a single-step commit: got [%d], "+
+				"want [%d]",
+			gotGenerations,
+			baseGenerations+1,
+		)
+	}
+	if gotRevisions != baseRevisions+1 {
+		t.Fatalf(
+			"consumption revisions after a single-step commit: got [%d], "+
+				"want [%d]",
+			gotRevisions,
+			baseRevisions+1,
+		)
+	}
 }
 
 func TestNativeTBTCSignerStateAnchorBarrierChecksTipWithoutMutation(t *testing.T) {
 	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	resetNativeTBTCSignerStateAnchorMetricsForTest()
 	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+	t.Cleanup(resetNativeTBTCSignerStateAnchorMetricsForTest)
+
+	baseGenerations, baseRevisions := NativeTBTCSignerStateAnchorConsumption()
 
 	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
 	current := initial
@@ -445,6 +476,27 @@ func TestNativeTBTCSignerStateAnchorBarrierChecksTipWithoutMutation(t *testing.T
 	lease.release()
 	if committer.calls != 0 {
 		t.Fatal("unchanged Rust tip unexpectedly issued a remote CAS")
+	}
+
+	// The skip-CAS branch spends nothing: an operation that advanced no
+	// generation spends no revision either, because the barrier skips the
+	// compare-and-swap when the tip is unchanged. Counting it would inflate
+	// the burn-rate numerator with operations the anchor never had to
+	// witness.
+	gotGenerations, gotRevisions := NativeTBTCSignerStateAnchorConsumption()
+	if gotGenerations != baseGenerations {
+		t.Fatalf(
+			"skip-CAS path consumed generations: got [%d], want [%d]",
+			gotGenerations,
+			baseGenerations,
+		)
+	}
+	if gotRevisions != baseRevisions {
+		t.Fatalf(
+			"skip-CAS path consumed revisions: got [%d], want [%d]",
+			gotRevisions,
+			baseRevisions,
+		)
 	}
 }
 

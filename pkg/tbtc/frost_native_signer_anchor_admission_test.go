@@ -505,6 +505,45 @@ func TestFrostNativeSignerAnchorAdmissionController_AtomicallyReservesNearWarnin
 	); err != nil {
 		t.Fatalf("released reservation remained charged: [%v]", err)
 	}
+
+	// The DKG admit counter is incremented only by reserveDKG, not by the
+	// controller-level reservePreSign calls above, so a successful native
+	// DKG reservation must be the exact amount it moves.
+	baseDKGs := frostNativeSignerAnchorAdmittedDKGs.Load()
+	dkgReservation, err := controller.reserveDKG(
+		context.Background(),
+		1,
+	)
+	if err != nil {
+		t.Fatalf("native DKG reservation was refused: [%v]", err)
+	}
+	defer dkgReservation.Release()
+	if got := frostNativeSignerAnchorAdmittedDKGs.Load(); got != baseDKGs+1 {
+		t.Fatalf(
+			"native DKG admission counter moved by [%d], want [1]",
+			got-baseDKGs,
+		)
+	}
+
+	// The pre-sign admit counters are incremented by the gate (admitInput and
+	// authorize), not by the controller-level reservePreSign calls in this
+	// test, so they must stay at zero. A counter that bumps on the wrong call
+	// site would burn a per-input or per-batch denominator the operator has
+	// no way to reconstruct from the calls actually made.
+	if got := frostNativeSignerAnchorAdmittedPresignInputs.Load(); got != 0 {
+		t.Fatalf(
+			"controller-level reservePreSign bumped the gate-level pre-sign "+
+				"input counter to [%d]; only gate.admitInput must",
+			got,
+		)
+	}
+	if got := frostNativeSignerAnchorAdmittedPresignRelayGates.Load(); got != 0 {
+		t.Fatalf(
+			"controller-level reservePreSign bumped the gate-level pre-sign "+
+				"relay-gate counter to [%d]; only gate.authorize must",
+			got,
+		)
+	}
 }
 
 func TestFrostNativeSignerAnchorAdmissionController_ContentionSaturatesAvailableHeadroom(
@@ -599,6 +638,34 @@ func TestFrostNativeSignerAnchorAdmissionController_ContentionSaturatesAvailable
 		t.Fatalf("released temporary reservation still blocked retry: [%v]", err)
 	}
 	retry.Release()
+
+	// Two controller-level reservePreSign reservations succeeded, two were
+	// refused. None of them went through gate.admitInput or gate.authorize,
+	// and none went through reserveDKG, so every admission counter must
+	// stay at zero. A counter that bumps on the wrong call site would burn
+	// a per-input or per-batch denominator the operator has no way to
+	// reconstruct from the calls actually made.
+	if got := frostNativeSignerAnchorAdmittedPresignInputs.Load(); got != 0 {
+		t.Fatalf(
+			"controller-level reservePreSign bumped the gate-level pre-sign "+
+				"input counter to [%d]; only gate.admitInput must",
+			got,
+		)
+	}
+	if got := frostNativeSignerAnchorAdmittedPresignRelayGates.Load(); got != 0 {
+		t.Fatalf(
+			"controller-level reservePreSign bumped the gate-level pre-sign "+
+				"relay-gate counter to [%d]; only gate.authorize must",
+			got,
+		)
+	}
+	if got := frostNativeSignerAnchorAdmittedDKGs.Load(); got != 0 {
+		t.Fatalf(
+			"controller-level reservePreSign bumped the native DKG "+
+				"admission counter to [%d]; only reserveDKG must",
+			got,
+		)
+	}
 }
 
 func TestFrostNativeSignerAnchorAdmissionController_RejectsStaleReadinessHeadroom(
@@ -761,6 +828,18 @@ func TestFrostNativeSignerAnchorAdmissionController_RefusesWhilePoisoned(
 	if preSignInput := frostNativeSignerAnchorPreSignInputRejections.Load(); preSignInput != 0 {
 		t.Fatalf("pre-sign input rejections counted [%d]", preSignInput)
 	}
+	// Every reservation in this test was refused, so no admission counter
+	// may have moved. The DKG admission counter in particular only fires on
+	// a successful reserveDKG, so a poisoned DKG reservation that bumped
+	// it would make the burn-rate denominator count work that never
+	// actually proceeded.
+	if got := frostNativeSignerAnchorAdmittedDKGs.Load(); got != 0 {
+		t.Fatalf(
+			"poisoned reservations bumped the native DKG admission "+
+				"counter to [%d]; only successful reserveDKG must",
+			got,
+		)
+	}
 
 	// The poison was the only thing refusing: with it cleared the identical
 	// reservation is admitted, so the refusals above cannot be explained by
@@ -777,6 +856,27 @@ func TestFrostNativeSignerAnchorAdmissionController_RefusesWhilePoisoned(
 		t.Fatalf("healthy anchor refused an admissible workflow: [%v]", err)
 	}
 	reservation.Release()
+
+	// The recovery reservation also went through controller-level
+	// reservePreSign, not through gate.admitInput, gate.authorize, or
+	// reserveDKG, so the per-workflow admission counters must still be at
+	// zero. A successful reservation that bumped the gate-level counters
+	// would tell operators a per-input or per-batch admission happened
+	// when only a controller-level reservation did.
+	if got := frostNativeSignerAnchorAdmittedPresignInputs.Load(); got != 0 {
+		t.Fatalf(
+			"controller-level reservePreSign bumped the gate-level "+
+				"pre-sign input counter to [%d]; only gate.admitInput must",
+			got,
+		)
+	}
+	if got := frostNativeSignerAnchorAdmittedPresignRelayGates.Load(); got != 0 {
+		t.Fatalf(
+			"controller-level reservePreSign bumped the gate-level "+
+				"pre-sign relay-gate counter to [%d]; only gate.authorize must",
+			got,
+		)
+	}
 
 	resetFrostNativeSignerAnchorAdmissionMetricsForTest()
 }
@@ -1057,6 +1157,31 @@ func TestFrostNativeSignerAnchorAdmissionRefusalsNameARemedy(t *testing.T) {
 		{
 			name:     "pre-sign input",
 			counted:  frostNativeSignerAnchorPreSignInputRejections.Load(),
+			expected: 0,
+		},
+		// Every reserveDKG call in this test was refused on a refusal path,
+		// so the native DKG admission counter must stay at zero. A counter
+		// that bumps on a refused reservation would tell operators that a
+		// DKG workflow was admitted when the seat count or window said it
+		// could not be.
+		{
+			name:     "admitted DKG",
+			counted:  frostNativeSignerAnchorAdmittedDKGs.Load(),
+			expected: 0,
+		},
+		// Nothing here went through gate.admitInput or gate.authorize, so the
+		// gate-level pre-sign admission counters must stay at zero. A counter
+		// that bumps on a controller-level reservation would tell operators
+		// a per-input or per-batch admission happened when only a raw
+		// reservation did.
+		{
+			name:     "admitted pre-sign input",
+			counted:  frostNativeSignerAnchorAdmittedPresignInputs.Load(),
+			expected: 0,
+		},
+		{
+			name:     "admitted pre-sign relay gate",
+			counted:  frostNativeSignerAnchorAdmittedPresignRelayGates.Load(),
 			expected: 0,
 		},
 	} {

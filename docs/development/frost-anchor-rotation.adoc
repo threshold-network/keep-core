@@ -47,8 +47,8 @@ unconsumed window at once - so no seat count a wallet can award is
 excluded from signing. What is still finite is the number of inputs a
 node can actually sign between two rotations: a fault-free 21-input
 sweep consumes roughly `21 * (3 * localSeats + 2)` revisions and one to
-two generations per call, so a 4-seat node gets *six to thirteen
-full-size sweeps per anchor epoch* and a 20-seat node one to two. The
+two generations per call, so a 4-seat node gets *13-26 sweeps
+per anchor epoch* and a 20-seat node 2-7 sweeps. The
 derivation is in <<when-rotation-is-required>>.
 
 == What the anchor is, in operator terms
@@ -126,12 +126,56 @@ states this directly where an absent anchor stream is refused
 ....
 
 So the floor moves only under an Ed25519 signature from the offline
-authority, checked at startup against pins that the running node cannot
-influence. A finite window is the price: the node must be able to
-replay its whole history from the floor to prove it did not roll back,
-and that replay is bounded. Running out of window is therefore not a
-failure of the anchor - it is the anchor working, and asking for a
-fresh signed floor.
+authority. That signature is what the running *signer process* cannot
+forge: a compromised signer cannot mint itself a new floor, because
+every certificate is verified against the offline authority key in both
+Go and Rust. It is not a pin against the *operator* - see
+<<what-the-floor-does-not-bound>>. A finite window is the price: the
+node must be able to replay its whole history from the floor to prove
+it did not roll back, and that replay is bounded. Running out of window
+is therefore not a failure of the anchor - it is the anchor working,
+and asking for a fresh signed floor.
+
+[[what-the-floor-does-not-bound]]
+=== What the floor does not bound
+
+The floor bounds the anchor *service* and the signer *process*. It does
+not bound the *operator*, and an earlier revision of this document said
+otherwise.
+
+Every artifact that names the floor is an operator-owned local file:
+the certificate chain (`FrostNativeSignerAnchorTrustCertificatePath`),
+the init config (`TBTC_SIGNER_INIT_CONFIG_PATH`), and the activation
+manifest (`FrostPreSignActivationManifestPath` - a signed envelope read
+from disk, not fetched from chain). The only comparison the certificate
+sequence and digest ever face is against the init config, in
+`validateFrostNativeSignerAnchorTrustExpectedHead`. An operator holding
+an earlier rotation's artifacts can therefore present them to their own
+node.
+
+Three things bound how far that goes, and none of them is the floor:
+
+. *The bundle moves in lockstep.* Every rotation must change the
+  activation manifest hash, advance the manifest sequence by exactly
+  one, and advance the service epoch by exactly one
+  (`validate_rotation_endpoints`). A certificate is only presentable
+  together with its own manifest, so a downgrade means reverting the
+  whole bundle, not swapping one file.
+. *The durable trust journal is append-only.* Its head must equal the
+  configured pin, so a downgraded bundle also requires a signer-store
+  snapshot from before the transition.
+. *The anchor service can refuse.* Every signed request names the
+  current `bindingHash` and `activationManifestSequence`, so a service
+  that retires the previous binding after a rotation makes the older
+  epoch unusable. This repository can neither specify nor enforce that;
+  see the pre-activation checklist.
+
+The practical consequence: a floor downgrade is not a single edit but a
+coordinated restore of the artifact bundle *and* the signer store,
+against a service still willing to answer for a retired epoch. Treat
+the certified floor as a bound on the service and on a compromised
+signer process, and treat operator-side rollback as governed by the
+checklist items below rather than by the floor.
 
 [[when-rotation-is-required]]
 == When rotation is required
@@ -232,10 +276,10 @@ charged against that bound rather than against real consumption:
 |===
 | Local seats | Calls per 21-input sweep | Revisions consumed | Generations consumed
 
-| 1 | 105 | 105 | 105-210
-| 2 | 168 | 168 | 168-336
-| 3 | 231 | 231 | 231-462
-| 4 | 294 | 294 | 294-588
+| 1 | 105 | 105 | 84-105
+| 2 | 168 | 168 | 105-168
+| 3 | 231 | 231 | 126-231
+| 4 | 294 | 294 | 147-294
 |===
 
 === Cadence
@@ -256,30 +300,45 @@ full-size sweeps one at a time:
 |===
 | Local seats | Generations per 21-input sweep | Full-size sweeps per anchor epoch | Note
 
-| 1  | 105-210    | 18-36 | best case assumes one generation per anchored call
-| 2  | 168-336    | 11-22 |
-| 3  | 231-462    | 8-16  |
-| 4  | 294-588    | 6-13  |
-| 5  | 357-714    | 5-10  | the average mainnet holder; excluded entirely before this change
-| 20 | 1302-2604  | 1-2   |
-| 100| 6342-12684 | 0-0   | a single sweep consumes more than the whole window
+| 1  | 84-105    | 36-45 | best case is `k+3` per input; worst is `3k+2`
+| 2  | 105-168   | 22-36 |
+| 3  | 126-231   | 16-30 |
+| 4  | 147-294   | 13-26 |
+| 5  | 168-357   | 10-22 | the average mainnet holder
+| 20 | 483-1302  | 2-7   |
+| 100| 2163-6342 | 0-1   | the protocol maximum, reachable only when one operator holds all the stake
 |===
 
 The 100-seat row is the honest edge of the model. Such a node is
-*admitted* for every input - the ceiling is gone - but a full sweep
-consumes more window than one epoch has, so it will be refused part way
-through and needs a rotation to finish. That is a throughput limit an
+*admitted* for every input - the ceiling is gone - but a full sweep can
+consume more window than one epoch has, so it may be refused part way
+through and need a rotation to finish. That is a throughput limit an
 offline ceremony fixes, not a permanent exclusion from the signing
 threshold, which is what the old ceiling was. It is also not a
 configuration any real wallet produces: one operator holding all 100
 seats of a 100-seat wallet is the protocol maximum, not a sortition
 result.
 
-NOTE: An earlier operability assessment put these at "1-2 at 4 seats,
-about 5 at 3 seats, about 28 at 1 seat". Those figures were measured
-against the batch-wide reservation, where the *next* workflow's worst
-case, not consumption, decided when a node stopped. They no longer
-apply; use the ranges above.
+IMPORTANT: Signers are stake-weighted, so seat count tracks the operator's
+stake share. The expected holder's seat count tracks the operator's
+stake share, and the high-seat rows are reachable in the upper tail of
+the seat-count distribution - in practice, by operators with concentrated
+stake. Size against the row that matches your network's realistic stake
+concentration, and treat 20 and 100 as sensitivity checks on that
+concentration rather than as the expected case.
+
+NOTE: Two earlier sets of figures in this document are wrong and should
+not be used. An operability assessment put these at "1-2 at 4 seats,
+about 5 at 3 seats, about 28 at 1 seat", measured against the batch-wide
+reservation, where the *next* workflow's worst case rather than
+consumption decided when a node stopped. A later revision of the table
+above used a single burn figure per input; real fault-free burn is a
+*range*, `k+3` to `3k+2` generations per input, because a call whose
+sweep prologue mutates state advances more than one generation. Any
+capacity or cadence number derived from a point value understates the
+window by roughly a factor of two. Use the ranges above, and confirm them
+by measurement on the live-testnet gate before relying on them for
+sizing.
 
 === Concurrency
 
@@ -485,11 +544,6 @@ answers.
 
 === Gaps in this area
 
-* *No metric.* Nothing anchor-related is registered with `clientinfo`,
-  so `/metrics` has no headroom gauge and no rotation warning. The only
-  scrapeable trace of a refusal is the generic
-  `wallet_action_failed_total` counter, which cannot distinguish a
-  headroom refusal from any other action failure.
 * *No log line.* Neither the readiness snapshot nor the anchor binding
   logs headroom. The first log evidence is the refusal itself, by which
   time the node is already turning work away.
@@ -618,10 +672,18 @@ under a 16 MiB bound and each certificate under a 120 KiB bound.
 
 WARNING: Because the file must always start at sequence 1 and may hold
 at most 64 entries, a signer store admits at most *63 rotations for its
-entire lifetime* - 64 anchor epochs counting the bootstrap. At 1-2
-full-size sweeps per epoch at 4 seats that is roughly 64-128 full-size
-sweeps before the chain can no longer be extended. Nothing in this tree
-implements what happens next. This is a gap, not a documented plan.
+entire lifetime* - 64 anchor epochs counting the bootstrap. At 10-22
+full-size sweeps per epoch at the expected 5 seats, that is roughly
+*630-1400 full-size sweeps* before the chain can no longer be extended.
+Nothing in this tree implements what happens next. This is a gap, not a
+documented plan.
+An earlier revision of this warning said "roughly 64-128 full-size
+sweeps", derived from the retracted 4-seat figures above; the real
+lifetime is about an order of magnitude larger. The cap is also a *size*
+artifact rather than a security property - each certificate must fit a
+bounded journal record, and 64 of them sit near half the request bound -
+so the ceiling is a consequence of the artifact having to be complete
+from sequence 1, not of anything the chain proves.
 
 === Restart, and the order of operations
 
@@ -665,6 +727,43 @@ Consequently:
 * *Downtime is unmeasured.* The whole ceremony happens with the node
   stopped, and no rehearsal figure exists.
 
+== The anchored emergency-rekey kill switch
+
+The wallet-level emergency rekey kill switch is now anchored. The Rust
+signer has always exported `frost_tbtc_trigger_emergency_rekey`; the Go
+bridge now reaches it through the state-anchored operation path
+(`TriggerNativeTBTCSignerEmergencyRekey` in
+`pkg/frost/signing/native_frost_engine_tbtc_signer_registration_frost_native.go`),
+so the durable write that arms the switch is compare-and-swapped onto
+the anchor stream before the call returns. That is what makes a later
+erasure detectable: an earlier out-of-band write to the durable store
+could be silently undone by restoring the pre-rekey state file, because
+nothing on the anchor stream recorded it.
+
+Three properties of the anchored call follow, and each one looks like
+an omission unless it is named:
+
+. It deliberately bypasses the admission model. The operation wrapper
+  takes no capacity reservation, and admission refuses all work once
+  headroom reaches the rotation floor while the barrier keeps admitting
+  until the certified window is genuinely exhausted. A kill switch that
+  capacity accounting can veto is not a kill switch, so the trigger
+  runs in that band unreserved.
+. The barrier stays mandatory. A poisoned anchor or an exhausted
+  certified window fails the trigger; every barrier refusal predicate
+  is operation-independent, so a state in which the trigger is refused
+  is one in which the node is already refusing every signature-producing
+  call. The kill switch is redundant there, not defeated.
+. The armed event is immutable once armed. The engine exposes no
+  export that clears it, so the wallet named in the record cannot sign
+  again until a replacement DKG completes.
+
+No operator-facing trigger for this kill switch currently exists in
+this repository. The `keep-client tbtc-signer` subcommands implement
+only the four-phase bootstrap ceremony described above; the rekey call
+is reachable today only through code paths that are not in `cmd/`.
+Wiring one is a separate piece of work.
+
 == Pre-activation checklist
 
 The FROST path is pre-production: both go-live gates in
@@ -680,12 +779,14 @@ derived above is run against real value.
 . *A supported way to read headroom* that does not require an
   auditor challenge assembled by hand: a `tbtc-signer` subcommand, or
   a `clientinfo` gauge for both headroom dimensions plus the
-  rotation-warning flag.
+  rotation-warning flag. +
+  Present as the `clientinfo` gauges `rotation_warning`,
+  `restartable_revision_headroom`, and
+  `restartable_generation_headroom`.
 . *An alert threshold set well above the danger points* - above 256
   (where all work stops), above the node's own per-input reservation for
   its seat count (175 generations at 4 seats, 815 at 20), and above what
-  one full sweep consumes (up to 588 generations at 4 seats). An alert
-  that fires at 256 fires after the node has already abandoned a batch
+  one full sweep consumes (up to 294 generations at 4 seats). An alert
   whose authorization it paid to relay.
 . *A documented, rehearsed anchor-service epoch transition:* who opens
   epoch N+1 revision 1, how the frozen checkpoint and previous event
@@ -697,8 +798,8 @@ derived above is run against real value.
 . *A decision on the 64-certificate lifetime bound,* including what a
   store does at certificate 64.
 . *A local-seat policy.* No seat count is excluded from signing any
-  more, but seat count still sets rotation cadence: 4 seats yields 6-13
-  full-size sweeps per epoch, 20 seats yields 1-2, and above roughly 30
+  more, but seat count still sets rotation cadence: 4 seats yields 13-26
+  sweeps per epoch, 20 seats yields 2-7, and above roughly 30
   a single full-size sweep can no longer be completed inside one epoch.
   Decide the supported seat count per node, and the rotation cadence
   that goes with it, before sortition produces one.
@@ -708,6 +809,27 @@ derived above is run against real value.
   fail-closed startup error.
 . *Both readiness-manifest gates flipped to `present`* with evidence,
   per that document's update discipline.
+. *An anchor-service rule that retires the previous binding.* After a
+  rotation the service should refuse reads and compare-and-swaps for the
+  previous `bindingHash`, or for an identity whose
+* `activationManifestSequence` is not the current one. `activationManifestSequence`
+  rides in the signed identity (`frostNativeSignerAnchorIdentityToWire`) while
+  `bindingHash` rides in the request payload alongside it, so
+  this is an admission rule rather than a protocol change. Without it,
+  an operator who keeps an earlier rotation's artifacts *and* an earlier
+  signer-store snapshot can run against the earlier certified floor; see
+  <<what-the-floor-does-not-bound>>.
+. *A decision on where a monotonic floor is published,* if operator-side
+  rollback is in scope. Nothing inside this repository can close it: every
+  candidate pin is downstream of a file the operator owns. Closing it
+  requires publishing a minimum trust-certificate sequence per signer
+  stream somewhere the operator cannot rewrite - on chain, or enforced by
+  the anchor service - which is a governance decision, not a keep-core
+  change. Note the signed activation-handshake attestation already
+  exports `trustCertificateSequence`, `anchorServiceEpoch` and the
+  certified floor revision/generation, so an external monitor retaining
+  the maximum ever seen per operator detects a downgrade today without
+  any protocol change.
 
 == References
 

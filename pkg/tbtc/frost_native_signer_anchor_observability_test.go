@@ -227,11 +227,15 @@ func (stub *stubFrostProductionSignerReadinessVerifier) verifyFrostProductionSig
 func readinessSnapshotWithHeadroom(
 	revisions uint64,
 	generations uint64,
+	rotationWarning bool,
+	largestLocalSeatCount uint64,
 ) *frostProductionSignerReadinessSnapshot {
 	return &frostProductionSignerReadinessSnapshot{
 		Inventory: &frostNativeSignerInventorySnapshot{
 			RestartableRevisionHeadroom:   revisions,
 			RestartableGenerationHeadroom: generations,
+			AnchorRotationWarning:         rotationWarning,
+			LargestLocalSeatCount:         largestLocalSeatCount,
 		},
 	}
 }
@@ -249,7 +253,7 @@ func publishFrostNativeSignerAnchorHeadroomForTest(
 	t.Helper()
 	if _, err := newFrostNativeSignerAnchorHeadroomObserver(
 		&stubFrostProductionSignerReadinessVerifier{
-			snapshot: readinessSnapshotWithHeadroom(revisions, generations),
+			snapshot: readinessSnapshotWithHeadroom(revisions, generations, false, 0),
 		},
 	).verifyFrostProductionSignerReadiness(
 		context.Background(),
@@ -290,7 +294,7 @@ func TestFrostNativeSignerAnchorHeadroomObserver_PublishesOnSuccess(
 	t *testing.T,
 ) {
 	stub := &stubFrostProductionSignerReadinessVerifier{
-		snapshot: readinessSnapshotWithHeadroom(3971, 3820),
+		snapshot: readinessSnapshotWithHeadroom(3971, 3820, true, 42),
 	}
 	observer := newFrostNativeSignerAnchorHeadroomObserver(stub)
 
@@ -315,6 +319,22 @@ func TestFrostNativeSignerAnchorHeadroomObserver_PublishesOnSuccess(
 		3971,
 		3820,
 	)
+	warning, warningObserved := frostsigning.NativeTBTCSignerStateAnchorRotationWarning()
+	if !warningObserved || !warning {
+		t.Errorf(
+			"rotation warning mirror is (%v, %v), want (true, true)",
+			warning,
+			warningObserved,
+		)
+	}
+	seats, seatsObserved := frostsigning.NativeTBTCSignerStateAnchorLargestLocalSeatCount()
+	if !seatsObserved || seats != 42 {
+		t.Errorf(
+			"largest local seat count mirror is (%d, %v), want (42, true)",
+			seats,
+			seatsObserved,
+		)
+	}
 }
 
 // Zero is the value that means "the certified windows are exhausted". A failed
@@ -332,7 +352,7 @@ func TestFrostNativeSignerAnchorHeadroomObserver_FailurePublishesNothing(
 		{
 			name: "reconciliation error",
 			stub: &stubFrostProductionSignerReadinessVerifier{
-				snapshot: readinessSnapshotWithHeadroom(0, 0),
+				snapshot: readinessSnapshotWithHeadroom(0, 0, false, 0),
 				err:      errors.New("anchor service unreachable"),
 			},
 		},
@@ -375,7 +395,7 @@ func TestFrostNativeSignerAnchorHeadroomObserver_UnchangedDelegatesOnly(
 	}
 	observer := newFrostNativeSignerAnchorHeadroomObserver(stub)
 
-	snapshot := readinessSnapshotWithHeadroom(4096, 4096)
+	snapshot := readinessSnapshotWithHeadroom(4096, 4096, false, 0)
 	err := observer.verifyFrostProductionSignerReadinessUnchanged(
 		context.Background(),
 		snapshot,

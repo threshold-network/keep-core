@@ -665,9 +665,11 @@ func (wte *walletTransactionExecutor) signTransaction(
 		// job is done: it gated the on-chain relay on a node that had the
 		// capacity to act on it. From here the sequential loop reserves an
 		// input's worth for each input it signs, and holding both at once would
-		// charge two inputs for one input's work - at the hundred-seat maximum
-		// that is 8030 of a 4096-entry proof window, which would reinstate a
-		// seat ceiling at fifty rather than remove it.
+		// charge two inputs for one input's work. At the average five seats
+		// the mainnet stake-weighted sortition produces that wastes 215 of
+		// a 4096-entry proof window on every input, and the waste scales
+		// with seat count, so a smaller operator set makes it worse
+		// rather than better.
 		//
 		// Releasing here rather than leaving it to the deferred release is safe
 		// and is not a hole: the release is idempotent, the deferred call still

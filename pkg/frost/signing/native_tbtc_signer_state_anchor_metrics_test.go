@@ -79,8 +79,8 @@ func TestNativeTBTCSignerStateAnchorMetrics_HeadroomGaugesMirrorTheLastReading(
 		t.Fatal("headroom reported as observed before any reading")
 	}
 
-	RecordNativeTBTCSignerStateAnchorRestartableHeadroom(4000, 3900)
-	RecordNativeTBTCSignerStateAnchorRestartableHeadroom(1234, 567)
+	RecordNativeTBTCSignerStateAnchorRestartableHeadroom(4000, 3900, false, 5)
+	RecordNativeTBTCSignerStateAnchorRestartableHeadroom(1234, 567, false, 5)
 
 	if got := nativeTBTCSignerStateAnchorMetricSourceForTest(
 		t,
@@ -121,7 +121,7 @@ func TestNativeTBTCSignerStateAnchorMetrics_ExhaustedHeadroomIsObserved(
 	resetNativeTBTCSignerStateAnchorMetricsForTest()
 	t.Cleanup(resetNativeTBTCSignerStateAnchorMetricsForTest)
 
-	RecordNativeTBTCSignerStateAnchorRestartableHeadroom(0, 0)
+	RecordNativeTBTCSignerStateAnchorRestartableHeadroom(0, 0, true, 5)
 
 	if got := nativeTBTCSignerStateAnchorMetricSourceForTest(
 		t,
@@ -142,13 +142,16 @@ func TestNativeTBTCSignerStateAnchorMetrics_RegisteredSourceNames(t *testing.T) 
 		nativeTBTCSignerStateAnchorRevisionHeadroomMetricName,
 		nativeTBTCSignerStateAnchorGenerationHeadroomMetricName,
 		nativeTBTCSignerStateAnchorHeadroomObservationsMetricName,
+		nativeTBTCSignerStateAnchorRotationWarningMetricName,
+		nativeTBTCSignerStateAnchorGenerationsConsumedMetricName,
+		nativeTBTCSignerStateAnchorRevisionsConsumedMetricName,
 	} {
 		if _, ok := sources[name]; !ok {
 			t.Errorf("metric source [%s] is not registered", name)
 		}
 	}
-	if len(sources) != 4 {
-		t.Errorf("registered source count: got %d want 4", len(sources))
+	if len(sources) != 7 {
+		t.Errorf("registered source count: got %d want 7", len(sources))
 	}
 	if nativeTBTCSignerStateAnchorMetricsApplication !=
 		"frost_native_signer_anchor" {
@@ -164,4 +167,112 @@ func TestRegisterNativeTBTCSignerStateAnchorMetrics_NilRegistryIsNoOp(
 	t *testing.T,
 ) {
 	RegisterNativeTBTCSignerStateAnchorMetrics(nil) // must not panic
+}
+
+// The rotation warning must be alertable from a scrape. It cannot be derived
+// from the two headroom gauges alone, because the workload term needs the
+// node's seat count - so it travels with the pair and gets its own gauge.
+func TestNativeTBTCSignerStateAnchorMetrics_RotationWarningGauge(t *testing.T) {
+	resetNativeTBTCSignerStateAnchorMetricsForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorMetricsForTest)
+
+	// Never published reads 0, exactly as the headroom gauges do; an alert
+	// must qualify on the observations counter to tell the two apart.
+	if got := nativeTBTCSignerStateAnchorMetricSourceForTest(
+		t,
+		nativeTBTCSignerStateAnchorRotationWarningMetricName,
+	); got != 0 {
+		t.Fatalf("rotation warning before any reading: got %v want 0", got)
+	}
+	if warning, observed :=
+		NativeTBTCSignerStateAnchorRotationWarning(); warning || observed {
+		t.Fatal("rotation warning reported as observed before any reading")
+	}
+
+	RecordNativeTBTCSignerStateAnchorRestartableHeadroom(4000, 3900, false, 7)
+	if got := nativeTBTCSignerStateAnchorMetricSourceForTest(
+		t,
+		nativeTBTCSignerStateAnchorRotationWarningMetricName,
+	); got != 0 {
+		t.Fatalf("rotation warning while healthy: got %v want 0", got)
+	}
+
+	RecordNativeTBTCSignerStateAnchorRestartableHeadroom(200, 180, true, 7)
+	if got := nativeTBTCSignerStateAnchorMetricSourceForTest(
+		t,
+		nativeTBTCSignerStateAnchorRotationWarningMetricName,
+	); got != 1 {
+		t.Fatalf("rotation warning when due: got %v want 1", got)
+	}
+	if warning, observed :=
+		NativeTBTCSignerStateAnchorRotationWarning(); !warning || !observed {
+		t.Fatalf("accessor: got (%v, %v) want (true, true)", warning, observed)
+	}
+
+	// The seat count rides along so a publisher holding fresh headroom but no
+	// inventory - the anchor commit path - can still recompute the warning.
+	if seats, observed :=
+		NativeTBTCSignerStateAnchorLargestLocalSeatCount(); !observed ||
+		seats != 7 {
+		t.Fatalf("seat count: got (%d, %v) want (7, true)", seats, observed)
+	}
+}
+
+// The burn-rate numerator. These are monotonic totals rather than levels
+// precisely because the headroom gauges reset at every rotation, so no rate can
+// be taken across one; dividing these by the admission counter yields real
+// generations and revisions per unit of work, which is the measurement the
+// anchor capacity model currently lacks.
+func TestNativeTBTCSignerStateAnchorMetrics_ConsumptionTotals(t *testing.T) {
+	baseGenerations, baseRevisions := NativeTBTCSignerStateAnchorConsumption()
+
+	// An operation that advanced nothing spends no revision either, because
+	// the barrier skips the compare-and-swap when the tip is unchanged.
+	recordNativeTBTCSignerStateAnchorConsumption(0, 0)
+	if generations, revisions :=
+		NativeTBTCSignerStateAnchorConsumption(); generations != baseGenerations ||
+		revisions != baseRevisions {
+		t.Fatalf(
+			"a non-advancing operation was counted: (%d, %d) want (%d, %d)",
+			generations,
+			revisions,
+			baseGenerations,
+			baseRevisions,
+		)
+	}
+
+	recordNativeTBTCSignerStateAnchorConsumption(2, 1)
+	recordNativeTBTCSignerStateAnchorConsumption(3, 1)
+
+	generations, revisions := NativeTBTCSignerStateAnchorConsumption()
+	if generations != baseGenerations+5 || revisions != baseRevisions+2 {
+		t.Fatalf(
+			"consumption totals: got (%d, %d) want (%d, %d)",
+			generations,
+			revisions,
+			baseGenerations+5,
+			baseRevisions+2,
+		)
+	}
+
+	if got := nativeTBTCSignerStateAnchorMetricSourceForTest(
+		t,
+		nativeTBTCSignerStateAnchorGenerationsConsumedMetricName,
+	); got != float64(baseGenerations+5) {
+		t.Fatalf(
+			"generations gauge: got %v want %v",
+			got,
+			float64(baseGenerations+5),
+		)
+	}
+	if got := nativeTBTCSignerStateAnchorMetricSourceForTest(
+		t,
+		nativeTBTCSignerStateAnchorRevisionsConsumedMetricName,
+	); got != float64(baseRevisions+2) {
+		t.Fatalf(
+			"revisions gauge: got %v want %v",
+			got,
+			float64(baseRevisions+2),
+		)
+	}
 }

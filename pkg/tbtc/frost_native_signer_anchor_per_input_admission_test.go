@@ -686,4 +686,43 @@ func TestFrostPreSignAuthorizationGate_AdmitInputChargesOneInput(t *testing.T) {
 	}(); reserved != (frostNativeSignerAnchorCapacity{}) {
 		t.Fatalf("[%+v] stayed reserved after the sweep", reserved)
 	}
+
+	// The pre-sign input admission counter is incremented by exactly one for
+	// every successful gate.admitInput. The loop above admitted a full sweep
+	// (frostPreSignAuthorizationMaximumInputs inputs), so the counter must
+	// match. A counter that fires on the wrong call site would burn a
+	// per-input denominator the operator has no way to reconstruct from the
+	// inputs the gate actually admitted.
+	if got := frostNativeSignerAnchorAdmittedPresignInputs.Load(); got !=
+		uint64(frostPreSignAuthorizationMaximumInputs) {
+		t.Fatalf(
+			"pre-sign input admissions counted [%d], expected [%d] (one per "+
+				"admitted input of a full sweep)",
+			got,
+			frostPreSignAuthorizationMaximumInputs,
+		)
+	}
+
+	// The pre-sign relay-gate admission counter is incremented only by
+	// gate.authorize, not by the controller-level reservePreSign this test
+	// uses to set up the relay reservation. A counter that bumps on a
+	// controller-level reservation would tell operators a per-batch relay
+	// gate was admitted when the authorize path was never reached.
+	if got := frostNativeSignerAnchorAdmittedPresignRelayGates.Load(); got != 0 {
+		t.Fatalf(
+			"controller-level reservePreSign bumped the pre-sign relay-gate "+
+				"admission counter to [%d]; only gate.authorize must",
+			got,
+		)
+	}
+
+	// The native DKG admission counter is incremented only by reserveDKG,
+	// which the gate never calls, so it must stay at zero.
+	if got := frostNativeSignerAnchorAdmittedDKGs.Load(); got != 0 {
+		t.Fatalf(
+			"gate.admitInput bumped the native DKG admission counter to "+
+				"[%d]; only reserveDKG must",
+			got,
+		)
+	}
 }

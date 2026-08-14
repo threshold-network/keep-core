@@ -946,10 +946,18 @@ func frostNativeSignerAnchorTrustValidateReferenceDescendant(
 		}
 		return nil
 	}
+	// The store fingerprint is checked here to match the Rust engine's
+	// descendant validator, which rejects a fingerprint change across
+	// generations. Both trees must agree on which references are admissible:
+	// where they disagree, one accepts a chain the other refuses on every
+	// store open, which is a fail-closed brick with no truncation path back.
 	if candidate.PreviousEventRoot == [32]byte{} ||
-		candidate.Checkpoint.Generation < floor.Checkpoint.Generation {
+		candidate.Checkpoint.Generation < floor.Checkpoint.Generation ||
+		candidate.Checkpoint.StoreFingerprint !=
+			floor.Checkpoint.StoreFingerprint {
 		return fmt.Errorf(
-			"later reference is unlinked or rolls back its checkpoint generation",
+			"later reference is unlinked, rolls back its checkpoint " +
+				"generation, or changes its store fingerprint",
 		)
 	}
 	if candidate.Checkpoint.Generation == floor.Checkpoint.Generation &&
