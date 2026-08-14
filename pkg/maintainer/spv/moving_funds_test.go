@@ -551,3 +551,63 @@ func TestGetUnprovenMovingFundsTransactions_FindsTaprootTargetOutput(
 		actualHash[:],
 	)
 }
+
+func TestGetUnprovenMovingFundsTransactions_TargetWalletLookupFailure(
+	t *testing.T,
+) {
+	historyDepth := uint64(5)
+	transactionLimit := 10
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	currentBlock := uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	sourceWalletPublicKeyHash := bytes20FromHex(
+		t,
+		"8db50eb52063ea9d98b3eac91489a90f738986f6",
+	)
+	targetWalletPublicKeyHash := bytes20FromHex(
+		t,
+		"c7302d75072d78be94eb8d36c4b77583c7abb06e",
+	)
+
+	spvChain.setWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{
+		State: tbtc.StateMovingFunds,
+	})
+
+	err := spvChain.addPastMovingFundsCommitmentSubmittedEvent(
+		&tbtc.MovingFundsCommitmentSubmittedEventFilter{
+			StartBlock: currentBlock - historyDepth,
+		},
+		&tbtc.MovingFundsCommitmentSubmittedEvent{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+			TargetWallets: [][20]byte{
+				targetWalletPublicKeyHash,
+			},
+			BlockNumber: currentBlock - 1,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = getUnprovenMovingFundsTransactions(
+		historyDepth,
+		transactionLimit,
+		btcChain,
+		spvChain,
+	)
+	if err == nil {
+		t.Fatal("expected target wallet lookup failure")
+	}
+
+	expectedError := fmt.Sprintf(
+		"failed to get target wallet [%x]: [no wallet for given PKH]",
+		targetWalletPublicKeyHash,
+	)
+	testutils.AssertStringsEqual(t, "error", expectedError, err.Error())
+}

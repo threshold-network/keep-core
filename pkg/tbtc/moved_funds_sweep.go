@@ -113,6 +113,7 @@ func newMovedFundsSweepAction(
 		signingExecutor,
 		waitForBlockFn,
 	)
+	transactionExecutor.action = ActionMovedFundsSweep
 
 	return &movedFundsSweepAction{
 		logger:                           logger,
@@ -220,6 +221,12 @@ func (mfsa *movedFundsSweepAction) execute() error {
 		return fmt.Errorf("invalid proposal expiry block")
 	}
 
+	mfsa.transactionExecutor.frostPreSignActionContext = &FrostPreSignActionContext{
+		MovedFundsSweep: &FrostPreSignMovedFundsSweepActionContext{
+			Proposal: mfsa.proposal,
+			MainUtxo: walletMainUtxo,
+		},
+	}
 	movedFundsSweepTx, err := mfsa.transactionExecutor.signTransaction(
 		signTxLogger,
 		unsignedMovedFundsSweepTx,

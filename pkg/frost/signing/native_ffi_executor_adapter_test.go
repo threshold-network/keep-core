@@ -18,6 +18,7 @@ type mockNativeExecutionFFISigningPrimitive struct {
 	lastRequest   *NativeExecutionFFISigningRequest
 	signature     *frost.Signature
 	signErr       error
+	afterSign     func()
 	registerCalls int
 	lastChannel   net.BroadcastChannel
 }
@@ -29,6 +30,9 @@ func (mnefsp *mockNativeExecutionFFISigningPrimitive) Sign(
 ) (*frost.Signature, error) {
 	mnefsp.signCalls++
 	mnefsp.lastRequest = request
+	if mnefsp.afterSign != nil {
+		mnefsp.afterSign()
+	}
 	return mnefsp.signature, mnefsp.signErr
 }
 
@@ -253,6 +257,40 @@ func TestNativeExecutionFFIExecutorAdapter_Execute_DelegatesToPrimitive(
 			ok,
 			heartbeatMessage,
 		)
+	}
+}
+
+func TestNativeExecutionFFIExecutorAdapter_Execute_RevalidatesBeforeSignatureRelease(
+	t *testing.T,
+) {
+	authorized := true
+	primitive := &mockNativeExecutionFFISigningPrimitive{
+		signature: &frost.Signature{R: [frost.SignatureComponentSize]byte{0x01}},
+		afterSign: func() { authorized = false },
+	}
+	executor, err := NewNativeExecutionFFIExecutorAdapter(primitive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), nil, &Request{
+		Message: big.NewInt(123),
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostUniFFIV1,
+			Payload: []byte{0xaa},
+		},
+		AuthorizationGuard: func(context.Context) error {
+			if !authorized {
+				return errors.New("authorization reorged")
+			}
+			return nil
+		},
+	})
+	if result != nil || err == nil ||
+		!errors.Is(err, ErrTerminalSigningFailure) {
+		t.Fatalf("unexpected post-sign authorization result: [%v] [%v]", result, err)
+	}
+	if primitive.signCalls != 1 {
+		t.Fatal("test did not reach the native signature boundary")
 	}
 }
 

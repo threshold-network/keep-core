@@ -130,6 +130,9 @@ func driveInteractiveRoastSigningIfEnabled(
 	}
 
 	collector := roast.NewRound2Collector(deps.Verifier)
+	if err := validateAuthorizationGuard(ctx, request.AuthorizationGuard); err != nil {
+		return nil, err
+	}
 
 	runner, err := newInteractiveSigningRunner(
 		active,
@@ -145,6 +148,7 @@ func driveInteractiveRoastSigningIfEnabled(
 	if err != nil {
 		return nil, fmt.Errorf("interactive ROAST signing: build runner: %w", err)
 	}
+	runner.authorizationGuard = request.AuthorizationGuard
 
 	signatureBytes, err := runner.Run(ctx)
 	if err != nil {

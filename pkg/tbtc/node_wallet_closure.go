@@ -20,13 +20,13 @@ func (n *node) archiveClosedWallets() error {
 
 		walletChainData, err := n.chain.GetWallet(walletPublicKeyHash)
 		if err != nil {
-			walletID, err = n.chain.CalculateWalletID(walletPublicKey)
-			if err != nil {
+			var found bool
+			walletID, found = n.walletRegistry.
+				getWalletIDByPublicKeyHash(walletPublicKeyHash)
+			if !found {
 				return fmt.Errorf(
-					"could not resolve wallet IDs for wallet with public key "+
-						"hash [0x%x]: [%v]",
+					"could not resolve local wallet ID for public key hash [0x%x]",
 					walletPublicKeyHash,
-					err,
 				)
 			}
 
@@ -44,16 +44,48 @@ func (n *node) archiveClosedWallets() error {
 			}
 
 			if !isRegistered && n.frostWalletRegistryAvailable() {
-				logger.Infof(
-					"wallet with ECDSA ID [0x%x] and public key hash [0x%x] "+
-						"was not found in Bridge or the legacy ECDSA registry; "+
-						"preserving local key material because FROST wallet "+
-						"registration is available and the wallet may be "+
-						"pending Bridge registration",
-					walletID,
-					walletPublicKeyHash,
-				)
-				continue
+				isFrostWallet, err := n.walletRegistry.
+					isFrostWalletByPublicKeyHash(walletPublicKeyHash)
+				if err != nil {
+					return fmt.Errorf(
+						"could not classify local wallet with public key hash "+
+							"[0x%x]: [%v]",
+						walletPublicKeyHash,
+						err,
+					)
+				}
+				if isFrostWallet {
+					frostChain, ok := n.chain.(frostWalletRegistrationChain)
+					if !ok {
+						return fmt.Errorf(
+							"FROST wallet registration is available but the chain " +
+								"does not expose registration checks",
+						)
+					}
+					isFrostRegistered, err :=
+						frostChain.IsFrostWalletRegistered(walletID)
+					if err != nil {
+						return fmt.Errorf(
+							"could not check FROST registration for wallet with ID "+
+								"[0x%x]: [%v]",
+							walletID,
+							err,
+						)
+					}
+					if isFrostRegistered {
+						continue
+					}
+					logger.Infof(
+						"FROST wallet with ID [0x%x] and public key hash [0x%x] "+
+							"was not found in Bridge or the FROST registry; "+
+							"deferring its material to anchored retained-history "+
+							"reconciliation so a valid pending DKG can be "+
+							"distinguished from an orphan",
+						walletID,
+						walletPublicKeyHash,
+					)
+					continue
+				}
 			}
 
 			archiveWallet = !isRegistered

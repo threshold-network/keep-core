@@ -89,13 +89,15 @@ func TestParseTBTCSignerABIVersion(t *testing.T) {
 }
 
 func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
-	// Pins the bridge's current required contract: major 3 adds the BIP-341
-	// transaction artifact, minor 1 adds heartbeat intent authorization, and
-	// minor 2 adds heartbeat rate limiting/metrics; minor 3 adds canary-evidence
-	// configuration. The matching library version is compatible; a different
-	// major is not. A regression here means the required constants drifted from
-	// what the bridge actually speaks.
-	if requiredTBTCSignerABIMajor != 3 || requiredTBTCSignerABIMinMinor != 3 {
+	// Pins the bridge's current required contract: major 4 moves the durable-store
+	// identity schema and the state-witness transcript to v2, so that state
+	// commitments bind only the stable `.store-id` and no longer break when a
+	// benign filesystem change alters the lock file, directory inode, or device.
+	// Minor 3 adds the trust transition/head and bootstrap-facts surface used
+	// before production signing can start. Minor 4 adds durable distributed-DKG
+	// retirement. The matching library version is compatible; ABI 4.3 and a
+	// different major are not.
+	if requiredTBTCSignerABIMajor != 4 || requiredTBTCSignerABIMinMinor != 4 {
 		t.Fatalf(
 			"unexpected required tbtc-signer ABI: [%d.%d]",
 			requiredTBTCSignerABIMajor,
@@ -104,6 +106,18 @@ func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, requiredTBTCSignerABIMinMinor); err != nil {
 		t.Fatalf("the required contract version must be self-compatible: %v", err)
+	}
+	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 0); err == nil {
+		t.Fatal("ABI 4.0 without readiness readbacks must be incompatible")
+	}
+	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 1); err == nil {
+		t.Fatal("ABI 4.1 without the output-barrier tip/ack symbols must be incompatible")
+	}
+	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 2); err == nil {
+		t.Fatal("ABI 4.2 without trust transition and bootstrap-facts symbols must be incompatible")
+	}
+	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 3); err == nil {
+		t.Fatal("ABI 4.3 without distributed-DKG retirement must be incompatible")
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor+1, requiredTBTCSignerABIMinMinor); err == nil {
 		t.Fatal("a higher major must be incompatible")

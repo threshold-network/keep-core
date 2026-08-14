@@ -1,6 +1,7 @@
 package tbtc
 
 import (
+	stdbytes "bytes"
 	"crypto/ecdsa"
 	"fmt"
 	"math"
@@ -13,10 +14,16 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/frost"
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
+
+// frostSigningDoneSignaturePrefix versions native FROST signatures inside the
+// existing SigningDoneMessage signature field. Legacy ECDSA attempts leave the
+// field byte-for-byte compatible with the pre-FROST tecdsa.Signature protobuf.
+const frostSigningDoneSignaturePrefix = "tbtc-frost-signature-v1:"
 
 var errIncompatiblePublicKey = fmt.Errorf(
 	"public key is not tECDSA compatible and will cause unmarshaling error",
@@ -99,9 +106,20 @@ func (s *signer) Unmarshal(bytes []byte) error {
 
 // Marshal converts the signingDoneMessage to a byte array.
 func (sdm *signingDoneMessage) Marshal() ([]byte, error) {
-	signatureBytes, err := sdm.signature.Marshal()
+	var signatureBytes []byte
+	var err error
+	if sdm.legacySignature != nil {
+		signatureBytes, err = sdm.legacySignature.Marshal()
+	} else {
+		var rawSignature []byte
+		rawSignature, err = sdm.signature.Marshal()
+		signatureBytes = append(
+			[]byte(frostSigningDoneSignaturePrefix),
+			rawSignature...,
+		)
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot marshal signature: [%w]", err)
 	}
 
 	return proto.Marshal(&pb.SigningDoneMessage{
@@ -124,15 +142,33 @@ func (sdm *signingDoneMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	signature := &frost.Signature{}
-	if err := signature.Unmarshal(pbMsg.Signature); err != nil {
-		return fmt.Errorf("cannot unmarshal signature: [%v]", err)
+	var signature *frost.Signature
+	var legacySignature *tecdsa.Signature
+	if stdbytes.HasPrefix(pbMsg.Signature, []byte(frostSigningDoneSignaturePrefix)) {
+		signature = &frost.Signature{}
+		if err := signature.Unmarshal(
+			pbMsg.Signature[len(frostSigningDoneSignaturePrefix):],
+		); err != nil {
+			return fmt.Errorf("cannot unmarshal FROST signature: [%v]", err)
+		}
+	} else {
+		legacySignature = &tecdsa.Signature{}
+		if err := legacySignature.Unmarshal(pbMsg.Signature); err != nil {
+			return fmt.Errorf("cannot unmarshal legacy signature: [%v]", err)
+		}
+
+		var err error
+		signature, err = frostsigning.FromTECDSASignature(legacySignature)
+		if err != nil {
+			return fmt.Errorf("cannot convert legacy signature: [%v]", err)
+		}
 	}
 
 	sdm.senderID = group.MemberIndex(pbMsg.SenderID)
 	sdm.message = new(big.Int).SetBytes(pbMsg.Message)
 	sdm.attemptNumber = pbMsg.AttemptNumber
 	sdm.signature = signature
+	sdm.legacySignature = legacySignature
 	sdm.endBlock = pbMsg.EndBlock
 
 	return nil

@@ -306,6 +306,11 @@ type coordinationExecutor struct {
 
 	waitForBlockFn waitForBlockFn
 
+	// suppressHeartbeat is true for transaction-only FROST wallets. The
+	// finalized COMPLETE authorization protocol has no heartbeat action, so
+	// proposing one would only burn a coordination window.
+	suppressHeartbeat bool
+
 	// metricsRecorder is optional and used for recording performance metrics
 	metricsRecorder interface {
 		IncrementCounter(name string, value float64)
@@ -637,7 +642,7 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// Drawing a decision about heartbeat does not require secure randomness.
 	// Use first 8 bytes of the seed to initialize the RNG.
 	rng := rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(seed[:8]))))
-	if rng.Float64() < coordinationHeartbeatProbability {
+	if !ce.suppressHeartbeat && rng.Float64() < coordinationHeartbeatProbability {
 		actions = append(actions, ActionHeartbeat)
 	}
 

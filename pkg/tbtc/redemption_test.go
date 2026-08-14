@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/tbtc/internal/test"
 )
@@ -179,69 +179,71 @@ func TestRedemptionAction_Execute(t *testing.T) {
 	}
 }
 
-func TestRedemptionAction_RejectsTransactionFeeAboveMaximumBeforeSigning(
-	t *testing.T,
-) {
-	const mainUtxoValue = int64(24372)
+type failIfCalledRedemptionSigningExecutor struct {
+	called bool
+}
 
+func (executor *failIfCalledRedemptionSigningExecutor) signBatch(
+	context.Context,
+	[]*big.Int,
+	uint64,
+) ([]*frost.Signature, error) {
+	executor.called = true
+	return nil, fmt.Errorf("unexpected signing call")
+}
+
+func TestRedemptionAction_RejectsActualFeeBeforeSigning(t *testing.T) {
 	hostChain := Connect()
 	bitcoinChain := newLocalBitcoinChain()
-	redeemingWallet := generateWallet(big.NewInt(111))
+	redeemingWallet := generateWallet(big.NewInt(1))
 	walletPublicKey := redeemingWallet.publicKey
 	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
 	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	fundingTx := &bitcoin.Transaction{
+	fundingTransaction := &bitcoin.Transaction{
 		Version: 1,
-		Inputs: []*bitcoin.TransactionInput{
-			{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: bitcoin.Hash{0x01},
-					OutputIndex:     0,
-				},
-				Sequence: 0xffffffff,
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: bitcoin.Hash{0x01},
 			},
-		},
-		Outputs: []*bitcoin.TransactionOutput{
-			{
-				Value:           mainUtxoValue,
-				PublicKeyScript: walletScript,
-			},
-		},
+			Sequence: 0xffffffff,
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           9293,
+			PublicKeyScript: walletScript,
+		}},
 	}
-	if err := bitcoinChain.BroadcastTransaction(fundingTx); err != nil {
+	if err := bitcoinChain.BroadcastTransaction(
+		fundingTransaction,
+	); err != nil {
 		t.Fatal(err)
 	}
-
 	walletMainUtxo := &bitcoin.UnspentTransactionOutput{
 		Outpoint: &bitcoin.TransactionOutpoint{
-			TransactionHash: fundingTx.Hash(),
-			OutputIndex:     0,
+			TransactionHash: fundingTransaction.Hash(),
 		},
-		Value: mainUtxoValue,
+		Value: 9293,
 	}
-
 	redeemerScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{0x01})
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	request := &RedemptionRequest{
-		Redeemer:             chain.Address("redeemer"),
 		RedeemerOutputScript: redeemerScript,
-		RequestedAmount:      24372,
-		TreasuryFee:          12,
-		TxMaxFee:             110,
+		RequestedAmount:      10000,
+		TreasuryFee:          1000,
+		TxMaxFee:             1000,
 		RequestedAt:          time.Now(),
 	}
-	hostChain.setPendingRedemptionRequest(walletPublicKeyHash, request)
-
+	hostChain.setPendingRedemptionRequest(
+		walletPublicKeyHash,
+		request,
+	)
 	proposal := &RedemptionProposal{
 		RedeemersOutputScripts: []bitcoin.Script{redeemerScript},
-		RedemptionTxFee:        big.NewInt(110),
+		RedemptionTxFee:        big.NewInt(1000),
 	}
 	if err := hostChain.setRedemptionProposalValidationResult(
 		walletPublicKeyHash,
@@ -250,36 +252,41 @@ func TestRedemptionAction_RejectsTransactionFeeAboveMaximumBeforeSigning(
 	); err != nil {
 		t.Fatal(err)
 	}
-
 	hostChain.setWallet(walletPublicKeyHash, &WalletChainData{
 		MainUtxoHash: hostChain.ComputeMainUtxoHash(walletMainUtxo),
 	})
-	hostChain.setRedemptionParameters(0, 0, 0, 121, 0, nil, 0)
-
+	hostChain.setRedemptionParameters(
+		0,
+		0,
+		0,
+		1292,
+		0,
+		big.NewInt(0),
+		0,
+	)
+	signingExecutor := &failIfCalledRedemptionSigningExecutor{}
 	action := newRedemptionAction(
 		logger.With(),
 		hostChain,
 		bitcoinChain,
 		redeemingWallet,
-		newMockWalletSigningExecutor(),
+		signingExecutor,
 		proposal,
 		100,
 		100+redemptionProposalValidityBlocks,
-		func(ctx context.Context, blockHeight uint64) error { return nil },
+		func(context.Context, uint64) error { return nil },
 	)
 
 	err = action.execute()
-	if err == nil {
-		t.Fatal("expected redemption action to reject an excessive actual fee")
-	}
-
-	testutils.AssertStringsEqual(
-		t,
-		"error",
-		"error while validating redemption transaction fee: "+
-			"[redemption transaction fee [122] exceeds maximum total fee [121]]",
+	if err == nil || !strings.Contains(
 		err.Error(),
-	)
+		"redemption transaction total fee [1293] exceeds maximum [1292]",
+	) {
+		t.Fatalf("unexpected action result: [%v]", err)
+	}
+	if signingExecutor.called {
+		t.Fatal("signing executor called for an over-limit redemption fee")
+	}
 }
 
 func TestAssembleRedemptionTransaction(t *testing.T) {
@@ -372,139 +379,66 @@ func TestAssembleRedemptionTransaction(t *testing.T) {
 	}
 }
 
-func TestAssembleRedemptionTransaction_SubDustChange(t *testing.T) {
-	// The main UTXO value and the sub-dust case numbers reproduce a live
-	// testnet4 redemption of the wallet's full main UTXO whose 12-satoshi
-	// change output made the transaction non-relayable:
-	// "dust, tx with dust output must be 0-fee".
-	const mainUtxoValue = int64(24372)
-
-	walletPublicKey := testWalletPublicKeyFromXOnly(
-		t,
-		"2336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008",
-	)
-
-	walletXOnlyKey, err := walletXOnlyPublicKey(walletPublicKey)
+func TestAssembleRedemptionTransaction_DustChangePolicy(t *testing.T) {
+	scenarios, err := test.LoadRedemptionTestScenarios()
 	if err != nil {
 		t.Fatal(err)
 	}
-	walletChangeScript, err := bitcoin.PayToTaproot(walletXOnlyKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scenario := scenarios[0]
 
-	redeemerScript, err := bitcoin.PayToWitnessPublicKeyHash(
-		[20]byte{
-			0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
-			0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var tests = map[string]struct {
-		requestedAmount            uint64
-		treasuryFee                uint64
-		feeShare                   int64
-		maxTotalFee                uint64
-		expectedFeeValidationError string
-		// expectedOutputs holds the expected output values in order. A -1
-		// value denotes the wallet change output; any other value denotes
-		// the redeemer output.
-		expectedOutputValues []int64
-		expectedChangeValue  int64
-		expectedImpliedFee   int64
+	tests := map[string]struct {
+		changeValue         int64
+		expectedOutputCount int
 	}{
-		// change = mainUtxoValue - (requestedAmount - treasuryFee) = 12.
-		// The sub-dust change must be omitted, the redeemer output must be
-		// left untouched, and the implied fee must grow by the change value.
-		"sub-dust change above the maximum total fee is rejected": {
-			requestedAmount:      24372,
-			treasuryFee:          12,
-			feeShare:             110,
-			maxTotalFee:          121,
-			expectedOutputValues: []int64{24250},
-			expectedChangeValue:  0,
-			expectedImpliedFee:   122,
-			expectedFeeValidationError: "redemption transaction fee [122] " +
-				"exceeds maximum total fee [121]",
+		"zero change omitted": {
+			changeValue:         0,
+			expectedOutputCount: 1,
 		},
-		// An actual fee exactly equal to the maximum total fee remains valid.
-		"sub-dust change at the maximum total fee is omitted": {
-			requestedAmount:      24372,
-			treasuryFee:          12,
-			feeShare:             110,
-			maxTotalFee:          122,
-			expectedOutputValues: []int64{24250},
-			expectedChangeValue:  0,
-			expectedImpliedFee:   122,
+		"P2WPKH below dust omitted": {
+			changeValue:         293,
+			expectedOutputCount: 1,
 		},
-		// change = 24372 - (23839 - 12) = 545, just below the dust limit.
-		"change just below the dust limit is omitted": {
-			requestedAmount:      23839,
-			treasuryFee:          12,
-			feeShare:             110,
-			maxTotalFee:          655,
-			expectedOutputValues: []int64{23717},
-			expectedChangeValue:  0,
-			expectedImpliedFee:   655,
-		},
-		// change = 24372 - (23838 - 12) = 546, exactly at the dust limit.
-		"change at the dust limit is kept": {
-			requestedAmount:      23838,
-			treasuryFee:          12,
-			feeShare:             110,
-			maxTotalFee:          110,
-			expectedOutputValues: []int64{23716, 546},
-			expectedChangeValue:  546,
-			expectedImpliedFee:   110,
-		},
-		// change = 24372 - (24384 - 12) = 0. Same behavior as before the
-		// dust guard: no change output at all.
-		"zero change produces no change output": {
-			requestedAmount:      24384,
-			treasuryFee:          12,
-			feeShare:             110,
-			maxTotalFee:          110,
-			expectedOutputValues: []int64{24262},
-			expectedChangeValue:  0,
-			expectedImpliedFee:   110,
+		"P2WPKH at dust threshold retained": {
+			changeValue:         294,
+			expectedOutputCount: 2,
 		},
 	}
 
-	for testName, test := range tests {
-		t.Run(testName, func(t *testing.T) {
+	for name, testCase := range tests {
+		t.Run(name, func(t *testing.T) {
 			bitcoinChain := newLocalBitcoinChain()
-
-			walletMainUtxo := testTaprootWalletMainUtxoWithValue(
-				t,
-				bitcoinChain,
-				walletPublicKey,
-				mainUtxoValue,
-			)
-
-			requests := []*RedemptionRequest{
-				{
-					Redeemer:             chain.Address("redeemer"),
-					RedeemerOutputScript: redeemerScript,
-					RequestedAmount:      test.requestedAmount,
-					TreasuryFee:          test.treasuryFee,
-					TxMaxFee:             1000,
-					RequestedAt:          time.Now(),
-				},
+			if err := bitcoinChain.BroadcastTransaction(
+				scenario.InputTransaction,
+			); err != nil {
+				t.Fatal(err)
 			}
 
-			feeDistribution := func(requests []*RedemptionRequest) []int64 {
-				return []int64{test.feeShare}
+			request := scenario.RedemptionRequests[0]
+			feeShare := scenario.FeeShares[0]
+			redemptionOutputValue :=
+				int64(request.RequestedAmount-request.TreasuryFee) - feeShare
+			mainUtxo := &bitcoin.UnspentTransactionOutput{
+				Outpoint: scenario.WalletMainUtxo.Outpoint,
+				Value: redemptionOutputValue +
+					feeShare +
+					testCase.changeValue,
 			}
 
 			builder, err := assembleRedemptionTransaction(
 				bitcoinChain,
-				walletPublicKey,
-				walletMainUtxo,
-				requests,
-				feeDistribution,
+				scenario.WalletPublicKey,
+				mainUtxo,
+				[]*RedemptionRequest{{
+					Redeemer:             request.Redeemer,
+					RedeemerOutputScript: request.RedeemerOutputScript,
+					RequestedAmount:      request.RequestedAmount,
+					TreasuryFee:          request.TreasuryFee,
+					TxMaxFee:             request.TxMaxFee,
+					RequestedAt:          request.RequestedAt,
+				}},
+				func([]*RedemptionRequest) []int64 {
+					return []int64{feeShare}
+				},
 				RedemptionChangeLast,
 			)
 			if err != nil {
@@ -512,83 +446,136 @@ func TestAssembleRedemptionTransaction_SubDustChange(t *testing.T) {
 			}
 
 			outputs := builder.UnsignedTransaction().Outputs
-
-			testutils.AssertIntsEqual(
-				t,
-				"output count",
-				len(test.expectedOutputValues),
-				len(outputs),
-			)
-
-			totalOutputsValue := int64(0)
-			for i, output := range outputs {
-				totalOutputsValue += output.Value
-
-				testutils.AssertIntsEqual(
-					t,
-					fmt.Sprintf("output [%v] value", i),
-					int(test.expectedOutputValues[i]),
-					int(output.Value),
-				)
-
-				// The RedemptionChangeLast shape is used so the change
-				// output, if present, is the last output.
-				expectedScript := redeemerScript
-				if test.expectedChangeValue > 0 && i == len(outputs)-1 {
-					expectedScript = walletChangeScript
-				}
-
-				testutils.AssertBytesEqual(
-					t,
-					expectedScript,
-					output.PublicKeyScript,
+			if len(outputs) != testCase.expectedOutputCount {
+				t.Fatalf(
+					"unexpected output count [%d]",
+					len(outputs),
 				)
 			}
-
-			actualFee := builder.TotalInputsValue() - totalOutputsValue
-
-			// The implied transaction fee is the difference between the
-			// input value and the total outputs value. When a sub-dust
-			// change is omitted, its value must become part of the fee.
-			testutils.AssertIntsEqual(
-				t,
-				"implied transaction fee",
-				int(test.expectedImpliedFee),
-				int(actualFee),
-			)
-
-			err = validateRedemptionTransactionFee(builder, test.maxTotalFee)
-			if len(test.expectedFeeValidationError) == 0 {
-				if err != nil {
-					t.Fatalf("unexpected fee validation error: [%v]", err)
-				}
-			} else {
-				if err == nil {
-					t.Fatal("expected fee validation error")
-				}
-
-				testutils.AssertStringsEqual(
-					t,
-					"fee validation error",
-					test.expectedFeeValidationError,
-					err.Error(),
+			if len(outputs) == 2 &&
+				outputs[1].Value != testCase.changeValue {
+				t.Fatalf(
+					"unexpected change value [%d]",
+					outputs[1].Value,
 				)
 			}
+		})
+	}
+}
 
-			// Make sure the downstream sighash computation works for the
-			// resulting transaction shape.
-			sigHashes, err := builder.ComputeSignatureHashes()
+func TestAssembleRedemptionTransaction_TaprootDustChangePolicy(t *testing.T) {
+	walletPublicKey := testWalletPublicKeyFromXOnly(
+		t,
+		"2336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008",
+	)
+	redeemerScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{0x01})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &RedemptionRequest{
+		RedeemerOutputScript: redeemerScript,
+		RequestedAmount:      10000,
+		TreasuryFee:          1000,
+		TxMaxFee:             1000,
+	}
+
+	for _, testCase := range []struct {
+		name                string
+		changeValue         int64
+		expectedOutputCount int
+	}{
+		{"P2TR below dust omitted", 329, 1},
+		{"P2TR at dust threshold retained", 330, 2},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			bitcoinChain := newLocalBitcoinChain()
+			mainUtxo := testTaprootWalletMainUtxoWithValue(
+				t,
+				bitcoinChain,
+				walletPublicKey,
+				9000+testCase.changeValue,
+			)
+			builder, err := assembleRedemptionTransaction(
+				bitcoinChain,
+				walletPublicKey,
+				mainUtxo,
+				[]*RedemptionRequest{request},
+				func([]*RedemptionRequest) []int64 {
+					return []int64{1000}
+				},
+				RedemptionChangeLast,
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			testutils.AssertIntsEqual(
-				t,
-				"sighash count",
-				1,
-				len(sigHashes),
-			)
+			outputs := builder.UnsignedTransaction().Outputs
+			if len(outputs) != testCase.expectedOutputCount {
+				t.Fatalf("unexpected output count [%d]", len(outputs))
+			}
+			if len(outputs) == 2 &&
+				outputs[1].Value != testCase.changeValue {
+				t.Fatalf("unexpected change value [%d]", outputs[1].Value)
+			}
 		})
+	}
+}
+
+func TestValidateRedemptionTransactionTotalFee_IncludesOmittedDustChange(
+	t *testing.T,
+) {
+	scenarios, err := test.LoadRedemptionTestScenarios()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenario := scenarios[0]
+	bitcoinChain := newLocalBitcoinChain()
+	if err := bitcoinChain.BroadcastTransaction(
+		scenario.InputTransaction,
+	); err != nil {
+		t.Fatal(err)
+	}
+	request := scenario.RedemptionRequests[0]
+	feeShare := scenario.FeeShares[0]
+	changeValue := int64(293)
+	redemptionOutputValue :=
+		int64(request.RequestedAmount-request.TreasuryFee) - feeShare
+	mainUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: scenario.WalletMainUtxo.Outpoint,
+		Value:    redemptionOutputValue + feeShare + changeValue,
+	}
+	builder, err := assembleRedemptionTransaction(
+		bitcoinChain,
+		scenario.WalletPublicKey,
+		mainUtxo,
+		[]*RedemptionRequest{{
+			Redeemer:             request.Redeemer,
+			RedeemerOutputScript: request.RedeemerOutputScript,
+			RequestedAmount:      request.RequestedAmount,
+			TreasuryFee:          request.TreasuryFee,
+			TxMaxFee:             request.TxMaxFee,
+			RequestedAt:          request.RequestedAt,
+		}},
+		func([]*RedemptionRequest) []int64 {
+			return []int64{feeShare}
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	actualFee := uint64(feeShare + changeValue)
+	if err := validateRedemptionTransactionTotalFee(
+		builder,
+		actualFee,
+	); err != nil {
+		t.Fatalf("fee at maximum rejected: [%v]", err)
+	}
+	if err := validateRedemptionTransactionTotalFee(
+		builder,
+		actualFee-1,
+	); err == nil {
+		t.Fatal("fee above maximum accepted")
 	}
 }
 

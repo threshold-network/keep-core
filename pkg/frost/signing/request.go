@@ -1,6 +1,7 @@
 package signing
 
 import (
+	"context"
 	"fmt"
 	"math/big"
 
@@ -13,6 +14,10 @@ import (
 type Request struct {
 	Message   *big.Int
 	SessionID string
+	// AuthorizationGuard revalidates an external authorization immediately
+	// before secret nonce/share boundaries. It is nil for signing flows that do
+	// not use an external authorization protocol.
+	AuthorizationGuard func(context.Context) error
 	// SigningIntent carries a narrowly typed authorization artifact for messages
 	// that are not transaction sighashes. It is nil for generic and transaction
 	// signing. Today the only supported value is a heartbeat intent created with
@@ -43,6 +48,26 @@ type Request struct {
 	Channel             net.BroadcastChannel
 	MembershipValidator *group.MembershipValidator
 	Attempt             *Attempt
+}
+
+func validateAuthorizationGuard(
+	ctx context.Context,
+	guard func(context.Context) error,
+) error {
+	if guard == nil {
+		return nil
+	}
+	if err := guard(ctx); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return fmt.Errorf(
+			"%w: external signing authorization is invalid: %v",
+			ErrTerminalSigningFailure,
+			err,
+		)
+	}
+	return nil
 }
 
 // SigningIntent is a closed, immutable signing-intent value. Its fields stay

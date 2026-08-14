@@ -224,6 +224,10 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 		fmt.Printf("%sbad worker index %q: %v\n", ddkgErrPrefix, idxStr, err)
 		return
 	}
+	// Each worker is its own process with no parent-provided signer state:
+	// give it the per-process development state and install the test anchor
+	// barrier before the request-taking DKG parts run.
+	setupRealCgoSignerState(t)
 	cfgBytes, err := os.ReadFile(os.Getenv(ddkgConfigEnv))
 	if err != nil {
 		fmt.Printf("%sread config: %v\n", ddkgErrPrefix, err)

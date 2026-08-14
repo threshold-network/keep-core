@@ -39,6 +39,10 @@ typedef TbtcSignerResult (*tbtc_persist_distributed_dkg_key_package_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_retire_distributed_dkg_key_packages_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_new_signing_package_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -79,6 +83,7 @@ typedef TbtcSignerResult (*tbtc_init_signer_config_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_durable_store_identity_fn)(void);
 typedef void (*tbtc_free_buffer_fn)(uint8_t* ptr, size_t len);
 
 static TbtcSignerResult unavailable_tbtc_signer_result(void) {
@@ -160,6 +165,19 @@ static TbtcSignerResult tbtc_signer_persist_distributed_dkg_key_package(const ui
   }
 
   return persist(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_retire_distributed_dkg_key_packages(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_retire_distributed_dkg_key_packages_fn retire =
+    (tbtc_retire_distributed_dkg_key_packages_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_retire_distributed_dkg_key_packages"
+    );
+  if (retire == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return retire(request_ptr, request_len);
 }
 
 static TbtcSignerResult tbtc_signer_new_signing_package(const uint8_t* request_ptr, size_t request_len) {
@@ -282,7 +300,30 @@ static TbtcSignerResult tbtc_signer_init_signer_config(const uint8_t* request_pt
   return init_signer_config(request_ptr, request_len);
 }
 
-static void tbtc_signer_free_buffer(uint8_t* ptr, size_t len) {
+static TbtcSignerResult tbtc_signer_durable_store_identity(void) {
+  tbtc_durable_store_identity_fn durable_store_identity =
+    (tbtc_durable_store_identity_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_durable_store_identity"
+    );
+  if (durable_store_identity == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return durable_store_identity();
+}
+
+static int tbtc_signer_free_buffer_available(void) {
+  return dlsym(RTLD_DEFAULT, "frost_tbtc_free_buffer") != NULL;
+}
+
+static void tbtc_signer_scrub_and_free_buffer(uint8_t* ptr, size_t len) {
+  if (ptr != NULL) {
+    volatile uint8_t* cursor = (volatile uint8_t*)ptr;
+    for (size_t index = 0; index < len; index++) {
+      cursor[index] = 0;
+    }
+  }
   tbtc_free_buffer_fn free_buffer = (tbtc_free_buffer_fn)dlsym(
     RTLD_DEFAULT,
     "frost_tbtc_free_buffer"
@@ -316,6 +357,7 @@ var _ interactiveSigningEngine = (*buildTaggedTBTCSignerEngine)(nil)
 // the registered engine to it to classify interactive aggregate share-verification
 // culprits. Compile-check it here against the real engine.
 var _ Round2ShareVerifyingEngine = (*buildTaggedTBTCSignerEngine)(nil)
+var _ NativeTBTCSignerDistributedDKGRetirementEngine = (*buildTaggedTBTCSignerEngine)(nil)
 
 type buildTaggedTBTCSignerRunDKGResponse struct {
 	SessionID        string `json:"session_id"`
@@ -387,6 +429,16 @@ type buildTaggedTBTCSignerPersistDistributedDKGKeyPackageRequest struct {
 	ParticipantCount      uint16                                            `json:"participant_count"`
 	KeyPackage            *buildTaggedTBTCSignerNativeFROSTKeyPackage       `json:"key_package"`
 	PublicKeyPackage      *buildTaggedTBTCSignerNativeFROSTPublicKeyPackage `json:"public_key_package"`
+}
+
+type buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequest struct {
+	KeyGroup string `json:"key_group"`
+}
+
+type buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse struct {
+	KeyGroup               string `json:"key_group"`
+	Retired                bool   `json:"retired"`
+	RetiredKeyPackageCount uint16 `json:"retired_key_package_count"`
 }
 
 type buildTaggedTBTCSignerNativeFROSTCommitment struct {
@@ -616,6 +668,25 @@ func (bttse *buildTaggedTBTCSignerEngine) PersistDistributedDKGKeyPackage(
 	}
 
 	return decodeBuildTaggedTBTCSignerRunDKGResponse(responsePayload)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) RetireDistributedDKGKeyPackages(
+	keyGroup string,
+) error {
+	requestPayload, err :=
+		buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequestPayload(keyGroup)
+	if err != nil {
+		return err
+	}
+	responsePayload, err :=
+		callBuildTaggedTBTCSignerRetireDistributedDKGKeyPackages(requestPayload)
+	if err != nil {
+		return err
+	}
+	return decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
+		responsePayload,
+		keyGroup,
+	)
 }
 
 func (bttse *buildTaggedTBTCSignerEngine) NewSigningPackage(
@@ -998,6 +1069,51 @@ func buildTaggedTBTCSignerPersistDistributedDKGKeyPackageRequestPayload(
 			},
 		},
 	)
+}
+
+func buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequestPayload(
+	keyGroup string,
+) ([]byte, error) {
+	const op = "RetireDistributedDKGKeyPackages"
+	if keyGroup == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"key group is empty",
+		)
+	}
+	return buildTaggedTBTCSignerMarshalRequest(
+		op,
+		buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequest{
+			KeyGroup: keyGroup,
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
+	responsePayload []byte,
+	expectedKeyGroup string,
+) error {
+	const op = "RetireDistributedDKGKeyPackages"
+	var response buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return buildTaggedTBTCSignerOperationError(
+			op,
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+	if response.KeyGroup != expectedKeyGroup {
+		return buildTaggedTBTCSignerOperationError(
+			op,
+			"response key group does not match request",
+		)
+	}
+	if response.Retired != (response.RetiredKeyPackageCount > 0) {
+		return buildTaggedTBTCSignerOperationError(
+			op,
+			"response retirement status and key-package count disagree",
+		)
+	}
+	return nil
 }
 
 func decodeBuildTaggedTBTCSignerDKGPart3Response(
@@ -1628,6 +1744,9 @@ func decodeBuildTaggedTBTCSignerBuildTaprootTxResponse(
 }
 
 func callBuildTaggedTBTCSignerVersion() ([]byte, error) {
+	if err := ensureTBTCSignerFreeBufferAvailable(); err != nil {
+		return nil, err
+	}
 	result := C.tbtc_signer_version()
 	return parseBuildTaggedTBTCSignerResult("Version", result)
 }
@@ -1638,6 +1757,9 @@ func callBuildTaggedTBTCSignerVersion() ([]byte, error) {
 // incompatibility. It deliberately does NOT pass through callBuildTaggedTBTCSignerOperation
 // (it takes no request and must not recurse into the ABI gate).
 func callBuildTaggedTBTCSignerABIVersion() ([]byte, error) {
+	if err := ensureTBTCSignerFreeBufferAvailable(); err != nil {
+		return nil, err
+	}
 	result := C.tbtc_signer_abi_version()
 	return parseBuildTaggedTBTCSignerResult("ABIVersion", result)
 }
@@ -1686,6 +1808,21 @@ func callBuildTaggedTBTCSignerPersistDistributedDKGKeyPackage(
 		requestPayload,
 		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
 			return C.tbtc_signer_persist_distributed_dkg_key_package(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerRetireDistributedDKGKeyPackages(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"RetireDistributedDKGKeyPackages",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_retire_distributed_dkg_key_packages(
+				requestPtr,
+				requestLen,
+			)
 		},
 	)
 }
@@ -1746,19 +1883,45 @@ func callBuildTaggedTBTCSignerOperation(
 		)
 	}
 
-	requestPtr := C.CBytes(requestPayload)
-	requestLen := len(requestPayload)
-	defer func() {
-		// Scrub the secret request bytes from the C heap before releasing them.
-		// The request payload can carry signing-share / nonce material, and a
-		// plain C.free does not overwrite; this mirrors the Go-side zeroBytes
-		// hygiene applied to the caller's own copy.
-		zeroBytes(unsafe.Slice((*byte)(requestPtr), requestLen))
-		C.free(requestPtr)
-	}()
+	var result C.TbtcSignerResult
+	return executeNativeTBTCSignerStateAnchoredOutput(
+		operation,
+		func() {
+			requestPtr := C.CBytes(requestPayload)
+			requestLen := len(requestPayload)
+			defer func() {
+				// Scrub secret request bytes immediately after the native call.
+				zeroBytes(unsafe.Slice((*byte)(requestPtr), requestLen))
+				C.free(requestPtr)
+			}()
+			result = call(
+				(*C.uint8_t)(requestPtr),
+				C.size_t(requestLen),
+			)
+		},
+		func() ([]byte, error) {
+			return parseBuildTaggedTBTCSignerResult(operation, result)
+		},
+		func() {
+			discardBuildTaggedTBTCSignerResult(result)
+		},
+	)
+}
 
-	result := call((*C.uint8_t)(requestPtr), C.size_t(len(requestPayload)))
-	return parseBuildTaggedTBTCSignerResult(operation, result)
+func discardBuildTaggedTBTCSignerResult(result C.TbtcSignerResult) {
+	if result.buffer.ptr != nil {
+		C.tbtc_signer_scrub_and_free_buffer(result.buffer.ptr, result.buffer.len)
+	}
+}
+
+func ensureTBTCSignerFreeBufferAvailable() error {
+	if C.tbtc_signer_free_buffer_available() == 0 {
+		return fmt.Errorf(
+			"%w: tbtc-signer buffer release symbol is unavailable",
+			ErrNativeCryptographyUnavailable,
+		)
+	}
+	return nil
 }
 
 func parseBuildTaggedTBTCSignerResult(
@@ -1771,7 +1934,10 @@ func parseBuildTaggedTBTCSignerResult(
 	// `result.buffer.ptr == nil`, so skip the deferred free in that case to
 	// avoid handing a NULL pointer to Rust's `frost_tbtc_free_buffer`.
 	if result.buffer.ptr != nil {
-		defer C.tbtc_signer_free_buffer(result.buffer.ptr, result.buffer.len)
+		defer C.tbtc_signer_scrub_and_free_buffer(
+			result.buffer.ptr,
+			result.buffer.len,
+		)
 	}
 
 	statusCode := int32(result.status_code)
@@ -1835,13 +2001,31 @@ func buildTaggedTBTCSignerResultStatusError(
 func callBuildTaggedTBTCSignerInitSignerConfig(
 	requestPayload []byte,
 ) ([]byte, error) {
-	return callBuildTaggedTBTCSignerOperation(
-		"InitSignerConfig",
-		requestPayload,
-		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
-			return C.tbtc_signer_init_signer_config(requestPtr, requestLen)
-		},
+	// This dedicated helper is the sole compile-time bootstrap exception to the
+	// process-global state anchor. InitSignerConfig must open/lock the durable
+	// store before its tip can be reconciled, and the Rust ABI guarantees an
+	// initial or config-identical install neither mutates signer state nor emits
+	// protocol material.
+	if err := ensureTBTCSignerABICompatible(); err != nil {
+		return nil, err
+	}
+	if len(requestPayload) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InitSignerConfig",
+			"request payload is empty",
+		)
+	}
+	requestPtr := C.CBytes(requestPayload)
+	requestLen := len(requestPayload)
+	defer func() {
+		zeroBytes(unsafe.Slice((*byte)(requestPtr), requestLen))
+		C.free(requestPtr)
+	}()
+	result := C.tbtc_signer_init_signer_config(
+		(*C.uint8_t)(requestPtr),
+		C.size_t(requestLen),
 	)
+	return parseBuildTaggedTBTCSignerResult("InitSignerConfig", result)
 }
 
 // InstallNativeTBTCSignerConfig installs the tbtc-signer's init-time
@@ -1870,6 +2054,36 @@ func InstallNativeTBTCSignerConfig(
 	}
 
 	return result, nil
+}
+
+// ReadNativeTBTCSignerDurableStoreIdentity asks the linked signer for the
+// identity of the store it has actually opened and locked. A stale library
+// without frost_tbtc_durable_store_identity fails closed; config JSON is not a
+// substitute for this runtime readback.
+func ReadNativeTBTCSignerDurableStoreIdentity() (
+	*NativeTBTCSignerDurableStoreIdentity,
+	error,
+) {
+	if err := ensureTBTCSignerABICompatible(); err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := parseBuildTaggedTBTCSignerResult(
+		"DurableStoreIdentity",
+		C.tbtc_signer_durable_store_identity(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	identity, err := DecodeNativeTBTCSignerDurableStoreIdentity(responsePayload)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"DurableStoreIdentity",
+			err.Error(),
+		)
+	}
+	return identity, nil
 }
 
 // ----------------------------------------------------------------------------

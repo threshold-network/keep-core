@@ -2,6 +2,7 @@ package signing
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"reflect"
 	"testing"
@@ -83,6 +84,26 @@ func TestExecuteRequest_NilRequest(t *testing.T) {
 	_, err := ExecuteRequest(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("expected request validation error")
+	}
+}
+
+func TestExecuteRequest_AuthorizationGuardPrecedesBackend(t *testing.T) {
+	ResetExecutionBackend()
+	t.Cleanup(ResetExecutionBackend)
+	backend := &mockExecutionBackend{name: "mock", result: &Result{}}
+	if err := SetExecutionBackend(backend); err != nil {
+		t.Fatal(err)
+	}
+	guardErr := errors.New("authorization reorged")
+	result, err := ExecuteRequest(context.Background(), nil, &Request{
+		AuthorizationGuard: func(context.Context) error { return guardErr },
+	})
+	if result != nil || err == nil ||
+		!errors.Is(err, ErrTerminalSigningFailure) {
+		t.Fatalf("unexpected authorization-guard result: [%v] [%v]", result, err)
+	}
+	if backend.executeCalls != 0 {
+		t.Fatal("authorization failure reached the signing backend")
 	}
 }
 

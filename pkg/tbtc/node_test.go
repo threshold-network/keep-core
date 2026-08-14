@@ -470,7 +470,7 @@ func TestNode_KeepsLiveBridgeWalletWithoutLegacyRegistration(t *testing.T) {
 	}
 }
 
-func TestNode_KeepsPendingFrostWalletWithoutBridgeRegistration(t *testing.T) {
+func TestNode_ArchivesLegacyWalletMissingFromEveryRegistry(t *testing.T) {
 	groupParameters := &GroupParameters{
 		GroupSize:       5,
 		GroupQuorum:     4,
@@ -500,8 +500,18 @@ func TestNode_KeepsPendingFrostWalletWithoutBridgeRegistration(t *testing.T) {
 	}
 
 	_, ok := n.walletRegistry.getWalletByPublicKeyHash(walletPublicKeyHash)
-	if !ok {
-		t.Fatal("pending FROST wallet should not be archived")
+	if ok {
+		t.Fatal("unregistered legacy wallet was not archived")
+	}
+
+	localChain.walletRegistrationChecksMutex.Lock()
+	frostChecks := localChain.frostWalletRegistrationChecks
+	localChain.walletRegistrationChecksMutex.Unlock()
+	if frostChecks != 0 {
+		t.Fatalf(
+			"legacy wallet cleanup queried the FROST registry [%d] times",
+			frostChecks,
+		)
 	}
 }
 
@@ -852,6 +862,59 @@ func TestNode_HandleHeartbeatProposal_DispatchesAction(t *testing.T) {
 			"expected walletDispatcher to be idle after action completed, got %d active actions",
 			count,
 		)
+	}
+}
+
+func TestNode_HandleHeartbeatProposal_SuppressesFrostWallet(t *testing.T) {
+	n, signer := setupNodeForHandlerTests(t)
+	registeredSigners := n.walletRegistry.getSigners(signer.wallet.publicKey)
+	if len(registeredSigners) == 0 {
+		t.Fatal("test wallet has no registered signer")
+	}
+	registeredSigners[0].signerMaterial = &frostsigning.NativeSignerMaterial{
+		Format: frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: []byte(`{
+			"keyGroup":"frost-heartbeat-filter-test",
+			"keyGroupSource":"dkg-persisted"
+		}`),
+	}
+
+	n.handleHeartbeatProposal(
+		signer.wallet,
+		&HeartbeatProposal{Message: [16]byte{0x04}},
+		10,
+		100,
+	)
+	if count := dispatchedActionsCount(n); count != 0 {
+		t.Fatalf("FROST heartbeat reached wallet dispatch: [%d]", count)
+	}
+	if len(n.signingExecutors) != 0 || len(n.inactivityClaimExecutors) != 0 {
+		t.Fatal("FROST heartbeat created signing/inactivity side effects")
+	}
+}
+
+func TestNode_GetCoordinationExecutorSuppressesFrostHeartbeat(t *testing.T) {
+	n, signer := setupNodeForHandlerTests(t)
+	registeredSigners := n.walletRegistry.getSigners(signer.wallet.publicKey)
+	if len(registeredSigners) == 0 {
+		t.Fatal("test wallet has no registered signer")
+	}
+	registeredSigners[0].signerMaterial = &frostsigning.NativeSignerMaterial{
+		Format: frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: []byte(`{
+			"keyGroup":"frost-coordination-filter-test",
+			"keyGroupSource":"dkg-persisted"
+		}`),
+	}
+	executor, ok, err := n.getCoordinationExecutor(signer.wallet.publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || executor == nil {
+		t.Fatal("FROST coordination executor was not created")
+	}
+	if !executor.suppressHeartbeat {
+		t.Fatal("FROST coordination executor did not suppress heartbeat")
 	}
 }
 

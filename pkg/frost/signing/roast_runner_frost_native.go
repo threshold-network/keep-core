@@ -51,6 +51,9 @@ type interactiveSigningRunner struct {
 	messageDigest []byte
 	threshold     uint16
 	signingIntent *SigningIntent
+	// authorizationGuard is set by the tBTC transaction-signing adapter. It is
+	// checked immediately before the native session, nonce, and share boundaries.
+	authorizationGuard func(context.Context) error
 	// includedMembers is the attempt's included set as a lookup, cached at
 	// construction. It gates which shares the collector retains as evidence (any
 	// included member's, even a non-signer observer's divergent share), distinct
@@ -150,6 +153,10 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	contextHash := binding.ContextHash()
 	elected := binding.ElectedCoordinator()
 
+	if err := validateAuthorizationGuard(ctx, r.authorizationGuard); err != nil {
+		return nil, err
+	}
+
 	// 1. Derive the canonical attempt context + per-participant FROST identifiers
 	// from the engine (single source of truth - the runner never re-implements the
 	// engine's domain-separated derivations). Cross-check the engine-derived
@@ -186,6 +193,9 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 
 	// 2. Open the interactive session with the engine-derived context; the engine
 	// returns the attempt id used for every subsequent round.
+	if err := validateAuthorizationGuard(ctx, r.authorizationGuard); err != nil {
+		return nil, err
+	}
 	open, err := r.engine.InteractiveSessionOpen(
 		binding.SessionID(),
 		uint16(r.member),
@@ -240,9 +250,18 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	}
 
 	// 3. Round 1: our commitments, broadcast to the group (own kept locally).
+	if err := validateAuthorizationGuard(ctx, r.authorizationGuard); err != nil {
+		return nil, err
+	}
 	ownCommitments, err := r.engine.InteractiveRound1(binding.SessionID(), attemptID, uint16(r.member))
 	if err != nil {
 		return nil, fmt.Errorf("roast runner: round 1: %w", err)
+	}
+	// The native call can block while authorization changes on the host chain.
+	// Revalidate after nonce creation and immediately before the commitment leaves
+	// the process; the pre-call guard alone leaves a TOCTOU release window.
+	if err := validateAuthorizationGuard(ctx, r.authorizationGuard); err != nil {
+		return nil, err
 	}
 	r.broadcast(RunnerMsgCommitments, contextHash, ownCommitments)
 
@@ -308,9 +327,18 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	// resident - the cleanup defer aborts them on success.
 	shares := map[group.MemberIndex][]byte{}
 	if memberInSet(r.member, signerSet) {
+		if err := validateAuthorizationGuard(ctx, r.authorizationGuard); err != nil {
+			return nil, err
+		}
 		ownShare, err := r.engine.InteractiveRound2(binding.SessionID(), attemptID, uint16(r.member), pkg.SigningPackageBytes)
 		if err != nil {
 			return nil, fmt.Errorf("roast runner: round 2: %w", err)
+		}
+		// Round 2 is the irreversible signing boundary: it may block while a
+		// reservation is settled or conflicted. Never hand its result to envelope
+		// signing or transport without a post-native authorization check.
+		if err := validateAuthorizationGuard(ctx, r.authorizationGuard); err != nil {
+			return nil, err
 		}
 		// Round 2 consumed our round-1 nonces: a successful signer prunes without
 		// aborting; only a non-signing observer still needs the abort.
@@ -321,6 +349,11 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 		}
 		if err := r.collector.RecordShareSubmission(ownSubmission); err != nil {
 			return nil, fmt.Errorf("roast runner: record own share submission: %w", err)
+		}
+		// Envelope signing/collector work is another scheduling window. This check
+		// is intentionally adjacent to broadcast, the actual secret-share release.
+		if err := validateAuthorizationGuard(ctx, r.authorizationGuard); err != nil {
+			return nil, err
 		}
 		r.broadcast(RunnerMsgShareSubmission, contextHash, ownSubmissionEnvelope)
 		shares[r.member] = ownShare
@@ -360,6 +393,9 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("roast runner: aggregate: %w", err)
+	}
+	if err := validateAuthorizationGuard(ctx, r.authorizationGuard); err != nil {
+		return nil, err
 	}
 
 	// 10. Mark the attempt succeeded so the cleanup path produces no transition

@@ -45,6 +45,15 @@ func buildInteractiveSigningNetHarness(
 ) netSigningHarness {
 	t.Helper()
 
+	// The runner's aggregate path releases results only under an active outer
+	// memo session owner (the production executor holds one across all local
+	// seats); the harness owns it for the round.
+	memoSession, err := BeginInteractiveAggregateMemoSession("session-net-1")
+	if err != nil {
+		t.Fatalf("begin aggregate memo session: %v", err)
+	}
+	t.Cleanup(memoSession.Release)
+
 	included := make([]group.MemberIndex, 0, n)
 	for i := 1; i <= n; i++ {
 		included = append(included, group.MemberIndex(i))

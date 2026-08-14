@@ -38,6 +38,11 @@ type Deposit struct {
 	// Utxo is the unspent output of the deposit funding transaction that
 	// represents the deposit on the Bitcoin chain.
 	Utxo *bitcoin.UnspentTransactionOutput
+	// FundingTx is the canonical stripped funding transaction retained during
+	// proposal validation. It is required to reproduce the exact COMPLETE_V2
+	// Taproot deposit authorization calldata and is never accepted from an
+	// unvalidated coordinator payload.
+	FundingTx *bitcoin.Transaction
 	// Depositor is the depositor's address on the host chain.
 	Depositor chain.Address
 	// BlindingFactor is an 8-byte arbitrary value that allows to distinguish

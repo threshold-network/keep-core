@@ -96,3 +96,24 @@ type Chain interface {
 	// block height.
 	GetCoinbaseTxHash(blockHeight uint) (Hash, error)
 }
+
+// CanonicalTransactionStatus is an authenticated transaction observation from
+// a canonical Bitcoin index. Found=false is meaningful (and may be used to
+// recover after a reorganization); it must not be returned for an RPC timeout
+// or an incomplete index. A confirmed transaction includes the canonical block
+// identity so durable broadcasters can detect confirmation reorgs.
+type CanonicalTransactionStatus struct {
+	Found         bool
+	Confirmations uint
+	BlockHeight   uint
+	BlockHash     Hash
+}
+
+// CanonicalTransactionStatusSource is an optional extension implemented by
+// Bitcoin backends that can distinguish authenticated canonical absence from
+// an unavailable or incomplete RPC response.
+type CanonicalTransactionStatusSource interface {
+	GetCanonicalTransactionStatus(
+		transactionHash Hash,
+	) (*CanonicalTransactionStatus, error)
+}

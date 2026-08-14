@@ -96,7 +96,11 @@ type shapeBConfig struct {
 // TestRealCgoInteractiveSigning_Libp2pMultiProc_ShapeB is BOTH the orchestrator and (when
 // re-exec'd with FROST_SHAPEB_WORKER set) the per-node worker. The worker branch runs one
 // seat to a real signature over real libp2p; the orchestrator branch wires the group,
-// launches the workers, and asserts every one independently aggregates the same signature.
+// launches the workers, and asserts every seat in the finalized signing subset (plus the
+// coordinator) independently aggregates the same signature, while a committed seat the
+// coordinator omitted fails closed with the engine's aggregate-authorization rejection
+// (separate processes share no aggregate memo, so an omitted observer cannot obtain the
+// signature locally).
 func TestRealCgoInteractiveSigning_Libp2pMultiProc_ShapeB(t *testing.T) {
 	if os.Getenv(shapeBBootstrapEnv) != "" {
 		runShapeBBootstrap(t)
@@ -130,6 +134,10 @@ func runShapeBBootstrap(t *testing.T) {
 	for i := 1; i <= n; i++ {
 		participantIDs = append(participantIDs, byte(i))
 	}
+	// The parent provides the signer state env; the anchor barrier is
+	// process-local Go state, so this child must install the test anchor
+	// itself before any request-taking native operation.
+	setupRealCgoSignerStateAnchor(t)
 	keyGroup := runRealCgoDKGKeyGroup(t, &buildTaggedTBTCSignerEngine{}, sessionID, participantIDs, uint16(threshold))
 	fmt.Printf("%s%s\n", shapeBKeyGroupPrefix, keyGroup)
 }
@@ -279,12 +287,25 @@ func runShapeBOrchestrator(t *testing.T, n int, threshold uint16) {
 	// 4. Every worker must independently produce the same valid 64-byte signature.
 	var winning string
 	winners := 0
+	observers := 0
 	for _, r := range results {
 		if skip := extractPrefixed(r.output, shapeBSkipPrefix); skip != "" {
 			t.Skipf("member %d skipped: %s", r.index, skip)
 		}
 		sig := extractPrefixed(r.output, shapeBSigPrefix)
 		if sig == "" {
+			// A committed seat the coordinator omitted from the finalized
+			// t-subset cannot aggregate in its OWN process: the engine
+			// authorizes aggregation only for seats that Round2-signed the
+			// exact package (plus the elected coordinator), and the
+			// cross-seat aggregate memo that hands observers the signature
+			// in-process does not span processes. Such a seat must fail
+			// closed with exactly the authorization rejection - anything
+			// else is a real failure.
+			if strings.Contains(r.output, "package is not authorized for attempt_id") {
+				observers++
+				continue
+			}
 			t.Fatalf("member %d did not emit a signature (err=%v):\n%s", r.index, r.err, indentTail(r.output, 40))
 		}
 		raw, err := hex.DecodeString(sig)
@@ -298,10 +319,19 @@ func runShapeBOrchestrator(t *testing.T, n int, threshold uint16) {
 		}
 		winners++
 	}
-	if winners != n {
-		t.Fatalf("expected all %d separate-process nodes to aggregate the signature, got %d", n, winners)
+	if winners < int(threshold) {
+		t.Fatalf(
+			"expected at least the %d-seat signing subset to aggregate the signature, got %d (observers %d)",
+			threshold, winners, observers,
+		)
 	}
-	t.Logf("shape-B: %d separate-process nodes over real libp2p each aggregated the same BIP-340 signature %s…", n, winning[:16])
+	if winners+observers != n {
+		t.Fatalf(
+			"expected every node to aggregate or fail closed as an omitted observer: %d winners + %d observers != %d",
+			winners, observers, n,
+		)
+	}
+	t.Logf("shape-B: %d/%d separate-process nodes over real libp2p aggregated the same BIP-340 signature %s… (%d omitted observers failed closed)", winners, n, winning[:16], observers)
 }
 
 func runShapeBWorker(t *testing.T, idxStr string) {
@@ -334,6 +364,21 @@ func runShapeBWorker(t *testing.T, idxStr string) {
 		fmt.Printf("%smember %d not found in config\n", shapeBErrPrefix, index)
 		return
 	}
+
+	// The member state copied from the bootstrap process already carries the
+	// installed test anchor; this worker process still has to pin the anchor
+	// env and install its own process-local barrier.
+	setupRealCgoSignerStateAnchor(t)
+
+	// The production executor owns the aggregate memo session for the outer
+	// signing operation; each worker process owns its own registry, so the
+	// worker stands in for it here.
+	memoSession, err := BeginInteractiveAggregateMemoSession(cfg.SessionID)
+	if err != nil {
+		fmt.Printf("%sbegin aggregate memo session: %v\n", shapeBErrPrefix, err)
+		return
+	}
+	defer memoSession.Release()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 130*time.Second)
 	defer cancel()

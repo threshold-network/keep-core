@@ -5,7 +5,10 @@ package signing
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // TestCanonicalFROSTIdentifier pins the canonical identifier string the node
@@ -44,5 +47,47 @@ func TestCanonicalFROSTIdentifier(t *testing.T) {
 			t.Fatalf("CanonicalFROSTIdentifier is not injective at member %d", m)
 		}
 		seen[id] = struct{}{}
+	}
+}
+
+func TestCollectDistributedDKGSeatOutcomesReturnsEveryDivergentPersist(
+	t *testing.T,
+) {
+	outcomes := make(chan distributedDKGSeatOutcome, 2)
+	outcomes <- distributedDKGSeatOutcome{
+		member: 1,
+		persist: &NativeTBTCSignerDKGResult{
+			KeyGroup: "key-group-a",
+		},
+	}
+	outcomes <- distributedDKGSeatOutcome{
+		member: 2,
+		persist: &NativeTBTCSignerDKGResult{
+			KeyGroup: "key-group-b",
+		},
+	}
+
+	persistBySeat, err := collectDistributedDKGSeatOutcomes(outcomes, 2)
+	if err == nil || !strings.Contains(err.Error(), "disagreed") {
+		t.Fatalf("unexpected divergent-seat result: [%v]", err)
+	}
+	if len(persistBySeat) != 2 {
+		t.Fatalf(
+			"successful divergent persists were dropped: [%v]",
+			persistBySeat,
+		)
+	}
+	for seat, expectedKeyGroup := range map[group.MemberIndex]string{
+		1: "key-group-a",
+		2: "key-group-b",
+	} {
+		persisted := persistBySeat[seat]
+		if persisted == nil || persisted.KeyGroup != expectedKeyGroup {
+			t.Fatalf(
+				"unexpected persisted outcome for seat [%d]: [%+v]",
+				seat,
+				persisted,
+			)
+		}
 	}
 }
