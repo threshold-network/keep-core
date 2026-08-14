@@ -956,13 +956,19 @@ overflow; Rust `wrapping_add`).
 === Non-goals and accepted properties
 
 * The concatenation `KeyGroupBytes || SessionID || MessageDigest` is
-  not length-framed, so input-boundary collisions are theoretically
-  expressible. This is accepted: the seed feeds a *non-cryptographic*
-  shuffle whose only job is deterministic agreement on rotation
-  order among honest members; every input is independently and
-  unambiguously bound (and framed) in the `AttemptContext` hash that
+  not length-framed, so input-boundary collisions are expressible.
+  `KeyGroupBytes` is an opaque handle whose width genuinely varies in
+  practice -- the conformance vectors carry both 18-byte handles and
+  33-byte compressed keys -- so this is reachable in principle rather
+  than merely theoretical. It is accepted regardless: the seed feeds a
+  *non-cryptographic* shuffle whose only job is deterministic agreement
+  on rotation order among honest members; every input is independently
+  and unambiguously bound (and framed) in the `AttemptContext` hash that
   protocol messages verify. The seed is not a security boundary, and
-  no exclusion or signing decision may ever be derived from it.
+  no exclusion or signing decision may ever be derived from it. Framing
+  it would be a normative change to this annex, the Go derivation, the
+  Rust port and both mirrored vector sets, so it is deferred to a single
+  coordinated change if ever wanted.
 * Only the first 8 bytes of `AttemptSeed32` influence the shuffle;
   the remaining 24 bytes are bound via the `AttemptContext` hash
   only.

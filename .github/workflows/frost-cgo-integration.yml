@@ -13,7 +13,10 @@ name: FROST cgo integration
 # compiled and tested against real crypto here (the mock-FFI variant runs in client.yml),
 # and the job smoke-builds the full activation artifact via `make build-frost`. The
 # non-cgo tagged build/test coverage lives in the client.yml `client-frost-roast-retry`
-# job; together they cover the tag matrix that the default untagged CI never touches.
+# job. This job is the ONLY one that supplies `frost_tbtc_signer` and `cgo`, so every
+# package holding files guarded by that combination must be named in its test
+# invocation below -- currently pkg/frost/signing and pkg/tbtc. A file guarded by
+# those tags in an unlisted package compiles in no CI job whatsoever.
 #
 # The Go interactive code and the signer crate currently live on separate branches, so
 # this checks the pinned mirror commit out into a side path and builds from there. After
@@ -106,22 +109,56 @@ jobs:
         env:
           CGO_ENABLED: "1"
           KEEP_CORE_FROST_REQUIRE_CGO: "true"
+          # Single source of truth for the packages this gate compiles. The guard below
+          # fails the job if a package needing these tags is missing from the list.
+          CGO_TAGGED_PACKAGES: "./pkg/frost/signing/ ./pkg/tbtc/"
+          CGO_TAGGED_TAGS: "frost_native frost_tbtc_signer frost_roast_retry"
         run: |
           set -euo pipefail
+          # This job is the only one that supplies `frost_tbtc_signer` and `cgo`, so a
+          # file guarded by them in an unlisted package compiles in NO ci job. That is
+          # how the pkg/tbtc startup backend guard (TestVerifyFrostSigningBackend) came
+          # to be compiled by nothing while CI still reported full coverage.
+          #
+          # Ask the toolchain rather than grepping build tags: list every package twice,
+          # once without `frost_tbtc_signer` and once with it, and compare file counts.
+          # A package whose count changes has files gated behind the tag and must appear
+          # in CGO_TAGGED_PACKAGES.
+          listFormat='{{.ImportPath}} {{len .GoFiles}}+{{len .TestGoFiles}}+{{len .XTestGoFiles}}'
+          missingPackages=0
+          while read -r pkg; do
+            case " ${CGO_TAGGED_PACKAGES} " in
+              *" ./${pkg}/ "*) ;;
+              *)
+                echo "::error::${pkg} has ${CGO_TAGGED_TAGS}-gated files but is not in CGO_TAGGED_PACKAGES"
+                missingPackages=1
+                ;;
+            esac
+          done < <(
+            join -j1 \
+              <(go list -tags "frost_native frost_roast_retry" -f "$listFormat" ./pkg/... | sort) \
+              <(go list -tags "${CGO_TAGGED_TAGS}" -f "$listFormat" ./pkg/... | sort) \
+              | awk '$2 != $3 {print $1}' \
+              | sed 's#^github.com/keep-network/keep-core/##'
+          )
+          test "$missingPackages" -eq 0 || {
+            echo "cgo tag coverage gap: the packages above would compile in no CI job"; exit 1; }
+
           # --no-as-needed keeps the DT_NEEDED on libfrost_tbtc even though the bridge
           # references its symbols only via dlsym (no direct references), so the loader
           # makes them resolvable at runtime; rpath lets the test binary find the .so.
           export CGO_LDFLAGS="-L${FROST_LIB_DIR} -Wl,--no-as-needed -lfrost_tbtc -Wl,-rpath,${FROST_LIB_DIR}"
-          # Run the WHOLE tagged pkg/frost/signing suite against the linked lib, not a
-          # narrow -run subset. `frost_roast_retry` is added to the tag set so the ROAST
-          # retry coordinator flow (liveness + evidence/blame) is compiled and tested
-          # against real crypto here too, not only in the mock-FFI job (client.yml).
-          # With KEEP_CORE_FROST_REQUIRE_CGO=true a lib-unavailable would-be skip becomes
-          # a hard failure, so a stale/missing symbol fails the gate instead of silently
-          # dropping coverage. This gate is the only CI that builds the cgo tag set.
-          go test -tags "frost_native frost_tbtc_signer frost_roast_retry" -count=1 \
+          # Run the WHOLE tagged suite against the linked lib, not a narrow -run subset.
+          # `frost_roast_retry` is in the tag set so the ROAST retry coordinator flow
+          # (liveness + evidence/blame) is compiled and tested against real crypto here
+          # too, not only in the mock-FFI job (client.yml). With
+          # KEEP_CORE_FROST_REQUIRE_CGO=true a lib-unavailable would-be skip becomes a
+          # hard failure, so a stale or missing symbol fails the gate instead of
+          # silently dropping coverage.
+          # shellcheck disable=SC2086 # word splitting is intended for the package list
+          go test -tags "${CGO_TAGGED_TAGS}" -count=1 \
             -timeout 20m \
-            ./pkg/frost/signing/
+            ${CGO_TAGGED_PACKAGES}
 
       - name: Smoke-build the FROST activation artifact (make build-frost)
         env:
