@@ -577,6 +577,14 @@ func (srl *signingRetryLoop) start(
 			// succeeded attempt. If the done-check below then fails, the next attempt
 			// finds no fresh transition and fails closed (the honest outcome) instead
 			// of consuming a peer's failure transition for an attempt this seat won.
+			//
+			// Accepted cost: a done-check failure after a local success abandons the
+			// attempt and discards a signature that was actually valid, so the loop
+			// spends an extra attempt. That is deliberate. The alternative -- letting
+			// the loop carry a "succeeded locally, done-check failed" outcome forward
+			// -- reopens exactly the hazard this clear closes, because the next attempt
+			// would again have a transition record available for an attempt this seat
+			// won. Spending one attempt is the cheaper side of that trade.
 			if srl.transitionController != nil {
 				srl.transitionController.OnAttemptSucceeded()
 			}

@@ -28,6 +28,19 @@ const (
 	// that this time cannot be too long as the cache may grow excessively and
 	// impact memory consumption.
 	libp2pSeenMessagesTTL = 5 * time.Minute
+	// MaxMessageSize is the explicit pubsub per-message ceiling. libp2p's own
+	// default is 1 MiB, which is BELOW the largest message this client
+	// legitimately broadcasts: a worst-case ROAST transition bundle at the
+	// mainnet group size measures ~1.95 MiB (see
+	// roast.MaxSignedTransitionMessageBytes and the sizing test that pins it).
+	// Relying on the default silently drops those bundles at the transport,
+	// where the ROAST retry path cannot observe the failure and only sees a
+	// stalled transition. This value is set to match the ROAST parser ceiling
+	// exactly, so the transport accepts precisely what the parser accepts and no
+	// message is admitted by one layer and dropped by the other. Raising the
+	// ROAST ceiling requires raising this in the same change; the sizing test
+	// fails otherwise.
+	MaxMessageSize = 8 * 1024 * 1024
 )
 
 type channelManager struct {
@@ -72,6 +85,7 @@ func newChannelManager(
 		pubsub.WithValidateQueueSize(libp2pValidationQueueSize),
 		pubsub.WithSeenMessagesStrategy(pubsubtc.Strategy_LastSeen),
 		pubsub.WithSeenMessagesTTL(libp2pSeenMessagesTTL),
+		pubsub.WithMaxMessageSize(MaxMessageSize),
 	)
 	if err != nil {
 		return nil, err

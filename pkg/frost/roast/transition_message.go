@@ -60,10 +60,22 @@ const MaxSignedLocalEvidenceSnapshotBytes = MaxCoordinatorPackageProofs*MaxSigne
 	MaxOperatorSignatureBytes + 64*1024
 
 // MaxSignedTransitionMessageBytes bounds a whole SignedTransitionMessage envelope
-// for the same pre-allocation reason: a full bundle of (now proof-carrying)
-// snapshots, the coordinator signature, and protobuf framing.
-const MaxSignedTransitionMessageBytes = MaxSnapshotsPerBundle*MaxSignedLocalEvidenceSnapshotBytes +
-	MaxCoordinatorSignatureBytes + 64*1024
+// for the same pre-allocation reason. Unlike the per-snapshot cap this is NOT the
+// sum of maxima: MaxSnapshotsPerBundle*MaxSignedLocalEvidenceSnapshotBytes is
+// ~528 MiB, a shape no legitimate group can produce and far too large to serve as
+// an allocation guard. It assumes 256 snapshots each carrying two 1 MiB proofs,
+// while a real bundle carries at most one snapshot per group member and a real
+// proof is a real signed FROST signing package.
+//
+// The value is measured instead. A worst-case legitimate bundle - the mainnet
+// group size of 100 members, every member reporting saturated evidence and
+// carrying the maximum two coordinator package proofs - serializes to ~1.95 MiB
+// (pinned by TestTransitionMessage_WorstCaseProductionBundleFitsLimits). 8 MiB
+// leaves ~4x headroom for evidence-payload growth while still bounding a single
+// receive allocation. The bundle is proof-dominated because every snapshot repeats
+// the same coordinator packages; shrinking that duplication would shrink this
+// ceiling, and the test measures the effect of any such change.
+const MaxSignedTransitionMessageBytes = 8 * 1024 * 1024
 
 // OverflowEntry is the JSON-friendly key/value pair representing one
 // per-sender overflow count from an attempt.Evidence map. The slice
