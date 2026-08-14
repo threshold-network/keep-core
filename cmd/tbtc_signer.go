@@ -175,7 +175,7 @@ func newTBTCSignerAnchorBootstrapCoreCommand() *cobra.Command {
 		&planPath,
 		"plan",
 		"",
-		"canonical absolute path to the authenticated public bootstrap plan",
+		"canonical absolute path to the public bootstrap plan (not yet authenticated; core re-derives and the offline authority signs it next)",
 	)
 	command.Flags().StringVar(
 		&output,

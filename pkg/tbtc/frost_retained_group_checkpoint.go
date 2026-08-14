@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -1070,28 +1071,174 @@ func validateFrostRetainedGroupCheckpointSemantics(
 			"FROST history receipt does not bind the exact checkpoint suffix",
 		)
 	}
+	// Pre-partition the mutation stream once so each certificate advances the
+	// running canonical and quarantine state by exactly the new mutations
+	// rather than rebuilding both journals from `history.From` per call.
+	canonicalMutations := frostRetainedGroupCanonicalMutations(
+		history.Mutations,
+	)
+	quarantineMutations := frostRetainedGroupQuarantineMutations(
+		history.Mutations,
+	)
+	canonical := frostRetainedGroupJournalState{
+		Schema:       frostRetainedGroupJournalStateSchema,
+		BindingHash:  policy.ProtocolBindingHash,
+		CurrentPoint: history.From,
+		Wallets:      []frostRetainedGroupWalletState{},
+	}
+	emptyActiveRoot, err := frostRetainedGroupQuarantineActiveRoot(
+		policy.ProtocolBindingHash,
+		map[[32]byte]frostRetainedGroupQuarantineState{},
+	)
+	if err != nil {
+		return err
+	}
+	emptyTombstoneRoot, err := frostRetainedGroupQuarantineTombstoneRoot(
+		policy.ProtocolBindingHash,
+		map[[32]byte]frostRetainedGroupQuarantineTombstone{},
+	)
+	if err != nil {
+		return err
+	}
+	quarantine := frostRetainedGroupQuarantineJournalState{
+		Schema:        frostRetainedGroupQuarantineStateSchema,
+		BindingHash:   policy.ProtocolBindingHash,
+		CurrentPoint:  history.From,
+		Root:          sha256.Sum256([]byte(frostRetainedGroupQuarantineDomain)),
+		ActiveRoot:    emptyActiveRoot,
+		TombstoneRoot: emptyTombstoneRoot,
+		Quarantines:   []frostRetainedGroupQuarantineState{},
+		Tombstones:    []frostRetainedGroupQuarantineTombstone{},
+	}
+	canonicalIndex := 0
+	quarantineIndex := 0
+	mutationIndex := 0
+	wirePrefix := make(
+		[]frostRetainedGroupWireMutation,
+		0,
+		len(history.Mutations),
+	)
 	for index, certificate := range history.Checkpoints {
-		expected, err := frostRetainedGroupCertifiedStateFromHistory(
-			policy,
-			history.From,
-			certificate.Body.Point,
-			history.Mutations,
+		point := certificate.Body.Point
+		if point.BlockNumber <= history.From.BlockNumber ||
+			point.BlockHash == [32]byte{} {
+			return fmt.Errorf(
+				"FROST checkpoint point is not above the empty history baseline [%d]",
+				index,
+			)
+		}
+		nextCanonicalIndex, err :=
+			frostRetainedGroupCheckpointAdvanceMutationBoundary(
+				canonicalMutations,
+				canonicalIndex,
+				point,
+				index,
+			)
+		if err != nil {
+			return err
+		}
+		if err := applyFrostRetainedGroupMutations(
+			&canonical,
+			canonicalMutations[canonicalIndex:nextCanonicalIndex],
+		); err != nil {
+			return fmt.Errorf(
+				"cannot advance FROST checkpoint canonical state [%d]: [%w]",
+				index,
+				err,
+			)
+		}
+		canonicalIndex = nextCanonicalIndex
+		canonical.CurrentPoint = point
+
+		nextQuarantineIndex, err :=
+			frostRetainedGroupCheckpointAdvanceMutationBoundary(
+				quarantineMutations,
+				quarantineIndex,
+				point,
+				index,
+			)
+		if err != nil {
+			return err
+		}
+		if err := applyFrostRetainedGroupQuarantineMutations(
+			&quarantine,
+			quarantineMutations[quarantineIndex:nextQuarantineIndex],
+			policy.LiftPolicy,
+		); err != nil {
+			return fmt.Errorf(
+				"cannot advance FROST checkpoint quarantine state [%d]: [%w]",
+				index,
+				err,
+			)
+		}
+		quarantineIndex = nextQuarantineIndex
+		quarantine.CurrentPoint = point
+
+		nextMutationIndex, err :=
+			frostRetainedGroupCheckpointAdvanceMutationBoundary(
+				history.Mutations,
+				mutationIndex,
+				point,
+				index,
+			)
+		if err != nil {
+			return err
+		}
+		for k := mutationIndex; k < nextMutationIndex; k++ {
+			wirePrefix = append(
+				wirePrefix,
+				frostRetainedGroupMutationToWire(history.Mutations[k]),
+			)
+		}
+		mutationIndex = nextMutationIndex
+
+		inventoryRoot, _, _, _, err := frostRetainedGroupInventoryRoot(
+			canonical,
 		)
 		if err != nil {
 			return fmt.Errorf(
-				"cannot derive FROST checkpoint semantic state [%d]: [%w]",
+				"cannot derive FROST checkpoint inventory root [%d]: [%w]",
+				index,
+				err,
+			)
+		}
+		query := frostRetainedGroupHistoryQuery{
+			Schema:      frostRetainedGroupHistoryRequestSchema,
+			BindingHash: frostActivationHex32(policy.ProtocolBindingHash),
+			From:        frostRetainedGroupFinalityToWire(history.From),
+			To:          frostRetainedGroupFinalityToWire(point),
+		}
+		queryHash, err := frostRetainedGroupDomainHash(
+			frostRetainedGroupHistoryQueryDomain,
+			query,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"cannot derive FROST checkpoint history query hash [%d]: [%w]",
+				index,
+				err,
+			)
+		}
+		historyRoot, err := frostRetainedGroupHistoryRoot(
+			policy.ProtocolBindingHash,
+			queryHash,
+			wirePrefix,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"cannot derive FROST checkpoint history root [%d]: [%w]",
 				index,
 				err,
 			)
 		}
 		body := certificate.Body
-		if body.HistoryRoot != expected.HistoryRoot ||
-			body.CanonicalGeneration != expected.CanonicalGeneration ||
-			body.CanonicalInventoryRoot != expected.CanonicalInventoryRoot ||
-			body.QuarantineGeneration != expected.QuarantineGeneration ||
-			body.QuarantineEventRoot != expected.QuarantineEventRoot ||
-			body.QuarantineActiveRoot != expected.QuarantineActiveRoot ||
-			body.QuarantineTombstoneRoot != expected.QuarantineTombstoneRoot {
+		if body.HistoryRoot != historyRoot ||
+			body.CanonicalGeneration != canonical.SnapshotGeneration ||
+			body.CanonicalInventoryRoot != inventoryRoot ||
+			body.QuarantineGeneration != quarantine.Generation ||
+			body.QuarantineEventRoot != quarantine.Root ||
+			body.QuarantineActiveRoot != quarantine.ActiveRoot ||
+			body.QuarantineTombstoneRoot != quarantine.TombstoneRoot {
 			return fmt.Errorf(
 				"FROST checkpoint certificate [%d] does not commit the independently derived semantic state",
 				index,
@@ -1118,6 +1265,35 @@ func validateFrostRetainedGroupCheckpointSemantics(
 		)
 	}
 	return nil
+}
+
+// frostRetainedGroupCheckpointAdvanceMutationBoundary advances end past every
+// mutation whose point is strictly below point, and past every mutation at
+// the same block as point whose block hash matches point.BlockHash. It
+// returns the new end, or an error if a mutation at the same block as point
+// disagrees on its block hash. The input is expected to be sorted by event
+// point, matching the existing contract of history.Mutations.
+func frostRetainedGroupCheckpointAdvanceMutationBoundary(
+	mutations []FrostRetainedGroupMutation,
+	end int,
+	point FrostPreSignFinality,
+	certificateIndex int,
+) (int, error) {
+	for end < len(mutations) &&
+		mutations[end].Point.BlockNumber < point.BlockNumber {
+		end++
+	}
+	for end < len(mutations) &&
+		mutations[end].Point.BlockNumber == point.BlockNumber {
+		if mutations[end].Point.BlockHash != point.BlockHash {
+			return 0, fmt.Errorf(
+				"FROST checkpoint point conflicts with mutation block hash [%d]",
+				certificateIndex,
+			)
+		}
+		end++
+	}
+	return end, nil
 }
 
 func frostRetainedGroupCheckpointFileName(
@@ -1203,6 +1379,14 @@ func (frgj *frostRetainedGroupJournal) initializeCheckpointJournal() error {
 				name,
 			)
 		}
+	}
+	if len(certificateNames) >
+		frostRetainedGroupMaximumHandshakeAncestry+1 {
+		return fmt.Errorf(
+			"FROST checkpoint journal holds [%d] durable certificates, exceeding the bounded ancestry window of [%d]; manual cleanup is required",
+			len(certificateNames),
+			frostRetainedGroupMaximumHandshakeAncestry+1,
+		)
 	}
 	expectedMetadata := frostRetainedGroupCheckpointMetadata{
 		Schema:             frostRetainedGroupCheckpointMetadataSchema,
@@ -1571,6 +1755,48 @@ func (frgj *frostRetainedGroupJournal) persistCheckpointSuffix(
 		frgj.checkpointHashes[sequence] = hashes[index]
 	}
 	frgj.checkpointState = next
+	if err := frgj.evictStaleCheckpointCertificates(); err != nil {
+		return fmt.Errorf(
+			"cannot evict stale FROST checkpoint certificates: [%w]",
+			err,
+		)
+	}
+	return nil
+}
+
+// evictStaleCheckpointCertificates unlinks checkpoint certificate files and
+// drops in-memory map entries whose sequence has fallen more than
+// frostRetainedGroupMaximumHandshakeAncestry behind the durable head. The
+// bounded window keeps both the in-memory maps and the on-disk directory
+// from growing without limit as reconciliation publishes new certificates.
+func (frgj *frostRetainedGroupJournal) evictStaleCheckpointCertificates() error {
+	head := frgj.checkpointState.Sequence
+	if head <= frostRetainedGroupMaximumHandshakeAncestry {
+		return nil
+	}
+	evictFloor := head - frostRetainedGroupMaximumHandshakeAncestry
+	var stale []uint64
+	for sequence := range frgj.checkpointHashes {
+		if sequence < evictFloor {
+			stale = append(stale, sequence)
+		}
+	}
+	for _, sequence := range stale {
+		name := frostRetainedGroupCheckpointFileName(
+			sequence,
+			frgj.checkpointHashes[sequence],
+		)
+		path := filepath.Join(frgj.checkpointDirectory, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf(
+				"cannot unlink stale FROST checkpoint certificate [%d]: [%w]",
+				sequence,
+				err,
+			)
+		}
+		delete(frgj.checkpointCertificates, sequence)
+		delete(frgj.checkpointHashes, sequence)
+	}
 	return nil
 }
 

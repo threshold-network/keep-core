@@ -356,6 +356,12 @@ func admitFrostDKGAttempt(
 	if node == nil {
 		return nil, fmt.Errorf("node is unavailable")
 	}
+	if node.frostNativeSignerAnchorAdmission == nil {
+		return nil, fmt.Errorf(
+			"native signer anchor admission is unavailable: " +
+				"EnableFrostPreSignAuthorization is not configured",
+		)
+	}
 	if err := node.walletRegistry.recordFrostDKGAttempt(
 		seed,
 		startBlock,

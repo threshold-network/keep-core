@@ -673,6 +673,92 @@ func TestNativeTBTCSignerStateAnchorBarrierRejectsInitialGenerationBeyondFloorWi
 	}
 }
 
+func TestNativeTBTCSignerStateAnchorBarrierRejectsReinstallation(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	current := initial
+	firstCommitter := &testNativeTBTCSignerStateAnchorCommitter{current: &current}
+	installTestNativeTBTCSignerStateAnchorBarrier(t, &initial, &current, firstCommitter)
+
+	// Re-installation with a config identical to the live one is rejected at
+	// the already-installed guard, before any of the validator code runs a
+	// second time.
+	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             4096,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := current
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     firstCommitter,
+		},
+	); err == nil {
+		t.Fatal("re-installation with identical config was accepted")
+	} else if !strings.Contains(err.Error(), "already installed") {
+		t.Fatalf(
+			"identical re-installation error did not mention 'already installed': %v",
+			err,
+		)
+	}
+
+	// Re-installation with a different - but otherwise valid - config is also
+	// rejected at the same guard. The alternative differs only in its
+	// committer and a more conservative maximum revision distance; the
+	// identity (binding hash, trust head, initial tip) is the same so the
+	// config validator accepts it and the rejection surfaces the
+	// already-installed invariant rather than a trust-head disagreement.
+	altCommitter := &testNativeTBTCSignerStateAnchorCommitter{current: &current}
+	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance - 1,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := current
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     altCommitter,
+		},
+	); err == nil {
+		t.Fatal("re-installation with different config was accepted")
+	} else if !strings.Contains(err.Error(), "already installed") {
+		t.Fatalf(
+			"different re-installation error did not mention 'already installed': %v",
+			err,
+		)
+	}
+
+	// Rejected re-installations must not have wired in their committers or
+	// poisoned the barrier; the first installation must remain the live one.
+	if altCommitter.calls != 0 || altCommitter.verifyCalls != 0 {
+		t.Fatal("rejected re-installation still contacted its committer")
+	}
+	if NativeTBTCSignerStateAnchorPoisoned() != nil {
+		t.Fatal("rejected re-installation poisoned the barrier")
+	}
+	if firstCommitter.calls != 0 || firstCommitter.verifyCalls != 1 {
+		t.Fatal(
+			"first installation's committer was contacted again by a rejected re-installation",
+		)
+	}
+}
+
 func TestNativeTBTCSignerStateAnchorBarrierBlocksBeforeMutationAtRevisionBound(
 	t *testing.T,
 ) {
@@ -688,7 +774,7 @@ func TestNativeTBTCSignerStateAnchorBarrierBlocksBeforeMutationAtRevisionBound(
 	committer := &testNativeTBTCSignerStateAnchorCommitter{
 		current: &current,
 	}
-	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+	err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
 			InitialTip:                                &initial,
 			ExpectedAnchorBindingHash:                 [32]byte{10},
@@ -704,34 +790,16 @@ func TestNativeTBTCSignerStateAnchorBarrierBlocksBeforeMutationAtRevisionBound(
 			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
 			Committer:     committer,
 		},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	invoked := false
-	released := false
-	discarded := false
-	_, err := executeNativeTBTCSignerStateAnchoredOutput(
-		"InteractiveRound1",
-		func() {
-			invoked = true
-			current.Generation++
-		},
-		func() ([]byte, error) {
-			released = true
-			return nil, nil
-		},
-		func() {
-			discarded = true
-		},
 	)
-	if !errors.Is(err, ErrNativeTBTCSignerStateAnchorUnavailable) {
-		t.Fatalf("exhausted revision window was not blocked: %v", err)
+	if err == nil {
+		t.Fatal("expected install to reject an exhausted revision window")
 	}
-	if invoked || released || discarded || current != initial ||
-		committer.calls != 0 || committer.verifyCalls != 1 {
+	if !strings.Contains(err.Error(), "offline anchor rotation is required") {
+		t.Fatalf("expected offline rotation guidance in the rejection: %v", err)
+	}
+	if current != initial || committer.calls != 0 || committer.verifyCalls != 0 {
 		t.Fatal(
-			"revision-bound admission mutated signer state or contacted the commit path",
+			"rejected installation still mutated signer state or contacted the commit path",
 		)
 	}
 }
@@ -752,7 +820,7 @@ func TestNativeTBTCSignerStateAnchorBarrierBlocksBeforeMutationWithoutGeneration
 	)
 	current := initial
 	committer := &testNativeTBTCSignerStateAnchorCommitter{current: &current}
-	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+	err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
 			InitialTip:                                &initial,
 			ExpectedAnchorBindingHash:                 [32]byte{10},
@@ -768,33 +836,16 @@ func TestNativeTBTCSignerStateAnchorBarrierBlocksBeforeMutationWithoutGeneration
 			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
 			Committer:     committer,
 		},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	invoked := false
-	released := false
-	discarded := false
-	_, err := executeNativeTBTCSignerStateAnchoredOutput(
-		"InteractiveRound1",
-		func() {
-			invoked = true
-		},
-		func() ([]byte, error) {
-			released = true
-			return nil, nil
-		},
-		func() {
-			discarded = true
-		},
 	)
-	if !errors.Is(err, ErrNativeTBTCSignerStateAnchorUnavailable) {
-		t.Fatalf("insufficient generation capacity was not blocked: %v", err)
+	if err == nil {
+		t.Fatal("expected install to reject insufficient generation capacity")
 	}
-	if invoked || released || discarded || current != initial ||
-		committer.calls != 0 || committer.verifyCalls != 1 {
+	if !strings.Contains(err.Error(), "offline anchor rotation is required") {
+		t.Fatalf("expected offline rotation guidance in the rejection: %v", err)
+	}
+	if current != initial || committer.calls != 0 || committer.verifyCalls != 0 {
 		t.Fatal(
-			"generation-bound admission mutated signer state or contacted the commit path",
+			"rejected installation still mutated signer state or contacted the commit path",
 		)
 	}
 }
@@ -1565,4 +1616,24 @@ func testNativeTBTCSignerStateWitnessTip(
 			testNativeTBTCSignerStateWitnessTip(1, [32]byte{2}).StateCommitment
 	}
 	return tip
+}
+
+func resetNativeTBTCSignerStateAnchorBarrierForTest() {
+	barrier := &globalNativeTBTCSignerStateAnchorBarrier
+	barrier.mutex.Lock()
+	defer barrier.mutex.Unlock()
+	barrier.installed = false
+	barrier.poisoned = nil
+	barrier.poisonedSignal.Store(nil)
+	barrier.tip = NativeTBTCSignerStateWitnessTip{}
+	barrier.readTip = nil
+	barrier.readTrustHead = nil
+	barrier.committer = nil
+	barrier.timeout = 0
+	barrier.expectedAnchorBindingHash = [32]byte{}
+	barrier.minimumAnchorServiceEpoch = 0
+	barrier.maximumAnchorRevisionDistance = 0
+	barrier.maximumStateGenerationDistance = 0
+	barrier.maximumStateGenerationAdvancePerOperation = 0
+	barrier.expectedTrustHead = NativeTBTCSignerStateAnchorTrustHead{}
 }

@@ -177,6 +177,14 @@ func TestDecodeNativeTBTCSignerRetainedKeyPackageInventoryRejectsSubstitution(
 		"wrong key group": func(wire *nativeTBTCSignerRetainedKeyPackageInventoryWire) {
 			(*wire.Entries)[0].KeyGroup = strings.Repeat("09", 32)
 		},
+		"uppercase key group": func(wire *nativeTBTCSignerRetainedKeyPackageInventoryWire) {
+			(*wire.Entries)[0].KeyGroup = strings.ToUpper(
+				strings.Repeat("0a", 32),
+			)
+		},
+		"0x-prefixed key group": func(wire *nativeTBTCSignerRetainedKeyPackageInventoryWire) {
+			(*wire.Entries)[0].KeyGroup = "0x" + (*wire.Entries)[0].KeyGroup
+		},
 		"wrong state image": func(wire *nativeTBTCSignerRetainedKeyPackageInventoryWire) {
 			wire.StateImageDigest = nativeTBTCSignerBytes32([32]byte{0x7f})
 		},

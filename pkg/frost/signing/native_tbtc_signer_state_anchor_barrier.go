@@ -212,7 +212,7 @@ func InstallNativeTBTCSignerStateAnchorBarrier(
 		expectedTrustHead.CertifiedFloor.ServiceEpoch !=
 			expectedTrustHead.ServiceEpoch ||
 		expectedTrustHead.CertifiedFloor.Revision > initial.AnchorRevision ||
-		initial.AnchorRevision-expectedTrustHead.CertifiedFloor.Revision >
+		initial.AnchorRevision-expectedTrustHead.CertifiedFloor.Revision >=
 			config.MaximumAnchorRevisionDistance ||
 		expectedTrustHead.CertifiedFloor.Checkpoint.StoreFingerprint !=
 			initial.StoreFingerprint ||
@@ -221,9 +221,13 @@ func InstallNativeTBTCSignerStateAnchorBarrier(
 			initial.Generation ||
 		initial.Generation-
 			expectedTrustHead.CertifiedFloor.Checkpoint.Generation >
-			config.MaximumStateGenerationDistance {
+			config.MaximumStateGenerationDistance ||
+		config.MaximumStateGenerationDistance-
+			(initial.Generation-
+				expectedTrustHead.CertifiedFloor.Checkpoint.Generation) <
+			config.MaximumStateGenerationAdvancePerOperation {
 		return fmt.Errorf(
-			"native tbtc signer trust head differs from the initial anchor identity",
+			"native tbtc signer trust head differs from the initial anchor identity; offline anchor rotation is required",
 		)
 	}
 	timeout := config.Timeout
@@ -856,24 +860,4 @@ func sameNativeTBTCSignerStateCheckpoint(
 		left.PreviousStateCommitment == right.PreviousStateCommitment &&
 		left.StateImageDigest == right.StateImageDigest &&
 		left.StateCommitment == right.StateCommitment
-}
-
-func resetNativeTBTCSignerStateAnchorBarrierForTest() {
-	barrier := &globalNativeTBTCSignerStateAnchorBarrier
-	barrier.mutex.Lock()
-	defer barrier.mutex.Unlock()
-	barrier.installed = false
-	barrier.poisoned = nil
-	barrier.poisonedSignal.Store(nil)
-	barrier.tip = NativeTBTCSignerStateWitnessTip{}
-	barrier.readTip = nil
-	barrier.readTrustHead = nil
-	barrier.committer = nil
-	barrier.timeout = 0
-	barrier.expectedAnchorBindingHash = [32]byte{}
-	barrier.minimumAnchorServiceEpoch = 0
-	barrier.maximumAnchorRevisionDistance = 0
-	barrier.maximumStateGenerationDistance = 0
-	barrier.maximumStateGenerationAdvancePerOperation = 0
-	barrier.expectedTrustHead = NativeTBTCSignerStateAnchorTrustHead{}
 }

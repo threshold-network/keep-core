@@ -485,11 +485,42 @@ answers.
 
 === Gaps in this area
 
-* *No metric.* Nothing anchor-related is registered with `clientinfo`,
-  so `/metrics` has no headroom gauge and no rotation warning. The only
-  scrapeable trace of a refusal is the generic
-  `wallet_action_failed_total` counter, which cannot distinguish a
-  headroom refusal from any other action failure.
+* *No consolidated boolean gauge.* The metrics that ship today cover
+  headroom and the per-cause rejection counters well enough for an
+  alert rule, but the single boolean `anchorRotationWarning` is not
+  exposed as its own scrape source (the existing `clientinfo`
+  application prefix `frost_native_signer_anchor` carries the three
+  state-anchor gauges but does not include a rotation-warning
+  boolean), and no alert-rule recommendation is documented. The
+  following sources are registered today and live inside `/metrics`
+  under the application prefix `frost_native_signer_anchor`:
+
+  * `frost_native_signer_anchor_poisoned` - gauge, reads the barrier
+    mirror directly at scrape time (true on any node, in any build,
+    the moment the registry is wired);
+  * `frost_native_signer_anchor_restartable_revision_headroom` and
+    `frost_native_signer_anchor_restartable_generation_headroom` -
+    gauges, fed live by `RecordNativeTBTCSignerStateAnchorRestartableHeadroom`
+    from `pkg/tbtc/node.go` and read zero until the first call;
+  * `frost_native_signer_anchor_headroom_observations_total` - counter,
+    counts how many times the headroom source has been published.
+
+  The admission-side rejections are registered separately under the
+  application prefix `frost_native_signer_anchor_admission` and are
+  cumulative counters (`*_rejected_total`); the ones that name a
+  rotation symptom are
+  `frost_native_signer_anchor_admission_unreserved_headroom_rejected_total`
+  (the rotation signal that lands first, while headroom is still
+  large) and
+  `frost_native_signer_anchor_admission_rotation_floor_rejected_total`
+  (fired once the smaller headroom crosses the 256-entry floor and
+  every new work item is refused). The other four -
+  `seat_ceiling_rejected_total`, `reservation_contention_rejected_total`,
+  `poisoned_rejected_total`, `pre_sign_input_rejected_total` - are
+  unrelated to headroom and remain useful for diagnosing the other
+  refusal paths. `wallet_action_failed_total` is the generic fallback
+  that still cannot distinguish a headroom refusal from any other
+  action failure.
 * *No log line.* Neither the readiness snapshot nor the anchor binding
   logs headroom. The first log evidence is the refusal itself, by which
   time the node is already turning work away.
@@ -502,6 +533,66 @@ answers.
   refuses to answer while activation state is not reconciled, so the
   reading is unavailable exactly when a node is unhealthy.
 
+[[trust-transition-startup-recovery]]
+== When startup cannot cleanly reconstruct its trust head
+
+A node that crashes mid trust-transition (typically mid-rotation-restart)
+is recovered *automatically* on the next start. The recovery itself
+requires no operator action when it succeeds: the typed
+`state-anchor trust-recovery` signal returned by the Rust signer selects
+an exact durable-intent suffix from the independently authenticated
+certificate artifact, and the transition is then validated as an exact
+idempotent replay of the suffix already applied, so an interrupted
+restart simply re-issues the same suffix and certifies the same head
+(`pkg/tbtc/frost_native_signer_anchor_trust_startup.go`,
+`executeFrostNativeSignerAnchorTrustTransition`, gated on success by
+`validateFrostNativeSignerAnchorTrustTransitionResult` and triggered
+from `pkg/tbtc/node.go` during `tbtc.Initialize`). The certificate
+artifact is read once at startup, validated end-to-end against the
+manifest pins, and used to re-derive the suffix; no certificate bytes
+or trust head are ever restored from local intent.
+
+When the recovery fails, the same path also surfaces the failure as
+a typed startup error. The recovery is non-silent: the typed error
+string names what failed. The recovery-specific surfaces to look for
+in the startup log are:
+
+----
+native signer anchor trust-transition executor dependencies are incomplete
+native signer anchor trust-transition certificate chain is empty
+cannot obtain a fresh native signer anchor trust-transition target: <wrapped>
+fresh native signer anchor trust-transition target differs from the selected certificate
+reconciled native signer tip differs from the fresh trust-transition target
+native signer anchor trust-transition validation inputs are incomplete
+native signer anchor trust-transition result differs from the independently pinned head
+new native signer anchor trust transition does not use the exact certified target
+fresh native signer anchor trust-transition target is not a certified-floor descendant: <descendant error>
+----
+
+The first four are read- or replay-side failures: a fresh signed
+`Read` could not be obtained, came back different from the
+certificate's target, or the reconciler did not match the transition
+target. The last five are validator-side failures: the Rust signer
+did not install the transition, the result's trust head does not
+match the independently pinned head, the transition's target is not
+the certificate's exact target, or the certified-floor descendant
+check rejected the target.
+
+The remedy is the same in every case: the failure is not transient
+and not retryable from the running node. The certificate artifact
+on disk is the only authoritative source of the trust floor, and the
+artifact is the artifact the validator just rejected. There is no
+runtime command that re-installs a trust transition and no operator
+remediation inside this repository beyond re-examining the
+certificate chain against the manifest pins (the chain must start at
+sequence 1, the authority public key must match the manifest, and the
+final certificate's `to.reference` must be a descendant of every
+prior certificate's `to.reference`) and re-running the rotation
+ceremony in <<the-rotation-ceremony>>. A node that cannot recover
+its trust head on startup refuses to start; it does not come up
+in a degraded state.
+
+[[the-rotation-ceremony]]
 == The rotation ceremony
 
 A rotation is an offline-signed statement that "the anchor stream moves
@@ -678,9 +769,11 @@ derived above is run against real value.
   Detached-signature-only, never accepting the offline authority
   private key online.
 . *A supported way to read headroom* that does not require an
-  auditor challenge assembled by hand: a `tbtc-signer` subcommand, or
-  a `clientinfo` gauge for both headroom dimensions plus the
-  rotation-warning flag.
+  auditor challenge assembled by hand, without first doing the
+  rotation metric work in the gap above: a `tbtc-signer` subcommand,
+  or a `clientinfo` boolean source for `anchorRotationWarning`
+  (the per-cause rejection counters already cover the alerting
+  case; the two headroom gauges already ship).
 . *An alert threshold set well above the danger points* - above 256
   (where all work stops), above the node's own per-input reservation for
   its seat count (175 generations at 4 seats, 815 at 20), and above what

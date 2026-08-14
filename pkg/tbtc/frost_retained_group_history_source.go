@@ -1522,6 +1522,19 @@ func frostRetainedGroupMutationFromWire(
 	if err != nil {
 		return FrostRetainedGroupMutation{}, err
 	}
+	// frostRetainedGroupWireMutation.OperatorIDs carries no `omitempty`, and
+	// decodeStrictFrostActivationJSON collapses both a missing key and an
+	// explicit null to a nil slice. The receipt root is canonicalized over
+	// the wire-decoded struct (a nil slice becomes JSON null), whereas
+	// frostRetainedGroupMutationToWire re-projects the parsed mutation back
+	// to wire and always emits an empty []uint32 slice (JSON []). The two
+	// normalizations disagree, so a nil slice here would silently break the
+	// checkpoint history root. Reject the ambiguous encoding up-front.
+	if mutation.OperatorIDs == nil {
+		return FrostRetainedGroupMutation{}, fmt.Errorf(
+			"retained-group mutation operatorIDs must be an explicit array",
+		)
+	}
 	if len(mutation.OperatorIDs) > 100 || len(mutation.Reason) > frostRetainedGroupMaximumReasonBytes {
 		return FrostRetainedGroupMutation{}, fmt.Errorf("retained-group mutation exceeds field bounds")
 	}

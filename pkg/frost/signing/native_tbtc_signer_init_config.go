@@ -85,6 +85,9 @@ func recordNativeTBTCSignerInstalledStateAnchorConfig(
 		StateAnchorTrustCertificateDigest      *string `json:"state_anchor_trust_certificate_digest"`
 		StateWitnessRotationThresholdRecords   *uint64 `json:"state_witness_rotation_threshold_records"`
 	}{}
+	if err := preflightStrictNativeTBTCSignerJSON(configJSON, 0); err != nil {
+		return fmt.Errorf("cannot strictly decode signer JSON: [%w]", err)
+	}
 	if err := json.Unmarshal(configJSON, &wire); err != nil {
 		return fmt.Errorf("cannot decode installed signer anchor configuration: %w", err)
 	}

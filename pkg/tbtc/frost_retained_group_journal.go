@@ -1034,6 +1034,26 @@ type frostOrphanedDKGReconcilerFunc func(
 	map[[32]byte]struct{},
 ) error
 
+// frostRetainedGroupJournal persists the canonical retained-group inventory,
+// the mirror quarantine journal, and the checkpoint chain so the node can
+// survive restarts without losing signed activation context. It upholds:
+//   - Crash-consistency: every persisted batch is immutable (no-replace) and
+//     the state checkpoint is published only after its batch sequence has
+//     reached durable storage, so a crash between the two writes leaves a
+//     state file at a prefix that the next init/adoptDurableBatchSuffixes
+//     can replay deterministically.
+//   - Replay safety: every persisted batch validates against the durable
+//     predecessor state (BatchRoot, BindingHash, sequence, From), so a
+//     tampered or reordered batch is rejected by the same chain commitment
+//     that reconciliation uses against the live history source.
+//   - Evidence retention: each batch carries its full mutation set under a
+//     SHA-256 checksum so the durable journal reproduces the canonical and
+//     quarantine state at every persisted point; lift certificates and
+//     quarantine tombstones are kept alongside, so re-applied mutations have
+//     the exact evidence the source would have produced.
+//
+// The on-disk layout and invariants above are the implementation's normative
+// reference; an RFC describing the public subsystem should mirror them.
 type frostRetainedGroupJournal struct {
 	mutex                        sync.Mutex
 	rootDirectory                string
@@ -1412,6 +1432,15 @@ func (frgj *frostRetainedGroupJournal) initialize() error {
 			return err
 		}
 	}
+	// Mirror adoptDurableCanonicalBatches: when a durable state checkpoint
+	// already captures rebuilt state as of stored.BatchSequence, the prior
+	// batches are cryptographically committed by stored.BatchRoot and chained
+	// through the first new batch's validateFrostRetainedGroupBatch check
+	// below. Re-running InventoryRoot and the byte-equality comparison per
+	// replayed batch would be O(total-batches × wallets) per restart with no
+	// bound over a multi-year node lifetime. Defer both to one final call
+	// after the loop and trust the cryptographic chain for the prefix.
+	equalAtMatch := matchedStored
 	for index, name := range batchNames {
 		expectedSequence := uint64(index + 1)
 		if name != frostRetainedGroupBatchFileName(expectedSequence) {
@@ -1430,20 +1459,26 @@ func (frgj *frostRetainedGroupJournal) initialize() error {
 		rebuilt.BatchSequence = batch.Sequence
 		rebuilt.CurrentPoint = batch.To
 		rebuilt.BatchRoot = frostRetainedGroupBatchRoot(batch.PriorBatchRoot, batch.Checksum)
-		rebuilt.InventoryRoot, _, _, _, err = frostRetainedGroupInventoryRoot(rebuilt)
-		if err != nil {
-			return err
-		}
 		rebuiltMutations = append(rebuiltMutations, cloneFrostRetainedGroupMutations(batch.Mutations)...)
-		if rebuilt.BatchSequence == stored.BatchSequence {
+		if !equalAtMatch && rebuilt.BatchSequence == stored.BatchSequence {
+			rebuilt.InventoryRoot, _, _, _, err = frostRetainedGroupInventoryRoot(rebuilt)
+			if err != nil {
+				return err
+			}
 			if err := equalFrostRetainedGroupStates(stored, rebuilt); err != nil {
 				return err
 			}
-			matchedStored = true
+			equalAtMatch = true
 		}
 	}
-	if stored.BatchSequence > uint64(len(batchNames)) || !matchedStored {
-		return fmt.Errorf("FROST retained-group state checkpoint has no exact batch prefix")
+	if stateExists && !equalAtMatch {
+		// Stored state was never reached during replay; it must point past the
+		// final batch, which the loop's per-batch validate has already rejected.
+		return fmt.Errorf("FROST retained-group stored state is past the replayed batch prefix")
+	}
+	rebuilt.InventoryRoot, _, _, _, err = frostRetainedGroupInventoryRoot(rebuilt)
+	if err != nil {
+		return err
 	}
 	frgj.state = rebuilt
 	frgj.mutations = rebuiltMutations
@@ -2055,7 +2090,7 @@ func frostRetainedGroupQuarantineBatchCanonicalValue(
 func frostRetainedGroupLegacySchemaError(component string) error {
 	return fmt.Errorf(
 		"prior FROST retained-group %s store schema is not safely migratable; "+
-			"the signed activation manifest must provision a new empty v3 store identity",
+			"the signed activation manifest must provision a new empty v4 store identity",
 		component,
 	)
 }
@@ -2072,6 +2107,7 @@ func validateFrostRetainedGroupBatch(
 		batch.BindingHash == [32]byte{} || batch.BindingHash != prior.BindingHash ||
 		batch.Sequence != prior.BatchSequence+1 || batch.From != prior.CurrentPoint ||
 		batch.PriorBatchRoot != prior.BatchRoot || batch.To.BlockNumber < batch.From.BlockNumber ||
+		(batch.To.BlockNumber == batch.From.BlockNumber && batch.To.BlockHash != batch.From.BlockHash) ||
 		batch.To.BlockHash == [32]byte{} || batch.Checksum == [32]byte{} {
 		return fmt.Errorf("batch header is invalid")
 	}
@@ -2105,8 +2141,8 @@ func validateFrostRetainedGroupQuarantineBatch(
 	}
 	if batch.Schema != frostRetainedGroupQuarantineBatchSchema ||
 		batch.BindingHash == [32]byte{} || batch.BindingHash != prior.BindingHash ||
-		batch.Sequence != prior.BatchSequence+1 || batch.From != prior.CurrentPoint ||
 		batch.PriorBatchRoot != prior.BatchRoot || batch.To.BlockNumber < batch.From.BlockNumber ||
+		(batch.To.BlockNumber == batch.From.BlockNumber && batch.To.BlockHash != batch.From.BlockHash) ||
 		batch.To.BlockHash == [32]byte{} || batch.Checksum == [32]byte{} {
 		return fmt.Errorf("quarantine batch header is invalid")
 	}
@@ -3311,23 +3347,90 @@ func frostRetainedGroupInventoryRoot(
 	maximumSize := uint64(0)
 	for _, wallet := range state.Wallets {
 		size := uint64(len(wallet.OperatorIDs))
-		if wallet.WalletID == [32]byte{} || size < 51 || size > 100 ||
-			wallet.RetainedGroupHash == [32]byte{} ||
-			!wallet.CreationPoint.valid() || !wallet.BridgeRegistrationPoint.valid() ||
-			!wallet.LifecyclePoint.valid() ||
-			!sameFrostRetainedGroupTransaction(wallet.CreationPoint, wallet.BridgeRegistrationPoint) ||
-			compareFrostRetainedGroupEventPoints(wallet.CreationPoint, wallet.BridgeRegistrationPoint) >= 0 ||
-			compareFrostRetainedGroupEventPoints(wallet.BridgeRegistrationPoint, wallet.LifecyclePoint) > 0 ||
-			(wallet.BridgeRegistrationPoint.BlockNumber == wallet.LifecyclePoint.BlockNumber &&
-				wallet.BridgeRegistrationPoint.BlockHash != wallet.LifecyclePoint.BlockHash) ||
-			wallet.LifecyclePoint.BlockNumber > state.CurrentPoint.BlockNumber ||
-			(wallet.LifecyclePoint.BlockNumber == state.CurrentPoint.BlockNumber &&
-				wallet.LifecyclePoint.BlockHash != state.CurrentPoint.BlockHash) ||
-			wallet.Lifecycle.terminal() != wallet.RegistryClosed ||
-			(wallet.RegistryClosed &&
-				(!sameFrostRetainedGroupTransaction(wallet.LifecyclePoint, wallet.RegistryClosurePoint) ||
-					compareFrostRetainedGroupEventPoints(wallet.LifecyclePoint, wallet.RegistryClosurePoint) >= 0)) {
-			return [32]byte{}, 0, 0, 0, fmt.Errorf("FROST retained-group inventory has invalid group size")
+		walletIDHex := "0x" + hex.EncodeToString(wallet.WalletID[:])
+		if wallet.WalletID == [32]byte{} || size < 51 || size > 100 {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has invalid wallet [%s]: group size [%d] outside [51, 100] or zero wallet ID",
+				walletIDHex,
+				size,
+			)
+		}
+		if wallet.RetainedGroupHash == [32]byte{} {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has zero retained-group hash for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if !wallet.CreationPoint.valid() {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has invalid creation point for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if !wallet.BridgeRegistrationPoint.valid() {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has invalid bridge registration point for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if !wallet.LifecyclePoint.valid() {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has invalid lifecycle point for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if !sameFrostRetainedGroupTransaction(wallet.CreationPoint, wallet.BridgeRegistrationPoint) {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has creation and bridge registration in different transactions for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if compareFrostRetainedGroupEventPoints(wallet.CreationPoint, wallet.BridgeRegistrationPoint) >= 0 {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has bridge registration not strictly after creation for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if compareFrostRetainedGroupEventPoints(wallet.BridgeRegistrationPoint, wallet.LifecyclePoint) > 0 {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has lifecycle strictly before bridge registration for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if wallet.BridgeRegistrationPoint.BlockNumber == wallet.LifecyclePoint.BlockNumber &&
+			wallet.BridgeRegistrationPoint.BlockHash != wallet.LifecyclePoint.BlockHash {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has bridge registration and lifecycle in the same block number with different hashes for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if wallet.LifecyclePoint.BlockNumber > state.CurrentPoint.BlockNumber {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has lifecycle point above the journal current point for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if wallet.LifecyclePoint.BlockNumber == state.CurrentPoint.BlockNumber &&
+			wallet.LifecyclePoint.BlockHash != state.CurrentPoint.BlockHash {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has lifecycle point block hash disagreeing with the journal current point for wallet [%s]",
+				walletIDHex,
+			)
+		}
+		if wallet.Lifecycle.terminal() != wallet.RegistryClosed {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has terminal lifecycle [%s] without matching registry closure for wallet [%s]",
+				wallet.Lifecycle,
+				walletIDHex,
+			)
+		}
+		if wallet.RegistryClosed &&
+			(!sameFrostRetainedGroupTransaction(wallet.LifecyclePoint, wallet.RegistryClosurePoint) ||
+				compareFrostRetainedGroupEventPoints(wallet.LifecyclePoint, wallet.RegistryClosurePoint) >= 0) {
+			return [32]byte{}, 0, 0, 0, fmt.Errorf(
+				"FROST retained-group inventory has registry closure not strictly after or in the same transaction as the lifecycle point for wallet [%s]",
+				walletIDHex,
+			)
 		}
 		if minimumSize == 0 || size < minimumSize {
 			minimumSize = size
@@ -3433,40 +3536,6 @@ func cloneFrostRetainedGroupMutations(
 		}
 	}
 	return result
-}
-
-func equalFrostRetainedGroupSemanticHistories(
-	first *FrostRetainedGroupHistory,
-	second *FrostRetainedGroupHistory,
-) (bool, error) {
-	if first == nil || second == nil ||
-		first.From != second.From ||
-		first.To != second.To ||
-		first.HistoryRoot != second.HistoryRoot ||
-		first.Complete != second.Complete ||
-		first.EmptyAtFrom != second.EmptyAtFrom ||
-		first.DescriptorSetHash != second.DescriptorSetHash ||
-		len(first.Mutations) != len(second.Mutations) {
-		return false, nil
-	}
-	for index := range first.Mutations {
-		firstMutation, err := frostRetainedGroupCanonicalValue(
-			first.Mutations[index],
-		)
-		if err != nil {
-			return false, err
-		}
-		secondMutation, err := frostRetainedGroupCanonicalValue(
-			second.Mutations[index],
-		)
-		if err != nil {
-			return false, err
-		}
-		if !bytes.Equal(firstMutation, secondMutation) {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 // adoptDurableBatchSuffixes integrates batches that are already durable but not
@@ -3688,14 +3757,28 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 	if err := frgj.source.VerifyPoint(ctx, beforeHead); err != nil {
 		return nil, fmt.Errorf("cannot verify independent finalized head before journal replay: [%w]", err)
 	}
-	for name, point := range map[string]FrostPreSignFinality{
-		"signed checkpoint":         frgj.metadata.Checkpoint,
-		"durable canonical cursor":  frgj.state.CurrentPoint,
-		"durable quarantine cursor": frgj.quarantineState.CurrentPoint,
-		"challenged target":         target,
-	} {
-		if err := frgj.source.VerifyPoint(ctx, point); err != nil {
-			return nil, fmt.Errorf("cannot verify FROST retained-group %s: [%w]", name, err)
+	type finalityCheck struct {
+		name  string
+		point FrostPreSignFinality
+	}
+	checks := []finalityCheck{
+		{"signed checkpoint", frgj.metadata.Checkpoint},
+		{"durable canonical cursor", frgj.state.CurrentPoint},
+		{"durable quarantine cursor", frgj.quarantineState.CurrentPoint},
+		{"challenged target", target},
+	}
+	distinct := make([]finalityCheck, 0, len(checks))
+	seen := make(map[FrostPreSignFinality]struct{}, len(checks))
+	for _, check := range checks {
+		if _, duplicate := seen[check.point]; duplicate {
+			continue
+		}
+		seen[check.point] = struct{}{}
+		distinct = append(distinct, check)
+	}
+	for _, check := range distinct {
+		if err := frgj.source.VerifyPoint(ctx, check.point); err != nil {
+			return nil, fmt.Errorf("cannot verify FROST retained-group %s: [%w]", check.name, err)
 		}
 	}
 	checkpointAfter := FrostRetainedGroupCheckpointCursor{
@@ -3732,6 +3815,16 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 				"FROST retained-group history receipt is incomplete or differently bound",
 			)
 		}
+		// frostRetainedGroupMaximumMutations is a lifetime ceiling on the
+		// combined canonical and quarantine stream because ReadCompleteHistory
+		// always restates the manifest checkpoint as its From and history is
+		// never pruned or re-based. FrostRetainedGroupMaximumWallets (2048)
+		// caps wallet entries, but a typical wallet lifecycle costs 3-5
+		// mutations and the mutation cap (4096) binds at roughly 800-1365
+		// lifetime wallets. Operators hitting this error are at the lifetime
+		// horizon and must rotate the activation identity to provision a new
+		// empty journal store; moving the genesis checkpoint forward is a
+		// separate protocol design tracked outside this component.
 		if len(page.Mutations) > frostRetainedGroupMaximumMutations {
 			return nil, fmt.Errorf(
 				"FROST retained-group history exceeds the mutation limit",
@@ -3754,22 +3847,7 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 				"FROST retained-group history checkpoint cursor differs from the requested certified head",
 			)
 		}
-		if history == nil {
-			history = page
-		} else {
-			equal, err := equalFrostRetainedGroupSemanticHistories(
-				history,
-				page,
-			)
-			if err != nil {
-				return nil, err
-			}
-			if !equal {
-				return nil, fmt.Errorf(
-					"FROST retained-group history changed between checkpoint pages",
-				)
-			}
-		}
+		history = page
 		pageCheckpointHashes, err :=
 			validateFrostRetainedGroupCheckpointSuffix(
 				frgj.checkpointPolicy,

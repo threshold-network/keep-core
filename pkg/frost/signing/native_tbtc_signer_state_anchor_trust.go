@@ -350,7 +350,8 @@ func DecodeNativeTBTCSignerStateAnchorTrustTransitionResult(
 	applied, err := decodeNativeTBTCSignerCanonicalUint64(
 		wire.AppliedCertificateCount,
 	)
-	if err != nil || applied > 64 {
+	if err != nil ||
+		applied > NativeTBTCSignerStateAnchorTrustTransitionMaximumCertificateCount {
 		return nil, fmt.Errorf(
 			"invalid native signer applied trust-certificate count",
 		)
@@ -395,8 +396,9 @@ func DecodeNativeTBTCSignerStateAnchorTrustTransitionResult(
 			result.CurrentCheckpoint.Generation ||
 		result.CurrentAnchorReference.Checkpoint != result.CurrentCheckpoint ||
 		result.CurrentAnchorReference.ServiceEpoch != result.TrustHead.ServiceEpoch ||
-		result.CurrentAnchorReference.Revision <
-			result.TrustHead.CertifiedFloor.Revision {
+		result.CurrentAnchorReference.Revision-
+			result.TrustHead.CertifiedFloor.Revision >
+			NativeTBTCSignerStateAnchorMaximumRevisionDistance {
 		return nil, fmt.Errorf(
 			"native signer state-anchor trust transition readback is inconsistent",
 		)

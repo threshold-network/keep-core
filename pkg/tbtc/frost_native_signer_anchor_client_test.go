@@ -783,6 +783,35 @@ func TestFrostNativeSignerAnchorClientHistoryPublishesTargetAtomically(t *testin
 	}
 }
 
+func TestFrostNativeSignerAnchorClientRejectsStaleHistoryNonce(t *testing.T) {
+	environment := newTestFrostNativeSignerAnchorEnvironment(t, "history")
+	defer environment.server.Close()
+	if _, err := environment.client.ReadFrostNativeSignerStateWitnessAnchorHistory(
+		context.Background(),
+		environment.historyFloor,
+	); err != nil {
+		t.Fatalf("fresh authenticated history failed: %v", err)
+	}
+
+	staleNonce := environment.lastHistoryNonce
+	environment.historyResponseMutator = func(response []byte) []byte {
+		return testFrostNativeSignerAnchorHistoryResponseWithNonce(
+			t,
+			response,
+			staleNonce,
+			environment.onlinePrivate,
+			environment.client.identity.OnlineKeyHash,
+		)
+	}
+	_, err := environment.client.ReadFrostNativeSignerStateWitnessAnchorHistory(
+		context.Background(),
+		environment.historyFloor,
+	)
+	if err == nil || !strings.Contains(err.Error(), "history response nonce mismatch") {
+		t.Fatalf("expected stale history nonce rejection, got [%v]", err)
+	}
+}
+
 func TestFrostNativeSignerAnchorClientHistoryRejectsChangedEqualRevisionAck(t *testing.T) {
 	environment := newTestFrostNativeSignerAnchorEnvironment(t, "history")
 	defer environment.server.Close()
@@ -852,6 +881,160 @@ func TestFrostNativeSignerAnchorClientRejectsSignedAbsentStream(t *testing.T) {
 		context.Background(),
 	); err == nil || !strings.Contains(err.Error(), "stream is absent") {
 		t.Fatalf("expected signed absent stream rejection, got [%v]", err)
+	}
+}
+
+func TestFrostNativeSignerAnchorClientRejectsInvalidResponseSignatures(
+	t *testing.T,
+) {
+	wrongKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0xfd}, ed25519.SeedSize))
+	tests := []struct {
+		name        string
+		operation   string
+		readMutator func(*testing.T, []byte) []byte
+		casMutator  func(*testing.T, []byte) []byte
+	}{
+		{
+			name:      "read wrong key",
+			operation: "read",
+			readMutator: func(t *testing.T, response []byte) []byte {
+				return testFrostNativeSignerAnchorReadResponseWithSignature(
+					t,
+					response,
+					wrongKey,
+				)
+			},
+		},
+		{
+			name:      "read corrupt signature",
+			operation: "read",
+			readMutator: func(t *testing.T, response []byte) []byte {
+				return testFrostNativeSignerAnchorReadResponseWithCorruptSignature(
+					t,
+					response,
+				)
+			},
+		},
+		{
+			name:      "read omitted signature",
+			operation: "read",
+			readMutator: func(t *testing.T, response []byte) []byte {
+				return testFrostNativeSignerAnchorOmitResponseSignature(
+					t,
+					response,
+				)
+			},
+		},
+		{
+			name:      "CAS wrong key",
+			operation: "cas",
+			casMutator: func(t *testing.T, response []byte) []byte {
+				return testFrostNativeSignerAnchorAcknowledgementWithSignature(
+					t,
+					response,
+					wrongKey,
+				)
+			},
+		},
+		{
+			name:      "CAS corrupt signature",
+			operation: "cas",
+			casMutator: func(t *testing.T, response []byte) []byte {
+				return testFrostNativeSignerAnchorAcknowledgementWithCorruptSignature(
+					t,
+					response,
+				)
+			},
+		},
+		{
+			name:      "CAS omitted signature",
+			operation: "cas",
+			casMutator: func(t *testing.T, response []byte) []byte {
+				return testFrostNativeSignerAnchorOmitResponseSignature(
+					t,
+					response,
+				)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mode := "normal"
+			if test.operation == "cas" {
+				mode = "cas-no-commit"
+			}
+			environment := newTestFrostNativeSignerAnchorEnvironment(t, mode)
+			defer environment.server.Close()
+			if _, err := environment.client.ReadFrostNativeSignerStateWitnessAnchor(
+				context.Background(),
+			); err != nil {
+				t.Fatalf("fresh authenticated read failed: %v", err)
+			}
+
+			if test.operation == "read" {
+				environment.readResponseMutator = func(response []byte) []byte {
+					return test.readMutator(t, response)
+				}
+				_, err := environment.client.ReadFrostNativeSignerStateWitnessAnchor(
+					context.Background(),
+				)
+				if err == nil || !strings.Contains(
+					err.Error(),
+					"native signer anchor read response signature is invalid",
+				) {
+					t.Fatalf("expected read signature rejection, got [%v]", err)
+				}
+				return
+			}
+
+			environment.casResponseMutator = func(response []byte) []byte {
+				return test.casMutator(t, response)
+			}
+			_, err := environment.client.CompareAndSwapFrostNativeSignerStateWitnessAnchor(
+				context.Background(),
+				environment.expected,
+				environment.candidate,
+				environment.proof,
+			)
+			if err == nil || !(strings.Contains(
+				err.Error(),
+				"checkpoint acknowledgement signature is invalid",
+			) || strings.Contains(
+				err.Error(),
+				"signature is not canonical lowercase bytes64",
+			)) {
+				t.Fatalf("expected CAS signature rejection, got [%v]", err)
+			}
+		})
+	}
+}
+
+func TestFrostNativeSignerAnchorClientRejectsStaleReadNonce(t *testing.T) {
+	environment := newTestFrostNativeSignerAnchorEnvironment(t, "normal")
+	defer environment.server.Close()
+	if _, err := environment.client.ReadFrostNativeSignerStateWitnessAnchor(
+		context.Background(),
+	); err != nil {
+		t.Fatalf("fresh authenticated read failed: %v", err)
+	}
+
+	staleNonce := environment.lastReadNonce
+	environment.readResponseMutator = func(response []byte) []byte {
+		return testFrostNativeSignerAnchorReadResponseWithNonce(
+			t,
+			response,
+			staleNonce,
+			environment.onlinePrivate,
+		)
+	}
+	_, err := environment.client.ReadFrostNativeSignerStateWitnessAnchor(
+		context.Background(),
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"native signer anchor read nonce mismatch",
+	) {
+		t.Fatalf("expected stale read nonce rejection, got [%v]", err)
 	}
 }
 
@@ -1040,14 +1223,20 @@ func TestIsFrostNativeSignerAnchorRetryableReadFailure(t *testing.T) {
 }
 
 type testFrostNativeSignerAnchorEnvironment struct {
-	server        *httptest.Server
-	client        *FrostNativeSignerAnchorClient
-	readFaults    *testFrostNativeSignerAnchorReadFaults
-	expected      FrostNativeSignerStateWitnessCheckpoint
-	candidate     FrostNativeSignerStateWitnessCheckpoint
-	proof         []frostsigning.NativeTBTCSignerStateWitnessProofEntry
-	historyFloor  FrostNativeSignerStateWitnessAnchorReference
-	historyTarget FrostNativeSignerStateWitnessAnchorReference
+	server                 *httptest.Server
+	client                 *FrostNativeSignerAnchorClient
+	readFaults             *testFrostNativeSignerAnchorReadFaults
+	expected               FrostNativeSignerStateWitnessCheckpoint
+	candidate              FrostNativeSignerStateWitnessCheckpoint
+	proof                  []frostsigning.NativeTBTCSignerStateWitnessProofEntry
+	historyFloor           FrostNativeSignerStateWitnessAnchorReference
+	historyTarget          FrostNativeSignerStateWitnessAnchorReference
+	readResponseMutator    func([]byte) []byte
+	casResponseMutator     func([]byte) []byte
+	historyResponseMutator func([]byte) []byte
+	onlinePrivate          ed25519.PrivateKey
+	lastReadNonce          [32]byte
+	lastHistoryNonce       [32]byte
 }
 
 // testFrostNativeSignerAnchorReadFaults counts read requests and answers the
@@ -1148,6 +1337,7 @@ func newTestFrostNativeSignerAnchorEnvironment(
 	var historyEvents []FrostNativeSignerStateWitnessAnchorHistoryEvent
 	advanceCalls := 0
 	readFaults := &testFrostNativeSignerAnchorReadFaults{}
+	environment := &testFrostNativeSignerAnchorEnvironment{}
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
@@ -1170,6 +1360,7 @@ func newTestFrostNativeSignerAnchorEnvironment(
 				http.Error(writer, err.Error(), http.StatusBadRequest)
 				return
 			}
+			environment.lastReadNonce = nonce
 			transcript := frostNativeSignerAnchorReadRequestTranscript(
 				identity,
 				nonce,
@@ -1202,6 +1393,9 @@ func newTestFrostNativeSignerAnchorEnvironment(
 				currentJSON,
 				onlinePrivate,
 			)
+			if environment.readResponseMutator != nil {
+				response = environment.readResponseMutator(response)
+			}
 			_, _ = writer.Write(response)
 		case "/anchor/advance":
 			payload, _ := io.ReadAll(request.Body)
@@ -1230,6 +1424,9 @@ func newTestFrostNativeSignerAnchorEnvironment(
 			requestDigest := sha256.Sum256(transcript)
 			advanceCalls++
 			shouldApply := mode != "expected-ambiguous" || advanceCalls > 1
+			if mode == "cas-no-commit" {
+				shouldApply = false
+			}
 			target := candidate
 			if mode == "divergent-ambiguous" {
 				target = divergent
@@ -1251,10 +1448,29 @@ func newTestFrostNativeSignerAnchorEnvironment(
 					now,
 					onlinePrivate,
 				)
+			} else if mode == "cas-no-commit" {
+				_, currentJSON = testFrostNativeSignerAnchorAcknowledgement(
+					t,
+					identity,
+					candidate,
+					operationID,
+					transitionDigest,
+					requestDigest,
+					nonce,
+					"applied",
+					current.ServiceEpoch,
+					current.Revision+1,
+					current.EventRoot,
+					now,
+					onlinePrivate,
+				)
 			}
-			if advanceCalls == 1 && mode != "normal" {
+			if advanceCalls == 1 && mode != "normal" && mode != "cas-no-commit" {
 				http.Error(writer, "response lost", http.StatusInternalServerError)
 				return
+			}
+			if environment.casResponseMutator != nil {
+				currentJSON = environment.casResponseMutator(currentJSON)
 			}
 			_, _ = writer.Write(currentJSON)
 		case "/anchor/history":
@@ -1265,6 +1481,7 @@ func newTestFrostNativeSignerAnchorEnvironment(
 				return
 			}
 			nonce, _ := frostNativeSignerAnchorParseHex32(historyRequest.Payload.Nonce)
+			environment.lastHistoryNonce = nonce
 			startRevision, _ := frostNativeSignerAnchorParseUint64(
 				historyRequest.Payload.StartRevision,
 			)
@@ -1308,6 +1525,9 @@ func newTestFrostNativeSignerAnchorEnvironment(
 					now,
 					onlinePrivate,
 				)
+				if environment.historyResponseMutator != nil {
+					response = environment.historyResponseMutator(response)
+				}
 				_, _ = writer.Write(response)
 				return
 			}
@@ -1335,6 +1555,9 @@ func newTestFrostNativeSignerAnchorEnvironment(
 				now,
 				onlinePrivate,
 			)
+			if environment.historyResponseMutator != nil {
+				response = environment.historyResponseMutator(response)
+			}
 			_, _ = writer.Write(response)
 		default:
 			http.NotFound(writer, request)
@@ -1451,16 +1674,16 @@ func newTestFrostNativeSignerAnchorEnvironment(
 		server.Close()
 		t.Fatal(err)
 	}
-	return &testFrostNativeSignerAnchorEnvironment{
-		server:        server,
-		client:        client,
-		readFaults:    readFaults,
-		expected:      expected,
-		candidate:     candidate,
-		proof:         proof,
-		historyFloor:  historyFloor,
-		historyTarget: historyTarget,
-	}
+	environment.server = server
+	environment.client = client
+	environment.readFaults = readFaults
+	environment.expected = expected
+	environment.candidate = candidate
+	environment.proof = proof
+	environment.historyFloor = historyFloor
+	environment.historyTarget = historyTarget
+	environment.onlinePrivate = onlinePrivate
+	return environment
 }
 
 func testFrostNativeSignerAnchorAbsentReadResponse(
@@ -1614,6 +1837,224 @@ func testFrostNativeSignerAnchorReadResponse(
 		ed25519.Sign(onlinePrivate, digest),
 	)
 	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func testFrostNativeSignerAnchorReplaceResponseSignature(
+	t *testing.T,
+	response []byte,
+	signature []byte,
+) []byte {
+	t.Helper()
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(response, &object); err != nil {
+		t.Fatal(err)
+	}
+	if signature == nil {
+		delete(object, "signature")
+	} else {
+		encoded, err := json.Marshal(frostNativeSignerAnchorSignatureHex(signature))
+		if err != nil {
+			t.Fatal(err)
+		}
+		object["signature"] = encoded
+	}
+	payload, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func testFrostNativeSignerAnchorReadResponseWithSignature(
+	t *testing.T,
+	response []byte,
+	signingKey ed25519.PrivateKey,
+) []byte {
+	t.Helper()
+	var wire frostNativeSignerAnchorReadResponse
+	if err := json.Unmarshal(response, &wire); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := frostNativeSignerAnchorReadResponseTranscript(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return testFrostNativeSignerAnchorReplaceResponseSignature(
+		t,
+		response,
+		ed25519.Sign(signingKey, digest),
+	)
+}
+
+func testFrostNativeSignerAnchorReadResponseWithCorruptSignature(
+	t *testing.T,
+	response []byte,
+) []byte {
+	t.Helper()
+	var wire frostNativeSignerAnchorReadResponse
+	if err := json.Unmarshal(response, &wire); err != nil {
+		t.Fatal(err)
+	}
+	signature, err := frostNativeSignerAnchorParseSignature(wire.Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature[0] ^= 0xff
+	return testFrostNativeSignerAnchorReplaceResponseSignature(
+		t,
+		response,
+		signature[:],
+	)
+}
+
+func testFrostNativeSignerAnchorReadResponseWithNonce(
+	t *testing.T,
+	response []byte,
+	nonce [32]byte,
+	signingKey ed25519.PrivateKey,
+) []byte {
+	t.Helper()
+	var wire frostNativeSignerAnchorReadResponse
+	if err := json.Unmarshal(response, &wire); err != nil {
+		t.Fatal(err)
+	}
+	wire.Nonce = frostNativeSignerAnchorHex32(nonce)
+	digest, err := frostNativeSignerAnchorReadResponseTranscript(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire.Signature = frostNativeSignerAnchorSignatureHex(
+		ed25519.Sign(signingKey, digest),
+	)
+	payload, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func testFrostNativeSignerAnchorAcknowledgementWithSignature(
+	t *testing.T,
+	response []byte,
+	signingKey ed25519.PrivateKey,
+) []byte {
+	t.Helper()
+	var wire frostNativeSignerAnchorAcknowledgementWire
+	if err := json.Unmarshal(response, &wire); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := frostNativeSignerAnchorAcknowledgementTranscript(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return testFrostNativeSignerAnchorReplaceResponseSignature(
+		t,
+		response,
+		ed25519.Sign(signingKey, digest),
+	)
+}
+
+func testFrostNativeSignerAnchorAcknowledgementWithCorruptSignature(
+	t *testing.T,
+	response []byte,
+) []byte {
+	t.Helper()
+	var wire frostNativeSignerAnchorAcknowledgementWire
+	if err := json.Unmarshal(response, &wire); err != nil {
+		t.Fatal(err)
+	}
+	signature, err := frostNativeSignerAnchorParseSignature(wire.Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature[0] ^= 0xff
+	return testFrostNativeSignerAnchorReplaceResponseSignature(
+		t,
+		response,
+		signature[:],
+	)
+}
+
+func testFrostNativeSignerAnchorOmitResponseSignature(
+	t *testing.T,
+	response []byte,
+) []byte {
+	t.Helper()
+	return testFrostNativeSignerAnchorReplaceResponseSignature(t, response, nil)
+}
+
+func testFrostNativeSignerAnchorHistoryResponseWithNonce(
+	t *testing.T,
+	response []byte,
+	nonce [32]byte,
+	signingKey ed25519.PrivateKey,
+	onlineKeyHash [32]byte,
+) []byte {
+	t.Helper()
+	var wire frostNativeSignerAnchorHistoryResponse
+	if err := json.Unmarshal(response, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Events == nil {
+		t.Fatal("history response events are absent")
+	}
+	eventDigests := make([][32]byte, len(*wire.Events))
+	for index, event := range *wire.Events {
+		var acknowledgement frostNativeSignerAnchorAcknowledgementWire
+		if err := json.Unmarshal(event.CheckpointAck, &acknowledgement); err != nil {
+			t.Fatal(err)
+		}
+		transcript, err := frostNativeSignerAnchorAcknowledgementTranscript(
+			acknowledgement,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var signingDigest [32]byte
+		copy(signingDigest[:], transcript)
+		signature, err := frostNativeSignerAnchorParseSignature(
+			acknowledgement.Signature,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		acknowledgementDigest :=
+			computeFrostNativeSignerCheckpointAcknowledgementDigest(
+				signingDigest,
+				signature,
+				onlineKeyHash,
+			)
+		proof, err := frostNativeSignerAnchorProofFromWire(event.WitnessProof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revision, err := frostNativeSignerAnchorParseUint64(acknowledgement.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		eventDigests[index] = computeFrostNativeSignerAnchorHistoryEventDigest(
+			revision,
+			acknowledgementDigest,
+			event.CheckpointAck,
+			proof,
+		)
+	}
+	wire.Nonce = frostNativeSignerAnchorHex32(nonce)
+	digest, err := frostNativeSignerAnchorHistoryResponseTranscript(
+		wire,
+		eventDigests,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire.Signature = frostNativeSignerAnchorSignatureHex(
+		ed25519.Sign(signingKey, digest),
+	)
+	payload, err := json.Marshal(wire)
 	if err != nil {
 		t.Fatal(err)
 	}

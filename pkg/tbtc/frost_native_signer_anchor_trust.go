@@ -29,6 +29,12 @@ const (
 	// fresh target Read wrapper.
 	FrostNativeSignerAnchorTrustTransitionRequestSchema = "tbtc-signer-state-anchor-trust-transition/v1"
 
+	// FrostNativeSignerAnchorTrustMaximumCertificateChainLength is the bounded
+	// number of offline-authority-signed certificates the chain decoder admits
+	// per signer store. The chain must always begin at sequence 1, so this
+	// caps a signer store at 63 rotations for its entire lifetime; the
+	// follow-up design (compacting re-bootstrap vs raising the cap) is tracked
+	// in docs/development/frost-anchor-rotation.adoc.
 	FrostNativeSignerAnchorTrustMaximumCertificateChainLength = 64
 
 	// A certificate is persisted inside Rust's bounded 128 KiB trust-journal
@@ -950,6 +956,12 @@ func frostNativeSignerAnchorTrustValidateReferenceDescendant(
 		candidate.Checkpoint.Generation < floor.Checkpoint.Generation {
 		return fmt.Errorf(
 			"later reference is unlinked or rolls back its checkpoint generation",
+		)
+	}
+	if candidate.Revision == floor.Revision+1 &&
+		candidate.PreviousEventRoot != floor.EventRoot {
+		return fmt.Errorf(
+			"later reference does not extend the certified floor's event root",
 		)
 	}
 	if candidate.Checkpoint.Generation == floor.Checkpoint.Generation &&

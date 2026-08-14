@@ -591,9 +591,7 @@ func newNode(
 				trustTransitionResult,
 				trustTransitionTarget,
 				finalTrustCertificate,
-				expectedTrustCertificateHead,
 				expectedTrustHead,
-				priorTrustCertificateHead,
 				transitionCertificateChain,
 				trustTransitionRecoveryReplay,
 			); err != nil {

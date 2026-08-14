@@ -2151,7 +2151,7 @@ func TestFrostRetainedGroupJournal_RejectsAuthenticatedPriorSchemaFixtures(
 				if err == nil ||
 					!strings.Contains(err.Error(), "prior FROST retained-group") ||
 					!strings.Contains(err.Error(), "not safely migratable") ||
-					!strings.Contains(err.Error(), "new empty v3") {
+					!strings.Contains(err.Error(), "new empty v4") {
 					t.Fatalf(
 						"expected explicit manifest-pinned prior-schema rejection, got [%v]",
 						err,

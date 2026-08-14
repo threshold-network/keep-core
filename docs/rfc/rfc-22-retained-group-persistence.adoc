@@ -1,0 +1,859 @@
+= RFC-22: Retained Group Persistence, Anchor Trust, and Bootstrap Ceremony
+
+*Author:* Threshold Labs
+*Status:* Draft
+*Date:* 2026-08-14
+
+== Summary
+
+This RFC specifies the on-disk and offline-authority surfaces that the
+FROST retained-group subsystem depends on but has so far only
+documented through code comments and the operator runbook at
+`docs/development/frost-anchor-rotation.adoc`. Two distinct RFC-21-style
+gaps are closed together because they share a single trust boundary --
+the offline "anchor" authority that signs both the manifest's checkpoint
+floor and the bootstrap/rotation certificate chain -- and because the
+node's crash-consistency story is incomplete without the bootstrap
+genesis those certificates install.
+
+The first half of the RFC defines the invariants the
+retained-group journal/checkpoint/evidence model must uphold:
+crash-consistency of the canonical and quarantine journals, replay
+safety on identical inputs, and a precise accounting of what "evidence"
+the journal retains and why. The second half defines the security
+properties of the four-subcommand
+`keep-client tbtc-signer anchor bootstrap {facts,core,initialize,finalize}`
+ceremony and the offline-authority trust transition that bootstraps
+the node's anchor identity: what the offline authority signs, what the
+"genesis" identity invariants are, and what a compromised or malicious
+online half can and cannot do.
+
+Together the two halves are the missing normative reference for the
+PRs that introduced `pkg/tbtc/frost_retained_group_journal.go` and the
+anchor-bootstrap ceremony suite. The implementation is described in
+prose here so that review and future changes can be cross-checked
+against the spec, not merely against the code or against docstrings
+scattered across the package.
+
+== Motivation
+
+RFC-20 introduced the FROST migration scaffold and listed
+follow-up work item 6 ("full integration tests for mixed wallet
+generations and migration flows") as the closest textual anchor for
+the per-wallet retained-group persistence story. Item 6 promised
+tests, not a durable journal subsystem, and does not describe
+checkpoint or evidence semantics. RFC-21 is the only other spec
+that references "retained" at all, and its reference is to the
+DKG-legacy retry retention in `pkg/tecdsa/retry` -- byte-identity
+preservation across retry, not per-wallet durable state. Direct
+search of RFC-20 and RFC-21 finds zero occurrences of 'journal',
+'checkpoint', or 'evidence' in the retained-group sense
+(`docs/rfc/rfc-20-schnorr-frost-migration-scaffold.adoc`,
+`docs/rfc/rfc-21-roast-coordinator-retry-and-transition-evidence.adoc`).
+
+The retained-group journal/checkpoint/evidence model is therefore
+new in this PR and has no spec basis. The implementation rightly
+includes extensive doc comments, but doc comments are not the
+normative reference a reviewer is supposed to be able to point at
+saying "the journal must uphold these invariants." Without one,
+the component is "internally consistent" but cannot be reviewed as
+spec compliant.
+
+The same gap exists for the offline-authority trust transition and
+the four-subcommand anchor bootstrap ceremony
+(`facts`, `core`, `initialize`, `finalize`). The function names
+`executeFrostNativeSignerAnchorTrustTransition`,
+`selectFrostNativeSignerAnchorTrustTransitionChain`,
+`selectFrostNativeSignerAnchorTrustRecoveryChain`, and
+`ValidateFrostNativeSignerAnchorTrustCertificate` are new,
+key-handling, detached-signature ceremonies with no counterpart
+requirement in any RFC. The function comments describe mechanics
+(replay idempotence, recovery suffix selection, exact-idempotent
+replay) but no document describes the security properties the
+ceremony is supposed to provide -- what the offline authority is
+authorising, what the online half is required to verify, what
+failure modes are tolerated, and what the boundary of compromise
+is.
+
+The two gaps share a trust model: the offline authority is the
+source of both the canonical history's checkpoint floor (which the
+journal commits to at genesis) and the bootstrap/rotation certificate
+chain (which the node installs at startup). A spec that documents
+the journal without documenting the bootstrap ceremony leaves the
+genesis identity unstated; a spec that documents the bootstrap
+ceremony without the journal leaves the durability of the installed
+identity unstated. This RFC therefore covers both.
+
+== Background
+
+The FROST retained-group subsystem tracks which tBTC signing groups
+each wallet's deposits have been retained into, so that a node can
+honestly answer, for a wallet it has never seen sign, whether it
+holds signable key material for that wallet. The signing-path
+inventory already proved one half of the case (the local signing
+material); the retained-group journal proves the other half
+(the canonical Bridge-defined group assignment, lifted against a
+quorum-certified transparent-log checkpoint, cross-referenced with
+a per-wallet quarantine status signed by an offline authority
+lift committee).
+
+The journal lives on disk because the canonical history is far too
+large to fit in memory (a single batch can carry up to 4096
+mutations, and the runtime caps the lifetime mutation stream at
+`frostRetainedGroupMaximumMutations`), because the node must be
+able to come back from a crash mid-reconciliation without losing
+its verified durable prefix, and because the node must be able to
+prove, on demand, that its durable cursor corresponds exactly to
+the canonical history at some checkpoint.
+
+The journal sits inside a directory whose contents are:
+
+* `metadata.json` -- the manifest-pinned, schema-bound identity of
+  the journal itself: source identity, store fingerprint, cluster
+  fingerprint, descriptor set hash, and the manifest checkpoint
+  (the "genesis" point this journal commits to).
+* `state.json` -- a single replaceable state file summarising the
+  rebuilt durable cursor at the checkpoint sequence the journal was
+  last advanced to.
+* `batch-NNNNNNNNNNNNNNNNNNNN.json` -- zero or more immutable
+  per-batch envelopes, each carrying a bounded suffix of the
+  canonical history plus a batch root that chains to the previous
+  batch. The leading zero-padded sequence is the durable batch
+  number; the absence of a sequence is a gap, and the absence of a
+  predecessor batch is a fatal startup error.
+* `lift-certificate-<hex32>.json` -- zero or more immutable
+  authority-quorum-signed lift certificates, each indicating that
+  one specific quarantine (qualified by its `QuarantineID`) has been
+  lifted against one specific wallet (qualified by its `WalletID`).
+* `checkpoints/` -- an independent checkpoint journal carrying
+  quorum-signed checkpoint certificates that bind authority-set
+  approved semantic state to the canonical history.
+* `quarantine/` -- an independent quarantine journal with the same
+  shape, carrying quarantines and tombstones.
+
+The bootstrap ceremony installs the offline-authority-signed
+certificate chain that names the boundary the journal's checkpoint
+floor is supposed to match. The two are not independent: a node
+that comes back from a crash and finds a journal whose checkpoint
+floor no longer matches the installed certificate chain must reject
+the journal before publishing any snapshot, regardless of how
+plausible the journal contents look.
+
+== Current state
+
+=== Canonical journal
+
+`pkg/tbtc/frost_retained_group_journal.go` defines an append-only
+journal of source-authenticated `FrostRetainedGroupMutation`s,
+decomposed into a per-batch immutable file plus a single replaceable
+state file. Every batch carries its predecessor's batch root, so a
+missing batch is detectable without further context. The state file
+is a byte-equivalent summary of the immutable prefix; the runtime
+verifies this on every initialization by replaying the batch
+sequence from sequence 1 and confirming the rebuilt state matches
+the stored state at the stored `BatchSequence`.
+
+The journal persists the following durable facts:
+
+* the canonical history's durable cursor (`CurrentPoint` -- the
+  last Ethereum block number and hash that has been reconciled and
+  committed),
+* the `BatchSequence` (number of batches applied),
+* the `BatchRoot` (rolling SHA-256 chain over immutable batch
+  contents),
+* the `InventoryRoot` (a deterministic merkleisation of the
+  reconstructed wallet set, with the canonical leaf, node, and root
+  domains separated from the inventory computation),
+* the per-wallet retained-group state (`Wallets`), including the
+  operator-ID list, the lifecycle, the Bridge and Registry closure
+  event points, and the `RegistryClosed` boolean,
+
+For the quarantine journal, the corresponding facts are:
+
+* the quarantine journal's durable cursor, generation, and active
+  / tombstone roots,
+* the per-wallet active quarantines and tombstones.
+
+For the checkpoint journal:
+
+* the most recent quorum-signed checkpoint certificate that
+  authenticates the durable head,
+* a chain of dependent certificates from the manifest's
+  predecessor hash through the current head.
+
+=== Crash-consistency machinery
+
+The journal uses a strict write protocol:
+
+. Write to a temporary file whose name contains 16 random bytes of
+  entropy and the chosen final name. The temporary file is opened
+  with `O_EXCL|O_NOFOLLOW`, created with mode `0600`, and verified
+  to be an owner-bound regular file before any data is written.
+. `fsync` the temporary file after writing the full envelope.
+. Rename into the final namespace. For immutable files (batches,
+  metadata, certificates) the rename is implemented as `linkat`
+  followed by `unlinkat` of the temporary; for replaceable files
+  (state) the rename is `renameat`. The directory is `fsync`ed
+  after the rename so the link is durable.
+. On startup, temporary files found in the directory are validated
+  against the private name format and unlinked. A temporary file is
+  never a commit point; only a linked immutable file or a renamed
+  state file is.
+
+The directory is opened with
+`O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW`, validated to be a
+non-symlink directory with mode `0700`, and re-validated to be
+owned by the effective UID. The same owner-bound and 0600 checks
+are applied to every persisted file before any link is created.
+
+=== The four-subcommand bootstrap ceremony
+
+`keep-client tbtc-signer anchor bootstrap` exposes four
+subcommands:
+
+* `facts` -- produces the
+  `FrostNativeSignerAnchorBootstrapFacts` JSON, which lists the
+  desired `StoreFingerprint`, the desired `CurrentCheckpoint`, and
+  the exact live values from the activation manifest and installed
+  native signer config. This is the public-input document for the
+  first offline signature.
+* `core` -- produces the
+  `FrostNativeSignerAnchorBootstrapCoreArtifact` JSON, which is a
+  deterministic re-derivation of the stream, transport, binding,
+  SPKI, store, and checkpoint relationships from the plan and the
+  facts. The artifact contains no private key and no service
+  result; it is the immutable input to the
+  `tbtc-frost-native-signer-state-anchor-bootstrap-core-signing-request/v1`
+  offline signature.
+* `initialize` -- submits the offline-signed core artifact to the
+  history service's create-if-absent initialize endpoint and
+  receives a service-signed acknowledgement. The transport is
+  client-signed over a domain-separated fixed-width transcript and
+  POSTed to the single initialize endpoint that the bootstrap
+  HTTP client exclusively targets. A verified service statement
+  that the stream holds a different genesis record poisons this
+  client permanently; transport-shaped failures do not.
+* `finalize` -- produces the
+  `FrostNativeSignerAnchorBootstrapFinalArtifact` JSON, which
+  binds the offline-signed core artifact to the service-signed
+  acknowledgement returned by `initialize`. The
+  `tbtc-frost-native-signer-state-anchor-final-signing-request/v1`
+  signature from the offline authority is the final offline
+  signature; the resulting certificate is the bootstrap certificate.
+
+The four subcommands are deliberately disjoint: the offline
+authority signs the `core` artifact before the service has issued
+the acknowledgement, and signs the `final` artifact after it has.
+The online half never sees a private key and never holds authority
+material; the offline half never sees a service response and never
+communicates with the history service.
+
+=== Trust transition at startup
+
+After bootstrap, the node holds a sequence-one bootstrap
+certificate installed at the path named by
+`FrostNativeSignerAnchorTrustCertificatePath`. Subsequent
+rotations are external certificate chains installed at the same
+path; each chain is bounded (1..64 entries) and validated against
+the offline authority's pinned SPKI hash, the expected
+`ProtocolID`, the expected `StreamID`, the expected
+`SignerStoreFingerprint`, and an independently supplied final
+head.
+
+Every startup re-derives the trust floor and routes through
+exactly one of three outcomes:
+
+* *exact head replay* -- the installed certificate's final head
+  matches the previously installed final head, so the same
+  transition request is replayed idempotently.
+* *recovery replay* -- the native signer reported a typed recovery
+  failure; the offline-signed selector identifies one exact
+  contiguous suffix of the installed chain, ending at the
+  independently pinned final certificate, and the suffix is
+  replayed.
+* *fresh extension* -- the installed chain extends the previously
+  authenticated head by exactly one certificate (or, for
+  bootstrap, is the sequence-one genesis certificate).
+
+Each outcome is validated by
+`validateFrostNativeSignerAnchorTrustTransitionResult`, which
+enforces that the offline-signed certificate chain, the
+offline-signed target acknowledgement, the deployment pins
+(binding hash, manifest hash, store fingerprint, etc.), and the
+resolved target reference all agree byte-for-byte.
+
+== Proposed design
+
+The journal and the bootstrap ceremony are specified by the
+invariants they are required to uphold and the threats they are
+required to survive. The implementation in code is the
+authoritative source for the exact mechanics; this RFC is the
+authoritative source for the requirements.
+
+=== Invariant 1 -- crash-consistency of the durable prefix
+
+The durable prefix -- the on-disk sequence of immutable batch
+files plus the current state file -- is a *prefix* of the
+canonical history at the journal's checkpoint. After any crash,
+power loss, or kernel kill, the next startup replays the
+immutable prefix and rebinds the durable cursor to it. The
+rebound cursor must equal the durable cursor that governed the
+crash or, equivalently, the next immutable batch's
+`PriorBatchRoot` must equal the rebound cursor's `BatchRoot`.
+
+In practice, this means:
+
+* Every immutable file is a "no replace" publication. Once a
+  `batch-NNNNN.json` file is linked into the directory, it is
+  never unlinked, never overwritten, and never modified.
+* The state file is a replaceable derivative of the immutable
+  prefix. If the state file is missing, the state is rebuilt
+  deterministically from the immutable prefix. If the state file
+  is present, it must match the rebuilt state byte-for-byte at
+  the stored `BatchSequence`; a mismatch is a fatal startup
+  error and the journal cannot be opened.
+* A temporary file is never a commit point. If a write is
+  interrupted (kernel panic, ENOSPC, kill), the temporary file is
+  unlinked on next startup and the durable prefix is left
+  unchanged. The directory's `fsync` after the rename is
+  load-bearing: without it, the link is not durable and a
+  post-crash replay may not see the file.
+* The directory is single-writer; the lock file
+  (`frostRetainedGroupJournalLockFile`) serialises concurrent
+  processes. The journal does not assume any cross-process
+  guarantee beyond what the lock file provides.
+
+The crash-consistency property is what makes the replay path
+sound: a node that restarts after a crash must observe the same
+durable prefix it had before the crash, modulo the integer
+sequence number of the most recent batch it had completed
+publishing.
+
+=== Invariant 2 -- replay safety
+
+Given the same immutable prefix, the same activation manifest,
+the same runtime manifest, the same `AuthoritySetHash`, and
+the same history source identity, every node must compute the
+same durable cursor, the same inventory root, the same
+quarantine root, and the same checkpoint chain root. Replay
+safety is the property that the journal's published state is
+a *pure function* of its inputs -- there are no clock-based
+choices, no random numbers, no networking-dependent bindings
+inside the rebuild.
+
+The implementation enforces this directly:
+
+* The state file is byte-equal (not just field-equal) to the
+  rebuilt state. The check is `json.Marshal(stored) ==
+  json.Marshal(rebuilt)`. Deterministic JSON encoding is a
+  precondition of the journal; the runtime's canonical
+  encoding helpers are the canonical source.
+* The batch root is a SHA-256 chain over the immutable batch
+  contents, not a timestamp-driven accumulator.
+* The checkpoint root is a deterministic merkleisation of the
+  per-wallet retained-group state, with the canonical
+  `InventoryLeafDomain`, `InventoryNodeDomain`, and
+  `InventoryRootDomain` separators (the trailing `\x00`
+  is part of the canonical domain string, not a separator).
+* The quarantine root is a separate deterministic
+  merkleisation whose leaf, node, and active roots are bound
+  to the manifest-pinned `ProtocolBindingHash`.
+
+Replay safety is the property that lets the offline
+checkpoint authority certify a journal head without needing to
+trust any specific node's local execution. The offline
+authority sees a quorum-signed `InventoryRoot`,
+`QuarantineRoot`, and `HistoryRoot`; those roots are the
+inputs to the commitment, and the commitment is the input
+to the certificate. Two nodes that publish the same roots
+have produced the same certificate, deterministically.
+
+=== Invariant 3 -- what "evidence" is retained and why
+
+The journal retains three distinct kinds of evidence, each
+with a different purpose:
+
+* *Canonical history evidence* -- the immutable batch
+  sequence. The batches are the journal's *primary* evidence:
+  they are the proof that the durable cursor binds to the
+  canonical history at the recorded checkpoint. They are the
+  evidence a node can produce on demand to prove that a
+  particular canonical mutation was applied, in order, before
+  the durable cursor.
+* *Quarantine evidence* -- the immutable quarantine sequence
+  plus the authority-quorum-signed lift certificates. The
+  quarantine journal is the journal's *proof of exclusion*
+  evidence: it proves that a specific wallet is, or is not,
+  currently quarantined at a specific checkpoint, and that any
+  past quarantine was lifted by a manifest-pinned quorum of
+  offline authorities against the exact durable state
+  immediately preceding the lift. Lift certificates are
+  persisted byte-for-byte (the wire encoding is the canonical
+  encoding, not a re-encoding).
+* *Checkpoint evidence* -- the independent
+  quorum-signed checkpoint certificate chain. The checkpoint
+  journal is the journal's *trust-anchored* evidence:
+  it is the proof that some quorum of offline authorities
+  has signed the durable cursor and the derived
+  inventory/quarantine roots. The checkpoint chain is
+  authoritative even when the journal is offline; it is
+  what the activation handshake uses to verify a node can
+  safely attest to its own state.
+
+Evidence is *not* retained for:
+
+* the full JSON of the immutable prefix (the rebuild is
+  deterministic from the immutable batches and the runtime
+  manifest, so the state file is not an independent witness),
+* the contents of any individual message the history source
+  ever returned (the checkpoint/commitment is the witness;
+  the raw history is reconstructible from the source),
+* the response of any individual anchor request (the
+  acknowledgement is bound to the certificate by hash, not
+  stored verbatim; the certificate is the witness).
+
+The journal's "evidence" is therefore the smallest set of
+durable artifacts that, taken together, lets any third party
+verify the journal's durable cursor without trusting the
+node's own execution. RFC-21 names the analogous evidence
+for the signing path (transition evidence per attempt); the
+journal's evidence is the analogous concept for the retained
+state path.
+
+=== Invariant 4 -- admission and termination ordering
+
+The retained-group journal tracks wallet lifecycle mutations
+in a strict order:
+
+* `admission` -- the wallet has been registered on the
+  Bridge after a successful DKG. The mutation carries the
+  exact ordered DKG operator IDs.
+* `moving-funds` -- the wallet has entered its moving-funds
+  phase.
+* `closing` -- the wallet has transitioned to its closing
+  phase.
+* `closed` -- the wallet has fully closed on the Bridge.
+* `terminated` -- the wallet has been terminated (a
+  stuck-wallet backstop that bypasses the moving-funds
+  closure path).
+* `registry-closure` -- the FROST Registry has closed the
+  retained group for the wallet. This mutation can only
+  apply to a wallet that is already terminal on the Bridge,
+  and the Bridge-Registry transaction-equal ordering is
+  enforced by requiring the registry's closure event point
+  to be the same transaction as the matching Bridge
+  terminal event.
+
+The nine mutation kinds are enumerated at
+`frost_retained_group_journal.go:191-199`; the lifecycle
+ordering is enforced by `applyFrostRetainedGroupMutations`
+and backstopped by `validFrostRetainedGroupTransition`.
+None of the mutations deletes a wallet; terminal transitions
+end with `wallets[mutation.WalletID] = wallet`, so the
+journal's wallet set is monotonically non-decreasing in
+cardinality.
+
+The lifetime mutation cap
+(`frostRetainedGroupMaximumMutations = 4096`) bounds the
+journal's lifetime to a fixed number of wallets regardless
+of bridge use, exactly because the wallet set is not pruned
+and the cap is the journal's only protection against
+unbounded growth. A journal that would exceed the cap is
+permanently unwritable; the operational response is to
+provision a new store identity and replay the canonical
+history from the activation manifest's checkpoint under the
+new identity.
+
+=== Invariant 5 -- activation identity
+
+The journal's identity is determined by the activation
+manifest plus the runtime manifest. The journal MUST refuse
+to open if:
+
+* `metadata.json` is absent but `state.json` or any batch
+  file is present,
+* `metadata.json` is present and its contents differ from
+  the manifest-pinned identity that the runtime is opening
+  the journal with,
+* the schema string in `metadata.json` is a legacy schema
+  (v1, v2, or v3) -- the node operator must provision a new
+  empty v4 store identity and replay from the manifest
+  checkpoint,
+* the history source identity (trust domain ID, endpoint
+  fingerprint, operator fingerprint, full identity) does not
+  match the manifest-pinned identity,
+* the authority set hash, the lift policy hash, the
+  checkpoint authority set hash, or any other manifest-pinned
+  field does not match the runtime manifest's claim.
+
+These checks are how the journal enforces "the durable
+prefix is provable to the activation manifest" before any
+reconciliation. The activation handshake that consumes the
+journal carries the same identity forward; a node that
+fails to satisfy the activation check cannot attest to its
+own state.
+
+=== Invariant 6 -- bootstrap ceremony security properties
+
+The four-subcommand bootstrap ceremony is the only path by
+which a node acquires its anchor identity. The ceremony's
+security properties are:
+
+* *What the offline authority signs.* The offline authority
+  signs exactly two artifacts: the
+  `CoreArtifact` (after the operator runs `facts` and `core`)
+  and the `FinalArtifact` (after the operator runs
+  `initialize` and `finalize`). The authority never sees
+  the service response except as the hash bound into the
+  final artifact; the online half never sees the
+  authority's private key.
+* *What the online half signs.* The online half signs two
+  domain-separated transcripts: the bootstrap request
+  (over `frostNativeSignerAnchorBootstrapRequestDomain`) and
+  the bootstrap initialization (over the
+  `frostNativeSignerAnchorReadRequestDomain` /
+  `initialize` domain). The signing keys are the operator's
+  response key and the client key, both already
+  attestation-bound at install time.
+* *What the history service sees.* The history service
+  receives one authorized `initialize` request and stores
+  exactly one acknowledgement per stream. The service
+  signature is over the exact JSON acknowledgement; the
+  acknowledgement is bound by SHA-256 into the final
+  artifact before the offline authority signs it.
+* *What the bootstrap certificate is.* The bootstrap
+  certificate is the `FinalArtifact` with the
+  offline-signed `FinalSignature` attached. It is a
+  sequence-one certificate of kind `bootstrap`, with
+  `From == nil`, `CertificateSequence == 1`, and
+  `PreviousCertificateDigest == [32]byte{}`. Its target
+  reference is `(ServiceEpoch = 1, Revision = 1,
+  PreviousEventRoot = [32]byte{}, EventRoot = ...,
+  AcknowledgementDigest = ..., Checkpoint = ...)`. The
+  `OfflineAuthorityPublicKey` carried by the certificate
+  is the offline authority's pinned Ed25519 public key for
+  the deployment.
+
+A compromised or malicious online half can:
+
+* Submit the bootstrap request to the wrong endpoint
+  (mitigated by the transport pinning, the client's
+  bundled TLS root, and the post-initialize verification
+  that the service response matches the offline-signed
+  core artifact).
+* Replay a previously valid `initialize` request
+  (mitigated by the bootstrap request signing key being
+  fresh and the response-key signature being required for
+  lift).
+* Construct a different genesis record that the service
+  accepts (mitigated by the service's own statement that
+  the stream holds a different genesis record, which
+  poisons this client permanently; the transport itself
+  cannot be poisoned because the response signature is
+  also required).
+
+A compromised or malicious online half cannot:
+
+* Forge the offline authority's signature. The offline
+  signing key never leaves the offline authority.
+* Substitute a different `ResponsePublicKey` or
+  `OfflineAuthorityPublicKey` in the bootstrap
+  certificate. The `CoreDigest` and `FinalDigest` are
+  bound to the deployment pins, and the certificate
+  digest is bound to the deployment pins plus the
+  deployment's authority set hash.
+* Pre-empt the offline authority. The `core` signature is
+  required before `initialize` and the `final` signature
+  is required before the certificate is usable; the
+  history service refuses to accept the initialize
+  request without the operator-signed authorization.
+* Bind the bootstrap certificate to a different chain
+  ID, manifest hash, store fingerprint, or cluster
+  fingerprint than the activation manifest prescribes.
+  The deployment pins in the validation options are
+  mandatory.
+
+A compromised offline authority (one of the authorities
+in the offline authority set) can:
+
+* Sign a bootstrap certificate that names the deployment
+  pins from the manifest it was configured to sign for.
+  This is the intended power and is not a compromise.
+* Refuse to sign a bootstrap certificate. The activation
+  handshake fails closed; the node cannot attest to its
+  own state and refuses to start signing.
+* Sign a certificate that names a future `ServiceEpoch`
+  or `Revision` value. The chain validation enforces the
+  "revision 1, previous event root zero, sequence 1"
+  invariants on bootstrap certificates and rejects any
+  deviation.
+
+A compromised offline authority cannot:
+
+* Sign a certificate that changes the activation
+  manifest hash, the binding hash, the store fingerprint,
+  or the cluster fingerprint away from the manifest's
+  pinned values. The `FrostPreSignActivationRuntimeManifest`
+  carries the manifest hash, and the offline-signed
+  certificate is bound to it by the deployment-pin
+  validation.
+* Sign a rotation that changes the offline authority
+  vector. Rotation certificates must extend the
+  authority set from the predecessor endpoint; the
+  `To.OfflineAuthorityPublicKey` must equal the
+  `From.OfflineAuthorityPublicKey`. A rotation that
+  attempts to substitute a new authority is rejected.
+* Sign a rotation that skips a sequence. The chain
+  validation requires `body.Sequence = previous.Sequence + 1`
+  and the matching `PreviousCertificateDigest`.
+
+A compromised offline authority that conspires with a
+malicious online half cannot:
+
+* Bootstrap a node that attests to a different durable
+  state than the canonical history at the activation
+  manifest's checkpoint. The journal's durable cursor is
+  bound to the manifest's checkpoint, the activation
+  manifest is bound to the genesis block hash, and the
+  bootstrap certificate carries the deployment pins
+  required to verify the journal.
+* Produce a certificate that the activation handshake
+  accepts without the deployment pins. The
+  `From`/`To` endpoints are bound to the deployment by
+  the chain validation, and the certificate's `To`
+  endpoint reference is the source of truth for the
+  activation handshake.
+
+=== Invariant 7 -- trust transition at startup
+
+The trust transition is the only path by which the node
+acquires its anchor identity at startup. The transition
+must satisfy:
+
+* The installed certificate chain is bounded (1..64
+  entries), starts at sequence 1, and ends at the
+  independently pinned final head.
+* The chain's `Kind` for the sequence-one certificate is
+  `bootstrap`; rotation certificates are only valid
+  after a sequence-one bootstrap certificate.
+* Every certificate's `CoreDigest` is recomputed from the
+  certificate's claimed contents and must equal the
+  signed value. The `CoreSignature` is verified against
+  the certificate's claimed `OfflineAuthorityPublicKey`.
+* Every certificate's `FinalDigest` is recomputed from the
+  certificate's claimed contents plus the target
+  acknowledgement and must equal the signed value. The
+  `FinalSignature` is verified against the same
+  `OfflineAuthorityPublicKey`.
+* The target acknowledgement is verified by the
+  semantic verifier supplied at chain validation time.
+  The verifier must verify the service response-key
+  signature, the binding, the derived operation and
+  transition IDs, the full target reference, and the
+  certificate-contextual revision-1 parent.
+* The transition result is one of three outcomes:
+  *exact head replay*, *recovery replay*, or *fresh
+  extension*. Each outcome is validated by
+  `validateFrostNativeSignerAnchorTrustTransitionResult`,
+  which enforces that the previously installed head,
+  the freshly read target, and the certificate chain all
+  agree.
+
+A fresh transition request is issued at every startup.
+Recovery replays are an exception, not a bypass: a recovery
+replay is a fresh transition that uses the
+recovery-supplied selector to identify the exact suffix of
+the installed chain to replay, and the recovery replay
+itself is a fresh signed Read that the bootstrap client
+echoes back to the history service.
+
+== Phased implementation
+
+The implementation is already in place. The phases here
+describe the order in which the invariants were -- or are
+being -- introduced, so that reviewers can verify the
+invariant-by-invariant story without re-deriving the
+timeline.
+
+=== Phase 0: This RFC (doc-only)
+
+RFC-22 lands first so subsequent code PRs can reference its
+invariants in their PR descriptions and reviews.
+
+=== Phase 1: Crash-consistency machinery
+
+The immutable file / replaceable state split, the
+entropy-tagged temporary file naming, the directory
+`fsync` after rename, the lock file, the directory
+ownership checks, and the temporary-file recovery on
+startup are introduced. The runtime tests
+`TestFrostRetainedGroupJournalTemporaryFileRecovery`,
+`TestFrostRetainedGroupJournalPersistsAndReadsBackTheWidestLegalBatch`,
+and `TestFrostRetainedGroupJournalMaximumFileCoversTheWidestLegalShapes`
+exercise the bounds.
+
+=== Phase 2: Activation identity
+
+The metadata-file authority, the runtime-manifest
+binding, the history-source identity check, and the
+legacy-schema rejection are introduced. The activation
+identity is the precondition: no replay is permitted
+without it.
+
+=== Phase 3: Replay safety
+
+The byte-equivalent state check, the canonical JSON
+encoding, the deterministic merkleisation of the
+inventory / quarantine / history roots, and the
+deterministic batch root chain are introduced. The
+runtime tests `TestFrostRetainedGroupInventoryRoot*`,
+`TestFrostRetainedGroupQuarantineRoot*`, and
+`TestFrostRetainedGroupJournalBatchRoot*` exercise the
+deterministic properties.
+
+=== Phase 4: Checkpoint evidence
+
+The independent checkpoint journal, the quorum-signed
+checkpoint certificate chain, the manifest-pinned
+authority set, and the activation handshake's
+checkpoint-proof verification are introduced. The
+checkpoint evidence is the trust anchor: it is what
+makes the journal's durable cursor attestable by a
+third party.
+
+=== Phase 5: Quarantine evidence
+
+The independent quarantine journal, the authority-quorum
+lift certificate lifecycle, the per-wallet quarantine
+scope, and the pre-sign authorization gate are
+introduced. The quarantine evidence is the binding
+between the canonical history and the offline-authority
+signing decisions on whether to pause a specific
+wallet's signing.
+
+=== Phase 6: Bootstrap ceremony
+
+The four-subcommand bootstrap ceremony, the bootstrap
+certificate, the trust transition at startup, and the
+activation-handshake trust transition are introduced.
+The bootstrap ceremony is the only path by which a
+node acquires its anchor identity, and the trust
+transition is the only path by which the node
+re-installs that identity at startup.
+
+=== Phase 7: Readiness manifest evidence
+
+The FROST readiness manifest flips the retained-group
+persistence story from `missing-no-go` to `present`
+once Phase 6 ships and the integration test suite has
+been run against a real testnet. The manifest lives at
+`docs/development/frost-readiness-manifest.adoc`; the
+update discipline is the same as RFC-21 Phase 7.
+
+== Resolved decisions
+
+The decisions below were settled in a design review with
+cross-team protocol-owner input. They are listed here so
+subsequent implementation PRs can reference them.
+
+=== Two immutable-file publication primitives
+
+*Decision: `linkat` + `unlinkat` for immutable files,
+`renameat` for replaceable state, `fsync` the directory
+after each.*
+
+The earlier draft considered `renameat` for everything.
+The two-primitive split is required because immutable
+files must not be overwritten even if a concurrent
+publish attempt is racing with an older one. A
+`renameat` for an immutable file would replace an
+already-linked batch silently, breaking the
+crash-consistency invariant. The `linkat` +
+`unlinkat` sequence is atomic at the kernel level and
+guarantees that the destination file is either the
+already-linked original or the freshly published one --
+never both, and never a partial overwrite.
+
+=== Quarantine scope is per wallet, not per node
+
+*Decision: a quarantine is raised against exactly one
+`WalletID`; the lift certificate is bound to that same
+`WalletID`; the activation handshake refuses to
+bootstrap or attest health while any quarantine is
+unresolved, but a running node fails closed per wallet
+(not per node).*
+
+The activation handshake is the only path that fails
+closed per node, because at bootstrap time the node is
+not yet trusted to do anything. Once the node is
+running, the pre-sign authorization gate refuses to
+authorize (or keep authorizing) a Bitcoin signing
+batch for a quarantined wallet, but other wallets
+continue to sign. This is the path that lets the node
+keep operating during a single-wallet investigation
+without trusting the offline authority to lift
+unrelated quarantines.
+
+=== Genesis invariants are exact, not approximate
+
+*Decision: the bootstrap certificate's
+`(ServiceEpoch, Revision, PreviousEventRoot)` must equal
+`(1, 1, [32]byte{})` byte-for-byte; rotation certificates
+must extend the previous endpoint's
+`EventRoot` as their `PreviousEventRoot` and must
+increment `ServiceEpoch` by exactly 1.*
+
+A bootstrap certificate with a non-zero
+`PreviousEventRoot` would not be a real bootstrap; it
+would be a rotation presented as a bootstrap. The
+chain validation rejects this and the activation
+handshake rejects any bootstrap certificate whose
+endpoint violates these invariants.
+
+=== Offline authority rotation requires a quorum-signed ceremony outside this RFC
+
+*Decision: rotating the offline authority set is not
+in scope for this RFC. The current certificate chain
+frozen `OfflineAuthorityPublicKey == From.OfflineAuthorityPublicKey`
+on rotation certificates. A future RFC will define the
+quorum-signed ceremony for authority rotation.*
+
+The decision is conservative on purpose: an offline
+authority rotation is the highest-impact event in the
+trust model, and the offline-authority redesign is a
+separate change with its own review surface.
+
+=== Bootstrap is irreversible without an external rotation
+
+*Decision: there is no `tbtc-signer anchor rotate`
+subcommand and no other code path in this repository
+performs a rotation. Rotation is entirely external and
+manual.*
+
+The cost of a rotation that is not externally
+authorised is the cost of losing the activation
+handshake, which is the cost of losing the node's
+ability to attest to its own state. The cost is
+deliberately high so that no rotation can ever be
+issued by a single compromised online half.
+
+== References
+
+* RFC-20: Schnorr/FROST Migration Scaffold
+  (`docs/rfc/rfc-20-schnorr-frost-migration-scaffold.adoc`).
+* RFC-21: ROAST Coordinator, Retry, and Transition Evidence
+  (`docs/rfc/rfc-21-roast-coordinator-retry-and-transition-evidence.adoc`).
+* FROST Native Signer Anchor Rotation (operator document)
+  (`docs/development/frost-anchor-rotation.adoc`).
+* Canonical retained-group journal:
+  `pkg/tbtc/frost_retained_group_journal.go`.
+* Quarantine journal machinery:
+  `pkg/tbtc/frost_retained_group_journal.go` (quarantine
+  types and validation),
+  `pkg/tbtc/frost_retained_group_checkpoint.go`.
+* Anchor trust transition:
+  `pkg/tbtc/frost_native_signer_anchor_trust.go`,
+  `pkg/tbtc/frost_native_signer_anchor_trust_startup.go`.
+* Anchor bootstrap ceremony:
+  `pkg/tbtc/frost_native_signer_anchor_provisioning.go`,
+  `pkg/tbtc/frost_native_signer_anchor_bootstrap_client.go`.

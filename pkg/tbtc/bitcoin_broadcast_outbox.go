@@ -889,6 +889,12 @@ candidateLoop:
 		broadcastErr, broadcastRecord, err := bbo.broadcastAuthorizedRecord(ctx, latest)
 		if err != nil {
 			if errors.Is(err, errBitcoinBroadcastQuarantined) {
+				logger.Warnf(
+					"Bitcoin broadcast outbox dropping quarantined reservation [%x] for transaction [%x] under activation profile [%x]",
+					candidate.reservationID,
+					broadcastRecord.TransactionHash,
+					broadcastRecord.Quarantine.ActiveActivationProfileHash,
+				)
 				continue
 			}
 			replayErrors.failures = append(

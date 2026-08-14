@@ -824,6 +824,59 @@ func TestFrostNativeSignerAnchorBootstrapClientInitializeResponseStrictness(
 	}
 }
 
+func TestFrostNativeSignerAnchorBootstrapClientRejectsStaleReadNonce(
+	t *testing.T,
+) {
+	environment := newBootstrapClientTestEnvironment(t)
+	authorization := environment.authorization()
+
+	var staleNonce [32]byte
+	firstRead := true
+	environment.setReadHook(func(
+		writer http.ResponseWriter,
+		requestDigest [32]byte,
+		nonce [32]byte,
+	) bool {
+		if firstRead {
+			staleNonce = nonce
+			firstRead = false
+			return false
+		}
+		_, _ = writer.Write(bootstrapClientTestReadResponse(
+			environment.t,
+			environment.identity,
+			requestDigest,
+			staleNonce,
+			environment.stored,
+			environment.storedJSON,
+			environment.nowFunc(),
+			environment.response,
+		))
+		return true
+	})
+
+	if _, err := environment.client.InitializeFrostNativeSignerAnchor(
+		context.Background(),
+		authorization,
+	); err != nil {
+		t.Fatalf("initial bootstrap failed: %v", err)
+	}
+
+	_, err := environment.client.InitializeFrostNativeSignerAnchor(
+		context.Background(),
+		authorization,
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"native signer anchor bootstrap read nonce mismatch",
+	) {
+		t.Fatalf("expected stale bootstrap read nonce rejection, got [%v]", err)
+	}
+	if _, readCalls, _ := environment.counters(); readCalls != 2 {
+		t.Fatalf("expected two bootstrap reads, got [%d]", readCalls)
+	}
+}
+
 func bootstrapClientTestConfigJSON(
 	endpoint string,
 	responseKeyHex string,

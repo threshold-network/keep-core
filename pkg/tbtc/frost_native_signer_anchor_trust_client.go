@@ -144,12 +144,10 @@ func verifyFrostNativeSignerAnchorTrustTargetAcknowledgement(
 // readFrostNativeSignerAnchorTrustTransitionTarget performs the fresh final
 // Read required immediately before the startup-only Rust transition. The
 // authenticated trust-floor capability installed by the private constructor
-// supplies the exact certificate. Only an already-installed exact replay may
-// return a generic, strictly validated descendant under the same final
-// binding.
+// supplies the exact certificate, and the stored acknowledgement must match
+// it byte-for-byte; any divergence is rejected unconditionally.
 func (client *FrostNativeSignerAnchorClient) readFrostNativeSignerAnchorTrustTransitionTarget(
 	ctx context.Context,
-	allowCompletedReplayDescendant bool,
 ) (*FrostNativeSignerAnchorTrustTransitionTarget, error) {
 	if client == nil || ctx == nil || client.certifiedTrustFloor == nil {
 		return nil, fmt.Errorf(
@@ -294,30 +292,9 @@ func (client *FrostNativeSignerAnchorClient) readFrostNativeSignerAnchorTrustTra
 				readResponse.CheckpointAck,
 			)
 	} else {
-		if !allowCompletedReplayDescendant {
-			return nil, fmt.Errorf(
-				"new native signer trust transition target is not the exact certified acknowledgement",
-			)
-		}
-		acknowledgement, err = client.verifyAcknowledgement(
-			readResponse.CheckpointAck,
-			nil,
-			nil,
-			&checkpoint,
-			&operationID,
-			false,
-			"applied",
-			"already-applied",
+		return nil, fmt.Errorf(
+			"new native signer trust transition target is not the exact certified acknowledgement",
 		)
-		if err == nil &&
-			(acknowledgement.ServiceEpoch !=
-				finalCertificate.To.Reference.ServiceEpoch ||
-				acknowledgement.Revision <=
-					finalCertificate.To.Reference.Revision) {
-			err = fmt.Errorf(
-				"native signer trust-transition Read is neither the certified floor nor a descendant",
-			)
-		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf(

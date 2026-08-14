@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -1207,15 +1206,7 @@ func frostNativeSignerAnchorParseSignature(value string) ([ed25519.SignatureSize
 }
 
 func frostNativeSignerAnchorSignatureHex(value []byte) string {
-	return "0x" + hex.EncodeToString(value)
-}
-
-func frostNativeSignerAnchorCanonicalSPKI(value string) ([]byte, error) {
-	decoded, err := base64.StdEncoding.DecodeString(value)
-	if err != nil || base64.StdEncoding.EncodeToString(decoded) != value {
-		return nil, fmt.Errorf("SPKI is not canonical base64")
-	}
-	return decoded, nil
+	return "0x" + hex.EncodeToString(value[:])
 }
 
 func decodeStrictFrostNativeSignerAnchorJSON(data []byte, target interface{}) error {

@@ -15,7 +15,6 @@ type frostNativeSignerAnchorAuthenticatedRecoveryArtifact struct {
 
 type frostNativeSignerAnchorTrustTransitionTargetReader func(
 	context.Context,
-	bool,
 ) (*FrostNativeSignerAnchorTrustTransitionTarget, error)
 
 type frostNativeSignerAnchorTrustTransitionInvoker func(
@@ -73,6 +72,8 @@ func selectFrostNativeSignerAnchorTrustRecoveryChain(
 ) ([]FrostNativeSignerAnchorTrustCertificate, error) {
 	if artifact == nil || artifact.trustFloor == nil ||
 		len(artifact.certificates) == 0 || recovery == nil ||
+		recovery.Schema !=
+			frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequiredSchema ||
 		recovery.CertificateCount == 0 ||
 		uint64(len(recovery.OrderedCertificateDigests)) !=
 			recovery.CertificateCount {
@@ -194,7 +195,7 @@ func executeFrostNativeSignerAnchorTrustTransition(
 		*FrostNativeSignerAnchorTrustTransitionTarget,
 		error,
 	) {
-		target, err := readTarget(ctx, false)
+		target, err := readTarget(ctx)
 		if err != nil {
 			return nil, nil, fmt.Errorf(
 				"cannot obtain a fresh native signer anchor trust-transition target: %w",
@@ -533,6 +534,18 @@ func selectFrostNativeSignerAnchorTrustTransitionChain(
 			start = match
 		case match >= 0:
 			start = match + 1
+		default:
+			// The authenticated journal head is absent from the configured
+			// artifact. The full configured suffix is only safe to apply when
+			// the head immediately precedes the artifact's first certificate.
+			if configured[0].CertificateSequence !=
+				readback.CertificateSequence+1 ||
+				configured[0].PreviousCertificateDigest !=
+					readback.CertificateDigest {
+				return nil, fmt.Errorf(
+					"authenticated native signer anchor trust head does not immediately precede the configured artifact",
+				)
+			}
 		}
 	}
 	result := append(
@@ -579,18 +592,26 @@ func validateFrostNativeSignerAnchorReconciledTransitionTarget(
 	return nil
 }
 
+// validateFrostNativeSignerAnchorTrustTransitionResult enforces the exact
+// idempotent-replay rule for the two startup outcomes that pass this
+// validator: a recovery replay (recoveryReplay) and a fresh extension. The
+// completed-restart path is filtered by the caller before this validator
+// runs, so the validator only checks the remaining two branches. The
+// recovery-replay branch requires an idempotent zero-applied result whose
+// witness base equals the recovered certified floor; the fresh-extension
+// branch requires a non-idempotent result whose AppliedCertificateCount
+// matches the authenticated missing suffix and whose witness base equals
+// the new certified floor.
 func validateFrostNativeSignerAnchorTrustTransitionResult(
 	result *frostsigning.NativeTBTCSignerStateAnchorTrustTransitionResult,
 	target *FrostNativeSignerAnchorTrustTransitionTarget,
 	finalCertificate *FrostNativeSignerAnchorTrustCertificate,
-	expectedProtocolHead *FrostNativeSignerAnchorTrustCertificateHead,
 	expectedNativeHead *frostsigning.NativeTBTCSignerStateAnchorTrustHead,
-	priorHead *FrostNativeSignerAnchorTrustCertificateHead,
 	appliedChain []FrostNativeSignerAnchorTrustCertificate,
 	recoveryReplay bool,
 ) error {
 	if result == nil || target == nil || finalCertificate == nil ||
-		expectedProtocolHead == nil || expectedNativeHead == nil ||
+		expectedNativeHead == nil ||
 		len(target.ExactReadResponse) == 0 ||
 		len(appliedChain) == 0 ||
 		len(appliedChain) >
@@ -613,9 +634,7 @@ func validateFrostNativeSignerAnchorTrustTransitionResult(
 	witnessBase := frostNativeSignerAnchorTrustCheckpointFromNative(
 		result.WitnessBaseCheckpoint,
 	)
-	exactReplay := priorHead != nil &&
-		*priorHead == *expectedProtocolHead
-	if !exactReplay && target.Reference != finalCertificate.To.Reference {
+	if target.Reference != finalCertificate.To.Reference {
 		return fmt.Errorf(
 			"new native signer anchor trust transition does not use the exact certified target",
 		)
@@ -636,39 +655,6 @@ func validateFrostNativeSignerAnchorTrustTransitionResult(
 		)
 	}
 
-	if exactReplay {
-		if recoveryReplay {
-			return fmt.Errorf(
-				"native signer anchor trust-transition result is ambiguously both an exact-head and recovery replay",
-			)
-		}
-		head := &appliedChain[len(appliedChain)-1]
-		if len(appliedChain) != 1 ||
-			head.CertificateSequence !=
-				expectedProtocolHead.CertificateSequence ||
-			head.CertificateDigest !=
-				expectedProtocolHead.CertificateDigest ||
-			head.To != expectedProtocolHead.Endpoint ||
-			!result.Idempotent ||
-			result.AppliedCertificateCount != 0 {
-			return fmt.Errorf(
-				"native signer anchor completed-restart result is not an exact idempotent replay",
-			)
-		}
-		floorCheckpoint := finalCertificate.To.Reference.Checkpoint
-		if witnessBase.StoreFingerprint != floorCheckpoint.StoreFingerprint ||
-			witnessBase.Generation < floorCheckpoint.Generation ||
-			witnessBase.Generation > currentCheckpoint.Generation ||
-			(witnessBase.Generation == floorCheckpoint.Generation &&
-				witnessBase != floorCheckpoint) ||
-			(witnessBase.Generation == currentCheckpoint.Generation &&
-				witnessBase != currentCheckpoint) {
-			return fmt.Errorf(
-				"native signer anchor completed-restart witness base is outside the retained certified segment",
-			)
-		}
-		return nil
-	}
 	if recoveryReplay {
 		if !result.Idempotent ||
 			result.AppliedCertificateCount != 0 {

@@ -645,7 +645,6 @@ func TestExecuteFrostNativeSignerAnchorTrustTransitionRecoversMultiCertificateIn
 			&recovery,
 			func(
 				context.Context,
-				bool,
 			) (*FrostNativeSignerAnchorTrustTransitionTarget, error) {
 				readCalls++
 				return &FrostNativeSignerAnchorTrustTransitionTarget{
@@ -728,7 +727,6 @@ func TestExecuteFrostNativeSignerAnchorTrustTransitionRetriesWithFreshRead(
 			nil,
 			func(
 				context.Context,
-				bool,
 			) (*FrostNativeSignerAnchorTrustTransitionTarget, error) {
 				read := freshReads[readCalls]
 				readCalls++
@@ -821,7 +819,6 @@ func TestExecuteFrostNativeSignerAnchorTrustTransitionRejectsStaleRecoveryTarget
 		&recovery,
 		func(
 			context.Context,
-			bool,
 		) (*FrostNativeSignerAnchorTrustTransitionTarget, error) {
 			readCalls++
 			return &FrostNativeSignerAnchorTrustTransitionTarget{
@@ -848,7 +845,7 @@ func TestExecuteFrostNativeSignerAnchorTrustTransitionRejectsStaleRecoveryTarget
 
 func TestValidateFrostNativeSignerAnchorTrustTransitionResult(t *testing.T) {
 	fixture := newFrostNativeSignerAnchorTrustStartupFixture()
-	protocolHead, nativeHead, err :=
+	_, nativeHead, err :=
 		validateFrostNativeSignerAnchorTrustExpectedHead(
 			fixture.runtime,
 			&fixture.installed,
@@ -875,9 +872,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResult(t *testing.T) {
 		&result,
 		target,
 		&fixture.certificate,
-		protocolHead,
 		nativeHead,
-		nil,
 		chain,
 		false,
 	); err != nil {
@@ -931,9 +926,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResult(t *testing.T) {
 				&candidate,
 				target,
 				&fixture.certificate,
-				protocolHead,
 				nativeHead,
-				nil,
 				chain,
 				false,
 			); err == nil {
@@ -961,9 +954,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResult(t *testing.T) {
 		&descendantResult,
 		&descendantTarget,
 		&fixture.certificate,
-		protocolHead,
 		nativeHead,
-		nil,
 		chain,
 		false,
 	); err == nil {
@@ -1026,86 +1017,11 @@ func TestValidateFrostNativeSignerAnchorReconciledTransitionTargetScopesExactHea
 	}
 }
 
-func TestValidateFrostNativeSignerAnchorTrustTransitionResultExactReplay(
-	t *testing.T,
-) {
-	fixture := newFrostNativeSignerAnchorTrustStartupFixture()
-	protocolHead, nativeHead, err :=
-		validateFrostNativeSignerAnchorTrustExpectedHead(
-			fixture.runtime,
-			&fixture.installed,
-			&fixture.certificate,
-		)
-	if err != nil {
-		t.Fatal(err)
-	}
-	descendant := fixture.certificate.To.Reference
-	descendant.Revision = 4
-	descendant.PreviousEventRoot = descendant.EventRoot
-	descendant.EventRoot =
-		frostNativeSignerAnchorTrustStartupBytes32(0xb1)
-	descendant.AcknowledgementDigest =
-		frostNativeSignerAnchorTrustStartupBytes32(0xb2)
-	descendant.Checkpoint.Generation += 3
-	descendant.Checkpoint.PreviousStateCommitment =
-		frostNativeSignerAnchorTrustStartupBytes32(0xb3)
-	descendant.Checkpoint.StateImageDigest =
-		frostNativeSignerAnchorTrustStartupBytes32(0xb4)
-	descendant.Checkpoint.StateCommitment =
-		frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
-			descendant.Checkpoint.StoreFingerprint,
-			descendant.Checkpoint.Generation,
-			descendant.Checkpoint.PreviousStateCommitment,
-			descendant.Checkpoint.StateImageDigest,
-		)
-	target := &FrostNativeSignerAnchorTrustTransitionTarget{
-		ExactReadResponse: []byte(`{"fresh":"descendant"}`),
-		Reference:         descendant,
-	}
-	result := frostNativeSignerAnchorTrustStartupResult(
-		*nativeHead,
-		descendant,
-		fixture.certificate.To.Reference.Checkpoint,
-		true,
-		0,
-	)
-	chain := []FrostNativeSignerAnchorTrustCertificate{
-		fixture.certificate,
-	}
-	if err := validateFrostNativeSignerAnchorTrustTransitionResult(
-		&result,
-		target,
-		&fixture.certificate,
-		protocolHead,
-		nativeHead,
-		protocolHead,
-		chain,
-		false,
-	); err != nil {
-		t.Fatalf("valid completed-restart result was rejected: %v", err)
-	}
-
-	result.WitnessBaseCheckpoint.Generation =
-		descendant.Checkpoint.Generation
-	if err := validateFrostNativeSignerAnchorTrustTransitionResult(
-		&result,
-		target,
-		&fixture.certificate,
-		protocolHead,
-		nativeHead,
-		protocolHead,
-		chain,
-		false,
-	); err == nil {
-		t.Fatal("equal-generation forked replay witness base was accepted")
-	}
-}
-
 func TestValidateFrostNativeSignerAnchorTrustTransitionResultRecoveryReplay(
 	t *testing.T,
 ) {
 	fixture := newFrostNativeSignerAnchorTrustStartupFixture()
-	protocolHead, nativeHead, err :=
+	_, nativeHead, err :=
 		validateFrostNativeSignerAnchorTrustExpectedHead(
 			fixture.runtime,
 			&fixture.installed,
@@ -1134,9 +1050,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResultRecoveryReplay(
 		&recovered,
 		target,
 		&fixture.certificate,
-		protocolHead,
 		nativeHead,
-		nil,
 		chain,
 		true,
 	); err != nil {
@@ -1149,9 +1063,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResultRecoveryReplay(
 		&recovered,
 		target,
 		&fixture.certificate,
-		protocolHead,
 		nativeHead,
-		nil,
 		chain,
 		false,
 	); err == nil {
@@ -1169,9 +1081,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResultRecoveryReplay(
 		&partiallyApplied,
 		target,
 		&fixture.certificate,
-		protocolHead,
 		nativeHead,
-		nil,
 		chain,
 		true,
 	); err == nil {
@@ -1189,9 +1099,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResultRecoveryReplay(
 		&nonIdempotent,
 		target,
 		&fixture.certificate,
-		protocolHead,
 		nativeHead,
-		nil,
 		chain,
 		true,
 	); err == nil {
@@ -1218,27 +1126,11 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResultRecoveryReplay(
 		&diverged,
 		target,
 		&fixture.certificate,
-		protocolHead,
 		nativeHead,
-		nil,
 		chain,
 		true,
 	); err == nil {
 		t.Fatal("recovery replay witness base off the certified floor was accepted")
-	}
-
-	// A result cannot be both an exact-head replay and a recovery replay.
-	if err := validateFrostNativeSignerAnchorTrustTransitionResult(
-		&recovered,
-		target,
-		&fixture.certificate,
-		protocolHead,
-		nativeHead,
-		protocolHead,
-		chain,
-		true,
-	); err == nil {
-		t.Fatal("ambiguous exact-head and recovery replay was accepted")
 	}
 }
 

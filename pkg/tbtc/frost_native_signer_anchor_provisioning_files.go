@@ -160,11 +160,24 @@ func WriteFrostNativeSignerAnchorProvisioningArtifact(
 	); err != nil {
 		return fmt.Errorf("cannot publish provisioning artifact: %w", err)
 	}
-	if err := unix.Unlinkat(directoryFD, temporaryName, 0); err != nil {
+	// Linkat has durably published the artifact. Flip the deferred
+	// cleanup sentinel so a later error path does not retry the same
+	// unlink, fsync the directory so the published link survives a
+	// crash, and downgrade a temporary unlink failure to a logged
+	// leftover: the canonical artifact is already in place and a
+	// failed unlink must not abort the call or block re-provisioning.
+	removeTemporary = false
+	if err := directoryFile.Sync(); err != nil {
 		return err
 	}
-	removeTemporary = false
-	return directoryFile.Sync()
+	if err := unix.Unlinkat(directoryFD, temporaryName, 0); err != nil {
+		logger.Warnf(
+			"cannot remove provisioning artifact temporary [%s]: [%v]",
+			temporaryName,
+			err,
+		)
+	}
+	return nil
 }
 
 func frostNativeSignerAnchorProvisioningPath(
