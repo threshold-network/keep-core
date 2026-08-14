@@ -44,6 +44,18 @@ walletPubKeyHashCompat = HASH160(0x02 || xOnlyOutputKey)
 
 == Non-Goals (This RFC Revision)
 
-* No production FROST coordinator implementation.
 * No on-chain contract ABI migration in this repository.
-* No replacement of existing GG18 runtime paths yet.
+* No replacement of existing GG18 runtime paths in a default build. GG18 (legacy
+  tECDSA) remains the only signing path an untagged build can take.
+
+[NOTE]
+====
+Superseded Non-Goal: earlier revisions of this RFC listed "No production FROST
+coordinator implementation" and an unqualified "No replacement of existing GG18
+runtime paths yet". The production ROAST coordinator now lives in
+`pkg/frost/roast` and is wired into the signing loop, specified separately in
+RFC-21. It is gated off by default: the coordinator only compiles under the
+`frost_roast_retry` build tag and only activates when
+`KEEP_CORE_FROST_ROAST_RETRY_ENABLED` is set, so the Non-Goal above is restated
+in terms of the default build rather than the codebase.
+====

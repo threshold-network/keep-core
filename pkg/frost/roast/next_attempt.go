@@ -219,7 +219,10 @@ func computeNextAttempt(
 	// coordinator equivocated. That is unforgeable (the coordinator's own two
 	// signatures over different bodies), so it is established INSTANTLY - it does
 	// NOT pass through the f+1 accuser gate, which exists only to bound
-	// fabricated bare-counter claims (frozen Phase 7.2b spec, section 6).
+	// fabricated bare-counter claims. Specified in RFC-21, "Coordinator
+	// equivocation: single-observer exclusion" (under Layer B's exclusion
+	// policy), which also explains why replacing the quorum with a signature
+	// check does not weaken the fabrication firewall.
 	coordinatorEquivocators := verifiedCoordinatorEquivocations(bundle, verifier)
 
 	// Merge into permanent exclusion.

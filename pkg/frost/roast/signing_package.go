@@ -64,8 +64,9 @@ const TaprootMerkleRootLength = 32
 const MaxSignedSigningPackageBytes = MaxSigningPackageBytes + MaxCoordinatorSignatureBytes + 512
 
 // SigningPackage is the coordinator-distributed signing package for one
-// attempt, carried as a signed-body envelope (Phase 7.2b, frozen spec
-// section 6). The elected coordinator signs the exact serialized
+// attempt, carried as a signed-body envelope (RFC-21, "Coordinator
+// equivocation: single-observer exclusion" -- the signed envelope is what
+// makes an equivocation proof unforgeable). The elected coordinator signs
 // SigningPackageBody with its operator key and distributes the
 // SignedSigningPackage to the chosen signing subset; each member verifies
 // the coordinator signature over the exact bytes it received and only then

@@ -86,8 +86,9 @@ func buildTaggedTBTCSignerErrorPayload(payload []byte) *buildTaggedTBTCSignerStr
 // own verifying material. They are NOT adjudicated blame: a coordinator that
 // aggregated honest shares against a substituted package/root would make those
 // honest shares appear here. The Go host performs the envelope-bound blame
-// adjudication at an f+1 accuser quorum over these candidates (frozen Phase 7.2b
-// spec, section 6); this list is its input, never authoritative on its own.
+// adjudication at an f+1 accuser quorum over these candidates (RFC-21, Layer B
+// exclusion policy: "Accusation tallying"); this list is its input, never
+// authoritative on its own.
 type InteractiveAggregateShareVerificationError struct {
 	SessionID         string
 	AttemptID         string

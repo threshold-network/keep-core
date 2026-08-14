@@ -385,6 +385,50 @@ as a fabrication firewall rather than a working exclusion mechanism;
 restoring per-category exclusion under heavy attack is exactly what
 proof-carrying blame is for.
 
+==== Coordinator equivocation: single-observer exclusion
+
+The verifiability roadmap above lands first for one specific accused
+party: the *coordinator*. A coordinator equivocates when it issues two
+different signing packages for the same attempt -- for example sending
+one signer subset to member A and a different one to member B, splitting
+the honest set so no subset can finalize.
+
+This case is exempt from the `f+1` accuser quorum, and the exemption is
+principled rather than pragmatic. The quorum exists to bound
+*unverifiable* claims: an overflow or reject counter is an observer's
+assertion that a third party cannot re-check. A coordinator-equivocation
+accusation is not an assertion at all. The evidence is a pair of
+*coordinator-signed* signing packages carrying the same attempt and
+coordinator identity but two different authenticated body hashes. Any
+member can verify both signatures against the coordinator's own operator
+key, so the evidence is self-incriminating and cannot be fabricated
+without that key. One honest observer is therefore sufficient, exactly
+as the roadmap describes for conflicts: the quorum is replaced by a
+signature check, not weakened.
+
+. *Category.* Coordinator equivocation is tallied separately from the
+  overflow / reject / conflict categories and is never summed with them.
+  It accuses only the attempt's coordinator; a proof naming any other
+  member is ignored.
+. *Wire path.* A member that receives a second, body-different signing
+  package for an attempt retains both signed envelopes. They travel in
+  that seat's evidence snapshot alongside its ordinary evidence and the
+  elected coordinator of the transition aggregates them into the bundle
+  like any other snapshot content.
+. *Verification.* `NextAttempt` authenticates every proof pair before
+  counting it: both envelopes must carry a valid operator signature from
+  the accused coordinator, the same attempt identity, and genuinely
+  different body hashes. Pairs failing any check are discarded without
+  effect.
+. *Disposition.* A single verified pair moves the coordinator to
+  `ExcludedSet` permanently, so it cannot be re-elected for this signer
+  set. Because the evidence is unforgeable this cannot be used to grind
+  the `IncludedSet`: an attacker without the coordinator's key cannot
+  produce a pair, and a coordinator that produces one has provably
+  broken the protocol.
+. *Infeasibility.* The resulting exclusion feeds the same
+  `ErrAttemptInfeasible` check as every other permanent exclusion.
+
 === Layer C: Retry orchestration (M7)
 
 `pkg/frost/retry/retry.go` is renamed to
@@ -737,11 +781,11 @@ panic-before-defer pathological case.
 
 === Orchestration error taxonomy
 
-*Decision: orchestration errors are bucketed into two classes, with
+*Decision: orchestration errors are bucketed into three classes, with
 fundamentally different handling.*
 
 When the executor adapter calls `BeginOrchestrationForSession`,
-the call can fail for two distinct reasons that the receiver MUST
+the call can fail for distinct reasons that the receiver MUST
 distinguish:
 
 . *Static-configuration errors* -- the build was deployed without
@@ -760,6 +804,24 @@ distinguish:
   failure while node B succeeds. Treat them as hard failures:
   return an error from the executor adapter, declare the session
   failed.
+
+. *Terminal refusals* -- a deliberately configured safety switch
+  declined the only path it permits, so neither disposition above is
+  correct. The motivating case is interactive-only mode
+  (`KEEP_CORE_FROST_INTERACTIVE_SIGNING_ONLY`): it exists precisely to
+  retire the coarse signing path, so falling back to the legacy retry
+  path would defeat the switch, while retrying cannot help because the
+  refusal is deterministic in the node's own configuration. Signalled by
+  the sentinel `ErrTerminalSigningFailure` and identified with
+  `errors.Is`; the retry loop aborts the session immediately rather than
+  falling back or re-attempting.
++
+Like static-configuration errors these are deterministic per node, but
+unlike them they must NOT fall back. Treating a refusal as a
+static-configuration error would silently reintroduce the very path the
+operator disabled; treating it as a runtime error would imply a
+transient fault and invite retries that can never succeed. The class is
+therefore distinct in disposition, not merely in provenance.
 
 The safety reason is load-bearing. If node A falls back to the
 legacy retry shuffle while node B proceeds with the ROAST state
