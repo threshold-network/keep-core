@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -31,6 +32,43 @@ func TestShouldRunLegacyECDSA(t *testing.T) {
 
 	if shouldRunLegacyECDSA(Config{DisableLegacyECDSA: true}) {
 		t.Fatal("expected legacy ECDSA to be disabled")
+	}
+}
+
+func TestValidateWalletSchemeConfig(t *testing.T) {
+	registryAvailable := Connect()
+	registryAvailable.frostWalletRegistryAvailable = true
+
+	registryMissing := Connect()
+
+	// The default configuration runs legacy ECDSA, so an absent FROST registry is
+	// a legitimate legacy-only deployment.
+	if err := validateWalletSchemeConfig(Config{}, registryMissing); err != nil {
+		t.Fatalf("expected default legacy-only config to be accepted: [%v]", err)
+	}
+
+	// FROST-only with the registry configured is the intended FROST deployment.
+	if err := validateWalletSchemeConfig(
+		Config{DisableLegacyECDSA: true},
+		registryAvailable,
+	); err != nil {
+		t.Fatalf("expected FROST-only config with registry to be accepted: [%v]", err)
+	}
+
+	// The trap: both schemes off. Neither switch fails on its own, so this must be
+	// rejected here or the node starts and creates no wallets at all.
+	err := validateWalletSchemeConfig(
+		Config{DisableLegacyECDSA: true},
+		registryMissing,
+	)
+	if err == nil {
+		t.Fatal(
+			"expected FROST-only config without a FROST wallet registry to be " +
+				"rejected; such a node can create no wallets of either scheme",
+		)
+	}
+	if !strings.Contains(err.Error(), "disableLegacyECDSA") {
+		t.Fatalf("expected error to name the offending flag, got: [%v]", err)
 	}
 }
 

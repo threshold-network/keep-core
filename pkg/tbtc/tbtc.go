@@ -140,6 +140,10 @@ func Initialize(
 	perfMetrics *clientinfo.PerformanceMetrics,
 	ethereumNetwork ethereum.Network,
 ) error {
+	if err := validateWalletSchemeConfig(config, chain); err != nil {
+		return err
+	}
+
 	groupParameters := defaultGroupParameters(ethereumNetwork)
 	var frostGroupParameters *GroupParameters
 
@@ -592,6 +596,32 @@ func shouldMonitorLegacySortitionPool(config Config) bool {
 
 func shouldRunLegacyECDSA(config Config) bool {
 	return !config.DisableLegacyECDSA
+}
+
+// validateWalletSchemeConfig rejects a configuration under which no wallet of
+// either scheme can ever be created. Disabling legacy ECDSA DKG and leaving the
+// FROST wallet registry unconfigured are two independent silent no-ops, so their
+// combination otherwise starts a node that creates zero wallets and monitors zero
+// sortition pools while logging only at Info level.
+func validateWalletSchemeConfig(config Config, chain Chain) error {
+	if shouldRunLegacyECDSA(config) {
+		return nil
+	}
+
+	// Assert only the capability being asked about, not the whole FrostDKGChain
+	// surface: a chain may report registry availability without implementing every
+	// DKG event hook.
+	if frostChain, ok := chain.(frostWalletRegistryAvailability); ok &&
+		frostChain.FrostWalletRegistryAvailable() {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"tbtc.disableLegacyECDSA is set but the FROST wallet registry is not " +
+			"configured; the node would create no wallets of either scheme; " +
+			"configure the FrostWalletRegistry contract address or re-enable " +
+			"legacy ECDSA",
+	)
 }
 
 // enoughPreParamsInPoolPolicy is a policy that enforces the sufficient size
