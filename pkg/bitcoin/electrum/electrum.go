@@ -30,7 +30,7 @@ var (
 type Connection struct {
 	parentCtx   context.Context
 	client      *electrum.Client
-	clientMutex *sync.Mutex
+	clientMutex *sync.RWMutex
 	config      Config
 }
 
@@ -55,7 +55,7 @@ func Connect(parentCtx context.Context, config Config) (bitcoin.Chain, error) {
 	c := &Connection{
 		parentCtx:   parentCtx,
 		config:      config,
-		clientMutex: &sync.Mutex{},
+		clientMutex: &sync.RWMutex{},
 	}
 
 	if err := c.electrumConnect(); err != nil {
@@ -1080,9 +1080,7 @@ func (c *Connection) getFeeBtcPerKbOnce(blocks uint32) (float32, error) {
 		c.config.RequestTimeout,
 	)
 	defer requestCancel()
-	c.clientMutex.Lock()
-	fee, err := c.client.GetFee(requestCtx, blocks)
-	c.clientMutex.Unlock()
+	fee, err := c.currentClient().GetFee(requestCtx, blocks)
 	if err != nil {
 		return 0, fmt.Errorf("request failed: [%w]", err)
 	}
@@ -1350,9 +1348,7 @@ func requestWithRetry[K interface{}](
 			requestCtx, requestCancel := context.WithTimeout(ctx, c.config.RequestTimeout)
 			defer requestCancel()
 
-			c.clientMutex.Lock()
-			r, err := requestFn(requestCtx, c.client)
-			c.clientMutex.Unlock()
+			r, err := requestFn(requestCtx, c.currentClient())
 
 			if err != nil {
 				return fmt.Errorf("request failed: [%w]", err)
@@ -1378,6 +1374,28 @@ func requestWithRetry[K interface{}](
 	return result, err
 }
 
+// currentClient returns the live Electrum client under a read lock.
+//
+// The lock protects the client POINTER against a concurrent reconnect swap, not
+// the request itself: go-electrum multiplexes concurrent requests over an
+// id-to-channel map with a single reader goroutine dispatching responses, so it is
+// safe to call from several goroutines at once. Holding the lock across the round
+// trip instead serialized every Electrum request in the process, so independent
+// lookups queued behind each other for a full network round trip each.
+//
+// A reconnect may still swap the client immediately after this returns. The
+// request then fails against the stale client and the retry wrapper reconnects and
+// repeats it -- the same recovery path a reconnect landing mid-request always took.
+func (c *Connection) currentClient() *electrum.Client {
+	c.clientMutex.RLock()
+	defer c.clientMutex.RUnlock()
+
+	return c.client
+}
+
+// reconnectIfShutdown replaces a shut-down client with a fresh connection. It is
+// the only writer of c.client, so it takes the write lock: readers hold the read
+// lock just long enough to copy the pointer (see currentClient).
 func (c *Connection) reconnectIfShutdown() error {
 	c.clientMutex.Lock()
 	defer c.clientMutex.Unlock()
