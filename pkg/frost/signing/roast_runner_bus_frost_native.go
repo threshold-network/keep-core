@@ -81,6 +81,12 @@ type RunnerBusSubscriber struct {
 
 	mu   sync.Mutex
 	seen map[[sha256.Size]byte]struct{}
+	// overflowRecorders holds one evidence recorder per attempt, created lazily on
+	// the first overflow for that attempt and removed when the attempt's snapshot
+	// claims it (TakeOverflowEvidence). Recording is gated on a registered
+	// ROAST-retry coordinator, so this stays empty and free in builds where retry
+	// is inactive. Guarded by mu.
+	overflowRecorders map[[attempt.MessageDigestLength]byte]attempt.EvidenceRecorder
 }
 
 // Commitments returns the round-1 commitments stream.
@@ -97,6 +103,70 @@ func (s *RunnerBusSubscriber) EvidenceSnapshots() <-chan RunnerMessage { return 
 
 // TransitionBundles returns the transition-bundle stream.
 func (s *RunnerBusSubscriber) TransitionBundles() <-chan RunnerMessage { return s.transitionBundles }
+
+// overflowAttemptBound caps how many distinct attempts the subscriber tracks
+// overflow evidence for at once. Snapshots normally claim an attempt's evidence
+// promptly, so this only bounds the pathological case where evidence is recorded
+// for attempts whose snapshot never runs; it mirrors the dedup set's reset policy.
+const overflowAttemptBound = 64
+
+// recordOverflowLocked notes a permanent inbound drop against the message's
+// sender for the message's attempt (RFC-21 Layer A / M4). The caller must hold
+// s.mu.
+//
+// Recording is skipped entirely when no ROAST-retry coordinator is registered:
+// without one there is no transition that could act on the evidence, so this is
+// free in the default and non-retry builds. Per-sender counts are saturated by
+// the bounded recorder's own quota, so a flooding peer cannot inflate the
+// snapshot.
+func (s *RunnerBusSubscriber) recordOverflowLocked(msg RunnerMessage) {
+	if _, ok := RegisteredRoastRetryCoordinator(); !ok {
+		return
+	}
+
+	recorder, ok := s.overflowRecorders[msg.Attempt]
+	if !ok {
+		if len(s.overflowRecorders) >= overflowAttemptBound {
+			// Unclaimed evidence for stale attempts: drop it wholesale rather than
+			// grow without bound. Matches how the dedup set resets at its bound.
+			s.overflowRecorders = nil
+		}
+		if s.overflowRecorders == nil {
+			s.overflowRecorders = make(
+				map[[attempt.MessageDigestLength]byte]attempt.EvidenceRecorder,
+				1,
+			)
+		}
+		recorder = attempt.NewBoundedRecorder()
+		s.overflowRecorders[msg.Attempt] = recorder
+	}
+
+	recorder.RecordOverflow(msg.Sender)
+}
+
+// TakeOverflowEvidence removes and returns the per-sender overflow counts
+// recorded for the given attempt, or nil when none were recorded. The seat's
+// forced-snapshot path merges these into the evidence it broadcasts so the
+// coordinator's f+1 tally can see permanent inbound drops.
+func (s *RunnerBusSubscriber) TakeOverflowEvidence(
+	attemptHash [attempt.MessageDigestLength]byte,
+) map[group.MemberIndex]uint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	recorder, ok := s.overflowRecorders[attemptHash]
+	if !ok {
+		return nil
+	}
+	delete(s.overflowRecorders, attemptHash)
+
+	overflows := recorder.Snapshot().Overflows
+	if len(overflows) == 0 {
+		return nil
+	}
+
+	return overflows
+}
 
 func (s *RunnerBusSubscriber) streamFor(t RunnerMessageType) chan RunnerMessage {
 	switch t {

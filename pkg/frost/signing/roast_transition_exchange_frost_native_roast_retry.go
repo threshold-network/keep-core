@@ -230,6 +230,18 @@ func (e *RoastTransitionExchange) BroadcastForcedSnapshot(
 	// coordinator-equivocation proofs (RFC-21 Phase 7.3 PR2b-2 step 2b); the
 	// constructor sorts + owns the proofs and the single signing happens below.
 	evidence, proofs, _ := takePendingEvidence(e.roastSessionID, e.member, attemptHash)
+	// RFC-21 Layer A / M4: fold in the permanent inbound drops the receive loop
+	// recorded for this attempt. Merged here rather than stashed at the drop site
+	// because stashPendingEvidence replaces the evidence field wholesale, which
+	// would clobber the share-blame rejects written above.
+	if overflows := e.sub.TakeOverflowEvidence(attemptHash); len(overflows) > 0 {
+		if evidence.Overflows == nil {
+			evidence.Overflows = make(map[group.MemberIndex]uint, len(overflows))
+		}
+		for sender, count := range overflows {
+			evidence.Overflows[sender] += count
+		}
+	}
 	snapshot := roast.NewLocalEvidenceSnapshot(e.member, attemptHash, evidence, proofs...)
 	payload, err := snapshot.SignableBytes()
 	if err != nil {

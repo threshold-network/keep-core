@@ -330,5 +330,11 @@ func (s *RunnerBusSubscriber) deliverNonBlocking(
 		// filtered upstream), so the buffer is sized above honest volume and this
 		// only occurs under a flood (-> ROAST retry). Left un-seen so a
 		// non-retransmit re-delivery, if any, is still accepted.
+		//
+		// RFC-21 Layer A / M4: a permanent drop must be attributable, never
+		// silent. Record it against the sender for THIS attempt so
+		// BroadcastForcedSnapshot can carry it into the seat's evidence snapshot
+		// and the coordinator's f+1 tally can see it.
+		s.recordOverflowLocked(msg)
 	}
 }

@@ -20,14 +20,13 @@ type senderIndexedMessage interface {
 // sender on the supplied recorder instead. Returns true if the payload
 // was enqueued, false if the overflow was recorded.
 //
-// This is the shared select-or-record body that replaces the three
-// inline select { default } drop sites in the FROST/tbtc-signer
-// receive loops. Pulling it out lets the recorder integration be unit-
-// tested directly without spinning up a network channel.
-//
-// Phase 2 callers pass attempt.NoOpRecorder(), so behaviour is
-// observably unchanged from before RFC-21 wiring. A coordinator-aware
-// caller in a later phase injects a real recorder.
+// This is a standalone, directly unit-testable select-or-record body. It is NOT
+// on the production receive path: RunnerBusSubscriber.deliverNonBlocking owns
+// dedup and payload copying under one lock, so it records overflow through its
+// own per-attempt recorder (see recordOverflowLocked) rather than through this
+// generic helper. Kept because the real-crypto overflow-park test drives it
+// against a genuinely full bounded channel, which pins the record-on-full
+// contract independently of the bus.
 func enqueueOrRecordOverflow[T senderIndexedMessage](
 	payload T,
 	target chan<- T,
