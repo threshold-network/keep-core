@@ -24,24 +24,15 @@ const (
 	// It fails closed with cryptographic_refresh_not_supported until a real
 	// multi-round refresh protocol exists. The changed status and response
 	// semantics are incompatible with ABI 3.
-	requiredTBTCSignerABIMajor uint32 = 4
-	// Minor 1 adds the durable-store identity, exact retained key-package
-	// inventory, and paginated state-witness proof readbacks. These are new
-	// symbols and response types, so ABI-4.0 callers remain valid and ignore
-	// them. Their first public contract uses the v2 stable-store and witness
-	// transcripts; bridges that consume them must require at least 4.1.
 	//
-	// Minor 2 adds the constant-size state-witness tip and signed checkpoint
-	// acknowledgement symbols required by the protocol-output barrier. This
-	// build must reject 4.1 before it can reach a missing symbol via dlsym.
-	//
-	// Minor 3 adds the durable state-anchor trust-head/transition and bootstrap
-	// facts symbols. Production startup and offline provisioning require that
-	// complete surface and must reject an ABI-4.2 library before dlsym.
-	//
-	// Minor 4 adds durable distributed-DKG key-package retirement. Failed DKG
-	// reconciliation must reject ABI 4.3 rather than preserving orphaned keys.
-	requiredTBTCSignerABIMinMinor uint32 = 4
+	// Major 5 replaces ABI 4.5's plaintext share-repair Delta/Sigma JSON with
+	// Rust-owned transient transport sessions and opaque ciphertexts. An ABI-4
+	// library would put complete reconstructable scalar sets in Go memory, so
+	// this bridge must reject it before resolving any repair symbol.
+	requiredTBTCSignerABIMajor uint32 = 5
+	// ABI 5.0 contains the complete native-custody share-repair surface:
+	// Begin/Finish plus ciphertext-only Part1, Part2, and Install.
+	requiredTBTCSignerABIMinMinor uint32 = 0
 )
 
 // ErrTBTCSignerABIIncompatible marks a linked libfrost_tbtc whose FFI contract version

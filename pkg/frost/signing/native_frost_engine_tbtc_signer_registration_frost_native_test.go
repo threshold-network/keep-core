@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -109,6 +110,23 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 			ErrNativeCryptographyUnavailable,
 			err,
 		)
+	}
+}
+
+func TestRealCgoShareRepairSymbolsResolve(t *testing.T) {
+	resetTBTCSignerABIOnceForTest()
+	t.Cleanup(resetTBTCSignerABIOnceForTest)
+	if err := assertTBTCSignerABICompatible(); errors.Is(
+		err,
+		ErrNativeCryptographyUnavailable,
+	) {
+		t.Skip("libfrost_tbtc is not linked")
+	} else if err != nil {
+		t.Fatalf("linked signer ABI is incompatible: %v", err)
+	}
+
+	if !buildTaggedTBTCSignerShareRepairSymbolsAvailable() {
+		t.Fatal("ABI 5.0 library is missing one or more native-custody share-repair symbols")
 	}
 }
 
@@ -328,6 +346,315 @@ func TestBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesPayloadAndResponse(
 		keyGroup,
 	); err == nil {
 		t.Fatal("inconsistent retirement response was accepted")
+	}
+}
+
+func TestBuildTaggedTBTCSignerShareRepairPayloadsAndResponses(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextDigest := fmt.Sprintf("0x%x", digest)
+	localPublicKey, err := hex.DecodeString(
+		transportRoster.ParticipantPublicKeys[0].PublicKeyHex,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload1 := bytesOf(0xa1, buildTaggedTBTCSignerShareRepairPayloadLength)
+	payload2 := bytesOf(0xa2, buildTaggedTBTCSignerShareRepairPayloadLength)
+
+	beginPayload, err := buildTaggedTBTCSignerShareRepairSessionRequestPayload(
+		"BeginShareRepairSession",
+		authorization,
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var beginRequest buildTaggedTBTCSignerShareRepairSessionRequest
+	if err := json.Unmarshal(beginPayload, &beginRequest); err != nil {
+		t.Fatal(err)
+	}
+	if beginRequest.Authorization == nil ||
+		beginRequest.Authorization.SessionID != authorization.SessionID ||
+		beginRequest.ParticipantIdentifier != 1 {
+		t.Fatal("share-repair begin request lost its authorization or participant")
+	}
+	beginResponse, err := json.Marshal(buildTaggedTBTCSignerBeginShareRepairSessionResponse{
+		ContextDigest:         contextDigest,
+		ParticipantIdentifier: 1,
+		StoreFingerprint:      authorization.NewStoreFingerprint,
+		TransportPublicKeyHex: hex.EncodeToString(localPublicKey),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := decodeBuildTaggedTBTCSignerBeginShareRepairSessionResponse(
+		beginResponse,
+		authorization,
+		1,
+	)
+	if err != nil || session == nil ||
+		!bytes.Equal(session.TransportPublicKey, localPublicKey) {
+		t.Fatalf("share-repair begin response was rejected: %v", err)
+	}
+	finishResponse, err := json.Marshal(buildTaggedTBTCSignerFinishShareRepairSessionResponse{
+		ContextDigest:         contextDigest,
+		ParticipantIdentifier: 1,
+		Finished:              true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := decodeBuildTaggedTBTCSignerFinishShareRepairSessionResponse(
+		finishResponse,
+		authorization,
+		1,
+	); err != nil {
+		t.Fatalf("share-repair finish response was rejected: %v", err)
+	}
+
+	part1RequestPayload, err := buildTaggedTBTCSignerShareRepairPart1RequestPayload(
+		authorization,
+		1,
+		transportRoster,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var part1Request buildTaggedTBTCSignerShareRepairPart1Request
+	if err := json.Unmarshal(part1RequestPayload, &part1Request); err != nil {
+		t.Fatal(err)
+	}
+	if part1Request.TransportRoster == nil ||
+		part1Request.TransportRoster.SignatureHex != transportRoster.SignatureHex ||
+		len(part1Request.TransportRoster.ParticipantPublicKeys) != 3 {
+		t.Fatal("share-repair Part1 request lost its signed transport roster")
+	}
+	if bytes.Contains(part1RequestPayload, []byte("recipient_public_keys")) {
+		t.Fatal("share-repair Part1 request retained caller-controlled recipient keys")
+	}
+	if bytes.Contains(part1RequestPayload, []byte("data_hex")) {
+		t.Fatal("share-repair Part1 request exposed the retired plaintext scalar field")
+	}
+
+	part1Payload, err := json.Marshal(buildTaggedTBTCSignerShareRepairPart1Response{
+		ContextDigest:    contextDigest,
+		HelperIdentifier: 1,
+		PublicKeyPackage: &buildTaggedTBTCSignerNativeFROSTPublicKeyPackage{
+			VerifyingShares: map[string]string{"1": "share-1", "2": "share-2"},
+			VerifyingKey:    "group-key",
+		},
+		Deltas: []buildTaggedTBTCSignerShareRepairEncryptedDelta{
+			{
+				ContextDigest:       contextDigest,
+				SenderIdentifier:    1,
+				RecipientIdentifier: 1,
+				PayloadHex:          hex.EncodeToString(payload1),
+			},
+			{
+				ContextDigest:       contextDigest,
+				SenderIdentifier:    1,
+				RecipientIdentifier: 2,
+				PayloadHex:          hex.EncodeToString(payload2),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part1, err := decodeBuildTaggedTBTCSignerShareRepairPart1Response(
+		part1Payload,
+		authorization,
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(part1.Deltas) != 2 ||
+		!bytes.Equal(part1.Deltas[0].Payload, payload1) ||
+		!bytes.Equal(part1.Deltas[1].Payload, payload2) {
+		t.Fatal("share-repair Part1 bridge response lost its opaque ciphertexts")
+	}
+
+	part2Deltas := []*NativeShareRepairEncryptedDelta{
+		{
+			ContextDigest:       contextDigest,
+			SenderIdentifier:    1,
+			RecipientIdentifier: 2,
+			Payload:             payload1,
+		},
+		{
+			ContextDigest:       contextDigest,
+			SenderIdentifier:    2,
+			RecipientIdentifier: 2,
+			Payload:             payload2,
+		},
+	}
+
+	part2Payload, err := buildTaggedTBTCSignerShareRepairPart2RequestPayload(
+		authorization,
+		2,
+		part2Deltas,
+		transportRoster,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part2Request := &buildTaggedTBTCSignerShareRepairPart2Request{}
+	if err := json.Unmarshal(part2Payload, part2Request); err != nil {
+		t.Fatal(err)
+	}
+	if part2Request.Authorization == nil ||
+		part2Request.Authorization.SessionID != authorization.SessionID ||
+		part2Request.HelperIdentifier != 2 || len(part2Request.Deltas) != 2 ||
+		part2Request.TransportRoster == nil ||
+		part2Request.TransportRoster.SignatureHex != transportRoster.SignatureHex {
+		t.Fatal("share-repair Part2 bridge request lost its authorization or endpoint")
+	}
+	if bytes.Contains(part2Payload, []byte("target_public_key_hex")) {
+		t.Fatal("share-repair Part2 request retained a caller-controlled target key")
+	}
+	if part2Request.Deltas[0].PayloadHex != hex.EncodeToString(payload1) ||
+		part2Request.Deltas[1].PayloadHex != hex.EncodeToString(payload2) {
+		t.Fatal("share-repair Part2 bridge ciphertexts did not round trip")
+	}
+	if bytes.Contains(part2Payload, []byte("data_hex")) {
+		t.Fatal("share-repair Part2 request exposed the retired plaintext scalar field")
+	}
+
+	part2ResponsePayload, err := json.Marshal(
+		buildTaggedTBTCSignerShareRepairPart2Response{
+			ContextDigest: contextDigest,
+			Sigma: &buildTaggedTBTCSignerShareRepairEncryptedSigma{
+				ContextDigest:    contextDigest,
+				HelperIdentifier: 2,
+				PayloadHex:       hex.EncodeToString(payload1),
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part2, err := decodeBuildTaggedTBTCSignerShareRepairPart2Response(
+		part2ResponsePayload,
+		authorization,
+		2,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if part2.Sigma == nil || !bytes.Equal(part2.Sigma.Payload, payload1) {
+		t.Fatal("share-repair Part2 bridge response lost its opaque sigma ciphertext")
+	}
+
+	sigmas := []*NativeShareRepairEncryptedSigma{
+		{
+			ContextDigest:    contextDigest,
+			HelperIdentifier: 1,
+			Payload:          payload1,
+		},
+		part2.Sigma,
+	}
+	installPayload, err := buildTaggedTBTCSignerInstallRepairedShareRequestPayload(
+		authorization,
+		&NativeFROSTPublicKeyPackage{
+			VerifyingShares: map[string]string{"1": "share-1", "2": "share-2"},
+			VerifyingKey:    "group-key",
+		},
+		sigmas,
+		transportRoster,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installRequest := &buildTaggedTBTCSignerInstallRepairedShareRequest{}
+	if err := json.Unmarshal(installPayload, installRequest); err != nil {
+		t.Fatal(err)
+	}
+	if installRequest.Authorization == nil ||
+		installRequest.Authorization.SessionID != authorization.SessionID ||
+		len(installRequest.Sigmas) != 2 || installRequest.TransportRoster == nil ||
+		installRequest.TransportRoster.SignatureHex != transportRoster.SignatureHex {
+		t.Fatal("share-repair install bridge request lost its bound inputs")
+	}
+	if installRequest.Sigmas[0].PayloadHex != hex.EncodeToString(payload1) ||
+		installRequest.Sigmas[1].PayloadHex != hex.EncodeToString(payload1) {
+		t.Fatal("share-repair install bridge ciphertexts did not round trip")
+	}
+	if bytes.Contains(installPayload, []byte("data_hex")) {
+		t.Fatal("share-repair install request exposed the retired plaintext scalar field")
+	}
+
+	installResponsePayload, err := json.Marshal(
+		buildTaggedTBTCSignerInstallRepairedShareResponse{
+			Schema:                 ShareRepairInstallResultSchema,
+			SessionID:              authorization.SessionID,
+			KeyGroup:               authorization.KeyGroup,
+			TargetIdentifier:       authorization.TargetIdentifier,
+			RecoveryEpoch:          authorization.RecoveryEpoch,
+			AuthorizationDigest:    contextDigest,
+			ActiveStoreFingerprint: authorization.NewStoreFingerprint,
+			Idempotent:             true,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := decodeBuildTaggedTBTCSignerInstallRepairedShareResponse(
+		installResponsePayload,
+		authorization,
+	)
+	if err != nil || installed == nil || !installed.Idempotent {
+		t.Fatalf("share-repair install bridge response was rejected: %v", err)
+	}
+}
+
+func TestBuildTaggedTBTCSignerShareRepairRejectsMalformedOpaqueMaterial(t *testing.T) {
+	authorization, authority := testShareRepairAuthorization(t)
+	transportRoster := testShareRepairTransportRoster(t, authorization, authority)
+	contextDigest, err := shareRepairContextWire(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := decodeBuildTaggedTBTCSignerBeginShareRepairSessionResponse(
+		[]byte(fmt.Sprintf(
+			`{"context_digest":%q,"participant_identifier":1,"store_fingerprint":%q,"transport_public_key_hex":%q}`,
+			contextDigest,
+			authorization.NewStoreFingerprint,
+			strings.Repeat("AA", buildTaggedTBTCSignerShareRepairPublicKeyLength),
+		)),
+		authorization,
+		1,
+	); err == nil {
+		t.Fatal("uppercase native session public key was accepted")
+	}
+
+	malformed := []*NativeShareRepairEncryptedDelta{
+		{
+			ContextDigest:       contextDigest,
+			SenderIdentifier:    1,
+			RecipientIdentifier: 2,
+			Payload:             bytesOf(0x11, buildTaggedTBTCSignerShareRepairPayloadLength-1),
+		},
+		{
+			ContextDigest:       contextDigest,
+			SenderIdentifier:    2,
+			RecipientIdentifier: 2,
+			Payload:             bytesOf(0x22, buildTaggedTBTCSignerShareRepairPayloadLength),
+		},
+	}
+	if _, err := buildTaggedTBTCSignerShareRepairPart2RequestPayload(
+		authorization,
+		2,
+		malformed,
+		transportRoster,
+	); err == nil {
+		t.Fatal("truncated encrypted delta was accepted")
 	}
 }
 

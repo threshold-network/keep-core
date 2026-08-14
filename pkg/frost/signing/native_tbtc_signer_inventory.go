@@ -13,13 +13,15 @@ import (
 )
 
 const (
-	NativeTBTCSignerRetainedKeyPackageInventorySchema = "tbtc-signer-retained-key-package-inventory/v1"
-	NativeTBTCSignerStateWitnessProofRequestSchema    = "tbtc-signer-state-witness-proof-request/v1"
-	NativeTBTCSignerStateWitnessProofSchema           = "tbtc-signer-state-witness-proof/v1"
+	NativeTBTCSignerRetainedKeyPackageInventorySchema         = "tbtc-signer-retained-key-package-inventory/v1"
+	NativeTBTCSignerRetainedKeyPackageInventoryRecoverySchema = "tbtc-signer-retained-key-package-inventory/v2"
+	NativeTBTCSignerStateWitnessProofRequestSchema            = "tbtc-signer-state-witness-proof-request/v1"
+	NativeTBTCSignerStateWitnessProofSchema                   = "tbtc-signer-state-witness-proof/v1"
 
 	NativeTBTCSignerStateWitnessProofMaximumEntries uint16 = 256
 
 	nativeTBTCSignerRetainedKeyPackageInventoryCommitmentDomain = "tbtc-signer-retained-key-package-inventory-commitment-v1\x00"
+	nativeTBTCSignerRecoveredSeatActivationCommitmentDomain     = "tbtc-signer-recovered-seat-activation-commitment-v1\x00"
 	nativeTBTCSignerStateWitnessGenesisDomain                   = "tbtc-signer-state-witness-genesis-v2\x00"
 	nativeTBTCSignerStateWitnessCommitmentDomain                = "tbtc-signer-state-witness-commitment-v2\x00"
 )
@@ -47,19 +49,34 @@ type NativeTBTCSignerRetainedKeyGroup struct {
 	KeyPackages                []NativeTBTCSignerRetainedKeyPackage
 }
 
+// NativeTBTCSignerRecoveredSeat is durable evidence that this exact key-group
+// seat was reconstructed into ActiveStoreFingerprint under one offline-signed
+// authorization. A recovered seat remains inactive until the separately signed
+// cutover registry supplies its matching old-stream tombstone lease.
+type NativeTBTCSignerRecoveredSeat struct {
+	WalletID               [32]byte
+	KeyGroup               string
+	ParticipantSeat        uint16
+	RecoveryEpoch          uint64
+	AuthorizationDigest    [32]byte
+	ActiveStoreFingerprint [32]byte
+}
+
 // NativeTBTCSignerRetainedKeyPackageInventory is a descriptor-locked snapshot
 // of the native signer. The state witness covers every durable engine-state
 // mutation, including replay markers; InventoryCommitment covers the sorted
 // public key-package inventory alone.
 type NativeTBTCSignerRetainedKeyPackageInventory struct {
-	Schema                  string
-	StoreFingerprint        [32]byte
-	StateGeneration         uint64
-	StateCommitment         [32]byte
-	PreviousStateCommitment [32]byte
-	StateImageDigest        [32]byte
-	InventoryCommitment     [32]byte
-	Entries                 []NativeTBTCSignerRetainedKeyGroup
+	Schema                       string
+	StoreFingerprint             [32]byte
+	StateGeneration              uint64
+	StateCommitment              [32]byte
+	PreviousStateCommitment      [32]byte
+	StateImageDigest             [32]byte
+	InventoryCommitment          [32]byte
+	Entries                      []NativeTBTCSignerRetainedKeyGroup
+	RecoveredSeats               []NativeTBTCSignerRecoveredSeat
+	RecoveryActivationCommitment [32]byte
 }
 
 type nativeTBTCSignerRetainedKeyPackageWire struct {
@@ -78,14 +95,25 @@ type nativeTBTCSignerRetainedKeyGroupWire struct {
 }
 
 type nativeTBTCSignerRetainedKeyPackageInventoryWire struct {
-	Schema                  string                                  `json:"schema"`
-	StoreFingerprint        string                                  `json:"storeFingerprint"`
-	StateGeneration         uint64                                  `json:"stateGeneration"`
-	StateCommitment         string                                  `json:"stateCommitment"`
-	PreviousStateCommitment string                                  `json:"previousStateCommitment"`
-	StateImageDigest        string                                  `json:"stateImageDigest"`
-	InventoryCommitment     string                                  `json:"inventoryCommitment"`
-	Entries                 *[]nativeTBTCSignerRetainedKeyGroupWire `json:"entries"`
+	Schema                       string                                  `json:"schema"`
+	StoreFingerprint             string                                  `json:"storeFingerprint"`
+	StateGeneration              uint64                                  `json:"stateGeneration"`
+	StateCommitment              string                                  `json:"stateCommitment"`
+	PreviousStateCommitment      string                                  `json:"previousStateCommitment"`
+	StateImageDigest             string                                  `json:"stateImageDigest"`
+	InventoryCommitment          string                                  `json:"inventoryCommitment"`
+	Entries                      *[]nativeTBTCSignerRetainedKeyGroupWire `json:"entries"`
+	RecoveredSeats               *[]nativeTBTCSignerRecoveredSeatWire    `json:"recoveredSeats,omitempty"`
+	RecoveryActivationCommitment *string                                 `json:"recoveryActivationCommitment,omitempty"`
+}
+
+type nativeTBTCSignerRecoveredSeatWire struct {
+	WalletID               string `json:"walletID"`
+	KeyGroup               string `json:"keyGroup"`
+	ParticipantSeat        uint16 `json:"participantSeat"`
+	RecoveryEpoch          uint64 `json:"recoveryEpoch"`
+	AuthorizationDigest    string `json:"authorizationDigest"`
+	ActiveStoreFingerprint string `json:"activeStoreFingerprint"`
 }
 
 // DecodeNativeTBTCSignerRetainedKeyPackageInventory validates the exact wire
@@ -97,7 +125,8 @@ func DecodeNativeTBTCSignerRetainedKeyPackageInventory(
 	if err := decodeStrictNativeTBTCSignerJSON(payload, wire, "retained key-package inventory"); err != nil {
 		return nil, err
 	}
-	if wire.Schema != NativeTBTCSignerRetainedKeyPackageInventorySchema {
+	if wire.Schema != NativeTBTCSignerRetainedKeyPackageInventorySchema &&
+		wire.Schema != NativeTBTCSignerRetainedKeyPackageInventoryRecoverySchema {
 		return nil, fmt.Errorf("unsupported retained key-package inventory schema")
 	}
 	if wire.StateGeneration == 0 {
@@ -222,6 +251,87 @@ func DecodeNativeTBTCSignerRetainedKeyPackageInventory(
 	if computed != result.InventoryCommitment {
 		return nil, fmt.Errorf("retained key-package inventory commitment mismatch")
 	}
+	if wire.Schema == NativeTBTCSignerRetainedKeyPackageInventorySchema {
+		if wire.RecoveredSeats != nil || wire.RecoveryActivationCommitment != nil {
+			return nil, fmt.Errorf("v1 retained inventory contains recovered-seat metadata")
+		}
+		return result, nil
+	}
+	if wire.RecoveredSeats == nil || len(*wire.RecoveredSeats) == 0 ||
+		wire.RecoveryActivationCommitment == nil {
+		return nil, fmt.Errorf("v2 retained inventory recovered-seat metadata is incomplete")
+	}
+	entryByWallet := make(map[[32]byte]*NativeTBTCSignerRetainedKeyGroup, len(result.Entries))
+	for index := range result.Entries {
+		entryByWallet[result.Entries[index].WalletID] = &result.Entries[index]
+	}
+	result.RecoveredSeats = make(
+		[]NativeTBTCSignerRecoveredSeat,
+		len(*wire.RecoveredSeats),
+	)
+	var previousWallet [32]byte
+	var previousSeat uint16
+	for index, recoveredWire := range *wire.RecoveredSeats {
+		recovered := &result.RecoveredSeats[index]
+		walletID, err := decodeNativeTBTCSignerStoreBytes32(recoveredWire.WalletID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid recovered-seat wallet ID: %w", err)
+		}
+		if index > 0 && (bytes.Compare(previousWallet[:], walletID[:]) > 0 ||
+			(bytes.Equal(previousWallet[:], walletID[:]) && recoveredWire.ParticipantSeat <= previousSeat)) {
+			return nil, fmt.Errorf("recovered-seat entries are not unique and strictly sorted")
+		}
+		previousWallet = walletID
+		previousSeat = recoveredWire.ParticipantSeat
+		entry := entryByWallet[walletID]
+		if entry == nil || entry.KeyGroup != recoveredWire.KeyGroup ||
+			recoveredWire.ParticipantSeat == 0 ||
+			recoveredWire.ParticipantSeat > entry.ParticipantCount ||
+			recoveredWire.RecoveryEpoch == 0 {
+			return nil, fmt.Errorf("recovered-seat entry does not match retained key-group inventory")
+		}
+		retained := false
+		for _, keyPackage := range entry.KeyPackages {
+			if keyPackage.ParticipantSeat == recoveredWire.ParticipantSeat {
+				retained = true
+				break
+			}
+		}
+		if !retained {
+			return nil, fmt.Errorf("recovered seat has no retained key package")
+		}
+		authorizationDigest, err := decodeNativeTBTCSignerStoreBytes32(
+			recoveredWire.AuthorizationDigest,
+		)
+		if err != nil || authorizationDigest == [32]byte{} {
+			return nil, fmt.Errorf("invalid recovered-seat authorization digest")
+		}
+		activeStoreFingerprint, err := decodeNativeTBTCSignerStoreBytes32(
+			recoveredWire.ActiveStoreFingerprint,
+		)
+		if err != nil || activeStoreFingerprint != result.StoreFingerprint {
+			return nil, fmt.Errorf("recovered seat belongs to another durable store")
+		}
+		*recovered = NativeTBTCSignerRecoveredSeat{
+			WalletID:               walletID,
+			KeyGroup:               recoveredWire.KeyGroup,
+			ParticipantSeat:        recoveredWire.ParticipantSeat,
+			RecoveryEpoch:          recoveredWire.RecoveryEpoch,
+			AuthorizationDigest:    authorizationDigest,
+			ActiveStoreFingerprint: activeStoreFingerprint,
+		}
+	}
+	recoveryCommitment, err := decodeNativeTBTCSignerStoreBytes32(
+		*wire.RecoveryActivationCommitment,
+	)
+	if err != nil || recoveryCommitment == [32]byte{} {
+		return nil, fmt.Errorf("invalid recovered-seat activation commitment")
+	}
+	result.RecoveryActivationCommitment = recoveryCommitment
+	if ComputeNativeTBTCSignerRecoveredSeatActivationCommitment(result.RecoveredSeats) !=
+		result.RecoveryActivationCommitment {
+		return nil, fmt.Errorf("recovered-seat activation commitment mismatch")
+	}
 	return result, nil
 }
 
@@ -249,6 +359,27 @@ func ComputeNativeTBTCSignerRetainedKeyPackageInventoryCommitment(
 		}
 	}
 	var result [32]byte
+	copy(result[:], digest.Sum(nil))
+	return result
+}
+
+// ComputeNativeTBTCSignerRecoveredSeatActivationCommitment reproduces the
+// native v2 inventory commitment over the sorted recovered-seat cutover facts.
+func ComputeNativeTBTCSignerRecoveredSeatActivationCommitment(
+	seats []NativeTBTCSignerRecoveredSeat,
+) [32]byte {
+	digest := sha256.New()
+	_, _ = digest.Write([]byte(nativeTBTCSignerRecoveredSeatActivationCommitmentDomain))
+	writeNativeTBTCSignerUint32(digest, uint32(len(seats)))
+	for _, seat := range seats {
+		_, _ = digest.Write(seat.WalletID[:])
+		writeNativeTBTCSignerStoreFingerprintField(digest, []byte(seat.KeyGroup))
+		writeNativeTBTCSignerUint16(digest, seat.ParticipantSeat)
+		writeNativeTBTCSignerUint64(digest, seat.RecoveryEpoch)
+		_, _ = digest.Write(seat.AuthorizationDigest[:])
+		_, _ = digest.Write(seat.ActiveStoreFingerprint[:])
+	}
+	result := [32]byte{}
 	copy(result[:], digest.Sum(nil))
 	return result
 }

@@ -565,6 +565,12 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := testFrostActivationRuntimeManifest(sha256.Sum256(publicKeyDER))
+	if err := prepareFrostShareRepairActivationForTest(
+		testFrostDurableSessionStoreIdentity().Fingerprint,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(resetFrostShareRepairActivationForTest)
 	point := frostActivationEthereumPoint{
 		BlockNumber: 123,
 		BlockHash:   frostActivationHex32([32]byte{0x44}),
@@ -692,7 +698,8 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		"frostWalletGroupInventory", "healthy", "maximumGroupSize", "nonceShareGateEnforced",
 		"interactiveSigningReady", "nativeSignerState",
 		"protocolID", "quarantineFailClosed", "quarantineJournal", "reservationProtocolID",
-		"retainedGroupInventoryProtocolID", "signingPolicyHash", "threshold",
+		"retainedGroupInventoryProtocolID", "shareRepairActivationRegistryRoot",
+		"signingPolicyHash", "threshold",
 	})
 	assertFrostActivationObjectKeys(t, handshake.Payload.State.FrostWalletGroupInventory, []string{
 		"complete", "groupSizeViolationCount", "inventoryRoot", "maximumActualGroupSize",
@@ -1665,6 +1672,12 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 	}
 	publicKeyDER, _ := x509.MarshalPKIXPublicKey(publicKey)
 	manifest := testFrostActivationRuntimeManifest(sha256.Sum256(publicKeyDER))
+	if err := prepareFrostShareRepairActivationForTest(
+		testFrostDurableSessionStoreIdentity().Fingerprint,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(resetFrostShareRepairActivationForTest)
 	point := frostActivationEthereumPoint{
 		BlockNumber: 7,
 		BlockHash:   frostActivationHex32([32]byte{0x11}),
@@ -2382,6 +2395,12 @@ func startTestFrostActivationHandshakeExporter(
 		t.Fatal(err)
 	}
 	manifest := testFrostActivationRuntimeManifest(sha256.Sum256(publicKeyDER))
+	if err := prepareFrostShareRepairActivationForTest(
+		testFrostDurableSessionStoreIdentity().Fingerprint,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(resetFrostShareRepairActivationForTest)
 	journal := testFrostRetainedGroupJournal(t, manifest, point)
 	source, ok := journal.source.(*testFrostRetainedGroupHistorySource)
 	if !ok {

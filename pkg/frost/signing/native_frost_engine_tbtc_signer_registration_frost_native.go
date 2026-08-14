@@ -43,6 +43,26 @@ typedef TbtcSignerResult (*tbtc_retire_distributed_dkg_key_packages_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_begin_share_repair_session_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
+typedef TbtcSignerResult (*tbtc_finish_share_repair_session_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
+typedef TbtcSignerResult (*tbtc_share_repair_part1_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
+typedef TbtcSignerResult (*tbtc_share_repair_part2_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
+typedef TbtcSignerResult (*tbtc_install_repaired_share_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_new_signing_package_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -182,6 +202,57 @@ static TbtcSignerResult tbtc_signer_retire_distributed_dkg_key_packages(const ui
   }
 
   return retire(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_begin_share_repair_session(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_begin_share_repair_session_fn begin =
+    (tbtc_begin_share_repair_session_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_begin_share_repair_session"
+    );
+  if (begin == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+  return begin(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_finish_share_repair_session(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_finish_share_repair_session_fn finish =
+    (tbtc_finish_share_repair_session_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_finish_share_repair_session"
+    );
+  if (finish == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+  return finish(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_share_repair_part1(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_share_repair_part1_fn part1 =
+    (tbtc_share_repair_part1_fn)dlsym(RTLD_DEFAULT, "frost_tbtc_share_repair_part1");
+  if (part1 == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+  return part1(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_share_repair_part2(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_share_repair_part2_fn part2 =
+    (tbtc_share_repair_part2_fn)dlsym(RTLD_DEFAULT, "frost_tbtc_share_repair_part2");
+  if (part2 == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+  return part2(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_install_repaired_share(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_install_repaired_share_fn install =
+    (tbtc_install_repaired_share_fn)dlsym(RTLD_DEFAULT, "frost_tbtc_install_repaired_share");
+  if (install == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+  return install(request_ptr, request_len);
 }
 
 static TbtcSignerResult tbtc_signer_new_signing_package(const uint8_t* request_ptr, size_t request_len) {
@@ -333,6 +404,15 @@ static int tbtc_signer_free_buffer_available(void) {
   return dlsym(RTLD_DEFAULT, "frost_tbtc_free_buffer") != NULL;
 }
 
+static int tbtc_signer_share_repair_symbols_available(void) {
+  return
+    dlsym(RTLD_DEFAULT, "frost_tbtc_begin_share_repair_session") != NULL &&
+    dlsym(RTLD_DEFAULT, "frost_tbtc_finish_share_repair_session") != NULL &&
+    dlsym(RTLD_DEFAULT, "frost_tbtc_share_repair_part1") != NULL &&
+    dlsym(RTLD_DEFAULT, "frost_tbtc_share_repair_part2") != NULL &&
+    dlsym(RTLD_DEFAULT, "frost_tbtc_install_repaired_share") != NULL;
+}
+
 static void tbtc_signer_scrub_and_free_buffer(uint8_t* ptr, size_t len) {
   if (ptr != NULL) {
     volatile uint8_t* cursor = (volatile uint8_t*)ptr;
@@ -376,6 +456,7 @@ var _ interactiveSigningEngine = (*buildTaggedTBTCSignerEngine)(nil)
 // culprits. Compile-check it here against the real engine.
 var _ Round2ShareVerifyingEngine = (*buildTaggedTBTCSignerEngine)(nil)
 var _ NativeTBTCSignerDistributedDKGRetirementEngine = (*buildTaggedTBTCSignerEngine)(nil)
+var _ NativeTBTCSignerShareRepairEngine = (*buildTaggedTBTCSignerEngine)(nil)
 
 type buildTaggedTBTCSignerRunDKGResponse struct {
 	SessionID        string `json:"session_id"`
@@ -457,6 +538,85 @@ type buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse struct {
 	KeyGroup               string `json:"key_group"`
 	Retired                bool   `json:"retired"`
 	RetiredKeyPackageCount uint16 `json:"retired_key_package_count"`
+}
+
+const (
+	buildTaggedTBTCSignerShareRepairPublicKeyLength = shareRepairEphemeralPublicKeyLength
+	buildTaggedTBTCSignerShareRepairPayloadLength   = shareRepairEncryptedScalarPayloadLength
+)
+
+type buildTaggedTBTCSignerShareRepairSessionRequest struct {
+	Authorization         *ShareRepairAuthorization `json:"authorization"`
+	ParticipantIdentifier uint16                    `json:"participant_identifier"`
+}
+
+type buildTaggedTBTCSignerBeginShareRepairSessionResponse struct {
+	ContextDigest         string `json:"context_digest"`
+	ParticipantIdentifier uint16 `json:"participant_identifier"`
+	StoreFingerprint      string `json:"store_fingerprint"`
+	TransportPublicKeyHex string `json:"transport_public_key_hex"`
+}
+
+type buildTaggedTBTCSignerFinishShareRepairSessionResponse struct {
+	ContextDigest         string `json:"context_digest"`
+	ParticipantIdentifier uint16 `json:"participant_identifier"`
+	Finished              bool   `json:"finished"`
+}
+
+type buildTaggedTBTCSignerShareRepairEncryptedDelta struct {
+	ContextDigest       string `json:"context_digest"`
+	SenderIdentifier    uint16 `json:"sender_identifier"`
+	RecipientIdentifier uint16 `json:"recipient_identifier"`
+	PayloadHex          string `json:"payload_hex"`
+}
+
+type buildTaggedTBTCSignerShareRepairPart1Request struct {
+	Authorization    *ShareRepairAuthorization   `json:"authorization"`
+	HelperIdentifier uint16                      `json:"helper_identifier"`
+	TransportRoster  *ShareRepairTransportRoster `json:"transport_roster"`
+}
+
+type buildTaggedTBTCSignerShareRepairPart1Response struct {
+	ContextDigest    string                                            `json:"context_digest"`
+	HelperIdentifier uint16                                            `json:"helper_identifier"`
+	PublicKeyPackage *buildTaggedTBTCSignerNativeFROSTPublicKeyPackage `json:"public_key_package"`
+	Deltas           []buildTaggedTBTCSignerShareRepairEncryptedDelta  `json:"deltas"`
+}
+
+type buildTaggedTBTCSignerShareRepairPart2Request struct {
+	Authorization    *ShareRepairAuthorization                        `json:"authorization"`
+	HelperIdentifier uint16                                           `json:"helper_identifier"`
+	Deltas           []buildTaggedTBTCSignerShareRepairEncryptedDelta `json:"deltas"`
+	TransportRoster  *ShareRepairTransportRoster                      `json:"transport_roster"`
+}
+
+type buildTaggedTBTCSignerShareRepairEncryptedSigma struct {
+	ContextDigest    string `json:"context_digest"`
+	HelperIdentifier uint16 `json:"helper_identifier"`
+	PayloadHex       string `json:"payload_hex"`
+}
+
+type buildTaggedTBTCSignerShareRepairPart2Response struct {
+	ContextDigest string                                          `json:"context_digest"`
+	Sigma         *buildTaggedTBTCSignerShareRepairEncryptedSigma `json:"sigma"`
+}
+
+type buildTaggedTBTCSignerInstallRepairedShareRequest struct {
+	Authorization    *ShareRepairAuthorization                         `json:"authorization"`
+	PublicKeyPackage *buildTaggedTBTCSignerNativeFROSTPublicKeyPackage `json:"public_key_package"`
+	Sigmas           []buildTaggedTBTCSignerShareRepairEncryptedSigma  `json:"sigmas"`
+	TransportRoster  *ShareRepairTransportRoster                       `json:"transport_roster"`
+}
+
+type buildTaggedTBTCSignerInstallRepairedShareResponse struct {
+	Schema                 string `json:"schema"`
+	SessionID              string `json:"session_id"`
+	KeyGroup               string `json:"key_group"`
+	TargetIdentifier       uint16 `json:"target_identifier"`
+	RecoveryEpoch          uint64 `json:"recovery_epoch"`
+	AuthorizationDigest    string `json:"authorization_digest"`
+	ActiveStoreFingerprint string `json:"active_store_fingerprint"`
+	Idempotent             bool   `json:"idempotent"`
 }
 
 type buildTaggedTBTCSignerTriggerEmergencyRekeyRequest struct {
@@ -717,6 +877,131 @@ func (bttse *buildTaggedTBTCSignerEngine) RetireDistributedDKGKeyPackages(
 	return decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
 		responsePayload,
 		keyGroup,
+	)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) BeginShareRepairSession(
+	authorization *ShareRepairAuthorization,
+	participantIdentifier uint16,
+) (*NativeShareRepairSession, error) {
+	requestPayload, err := buildTaggedTBTCSignerShareRepairSessionRequestPayload(
+		"BeginShareRepairSession",
+		authorization,
+		participantIdentifier,
+	)
+	if err != nil {
+		return nil, err
+	}
+	responsePayload, err := callBuildTaggedTBTCSignerBeginShareRepairSession(
+		requestPayload,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return decodeBuildTaggedTBTCSignerBeginShareRepairSessionResponse(
+		responsePayload,
+		authorization,
+		participantIdentifier,
+	)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) FinishShareRepairSession(
+	authorization *ShareRepairAuthorization,
+	participantIdentifier uint16,
+) error {
+	requestPayload, err := buildTaggedTBTCSignerShareRepairSessionRequestPayload(
+		"FinishShareRepairSession",
+		authorization,
+		participantIdentifier,
+	)
+	if err != nil {
+		return err
+	}
+	responsePayload, err := callBuildTaggedTBTCSignerFinishShareRepairSession(
+		requestPayload,
+	)
+	if err != nil {
+		return err
+	}
+	return decodeBuildTaggedTBTCSignerFinishShareRepairSessionResponse(
+		responsePayload,
+		authorization,
+		participantIdentifier,
+	)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) ShareRepairPart1(
+	authorization *ShareRepairAuthorization,
+	helperIdentifier uint16,
+	transportRoster *ShareRepairTransportRoster,
+) (*NativeShareRepairPart1Result, error) {
+	requestPayload, err := buildTaggedTBTCSignerShareRepairPart1RequestPayload(
+		authorization,
+		helperIdentifier,
+		transportRoster,
+	)
+	if err != nil {
+		return nil, err
+	}
+	responsePayload, err := callBuildTaggedTBTCSignerShareRepairPart1(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+	return decodeBuildTaggedTBTCSignerShareRepairPart1Response(
+		responsePayload,
+		authorization,
+		helperIdentifier,
+	)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) ShareRepairPart2(
+	authorization *ShareRepairAuthorization,
+	helperIdentifier uint16,
+	deltas []*NativeShareRepairEncryptedDelta,
+	transportRoster *ShareRepairTransportRoster,
+) (*NativeShareRepairPart2Result, error) {
+	requestPayload, err := buildTaggedTBTCSignerShareRepairPart2RequestPayload(
+		authorization,
+		helperIdentifier,
+		deltas,
+		transportRoster,
+	)
+	if err != nil {
+		return nil, err
+	}
+	responsePayload, err := callBuildTaggedTBTCSignerShareRepairPart2(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+	return decodeBuildTaggedTBTCSignerShareRepairPart2Response(
+		responsePayload,
+		authorization,
+		helperIdentifier,
+	)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) InstallRepairedShare(
+	authorization *ShareRepairAuthorization,
+	publicKeyPackage *NativeFROSTPublicKeyPackage,
+	sigmas []*NativeShareRepairEncryptedSigma,
+	transportRoster *ShareRepairTransportRoster,
+) (*NativeShareRepairInstallResult, error) {
+	requestPayload, err := buildTaggedTBTCSignerInstallRepairedShareRequestPayload(
+		authorization,
+		publicKeyPackage,
+		sigmas,
+		transportRoster,
+	)
+	if err != nil {
+		return nil, err
+	}
+	responsePayload, err := callBuildTaggedTBTCSignerInstallRepairedShare(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+	return decodeBuildTaggedTBTCSignerInstallRepairedShareResponse(
+		responsePayload,
+		authorization,
 	)
 }
 
@@ -1118,6 +1403,436 @@ func buildTaggedTBTCSignerRetireDistributedDKGKeyPackagesRequestPayload(
 			KeyGroup: keyGroup,
 		},
 	)
+}
+
+func buildTaggedTBTCSignerShareRepairSessionRequestPayload(
+	op string,
+	authorization *ShareRepairAuthorization,
+	participantIdentifier uint16,
+) ([]byte, error) {
+	if _, err := ComputeShareRepairAuthorizationDigest(authorization); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, err.Error())
+	}
+	if participantIdentifier == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(op, "participant identifier is zero")
+	}
+	return buildTaggedTBTCSignerMarshalRequest(
+		op,
+		buildTaggedTBTCSignerShareRepairSessionRequest{
+			Authorization:         authorization,
+			ParticipantIdentifier: participantIdentifier,
+		},
+	)
+}
+
+func shareRepairContextWire(
+	authorization *ShareRepairAuthorization,
+) (string, error) {
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("0x%x", digest), nil
+}
+
+func decodeCanonicalShareRepairHex(
+	op string,
+	label string,
+	value string,
+	expectedLength int,
+) ([]byte, error) {
+	if len(value) != expectedLength*2 || strings.ToLower(value) != value {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			fmt.Sprintf("%s is not canonical lowercase %d-byte hex", label, expectedLength),
+		)
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			fmt.Sprintf("%s is invalid: %v", label, err),
+		)
+	}
+	return decoded, nil
+}
+
+func validateBuildTaggedTBTCSignerShareRepairTransportRoster(
+	op string,
+	authorization *ShareRepairAuthorization,
+	transportRoster *ShareRepairTransportRoster,
+) error {
+	if _, err := ComputeShareRepairTransportRosterDigest(
+		transportRoster,
+		authorization,
+	); err != nil {
+		return buildTaggedTBTCSignerOperationError(op, err.Error())
+	}
+	if _, err := parseCanonicalShareRepairSignature(
+		transportRoster.SignatureHex,
+	); err != nil {
+		return buildTaggedTBTCSignerOperationError(
+			op,
+			fmt.Sprintf("invalid transport roster signature encoding: %v", err),
+		)
+	}
+	return nil
+}
+
+func buildTaggedTBTCSignerShareRepairPart1RequestPayload(
+	authorization *ShareRepairAuthorization,
+	helperIdentifier uint16,
+	transportRoster *ShareRepairTransportRoster,
+) ([]byte, error) {
+	const op = "ShareRepairPart1"
+	if err := validateBuildTaggedTBTCSignerShareRepairTransportRoster(
+		op,
+		authorization,
+		transportRoster,
+	); err != nil {
+		return nil, err
+	}
+	return buildTaggedTBTCSignerMarshalRequest(
+		op,
+		buildTaggedTBTCSignerShareRepairPart1Request{
+			Authorization:    authorization,
+			HelperIdentifier: helperIdentifier,
+			TransportRoster:  transportRoster,
+		},
+	)
+}
+
+func buildTaggedTBTCSignerShareRepairDeltaPayloads(
+	op string,
+	authorization *ShareRepairAuthorization,
+	helperIdentifier uint16,
+	deltas []*NativeShareRepairEncryptedDelta,
+) ([]buildTaggedTBTCSignerShareRepairEncryptedDelta, error) {
+	if len(deltas) != len(authorization.HelperIdentifiers) {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"encrypted deltas do not contain the exact helper set",
+		)
+	}
+	contextDigest, err := shareRepairContextWire(authorization)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, err.Error())
+	}
+	result := make([]buildTaggedTBTCSignerShareRepairEncryptedDelta, len(deltas))
+	for index, delta := range deltas {
+		if delta == nil || delta.ContextDigest != contextDigest ||
+			delta.SenderIdentifier != authorization.HelperIdentifiers[index] ||
+			delta.RecipientIdentifier != helperIdentifier ||
+			len(delta.Payload) != buildTaggedTBTCSignerShareRepairPayloadLength {
+			return nil, buildTaggedTBTCSignerOperationError(
+				op,
+				fmt.Sprintf("encrypted delta [%d] is invalid or out of order", index),
+			)
+		}
+		result[index] = buildTaggedTBTCSignerShareRepairEncryptedDelta{
+			ContextDigest:       delta.ContextDigest,
+			SenderIdentifier:    delta.SenderIdentifier,
+			RecipientIdentifier: delta.RecipientIdentifier,
+			PayloadHex:          hex.EncodeToString(delta.Payload),
+		}
+	}
+	return result, nil
+}
+
+func buildTaggedTBTCSignerShareRepairPart2RequestPayload(
+	authorization *ShareRepairAuthorization,
+	helperIdentifier uint16,
+	deltas []*NativeShareRepairEncryptedDelta,
+	transportRoster *ShareRepairTransportRoster,
+) ([]byte, error) {
+	const op = "ShareRepairPart2"
+	if err := validateBuildTaggedTBTCSignerShareRepairTransportRoster(
+		op,
+		authorization,
+		transportRoster,
+	); err != nil {
+		return nil, err
+	}
+	wireDeltas, err := buildTaggedTBTCSignerShareRepairDeltaPayloads(
+		op,
+		authorization,
+		helperIdentifier,
+		deltas,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return buildTaggedTBTCSignerMarshalRequest(
+		op,
+		buildTaggedTBTCSignerShareRepairPart2Request{
+			Authorization:    authorization,
+			HelperIdentifier: helperIdentifier,
+			Deltas:           wireDeltas,
+			TransportRoster:  transportRoster,
+		},
+	)
+}
+
+func buildTaggedTBTCSignerShareRepairSigmaPayloads(
+	op string,
+	authorization *ShareRepairAuthorization,
+	sigmas []*NativeShareRepairEncryptedSigma,
+) ([]buildTaggedTBTCSignerShareRepairEncryptedSigma, error) {
+	if len(sigmas) != len(authorization.HelperIdentifiers) {
+		return nil, buildTaggedTBTCSignerOperationError(
+			op,
+			"encrypted sigmas do not contain the exact helper set",
+		)
+	}
+	contextDigest, err := shareRepairContextWire(authorization)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, err.Error())
+	}
+	result := make([]buildTaggedTBTCSignerShareRepairEncryptedSigma, len(sigmas))
+	for index, sigma := range sigmas {
+		if sigma == nil || sigma.ContextDigest != contextDigest ||
+			sigma.HelperIdentifier != authorization.HelperIdentifiers[index] ||
+			len(sigma.Payload) != buildTaggedTBTCSignerShareRepairPayloadLength {
+			return nil, buildTaggedTBTCSignerOperationError(
+				op,
+				fmt.Sprintf("encrypted sigma [%d] is invalid or out of order", index),
+			)
+		}
+		result[index] = buildTaggedTBTCSignerShareRepairEncryptedSigma{
+			ContextDigest:    sigma.ContextDigest,
+			HelperIdentifier: sigma.HelperIdentifier,
+			PayloadHex:       hex.EncodeToString(sigma.Payload),
+		}
+	}
+	return result, nil
+}
+
+func buildTaggedTBTCSignerInstallRepairedShareRequestPayload(
+	authorization *ShareRepairAuthorization,
+	publicKeyPackage *NativeFROSTPublicKeyPackage,
+	sigmas []*NativeShareRepairEncryptedSigma,
+	transportRoster *ShareRepairTransportRoster,
+) ([]byte, error) {
+	const op = "InstallRepairedShare"
+	if err := validateBuildTaggedTBTCSignerShareRepairTransportRoster(
+		op,
+		authorization,
+		transportRoster,
+	); err != nil {
+		return nil, err
+	}
+	if publicKeyPackage == nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, "public key package is nil")
+	}
+	wireSigmas, err := buildTaggedTBTCSignerShareRepairSigmaPayloads(
+		op,
+		authorization,
+		sigmas,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return buildTaggedTBTCSignerMarshalRequest(
+		op,
+		buildTaggedTBTCSignerInstallRepairedShareRequest{
+			Authorization:   authorization,
+			TransportRoster: transportRoster,
+			PublicKeyPackage: &buildTaggedTBTCSignerNativeFROSTPublicKeyPackage{
+				VerifyingShares: publicKeyPackage.VerifyingShares,
+				VerifyingKey:    publicKeyPackage.VerifyingKey,
+			},
+			Sigmas: wireSigmas,
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerBeginShareRepairSessionResponse(
+	responsePayload []byte,
+	authorization *ShareRepairAuthorization,
+	participantIdentifier uint16,
+) (*NativeShareRepairSession, error) {
+	const op = "BeginShareRepairSession"
+	response := &buildTaggedTBTCSignerBeginShareRepairSessionResponse{}
+	if err := json.Unmarshal(responsePayload, response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, fmt.Sprintf("cannot decode response: %v", err))
+	}
+	contextDigest, err := shareRepairContextWire(authorization)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, err.Error())
+	}
+	if response.ContextDigest != contextDigest ||
+		response.ParticipantIdentifier != participantIdentifier {
+		return nil, buildTaggedTBTCSignerOperationError(op, "response does not match the requested session")
+	}
+	if _, err := parseCanonicalShareRepairHex32(
+		response.StoreFingerprint,
+		"native share-repair session store_fingerprint",
+	); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, err.Error())
+	}
+	publicKey, err := decodeCanonicalShareRepairHex(
+		op,
+		"transport_public_key_hex",
+		response.TransportPublicKeyHex,
+		buildTaggedTBTCSignerShareRepairPublicKeyLength,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &NativeShareRepairSession{
+		ContextDigest:         response.ContextDigest,
+		ParticipantIdentifier: response.ParticipantIdentifier,
+		StoreFingerprint:      response.StoreFingerprint,
+		TransportPublicKey:    publicKey,
+	}, nil
+}
+
+func decodeBuildTaggedTBTCSignerFinishShareRepairSessionResponse(
+	responsePayload []byte,
+	authorization *ShareRepairAuthorization,
+	participantIdentifier uint16,
+) error {
+	const op = "FinishShareRepairSession"
+	response := &buildTaggedTBTCSignerFinishShareRepairSessionResponse{}
+	if err := json.Unmarshal(responsePayload, response); err != nil {
+		return buildTaggedTBTCSignerOperationError(op, fmt.Sprintf("cannot decode response: %v", err))
+	}
+	contextDigest, err := shareRepairContextWire(authorization)
+	if err != nil {
+		return buildTaggedTBTCSignerOperationError(op, err.Error())
+	}
+	if response.ContextDigest != contextDigest ||
+		response.ParticipantIdentifier != participantIdentifier || !response.Finished {
+		return buildTaggedTBTCSignerOperationError(op, "response does not confirm the requested session")
+	}
+	return nil
+}
+
+func decodeBuildTaggedTBTCSignerShareRepairPart1Response(
+	responsePayload []byte,
+	authorization *ShareRepairAuthorization,
+	helperIdentifier uint16,
+) (*NativeShareRepairPart1Result, error) {
+	const op = "ShareRepairPart1"
+	response := &buildTaggedTBTCSignerShareRepairPart1Response{}
+	if err := json.Unmarshal(responsePayload, response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, fmt.Sprintf("cannot decode response: %v", err))
+	}
+	contextDigest, err := shareRepairContextWire(authorization)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, err.Error())
+	}
+	if response.ContextDigest != contextDigest || response.HelperIdentifier != helperIdentifier ||
+		response.PublicKeyPackage == nil ||
+		len(response.PublicKeyPackage.VerifyingShares) == 0 ||
+		response.PublicKeyPackage.VerifyingKey == "" ||
+		len(response.Deltas) != len(authorization.HelperIdentifiers) {
+		return nil, buildTaggedTBTCSignerOperationError(op, "response has the wrong context or shape")
+	}
+	deltas := make([]*NativeShareRepairEncryptedDelta, len(response.Deltas))
+	for index, delta := range response.Deltas {
+		if delta.ContextDigest != contextDigest || delta.SenderIdentifier != helperIdentifier ||
+			delta.RecipientIdentifier != authorization.HelperIdentifiers[index] {
+			return nil, buildTaggedTBTCSignerOperationError(op, fmt.Sprintf("invalid delta [%d] bindings", index))
+		}
+		payload, err := decodeCanonicalShareRepairHex(
+			op,
+			fmt.Sprintf("deltas[%d].payload_hex", index),
+			delta.PayloadHex,
+			buildTaggedTBTCSignerShareRepairPayloadLength,
+		)
+		if err != nil {
+			return nil, err
+		}
+		deltas[index] = &NativeShareRepairEncryptedDelta{
+			ContextDigest:       delta.ContextDigest,
+			SenderIdentifier:    delta.SenderIdentifier,
+			RecipientIdentifier: delta.RecipientIdentifier,
+			Payload:             payload,
+		}
+	}
+	return &NativeShareRepairPart1Result{
+		ContextDigest:    response.ContextDigest,
+		HelperIdentifier: response.HelperIdentifier,
+		PublicKeyPackage: &NativeFROSTPublicKeyPackage{
+			VerifyingShares: appendBuildTaggedTBTCSignerStringMap(
+				response.PublicKeyPackage.VerifyingShares,
+			),
+			VerifyingKey: response.PublicKeyPackage.VerifyingKey,
+		},
+		Deltas: deltas,
+	}, nil
+}
+
+func decodeBuildTaggedTBTCSignerShareRepairPart2Response(
+	responsePayload []byte,
+	authorization *ShareRepairAuthorization,
+	helperIdentifier uint16,
+) (*NativeShareRepairPart2Result, error) {
+	const op = "ShareRepairPart2"
+	response := &buildTaggedTBTCSignerShareRepairPart2Response{}
+	if err := json.Unmarshal(responsePayload, response); err != nil || response.Sigma == nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, "cannot decode response sigma")
+	}
+	contextDigest, err := shareRepairContextWire(authorization)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, err.Error())
+	}
+	if response.ContextDigest != contextDigest || response.Sigma.ContextDigest != contextDigest ||
+		response.Sigma.HelperIdentifier != helperIdentifier {
+		return nil, buildTaggedTBTCSignerOperationError(op, "response sigma has invalid bindings")
+	}
+	payload, err := decodeCanonicalShareRepairHex(
+		op,
+		"sigma.payload_hex",
+		response.Sigma.PayloadHex,
+		buildTaggedTBTCSignerShareRepairPayloadLength,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &NativeShareRepairPart2Result{
+		ContextDigest: response.ContextDigest,
+		Sigma: &NativeShareRepairEncryptedSigma{
+			ContextDigest:    response.Sigma.ContextDigest,
+			HelperIdentifier: response.Sigma.HelperIdentifier,
+			Payload:          payload,
+		},
+	}, nil
+}
+
+func decodeBuildTaggedTBTCSignerInstallRepairedShareResponse(
+	responsePayload []byte,
+	authorization *ShareRepairAuthorization,
+) (*NativeShareRepairInstallResult, error) {
+	const op = "InstallRepairedShare"
+	response := &buildTaggedTBTCSignerInstallRepairedShareResponse{}
+	if err := json.Unmarshal(responsePayload, response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, fmt.Sprintf("cannot decode response: %v", err))
+	}
+	digest, err := ComputeShareRepairAuthorizationDigest(authorization)
+	if err != nil {
+		return nil, err
+	}
+	if response.Schema != ShareRepairInstallResultSchema ||
+		response.SessionID != authorization.SessionID ||
+		response.KeyGroup != authorization.KeyGroup ||
+		response.TargetIdentifier != authorization.TargetIdentifier ||
+		response.RecoveryEpoch != authorization.RecoveryEpoch ||
+		response.AuthorizationDigest != fmt.Sprintf("0x%x", digest) ||
+		response.ActiveStoreFingerprint != authorization.NewStoreFingerprint {
+		return nil, buildTaggedTBTCSignerOperationError(op, "response does not match authorization")
+	}
+	return &NativeShareRepairInstallResult{
+		Schema:                 response.Schema,
+		SessionID:              response.SessionID,
+		KeyGroup:               response.KeyGroup,
+		TargetIdentifier:       response.TargetIdentifier,
+		RecoveryEpoch:          response.RecoveryEpoch,
+		AuthorizationDigest:    response.AuthorizationDigest,
+		ActiveStoreFingerprint: response.ActiveStoreFingerprint,
+		Idempotent:             response.Idempotent,
+	}, nil
 }
 
 func decodeBuildTaggedTBTCSignerRetireDistributedDKGKeyPackagesResponse(
@@ -1959,6 +2674,66 @@ func callBuildTaggedTBTCSignerRetireDistributedDKGKeyPackages(
 	)
 }
 
+func callBuildTaggedTBTCSignerBeginShareRepairSession(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"BeginShareRepairSession",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_begin_share_repair_session(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerFinishShareRepairSession(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"FinishShareRepairSession",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_finish_share_repair_session(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerShareRepairPart1(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"ShareRepairPart1",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_share_repair_part1(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerShareRepairPart2(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"ShareRepairPart2",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_share_repair_part2(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerInstallRepairedShare(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"InstallRepairedShare",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_install_repaired_share(requestPtr, requestLen)
+		},
+	)
+}
+
 func callBuildTaggedTBTCSignerNewSigningPackage(
 	requestPayload []byte,
 ) ([]byte, error) {
@@ -2066,6 +2841,10 @@ func ensureTBTCSignerFreeBufferAvailable() error {
 		)
 	}
 	return nil
+}
+
+func buildTaggedTBTCSignerShareRepairSymbolsAvailable() bool {
+	return C.tbtc_signer_share_repair_symbols_available() != 0
 }
 
 func parseBuildTaggedTBTCSignerResult(

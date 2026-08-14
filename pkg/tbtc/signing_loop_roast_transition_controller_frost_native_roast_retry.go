@@ -101,8 +101,19 @@ func newRoastTransitionExchangeForRequest(
 	if template.Channel == nil || template.MembershipValidator == nil {
 		return nil
 	}
-	bus, err := signing.NewBroadcastChannelRunnerBus(
-		ctx, logger, template.Channel, template.MembershipValidator,
+	if err := signing.ValidateLocalShareRepairSeatActivation(
+		keyGroupID,
+		template.MemberIndex,
+	); err != nil {
+		logger.Warnf("roast transition: recovered-seat activation: [%v]", err)
+		return nil
+	}
+	bus, err := signing.NewActivationBoundBroadcastChannelRunnerBus(
+		ctx,
+		logger,
+		template.Channel,
+		template.MembershipValidator,
+		keyGroupID,
 	)
 	if err != nil {
 		logger.Warnf("roast transition: build transport bus: [%v]", err)

@@ -233,6 +233,21 @@ func TestValidateFrostPreSignActivationManifest_CanonicalJournal(t *testing.T) {
 			t.Fatalf("expected durable-session fingerprint failure, got [%v]", err)
 		}
 	})
+	t.Run("valid share-repair activation registry root", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.ShareRepairActivationRegistryRoot = testManifestHex32(0x18)
+		if err := validateFrostPreSignActivationManifest(manifest); err != nil {
+			t.Fatalf("expected optional share-repair registry root to validate: %v", err)
+		}
+	})
+	t.Run("malformed share-repair activation registry root", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.ShareRepairActivationRegistryRoot = "operator-authored-label"
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "share-repair activation registry root") {
+			t.Fatalf("expected share-repair registry-root failure, got [%v]", err)
+		}
+	})
 	t.Run("native anchor stream mismatch", func(t *testing.T) {
 		manifest := testFrostJournalActivationManifest()
 		manifest.FrostSigner.NativeSignerAnchor.StreamID = testManifestHex32(0xee)
