@@ -343,29 +343,31 @@ type buildTaggedTBTCSignerDKGRound2Package struct {
 }
 
 type buildTaggedTBTCSignerDKGPart1Response struct {
-	SecretPackageHex string                                 `json:"secret_package_hex"`
+	SecretPackageHex hexBytes                               `json:"secret_package_hex"`
 	Package          *buildTaggedTBTCSignerDKGRound1Package `json:"package"`
 }
 
 type buildTaggedTBTCSignerDKGPart2Request struct {
-	SecretPackageHex string                                  `json:"secret_package_hex"`
+	SecretPackageHex hexBytes                                `json:"secret_package_hex"`
 	Round1Packages   []buildTaggedTBTCSignerDKGRound1Package `json:"round1_packages"`
 }
 
 type buildTaggedTBTCSignerDKGPart2Response struct {
-	SecretPackageHex string                                  `json:"secret_package_hex"`
+	SecretPackageHex hexBytes                                `json:"secret_package_hex"`
 	Packages         []buildTaggedTBTCSignerDKGRound2Package `json:"packages"`
 }
 
 type buildTaggedTBTCSignerDKGPart3Request struct {
-	SecretPackageHex string                                  `json:"secret_package_hex"`
+	SecretPackageHex hexBytes                                `json:"secret_package_hex"`
 	Round1Packages   []buildTaggedTBTCSignerDKGRound1Package `json:"round1_packages"`
 	Round2Packages   []buildTaggedTBTCSignerDKGRound2Package `json:"round2_packages"`
 }
 
 type buildTaggedTBTCSignerNativeFROSTKeyPackage struct {
 	Identifier string `json:"identifier"`
-	DataHex    string `json:"data_hex"`
+	// DataHex is the participant's long-term FROST key package: secret material.
+	// hexBytes keeps it out of an unzeroable Go string.
+	DataHex hexBytes `json:"data_hex"`
 }
 
 type buildTaggedTBTCSignerNativeFROSTPublicKeyPackage struct {
@@ -810,7 +812,7 @@ func decodeBuildTaggedTBTCSignerDKGPart1Response(
 		)
 	}
 
-	secretPackageData, err := buildTaggedTBTCSignerDecodeHexField(
+	secretPackageData, err := buildTaggedTBTCSignerValidateHexBytesField(
 		"DKGPart1",
 		"response secret package",
 		response.SecretPackageHex,
@@ -863,7 +865,7 @@ func buildTaggedTBTCSignerDKGPart2RequestPayload(
 	return buildTaggedTBTCSignerMarshalRequest(
 		"DKGPart2",
 		buildTaggedTBTCSignerDKGPart2Request{
-			SecretPackageHex: hex.EncodeToString(secretPackage.Data),
+			SecretPackageHex: hexBytes(secretPackage.Data),
 			Round1Packages:   requestPackages,
 		},
 	)
@@ -880,7 +882,7 @@ func decodeBuildTaggedTBTCSignerDKGPart2Response(
 		)
 	}
 
-	secretPackageData, err := buildTaggedTBTCSignerDecodeHexField(
+	secretPackageData, err := buildTaggedTBTCSignerValidateHexBytesField(
 		"DKGPart2",
 		"response secret package",
 		response.SecretPackageHex,
@@ -954,7 +956,7 @@ func buildTaggedTBTCSignerDKGPart3RequestPayload(
 	return buildTaggedTBTCSignerMarshalRequest(
 		"DKGPart3",
 		buildTaggedTBTCSignerDKGPart3Request{
-			SecretPackageHex: hex.EncodeToString(secretPackage.Data),
+			SecretPackageHex: hexBytes(secretPackage.Data),
 			Round1Packages:   requestRound1Packages,
 			Round2Packages:   requestRound2Packages,
 		},
@@ -988,7 +990,7 @@ func buildTaggedTBTCSignerPersistDistributedDKGKeyPackageRequestPayload(
 			ParticipantCount:      participantCount,
 			KeyPackage: &buildTaggedTBTCSignerNativeFROSTKeyPackage{
 				Identifier: keyPackage.Identifier,
-				DataHex:    hex.EncodeToString(keyPackage.Data),
+				DataHex:    hexBytes(keyPackage.Data),
 			},
 			PublicKeyPackage: &buildTaggedTBTCSignerNativeFROSTPublicKeyPackage{
 				VerifyingShares: publicKeyPackage.VerifyingShares,
@@ -1020,7 +1022,7 @@ func decodeBuildTaggedTBTCSignerDKGPart3Response(
 			"response key package identifier is empty",
 		)
 	}
-	keyPackageData, err := buildTaggedTBTCSignerDecodeHexField(
+	keyPackageData, err := buildTaggedTBTCSignerValidateHexBytesField(
 		"DKGPart3",
 		"response key package data",
 		response.KeyPackage.DataHex,
@@ -1245,6 +1247,26 @@ func buildTaggedTBTCSignerDecodeHexField(
 	}
 
 	return data, nil
+}
+
+// buildTaggedTBTCSignerValidateHexBytesField is the hexBytes counterpart of
+// buildTaggedTBTCSignerDecodeHexField. Fields carrying secret material decode
+// during json.Unmarshal (see hexBytes) so the plaintext never passes through a Go
+// string, which leaves only the emptiness check to perform here. Malformed hex is
+// already rejected by hexBytes.UnmarshalJSON.
+func buildTaggedTBTCSignerValidateHexBytesField(
+	operation string,
+	fieldName string,
+	value hexBytes,
+) ([]byte, error) {
+	if len(value) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			operation,
+			fmt.Sprintf("%s is empty", fieldName),
+		)
+	}
+
+	return value, nil
 }
 
 func buildTaggedTBTCSignerDKGRound1PackagePayloads(
