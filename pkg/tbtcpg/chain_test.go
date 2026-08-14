@@ -34,6 +34,7 @@ type LocalChain struct {
 
 	depositRequests                          map[[32]byte]*tbtc.DepositChainRequest
 	pastDepositRevealedEvents                map[[32]byte][]*tbtc.DepositRevealedEvent
+	pastTaprootDepositRevealedEvents         map[[32]byte][]*tbtc.TaprootDepositRevealedEvent
 	pastNewWalletRegisteredEvents            map[[32]byte][]*tbtc.NewWalletRegisteredEvent
 	depositParameters                        tbtc.DepositParameters
 	depositSweepProposalValidations          map[[32]byte]bool
@@ -55,14 +56,17 @@ type LocalChain struct {
 	movedFundsSweepRequests                  map[[32]byte]*tbtc.MovedFundsSweepRequest
 	movedFundsSweepProposalValidations       map[[32]byte]bool
 	operatorIDs                              map[chain.Address]uint32
+	frostOperatorIDs                         map[chain.Address]uint32
 	redemptionDelays                         map[[32]byte]time.Duration
 	depositMinAge                            uint32
+	currentBlockTimestamp                    time.Time
 }
 
 func NewLocalChain() *LocalChain {
 	return &LocalChain{
 		depositRequests:                          make(map[[32]byte]*tbtc.DepositChainRequest),
 		pastDepositRevealedEvents:                make(map[[32]byte][]*tbtc.DepositRevealedEvent),
+		pastTaprootDepositRevealedEvents:         make(map[[32]byte][]*tbtc.TaprootDepositRevealedEvent),
 		pastNewWalletRegisteredEvents:            make(map[[32]byte][]*tbtc.NewWalletRegisteredEvent),
 		depositSweepProposalValidations:          make(map[[32]byte]bool),
 		pastRedemptionRequestedEvents:            make(map[[32]byte][]*tbtc.RedemptionRequestedEvent),
@@ -77,7 +81,9 @@ func NewLocalChain() *LocalChain {
 		movedFundsSweepRequests:                  make(map[[32]byte]*tbtc.MovedFundsSweepRequest),
 		movedFundsSweepProposalValidations:       make(map[[32]byte]bool),
 		operatorIDs:                              make(map[chain.Address]uint32),
+		frostOperatorIDs:                         make(map[chain.Address]uint32),
 		redemptionDelays:                         make(map[[32]byte]time.Duration),
+		currentBlockTimestamp:                    time.Now(),
 	}
 }
 
@@ -114,6 +120,45 @@ func (lc *LocalChain) AddPastDepositRevealedEvent(
 
 	lc.pastDepositRevealedEvents[eventsKey] = append(
 		lc.pastDepositRevealedEvents[eventsKey],
+		event,
+	)
+
+	return nil
+}
+
+func (lc *LocalChain) PastTaprootDepositRevealedEvents(
+	filter *tbtc.DepositRevealedEventFilter,
+) ([]*tbtc.TaprootDepositRevealedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	events, ok := lc.pastTaprootDepositRevealedEvents[eventsKey]
+	if !ok {
+		return []*tbtc.TaprootDepositRevealedEvent{}, nil
+	}
+
+	return events, nil
+}
+
+func (lc *LocalChain) AddPastTaprootDepositRevealedEvent(
+	filter *tbtc.DepositRevealedEventFilter,
+	event *tbtc.TaprootDepositRevealedEvent,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return err
+	}
+
+	lc.pastTaprootDepositRevealedEvents[eventsKey] = append(
+		lc.pastTaprootDepositRevealedEvents[eventsKey],
 		event,
 	)
 
@@ -548,6 +593,21 @@ func (lc *LocalChain) ValidateDepositSweepProposal(
 	return nil
 }
 
+func (lc *LocalChain) ValidateTaprootDepositSweepProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.DepositSweepProposal,
+	depositsExtraInfo []struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return lc.ValidateDepositSweepProposal(
+		walletPublicKeyHash,
+		proposal,
+		depositsExtraInfo,
+	)
+}
+
 func (lc *LocalChain) SetDepositSweepProposalValidationResult(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.DepositSweepProposal,
@@ -894,6 +954,20 @@ func (lc *LocalChain) AverageBlockTime() time.Duration {
 	return lc.averageBlockTime
 }
 
+func (lc *LocalChain) CurrentBlockTimestamp() (time.Time, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.currentBlockTimestamp, nil
+}
+
+func (lc *LocalChain) SetCurrentBlockTimestamp(currentBlockTimestamp time.Time) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.currentBlockTimestamp = currentBlockTimestamp
+}
+
 func (lc *LocalChain) SetOperatorID(
 	operatorAddress chain.Address,
 	operatorID chain.OperatorID,
@@ -918,6 +992,35 @@ func (lc *LocalChain) GetOperatorID(
 	operatorID, ok := lc.operatorIDs[operatorAddress]
 	if !ok {
 		return 0, fmt.Errorf("operator not found")
+	}
+
+	return operatorID, nil
+}
+
+func (lc *LocalChain) SetFrostOperatorID(
+	operatorAddress chain.Address,
+	operatorID chain.OperatorID,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	_, ok := lc.frostOperatorIDs[operatorAddress]
+	if !ok {
+		lc.frostOperatorIDs[operatorAddress] = operatorID
+	}
+
+	return nil
+}
+
+func (lc *LocalChain) GetFrostOperatorID(
+	operatorAddress chain.Address,
+) (chain.OperatorID, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	operatorID, ok := lc.frostOperatorIDs[operatorAddress]
+	if !ok {
+		return 0, fmt.Errorf("FROST operator not found")
 	}
 
 	return operatorID, nil
@@ -954,6 +1057,25 @@ func (lc *LocalChain) GetWallet(walletPublicKeyHash [20]byte) (
 	}
 
 	return data, nil
+}
+
+func (lc *LocalChain) WalletPublicKeyHashForWalletID(
+	walletID [32]byte,
+) ([20]byte, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	for walletPublicKeyHash, walletData := range lc.walletChainData {
+		if walletData == nil {
+			continue
+		}
+
+		if walletData.WalletID == walletID || walletData.EcdsaWalletID == walletID {
+			return walletPublicKeyHash, nil
+		}
+	}
+
+	return [20]byte{}, fmt.Errorf("wallet public key hash for wallet ID not found")
 }
 
 func (lc *LocalChain) SetWallet(

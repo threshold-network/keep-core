@@ -133,8 +133,8 @@ func (mfa *movingFundsAction) execute() error {
 
 	walletPublicKeyHash := bitcoin.PublicKeyHash(mfa.wallet().publicKey)
 
-	walletMainUtxo, err := DetermineWalletMainUtxo(
-		walletPublicKeyHash,
+	walletMainUtxo, err := DetermineWalletMainUtxoForPublicKey(
+		mfa.wallet().publicKey,
 		mfa.chain,
 		mfa.btcChain,
 	)
@@ -188,8 +188,8 @@ func (mfa *movingFundsAction) execute() error {
 		return fmt.Errorf("validate proposal step failed: [%v]", err)
 	}
 
-	err = EnsureWalletSyncedBetweenChains(
-		walletPublicKeyHash,
+	err = EnsureWalletSyncedBetweenChainsForPublicKey(
+		mfa.wallet().publicKey,
 		walletMainUtxo,
 		mfa.chain,
 		mfa.btcChain,
@@ -202,10 +202,21 @@ func (mfa *movingFundsAction) execute() error {
 		)
 	}
 
+	targetWalletOutputScripts, err := walletOutputScriptsForPublicKeyHashes(
+		mfa.chain,
+		mfa.proposal.TargetWallets,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"error while resolving moving funds target wallet outputs: [%v]",
+			err,
+		)
+	}
+
 	unsignedMovingFundsTx, err := assembleMovingFundsTransaction(
 		mfa.btcChain,
 		walletMainUtxo,
-		mfa.proposal.TargetWallets,
+		targetWalletOutputScripts,
 		mfa.proposal.MovingFundsTxFee.Int64(),
 	)
 	if err != nil {
@@ -523,10 +534,10 @@ func isWalletPendingMovingFundsTarget(
 func assembleMovingFundsTransaction(
 	bitcoinChain bitcoin.Chain,
 	walletMainUtxo *bitcoin.UnspentTransactionOutput,
-	targetWallets [][20]byte,
+	targetWalletOutputScripts []bitcoin.Script,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
-	if len(targetWallets) < 1 {
+	if len(targetWalletOutputScripts) < 1 {
 		return nil, fmt.Errorf("at least one target wallet is required")
 	}
 
@@ -535,7 +546,7 @@ func assembleMovingFundsTransaction(
 	}
 
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
-	err := builder.AddPublicKeyHashInput(walletMainUtxo)
+	err := addWalletUtxoInput(builder, bitcoinChain, walletMainUtxo)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot add input pointing to wallet main UTXO: [%v]",
@@ -544,7 +555,7 @@ func assembleMovingFundsTransaction(
 	}
 
 	// The number of target wallets. It determines the number of outputs.
-	targetWalletsCount := int64(len(targetWallets))
+	targetWalletsCount := int64(len(targetWalletOutputScripts))
 
 	// The sum of all the outputs equal to the input value minus fee.
 	totalOutputValue := walletMainUtxo.Value - fee
@@ -563,16 +574,9 @@ func assembleMovingFundsTransaction(
 	// should be the same as during the commitment. We don't to check it,
 	// as the order of target wallets has already been validated by the on-chain
 	// contract.
-	for i, targetWalletPublicKeyHash := range targetWallets {
-		outputScript, err := bitcoin.PayToWitnessPublicKeyHash(
-			targetWalletPublicKeyHash,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("cannot compute output script: [%v]", err)
-		}
-
+	for i, targetWalletOutputScript := range targetWalletOutputScripts {
 		outputValue := singleOutputValue
-		if i == len(targetWallets)-1 {
+		if i == len(targetWalletOutputScripts)-1 {
 			// If we are at the last output, increase its value by the remaining
 			// satoshis. If the total output amount is divisible by the number
 			// of target wallets, the increase will be `0`.
@@ -581,7 +585,7 @@ func assembleMovingFundsTransaction(
 
 		builder.AddOutput(&bitcoin.TransactionOutput{
 			Value:           outputValue,
-			PublicKeyScript: outputScript,
+			PublicKeyScript: targetWalletOutputScript,
 		})
 	}
 

@@ -11,6 +11,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 )
@@ -43,7 +44,12 @@ const (
 
 // node represents the current state of an ECDSA node.
 type node struct {
+	// groupParameters contains the legacy ECDSA wallet parameters.
 	groupParameters *GroupParameters
+	// frostGroupParameters contains the independently configured FROST wallet
+	// parameters. FROST DKG must not use the legacy validator's constants: the
+	// two registries can deliberately use different group sizes and thresholds.
+	frostGroupParameters *GroupParameters
 
 	chain          Chain
 	btcChain       bitcoin.Chain
@@ -126,6 +132,33 @@ func newNode(
 	proposalGenerator CoordinationProposalGenerator,
 	config Config,
 ) (*node, error) {
+	if err := RegisterSignerMaterialResolverForBuild(); err != nil {
+		return nil, fmt.Errorf(
+			"cannot register signer material resolver for build: %w",
+			err,
+		)
+	}
+
+	if err := configureFrostSigningBackend(config); err != nil {
+		return nil, fmt.Errorf("cannot configure FROST signing backend: %w", err)
+	}
+
+	// Fail fast on an invalid FROST signing backend here, right after it is
+	// configured and before any further node construction - in particular before
+	// newDkgExecutor below starts the legacy ECDSA pre-params pool, which
+	// schedules CPU-heavy generation/persistence on a background context. This
+	// keeps the fail-closed path side-effect free. verifyFrostSigningBackend is a
+	// no-op unless FROST is enabled (a FROST wallet registry is configured); a
+	// FROST-enabled node on the legacy backend, or without a usable/linked native
+	// signer engine, cannot sign native FROST wallets.
+	if frostChain, ok := chain.(FrostDKGChain); ok {
+		if err := verifyFrostSigningBackend(
+			frostChain.FrostWalletRegistryAvailable(),
+		); err != nil {
+			return nil, err
+		}
+	}
+
 	walletRegistry, err := newWalletRegistry(
 		keyStorePersistance,
 		chain.CalculateWalletID,
@@ -138,7 +171,11 @@ func newNode(
 	scheduler.RegisterProtocol(latch)
 
 	node := &node{
-		groupParameters:          groupParameters,
+		groupParameters: groupParameters,
+		// Initialize this field for chains without FROST support and for tests that
+		// construct a node directly. Initialize replaces it with the parameters
+		// loaded from FrostDkgValidator whenever FROST is enabled.
+		frostGroupParameters:     groupParameters,
 		chain:                    chain,
 		btcChain:                 btcChain,
 		netProvider:              netProvider,
@@ -167,23 +204,75 @@ func newNode(
 		return nil, fmt.Errorf("cannot get node's operator address: [%v]", err)
 	}
 
-	// TODO: This chicken and egg problem should be solved when
-	// waitForBlockHeight becomes a part of BlockHeightWaiter interface.
-	node.dkgExecutor = newDkgExecutor(
-		node.groupParameters,
-		node.operatorID,
-		operatorAddress,
-		chain,
-		netProvider,
-		walletRegistry,
-		latch,
-		config,
-		workPersistence,
-		scheduler,
-		node.waitForBlockHeight,
-	)
+	if shouldRunLegacyECDSA(config) {
+		// TODO: This chicken and egg problem should be solved when
+		// waitForBlockHeight becomes a part of BlockHeightWaiter interface.
+		node.dkgExecutor = newDkgExecutor(
+			node.groupParameters,
+			node.operatorID,
+			operatorAddress,
+			chain,
+			netProvider,
+			walletRegistry,
+			latch,
+			config,
+			workPersistence,
+			scheduler,
+			node.waitForBlockHeight,
+		)
+	}
 
 	return node, nil
+}
+
+func configureFrostSigningBackend(config Config) error {
+	return signing.SetExecutionBackendByName(config.FrostSigningBackend)
+}
+
+// verifyFrostSigningBackend fails fast when FROST DKG is enabled while the
+// configured signing backend is the transitional legacy backend. Native FROST
+// wallets carry native signer material that the legacy backend cannot process,
+// so a node left on the legacy backend produces valid wallets via DKG but then
+// fails every signing attempt (heartbeat, deposit sweep, redemption, ...). The
+// native backend handles both native FROST and legacy-ECDSA material, so it is
+// always the correct choice once FROST is enabled.
+//
+// The guard is a no-op when FROST is not enabled (frostEnabled == false): the
+// normal Ethereum TbtcChain satisfies FrostDKGChain even when no FROST wallet
+// registry is configured, and in that case the node has no FROST wallets to
+// sign for, so the default legacy backend is fine.
+func verifyFrostSigningBackend(frostEnabled bool) error {
+	if !frostEnabled {
+		return nil
+	}
+
+	backend := signing.CurrentExecutionBackendName()
+	if backend == signing.LegacyExecutionBackendName {
+		return fmt.Errorf(
+			"FROST DKG is enabled but the FROST signing backend is [%s]; set "+
+				"tbtc.frostSigningBackend to \"native\" or \"ffi\" - the legacy "+
+				"backend cannot sign native FROST wallets and would fail every "+
+				"signature",
+			backend,
+		)
+	}
+
+	// A non-legacy backend name is not sufficient: the fallback-allowed "native"
+	// mode is selected without verifying that native execution is actually
+	// available, so an unavailable native engine would fall back to the legacy
+	// bridge and fail on native FROST signer material at signing time. Require
+	// usable native execution up front.
+	if !signing.NativeExecutionAvailable() {
+		return fmt.Errorf(
+			"FROST DKG is enabled with signing backend [%s] but native FROST "+
+				"execution is unavailable in this build/runtime; use "+
+				"tbtc.frostSigningBackend=\"ffi\" with the native tbtc-signer "+
+				"linked in, otherwise signing falls back to the legacy bridge "+
+				"and fails on native FROST wallets",
+			backend,
+		)
+	}
+	return nil
 }
 
 // setPerformanceMetrics sets the performance metrics recorder for the node
@@ -194,6 +283,25 @@ func (n *node) setPerformanceMetrics(metrics interface {
 	RecordDuration(name string, duration time.Duration)
 }) {
 	n.performanceMetrics = metrics
+
+	if metrics == nil {
+		signing.UnregisterNativeTBTCSignerFallbackObserver()
+	} else {
+		err := signing.RegisterNativeTBTCSignerFallbackObserver(
+			func(event signing.NativeTBTCSignerFallbackEvent) {
+				metrics.IncrementCounter(
+					clientinfo.MetricSigningNativeTBTCSignerFallbackTotal,
+					1,
+				)
+			},
+		)
+		if err != nil {
+			logger.Warnf(
+				"cannot register native tbtc-signer fallback observer: [%v]",
+				err,
+			)
+		}
+	}
 
 	// Initialize window metrics tracker with performance metrics
 	// Keep metrics for the last 100 windows (approximately 25 hours at 900 blocks per window)
@@ -285,6 +393,11 @@ func (n *node) joinDKGIfEligible(
 	startBlock uint64,
 	delayBlocks uint64,
 ) {
+	if n.dkgExecutor == nil {
+		logger.Warnf("legacy ECDSA DKG is disabled; ignoring DKG started event")
+		return
+	}
+
 	n.dkgExecutor.executeDkgIfEligible(seed, startBlock, delayBlocks)
 }
 
@@ -299,5 +412,10 @@ func (n *node) validateDKG(
 	result *DKGChainResult,
 	resultHash [32]byte,
 ) {
+	if n.dkgExecutor == nil {
+		logger.Warnf("legacy ECDSA DKG is disabled; ignoring DKG result")
+		return
+	}
+
 	n.dkgExecutor.executeDkgValidation(seed, submissionBlock, result, resultHash)
 }

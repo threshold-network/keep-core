@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,10 +19,16 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 	"go.uber.org/zap"
 )
+
+type unsignedTransactionInputReference struct {
+	TxIDHex string
+	Vout    uint32
+}
 
 // WalletActionType represents actions types that can be performed by a wallet.
 type WalletActionType uint8
@@ -281,7 +289,30 @@ type walletSigningExecutor interface {
 		ctx context.Context,
 		messages []*big.Int,
 		startBlock uint64,
-	) ([]*tecdsa.Signature, error)
+	) ([]*frost.Signature, error)
+}
+
+type schnorrWalletSigningExecutor interface {
+	usesSchnorrSignatures() bool
+}
+
+type taprootTweakedWalletSigningExecutor interface {
+	signBatchWithTaprootMerkleRoots(
+		ctx context.Context,
+		messages []*big.Int,
+		taprootMerkleRoots []*[32]byte,
+		startBlock uint64,
+	) ([]*frost.Signature, error)
+}
+
+type taprootPolicyBoundWalletSigningExecutor interface {
+	signBatchWithTaprootTransaction(
+		ctx context.Context,
+		messages []*big.Int,
+		taprootMerkleRoots []*[32]byte,
+		startBlock uint64,
+		unsignedTx *bitcoin.TransactionBuilder,
+	) ([]*frost.Signature, error)
 }
 
 // walletTransactionExecutor is a component allowing to sign and broadcast
@@ -294,6 +325,11 @@ type walletTransactionExecutor struct {
 
 	waitForBlockFn waitForBlockFn
 }
+
+var buildTaprootTxViaNativeSignerFn = buildTaprootTxViaNativeSigner
+var nativeBuildTaprootTxSigningSubstitutionEnabledFn = nativeBuildTaprootTxSigningSubstitutionEnabled
+
+const nativeBuildTaprootTxSigningSubstitutionEnvVar = "KEEP_CORE_NATIVE_BUILDTX_SIGNING_SUBSTITUTION"
 
 func newWalletTransactionExecutor(
 	btcChain bitcoin.Chain,
@@ -318,6 +354,25 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signingStartBlock uint64,
 	signingTimeoutBlock uint64,
 ) (*bitcoin.Transaction, error) {
+	usesSchnorrSignatures := wte.usesSchnorrSignatures()
+
+	// The native tbtc-signer BuildTaprootTx parity/substitution path applies
+	// only to Taproot transactions that do not use the mandatory policy-bound
+	// Schnorr path below. That path calls BuildTaprootTx under the exact ROAST
+	// session before every signature; running this preflight first under a
+	// buildtx-* session would consume one extra token from the signer's global
+	// policy rate limiter, and its artifact cannot authorize the ROAST session.
+	// The native builder is meaningless for legacy transactions, so those skip
+	// this path as before.
+	if unsignedTx.HasOnlyTaprootKeyPathInputs() && !usesSchnorrSignatures {
+		if err := wte.maybeSubstituteNativeBuildTaprootTx(
+			signTxLogger,
+			unsignedTx,
+		); err != nil {
+			return nil, err
+		}
+	}
+
 	signTxLogger.Infof("computing transaction's sig hashes")
 
 	sigHashes, err := unsignedTx.ComputeSignatureHashes()
@@ -325,6 +380,20 @@ func (wte *walletTransactionExecutor) signTransaction(
 		return nil, fmt.Errorf(
 			"error while computing transaction's sig hashes: [%v]",
 			err,
+		)
+	}
+
+	if unsignedTx.HasTaprootKeyPathInputs() &&
+		!unsignedTx.HasOnlyTaprootKeyPathInputs() {
+		return nil, fmt.Errorf(
+			"cannot apply FROST signatures to mixed taproot and legacy inputs",
+		)
+	}
+
+	if usesSchnorrSignatures &&
+		!unsignedTx.HasOnlyTaprootKeyPathInputs() {
+		return nil, fmt.Errorf(
+			"cannot apply FROST signatures to non-taproot transaction inputs",
 		)
 	}
 
@@ -337,11 +406,44 @@ func (wte *walletTransactionExecutor) signTransaction(
 	)
 	defer cancelSigningCtx()
 
-	signatures, err := wte.signingExecutor.signBatch(
-		signingCtx,
-		sigHashes,
-		signingStartBlock,
-	)
+	var signatures []*frost.Signature
+	taprootMerkleRoots := unsignedTx.TaprootKeyPathInputMerkleRoots()
+	policyBoundSigningExecutor, policyBindingAvailable :=
+		wte.signingExecutor.(taprootPolicyBoundWalletSigningExecutor)
+	if usesSchnorrSignatures {
+		if !policyBindingAvailable {
+			return nil, fmt.Errorf(
+				"Schnorr signing executor does not support transaction policy binding",
+			)
+		}
+		signatures, err = policyBoundSigningExecutor.signBatchWithTaprootTransaction(
+			signingCtx,
+			sigHashes,
+			taprootMerkleRoots,
+			signingStartBlock,
+			unsignedTx,
+		)
+	} else if hasTaprootMerkleRoots(taprootMerkleRoots) {
+		tweakedSigningExecutor, ok := wte.signingExecutor.(taprootTweakedWalletSigningExecutor)
+		if !ok {
+			return nil, fmt.Errorf(
+				"taproot tweaked signing requires signer support",
+			)
+		}
+
+		signatures, err = tweakedSigningExecutor.signBatchWithTaprootMerkleRoots(
+			signingCtx,
+			sigHashes,
+			taprootMerkleRoots,
+			signingStartBlock,
+		)
+	} else {
+		signatures, err = wte.signingExecutor.signBatch(
+			signingCtx,
+			sigHashes,
+			signingStartBlock,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf(
 			"error while signing transaction's sig hashes: [%v]",
@@ -351,11 +453,36 @@ func (wte *walletTransactionExecutor) signTransaction(
 
 	signTxLogger.Infof("applying transaction's signatures")
 
+	if unsignedTx.HasTaprootKeyPathInputs() {
+		containers := make(
+			[]*bitcoin.SchnorrSignatureContainer,
+			len(signatures),
+		)
+		for i, signature := range signatures {
+			containers[i] = &bitcoin.SchnorrSignatureContainer{
+				Signature: signature.Serialize(),
+			}
+		}
+
+		tx, err := unsignedTx.AddTaprootKeyPathSignatures(containers)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"error while applying transaction's taproot key-path "+
+					"signatures: [%v]",
+				err,
+			)
+		}
+
+		signTxLogger.Infof("transaction created successfully")
+
+		return tx, nil
+	}
+
 	containers := make([]*bitcoin.SignatureContainer, len(signatures))
 	for i, signature := range signatures {
 		containers[i] = &bitcoin.SignatureContainer{
-			R:         signature.R,
-			S:         signature.S,
+			R:         new(big.Int).SetBytes(signature.R[:]),
+			S:         new(big.Int).SetBytes(signature.S[:]),
 			PublicKey: wte.executingWallet.publicKey,
 		}
 	}
@@ -371,6 +498,382 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signTxLogger.Infof("transaction created successfully")
 
 	return tx, nil
+}
+
+func (wte *walletTransactionExecutor) usesSchnorrSignatures() bool {
+	executor, ok := wte.signingExecutor.(schnorrWalletSigningExecutor)
+	if !ok {
+		return false
+	}
+
+	return executor.usesSchnorrSignatures()
+}
+
+// maybeSubstituteNativeBuildTaprootTx runs the native tbtc-signer BuildTaprootTx
+// parity/substitution path: it builds the unsigned transaction via the native
+// signer and, when KEEP_CORE_NATIVE_BUILDTX_SIGNING_SUBSTITUTION is set,
+// substitutes the Go-built transaction with the native one. In the default build
+// the native builder is a no-op (returns an empty hex), so this is observational
+// only. It must only be called for Taproot transactions (see signTransaction).
+func (wte *walletTransactionExecutor) maybeSubstituteNativeBuildTaprootTx(
+	signTxLogger log.StandardLogger,
+	unsignedTx *bitcoin.TransactionBuilder,
+) error {
+	substitutionEnabled := nativeBuildTaprootTxSigningSubstitutionEnabledFn()
+
+	nativeUnsignedTxHex, err := buildTaprootTxViaNativeSignerFn(unsignedTx)
+	if err != nil {
+		return fmt.Errorf(
+			"error while building unsigned transaction with native tbtc-signer: [%w]",
+			err,
+		)
+	}
+
+	if nativeUnsignedTxHex == "" {
+		return nil
+	}
+
+	signTxLogger.Debugf(
+		"received unsigned transaction from native tbtc-signer BuildTaprootTx [txHexLen:%d]",
+		len(nativeUnsignedTxHex),
+	)
+
+	nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
+		signTxLogger,
+		nativeUnsignedTxHex,
+		unsignedTx.UnsignedTransaction(),
+		substitutionEnabled,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot process native BuildTaprootTx unsigned transaction for signing: [%v]",
+			err,
+		)
+	}
+
+	if nativeUnsignedTx != nil {
+		if err := unsignedTx.ReplaceUnsignedTransaction(nativeUnsignedTx); err != nil {
+			return fmt.Errorf(
+				"cannot substitute Go unsigned transaction with native BuildTaprootTx output: [%v]",
+				err,
+			)
+		}
+
+		signTxLogger.Infof(
+			"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
+		)
+	}
+
+	return nil
+}
+
+func hasTaprootMerkleRoots(taprootMerkleRoots []*[32]byte) bool {
+	for _, merkleRoot := range taprootMerkleRoots {
+		if merkleRoot != nil {
+			return true
+		}
+	}
+
+	return false
+}
+
+func nativeBuildTaprootTxSigningSubstitutionEnabled() bool {
+	switch strings.ToLower(
+		strings.TrimSpace(
+			os.Getenv(nativeBuildTaprootTxSigningSubstitutionEnvVar),
+		),
+	) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func evaluateNativeUnsignedTransactionForSigning(
+	signTxLogger log.StandardLogger,
+	nativeUnsignedTxHex string,
+	expectedTransaction *bitcoin.Transaction,
+	substitutionEnabled bool,
+) (*bitcoin.Transaction, error) {
+	nativeUnsignedTx, err := decodeNativeUnsignedTransactionHex(nativeUnsignedTxHex)
+	if err != nil {
+		if substitutionEnabled {
+			return nil, err
+		}
+
+		signTxLogger.Warnf(
+			"cannot compare native BuildTaprootTx unsigned transaction with Go builder state: [%v]",
+			err,
+		)
+		return nil, nil
+	}
+
+	diverges, divergenceReason, err := nativeUnsignedTransactionDivergesFromTransaction(
+		nativeUnsignedTx,
+		expectedTransaction,
+	)
+	if err != nil {
+		if substitutionEnabled {
+			return nil, err
+		}
+
+		signTxLogger.Warnf(
+			"cannot compare native BuildTaprootTx unsigned transaction with Go builder state: [%v]",
+			err,
+		)
+		return nil, nil
+	}
+
+	if diverges {
+		divergenceMessage := "native BuildTaprootTx unsigned transaction diverges from Go builder state"
+		if divergenceReason != "" {
+			divergenceMessage = fmt.Sprintf(
+				"%s: %s",
+				divergenceMessage,
+				divergenceReason,
+			)
+		}
+
+		if substitutionEnabled {
+			return nil, fmt.Errorf("%s", divergenceMessage)
+		}
+
+		signTxLogger.Warnf(divergenceMessage)
+	}
+
+	if substitutionEnabled {
+		return nativeUnsignedTx, nil
+	}
+
+	return nil, nil
+}
+
+func decodeNativeUnsignedTransactionHex(
+	nativeUnsignedTxHex string,
+) (*bitcoin.Transaction, error) {
+	nativeUnsignedTxBytes, err := hex.DecodeString(nativeUnsignedTxHex)
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode native tx hex: [%w]", err)
+	}
+
+	nativeUnsignedTx := &bitcoin.Transaction{}
+	if err := nativeUnsignedTx.Deserialize(nativeUnsignedTxBytes); err != nil {
+		return nil, fmt.Errorf("cannot deserialize native tx bytes: [%w]", err)
+	}
+
+	return nativeUnsignedTx, nil
+}
+
+func nativeUnsignedTransactionDivergesFromTransaction(
+	nativeUnsignedTx *bitcoin.Transaction,
+	expectedTransaction *bitcoin.Transaction,
+) (bool, string, error) {
+	actualShape, err := extractUnsignedTransactionShapeFromTransaction(nativeUnsignedTx)
+	if err != nil {
+		return false, "", err
+	}
+
+	expectedShape, err := extractUnsignedTransactionShapeFromTransaction(expectedTransaction)
+	if err != nil {
+		return false, "", err
+	}
+
+	if actualShape.Version != expectedShape.Version {
+		return true, fmt.Sprintf(
+			"version mismatch: expected [%d], got [%d]",
+			expectedShape.Version,
+			actualShape.Version,
+		), nil
+	}
+
+	if actualShape.Locktime != expectedShape.Locktime {
+		return true, fmt.Sprintf(
+			"locktime mismatch: expected [%d], got [%d]",
+			expectedShape.Locktime,
+			actualShape.Locktime,
+		), nil
+	}
+
+	if reason, diverges := unsignedTransactionInputReferencesDivergenceReason(
+		actualShape.InputReferences,
+		expectedShape.InputReferences,
+	); diverges {
+		return true, reason, nil
+	}
+
+	if reason, diverges := unsignedTransactionInputSequencesDivergenceReason(
+		actualShape.InputSequences,
+		expectedShape.InputSequences,
+	); diverges {
+		return true, reason, nil
+	}
+
+	if reason, diverges := unsignedTransactionOutputsDivergenceReason(
+		actualShape.Outputs,
+		expectedShape.Outputs,
+	); diverges {
+		return true, reason, nil
+	}
+
+	return false, "", nil
+}
+
+func unsignedTransactionInputReferencesDivergenceReason(
+	actual []unsignedTransactionInputReference,
+	expected []unsignedTransactionInputReference,
+) (string, bool) {
+	if len(actual) != len(expected) {
+		return fmt.Sprintf(
+			"input reference count mismatch: expected [%d], got [%d]",
+			len(expected),
+			len(actual),
+		), true
+	}
+
+	for i := range actual {
+		if actual[i] != expected[i] {
+			return fmt.Sprintf(
+				"input reference mismatch at index [%d]: expected [%s:%d], got [%s:%d]",
+				i,
+				expected[i].TxIDHex,
+				expected[i].Vout,
+				actual[i].TxIDHex,
+				actual[i].Vout,
+			), true
+		}
+	}
+
+	return "", false
+}
+
+type unsignedTransactionShape struct {
+	Version         int32
+	Locktime        uint32
+	InputReferences []unsignedTransactionInputReference
+	InputSequences  []uint32
+	Outputs         []bitcoin.UnsignedTransactionOutput
+}
+
+func extractUnsignedTransactionShapeFromTransaction(
+	transaction *bitcoin.Transaction,
+) (*unsignedTransactionShape, error) {
+	if transaction == nil {
+		return nil, fmt.Errorf("transaction is nil")
+	}
+
+	inputReferences := make(
+		[]unsignedTransactionInputReference,
+		0,
+		len(transaction.Inputs),
+	)
+	inputSequences := make([]uint32, 0, len(transaction.Inputs))
+	for i, input := range transaction.Inputs {
+		if input == nil {
+			return nil, fmt.Errorf("transaction input [%d] is nil", i)
+		}
+
+		if input.Outpoint == nil {
+			return nil, fmt.Errorf("transaction input [%d] outpoint is nil", i)
+		}
+
+		inputReferences = append(
+			inputReferences,
+			unsignedTransactionInputReference{
+				TxIDHex: input.Outpoint.TransactionHash.Hex(bitcoin.ReversedByteOrder),
+				Vout:    input.Outpoint.OutputIndex,
+			},
+		)
+		inputSequences = append(inputSequences, input.Sequence)
+	}
+
+	outputs := make([]bitcoin.UnsignedTransactionOutput, 0, len(transaction.Outputs))
+	for i, output := range transaction.Outputs {
+		if output == nil {
+			return nil, fmt.Errorf("transaction output [%d] is nil", i)
+		}
+
+		if output.Value < 0 {
+			return nil, fmt.Errorf("transaction output [%d] value is negative", i)
+		}
+
+		outputs = append(
+			outputs,
+			bitcoin.UnsignedTransactionOutput{
+				ScriptPubKeyHex: hex.EncodeToString(output.PublicKeyScript),
+				ValueSats:       uint64(output.Value),
+			},
+		)
+	}
+
+	return &unsignedTransactionShape{
+		Version:         transaction.Version,
+		Locktime:        transaction.Locktime,
+		InputReferences: inputReferences,
+		InputSequences:  inputSequences,
+		Outputs:         outputs,
+	}, nil
+}
+
+func unsignedTransactionOutputsDivergenceReason(
+	actual []bitcoin.UnsignedTransactionOutput,
+	expected []bitcoin.UnsignedTransactionOutput,
+) (string, bool) {
+	if len(actual) != len(expected) {
+		return fmt.Sprintf(
+			"output count mismatch: expected [%d], got [%d]",
+			len(expected),
+			len(actual),
+		), true
+	}
+
+	for i := range actual {
+		if actual[i].ValueSats != expected[i].ValueSats {
+			return fmt.Sprintf(
+				"output value mismatch at index [%d]: expected [%d], got [%d]",
+				i,
+				expected[i].ValueSats,
+				actual[i].ValueSats,
+			), true
+		}
+
+		if actual[i].ScriptPubKeyHex != expected[i].ScriptPubKeyHex {
+			return fmt.Sprintf(
+				"output script mismatch at index [%d]: expected [%s], got [%s]",
+				i,
+				expected[i].ScriptPubKeyHex,
+				actual[i].ScriptPubKeyHex,
+			), true
+		}
+	}
+
+	return "", false
+}
+
+func unsignedTransactionInputSequencesDivergenceReason(
+	actual []uint32,
+	expected []uint32,
+) (string, bool) {
+	if len(actual) != len(expected) {
+		return fmt.Sprintf(
+			"input sequence count mismatch: expected [%d], got [%d]",
+			len(expected),
+			len(actual),
+		), true
+	}
+
+	for i := range actual {
+		if actual[i] != expected[i] {
+			return fmt.Sprintf(
+				"input sequence mismatch at index [%d]: expected [%d], got [%d]",
+				i,
+				expected[i],
+				actual[i],
+			), true
+		}
+	}
+
+	return "", false
 }
 
 // broadcastTransaction broadcasts a signed Bitcoin transaction until
@@ -516,6 +1019,48 @@ func DetermineWalletMainUtxo(
 	bridgeChain BridgeChain,
 	btcChain bitcoin.Chain,
 ) (*bitcoin.UnspentTransactionOutput, error) {
+	walletScripts, err := legacyWalletPublicKeyScripts(walletPublicKeyHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return determineWalletMainUtxo(
+		walletPublicKeyHash,
+		walletScripts,
+		bridgeChain,
+		btcChain,
+	)
+}
+
+// DetermineWalletMainUtxoForPublicKey determines the plain-text wallet main
+// UTXO currently registered in the Bridge on-chain contract. Unlike
+// DetermineWalletMainUtxo, this variant can discover Taproot wallet outputs.
+func DetermineWalletMainUtxoForPublicKey(
+	walletPublicKey *ecdsa.PublicKey,
+	bridgeChain BridgeChain,
+	btcChain bitcoin.Chain,
+) (*bitcoin.UnspentTransactionOutput, error) {
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+
+	walletScripts, err := walletPublicKeyScripts(walletPublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return determineWalletMainUtxo(
+		walletPublicKeyHash,
+		walletScripts,
+		bridgeChain,
+		btcChain,
+	)
+}
+
+func determineWalletMainUtxo(
+	walletPublicKeyHash [20]byte,
+	walletScripts []bitcoin.Script,
+	bridgeChain BridgeChain,
+	btcChain bitcoin.Chain,
+) (*bitcoin.UnspentTransactionOutput, error) {
 	walletChainData, err := bridgeChain.GetWallet(walletPublicKeyHash)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get on-chain data for wallet: [%v]", err)
@@ -539,18 +1084,13 @@ func DetermineWalletMainUtxo(
 	// fetch full transaction data (time-consuming calls) starting from
 	// the most recent transactions as there is a high chance the main UTXO
 	// comes from there.
-	txHashes, err := btcChain.GetTxHashesForPublicKeyHash(walletPublicKeyHash)
+	txHashes, err := getTxHashesForWalletScripts(
+		btcChain,
+		walletPublicKeyHash,
+		walletScripts,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get transactions history for wallet: [%v]", err)
-	}
-
-	walletP2PKH, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return nil, fmt.Errorf("cannot construct P2PKH for wallet: [%v]", err)
-	}
-	walletP2WPKH, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return nil, fmt.Errorf("cannot construct P2WPKH for wallet: [%v]", err)
 	}
 
 	// Start iterating from the latest transaction as the chance it matches
@@ -571,8 +1111,7 @@ func DetermineWalletMainUtxo(
 		// the wallet public key hash.
 		for outputIndex, output := range transaction.Outputs {
 			script := output.PublicKeyScript
-			matchesWallet := bytes.Equal(script, walletP2PKH) ||
-				bytes.Equal(script, walletP2WPKH)
+			matchesWallet := scriptMatchesAny(script, walletScripts)
 
 			// Once the right output is found, check whether their hash
 			// matches the main UTXO hash stored on-chain. If so, this
@@ -605,10 +1144,62 @@ func EnsureWalletSyncedBetweenChains(
 	bridgeChain BridgeChain,
 	btcChain bitcoin.Chain,
 ) error {
+	walletScripts, err := legacyWalletPublicKeyScripts(walletPublicKeyHash)
+	if err != nil {
+		return err
+	}
+
+	return ensureWalletSyncedBetweenChains(
+		walletPublicKeyHash,
+		walletScripts,
+		walletMainUtxo,
+		bridgeChain,
+		btcChain,
+	)
+}
+
+// EnsureWalletSyncedBetweenChainsForPublicKey makes sure all actions taken by
+// the wallet on the Bitcoin chain are reflected in the host chain Bridge.
+// Unlike EnsureWalletSyncedBetweenChains, this variant can discover Taproot
+// wallet outputs.
+func EnsureWalletSyncedBetweenChainsForPublicKey(
+	walletPublicKey *ecdsa.PublicKey,
+	walletMainUtxo *bitcoin.UnspentTransactionOutput,
+	bridgeChain BridgeChain,
+	btcChain bitcoin.Chain,
+) error {
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+
+	walletScripts, err := walletPublicKeyScripts(walletPublicKey)
+	if err != nil {
+		return err
+	}
+
+	return ensureWalletSyncedBetweenChains(
+		walletPublicKeyHash,
+		walletScripts,
+		walletMainUtxo,
+		bridgeChain,
+		btcChain,
+	)
+}
+
+func ensureWalletSyncedBetweenChains(
+	walletPublicKeyHash [20]byte,
+	walletScripts []bitcoin.Script,
+	walletMainUtxo *bitcoin.UnspentTransactionOutput,
+	bridgeChain BridgeChain,
+	btcChain bitcoin.Chain,
+) error {
 	// Take UTXOs controlled by the wallet on Bitcoin chain. Those are outputs
 	// coming from confirmed transactions, ready to be spent right now, and
 	// not used as inputs of other (either confirmed or mempool) transactions.
-	confirmedUtxos, err := btcChain.GetUtxosForPublicKeyHash(walletPublicKeyHash)
+	confirmedUtxos, err := getUtxosForWalletScripts(
+		btcChain,
+		walletPublicKeyHash,
+		walletScripts,
+		true,
+	)
 	if err != nil {
 		return fmt.Errorf("cannot get confirmed UTXOs: [%v]", err)
 	}
@@ -655,7 +1246,12 @@ func EnsureWalletSyncedBetweenChains(
 		// to the wallet address. We need to look at the confirmed and mempool
 		// UTXOs and make sure there are no transactions produced by the wallet
 		// there.
-		mempoolUtxos, err := btcChain.GetMempoolUtxosForPublicKeyHash(walletPublicKeyHash)
+		mempoolUtxos, err := getUtxosForWalletScripts(
+			btcChain,
+			walletPublicKeyHash,
+			walletScripts,
+			false,
+		)
 		if err != nil {
 			return fmt.Errorf("cannot get mempool UTXOs: [%v]", err)
 		}
@@ -762,6 +1358,100 @@ func EnsureWalletSyncedBetweenChains(
 	}
 }
 
+type walletPublicKeyScriptsChain interface {
+	GetTxHashesForPublicKeyScripts(
+		publicKeyScripts []bitcoin.Script,
+	) ([]bitcoin.Hash, error)
+	GetUtxosForPublicKeyScripts(
+		publicKeyScripts []bitcoin.Script,
+	) ([]*bitcoin.UnspentTransactionOutput, error)
+	GetMempoolUtxosForPublicKeyScripts(
+		publicKeyScripts []bitcoin.Script,
+	) ([]*bitcoin.UnspentTransactionOutput, error)
+}
+
+func legacyWalletPublicKeyScripts(
+	walletPublicKeyHash [20]byte,
+) ([]bitcoin.Script, error) {
+	walletP2PKH, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot construct P2PKH for wallet: [%v]", err)
+	}
+
+	walletP2WPKH, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot construct P2WPKH for wallet: [%v]", err)
+	}
+
+	return []bitcoin.Script{walletP2PKH, walletP2WPKH}, nil
+}
+
+func walletPublicKeyScripts(
+	walletPublicKey *ecdsa.PublicKey,
+) ([]bitcoin.Script, error) {
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+
+	walletScripts, err := legacyWalletPublicKeyScripts(walletPublicKeyHash)
+	if err != nil {
+		return nil, err
+	}
+
+	xOnlyPublicKey, err := walletXOnlyPublicKey(walletPublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	walletP2TR, err := bitcoin.PayToTaproot(xOnlyPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("cannot construct P2TR for wallet: [%v]", err)
+	}
+
+	return append(walletScripts, walletP2TR), nil
+}
+
+func getTxHashesForWalletScripts(
+	btcChain bitcoin.Chain,
+	walletPublicKeyHash [20]byte,
+	walletScripts []bitcoin.Script,
+) ([]bitcoin.Hash, error) {
+	if scriptChain, ok := btcChain.(walletPublicKeyScriptsChain); ok {
+		return scriptChain.GetTxHashesForPublicKeyScripts(walletScripts)
+	}
+
+	return btcChain.GetTxHashesForPublicKeyHash(walletPublicKeyHash)
+}
+
+func getUtxosForWalletScripts(
+	btcChain bitcoin.Chain,
+	walletPublicKeyHash [20]byte,
+	walletScripts []bitcoin.Script,
+	confirmed bool,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	if scriptChain, ok := btcChain.(walletPublicKeyScriptsChain); ok {
+		if confirmed {
+			return scriptChain.GetUtxosForPublicKeyScripts(walletScripts)
+		}
+
+		return scriptChain.GetMempoolUtxosForPublicKeyScripts(walletScripts)
+	}
+
+	if confirmed {
+		return btcChain.GetUtxosForPublicKeyHash(walletPublicKeyHash)
+	}
+
+	return btcChain.GetMempoolUtxosForPublicKeyHash(walletPublicKeyHash)
+}
+
+func scriptMatchesAny(script bitcoin.Script, scripts []bitcoin.Script) bool {
+	for _, candidate := range scripts {
+		if bytes.Equal(script, candidate) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // signer represents a threshold signer of a tBTC wallet. A signer holds
 // a wallet tECDSA private key share and is able to participate in the
 // signing process.
@@ -781,6 +1471,10 @@ type signer struct {
 	// privateKeyShare is the tECDSA private key share required to participate
 	// in the signing process.
 	privateKeyShare *tecdsa.PrivateKeyShare
+
+	// signerMaterial carries backend-specific signer material used by the
+	// FROST signing runtime. Legacy path falls back to privateKeyShare.
+	signerMaterial any
 }
 
 // newSigner constructs a new instance of the wallet's signer.
@@ -789,17 +1483,31 @@ func newSigner(
 	walletSigningGroupOperators []chain.Address,
 	signingGroupMemberIndex group.MemberIndex,
 	privateKeyShare *tecdsa.PrivateKeyShare,
+	signerMaterial any,
 ) *signer {
 	wallet := wallet{
 		publicKey:             walletPublicKey,
 		signingGroupOperators: walletSigningGroupOperators,
 	}
 
+	if signerMaterial == nil {
+		signerMaterial = privateKeyShare
+	}
+
 	return &signer{
 		wallet:                  wallet,
 		signingGroupMemberIndex: signingGroupMemberIndex,
 		privateKeyShare:         privateKeyShare,
+		signerMaterial:          signerMaterial,
 	}
+}
+
+func (s *signer) signingMaterial() any {
+	if s.signerMaterial != nil {
+		return s.signerMaterial
+	}
+
+	return s.privateKeyShare
 }
 
 func (s *signer) String() string {

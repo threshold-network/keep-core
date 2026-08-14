@@ -87,6 +87,14 @@ func (n *node) getSigningExecutor(
 		len(signers),
 	)
 
+	// Register a ROAST-retry coordinator for each local seat of this wallet so
+	// the interactive FROST signing path can run for it. This must happen before
+	// the executor is used: the executor entry's BeginOrchestrationForSession
+	// looks the coordinator up per member, and an absent coordinator makes the
+	// interactive drive fall through (fail-closed under interactive-only mode).
+	// No-op unless built with frost_native && frost_roast_retry.
+	registerRoastRetryCoordinatorForSeats(n, signers)
+
 	blockCounter, err := n.chain.BlockCounter()
 	if err != nil {
 		return nil, false, fmt.Errorf(
@@ -95,11 +103,16 @@ func (n *node) getSigningExecutor(
 		)
 	}
 
+	walletGroupParameters, err := n.groupParametersForSigners(signers)
+	if err != nil {
+		return nil, false, err
+	}
+
 	executor := newSigningExecutor(
 		signers,
 		broadcastChannel,
 		membershipValidator,
-		n.groupParameters,
+		walletGroupParameters,
 		n.protocolLatch,
 		blockCounter.CurrentBlock,
 		n.waitForBlockHeight,
@@ -294,12 +307,17 @@ func (n *node) getInactivityClaimExecutor(
 		len(signers),
 	)
 
+	walletGroupParameters, err := n.groupParametersForSigners(signers)
+	if err != nil {
+		return nil, false, err
+	}
+
 	executor := newInactivityClaimExecutor(
 		n.chain,
 		signers,
 		broadcastChannel,
 		membershipValidator,
-		n.groupParameters,
+		walletGroupParameters,
 		n.protocolLatch,
 		n.waitForBlockHeight,
 	)
@@ -307,4 +325,30 @@ func (n *node) getInactivityClaimExecutor(
 	n.inactivityClaimExecutors[executorKey] = executor
 
 	return executor, true, nil
+}
+
+// groupParametersForSigners selects parameters from the registry that created
+// the wallet. Native Schnorr signer material denotes a FROST wallet; legacy
+// material denotes an ECDSA wallet. All signers in this slice belong to the
+// same wallet, so the first signer is sufficient to identify the scheme.
+func (n *node) groupParametersForSigners(
+	signers []*signer,
+) (*GroupParameters, error) {
+	if len(signers) == 0 {
+		return nil, fmt.Errorf("cannot select group parameters without signers")
+	}
+
+	if signingMaterialUsesSchnorrSignatures(signers[0].signingMaterial()) {
+		if n.frostGroupParameters == nil {
+			return nil, fmt.Errorf("FROST group parameters are not configured")
+		}
+
+		return n.frostGroupParameters, nil
+	}
+
+	if n.groupParameters == nil {
+		return nil, fmt.Errorf("ECDSA group parameters are not configured")
+	}
+
+	return n.groupParameters, nil
 }

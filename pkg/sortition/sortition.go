@@ -12,7 +12,12 @@ const (
 	DefaultStatusCheckTick = 6 * time.Hour
 )
 
-var errOperatorUnknown = fmt.Errorf("operator not registered for the staking provider, check Threshold dashboard")
+// ErrOperatorUnknown indicates the operator is not registered for a staking
+// provider in the targeted sortition pool. Callers running more than one pool
+// monitor (e.g. a legacy ECDSA pool and a FROST pool during migration) can
+// treat this as a non-fatal, per-pool condition: absence from one pool must not
+// abort monitoring of another.
+var ErrOperatorUnknown = fmt.Errorf("operator not registered for the staking provider, check Threshold dashboard")
 
 // MonitorPool periodically checks the status of the operator in the sortition
 // pool. If the operator is supposed to be in the sortition pool but is not
@@ -32,7 +37,7 @@ func MonitorPool(
 	}
 
 	if !isRegistered {
-		return errOperatorUnknown
+		return ErrOperatorUnknown
 	}
 
 	err = checkOperatorStatus(logger, chain, policy)

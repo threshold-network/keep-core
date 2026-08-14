@@ -225,6 +225,40 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: 101,
 		defaultValue:          runtime.GOMAXPROCS(0),
 	},
+	"tbtc.frostSigningBackend": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.FrostSigningBackend },
+		flagName:              "--tbtc.frostSigningBackend",
+		flagValue:             "native",
+		expectedValueFromFlag: "native",
+		defaultValue:          "",
+	},
+	"tbtc.disableLegacyECDSA": {
+		readValueFunc: func(c *config.Config) interface{} {
+			return c.Tbtc.DisableLegacyECDSA
+		},
+		flagName:              "--tbtc.disableLegacyECDSA",
+		flagValue:             "", // don't provide any value
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
+	"tbtc.disableLegacySortitionPoolMonitoring": {
+		readValueFunc: func(c *config.Config) interface{} {
+			return c.Tbtc.DisableLegacySortitionPoolMonitoring
+		},
+		flagName:              "--tbtc.disableLegacySortitionPoolMonitoring",
+		flagValue:             "", // don't provide any value
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
+	"tbtc.disableFrostSortitionPoolMonitoring": {
+		readValueFunc: func(c *config.Config) interface{} {
+			return c.Tbtc.DisableFrostSortitionPoolMonitoring
+		},
+		flagName:              "--tbtc.disableFrostSortitionPoolMonitoring",
+		flagValue:             "", // don't provide any value
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
 	"maintainer.bitcoinDifficulty": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Maintainer.BitcoinDifficulty.Enabled },
 		flagName:              "--bitcoinDifficulty",

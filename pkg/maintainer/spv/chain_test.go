@@ -57,6 +57,7 @@ type localChain struct {
 	submittedMovedFundsSweepProofs           []*submittedMovedFundsSweepProof
 	pastRedemptionRequestedEvents            map[[32]byte][]*tbtc.RedemptionRequestedEvent
 	pastDepositRevealedEvents                map[[32]byte][]*tbtc.DepositRevealedEvent
+	pastTaprootDepositRevealedEvents         map[[32]byte][]*tbtc.TaprootDepositRevealedEvent
 	pastMovingFundsCommitmentSubmittedEvents map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent
 
 	txProofDifficultyFactor *big.Int
@@ -76,6 +77,7 @@ func newLocalChain() *localChain {
 		submittedMovingFundsProofs:               make([]*submittedMovingFundsProof, 0),
 		pastRedemptionRequestedEvents:            make(map[[32]byte][]*tbtc.RedemptionRequestedEvent),
 		pastDepositRevealedEvents:                make(map[[32]byte][]*tbtc.DepositRevealedEvent),
+		pastTaprootDepositRevealedEvents:         make(map[[32]byte][]*tbtc.TaprootDepositRevealedEvent),
 		pastMovingFundsCommitmentSubmittedEvents: make(map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent),
 	}
 }
@@ -161,6 +163,28 @@ func (lc *localChain) GetWallet(walletPublicKeyHash [20]byte) (
 	}
 
 	return walletChainData, nil
+}
+
+func (lc *localChain) WalletPublicKeyHashForWalletID(
+	walletID [32]byte,
+) ([20]byte, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	for walletPublicKeyHash, walletChainData := range lc.wallets {
+		if walletChainData.WalletID == walletID ||
+			walletChainData.EcdsaWalletID == walletID {
+			return walletPublicKeyHash, nil
+		}
+	}
+
+	legacyWalletPublicKeyHash, ok :=
+		tbtc.WalletPublicKeyHashFromLegacyWalletID(walletID)
+	if ok {
+		return legacyWalletPublicKeyHash, nil
+	}
+
+	return [20]byte{}, fmt.Errorf("no wallet for given wallet ID")
 }
 
 func (lc *localChain) setWallet(
@@ -452,6 +476,40 @@ func (lc *localChain) addPastDepositRevealedEvent(
 
 	lc.pastDepositRevealedEvents[eventsKey] = append(
 		lc.pastDepositRevealedEvents[eventsKey],
+		event,
+	)
+
+	return nil
+}
+
+func (lc *localChain) PastTaprootDepositRevealedEvents(
+	filter *tbtc.DepositRevealedEventFilter,
+) ([]*tbtc.TaprootDepositRevealedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	return lc.pastTaprootDepositRevealedEvents[eventsKey], nil
+}
+
+func (lc *localChain) addPastTaprootDepositRevealedEvent(
+	filter *tbtc.DepositRevealedEventFilter,
+	event *tbtc.TaprootDepositRevealedEvent,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return err
+	}
+
+	lc.pastTaprootDepositRevealedEvents[eventsKey] = append(
+		lc.pastTaprootDepositRevealedEvents[eventsKey],
 		event,
 	)
 

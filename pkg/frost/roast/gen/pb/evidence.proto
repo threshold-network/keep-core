@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+option go_package = "./pb";
+package roast;
+
+// Evidence wire format (RFC-21 Layer B).
+//
+// The body bytes travel verbatim: a verifier checks the signature over the
+// bytes it received and only then parses them. Nothing in the evidence chain
+// is ever re-encoded, so signature validity never depends on any serializer's
+// canonical form - across protobuf library versions or across languages (the
+// Phase 7 Rust signer verifies and parses these same bytes).
+//
+// SIGNED PAYLOAD (cross-language contract). Operator and coordinator
+// signatures do NOT cover the bare body; they cover a domain-separated byte
+// stream, domain_tag || serialized body, where domain_tag is, in order: a
+// single 0x00 byte, a fixed ASCII string, and a trailing 0x00 byte. The
+// leading 0x00 is an illegal protobuf tag (field number 0), so the signed
+// payload is undecodable as any protobuf message and a signature over one body
+// type can never be accepted for another. The tag is NOT carried on the wire -
+// only the body is, in the .body field. The ASCII strings are
+// "roast/signed-evidence-snapshot/v1" (operator_signature) and
+// "roast/signed-transition-message/v1" (coordinator_signature). Any
+// implementation that signs or verifies the bare body (without the exact tag)
+// will fail to interoperate.
+
+// The evidence-snapshot body. Carried verbatim as
+// SignedLocalEvidenceSnapshot.body; the operator signature covers the
+// domain-tagged form of these bytes (domain_tag || body), not the bare bytes.
+message LocalEvidenceSnapshotBody {
+  uint32 sender_id = 1;
+  // 32-byte attempt context hash binding the evidence to one attempt.
+  bytes attempt_context_hash = 2;
+  // Sorted ascending by sender; producers emit the canonical order, and
+  // receivers validate it after signature verification.
+  repeated OverflowEntry overflows = 3;
+  // Sorted ascending by (sender, reason).
+  repeated RejectEntry rejects = 4;
+  // Sorted ascending by sender.
+  repeated ConflictEntry conflicts = 5;
+  // coordinator_package_proofs carries the coordinator-signed signing-package
+  // envelope(s) this observer accepted for the attempt - the authoritative one,
+  // plus a second body-different one if the coordinator equivocated to this
+  // observer. At most two; sorted ascending bytewise for a canonical signed body.
+  // Each entry is a serialized SignedSigningPackage and travels verbatim like the
+  // other evidence bytes. NextAttempt verifies each (coordinator signature +
+  // attempt binding), dedupes by signing-package body hash, and excludes a
+  // coordinator that signed >= 2 distinct bodies for one attempt.
+  repeated bytes coordinator_package_proofs = 6;
+}
+
+message OverflowEntry {
+  uint32 sender = 1;
+  uint64 count = 2;
+}
+
+message RejectEntry {
+  uint32 sender = 1;
+  string reason = 2;
+  uint64 count = 3;
+}
+
+message ConflictEntry {
+  uint32 sender = 1;
+  uint64 count = 2;
+}
+
+// The on-wire snapshot message: the exact serialized LocalEvidenceSnapshotBody
+// bytes plus the operator signature, which covers the domain-tagged body
+// (domain_tag || body), not the bare body field.
+message SignedLocalEvidenceSnapshot {
+  bytes body = 1;
+  bytes operator_signature = 2;
+}
+
+// The transition-message body. signed_snapshots carries each member's
+// SignedLocalEvidenceSnapshot envelope verbatim as received, so the
+// coordinator attests to the exact signed snapshots it assembled, in order,
+// and downstream verifiers re-check the operator signatures over those same
+// exact bytes. Carried verbatim as SignedTransitionMessage.body; the
+// coordinator signature covers the domain-tagged form of these bytes
+// (domain_tag || body), not the bare bytes.
+message TransitionMessageBody {
+  bytes attempt_context_hash = 1;
+  uint32 coordinator_id = 2;
+  repeated bytes signed_snapshots = 3;
+}
+
+// The on-wire transition message: the exact serialized TransitionMessageBody
+// bytes plus the coordinator signature, which covers the domain-tagged body
+// (domain_tag || body), not the bare body field.
+message SignedTransitionMessage {
+  bytes body = 1;
+  bytes coordinator_signature = 2;
+}

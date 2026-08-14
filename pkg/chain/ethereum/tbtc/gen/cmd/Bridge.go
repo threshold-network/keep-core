@@ -52,31 +52,38 @@ func init() {
 	}
 
 	BridgeCommand.AddCommand(
+		bActiveWalletIDCommand(),
 		bActiveWalletPubKeyHashCommand(),
 		bContractReferencesCommand(),
 		bDepositParametersCommand(),
 		bDepositsCommand(),
-		bFraudChallengesCommand(),
+		bEcdsaFraudRouterCommand(),
+		bEcdsaRetiredCommand(),
 		bFraudParametersCommand(),
+		bFrostLifecycleContextCommand(),
+		bGetRebateStakingCommand(),
 		bGetRedemptionWatchtowerCommand(),
 		bGovernanceCommand(),
 		bIsVaultTrustedCommand(),
 		bLiveWalletsCountCommand(),
 		bMovedFundsSweepRequestsCommand(),
 		bMovingFundsParametersCommand(),
+		bP2trFraudRouterCommand(),
 		bPendingRedemptionsCommand(),
 		bRedemptionParametersCommand(),
 		bSpentMainUTXOsCommand(),
 		bTimedOutRedemptionsCommand(),
 		bTreasuryCommand(),
 		bTxProofDifficultyFactorCommand(),
+		bWalletIDCommand(),
 		bWalletParametersCommand(),
+		bWalletPubKeyHashForWalletIDCommand(),
 		bWalletsCommand(),
-		bDefeatFraudChallengeCommand(),
-		bDefeatFraudChallengeWithHeartbeatCommand(),
-		bEcdsaWalletCreatedCallbackCommand(),
+		bWalletsByWalletIDCommand(),
 		bEcdsaWalletHeartbeatFailedCallbackCommand(),
+		bFrostWalletCreatedCallbackCommand(),
 		bInitializeCommand(),
+		bInitializeV2FixVaultZeroDepositCommand(),
 		bNotifyMovingFundsBelowDustCommand(),
 		bNotifyRedemptionVetoCommand(),
 		bNotifyWalletCloseableCommand(),
@@ -85,13 +92,20 @@ func init() {
 		bRequestNewWalletCommand(),
 		bRequestRedemptionCommand(),
 		bResetMovingFundsTimeoutCommand(),
+		bRetireEcdsaCommand(),
 		bRevealDepositCommand(),
 		bRevealDepositWithExtraDataCommand(),
+		bRevealTaprootDepositCommand(),
+		bRevealTaprootDepositWithExtraDataCommand(),
+		bSetEcdsaFraudRouterCommand(),
+		bSetFrostWalletRegistryCommand(),
+		bSetLifecycleRouterCommand(),
+		bSetP2TRFraudRouterCommand(),
+		bSetRebateStakingCommand(),
 		bSetRedemptionWatchtowerCommand(),
 		bSetSpvMaintainerStatusCommand(),
 		bSetVaultStatusCommand(),
 		bSubmitDepositSweepProofCommand(),
-		bSubmitFraudChallengeCommand(),
 		bSubmitMovedFundsSweepProofCommand(),
 		bSubmitMovingFundsProofCommand(),
 		bSubmitRedemptionProofCommand(),
@@ -108,6 +122,40 @@ func init() {
 }
 
 /// ------------------- Const methods -------------------
+
+func bActiveWalletIDCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "active-wallet-i-d",
+		Short:                 "Calls the view method activeWalletID on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bActiveWalletID,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bActiveWalletID(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	result, err := contract.ActiveWalletIDAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
 
 func bActiveWalletPubKeyHashCommand() *cobra.Command {
 	c := &cobra.Command{
@@ -254,12 +302,12 @@ func bDeposits(c *cobra.Command, args []string) error {
 	return nil
 }
 
-func bFraudChallengesCommand() *cobra.Command {
+func bEcdsaFraudRouterCommand() *cobra.Command {
 	c := &cobra.Command{
-		Use:                   "fraud-challenges [arg_challengeKey]",
-		Short:                 "Calls the view method fraudChallenges on the Bridge contract.",
-		Args:                  cmd.ArgCountChecker(1),
-		RunE:                  bFraudChallenges,
+		Use:                   "ecdsa-fraud-router",
+		Short:                 "Calls the view method ecdsaFraudRouter on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bEcdsaFraudRouter,
 		SilenceUsage:          true,
 		DisableFlagsInUseLine: true,
 	}
@@ -269,22 +317,47 @@ func bFraudChallengesCommand() *cobra.Command {
 	return c
 }
 
-func bFraudChallenges(c *cobra.Command, args []string) error {
+func bEcdsaFraudRouter(c *cobra.Command, args []string) error {
 	contract, err := initializeBridge(c)
 	if err != nil {
 		return err
 	}
 
-	arg_challengeKey, err := hexutil.DecodeBig(args[0])
+	result, err := contract.EcdsaFraudRouterAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
 	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_challengeKey, a uint256, from passed value %v",
-			args[0],
-		)
+		return err
 	}
 
-	result, err := contract.FraudChallengesAtBlock(
-		arg_challengeKey,
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func bEcdsaRetiredCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "ecdsa-retired",
+		Short:                 "Calls the view method ecdsaRetired on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bEcdsaRetired,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bEcdsaRetired(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	result, err := contract.EcdsaRetiredAtBlock(
 		cmd.BlockFlagValue.Int,
 	)
 
@@ -319,6 +392,83 @@ func bFraudParameters(c *cobra.Command, args []string) error {
 	}
 
 	result, err := contract.FraudParametersAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func bFrostLifecycleContextCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "frost-lifecycle-context [arg_walletPubKeyHash]",
+		Short:                 "Calls the view method frostLifecycleContext on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bFrostLifecycleContext,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bFrostLifecycleContext(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_walletPubKeyHash, err := decode.ParseBytes20(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_walletPubKeyHash, a bytes20, from passed value %v",
+			args[0],
+		)
+	}
+
+	result, err := contract.FrostLifecycleContextAtBlock(
+		arg_walletPubKeyHash,
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func bGetRebateStakingCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "get-rebate-staking",
+		Short:                 "Calls the view method getRebateStaking on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bGetRebateStaking,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bGetRebateStaking(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	result, err := contract.GetRebateStakingAtBlock(
 		cmd.BlockFlagValue.Int,
 	)
 
@@ -541,6 +691,40 @@ func bMovingFundsParameters(c *cobra.Command, args []string) error {
 	}
 
 	result, err := contract.MovingFundsParametersAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func bP2trFraudRouterCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "p2tr-fraud-router",
+		Short:                 "Calls the view method p2trFraudRouter on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bP2trFraudRouter,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bP2trFraudRouter(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	result, err := contract.P2trFraudRouterAtBlock(
 		cmd.BlockFlagValue.Int,
 	)
 
@@ -784,6 +968,49 @@ func bTxProofDifficultyFactor(c *cobra.Command, args []string) error {
 	return nil
 }
 
+func bWalletIDCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "wallet-i-d [arg_walletPubKeyHash]",
+		Short:                 "Calls the view method walletID on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bWalletID,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bWalletID(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_walletPubKeyHash, err := decode.ParseBytes20(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_walletPubKeyHash, a bytes20, from passed value %v",
+			args[0],
+		)
+	}
+
+	result, err := contract.WalletIDAtBlock(
+		arg_walletPubKeyHash,
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
 func bWalletParametersCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "wallet-parameters",
@@ -806,6 +1033,49 @@ func bWalletParameters(c *cobra.Command, args []string) error {
 	}
 
 	result, err := contract.WalletParametersAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func bWalletPubKeyHashForWalletIDCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "wallet-pub-key-hash-for-wallet-i-d [arg_walletId]",
+		Short:                 "Calls the view method walletPubKeyHashForWalletID on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bWalletPubKeyHashForWalletID,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bWalletPubKeyHashForWalletID(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_walletId, err := decode.ParseBytes32(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_walletId, a bytes32, from passed value %v",
+			args[0],
+		)
+	}
+
+	result, err := contract.WalletPubKeyHashForWalletIDAtBlock(
+		arg_walletId,
 		cmd.BlockFlagValue.Int,
 	)
 
@@ -861,247 +1131,50 @@ func bWallets(c *cobra.Command, args []string) error {
 	return nil
 }
 
+func bWalletsByWalletIDCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "wallets-by-wallet-i-d [arg_walletId]",
+		Short:                 "Calls the view method walletsByWalletID on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bWalletsByWalletID,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bWalletsByWalletID(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_walletId, err := decode.ParseBytes32(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_walletId, a bytes32, from passed value %v",
+			args[0],
+		)
+	}
+
+	result, err := contract.WalletsByWalletIDAtBlock(
+		arg_walletId,
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
 /// ------------------- Non-const methods -------------------
-
-func bDefeatFraudChallengeCommand() *cobra.Command {
-	c := &cobra.Command{
-		Use:                   "defeat-fraud-challenge [arg_walletPublicKey] [arg_preimage] [arg_witness]",
-		Short:                 "Calls the nonpayable method defeatFraudChallenge on the Bridge contract.",
-		Args:                  cmd.ArgCountChecker(3),
-		RunE:                  bDefeatFraudChallenge,
-		SilenceUsage:          true,
-		DisableFlagsInUseLine: true,
-	}
-
-	c.PreRunE = cmd.NonConstArgsChecker
-	cmd.InitNonConstFlags(c)
-
-	return c
-}
-
-func bDefeatFraudChallenge(c *cobra.Command, args []string) error {
-	contract, err := initializeBridge(c)
-	if err != nil {
-		return err
-	}
-
-	arg_walletPublicKey, err := hexutil.Decode(args[0])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_walletPublicKey, a bytes, from passed value %v",
-			args[0],
-		)
-	}
-	arg_preimage, err := hexutil.Decode(args[1])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_preimage, a bytes, from passed value %v",
-			args[1],
-		)
-	}
-	arg_witness, err := strconv.ParseBool(args[2])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_witness, a bool, from passed value %v",
-			args[2],
-		)
-	}
-
-	var (
-		transaction *types.Transaction
-	)
-
-	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
-		// Do a regular submission. Take payable into account.
-		transaction, err = contract.DefeatFraudChallenge(
-			arg_walletPublicKey,
-			arg_preimage,
-			arg_witness,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput(transaction.Hash())
-	} else {
-		// Do a call.
-		err = contract.CallDefeatFraudChallenge(
-			arg_walletPublicKey,
-			arg_preimage,
-			arg_witness,
-			cmd.BlockFlagValue.Int,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput("success")
-
-		cmd.PrintOutput(
-			"the transaction was not submitted to the chain; " +
-				"please add the `--submit` flag",
-		)
-	}
-
-	return nil
-}
-
-func bDefeatFraudChallengeWithHeartbeatCommand() *cobra.Command {
-	c := &cobra.Command{
-		Use:                   "defeat-fraud-challenge-with-heartbeat [arg_walletPublicKey] [arg_heartbeatMessage]",
-		Short:                 "Calls the nonpayable method defeatFraudChallengeWithHeartbeat on the Bridge contract.",
-		Args:                  cmd.ArgCountChecker(2),
-		RunE:                  bDefeatFraudChallengeWithHeartbeat,
-		SilenceUsage:          true,
-		DisableFlagsInUseLine: true,
-	}
-
-	c.PreRunE = cmd.NonConstArgsChecker
-	cmd.InitNonConstFlags(c)
-
-	return c
-}
-
-func bDefeatFraudChallengeWithHeartbeat(c *cobra.Command, args []string) error {
-	contract, err := initializeBridge(c)
-	if err != nil {
-		return err
-	}
-
-	arg_walletPublicKey, err := hexutil.Decode(args[0])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_walletPublicKey, a bytes, from passed value %v",
-			args[0],
-		)
-	}
-	arg_heartbeatMessage, err := hexutil.Decode(args[1])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_heartbeatMessage, a bytes, from passed value %v",
-			args[1],
-		)
-	}
-
-	var (
-		transaction *types.Transaction
-	)
-
-	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
-		// Do a regular submission. Take payable into account.
-		transaction, err = contract.DefeatFraudChallengeWithHeartbeat(
-			arg_walletPublicKey,
-			arg_heartbeatMessage,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput(transaction.Hash())
-	} else {
-		// Do a call.
-		err = contract.CallDefeatFraudChallengeWithHeartbeat(
-			arg_walletPublicKey,
-			arg_heartbeatMessage,
-			cmd.BlockFlagValue.Int,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput("success")
-
-		cmd.PrintOutput(
-			"the transaction was not submitted to the chain; " +
-				"please add the `--submit` flag",
-		)
-	}
-
-	return nil
-}
-
-func bEcdsaWalletCreatedCallbackCommand() *cobra.Command {
-	c := &cobra.Command{
-		Use:                   "ecdsa-wallet-created-callback [arg_ecdsaWalletID] [arg_publicKeyX] [arg_publicKeyY]",
-		Short:                 "Calls the nonpayable method ecdsaWalletCreatedCallback on the Bridge contract.",
-		Args:                  cmd.ArgCountChecker(3),
-		RunE:                  bEcdsaWalletCreatedCallback,
-		SilenceUsage:          true,
-		DisableFlagsInUseLine: true,
-	}
-
-	c.PreRunE = cmd.NonConstArgsChecker
-	cmd.InitNonConstFlags(c)
-
-	return c
-}
-
-func bEcdsaWalletCreatedCallback(c *cobra.Command, args []string) error {
-	contract, err := initializeBridge(c)
-	if err != nil {
-		return err
-	}
-
-	arg_ecdsaWalletID, err := decode.ParseBytes32(args[0])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_ecdsaWalletID, a bytes32, from passed value %v",
-			args[0],
-		)
-	}
-	arg_publicKeyX, err := decode.ParseBytes32(args[1])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_publicKeyX, a bytes32, from passed value %v",
-			args[1],
-		)
-	}
-	arg_publicKeyY, err := decode.ParseBytes32(args[2])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_publicKeyY, a bytes32, from passed value %v",
-			args[2],
-		)
-	}
-
-	var (
-		transaction *types.Transaction
-	)
-
-	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
-		// Do a regular submission. Take payable into account.
-		transaction, err = contract.EcdsaWalletCreatedCallback(
-			arg_ecdsaWalletID,
-			arg_publicKeyX,
-			arg_publicKeyY,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput(transaction.Hash())
-	} else {
-		// Do a call.
-		err = contract.CallEcdsaWalletCreatedCallback(
-			arg_ecdsaWalletID,
-			arg_publicKeyX,
-			arg_publicKeyY,
-			cmd.BlockFlagValue.Int,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput("success")
-
-		cmd.PrintOutput(
-			"the transaction was not submitted to the chain; " +
-				"please add the `--submit` flag",
-		)
-	}
-
-	return nil
-}
 
 func bEcdsaWalletHeartbeatFailedCallbackCommand() *cobra.Command {
 	c := &cobra.Command{
@@ -1169,6 +1242,71 @@ func bEcdsaWalletHeartbeatFailedCallback(c *cobra.Command, args []string) error 
 			arg0,
 			arg_publicKeyX,
 			arg_publicKeyY,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bFrostWalletCreatedCallbackCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "frost-wallet-created-callback [arg_xOnlyOutputKey]",
+		Short:                 "Calls the nonpayable method frostWalletCreatedCallback on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bFrostWalletCreatedCallback,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bFrostWalletCreatedCallback(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_xOnlyOutputKey, err := decode.ParseBytes32(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_xOnlyOutputKey, a bytes32, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.FrostWalletCreatedCallback(
+			arg_xOnlyOutputKey,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallFrostWalletCreatedCallback(
+			arg_xOnlyOutputKey,
 			cmd.BlockFlagValue.Int,
 		)
 		if err != nil {
@@ -1279,6 +1417,60 @@ func bInitialize(c *cobra.Command, args []string) error {
 			arg__ecdsaWalletRegistry,
 			arg__reimbursementPool,
 			arg__txProofDifficultyFactor,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bInitializeV2FixVaultZeroDepositCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "initialize-v2-fix-vault-zero-deposit",
+		Short:                 "Calls the nonpayable method initializeV2FixVaultZeroDeposit on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bInitializeV2FixVaultZeroDeposit,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bInitializeV2FixVaultZeroDeposit(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.InitializeV2FixVaultZeroDeposit()
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallInitializeV2FixVaultZeroDeposit(
 			cmd.BlockFlagValue.Int,
 		)
 		if err != nil {
@@ -1879,6 +2071,60 @@ func bResetMovingFundsTimeout(c *cobra.Command, args []string) error {
 	return nil
 }
 
+func bRetireEcdsaCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "retire-ecdsa",
+		Short:                 "Calls the nonpayable method retireEcdsa on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bRetireEcdsa,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bRetireEcdsa(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.RetireEcdsa()
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallRetireEcdsa(
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
 func bRevealDepositCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "reveal-deposit [arg_fundingTx_json] [arg_reveal_json]",
@@ -2009,6 +2255,478 @@ func bRevealDepositWithExtraData(c *cobra.Command, args []string) error {
 			arg_fundingTx_json,
 			arg_reveal_json,
 			arg_extraData,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bRevealTaprootDepositCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "reveal-taproot-deposit [arg_fundingTx_json] [arg_reveal_json]",
+		Short:                 "Calls the nonpayable method revealTaprootDeposit on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(2),
+		RunE:                  bRevealTaprootDeposit,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bRevealTaprootDeposit(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_fundingTx_json := abi.BitcoinTxInfo{}
+	if err := json.Unmarshal([]byte(args[0]), &arg_fundingTx_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_fundingTx_json to abi.BitcoinTxInfo: %w", err)
+	}
+
+	arg_reveal_json := abi.DepositTaprootDepositRevealInfo{}
+	if err := json.Unmarshal([]byte(args[1]), &arg_reveal_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_reveal_json to abi.DepositTaprootDepositRevealInfo: %w", err)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.RevealTaprootDeposit(
+			arg_fundingTx_json,
+			arg_reveal_json,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallRevealTaprootDeposit(
+			arg_fundingTx_json,
+			arg_reveal_json,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bRevealTaprootDepositWithExtraDataCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "reveal-taproot-deposit-with-extra-data [arg_fundingTx_json] [arg_reveal_json] [arg_extraData]",
+		Short:                 "Calls the nonpayable method revealTaprootDepositWithExtraData on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(3),
+		RunE:                  bRevealTaprootDepositWithExtraData,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bRevealTaprootDepositWithExtraData(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_fundingTx_json := abi.BitcoinTxInfo{}
+	if err := json.Unmarshal([]byte(args[0]), &arg_fundingTx_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_fundingTx_json to abi.BitcoinTxInfo: %w", err)
+	}
+
+	arg_reveal_json := abi.DepositTaprootDepositRevealInfo{}
+	if err := json.Unmarshal([]byte(args[1]), &arg_reveal_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_reveal_json to abi.DepositTaprootDepositRevealInfo: %w", err)
+	}
+	arg_extraData, err := decode.ParseBytes32(args[2])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_extraData, a bytes32, from passed value %v",
+			args[2],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.RevealTaprootDepositWithExtraData(
+			arg_fundingTx_json,
+			arg_reveal_json,
+			arg_extraData,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallRevealTaprootDepositWithExtraData(
+			arg_fundingTx_json,
+			arg_reveal_json,
+			arg_extraData,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bSetEcdsaFraudRouterCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "set-ecdsa-fraud-router [arg_ecdsaFraudRouter]",
+		Short:                 "Calls the nonpayable method setEcdsaFraudRouter on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bSetEcdsaFraudRouter,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bSetEcdsaFraudRouter(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_ecdsaFraudRouter, err := chainutil.AddressFromHex(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_ecdsaFraudRouter, a address, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.SetEcdsaFraudRouter(
+			arg_ecdsaFraudRouter,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallSetEcdsaFraudRouter(
+			arg_ecdsaFraudRouter,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bSetFrostWalletRegistryCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "set-frost-wallet-registry [arg_frostWalletRegistry]",
+		Short:                 "Calls the nonpayable method setFrostWalletRegistry on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bSetFrostWalletRegistry,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bSetFrostWalletRegistry(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_frostWalletRegistry, err := chainutil.AddressFromHex(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_frostWalletRegistry, a address, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.SetFrostWalletRegistry(
+			arg_frostWalletRegistry,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallSetFrostWalletRegistry(
+			arg_frostWalletRegistry,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bSetLifecycleRouterCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "set-lifecycle-router [arg_lifecycleRouter]",
+		Short:                 "Calls the nonpayable method setLifecycleRouter on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bSetLifecycleRouter,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bSetLifecycleRouter(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_lifecycleRouter, err := chainutil.AddressFromHex(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_lifecycleRouter, a address, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.SetLifecycleRouter(
+			arg_lifecycleRouter,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallSetLifecycleRouter(
+			arg_lifecycleRouter,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bSetP2TRFraudRouterCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "set-p2-t-r-fraud-router [arg_p2trFraudRouter]",
+		Short:                 "Calls the nonpayable method setP2TRFraudRouter on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bSetP2TRFraudRouter,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bSetP2TRFraudRouter(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_p2trFraudRouter, err := chainutil.AddressFromHex(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_p2trFraudRouter, a address, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.SetP2TRFraudRouter(
+			arg_p2trFraudRouter,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallSetP2TRFraudRouter(
+			arg_p2trFraudRouter,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bSetRebateStakingCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "set-rebate-staking [arg_rebateStaking]",
+		Short:                 "Calls the nonpayable method setRebateStaking on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bSetRebateStaking,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bSetRebateStaking(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_rebateStaking, err := chainutil.AddressFromHex(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_rebateStaking, a address, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.SetRebateStaking(
+			arg_rebateStaking,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallSetRebateStaking(
+			arg_rebateStaking,
 			cmd.BlockFlagValue.Int,
 		)
 		if err != nil {
@@ -2307,87 +3025,6 @@ func bSubmitDepositSweepProof(c *cobra.Command, args []string) error {
 			arg_sweepProof_json,
 			arg_mainUtxo_json,
 			arg_vault,
-			cmd.BlockFlagValue.Int,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput("success")
-
-		cmd.PrintOutput(
-			"the transaction was not submitted to the chain; " +
-				"please add the `--submit` flag",
-		)
-	}
-
-	return nil
-}
-
-func bSubmitFraudChallengeCommand() *cobra.Command {
-	c := &cobra.Command{
-		Use:                   "submit-fraud-challenge [arg_walletPublicKey] [arg_preimageSha256] [arg_signature_json]",
-		Short:                 "Calls the payable method submitFraudChallenge on the Bridge contract.",
-		Args:                  cmd.ArgCountChecker(3),
-		RunE:                  bSubmitFraudChallenge,
-		SilenceUsage:          true,
-		DisableFlagsInUseLine: true,
-	}
-
-	c.PreRunE = cmd.NonConstArgsChecker
-	cmd.InitNonConstFlags(c)
-
-	return c
-}
-
-func bSubmitFraudChallenge(c *cobra.Command, args []string) error {
-	contract, err := initializeBridge(c)
-	if err != nil {
-		return err
-	}
-
-	arg_walletPublicKey, err := hexutil.Decode(args[0])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_walletPublicKey, a bytes, from passed value %v",
-			args[0],
-		)
-	}
-	arg_preimageSha256, err := hexutil.Decode(args[1])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_preimageSha256, a bytes, from passed value %v",
-			args[1],
-		)
-	}
-
-	arg_signature_json := abi.BitcoinTxRSVSignature{}
-	if err := json.Unmarshal([]byte(args[2]), &arg_signature_json); err != nil {
-		return fmt.Errorf("failed to unmarshal arg_signature_json to abi.BitcoinTxRSVSignature: %w", err)
-	}
-
-	var (
-		transaction *types.Transaction
-	)
-
-	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
-		// Do a regular submission. Take payable into account.
-		transaction, err = contract.SubmitFraudChallenge(
-			arg_walletPublicKey,
-			arg_preimageSha256,
-			arg_signature_json,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput(transaction.Hash())
-	} else {
-		// Do a call.
-		err = contract.CallSubmitFraudChallenge(
-			arg_walletPublicKey,
-			arg_preimageSha256,
-			arg_signature_json,
 			cmd.BlockFlagValue.Int,
 		)
 		if err != nil {

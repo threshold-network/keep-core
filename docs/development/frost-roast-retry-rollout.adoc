@@ -1,0 +1,236 @@
+= FROST/ROAST Retry Rollout Guide
+
+*Author:* Threshold Labs
+*Status:* Draft
+*Date:* 2026-05-23
+
+== Summary
+
+This document describes the operational lifecycle of the
+ROAST-driven retry path introduced by RFC-21
+(`docs/rfc/rfc-21-roast-coordinator-retry-and-transition-evidence.adoc`)
+and implemented across Phases 1-7 of that RFC. It is intended for
+node operators and release engineers planning a rollout of the new
+retry semantics.
+
+The feature ships as a build-tagged code path. A production
+binary built without the tag contains *no ROAST retry code*;
+every signing flow uses the pre-RFC-21 legacy retry shuffle. A
+binary built with the tag still executes the legacy path unless
+the operator explicitly opts in via an environment variable, and
+even then the new path silently falls back to legacy whenever its
+preconditions are not met.
+
+== Activation prerequisites
+
+All three must be true at the same time for the ROAST retry path
+to influence participant selection on a given session attempt:
+
+. *Build tag set.* The keep-core binary is built with
+  `-tags frost_roast_retry`. Without the tag, the dispatcher
+  package does not include the ROAST selector at all.
+. *Operator opt-in env var.* The runtime environment defines
+  `KEEP_CORE_FROST_ROAST_RETRY_ENABLED=true` (case-insensitive,
+  whitespace-trimmed). The variable is read per call (not
+  cached), so an operator can flip the switch during a debugging
+  session without restarting the node.
+. *Coordinator registered.* A caller has invoked
+  `signing.RegisterRoastRetryCoordinator(deps)` at process
+  startup with the node's operator-key signer, the network's
+  signature verifier, and the node's member index.
+
+When any of these is missing, the receive loops, executor
+adapter, and signing-loop selector all behave as in the legacy
+pre-RFC-21 path. The behavioural rollback is therefore *configuration-
+only*: toggle the env var off and the next signing attempt uses
+the legacy retry shuffle.
+
+=== One env var can terminate an untagged binary
+
+The rollback story above covers `KEEP_CORE_FROST_ROAST_RETRY_ENABLED`
+only. `TBTC_SIGNER_INIT_CONFIG_PATH` is different in kind: setting it is
+read as an explicit *demand* for config-mode FROST operation, and any
+state in which the demand cannot be met is process-fatal rather than a
+degrade-to-legacy warning. That includes a binary built without the
+`frost_native` build tag, which cannot honor the demand at all
+(`pkg/frost/signing/native_init_config_demand.go`).
+
+So a node that would otherwise run the legacy path untouched will refuse
+to start if this variable is set and the binary is untagged, the config
+file is unreadable, or engine registration failed. Operators rolling out
+across a mixed fleet must set it only on `frost_native` binaries. It is
+deliberately unconditional on the configured profile: an unreadable
+config file cannot reveal its profile, and the signer treats a missing
+profile as production, so enforcing whenever the path is set is the only
+non-circular rule. Unsetting it restores the transitional env-fallback
+mode.
+
+== Behavioural matrix
+
+[options="header"]
+|===
+| Build tag | Env var | Registry | Bundle present | Behaviour
+| not set   | _any_   | _any_     | _any_          | Legacy retry shuffle
+| set       | unset   | _any_     | _any_          | Legacy retry shuffle (env-var gate)
+| set       | true    | empty     | _any_          | Legacy retry shuffle (no coordinator)
+| set       | true    | populated | absent         | Legacy retry shuffle (first attempt / no transition yet)
+| set       | true    | populated | present        | ROAST `EvaluateRoastRetryForSigning`
+|===
+
+The bundle is "present" once the elected coordinator's node has
+produced a `TransitionMessage` at the end of a prior attempt
+(see Phase 7.1 in RFC-21). Until that happens, the ROAST path is
+dormant and the legacy path provides liveness.
+
+== Error handling discipline
+
+The orchestration layer distinguishes two error classes:
+
+* *Static-configuration errors.* Env var unset, no coordinator
+  registered, signer-material format not extractable. These are
+  deterministic per deployment configuration: every honest signer
+  observes the same outcome. Logged at INFO, signing flow
+  continues with the legacy retry shuffle.
+
+* *Runtime state-machine errors.* `Coordinator.BeginAttempt`
+  failures, internal invariant violations,
+  `ErrAttemptInfeasible` from the policy's threshold floor. These
+  are non-deterministic across nodes. Treated as *hard failures*:
+  the session is declared failed and the operator is notified
+  via the standard signing-failure log path. Falling back to
+  legacy on these errors would let one node use legacy retry
+  while another uses ROAST, which would split the signing group
+  on `NextAttempt` agreement.
+
+This discipline is the load-bearing safety property of the
+RFC-21 design and is enforced in
+`pkg/frost/signing/roast_retry_executor_entry_frost_native.go`.
+
+== Production rollout sequencing
+
+. *Build the binary with the tag.* CI exercises the tagged path on
+  every pull request that touches Go, so the ROAST retry flow cannot
+  silently rot:
++
+--
+* The `client-frost-roast-retry` job in `.github/workflows/client.yml`
+  compiles the coordinator flow with cgo disabled
+  (`go build -tags "frost_roast_retry" ./...` and
+  `go build -tags "frost_native frost_roast_retry" ./...`) and runs the
+  tagged unit tests under the three non-cgo tag sets that cover the
+  matrix — `frost_native`, `frost_roast_retry`, and
+  `frost_native frost_roast_retry` — via
+  `go test -tags "<set>" ./pkg/frost/... ./pkg/tbtc/...` against the
+  mock FFI (no `libfrost_tbtc` required).
+* `.github/workflows/frost-cgo-integration.yml` adds `frost_roast_retry`
+  to its real-crypto cgo tag set, runs the whole tagged
+  `./pkg/frost/signing/` suite against the linked `libfrost_tbtc` with
+  skips forbidden, and smoke-builds the activation artifact via
+  `make build-frost`.
+--
++
+Production binaries are produced with `make build-frost` (tags
+  `frost_native frost_tbtc_signer frost_roast_retry`, cgo-linked against
+  `libfrost_tbtc`); the default `make build` still ships the
+  `!frost_roast_retry` no-op stubs. Production adopts the tagged build
+  once the readiness manifest at
+  `docs/development/frost-readiness-manifest.adoc` flips to
+  `present`. (The manifest was originally planned for the tBTC
+  monorepo's `docs/operations/` directory; the monorepo signer is
+  retired and keep-core is canonical, so the manifest lives in this
+  repository.)
+. *Verify FROST/UniFFI V1 migration.* The DKG-pubkey extraction
+  helper rejects FrostUniFFIV1 signer material. The Phase 7
+  manifest flip is gated on verified migration off V1 across
+  production signers; until that migration completes, ROAST
+  retry would silently fall back to legacy on V1-bearing nodes.
+. *Stage operator opt-in.* Operators set
+  `KEEP_CORE_FROST_ROAST_RETRY_ENABLED=true` on a subset of nodes
+  first. Static-configuration fallback guarantees mixed-state
+  deployments stay correct: nodes without the env var simply use
+  legacy. Beware: a node with the env var set but no registered
+  coordinator (e.g., due to a misconfigured startup script) still
+  uses legacy, so the safety property holds.
+. *Monitor for runtime hard-failures.* The "ROAST orchestration"
+  log lines under
+  `keep-frost-roast-orchestration` and
+  `keep-frost-roast-retry` loggers indicate transitions of the
+  new state machine. A spike in WARN/ERROR entries from these
+  loggers is the early signal of trouble.
+. *Roll back via env var.* If anything misbehaves, unset
+  `KEEP_CORE_FROST_ROAST_RETRY_ENABLED` and restart (or wait for
+  the per-call check to flip the next attempt). The legacy code
+  paths are retained through Phase 6 and 7 deliberately to make
+  this rollback bit-for-bit safe.
+
+== Interim liveness alerting (RFC-21 Annex B)
+
+Until Phase-7 t-of-included finalize removes the per-attempt veto,
+the serial retry loop's liveness envelope assumes `f <= 2` byzantine
+members (see RFC-21 Annex B for the sampling arithmetic). The node
+exports three gauges via the `/metrics` endpoint implementing the
+annex's required alerting. The names below are the exported series
+names: the metrics registry prepends the `performance_` application
+prefix to every gauge it registers, so alert queries must use the
+prefixed form.
+
+[cols="2,3"]
+|===
+| Exported gauge | Meaning
+
+| `performance_signing_attempt_rolling_success_rate`
+| Per-attempt success rate over the last 50 terminal attempt
+  outcomes observed by this node (all wallets aggregated; one
+  observation per network-wide attempt).
+
+| `performance_signing_attempt_rolling_sample_count`
+| Number of outcomes currently in the rolling window (caps at 50).
+
+| `performance_signing_attempt_implied_f_alert`
+| `1` when the window is full and the success rate is below `0.14` -
+  observed failure rates imply `f >= 3` behaviour under the Annex B
+  model. Alert on this value being sustained, not on a single
+  scrape: the window slides per attempt, so consecutive scrapes are
+  correlated.
+|===
+
+For independent full windows the default threshold false-alarms on
+roughly 4% of windows at a true `f = 2` and detects roughly 64% of
+windows at `f = 3` (97% at `f >= 4`; the staggered-silence profile
+that fails attempts deterministically is detected with certainty).
+Benign attempt failures (network flakes, restarts) depress the rate
+below the model's prediction, so once the Phase 5 baseline
+calibration worksheet records the benign failure rate, revisit the
+threshold (`SigningLivenessAlertSuccessRateThreshold` in
+`pkg/clientinfo/signing_liveness.go`). The alert is advisory: its
+operational response is the Annex B escalation path (investigate
+member inactivity, operator-inactivity claims, wallet retirement),
+not an automatic rollback.
+
+== FROST DKG digest format coupling
+
+The FROST DKG result digest is a cross-repo wire-format contract
+shared by keep-core, the tBTC TypeScript test vectors, and the
+on-chain `FrostDkgValidator.resultDigest(...)` implementation.
+The current tag is `tbtc-frost-dkg-result-v1`.
+
+Treat that string, the ABI field order, and the field types as a
+single coupled interface. A future wire-format migration, for
+example changing the digest fields or their order, must update
+keep-core, the tBTC fixture/emitter, and the on-chain validator
+together. Do not change the string on one side as an isolated
+cleanup.
+
+== Cross-references
+
+* RFC-21: `docs/rfc/rfc-21-roast-coordinator-retry-and-transition-evidence.adoc`
+* Readiness manifest: `docs/development/frost-readiness-manifest.adoc`
+* Build-tag scaffolding: `pkg/frost/signing/roast_retry_registration_*.go`
+* Orchestration entry point: `pkg/frost/signing/roast_retry_orchestration.go`
+* Executor-adapter wiring: `pkg/frost/signing/native_ffi_executor_adapter.go`
+* Signing-loop dispatcher: `pkg/tbtc/signing_loop_roast_dispatcher.go`
+* ROAST-driven selector: `pkg/tbtc/signing_loop_selector_frost_roast_retry.go`
+* Bundle registry: `pkg/frost/signing/roast_retry_bundle_registry_*.go`
+* Readiness env var: `pkg/frost/signing/roast_retry_readiness.go`
+* Coordinator state machine: `pkg/frost/roast/coordinator_state.go`
+* Adapter type: `pkg/frost/roast/signing_retry_adapter.go`

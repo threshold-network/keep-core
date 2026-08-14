@@ -1,6 +1,7 @@
 package tbtcpg_test
 
 import (
+	"math/big"
 	"reflect"
 	"testing"
 	"time"
@@ -185,6 +186,85 @@ func TestDepositSweepTask_FindDepositsToSweep_UnderflowGuard(t *testing.T) {
 
 	if deposits[0].FundingTxHash != fundingTxHash {
 		t.Errorf("unexpected funding tx hash")
+	}
+}
+
+func TestDepositSweepTask_FindDepositsToSweep_UsesChainTimestamp(t *testing.T) {
+	currentBlock := uint64(100000)
+	chainNow := time.Now().Add(3 * time.Hour)
+
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+
+	tbtcChain.SetCurrentBlockTimestamp(chainNow)
+	tbtcChain.SetDepositMinAge(3600)
+
+	fundingTxHash := hashFromString(
+		"f7fc639dd598e70a423fd28d39ca2f2d01e93523b847f601b78ac5a2b6da51da",
+	)
+
+	tbtcChain.SetDepositRequest(
+		fundingTxHash,
+		uint32(1),
+		&tbtc.DepositChainRequest{
+			// This timestamp is deliberately in the future compared to the
+			// host clock, but mature compared to the chain clock.
+			RevealedAt: chainNow.Add(-2 * time.Hour),
+			SweptAt:    time.Unix(0, 0),
+		},
+	)
+
+	btcChain.SetTransaction(fundingTxHash, &bitcoin.Transaction{})
+	btcChain.SetTransactionConfirmations(
+		fundingTxHash,
+		tbtc.DepositSweepRequiredFundingTxConfirmations,
+	)
+
+	err := tbtcChain.AddPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{
+			StartBlock:          0,
+			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+		&tbtc.DepositRevealedEvent{
+			BlockNumber:         90000,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			FundingTxHash:       fundingTxHash,
+			FundingOutputIndex:  1,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+
+	deposits, err := task.FindDepositsToSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		5,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(deposits) != 1 {
+		t.Fatalf("expected 1 deposit, got %d", len(deposits))
+	}
+
+	if deposits[0].FundingTxHash != fundingTxHash {
+		t.Errorf("unexpected funding tx hash")
+	}
+
+	if deposits[0].FundingOutputIndex != 1 {
+		t.Errorf("unexpected funding output index")
 	}
 }
 
@@ -379,6 +459,209 @@ func TestDepositSweepTask_ProposeDepositsSweep(t *testing.T) {
 	}
 }
 
+func TestDepositSweepTask_TaprootMarkerControlsFirstSweepFeeEstimation(t *testing.T) {
+	currentBlock := uint64(300000)
+	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
+	revealBlock := uint64(290000)
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+	tbtcChain.SetDepositMinAge(3600)
+	tbtcChain.SetDepositParameters(0, 0, 2500, 0)
+	tbtcChain.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{})
+	btcChain.SetEstimateSatPerVByteFee(1, 20)
+
+	fundingTxHash := setupVaultGroupingDeposit(
+		t,
+		tbtcChain,
+		btcChain,
+		walletPublicKeyHash,
+		filterStartBlock,
+		"7711111111111111111111111111111111111111111111111111111111111111",
+		0,
+		revealBlock,
+		nil,
+	)
+
+	legacyEvent := &tbtc.DepositRevealedEvent{
+		BlockNumber:         revealBlock,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		FundingTxHash:       fundingTxHash,
+		FundingOutputIndex:  0,
+	}
+	taprootEvent := &tbtc.TaprootDepositRevealedEvent{
+		BlockNumber:         revealBlock,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		FundingTxHash:       fundingTxHash,
+		FundingOutputIndex:  0,
+	}
+
+	broadFilter := &tbtc.DepositRevealedEventFilter{
+		StartBlock:          filterStartBlock,
+		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	}
+	if err := tbtcChain.AddPastTaprootDepositRevealedEvent(
+		broadFilter,
+		taprootEvent,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+	deposits, err := task.FindDepositsToSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deposits) != 1 {
+		t.Fatalf("expected one deposit, got [%d]", len(deposits))
+	}
+	if !deposits[0].IsTaproot {
+		t.Fatal("Taproot marker was lost while building the deposit reference")
+	}
+
+	// With no main UTXO, the first-sweep P2TR shape is 111 vbytes. Its raw fee
+	// is 2220 sats at 20 sat/vbyte; the 25% safety buffer reaches 2775 sats and
+	// is bounded to the 2500-sat per-deposit maximum. Including a nonexistent
+	// P2TR main-UTXO input would make even the raw fee exceed that maximum.
+	expectedProposal := &tbtc.DepositSweepProposal{
+		DepositsKeys: []struct {
+			FundingTxHash      bitcoin.Hash
+			FundingOutputIndex uint32
+		}{
+			{
+				FundingTxHash:      fundingTxHash,
+				FundingOutputIndex: 0,
+			},
+		},
+		SweepTxFee:           big.NewInt(2500),
+		DepositsRevealBlocks: []*big.Int{big.NewInt(int64(revealBlock))},
+	}
+
+	exactFilter := &tbtc.DepositRevealedEventFilter{
+		StartBlock:          revealBlock,
+		EndBlock:            &revealBlock,
+		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	}
+	if err := tbtcChain.AddPastDepositRevealedEvent(
+		exactFilter,
+		legacyEvent,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tbtcChain.AddPastTaprootDepositRevealedEvent(
+		exactFilter,
+		taprootEvent,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tbtcChain.SetDepositSweepProposalValidationResult(
+		walletPublicKeyHash,
+		expectedProposal,
+		nil,
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err := task.ProposeDepositsSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		deposits,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(expectedProposal, proposal); diff != nil {
+		t.Errorf("invalid Taproot deposit sweep proposal: %v", diff)
+	}
+
+	// An existing main UTXO adds a second P2TR input to the sweep. Its raw fee is
+	// 3380 sats at 20 sat/vbyte; the buffered fee is bounded to the configured
+	// 4000-sat maximum. This exercises the hasMainUtxo fee-estimation branch
+	// rather than just snapshot propagation.
+	mainUtxoHash := [32]byte{0xaa, 0xbb, 0xcc}
+	tbtcChain.SetWallet(
+		walletPublicKeyHash,
+		&tbtc.WalletChainData{MainUtxoHash: mainUtxoHash},
+	)
+	tbtcChain.SetDepositParameters(0, 0, 4000, 0)
+	expectedEstimatedProposalWithMainUtxo := &tbtc.DepositSweepProposal{
+		DepositsKeys:         expectedProposal.DepositsKeys,
+		SweepTxFee:           big.NewInt(4000),
+		DepositsRevealBlocks: expectedProposal.DepositsRevealBlocks,
+		MainUtxoHash:         mainUtxoHash,
+	}
+	if err := tbtcChain.SetDepositSweepProposalValidationResult(
+		walletPublicKeyHash,
+		expectedEstimatedProposalWithMainUtxo,
+		nil,
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err = task.ProposeDepositsSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		deposits,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.SweepTxFee.Cmp(expectedEstimatedProposalWithMainUtxo.SweepTxFee) != 0 {
+		t.Fatalf(
+			"unexpected Taproot sweep fee with main UTXO\nexpected: [%v]\nactual:   [%v]",
+			expectedEstimatedProposalWithMainUtxo.SweepTxFee,
+			proposal.SweepTxFee,
+		)
+	}
+	if diff := deep.Equal(expectedEstimatedProposalWithMainUtxo, proposal); diff != nil {
+		t.Errorf("invalid Taproot sweep proposal with main UTXO: %v", diff)
+	}
+
+	// Even when the fee is supplied explicitly, capture the main UTXO state
+	// that execution must revalidate before signing.
+	expectedProposalWithMainUtxo := &tbtc.DepositSweepProposal{
+		DepositsKeys:         expectedProposal.DepositsKeys,
+		SweepTxFee:           big.NewInt(2000),
+		DepositsRevealBlocks: expectedProposal.DepositsRevealBlocks,
+		MainUtxoHash:         mainUtxoHash,
+	}
+	if err := tbtcChain.SetDepositSweepProposalValidationResult(
+		walletPublicKeyHash,
+		expectedProposalWithMainUtxo,
+		nil,
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err = task.ProposeDepositsSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		deposits,
+		2000,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(expectedProposalWithMainUtxo, proposal); diff != nil {
+		t.Errorf("invalid Taproot main UTXO snapshot: %v", diff)
+	}
+}
+
 // setupVaultGroupingDeposit registers a single deposit in the mock chains
 // with the given vault and returns the funding tx hash used.
 func setupVaultGroupingDeposit(
@@ -550,6 +833,109 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 					"expected vault %s, got %s",
 					string(vaultA),
 					string(*d.Vault),
+				)
+			}
+		}
+	})
+
+	t.Run("taproot compatibility reveals deduplicated before grouping", func(t *testing.T) {
+		tbtcChain := tbtcpg.NewLocalChain()
+		btcChain := tbtcpg.NewLocalBitcoinChain()
+
+		blockCounter := tbtcpg.NewMockBlockCounter()
+		blockCounter.SetCurrentBlock(currentBlock)
+		tbtcChain.SetBlockCounter(blockCounter)
+		tbtcChain.SetDepositMinAge(3600)
+
+		vaultA := chain.Address("0xAA1122BB3344CC5566DD7788EE9900FF00112233")
+
+		// Three ordinary legacy deposits form the largest valid group.
+		legacyHash1 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6611111111111111111111111111111111111111111111111111111111111111",
+			0, 290000, &vaultA,
+		)
+		legacyHash2 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6622222222222222222222222222222222222222222222222222222222222222",
+			0, 290001, &vaultA,
+		)
+		legacyHash3 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6633333333333333333333333333333333333333333333333333333333333333",
+			0, 290002, &vaultA,
+		)
+
+		taprootHash1 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6644444444444444444444444444444444444444444444444444444444444444",
+			0, 290003, &vaultA,
+		)
+		taprootHash2 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6655555555555555555555555555555555555555555555555555555555555555",
+			0, 290004, &vaultA,
+		)
+
+		for _, taprootDeposit := range []struct {
+			fundingTxHash bitcoin.Hash
+			blockNumber   uint64
+		}{
+			{fundingTxHash: taprootHash1, blockNumber: 290003},
+			{fundingTxHash: taprootHash2, blockNumber: 290004},
+		} {
+			err := tbtcChain.AddPastTaprootDepositRevealedEvent(
+				&tbtc.DepositRevealedEventFilter{
+					StartBlock:          filterStartBlock,
+					WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+				&tbtc.TaprootDepositRevealedEvent{
+					BlockNumber:         taprootDeposit.blockNumber,
+					WalletPublicKeyHash: walletPublicKeyHash,
+					FundingTxHash:       taprootDeposit.fundingTxHash,
+					FundingOutputIndex:  0,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+		deposits, err := task.FindDepositsToSweep(
+			&testutils.MockLogger{},
+			walletPublicKeyHash,
+			10,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(deposits) != 3 {
+			t.Fatalf("expected 3 legacy deposits, got %d", len(deposits))
+		}
+
+		expectedLegacyHashes := map[bitcoin.Hash]bool{
+			legacyHash1: true,
+			legacyHash2: true,
+			legacyHash3: true,
+		}
+		taprootHashes := map[bitcoin.Hash]bool{
+			taprootHash1: true,
+			taprootHash2: true,
+		}
+
+		for _, deposit := range deposits {
+			if !expectedLegacyHashes[deposit.FundingTxHash] {
+				t.Errorf(
+					"unexpected non-legacy deposit selected: [%v]",
+					deposit.FundingTxHash,
+				)
+			}
+			if taprootHashes[deposit.FundingTxHash] {
+				t.Errorf(
+					"taproot compatibility reveal selected in legacy group: [%v]",
+					deposit.FundingTxHash,
 				)
 			}
 		}

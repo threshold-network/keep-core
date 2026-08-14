@@ -11,8 +11,8 @@ import (
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/tbtc/internal/test"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 // TODO: Think about covering unhappy paths for specific steps of the moving funds action.
@@ -88,18 +88,20 @@ func TestMovingFundsAction_Execute(t *testing.T) {
 				MainUtxoHash:                           walletMainUtxoHash,
 				MovingFundsTargetWalletsCommitmentHash: movingFundsCommitmentHash,
 			})
+			for _, targetWallet := range scenario.TargetWallets {
+				hostChain.setWallet(targetWallet, &WalletChainData{})
+			}
 
 			// Create a signing executor mock instance.
 			signingExecutor := newMockWalletSigningExecutor()
 
-			// The signature within the scenario fixture is in the format
-			// suitable for applying them directly to a Bitcoin transaction.
-			// However, the signing executor operates on raw tECDSA signatures
-			// so, we need to unpack it first.
-			rawSignature := &tecdsa.Signature{
-				R: scenario.Signature.R,
-				S: scenario.Signature.S,
-			}
+			// The signature within the scenario fixture is represented as
+			// big integer components and needs conversion to runtime signature
+			// container used by signing executor.
+			rawSignature := mustFrostSignatureFromBigInts(
+				scenario.Signature.R,
+				scenario.Signature.S,
+			)
 
 			// Set up the signing executor mock to return the signature from
 			// the test fixture when called with the expected parameters.
@@ -108,7 +110,7 @@ func TestMovingFundsAction_Execute(t *testing.T) {
 			signingExecutor.setSignatures(
 				[]*big.Int{scenario.ExpectedSigHash},
 				proposalProcessingStartBlock+movingFundsCommitmentConfirmationBlocks,
-				[]*tecdsa.Signature{rawSignature},
+				[]*frost.Signature{rawSignature},
 			)
 
 			action := newMovingFundsAction(
@@ -169,10 +171,17 @@ func TestAssembleMovingFundsTransaction(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			targetWalletOutputScripts, err := testLegacyWalletOutputScripts(
+				scenario.TargetWallets,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			builder, err := assembleMovingFundsTransaction(
 				bitcoinChain,
 				scenario.WalletMainUtxo,
-				scenario.TargetWallets,
+				targetWalletOutputScripts,
 				scenario.Fee,
 			)
 
@@ -224,6 +233,44 @@ func TestAssembleMovingFundsTransaction(t *testing.T) {
 				transaction.WitnessHash().Hex(bitcoin.InternalByteOrder),
 			)
 		})
+	}
+}
+
+func TestAssembleMovingFundsTransaction_SupportsTaprootWalletMainUtxo(
+	t *testing.T,
+) {
+	bitcoinChain := newLocalBitcoinChain()
+	walletPublicKey := testWalletPublicKeyFromXOnly(
+		t,
+		"2336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008",
+	)
+	walletMainUtxo := testTaprootWalletMainUtxo(
+		t,
+		bitcoinChain,
+		walletPublicKey,
+	)
+
+	var targetWalletID [32]byte
+	targetWalletID[31] = 1
+	targetWalletOutputScript, err := bitcoin.PayToTaproot(targetWalletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	builder, err := assembleMovingFundsTransaction(
+		bitcoinChain,
+		walletMainUtxo,
+		[]bitcoin.Script{
+			targetWalletOutputScript,
+		},
+		1000,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !builder.HasOnlyTaprootKeyPathInputs() {
+		t.Fatal("expected moving funds builder to use Taproot key-path inputs")
 	}
 }
 
@@ -432,4 +479,23 @@ func hexToByte20(hexStr string) [20]byte {
 	var result [20]byte
 	copy(result[:], decoded)
 	return result
+}
+
+func testLegacyWalletOutputScripts(
+	walletPublicKeyHashes [][20]byte,
+) ([]bitcoin.Script, error) {
+	outputScripts := make([]bitcoin.Script, len(walletPublicKeyHashes))
+
+	for i, walletPublicKeyHash := range walletPublicKeyHashes {
+		outputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+			walletPublicKeyHash,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		outputScripts[i] = outputScript
+	}
+
+	return outputScripts, nil
 }

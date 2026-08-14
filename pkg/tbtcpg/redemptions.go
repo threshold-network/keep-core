@@ -232,8 +232,31 @@ func (rt *RedemptionTask) ProposeRedemption(
 		txMaxFee := redemptionParameters.TxMaxFee
 		txMaxTotalFee := redemptionParameters.TxMaxTotalFee
 
-		estimatedFee, err := EstimateRedemptionFee(
+		walletChainData, err := rt.chain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get redeeming wallet's chain data: [%w]",
+				err,
+			)
+		}
+		if walletChainData == nil {
+			return nil, fmt.Errorf("redeeming wallet's chain data is nil")
+		}
+
+		walletOutputScript, err := tbtc.WalletOutputScript(
+			walletPublicKeyHash,
+			walletChainData.WalletID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot compute redeeming wallet's output script: [%w]",
+				err,
+			)
+		}
+
+		estimatedFee, err := EstimateRedemptionFeeForWalletScript(
 			rt.btcChain,
+			walletOutputScript,
 			redeemersOutputScripts,
 			txMaxTotalFee,
 		)
@@ -424,8 +447,13 @@ redemptionRequestedLoop:
 		},
 	)
 
-	// Capture time now for computations.
-	timeNow := time.Now()
+	timeNow, err := chain.CurrentBlockTimestamp()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get current block timestamp: [%w]",
+			err,
+		)
+	}
 
 	// Only redemption requests in range:
 	// [now - requestTimeout, now - minAge]
@@ -502,22 +530,46 @@ redemptionRequestedLoop:
 	return result, nil
 }
 
-// EstimateRedemptionFee estimates fee for the redemption transaction that pays
-// the provided redeemers output scripts. The estimated fee is floored at a safe
-// minimum rate and bounded above by txMaxTotalFee (the Bridge total-fee
-// maximum), so a non-RBF redemption is not proposed below the floor where it
-// could get stuck and jam the wallet. Only the total fee is bounded here; the
-// per-request maximum fee is enforced separately by on-chain validation.
+// EstimateRedemptionFee estimates fee for a legacy P2WPKH redemption
+// transaction that pays the provided redeemers output scripts. Call
+// EstimateRedemptionFeeForWalletScript when the redeeming wallet may use
+// another output script type. The estimated fee is floored at a safe minimum
+// rate and bounded above by txMaxTotalFee (the Bridge total-fee maximum), so a
+// non-RBF redemption is not proposed below the floor where it could get stuck
+// and jam the wallet. Only the total fee is bounded here; the per-request
+// maximum fee is enforced separately by on-chain validation.
 func EstimateRedemptionFee(
 	btcChain bitcoin.Chain,
 	redeemersOutputScripts []bitcoin.Script,
 	txMaxTotalFee uint64,
 ) (int64, error) {
+	legacyWalletOutputScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{})
+	if err != nil {
+		return 0, fmt.Errorf("cannot construct legacy wallet output script: [%v]", err)
+	}
+
+	return EstimateRedemptionFeeForWalletScript(
+		btcChain,
+		legacyWalletOutputScript,
+		redeemersOutputScripts,
+		txMaxTotalFee,
+	)
+}
+
+// EstimateRedemptionFeeForWalletScript estimates fee for a redemption
+// transaction using the resolved redeeming wallet output script for both the
+// main UTXO input and the possible change output. The estimate is floored at a
+// safe minimum rate and bounded above by txMaxTotalFee, as described on
+// EstimateRedemptionFee.
+func EstimateRedemptionFeeForWalletScript(
+	btcChain bitcoin.Chain,
+	walletOutputScript bitcoin.Script,
+	redeemersOutputScripts []bitcoin.Script,
+	txMaxTotalFee uint64,
+) (int64, error) {
 	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
-		// 1 P2WPKH main UTXO input.
-		AddPublicKeyHashInputs(1, true).
-		// 1 P2WPKH change output.
-		AddPublicKeyHashOutputs(1, true)
+		AddPublicKeyScriptInput(walletOutputScript).
+		AddOutputScript(walletOutputScript)
 
 	for _, script := range redeemersOutputScripts {
 		switch bitcoin.GetScriptType(script) {

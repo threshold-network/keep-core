@@ -49,6 +49,7 @@ COPY ./pkg/chain/ethereum/common/gen $APP_DIR/pkg/chain/ethereum/common/gen
 COPY ./pkg/chain/ethereum/ecdsa/gen $APP_DIR/pkg/chain/ethereum/ecdsa/gen
 COPY ./pkg/chain/ethereum/tbtc/gen $APP_DIR/pkg/chain/ethereum/tbtc/gen
 COPY ./pkg/chain/ethereum/threshold/gen $APP_DIR/pkg/chain/ethereum/threshold/gen
+COPY ./pkg/frost/roast/gen $APP_DIR/pkg/frost/roast/gen
 COPY ./pkg/net/gen $APP_DIR/pkg/net/gen
 COPY ./pkg/tbtc/gen $APP_DIR/pkg/tbtc/gen
 COPY ./pkg/tecdsa/dkg/gen $APP_DIR/pkg/tecdsa/dkg/gen

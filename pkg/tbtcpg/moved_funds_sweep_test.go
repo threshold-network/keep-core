@@ -346,28 +346,43 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 
 	movingFundsTxOutputIndex := uint32(1)
 
-	hasMainUtxo := true
-
 	var tests = map[string]struct {
 		fee              int64
+		walletID         [32]byte
+		hasMainUtxo      bool
 		expectedProposal *tbtc.MovedFundsSweepProposal
 	}{
 		"fee provided": {
-			fee: 10000,
+			fee:         10000,
+			hasMainUtxo: true,
 			expectedProposal: &tbtc.MovedFundsSweepProposal{
 				MovingFundsTxHash:        movingFundsTxHash,
 				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
 				SweepTxFee:               big.NewInt(10000),
 			},
 		},
-		"fee estimated": {
-			fee: 0, // trigger fee estimation
+		"legacy fee estimated": {
+			fee:         0, // trigger fee estimation
+			hasMainUtxo: true,
 			expectedProposal: &tbtc.MovedFundsSweepProposal{
 				MovingFundsTxHash:        movingFundsTxHash,
 				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
 				// raw 4450 (178 vByte * 25 sat/vByte), buffered to
 				// ceil(25*1.25)=32 sat/vByte * 178 = 5696, below the 6000 cap.
 				SweepTxFee: big.NewInt(5696),
+			},
+		},
+		"fresh FROST wallet fee estimated": {
+			fee:         0, // trigger fee estimation
+			walletID:    [32]byte{0x01},
+			hasMainUtxo: false,
+			expectedProposal: &tbtc.MovedFundsSweepProposal{
+				MovingFundsTxHash:        movingFundsTxHash,
+				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
+				// A fresh FROST wallet sweeps a single P2TR input: raw 2775
+				// (111 vByte * 25 sat/vByte), buffered to
+				// ceil(25*1.25)=32 sat/vByte * 111 = 3552, below the 6000 cap.
+				SweepTxFee: big.NewInt(3552),
 			},
 		},
 	}
@@ -393,7 +408,28 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 				0,
 			)
 
-			err := tbtcChain.SetMovedFundsSweepProposalValidationResult(
+			walletOutputScript, err := tbtc.WalletOutputScript(
+				walletPublicKeyHash,
+				test.walletID,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tbtcChain.SetWallet(
+				walletPublicKeyHash,
+				&tbtc.WalletChainData{WalletID: test.walletID},
+			)
+			movingFundsTxOutputs := make([]*bitcoin.TransactionOutput, 2)
+			movingFundsTxOutputs[movingFundsTxOutputIndex] = &bitcoin.TransactionOutput{
+				PublicKeyScript: walletOutputScript,
+			}
+			btcChain.SetTransaction(
+				movingFundsTxHash,
+				&bitcoin.Transaction{Outputs: movingFundsTxOutputs},
+			)
+
+			err = tbtcChain.SetMovedFundsSweepProposalValidationResult(
 				walletPublicKeyHash,
 				test.expectedProposal,
 				true,
@@ -409,7 +445,7 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 				walletPublicKeyHash,
 				movingFundsTxHash,
 				movingFundsTxOutputIndex,
-				hasMainUtxo,
+				test.hasMainUtxo,
 				test.fee,
 			)
 			if err != nil {
@@ -419,6 +455,133 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 			if diff := deep.Equal(proposal, test.expectedProposal); diff != nil {
 				t.Errorf("invalid moved funds sweep proposal: %v", diff)
 			}
+		})
+	}
+}
+
+func TestEstimateMovedFundsSweepFeeForScripts(t *testing.T) {
+	legacyWalletScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{0x01})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taprootWalletScript, err := bitcoin.PayToTaproot([32]byte{0x02})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var tests = map[string]struct {
+		movedFundsOutputScript bitcoin.Script
+		walletOutputScript     bitcoin.Script
+		estimateSatPerVByte    int64
+		sweepTxMaxTotalFee     uint64
+		hasMainUtxo            bool
+		expectedFee            uint64
+		expectedError          error
+	}{
+		"legacy scripts, one input": {
+			movedFundsOutputScript: legacyWalletScript,
+			walletOutputScript:     legacyWalletScript,
+			estimateSatPerVByte:    16,
+			sweepTxMaxTotalFee:     3000,
+			hasMainUtxo:            false,
+			// raw 1760 (110 vByte * 16 sat/vByte), buffered to
+			// ceil(16*1.25)=20 sat/vByte * 110 = 2200, below the cap.
+			expectedFee:   2200,
+			expectedError: nil,
+		},
+		"legacy scripts, two inputs": {
+			movedFundsOutputScript: legacyWalletScript,
+			walletOutputScript:     legacyWalletScript,
+			estimateSatPerVByte:    16,
+			sweepTxMaxTotalFee:     3000,
+			hasMainUtxo:            true,
+			// raw 2848 (178 vByte * 16 sat/vByte); buffered 20 sat/vByte * 178
+			// = 3560 exceeds the 3000 cap, so it is bounded down to the cap.
+			expectedFee:   3000,
+			expectedError: nil,
+		},
+		"Taproot scripts, one input": {
+			movedFundsOutputScript: taprootWalletScript,
+			walletOutputScript:     taprootWalletScript,
+			estimateSatPerVByte:    16,
+			sweepTxMaxTotalFee:     3000,
+			hasMainUtxo:            false,
+			// The P2TR shape is one virtual byte larger than the legacy one:
+			// raw 1776 (111 vByte * 16 sat/vByte), buffered to 20 * 111 = 2220.
+			expectedFee:   2220,
+			expectedError: nil,
+		},
+		"Taproot scripts, two inputs": {
+			movedFundsOutputScript: taprootWalletScript,
+			walletOutputScript:     taprootWalletScript,
+			estimateSatPerVByte:    16,
+			sweepTxMaxTotalFee:     6000,
+			hasMainUtxo:            true,
+			// raw 2704 (169 vByte * 16 sat/vByte), buffered to
+			// 20 sat/vByte * 169 = 3380, below the cap.
+			expectedFee:   3380,
+			expectedError: nil,
+		},
+		"low estimate is raised to the minimum floor": {
+			movedFundsOutputScript: legacyWalletScript,
+			walletOutputScript:     legacyWalletScript,
+			estimateSatPerVByte:    1,
+			sweepTxMaxTotalFee:     3000,
+			hasMainUtxo:            false,
+			// raw 110 (110 vByte * 1 sat/vByte), buffered ceil(1*1.25)=2 is
+			// below the 5 sat/vByte floor, so clamped to 5 * 110 = 550.
+			expectedFee:   550,
+			expectedError: nil,
+		},
+		"estimated Taproot fee too high": {
+			movedFundsOutputScript: taprootWalletScript,
+			walletOutputScript:     taprootWalletScript,
+			estimateSatPerVByte:    16,
+			sweepTxMaxTotalFee:     2700,
+			hasMainUtxo:            true,
+			// The raw 2704 estimate already exceeds the cap.
+			expectedFee:   0,
+			expectedError: tbtcpg.ErrSweepTxFeeTooHigh,
+		},
+		"minimum floor exceeds the max total fee": {
+			movedFundsOutputScript: legacyWalletScript,
+			walletOutputScript:     legacyWalletScript,
+			estimateSatPerVByte:    1,
+			// raw 110 (110 vByte * 1 sat/vByte) is below the cap, so it passes
+			// the raw-estimate guard, but the 5 sat/vByte floor total (550)
+			// exceeds the cap, so a safe sweep cannot be built.
+			sweepTxMaxTotalFee: 400,
+			hasMainUtxo:        false,
+			expectedFee:        0,
+			expectedError:      tbtcpg.ErrMaxFeeTooLow,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			btcChain := tbtcpg.NewLocalBitcoinChain()
+			btcChain.SetEstimateSatPerVByteFee(1, test.estimateSatPerVByte)
+
+			actualFee, err := tbtcpg.EstimateMovedFundsSweepFeeForScripts(
+				btcChain,
+				test.movedFundsOutputScript,
+				test.walletOutputScript,
+				test.hasMainUtxo,
+				test.sweepTxMaxTotalFee,
+			)
+
+			testutils.AssertUintsEqual(
+				t,
+				"fee",
+				test.expectedFee,
+				uint64(actualFee),
+			)
+
+			testutils.AssertAnyErrorInChainMatchesTarget(
+				t,
+				test.expectedError,
+				err,
+			)
 		})
 	}
 }

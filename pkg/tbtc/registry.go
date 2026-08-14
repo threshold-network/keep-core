@@ -67,7 +67,10 @@ func newWalletRegistry(
 			// them.
 			wallet := signers[0].wallet
 			walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
-			walletID, err := calculateWalletIdFunc(wallet.publicKey)
+			walletID, err := calculateWalletIDForSigner(
+				signers[0],
+				calculateWalletIdFunc,
+			)
 			if err != nil {
 				return nil, fmt.Errorf(
 					"error while calculating wallet ID for wallet with public "+
@@ -134,7 +137,10 @@ func (wr *walletRegistry) registerSigner(signer *signer) error {
 	// the hashes are computed only once. No need to initialize signers slice as
 	// appending works with nil values.
 	if _, ok := wr.walletCache[walletStorageKey]; !ok {
-		walletID, err := wr.calculateWalletIdFunc(signer.wallet.publicKey)
+		walletID, err := calculateWalletIDForSigner(
+			signer,
+			wr.calculateWalletIdFunc,
+		)
 		if err != nil {
 			return fmt.Errorf("cannot calculate wallet ID: [%v]", err)
 		}

@@ -333,14 +333,50 @@ func (mfst *MovedFundsSweepTask) ProposeMovedFundsSweep(
 		}
 		sweepTxMaxTotalFee := movingFundsParameters.SweepTxMaxTotalFee
 
-		estimatedFee, err := EstimateMovedFundsSweepFee(
+		movedFundsOutputScript, err := movedFundsSweepOutputScript(
 			mfst.btcChain,
+			movingFundsTxHash,
+			movingFundsTxOutputIndex,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot resolve moved funds output script: [%w]",
+				err,
+			)
+		}
+
+		walletData, err := mfst.chain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get wallet chain data: [%w]",
+				err,
+			)
+		}
+		if walletData == nil {
+			return nil, fmt.Errorf("wallet chain data is nil")
+		}
+
+		walletOutputScript, err := tbtc.WalletOutputScript(
+			walletPublicKeyHash,
+			walletData.WalletID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot compute wallet output script: [%w]",
+				err,
+			)
+		}
+
+		estimatedFee, err := EstimateMovedFundsSweepFeeForScripts(
+			mfst.btcChain,
+			movedFundsOutputScript,
+			walletOutputScript,
 			hasMainUtxo,
 			sweepTxMaxTotalFee,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"cannot estimate moving funds transaction fee: [%w]",
+				"cannot estimate moved funds sweep transaction fee: [%w]",
 				err,
 			)
 		}
@@ -373,25 +409,79 @@ func (mfst *MovedFundsSweepTask) ProposeMovedFundsSweep(
 	return proposal, nil
 }
 
-// EstimateMovedFundsSweepFee estimates fee for the moved funds sweep transaction
-// that merges the received main UTXO from the source wallets with the current
-// wallet's main UTXO.
+func movedFundsSweepOutputScript(
+	btcChain bitcoin.Chain,
+	movingFundsTxHash bitcoin.Hash,
+	movingFundsTxOutputIndex uint32,
+) (bitcoin.Script, error) {
+	transaction, err := btcChain.GetTransaction(movingFundsTxHash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get moving funds transaction: [%w]", err)
+	}
+	if transaction == nil {
+		return nil, fmt.Errorf("moving funds transaction is nil")
+	}
+
+	if movingFundsTxOutputIndex >= uint32(len(transaction.Outputs)) {
+		return nil, fmt.Errorf(
+			"moving funds output index [%d] out of range for transaction with [%d] outputs",
+			movingFundsTxOutputIndex,
+			len(transaction.Outputs),
+		)
+	}
+
+	output := transaction.Outputs[movingFundsTxOutputIndex]
+	if output == nil {
+		return nil, fmt.Errorf(
+			"moving funds transaction output [%d] is nil",
+			movingFundsTxOutputIndex,
+		)
+	}
+
+	return output.PublicKeyScript, nil
+}
+
+// EstimateMovedFundsSweepFee estimates a legacy P2WPKH moved-funds sweep fee.
+// Call EstimateMovedFundsSweepFeeForScripts when either the moved-funds output
+// or the wallet output may use another script type.
 func EstimateMovedFundsSweepFee(
 	btcChain bitcoin.Chain,
 	hasMainUtxo bool,
 	sweepTxMaxTotalFee uint64,
 ) (int64, error) {
-	// The transaction always has an input coming from the moved funds
-	// transferred by the source wallet. Additionally, it may have the second
-	// input which is the wallet main UTXO.
-	inputCount := 1
-	if hasMainUtxo {
-		inputCount++
+	legacyWalletOutputScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{})
+	if err != nil {
+		return 0, fmt.Errorf("cannot construct legacy wallet output script: [%v]", err)
 	}
 
+	return EstimateMovedFundsSweepFeeForScripts(
+		btcChain,
+		legacyWalletOutputScript,
+		legacyWalletOutputScript,
+		hasMainUtxo,
+		sweepTxMaxTotalFee,
+	)
+}
+
+// EstimateMovedFundsSweepFeeForScripts estimates fee for a moved-funds sweep
+// transaction using the resolved moved-funds input and wallet output scripts.
+func EstimateMovedFundsSweepFeeForScripts(
+	btcChain bitcoin.Chain,
+	movedFundsOutputScript bitcoin.Script,
+	walletOutputScript bitcoin.Script,
+	hasMainUtxo bool,
+	sweepTxMaxTotalFee uint64,
+) (int64, error) {
 	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
-		AddPublicKeyHashInputs(inputCount, true).
-		AddPublicKeyHashOutputs(1, true)
+		AddPublicKeyScriptInput(movedFundsOutputScript)
+
+	// The transaction may have a second input spending the wallet's main UTXO.
+	// That UTXO is locked using the same script as the new wallet output.
+	if hasMainUtxo {
+		sizeEstimator.AddPublicKeyScriptInput(walletOutputScript)
+	}
+
+	sizeEstimator.AddOutputScript(walletOutputScript)
 
 	transactionSize, err := sizeEstimator.VirtualSize()
 	if err != nil {

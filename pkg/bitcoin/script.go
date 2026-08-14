@@ -19,6 +19,7 @@ const (
 	P2WPKHScript
 	P2SHScript
 	P2WSHScript
+	P2TRScript
 )
 
 func (st ScriptType) String() string {
@@ -31,6 +32,8 @@ func (st ScriptType) String() string {
 		return "P2SH"
 	case P2WSHScript:
 		return "P2WSH"
+	case P2TRScript:
+		return "P2TR"
 	default:
 		return "NonStandard"
 	}
@@ -147,8 +150,25 @@ func PayToScriptHash(scriptHash [20]byte) (Script, error) {
 		Script()
 }
 
+// PayToTaproot constructs a P2TR script for the provided 32-byte x-only
+// Taproot output key. The function assumes the provided output key is valid.
+//
+// The argument must be the final Taproot output key committed to by the
+// scriptPubKey. This helper does not derive a BIP-341/BIP-86 tweak from an
+// internal key.
+func PayToTaproot(outputKey [32]byte) (Script, error) {
+	return txscript.NewScriptBuilder().
+		AddOp(txscript.OP_1).
+		AddData(outputKey[:]).
+		Script()
+}
+
 // GetScriptType gets the ScriptType of the given Script.
 func GetScriptType(script Script) ScriptType {
+	if isPayToTaproot(script) {
+		return P2TRScript
+	}
+
 	switch txscript.GetScriptClass(script) {
 	case txscript.PubKeyHashTy:
 		return P2PKHScript
@@ -161,6 +181,12 @@ func GetScriptType(script Script) ScriptType {
 	default:
 		return NonStandardScript
 	}
+}
+
+func isPayToTaproot(script Script) bool {
+	return len(script) == 34 &&
+		script[0] == txscript.OP_1 &&
+		script[1] == txscript.OP_DATA_32
 }
 
 // ExtractPublicKeyHash extracts the public key hash from a P2WPKH or P2PKH
@@ -188,4 +214,16 @@ func ExtractPublicKeyHash(script Script) ([20]byte, error) {
 	copy(publicKeyHash[:], publicKeyHashBytes)
 
 	return publicKeyHash, nil
+}
+
+// ExtractTaprootKey extracts the x-only output key from a P2TR script.
+func ExtractTaprootKey(script Script) ([32]byte, error) {
+	if GetScriptType(script) != P2TRScript {
+		return [32]byte{}, fmt.Errorf("not a P2TR script")
+	}
+
+	var outputKey [32]byte
+	copy(outputKey[:], script[2:])
+
+	return outputKey, nil
 }

@@ -46,13 +46,6 @@ type BitcoinTxProof struct {
 	CoinbaseProof    []byte
 }
 
-// BitcoinTxRSVSignature is an auto generated low-level Go binding around an user-defined struct.
-type BitcoinTxRSVSignature struct {
-	R [32]byte
-	S [32]byte
-	V uint8
-}
-
 // BitcoinTxUTXO is an auto generated low-level Go binding around an user-defined struct.
 type BitcoinTxUTXO struct {
 	TxHash        [32]byte
@@ -81,12 +74,16 @@ type DepositDepositRevealInfo struct {
 	Vault              common.Address
 }
 
-// FraudFraudChallenge is an auto generated low-level Go binding around an user-defined struct.
-type FraudFraudChallenge struct {
-	Challenger    common.Address
-	DepositAmount *big.Int
-	ReportedAt    uint32
-	Resolved      bool
+// DepositTaprootDepositRevealInfo is an auto generated low-level Go binding around an user-defined struct.
+type DepositTaprootDepositRevealInfo struct {
+	FundingOutputIndex   uint32
+	BlindingFactor       [8]byte
+	WalletPubKeyHash     [20]byte
+	WalletXOnlyPublicKey [32]byte
+	RefundPubKeyHash     [20]byte
+	RefundXOnlyPublicKey [32]byte
+	RefundLocktime       [4]byte
+	Vault                common.Address
 }
 
 // MovingFundsMovedFundsSweepRequest is an auto generated low-level Go binding around an user-defined struct.
@@ -121,7 +118,7 @@ type WalletsWallet struct {
 
 // BridgeMetaData contains all meta data concerning the Bridge contract.
 var BridgeMetaData = &bind.MetaData{
-	ABI: "[{\"inputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"constructor\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"name\":\"DepositParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"fundingTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"depositor\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"DepositRevealed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sweepTxHash\",\"type\":\"bytes32\"}],\"name\":\"DepositsSwept\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sighash\",\"type\":\"bytes32\"}],\"name\":\"FraudChallengeDefeatTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sighash\",\"type\":\"bytes32\"}],\"name\":\"FraudChallengeDefeated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sighash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint8\",\"name\":\"v\",\"type\":\"uint8\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"r\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"s\",\"type\":\"bytes32\"}],\"name\":\"FraudChallengeSubmitted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"FraudParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"oldGovernance\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"GovernanceTransferred\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint8\",\"name\":\"version\",\"type\":\"uint8\"}],\"name\":\"Initialized\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTxOutputIndex\",\"type\":\"uint32\"}],\"name\":\"MovedFundsSweepTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sweepTxHash\",\"type\":\"bytes32\"}],\"name\":\"MovedFundsSwept\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsBelowDustReported\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes20[]\",\"name\":\"targetWallets\",\"type\":\"bytes20[]\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"submitter\",\"type\":\"address\"}],\"name\":\"MovingFundsCommitmentSubmitted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"}],\"name\":\"MovingFundsCompleted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"MovingFundsParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsTimeoutReset\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"NewWalletRegistered\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[],\"name\":\"NewWalletRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"RedemptionParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"}],\"name\":\"RedemptionRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"RedemptionTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"redemptionWatchtower\",\"type\":\"address\"}],\"name\":\"RedemptionWatchtowerSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"redemptionTxHash\",\"type\":\"bytes32\"}],\"name\":\"RedemptionsCompleted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"spvMaintainer\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"SpvMaintainerStatusUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"treasury\",\"type\":\"address\"}],\"name\":\"TreasuryUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"VaultStatusUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletClosed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletClosing\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletMovingFunds\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"name\":\"WalletParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletTerminated\",\"type\":\"event\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyX\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyY\",\"type\":\"bytes32\"}],\"name\":\"__ecdsaWalletCreatedCallback\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyX\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyY\",\"type\":\"bytes32\"}],\"name\":\"__ecdsaWalletHeartbeatFailedCallback\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"activeWalletPubKeyHash\",\"outputs\":[{\"internalType\":\"bytes20\",\"name\":\"\",\"type\":\"bytes20\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"contractReferences\",\"outputs\":[{\"internalType\":\"contractBank\",\"name\":\"bank\",\"type\":\"address\"},{\"internalType\":\"contractIRelay\",\"name\":\"relay\",\"type\":\"address\"},{\"internalType\":\"contractIWalletRegistry\",\"name\":\"ecdsaWalletRegistry\",\"type\":\"address\"},{\"internalType\":\"contractReimbursementPool\",\"name\":\"reimbursementPool\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"preimage\",\"type\":\"bytes\"},{\"internalType\":\"bool\",\"name\":\"witness\",\"type\":\"bool\"}],\"name\":\"defeatFraudChallenge\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"heartbeatMessage\",\"type\":\"bytes\"}],\"name\":\"defeatFraudChallengeWithHeartbeat\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"depositParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"deposits\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"depositor\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"revealedAt\",\"type\":\"uint32\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"sweptAt\",\"type\":\"uint32\"},{\"internalType\":\"bytes32\",\"name\":\"extraData\",\"type\":\"bytes32\"}],\"internalType\":\"structDeposit.DepositRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"challengeKey\",\"type\":\"uint256\"}],\"name\":\"fraudChallenges\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"challenger\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"depositAmount\",\"type\":\"uint256\"},{\"internalType\":\"uint32\",\"name\":\"reportedAt\",\"type\":\"uint32\"},{\"internalType\":\"bool\",\"name\":\"resolved\",\"type\":\"bool\"}],\"internalType\":\"structFraud.FraudChallenge\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"fraudParameters\",\"outputs\":[{\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"getRedemptionWatchtower\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"governance\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"_bank\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_relay\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_treasury\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_ecdsaWalletRegistry\",\"type\":\"address\"},{\"internalType\":\"addresspayable\",\"name\":\"_reimbursementPool\",\"type\":\"address\"},{\"internalType\":\"uint96\",\"name\":\"_txProofDifficultyFactor\",\"type\":\"uint96\"}],\"name\":\"initialize\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"isVaultTrusted\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"liveWalletsCount\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"requestKey\",\"type\":\"uint256\"}],\"name\":\"movedFundsSweepRequests\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint64\",\"name\":\"value\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"createdAt\",\"type\":\"uint32\"},{\"internalType\":\"enumMovingFunds.MovedFundsSweepRequestState\",\"name\":\"state\",\"type\":\"uint8\"}],\"internalType\":\"structMovingFunds.MovedFundsSweepRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"movingFundsParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"bytes\",\"name\":\"preimageSha256\",\"type\":\"bytes\"}],\"name\":\"notifyFraudChallengeDefeatTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTxOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"}],\"name\":\"notifyMovedFundsSweepTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"}],\"name\":\"notifyMovingFundsBelowDust\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"}],\"name\":\"notifyMovingFundsTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"notifyRedemptionTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"notifyRedemptionVeto\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"walletMainUtxo\",\"type\":\"tuple\"}],\"name\":\"notifyWalletCloseable\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"notifyWalletClosingPeriodElapsed\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"redemptionKey\",\"type\":\"uint256\"}],\"name\":\"pendingRedemptions\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"}],\"internalType\":\"structRedemption.RedemptionRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"balanceOwner\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"redemptionData\",\"type\":\"bytes\"}],\"name\":\"receiveBalanceApproval\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"redemptionParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"activeWalletMainUtxo\",\"type\":\"tuple\"}],\"name\":\"requestNewWallet\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"}],\"name\":\"requestRedemption\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"resetMovingFundsTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.DepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"}],\"name\":\"revealDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.DepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"},{\"internalType\":\"bytes32\",\"name\":\"extraData\",\"type\":\"bytes32\"}],\"name\":\"revealDepositWithExtraData\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"redemptionWatchtower\",\"type\":\"address\"}],\"name\":\"setRedemptionWatchtower\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"spvMaintainer\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"setSpvMaintainerStatus\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"setVaultStatus\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"utxoKey\",\"type\":\"uint256\"}],\"name\":\"spentMainUTXOs\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"sweepTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"sweepProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"submitDepositSweepProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"preimageSha256\",\"type\":\"bytes\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"r\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"s\",\"type\":\"bytes32\"},{\"internalType\":\"uint8\",\"name\":\"v\",\"type\":\"uint8\"}],\"internalType\":\"structBitcoinTx.RSVSignature\",\"name\":\"signature\",\"type\":\"tuple\"}],\"name\":\"submitFraudChallenge\",\"outputs\":[],\"stateMutability\":\"payable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"sweepTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"sweepProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"}],\"name\":\"submitMovedFundsSweepProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"walletMainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"uint256\",\"name\":\"walletMemberIndex\",\"type\":\"uint256\"},{\"internalType\":\"bytes20[]\",\"name\":\"targetWallets\",\"type\":\"bytes20[]\"}],\"name\":\"submitMovingFundsCommitment\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"movingFundsTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"movingFundsProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"submitMovingFundsProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"redemptionTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"redemptionProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"submitRedemptionProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"redemptionKey\",\"type\":\"uint256\"}],\"name\":\"timedOutRedemptions\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"}],\"internalType\":\"structRedemption.RedemptionRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"transferGovernance\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"treasury\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"txProofDifficultyFactor\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"name\":\"updateDepositParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateFraudParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateMovingFundsParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateRedemptionParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"treasury\",\"type\":\"address\"}],\"name\":\"updateTreasury\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"name\":\"updateWalletParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"walletParameters\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"wallets\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"mainUtxoHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint64\",\"name\":\"pendingRedemptionsValue\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"createdAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsRequestedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"closingStartedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"pendingMovedFundsSweepRequestsCount\",\"type\":\"uint32\"},{\"internalType\":\"enumWallets.WalletState\",\"name\":\"state\",\"type\":\"uint8\"},{\"internalType\":\"bytes32\",\"name\":\"movingFundsTargetWalletsCommitmentHash\",\"type\":\"bytes32\"}],\"internalType\":\"structWallets.Wallet\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
+	ABI: "[{\"inputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"constructor\"},{\"inputs\":[],\"name\":\"AddressIsZero\",\"type\":\"error\"},{\"inputs\":[],\"name\":\"EcdsaFraudRouterAddressZero\",\"type\":\"error\"},{\"inputs\":[],\"name\":\"EcdsaFraudRouterAlreadySet\",\"type\":\"error\"},{\"inputs\":[],\"name\":\"FrostWalletRegistryAddressZero\",\"type\":\"error\"},{\"inputs\":[],\"name\":\"FrostWalletRegistryAlreadySet\",\"type\":\"error\"},{\"inputs\":[],\"name\":\"LifecycleRouterAddressZero\",\"type\":\"error\"},{\"inputs\":[],\"name\":\"LifecycleRouterAlreadySet\",\"type\":\"error\"},{\"inputs\":[],\"name\":\"MigrateLegacyFraudChallengesNotImplemented\",\"type\":\"error\"},{\"inputs\":[],\"name\":\"P2TRFraudRouterAddressZero\",\"type\":\"error\"},{\"inputs\":[],\"name\":\"P2TRFraudRouterAlreadySet\",\"type\":\"error\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"name\":\"DepositParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"fundingTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"depositor\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"DepositRevealed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newVault\",\"type\":\"address\"}],\"name\":\"DepositVaultFixed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sweepTxHash\",\"type\":\"bytes32\"}],\"name\":\"DepositsSwept\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"ecdsaFraudRouter\",\"type\":\"address\"}],\"name\":\"EcdsaFraudRouterSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[],\"name\":\"EcdsaRetired\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"FraudParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"frostWalletRegistry\",\"type\":\"address\"}],\"name\":\"FrostWalletRegistrySet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"oldGovernance\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"GovernanceTransferred\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint8\",\"name\":\"version\",\"type\":\"uint8\"}],\"name\":\"Initialized\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint8\",\"name\":\"routerKind\",\"type\":\"uint8\"},{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"challengeKey\",\"type\":\"uint256\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"challenger\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"depositAmount\",\"type\":\"uint256\"}],\"name\":\"LegacyFraudChallengeMigrated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"lifecycleRouter\",\"type\":\"address\"}],\"name\":\"LifecycleRouterSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTxOutputIndex\",\"type\":\"uint32\"}],\"name\":\"MovedFundsSweepTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sweepTxHash\",\"type\":\"bytes32\"}],\"name\":\"MovedFundsSwept\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsBelowDustReported\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes20[]\",\"name\":\"targetWallets\",\"type\":\"bytes20[]\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"submitter\",\"type\":\"address\"}],\"name\":\"MovingFundsCommitmentSubmitted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"}],\"name\":\"MovingFundsCompleted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"MovingFundsParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsTimeoutReset\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"walletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"}],\"name\":\"NewFrostWalletRegistered\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"NewWalletRegistered\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"walletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"NewWalletRegisteredV2\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[],\"name\":\"NewWalletRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"enumBridgeState.WalletScheme\",\"name\":\"scheme\",\"type\":\"uint8\"}],\"name\":\"NewWalletSchemeSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"p2trFraudRouter\",\"type\":\"address\"}],\"name\":\"P2TRFraudRouterSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"rebateStaking\",\"type\":\"address\"}],\"name\":\"RebateStakingSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"RedemptionParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"}],\"name\":\"RedemptionRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"RedemptionTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"redemptionWatchtower\",\"type\":\"address\"}],\"name\":\"RedemptionWatchtowerSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"redemptionTxHash\",\"type\":\"bytes32\"}],\"name\":\"RedemptionsCompleted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"spvMaintainer\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"SpvMaintainerStatusUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"fundingTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"depositor\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"walletXOnlyPublicKey\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"refundXOnlyPublicKey\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"TaprootDepositRevealed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"treasury\",\"type\":\"address\"}],\"name\":\"TreasuryUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"VaultStatusUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletClosed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletClosing\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletMovingFunds\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"name\":\"WalletParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletTerminated\",\"type\":\"event\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyX\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyY\",\"type\":\"bytes32\"}],\"name\":\"__ecdsaWalletHeartbeatFailedCallback\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"}],\"name\":\"__frostWalletCreatedCallback\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"activeWalletID\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"activeWalletPubKeyHash\",\"outputs\":[{\"internalType\":\"bytes20\",\"name\":\"\",\"type\":\"bytes20\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"contractReferences\",\"outputs\":[{\"internalType\":\"contractBank\",\"name\":\"bank\",\"type\":\"address\"},{\"internalType\":\"contractIRelay\",\"name\":\"relay\",\"type\":\"address\"},{\"internalType\":\"contractIWalletRegistry\",\"name\":\"ecdsaWalletRegistry\",\"type\":\"address\"},{\"internalType\":\"contractReimbursementPool\",\"name\":\"reimbursementPool\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"depositParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"deposits\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"depositor\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"revealedAt\",\"type\":\"uint32\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"sweptAt\",\"type\":\"uint32\"},{\"internalType\":\"bytes32\",\"name\":\"extraData\",\"type\":\"bytes32\"}],\"internalType\":\"structDeposit.DepositRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"ecdsaFraudRouter\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"ecdsaRetired\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"fraudParameters\",\"outputs\":[{\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"frostLifecycleContext\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"frostRegistry\",\"type\":\"address\"},{\"internalType\":\"bytes32\",\"name\":\"walletID\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"getRebateStaking\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"getRedemptionWatchtower\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"governance\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"_bank\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_relay\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_treasury\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_ecdsaWalletRegistry\",\"type\":\"address\"},{\"internalType\":\"addresspayable\",\"name\":\"_reimbursementPool\",\"type\":\"address\"},{\"internalType\":\"uint96\",\"name\":\"_txProofDifficultyFactor\",\"type\":\"uint96\"}],\"name\":\"initialize\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"initializeV2_FixVaultZeroDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"isVaultTrusted\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"liveWalletsCount\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint8\",\"name\":\"routerKind\",\"type\":\"uint8\"},{\"internalType\":\"uint256[]\",\"name\":\"challengeKeys\",\"type\":\"uint256[]\"}],\"name\":\"migrateLegacyFraudChallenges\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"requestKey\",\"type\":\"uint256\"}],\"name\":\"movedFundsSweepRequests\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint64\",\"name\":\"value\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"createdAt\",\"type\":\"uint32\"},{\"internalType\":\"enumMovingFunds.MovedFundsSweepRequestState\",\"name\":\"state\",\"type\":\"uint8\"}],\"internalType\":\"structMovingFunds.MovedFundsSweepRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"movingFundsParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTxOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"}],\"name\":\"notifyMovedFundsSweepTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"}],\"name\":\"notifyMovingFundsBelowDust\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"}],\"name\":\"notifyMovingFundsTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"notifyRedemptionTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"notifyRedemptionVeto\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"walletMainUtxo\",\"type\":\"tuple\"}],\"name\":\"notifyWalletCloseable\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"notifyWalletClosingPeriodElapsed\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"p2trFraudRouter\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"redemptionKey\",\"type\":\"uint256\"}],\"name\":\"pendingRedemptions\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"}],\"internalType\":\"structRedemption.RedemptionRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"balanceOwner\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"redemptionData\",\"type\":\"bytes\"}],\"name\":\"receiveBalanceApproval\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"redemptionParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"activeWalletMainUtxo\",\"type\":\"tuple\"}],\"name\":\"requestNewWallet\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"}],\"name\":\"requestRedemption\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"resetMovingFundsTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"retireEcdsa\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.DepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"}],\"name\":\"revealDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.DepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"},{\"internalType\":\"bytes32\",\"name\":\"extraData\",\"type\":\"bytes32\"}],\"name\":\"revealDepositWithExtraData\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes32\",\"name\":\"walletXOnlyPublicKey\",\"type\":\"bytes32\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes32\",\"name\":\"refundXOnlyPublicKey\",\"type\":\"bytes32\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.TaprootDepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"}],\"name\":\"revealTaprootDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes32\",\"name\":\"walletXOnlyPublicKey\",\"type\":\"bytes32\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes32\",\"name\":\"refundXOnlyPublicKey\",\"type\":\"bytes32\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.TaprootDepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"},{\"internalType\":\"bytes32\",\"name\":\"extraData\",\"type\":\"bytes32\"}],\"name\":\"revealTaprootDepositWithExtraData\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"ecdsaFraudRouter\",\"type\":\"address\"}],\"name\":\"setEcdsaFraudRouter\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"frostWalletRegistry\",\"type\":\"address\"}],\"name\":\"setFrostWalletRegistry\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"lifecycleRouter\",\"type\":\"address\"}],\"name\":\"setLifecycleRouter\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"p2trFraudRouter\",\"type\":\"address\"}],\"name\":\"setP2TRFraudRouter\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"rebateStaking\",\"type\":\"address\"}],\"name\":\"setRebateStaking\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"redemptionWatchtower\",\"type\":\"address\"}],\"name\":\"setRedemptionWatchtower\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"spvMaintainer\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"setSpvMaintainerStatus\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"setVaultStatus\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"address\",\"name\":\"challenger\",\"type\":\"address\"}],\"name\":\"slashWalletForFraud\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"address\",\"name\":\"challenger\",\"type\":\"address\"}],\"name\":\"slashWalletForP2TRFraud\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"utxoKey\",\"type\":\"uint256\"}],\"name\":\"spentMainUTXOs\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"sweepTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"sweepProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"submitDepositSweepProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"sweepTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"sweepProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"}],\"name\":\"submitMovedFundsSweepProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"walletMainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"uint256\",\"name\":\"walletMemberIndex\",\"type\":\"uint256\"},{\"internalType\":\"bytes20[]\",\"name\":\"targetWallets\",\"type\":\"bytes20[]\"}],\"name\":\"submitMovingFundsCommitment\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"movingFundsTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"movingFundsProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"submitMovingFundsProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"redemptionTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"redemptionProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"submitRedemptionProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"redemptionKey\",\"type\":\"uint256\"}],\"name\":\"timedOutRedemptions\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"}],\"internalType\":\"structRedemption.RedemptionRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"transferGovernance\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"treasury\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"txProofDifficultyFactor\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"name\":\"updateDepositParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateFraudParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateMovingFundsParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateRedemptionParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"treasury\",\"type\":\"address\"}],\"name\":\"updateTreasury\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"name\":\"updateWalletParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"walletID\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"walletParameters\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"walletId\",\"type\":\"bytes32\"}],\"name\":\"walletPubKeyHashForWalletID\",\"outputs\":[{\"internalType\":\"bytes20\",\"name\":\"\",\"type\":\"bytes20\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"wallets\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"mainUtxoHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint64\",\"name\":\"pendingRedemptionsValue\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"createdAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsRequestedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"closingStartedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"pendingMovedFundsSweepRequestsCount\",\"type\":\"uint32\"},{\"internalType\":\"enumWallets.WalletState\",\"name\":\"state\",\"type\":\"uint8\"},{\"internalType\":\"bytes32\",\"name\":\"movingFundsTargetWalletsCommitmentHash\",\"type\":\"bytes32\"}],\"internalType\":\"structWallets.Wallet\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"walletId\",\"type\":\"bytes32\"}],\"name\":\"walletsByWalletID\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"mainUtxoHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint64\",\"name\":\"pendingRedemptionsValue\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"createdAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsRequestedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"closingStartedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"pendingMovedFundsSweepRequestsCount\",\"type\":\"uint32\"},{\"internalType\":\"enumWallets.WalletState\",\"name\":\"state\",\"type\":\"uint8\"},{\"internalType\":\"bytes32\",\"name\":\"movingFundsTargetWalletsCommitmentHash\",\"type\":\"bytes32\"}],\"internalType\":\"structWallets.Wallet\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
 }
 
 // BridgeABI is the input ABI used to generate the binding from.
@@ -268,6 +265,37 @@ func (_Bridge *BridgeTransactorRaw) Transfer(opts *bind.TransactOpts) (*types.Tr
 // Transact invokes the (paid) contract method with params as input values.
 func (_Bridge *BridgeTransactorRaw) Transact(opts *bind.TransactOpts, method string, params ...interface{}) (*types.Transaction, error) {
 	return _Bridge.Contract.contract.Transact(opts, method, params...)
+}
+
+// ActiveWalletID is a free data retrieval call binding the contract method 0x160c1730.
+//
+// Solidity: function activeWalletID() view returns(bytes32)
+func (_Bridge *BridgeCaller) ActiveWalletID(opts *bind.CallOpts) ([32]byte, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "activeWalletID")
+
+	if err != nil {
+		return *new([32]byte), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new([32]byte)).(*[32]byte)
+
+	return out0, err
+
+}
+
+// ActiveWalletID is a free data retrieval call binding the contract method 0x160c1730.
+//
+// Solidity: function activeWalletID() view returns(bytes32)
+func (_Bridge *BridgeSession) ActiveWalletID() ([32]byte, error) {
+	return _Bridge.Contract.ActiveWalletID(&_Bridge.CallOpts)
+}
+
+// ActiveWalletID is a free data retrieval call binding the contract method 0x160c1730.
+//
+// Solidity: function activeWalletID() view returns(bytes32)
+func (_Bridge *BridgeCallerSession) ActiveWalletID() ([32]byte, error) {
+	return _Bridge.Contract.ActiveWalletID(&_Bridge.CallOpts)
 }
 
 // ActiveWalletPubKeyHash is a free data retrieval call binding the contract method 0xded1d24a.
@@ -442,35 +470,66 @@ func (_Bridge *BridgeCallerSession) Deposits(depositKey *big.Int) (DepositDeposi
 	return _Bridge.Contract.Deposits(&_Bridge.CallOpts, depositKey)
 }
 
-// FraudChallenges is a free data retrieval call binding the contract method 0x33e957cb.
+// EcdsaFraudRouter is a free data retrieval call binding the contract method 0x9fa00083.
 //
-// Solidity: function fraudChallenges(uint256 challengeKey) view returns((address,uint256,uint32,bool))
-func (_Bridge *BridgeCaller) FraudChallenges(opts *bind.CallOpts, challengeKey *big.Int) (FraudFraudChallenge, error) {
+// Solidity: function ecdsaFraudRouter() view returns(address)
+func (_Bridge *BridgeCaller) EcdsaFraudRouter(opts *bind.CallOpts) (common.Address, error) {
 	var out []interface{}
-	err := _Bridge.contract.Call(opts, &out, "fraudChallenges", challengeKey)
+	err := _Bridge.contract.Call(opts, &out, "ecdsaFraudRouter")
 
 	if err != nil {
-		return *new(FraudFraudChallenge), err
+		return *new(common.Address), err
 	}
 
-	out0 := *abi.ConvertType(out[0], new(FraudFraudChallenge)).(*FraudFraudChallenge)
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
 
 	return out0, err
 
 }
 
-// FraudChallenges is a free data retrieval call binding the contract method 0x33e957cb.
+// EcdsaFraudRouter is a free data retrieval call binding the contract method 0x9fa00083.
 //
-// Solidity: function fraudChallenges(uint256 challengeKey) view returns((address,uint256,uint32,bool))
-func (_Bridge *BridgeSession) FraudChallenges(challengeKey *big.Int) (FraudFraudChallenge, error) {
-	return _Bridge.Contract.FraudChallenges(&_Bridge.CallOpts, challengeKey)
+// Solidity: function ecdsaFraudRouter() view returns(address)
+func (_Bridge *BridgeSession) EcdsaFraudRouter() (common.Address, error) {
+	return _Bridge.Contract.EcdsaFraudRouter(&_Bridge.CallOpts)
 }
 
-// FraudChallenges is a free data retrieval call binding the contract method 0x33e957cb.
+// EcdsaFraudRouter is a free data retrieval call binding the contract method 0x9fa00083.
 //
-// Solidity: function fraudChallenges(uint256 challengeKey) view returns((address,uint256,uint32,bool))
-func (_Bridge *BridgeCallerSession) FraudChallenges(challengeKey *big.Int) (FraudFraudChallenge, error) {
-	return _Bridge.Contract.FraudChallenges(&_Bridge.CallOpts, challengeKey)
+// Solidity: function ecdsaFraudRouter() view returns(address)
+func (_Bridge *BridgeCallerSession) EcdsaFraudRouter() (common.Address, error) {
+	return _Bridge.Contract.EcdsaFraudRouter(&_Bridge.CallOpts)
+}
+
+// EcdsaRetired is a free data retrieval call binding the contract method 0xea3257e3.
+//
+// Solidity: function ecdsaRetired() view returns(bool)
+func (_Bridge *BridgeCaller) EcdsaRetired(opts *bind.CallOpts) (bool, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "ecdsaRetired")
+
+	if err != nil {
+		return *new(bool), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(bool)).(*bool)
+
+	return out0, err
+
+}
+
+// EcdsaRetired is a free data retrieval call binding the contract method 0xea3257e3.
+//
+// Solidity: function ecdsaRetired() view returns(bool)
+func (_Bridge *BridgeSession) EcdsaRetired() (bool, error) {
+	return _Bridge.Contract.EcdsaRetired(&_Bridge.CallOpts)
+}
+
+// EcdsaRetired is a free data retrieval call binding the contract method 0xea3257e3.
+//
+// Solidity: function ecdsaRetired() view returns(bool)
+func (_Bridge *BridgeCallerSession) EcdsaRetired() (bool, error) {
+	return _Bridge.Contract.EcdsaRetired(&_Bridge.CallOpts)
 }
 
 // FraudParameters is a free data retrieval call binding the contract method 0x75b922d1.
@@ -526,6 +585,82 @@ func (_Bridge *BridgeCallerSession) FraudParameters() (struct {
 	FraudNotifierRewardMultiplier uint32
 }, error) {
 	return _Bridge.Contract.FraudParameters(&_Bridge.CallOpts)
+}
+
+// FrostLifecycleContext is a free data retrieval call binding the contract method 0xd0ebc637.
+//
+// Solidity: function frostLifecycleContext(bytes20 walletPubKeyHash) view returns(address frostRegistry, bytes32 walletID)
+func (_Bridge *BridgeCaller) FrostLifecycleContext(opts *bind.CallOpts, walletPubKeyHash [20]byte) (struct {
+	FrostRegistry common.Address
+	WalletID      [32]byte
+}, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "frostLifecycleContext", walletPubKeyHash)
+
+	outstruct := new(struct {
+		FrostRegistry common.Address
+		WalletID      [32]byte
+	})
+	if err != nil {
+		return *outstruct, err
+	}
+
+	outstruct.FrostRegistry = *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+	outstruct.WalletID = *abi.ConvertType(out[1], new([32]byte)).(*[32]byte)
+
+	return *outstruct, err
+
+}
+
+// FrostLifecycleContext is a free data retrieval call binding the contract method 0xd0ebc637.
+//
+// Solidity: function frostLifecycleContext(bytes20 walletPubKeyHash) view returns(address frostRegistry, bytes32 walletID)
+func (_Bridge *BridgeSession) FrostLifecycleContext(walletPubKeyHash [20]byte) (struct {
+	FrostRegistry common.Address
+	WalletID      [32]byte
+}, error) {
+	return _Bridge.Contract.FrostLifecycleContext(&_Bridge.CallOpts, walletPubKeyHash)
+}
+
+// FrostLifecycleContext is a free data retrieval call binding the contract method 0xd0ebc637.
+//
+// Solidity: function frostLifecycleContext(bytes20 walletPubKeyHash) view returns(address frostRegistry, bytes32 walletID)
+func (_Bridge *BridgeCallerSession) FrostLifecycleContext(walletPubKeyHash [20]byte) (struct {
+	FrostRegistry common.Address
+	WalletID      [32]byte
+}, error) {
+	return _Bridge.Contract.FrostLifecycleContext(&_Bridge.CallOpts, walletPubKeyHash)
+}
+
+// GetRebateStaking is a free data retrieval call binding the contract method 0x3edf8238.
+//
+// Solidity: function getRebateStaking() view returns(address)
+func (_Bridge *BridgeCaller) GetRebateStaking(opts *bind.CallOpts) (common.Address, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "getRebateStaking")
+
+	if err != nil {
+		return *new(common.Address), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+
+	return out0, err
+
+}
+
+// GetRebateStaking is a free data retrieval call binding the contract method 0x3edf8238.
+//
+// Solidity: function getRebateStaking() view returns(address)
+func (_Bridge *BridgeSession) GetRebateStaking() (common.Address, error) {
+	return _Bridge.Contract.GetRebateStaking(&_Bridge.CallOpts)
+}
+
+// GetRebateStaking is a free data retrieval call binding the contract method 0x3edf8238.
+//
+// Solidity: function getRebateStaking() view returns(address)
+func (_Bridge *BridgeCallerSession) GetRebateStaking() (common.Address, error) {
+	return _Bridge.Contract.GetRebateStaking(&_Bridge.CallOpts)
 }
 
 // GetRedemptionWatchtower is a free data retrieval call binding the contract method 0x5f3281ca.
@@ -773,6 +908,37 @@ func (_Bridge *BridgeCallerSession) MovingFundsParameters() (struct {
 	return _Bridge.Contract.MovingFundsParameters(&_Bridge.CallOpts)
 }
 
+// P2trFraudRouter is a free data retrieval call binding the contract method 0xe3973b03.
+//
+// Solidity: function p2trFraudRouter() view returns(address)
+func (_Bridge *BridgeCaller) P2trFraudRouter(opts *bind.CallOpts) (common.Address, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "p2trFraudRouter")
+
+	if err != nil {
+		return *new(common.Address), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+
+	return out0, err
+
+}
+
+// P2trFraudRouter is a free data retrieval call binding the contract method 0xe3973b03.
+//
+// Solidity: function p2trFraudRouter() view returns(address)
+func (_Bridge *BridgeSession) P2trFraudRouter() (common.Address, error) {
+	return _Bridge.Contract.P2trFraudRouter(&_Bridge.CallOpts)
+}
+
+// P2trFraudRouter is a free data retrieval call binding the contract method 0xe3973b03.
+//
+// Solidity: function p2trFraudRouter() view returns(address)
+func (_Bridge *BridgeCallerSession) P2trFraudRouter() (common.Address, error) {
+	return _Bridge.Contract.P2trFraudRouter(&_Bridge.CallOpts)
+}
+
 // PendingRedemptions is a free data retrieval call binding the contract method 0x03d952f7.
 //
 // Solidity: function pendingRedemptions(uint256 redemptionKey) view returns((address,uint64,uint64,uint64,uint32))
@@ -998,6 +1164,37 @@ func (_Bridge *BridgeCallerSession) TxProofDifficultyFactor() (*big.Int, error) 
 	return _Bridge.Contract.TxProofDifficultyFactor(&_Bridge.CallOpts)
 }
 
+// WalletID is a free data retrieval call binding the contract method 0x858c14bd.
+//
+// Solidity: function walletID(bytes20 walletPubKeyHash) view returns(bytes32)
+func (_Bridge *BridgeCaller) WalletID(opts *bind.CallOpts, walletPubKeyHash [20]byte) ([32]byte, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "walletID", walletPubKeyHash)
+
+	if err != nil {
+		return *new([32]byte), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new([32]byte)).(*[32]byte)
+
+	return out0, err
+
+}
+
+// WalletID is a free data retrieval call binding the contract method 0x858c14bd.
+//
+// Solidity: function walletID(bytes20 walletPubKeyHash) view returns(bytes32)
+func (_Bridge *BridgeSession) WalletID(walletPubKeyHash [20]byte) ([32]byte, error) {
+	return _Bridge.Contract.WalletID(&_Bridge.CallOpts, walletPubKeyHash)
+}
+
+// WalletID is a free data retrieval call binding the contract method 0x858c14bd.
+//
+// Solidity: function walletID(bytes20 walletPubKeyHash) view returns(bytes32)
+func (_Bridge *BridgeCallerSession) WalletID(walletPubKeyHash [20]byte) ([32]byte, error) {
+	return _Bridge.Contract.WalletID(&_Bridge.CallOpts, walletPubKeyHash)
+}
+
 // WalletParameters is a free data retrieval call binding the contract method 0x61ccf97a.
 //
 // Solidity: function walletParameters() view returns(uint32 walletCreationPeriod, uint64 walletCreationMinBtcBalance, uint64 walletCreationMaxBtcBalance, uint64 walletClosureMinBtcBalance, uint32 walletMaxAge, uint64 walletMaxBtcTransfer, uint32 walletClosingPeriod)
@@ -1068,6 +1265,37 @@ func (_Bridge *BridgeCallerSession) WalletParameters() (struct {
 	return _Bridge.Contract.WalletParameters(&_Bridge.CallOpts)
 }
 
+// WalletPubKeyHashForWalletID is a free data retrieval call binding the contract method 0x9a4f2ea9.
+//
+// Solidity: function walletPubKeyHashForWalletID(bytes32 walletId) view returns(bytes20)
+func (_Bridge *BridgeCaller) WalletPubKeyHashForWalletID(opts *bind.CallOpts, walletId [32]byte) ([20]byte, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "walletPubKeyHashForWalletID", walletId)
+
+	if err != nil {
+		return *new([20]byte), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new([20]byte)).(*[20]byte)
+
+	return out0, err
+
+}
+
+// WalletPubKeyHashForWalletID is a free data retrieval call binding the contract method 0x9a4f2ea9.
+//
+// Solidity: function walletPubKeyHashForWalletID(bytes32 walletId) view returns(bytes20)
+func (_Bridge *BridgeSession) WalletPubKeyHashForWalletID(walletId [32]byte) ([20]byte, error) {
+	return _Bridge.Contract.WalletPubKeyHashForWalletID(&_Bridge.CallOpts, walletId)
+}
+
+// WalletPubKeyHashForWalletID is a free data retrieval call binding the contract method 0x9a4f2ea9.
+//
+// Solidity: function walletPubKeyHashForWalletID(bytes32 walletId) view returns(bytes20)
+func (_Bridge *BridgeCallerSession) WalletPubKeyHashForWalletID(walletId [32]byte) ([20]byte, error) {
+	return _Bridge.Contract.WalletPubKeyHashForWalletID(&_Bridge.CallOpts, walletId)
+}
+
 // Wallets is a free data retrieval call binding the contract method 0xe65e19d5.
 //
 // Solidity: function wallets(bytes20 walletPubKeyHash) view returns((bytes32,bytes32,uint64,uint32,uint32,uint32,uint32,uint8,bytes32))
@@ -1099,25 +1327,35 @@ func (_Bridge *BridgeCallerSession) Wallets(walletPubKeyHash [20]byte) (WalletsW
 	return _Bridge.Contract.Wallets(&_Bridge.CallOpts, walletPubKeyHash)
 }
 
-// EcdsaWalletCreatedCallback is a paid mutator transaction binding the contract method 0xa8fa0f42.
+// WalletsByWalletID is a free data retrieval call binding the contract method 0xa9b2f9a3.
 //
-// Solidity: function __ecdsaWalletCreatedCallback(bytes32 ecdsaWalletID, bytes32 publicKeyX, bytes32 publicKeyY) returns()
-func (_Bridge *BridgeTransactor) EcdsaWalletCreatedCallback(opts *bind.TransactOpts, ecdsaWalletID [32]byte, publicKeyX [32]byte, publicKeyY [32]byte) (*types.Transaction, error) {
-	return _Bridge.contract.Transact(opts, "__ecdsaWalletCreatedCallback", ecdsaWalletID, publicKeyX, publicKeyY)
+// Solidity: function walletsByWalletID(bytes32 walletId) view returns((bytes32,bytes32,uint64,uint32,uint32,uint32,uint32,uint8,bytes32))
+func (_Bridge *BridgeCaller) WalletsByWalletID(opts *bind.CallOpts, walletId [32]byte) (WalletsWallet, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "walletsByWalletID", walletId)
+
+	if err != nil {
+		return *new(WalletsWallet), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(WalletsWallet)).(*WalletsWallet)
+
+	return out0, err
+
 }
 
-// EcdsaWalletCreatedCallback is a paid mutator transaction binding the contract method 0xa8fa0f42.
+// WalletsByWalletID is a free data retrieval call binding the contract method 0xa9b2f9a3.
 //
-// Solidity: function __ecdsaWalletCreatedCallback(bytes32 ecdsaWalletID, bytes32 publicKeyX, bytes32 publicKeyY) returns()
-func (_Bridge *BridgeSession) EcdsaWalletCreatedCallback(ecdsaWalletID [32]byte, publicKeyX [32]byte, publicKeyY [32]byte) (*types.Transaction, error) {
-	return _Bridge.Contract.EcdsaWalletCreatedCallback(&_Bridge.TransactOpts, ecdsaWalletID, publicKeyX, publicKeyY)
+// Solidity: function walletsByWalletID(bytes32 walletId) view returns((bytes32,bytes32,uint64,uint32,uint32,uint32,uint32,uint8,bytes32))
+func (_Bridge *BridgeSession) WalletsByWalletID(walletId [32]byte) (WalletsWallet, error) {
+	return _Bridge.Contract.WalletsByWalletID(&_Bridge.CallOpts, walletId)
 }
 
-// EcdsaWalletCreatedCallback is a paid mutator transaction binding the contract method 0xa8fa0f42.
+// WalletsByWalletID is a free data retrieval call binding the contract method 0xa9b2f9a3.
 //
-// Solidity: function __ecdsaWalletCreatedCallback(bytes32 ecdsaWalletID, bytes32 publicKeyX, bytes32 publicKeyY) returns()
-func (_Bridge *BridgeTransactorSession) EcdsaWalletCreatedCallback(ecdsaWalletID [32]byte, publicKeyX [32]byte, publicKeyY [32]byte) (*types.Transaction, error) {
-	return _Bridge.Contract.EcdsaWalletCreatedCallback(&_Bridge.TransactOpts, ecdsaWalletID, publicKeyX, publicKeyY)
+// Solidity: function walletsByWalletID(bytes32 walletId) view returns((bytes32,bytes32,uint64,uint32,uint32,uint32,uint32,uint8,bytes32))
+func (_Bridge *BridgeCallerSession) WalletsByWalletID(walletId [32]byte) (WalletsWallet, error) {
+	return _Bridge.Contract.WalletsByWalletID(&_Bridge.CallOpts, walletId)
 }
 
 // EcdsaWalletHeartbeatFailedCallback is a paid mutator transaction binding the contract method 0x3dce9812.
@@ -1141,46 +1379,25 @@ func (_Bridge *BridgeTransactorSession) EcdsaWalletHeartbeatFailedCallback(arg0 
 	return _Bridge.Contract.EcdsaWalletHeartbeatFailedCallback(&_Bridge.TransactOpts, arg0, publicKeyX, publicKeyY)
 }
 
-// DefeatFraudChallenge is a paid mutator transaction binding the contract method 0x77145f21.
+// FrostWalletCreatedCallback is a paid mutator transaction binding the contract method 0xd81c729e.
 //
-// Solidity: function defeatFraudChallenge(bytes walletPublicKey, bytes preimage, bool witness) returns()
-func (_Bridge *BridgeTransactor) DefeatFraudChallenge(opts *bind.TransactOpts, walletPublicKey []byte, preimage []byte, witness bool) (*types.Transaction, error) {
-	return _Bridge.contract.Transact(opts, "defeatFraudChallenge", walletPublicKey, preimage, witness)
+// Solidity: function __frostWalletCreatedCallback(bytes32 xOnlyOutputKey) returns()
+func (_Bridge *BridgeTransactor) FrostWalletCreatedCallback(opts *bind.TransactOpts, xOnlyOutputKey [32]byte) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "__frostWalletCreatedCallback", xOnlyOutputKey)
 }
 
-// DefeatFraudChallenge is a paid mutator transaction binding the contract method 0x77145f21.
+// FrostWalletCreatedCallback is a paid mutator transaction binding the contract method 0xd81c729e.
 //
-// Solidity: function defeatFraudChallenge(bytes walletPublicKey, bytes preimage, bool witness) returns()
-func (_Bridge *BridgeSession) DefeatFraudChallenge(walletPublicKey []byte, preimage []byte, witness bool) (*types.Transaction, error) {
-	return _Bridge.Contract.DefeatFraudChallenge(&_Bridge.TransactOpts, walletPublicKey, preimage, witness)
+// Solidity: function __frostWalletCreatedCallback(bytes32 xOnlyOutputKey) returns()
+func (_Bridge *BridgeSession) FrostWalletCreatedCallback(xOnlyOutputKey [32]byte) (*types.Transaction, error) {
+	return _Bridge.Contract.FrostWalletCreatedCallback(&_Bridge.TransactOpts, xOnlyOutputKey)
 }
 
-// DefeatFraudChallenge is a paid mutator transaction binding the contract method 0x77145f21.
+// FrostWalletCreatedCallback is a paid mutator transaction binding the contract method 0xd81c729e.
 //
-// Solidity: function defeatFraudChallenge(bytes walletPublicKey, bytes preimage, bool witness) returns()
-func (_Bridge *BridgeTransactorSession) DefeatFraudChallenge(walletPublicKey []byte, preimage []byte, witness bool) (*types.Transaction, error) {
-	return _Bridge.Contract.DefeatFraudChallenge(&_Bridge.TransactOpts, walletPublicKey, preimage, witness)
-}
-
-// DefeatFraudChallengeWithHeartbeat is a paid mutator transaction binding the contract method 0x0674f266.
-//
-// Solidity: function defeatFraudChallengeWithHeartbeat(bytes walletPublicKey, bytes heartbeatMessage) returns()
-func (_Bridge *BridgeTransactor) DefeatFraudChallengeWithHeartbeat(opts *bind.TransactOpts, walletPublicKey []byte, heartbeatMessage []byte) (*types.Transaction, error) {
-	return _Bridge.contract.Transact(opts, "defeatFraudChallengeWithHeartbeat", walletPublicKey, heartbeatMessage)
-}
-
-// DefeatFraudChallengeWithHeartbeat is a paid mutator transaction binding the contract method 0x0674f266.
-//
-// Solidity: function defeatFraudChallengeWithHeartbeat(bytes walletPublicKey, bytes heartbeatMessage) returns()
-func (_Bridge *BridgeSession) DefeatFraudChallengeWithHeartbeat(walletPublicKey []byte, heartbeatMessage []byte) (*types.Transaction, error) {
-	return _Bridge.Contract.DefeatFraudChallengeWithHeartbeat(&_Bridge.TransactOpts, walletPublicKey, heartbeatMessage)
-}
-
-// DefeatFraudChallengeWithHeartbeat is a paid mutator transaction binding the contract method 0x0674f266.
-//
-// Solidity: function defeatFraudChallengeWithHeartbeat(bytes walletPublicKey, bytes heartbeatMessage) returns()
-func (_Bridge *BridgeTransactorSession) DefeatFraudChallengeWithHeartbeat(walletPublicKey []byte, heartbeatMessage []byte) (*types.Transaction, error) {
-	return _Bridge.Contract.DefeatFraudChallengeWithHeartbeat(&_Bridge.TransactOpts, walletPublicKey, heartbeatMessage)
+// Solidity: function __frostWalletCreatedCallback(bytes32 xOnlyOutputKey) returns()
+func (_Bridge *BridgeTransactorSession) FrostWalletCreatedCallback(xOnlyOutputKey [32]byte) (*types.Transaction, error) {
+	return _Bridge.Contract.FrostWalletCreatedCallback(&_Bridge.TransactOpts, xOnlyOutputKey)
 }
 
 // Initialize is a paid mutator transaction binding the contract method 0xd246ce16.
@@ -1204,25 +1421,46 @@ func (_Bridge *BridgeTransactorSession) Initialize(_bank common.Address, _relay 
 	return _Bridge.Contract.Initialize(&_Bridge.TransactOpts, _bank, _relay, _treasury, _ecdsaWalletRegistry, _reimbursementPool, _txProofDifficultyFactor)
 }
 
-// NotifyFraudChallengeDefeatTimeout is a paid mutator transaction binding the contract method 0x79fc4eb3.
+// InitializeV2FixVaultZeroDeposit is a paid mutator transaction binding the contract method 0x456ffee0.
 //
-// Solidity: function notifyFraudChallengeDefeatTimeout(bytes walletPublicKey, uint32[] walletMembersIDs, bytes preimageSha256) returns()
-func (_Bridge *BridgeTransactor) NotifyFraudChallengeDefeatTimeout(opts *bind.TransactOpts, walletPublicKey []byte, walletMembersIDs []uint32, preimageSha256 []byte) (*types.Transaction, error) {
-	return _Bridge.contract.Transact(opts, "notifyFraudChallengeDefeatTimeout", walletPublicKey, walletMembersIDs, preimageSha256)
+// Solidity: function initializeV2_FixVaultZeroDeposit() returns()
+func (_Bridge *BridgeTransactor) InitializeV2FixVaultZeroDeposit(opts *bind.TransactOpts) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "initializeV2_FixVaultZeroDeposit")
 }
 
-// NotifyFraudChallengeDefeatTimeout is a paid mutator transaction binding the contract method 0x79fc4eb3.
+// InitializeV2FixVaultZeroDeposit is a paid mutator transaction binding the contract method 0x456ffee0.
 //
-// Solidity: function notifyFraudChallengeDefeatTimeout(bytes walletPublicKey, uint32[] walletMembersIDs, bytes preimageSha256) returns()
-func (_Bridge *BridgeSession) NotifyFraudChallengeDefeatTimeout(walletPublicKey []byte, walletMembersIDs []uint32, preimageSha256 []byte) (*types.Transaction, error) {
-	return _Bridge.Contract.NotifyFraudChallengeDefeatTimeout(&_Bridge.TransactOpts, walletPublicKey, walletMembersIDs, preimageSha256)
+// Solidity: function initializeV2_FixVaultZeroDeposit() returns()
+func (_Bridge *BridgeSession) InitializeV2FixVaultZeroDeposit() (*types.Transaction, error) {
+	return _Bridge.Contract.InitializeV2FixVaultZeroDeposit(&_Bridge.TransactOpts)
 }
 
-// NotifyFraudChallengeDefeatTimeout is a paid mutator transaction binding the contract method 0x79fc4eb3.
+// InitializeV2FixVaultZeroDeposit is a paid mutator transaction binding the contract method 0x456ffee0.
 //
-// Solidity: function notifyFraudChallengeDefeatTimeout(bytes walletPublicKey, uint32[] walletMembersIDs, bytes preimageSha256) returns()
-func (_Bridge *BridgeTransactorSession) NotifyFraudChallengeDefeatTimeout(walletPublicKey []byte, walletMembersIDs []uint32, preimageSha256 []byte) (*types.Transaction, error) {
-	return _Bridge.Contract.NotifyFraudChallengeDefeatTimeout(&_Bridge.TransactOpts, walletPublicKey, walletMembersIDs, preimageSha256)
+// Solidity: function initializeV2_FixVaultZeroDeposit() returns()
+func (_Bridge *BridgeTransactorSession) InitializeV2FixVaultZeroDeposit() (*types.Transaction, error) {
+	return _Bridge.Contract.InitializeV2FixVaultZeroDeposit(&_Bridge.TransactOpts)
+}
+
+// MigrateLegacyFraudChallenges is a paid mutator transaction binding the contract method 0xfe491621.
+//
+// Solidity: function migrateLegacyFraudChallenges(uint8 routerKind, uint256[] challengeKeys) returns()
+func (_Bridge *BridgeTransactor) MigrateLegacyFraudChallenges(opts *bind.TransactOpts, routerKind uint8, challengeKeys []*big.Int) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "migrateLegacyFraudChallenges", routerKind, challengeKeys)
+}
+
+// MigrateLegacyFraudChallenges is a paid mutator transaction binding the contract method 0xfe491621.
+//
+// Solidity: function migrateLegacyFraudChallenges(uint8 routerKind, uint256[] challengeKeys) returns()
+func (_Bridge *BridgeSession) MigrateLegacyFraudChallenges(routerKind uint8, challengeKeys []*big.Int) (*types.Transaction, error) {
+	return _Bridge.Contract.MigrateLegacyFraudChallenges(&_Bridge.TransactOpts, routerKind, challengeKeys)
+}
+
+// MigrateLegacyFraudChallenges is a paid mutator transaction binding the contract method 0xfe491621.
+//
+// Solidity: function migrateLegacyFraudChallenges(uint8 routerKind, uint256[] challengeKeys) returns()
+func (_Bridge *BridgeTransactorSession) MigrateLegacyFraudChallenges(routerKind uint8, challengeKeys []*big.Int) (*types.Transaction, error) {
+	return _Bridge.Contract.MigrateLegacyFraudChallenges(&_Bridge.TransactOpts, routerKind, challengeKeys)
 }
 
 // NotifyMovedFundsSweepTimeout is a paid mutator transaction binding the contract method 0x50aea15a.
@@ -1456,6 +1694,27 @@ func (_Bridge *BridgeTransactorSession) ResetMovingFundsTimeout(walletPubKeyHash
 	return _Bridge.Contract.ResetMovingFundsTimeout(&_Bridge.TransactOpts, walletPubKeyHash)
 }
 
+// RetireEcdsa is a paid mutator transaction binding the contract method 0x0652611e.
+//
+// Solidity: function retireEcdsa() returns()
+func (_Bridge *BridgeTransactor) RetireEcdsa(opts *bind.TransactOpts) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "retireEcdsa")
+}
+
+// RetireEcdsa is a paid mutator transaction binding the contract method 0x0652611e.
+//
+// Solidity: function retireEcdsa() returns()
+func (_Bridge *BridgeSession) RetireEcdsa() (*types.Transaction, error) {
+	return _Bridge.Contract.RetireEcdsa(&_Bridge.TransactOpts)
+}
+
+// RetireEcdsa is a paid mutator transaction binding the contract method 0x0652611e.
+//
+// Solidity: function retireEcdsa() returns()
+func (_Bridge *BridgeTransactorSession) RetireEcdsa() (*types.Transaction, error) {
+	return _Bridge.Contract.RetireEcdsa(&_Bridge.TransactOpts)
+}
+
 // RevealDeposit is a paid mutator transaction binding the contract method 0xfca4ba4c.
 //
 // Solidity: function revealDeposit((bytes4,bytes,bytes,bytes4) fundingTx, (uint32,bytes8,bytes20,bytes20,bytes4,address) reveal) returns()
@@ -1496,6 +1755,153 @@ func (_Bridge *BridgeSession) RevealDepositWithExtraData(fundingTx BitcoinTxInfo
 // Solidity: function revealDepositWithExtraData((bytes4,bytes,bytes,bytes4) fundingTx, (uint32,bytes8,bytes20,bytes20,bytes4,address) reveal, bytes32 extraData) returns()
 func (_Bridge *BridgeTransactorSession) RevealDepositWithExtraData(fundingTx BitcoinTxInfo, reveal DepositDepositRevealInfo, extraData [32]byte) (*types.Transaction, error) {
 	return _Bridge.Contract.RevealDepositWithExtraData(&_Bridge.TransactOpts, fundingTx, reveal, extraData)
+}
+
+// RevealTaprootDeposit is a paid mutator transaction binding the contract method 0xbbbafefa.
+//
+// Solidity: function revealTaprootDeposit((bytes4,bytes,bytes,bytes4) fundingTx, (uint32,bytes8,bytes20,bytes32,bytes20,bytes32,bytes4,address) reveal) returns()
+func (_Bridge *BridgeTransactor) RevealTaprootDeposit(opts *bind.TransactOpts, fundingTx BitcoinTxInfo, reveal DepositTaprootDepositRevealInfo) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "revealTaprootDeposit", fundingTx, reveal)
+}
+
+// RevealTaprootDeposit is a paid mutator transaction binding the contract method 0xbbbafefa.
+//
+// Solidity: function revealTaprootDeposit((bytes4,bytes,bytes,bytes4) fundingTx, (uint32,bytes8,bytes20,bytes32,bytes20,bytes32,bytes4,address) reveal) returns()
+func (_Bridge *BridgeSession) RevealTaprootDeposit(fundingTx BitcoinTxInfo, reveal DepositTaprootDepositRevealInfo) (*types.Transaction, error) {
+	return _Bridge.Contract.RevealTaprootDeposit(&_Bridge.TransactOpts, fundingTx, reveal)
+}
+
+// RevealTaprootDeposit is a paid mutator transaction binding the contract method 0xbbbafefa.
+//
+// Solidity: function revealTaprootDeposit((bytes4,bytes,bytes,bytes4) fundingTx, (uint32,bytes8,bytes20,bytes32,bytes20,bytes32,bytes4,address) reveal) returns()
+func (_Bridge *BridgeTransactorSession) RevealTaprootDeposit(fundingTx BitcoinTxInfo, reveal DepositTaprootDepositRevealInfo) (*types.Transaction, error) {
+	return _Bridge.Contract.RevealTaprootDeposit(&_Bridge.TransactOpts, fundingTx, reveal)
+}
+
+// RevealTaprootDepositWithExtraData is a paid mutator transaction binding the contract method 0xa97c9f34.
+//
+// Solidity: function revealTaprootDepositWithExtraData((bytes4,bytes,bytes,bytes4) fundingTx, (uint32,bytes8,bytes20,bytes32,bytes20,bytes32,bytes4,address) reveal, bytes32 extraData) returns()
+func (_Bridge *BridgeTransactor) RevealTaprootDepositWithExtraData(opts *bind.TransactOpts, fundingTx BitcoinTxInfo, reveal DepositTaprootDepositRevealInfo, extraData [32]byte) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "revealTaprootDepositWithExtraData", fundingTx, reveal, extraData)
+}
+
+// RevealTaprootDepositWithExtraData is a paid mutator transaction binding the contract method 0xa97c9f34.
+//
+// Solidity: function revealTaprootDepositWithExtraData((bytes4,bytes,bytes,bytes4) fundingTx, (uint32,bytes8,bytes20,bytes32,bytes20,bytes32,bytes4,address) reveal, bytes32 extraData) returns()
+func (_Bridge *BridgeSession) RevealTaprootDepositWithExtraData(fundingTx BitcoinTxInfo, reveal DepositTaprootDepositRevealInfo, extraData [32]byte) (*types.Transaction, error) {
+	return _Bridge.Contract.RevealTaprootDepositWithExtraData(&_Bridge.TransactOpts, fundingTx, reveal, extraData)
+}
+
+// RevealTaprootDepositWithExtraData is a paid mutator transaction binding the contract method 0xa97c9f34.
+//
+// Solidity: function revealTaprootDepositWithExtraData((bytes4,bytes,bytes,bytes4) fundingTx, (uint32,bytes8,bytes20,bytes32,bytes20,bytes32,bytes4,address) reveal, bytes32 extraData) returns()
+func (_Bridge *BridgeTransactorSession) RevealTaprootDepositWithExtraData(fundingTx BitcoinTxInfo, reveal DepositTaprootDepositRevealInfo, extraData [32]byte) (*types.Transaction, error) {
+	return _Bridge.Contract.RevealTaprootDepositWithExtraData(&_Bridge.TransactOpts, fundingTx, reveal, extraData)
+}
+
+// SetEcdsaFraudRouter is a paid mutator transaction binding the contract method 0xba863979.
+//
+// Solidity: function setEcdsaFraudRouter(address ecdsaFraudRouter) returns()
+func (_Bridge *BridgeTransactor) SetEcdsaFraudRouter(opts *bind.TransactOpts, ecdsaFraudRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "setEcdsaFraudRouter", ecdsaFraudRouter)
+}
+
+// SetEcdsaFraudRouter is a paid mutator transaction binding the contract method 0xba863979.
+//
+// Solidity: function setEcdsaFraudRouter(address ecdsaFraudRouter) returns()
+func (_Bridge *BridgeSession) SetEcdsaFraudRouter(ecdsaFraudRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetEcdsaFraudRouter(&_Bridge.TransactOpts, ecdsaFraudRouter)
+}
+
+// SetEcdsaFraudRouter is a paid mutator transaction binding the contract method 0xba863979.
+//
+// Solidity: function setEcdsaFraudRouter(address ecdsaFraudRouter) returns()
+func (_Bridge *BridgeTransactorSession) SetEcdsaFraudRouter(ecdsaFraudRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetEcdsaFraudRouter(&_Bridge.TransactOpts, ecdsaFraudRouter)
+}
+
+// SetFrostWalletRegistry is a paid mutator transaction binding the contract method 0x07fe5dad.
+//
+// Solidity: function setFrostWalletRegistry(address frostWalletRegistry) returns()
+func (_Bridge *BridgeTransactor) SetFrostWalletRegistry(opts *bind.TransactOpts, frostWalletRegistry common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "setFrostWalletRegistry", frostWalletRegistry)
+}
+
+// SetFrostWalletRegistry is a paid mutator transaction binding the contract method 0x07fe5dad.
+//
+// Solidity: function setFrostWalletRegistry(address frostWalletRegistry) returns()
+func (_Bridge *BridgeSession) SetFrostWalletRegistry(frostWalletRegistry common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetFrostWalletRegistry(&_Bridge.TransactOpts, frostWalletRegistry)
+}
+
+// SetFrostWalletRegistry is a paid mutator transaction binding the contract method 0x07fe5dad.
+//
+// Solidity: function setFrostWalletRegistry(address frostWalletRegistry) returns()
+func (_Bridge *BridgeTransactorSession) SetFrostWalletRegistry(frostWalletRegistry common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetFrostWalletRegistry(&_Bridge.TransactOpts, frostWalletRegistry)
+}
+
+// SetLifecycleRouter is a paid mutator transaction binding the contract method 0xdf5efac8.
+//
+// Solidity: function setLifecycleRouter(address lifecycleRouter) returns()
+func (_Bridge *BridgeTransactor) SetLifecycleRouter(opts *bind.TransactOpts, lifecycleRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "setLifecycleRouter", lifecycleRouter)
+}
+
+// SetLifecycleRouter is a paid mutator transaction binding the contract method 0xdf5efac8.
+//
+// Solidity: function setLifecycleRouter(address lifecycleRouter) returns()
+func (_Bridge *BridgeSession) SetLifecycleRouter(lifecycleRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetLifecycleRouter(&_Bridge.TransactOpts, lifecycleRouter)
+}
+
+// SetLifecycleRouter is a paid mutator transaction binding the contract method 0xdf5efac8.
+//
+// Solidity: function setLifecycleRouter(address lifecycleRouter) returns()
+func (_Bridge *BridgeTransactorSession) SetLifecycleRouter(lifecycleRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetLifecycleRouter(&_Bridge.TransactOpts, lifecycleRouter)
+}
+
+// SetP2TRFraudRouter is a paid mutator transaction binding the contract method 0x6247cf16.
+//
+// Solidity: function setP2TRFraudRouter(address p2trFraudRouter) returns()
+func (_Bridge *BridgeTransactor) SetP2TRFraudRouter(opts *bind.TransactOpts, p2trFraudRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "setP2TRFraudRouter", p2trFraudRouter)
+}
+
+// SetP2TRFraudRouter is a paid mutator transaction binding the contract method 0x6247cf16.
+//
+// Solidity: function setP2TRFraudRouter(address p2trFraudRouter) returns()
+func (_Bridge *BridgeSession) SetP2TRFraudRouter(p2trFraudRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetP2TRFraudRouter(&_Bridge.TransactOpts, p2trFraudRouter)
+}
+
+// SetP2TRFraudRouter is a paid mutator transaction binding the contract method 0x6247cf16.
+//
+// Solidity: function setP2TRFraudRouter(address p2trFraudRouter) returns()
+func (_Bridge *BridgeTransactorSession) SetP2TRFraudRouter(p2trFraudRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetP2TRFraudRouter(&_Bridge.TransactOpts, p2trFraudRouter)
+}
+
+// SetRebateStaking is a paid mutator transaction binding the contract method 0xca73c462.
+//
+// Solidity: function setRebateStaking(address rebateStaking) returns()
+func (_Bridge *BridgeTransactor) SetRebateStaking(opts *bind.TransactOpts, rebateStaking common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "setRebateStaking", rebateStaking)
+}
+
+// SetRebateStaking is a paid mutator transaction binding the contract method 0xca73c462.
+//
+// Solidity: function setRebateStaking(address rebateStaking) returns()
+func (_Bridge *BridgeSession) SetRebateStaking(rebateStaking common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetRebateStaking(&_Bridge.TransactOpts, rebateStaking)
+}
+
+// SetRebateStaking is a paid mutator transaction binding the contract method 0xca73c462.
+//
+// Solidity: function setRebateStaking(address rebateStaking) returns()
+func (_Bridge *BridgeTransactorSession) SetRebateStaking(rebateStaking common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetRebateStaking(&_Bridge.TransactOpts, rebateStaking)
 }
 
 // SetRedemptionWatchtower is a paid mutator transaction binding the contract method 0xbe26ebad.
@@ -1561,6 +1967,48 @@ func (_Bridge *BridgeTransactorSession) SetVaultStatus(vault common.Address, isT
 	return _Bridge.Contract.SetVaultStatus(&_Bridge.TransactOpts, vault, isTrusted)
 }
 
+// SlashWalletForFraud is a paid mutator transaction binding the contract method 0x3f5dfabb.
+//
+// Solidity: function slashWalletForFraud(bytes20 walletPubKeyHash, uint32[] walletMembersIDs, address challenger) returns()
+func (_Bridge *BridgeTransactor) SlashWalletForFraud(opts *bind.TransactOpts, walletPubKeyHash [20]byte, walletMembersIDs []uint32, challenger common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "slashWalletForFraud", walletPubKeyHash, walletMembersIDs, challenger)
+}
+
+// SlashWalletForFraud is a paid mutator transaction binding the contract method 0x3f5dfabb.
+//
+// Solidity: function slashWalletForFraud(bytes20 walletPubKeyHash, uint32[] walletMembersIDs, address challenger) returns()
+func (_Bridge *BridgeSession) SlashWalletForFraud(walletPubKeyHash [20]byte, walletMembersIDs []uint32, challenger common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SlashWalletForFraud(&_Bridge.TransactOpts, walletPubKeyHash, walletMembersIDs, challenger)
+}
+
+// SlashWalletForFraud is a paid mutator transaction binding the contract method 0x3f5dfabb.
+//
+// Solidity: function slashWalletForFraud(bytes20 walletPubKeyHash, uint32[] walletMembersIDs, address challenger) returns()
+func (_Bridge *BridgeTransactorSession) SlashWalletForFraud(walletPubKeyHash [20]byte, walletMembersIDs []uint32, challenger common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SlashWalletForFraud(&_Bridge.TransactOpts, walletPubKeyHash, walletMembersIDs, challenger)
+}
+
+// SlashWalletForP2TRFraud is a paid mutator transaction binding the contract method 0xc823b5cf.
+//
+// Solidity: function slashWalletForP2TRFraud(bytes20 walletPubKeyHash, uint32[] walletMembersIDs, address challenger) returns()
+func (_Bridge *BridgeTransactor) SlashWalletForP2TRFraud(opts *bind.TransactOpts, walletPubKeyHash [20]byte, walletMembersIDs []uint32, challenger common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "slashWalletForP2TRFraud", walletPubKeyHash, walletMembersIDs, challenger)
+}
+
+// SlashWalletForP2TRFraud is a paid mutator transaction binding the contract method 0xc823b5cf.
+//
+// Solidity: function slashWalletForP2TRFraud(bytes20 walletPubKeyHash, uint32[] walletMembersIDs, address challenger) returns()
+func (_Bridge *BridgeSession) SlashWalletForP2TRFraud(walletPubKeyHash [20]byte, walletMembersIDs []uint32, challenger common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SlashWalletForP2TRFraud(&_Bridge.TransactOpts, walletPubKeyHash, walletMembersIDs, challenger)
+}
+
+// SlashWalletForP2TRFraud is a paid mutator transaction binding the contract method 0xc823b5cf.
+//
+// Solidity: function slashWalletForP2TRFraud(bytes20 walletPubKeyHash, uint32[] walletMembersIDs, address challenger) returns()
+func (_Bridge *BridgeTransactorSession) SlashWalletForP2TRFraud(walletPubKeyHash [20]byte, walletMembersIDs []uint32, challenger common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SlashWalletForP2TRFraud(&_Bridge.TransactOpts, walletPubKeyHash, walletMembersIDs, challenger)
+}
+
 // SubmitDepositSweepProof is a paid mutator transaction binding the contract method 0xbd150131.
 //
 // Solidity: function submitDepositSweepProof((bytes4,bytes,bytes,bytes4) sweepTx, (bytes,uint256,bytes,bytes32,bytes) sweepProof, (bytes32,uint32,uint64) mainUtxo, address vault) returns()
@@ -1580,27 +2028,6 @@ func (_Bridge *BridgeSession) SubmitDepositSweepProof(sweepTx BitcoinTxInfo, swe
 // Solidity: function submitDepositSweepProof((bytes4,bytes,bytes,bytes4) sweepTx, (bytes,uint256,bytes,bytes32,bytes) sweepProof, (bytes32,uint32,uint64) mainUtxo, address vault) returns()
 func (_Bridge *BridgeTransactorSession) SubmitDepositSweepProof(sweepTx BitcoinTxInfo, sweepProof BitcoinTxProof, mainUtxo BitcoinTxUTXO, vault common.Address) (*types.Transaction, error) {
 	return _Bridge.Contract.SubmitDepositSweepProof(&_Bridge.TransactOpts, sweepTx, sweepProof, mainUtxo, vault)
-}
-
-// SubmitFraudChallenge is a paid mutator transaction binding the contract method 0x685ce1b1.
-//
-// Solidity: function submitFraudChallenge(bytes walletPublicKey, bytes preimageSha256, (bytes32,bytes32,uint8) signature) payable returns()
-func (_Bridge *BridgeTransactor) SubmitFraudChallenge(opts *bind.TransactOpts, walletPublicKey []byte, preimageSha256 []byte, signature BitcoinTxRSVSignature) (*types.Transaction, error) {
-	return _Bridge.contract.Transact(opts, "submitFraudChallenge", walletPublicKey, preimageSha256, signature)
-}
-
-// SubmitFraudChallenge is a paid mutator transaction binding the contract method 0x685ce1b1.
-//
-// Solidity: function submitFraudChallenge(bytes walletPublicKey, bytes preimageSha256, (bytes32,bytes32,uint8) signature) payable returns()
-func (_Bridge *BridgeSession) SubmitFraudChallenge(walletPublicKey []byte, preimageSha256 []byte, signature BitcoinTxRSVSignature) (*types.Transaction, error) {
-	return _Bridge.Contract.SubmitFraudChallenge(&_Bridge.TransactOpts, walletPublicKey, preimageSha256, signature)
-}
-
-// SubmitFraudChallenge is a paid mutator transaction binding the contract method 0x685ce1b1.
-//
-// Solidity: function submitFraudChallenge(bytes walletPublicKey, bytes preimageSha256, (bytes32,bytes32,uint8) signature) payable returns()
-func (_Bridge *BridgeTransactorSession) SubmitFraudChallenge(walletPublicKey []byte, preimageSha256 []byte, signature BitcoinTxRSVSignature) (*types.Transaction, error) {
-	return _Bridge.Contract.SubmitFraudChallenge(&_Bridge.TransactOpts, walletPublicKey, preimageSha256, signature)
 }
 
 // SubmitMovedFundsSweepProof is a paid mutator transaction binding the contract method 0x9821c38b.
@@ -2133,6 +2560,151 @@ func (_Bridge *BridgeFilterer) ParseDepositRevealed(log types.Log) (*BridgeDepos
 	return event, nil
 }
 
+// BridgeDepositVaultFixedIterator is returned from FilterDepositVaultFixed and is used to iterate over the raw logs and unpacked data for DepositVaultFixed events raised by the Bridge contract.
+type BridgeDepositVaultFixedIterator struct {
+	Event *BridgeDepositVaultFixed // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeDepositVaultFixedIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeDepositVaultFixed)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeDepositVaultFixed)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeDepositVaultFixedIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeDepositVaultFixedIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeDepositVaultFixed represents a DepositVaultFixed event raised by the Bridge contract.
+type BridgeDepositVaultFixed struct {
+	DepositKey *big.Int
+	NewVault   common.Address
+	Raw        types.Log // Blockchain specific contextual infos
+}
+
+// FilterDepositVaultFixed is a free log retrieval operation binding the contract event 0x6851c9da8832e374b52353e89727e1f35bd403bf45bc19c889e416393bd53973.
+//
+// Solidity: event DepositVaultFixed(uint256 indexed depositKey, address newVault)
+func (_Bridge *BridgeFilterer) FilterDepositVaultFixed(opts *bind.FilterOpts, depositKey []*big.Int) (*BridgeDepositVaultFixedIterator, error) {
+
+	var depositKeyRule []interface{}
+	for _, depositKeyItem := range depositKey {
+		depositKeyRule = append(depositKeyRule, depositKeyItem)
+	}
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "DepositVaultFixed", depositKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeDepositVaultFixedIterator{contract: _Bridge.contract, event: "DepositVaultFixed", logs: logs, sub: sub}, nil
+}
+
+// WatchDepositVaultFixed is a free log subscription operation binding the contract event 0x6851c9da8832e374b52353e89727e1f35bd403bf45bc19c889e416393bd53973.
+//
+// Solidity: event DepositVaultFixed(uint256 indexed depositKey, address newVault)
+func (_Bridge *BridgeFilterer) WatchDepositVaultFixed(opts *bind.WatchOpts, sink chan<- *BridgeDepositVaultFixed, depositKey []*big.Int) (event.Subscription, error) {
+
+	var depositKeyRule []interface{}
+	for _, depositKeyItem := range depositKey {
+		depositKeyRule = append(depositKeyRule, depositKeyItem)
+	}
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "DepositVaultFixed", depositKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeDepositVaultFixed)
+				if err := _Bridge.contract.UnpackLog(event, "DepositVaultFixed", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseDepositVaultFixed is a log parse operation binding the contract event 0x6851c9da8832e374b52353e89727e1f35bd403bf45bc19c889e416393bd53973.
+//
+// Solidity: event DepositVaultFixed(uint256 indexed depositKey, address newVault)
+func (_Bridge *BridgeFilterer) ParseDepositVaultFixed(log types.Log) (*BridgeDepositVaultFixed, error) {
+	event := new(BridgeDepositVaultFixed)
+	if err := _Bridge.contract.UnpackLog(event, "DepositVaultFixed", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
 // BridgeDepositsSweptIterator is returned from FilterDepositsSwept and is used to iterate over the raw logs and unpacked data for DepositsSwept events raised by the Bridge contract.
 type BridgeDepositsSweptIterator struct {
 	Event *BridgeDepositsSwept // Event containing the contract specifics and raw log
@@ -2268,9 +2840,9 @@ func (_Bridge *BridgeFilterer) ParseDepositsSwept(log types.Log) (*BridgeDeposit
 	return event, nil
 }
 
-// BridgeFraudChallengeDefeatTimedOutIterator is returned from FilterFraudChallengeDefeatTimedOut and is used to iterate over the raw logs and unpacked data for FraudChallengeDefeatTimedOut events raised by the Bridge contract.
-type BridgeFraudChallengeDefeatTimedOutIterator struct {
-	Event *BridgeFraudChallengeDefeatTimedOut // Event containing the contract specifics and raw log
+// BridgeEcdsaFraudRouterSetIterator is returned from FilterEcdsaFraudRouterSet and is used to iterate over the raw logs and unpacked data for EcdsaFraudRouterSet events raised by the Bridge contract.
+type BridgeEcdsaFraudRouterSetIterator struct {
+	Event *BridgeEcdsaFraudRouterSet // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -2284,7 +2856,7 @@ type BridgeFraudChallengeDefeatTimedOutIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *BridgeFraudChallengeDefeatTimedOutIterator) Next() bool {
+func (it *BridgeEcdsaFraudRouterSetIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -2293,7 +2865,7 @@ func (it *BridgeFraudChallengeDefeatTimedOutIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(BridgeFraudChallengeDefeatTimedOut)
+			it.Event = new(BridgeEcdsaFraudRouterSet)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -2308,7 +2880,7 @@ func (it *BridgeFraudChallengeDefeatTimedOutIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(BridgeFraudChallengeDefeatTimedOut)
+		it.Event = new(BridgeEcdsaFraudRouterSet)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -2324,52 +2896,41 @@ func (it *BridgeFraudChallengeDefeatTimedOutIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *BridgeFraudChallengeDefeatTimedOutIterator) Error() error {
+func (it *BridgeEcdsaFraudRouterSetIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *BridgeFraudChallengeDefeatTimedOutIterator) Close() error {
+func (it *BridgeEcdsaFraudRouterSetIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// BridgeFraudChallengeDefeatTimedOut represents a FraudChallengeDefeatTimedOut event raised by the Bridge contract.
-type BridgeFraudChallengeDefeatTimedOut struct {
-	WalletPubKeyHash [20]byte
-	Sighash          [32]byte
+// BridgeEcdsaFraudRouterSet represents a EcdsaFraudRouterSet event raised by the Bridge contract.
+type BridgeEcdsaFraudRouterSet struct {
+	EcdsaFraudRouter common.Address
 	Raw              types.Log // Blockchain specific contextual infos
 }
 
-// FilterFraudChallengeDefeatTimedOut is a free log retrieval operation binding the contract event 0x635230b60143449f10a365568e2bd95e3e8aaed03855631722941c2bad634b77.
+// FilterEcdsaFraudRouterSet is a free log retrieval operation binding the contract event 0x74b82ffdaa86ef071c7c5083b76052a32b9d67ead5e1013cba6979a28d1851c1.
 //
-// Solidity: event FraudChallengeDefeatTimedOut(bytes20 indexed walletPubKeyHash, bytes32 sighash)
-func (_Bridge *BridgeFilterer) FilterFraudChallengeDefeatTimedOut(opts *bind.FilterOpts, walletPubKeyHash [][20]byte) (*BridgeFraudChallengeDefeatTimedOutIterator, error) {
+// Solidity: event EcdsaFraudRouterSet(address ecdsaFraudRouter)
+func (_Bridge *BridgeFilterer) FilterEcdsaFraudRouterSet(opts *bind.FilterOpts) (*BridgeEcdsaFraudRouterSetIterator, error) {
 
-	var walletPubKeyHashRule []interface{}
-	for _, walletPubKeyHashItem := range walletPubKeyHash {
-		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
-	}
-
-	logs, sub, err := _Bridge.contract.FilterLogs(opts, "FraudChallengeDefeatTimedOut", walletPubKeyHashRule)
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "EcdsaFraudRouterSet")
 	if err != nil {
 		return nil, err
 	}
-	return &BridgeFraudChallengeDefeatTimedOutIterator{contract: _Bridge.contract, event: "FraudChallengeDefeatTimedOut", logs: logs, sub: sub}, nil
+	return &BridgeEcdsaFraudRouterSetIterator{contract: _Bridge.contract, event: "EcdsaFraudRouterSet", logs: logs, sub: sub}, nil
 }
 
-// WatchFraudChallengeDefeatTimedOut is a free log subscription operation binding the contract event 0x635230b60143449f10a365568e2bd95e3e8aaed03855631722941c2bad634b77.
+// WatchEcdsaFraudRouterSet is a free log subscription operation binding the contract event 0x74b82ffdaa86ef071c7c5083b76052a32b9d67ead5e1013cba6979a28d1851c1.
 //
-// Solidity: event FraudChallengeDefeatTimedOut(bytes20 indexed walletPubKeyHash, bytes32 sighash)
-func (_Bridge *BridgeFilterer) WatchFraudChallengeDefeatTimedOut(opts *bind.WatchOpts, sink chan<- *BridgeFraudChallengeDefeatTimedOut, walletPubKeyHash [][20]byte) (event.Subscription, error) {
+// Solidity: event EcdsaFraudRouterSet(address ecdsaFraudRouter)
+func (_Bridge *BridgeFilterer) WatchEcdsaFraudRouterSet(opts *bind.WatchOpts, sink chan<- *BridgeEcdsaFraudRouterSet) (event.Subscription, error) {
 
-	var walletPubKeyHashRule []interface{}
-	for _, walletPubKeyHashItem := range walletPubKeyHash {
-		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
-	}
-
-	logs, sub, err := _Bridge.contract.WatchLogs(opts, "FraudChallengeDefeatTimedOut", walletPubKeyHashRule)
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "EcdsaFraudRouterSet")
 	if err != nil {
 		return nil, err
 	}
@@ -2379,8 +2940,8 @@ func (_Bridge *BridgeFilterer) WatchFraudChallengeDefeatTimedOut(opts *bind.Watc
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(BridgeFraudChallengeDefeatTimedOut)
-				if err := _Bridge.contract.UnpackLog(event, "FraudChallengeDefeatTimedOut", log); err != nil {
+				event := new(BridgeEcdsaFraudRouterSet)
+				if err := _Bridge.contract.UnpackLog(event, "EcdsaFraudRouterSet", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -2401,21 +2962,21 @@ func (_Bridge *BridgeFilterer) WatchFraudChallengeDefeatTimedOut(opts *bind.Watc
 	}), nil
 }
 
-// ParseFraudChallengeDefeatTimedOut is a log parse operation binding the contract event 0x635230b60143449f10a365568e2bd95e3e8aaed03855631722941c2bad634b77.
+// ParseEcdsaFraudRouterSet is a log parse operation binding the contract event 0x74b82ffdaa86ef071c7c5083b76052a32b9d67ead5e1013cba6979a28d1851c1.
 //
-// Solidity: event FraudChallengeDefeatTimedOut(bytes20 indexed walletPubKeyHash, bytes32 sighash)
-func (_Bridge *BridgeFilterer) ParseFraudChallengeDefeatTimedOut(log types.Log) (*BridgeFraudChallengeDefeatTimedOut, error) {
-	event := new(BridgeFraudChallengeDefeatTimedOut)
-	if err := _Bridge.contract.UnpackLog(event, "FraudChallengeDefeatTimedOut", log); err != nil {
+// Solidity: event EcdsaFraudRouterSet(address ecdsaFraudRouter)
+func (_Bridge *BridgeFilterer) ParseEcdsaFraudRouterSet(log types.Log) (*BridgeEcdsaFraudRouterSet, error) {
+	event := new(BridgeEcdsaFraudRouterSet)
+	if err := _Bridge.contract.UnpackLog(event, "EcdsaFraudRouterSet", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
 	return event, nil
 }
 
-// BridgeFraudChallengeDefeatedIterator is returned from FilterFraudChallengeDefeated and is used to iterate over the raw logs and unpacked data for FraudChallengeDefeated events raised by the Bridge contract.
-type BridgeFraudChallengeDefeatedIterator struct {
-	Event *BridgeFraudChallengeDefeated // Event containing the contract specifics and raw log
+// BridgeEcdsaRetiredIterator is returned from FilterEcdsaRetired and is used to iterate over the raw logs and unpacked data for EcdsaRetired events raised by the Bridge contract.
+type BridgeEcdsaRetiredIterator struct {
+	Event *BridgeEcdsaRetired // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -2429,7 +2990,7 @@ type BridgeFraudChallengeDefeatedIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *BridgeFraudChallengeDefeatedIterator) Next() bool {
+func (it *BridgeEcdsaRetiredIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -2438,7 +2999,7 @@ func (it *BridgeFraudChallengeDefeatedIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(BridgeFraudChallengeDefeated)
+			it.Event = new(BridgeEcdsaRetired)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -2453,7 +3014,7 @@ func (it *BridgeFraudChallengeDefeatedIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(BridgeFraudChallengeDefeated)
+		it.Event = new(BridgeEcdsaRetired)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -2469,52 +3030,40 @@ func (it *BridgeFraudChallengeDefeatedIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *BridgeFraudChallengeDefeatedIterator) Error() error {
+func (it *BridgeEcdsaRetiredIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *BridgeFraudChallengeDefeatedIterator) Close() error {
+func (it *BridgeEcdsaRetiredIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// BridgeFraudChallengeDefeated represents a FraudChallengeDefeated event raised by the Bridge contract.
-type BridgeFraudChallengeDefeated struct {
-	WalletPubKeyHash [20]byte
-	Sighash          [32]byte
-	Raw              types.Log // Blockchain specific contextual infos
+// BridgeEcdsaRetired represents a EcdsaRetired event raised by the Bridge contract.
+type BridgeEcdsaRetired struct {
+	Raw types.Log // Blockchain specific contextual infos
 }
 
-// FilterFraudChallengeDefeated is a free log retrieval operation binding the contract event 0x6ff720470ffad78f316655e2c7fc77a76763c13de0e19ee52149916ba7e44d3b.
+// FilterEcdsaRetired is a free log retrieval operation binding the contract event 0xcfd6ec30c5fce5bd571f7b6c440f26edaa4ed4e92387c12806fc47ed888fd014.
 //
-// Solidity: event FraudChallengeDefeated(bytes20 indexed walletPubKeyHash, bytes32 sighash)
-func (_Bridge *BridgeFilterer) FilterFraudChallengeDefeated(opts *bind.FilterOpts, walletPubKeyHash [][20]byte) (*BridgeFraudChallengeDefeatedIterator, error) {
+// Solidity: event EcdsaRetired()
+func (_Bridge *BridgeFilterer) FilterEcdsaRetired(opts *bind.FilterOpts) (*BridgeEcdsaRetiredIterator, error) {
 
-	var walletPubKeyHashRule []interface{}
-	for _, walletPubKeyHashItem := range walletPubKeyHash {
-		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
-	}
-
-	logs, sub, err := _Bridge.contract.FilterLogs(opts, "FraudChallengeDefeated", walletPubKeyHashRule)
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "EcdsaRetired")
 	if err != nil {
 		return nil, err
 	}
-	return &BridgeFraudChallengeDefeatedIterator{contract: _Bridge.contract, event: "FraudChallengeDefeated", logs: logs, sub: sub}, nil
+	return &BridgeEcdsaRetiredIterator{contract: _Bridge.contract, event: "EcdsaRetired", logs: logs, sub: sub}, nil
 }
 
-// WatchFraudChallengeDefeated is a free log subscription operation binding the contract event 0x6ff720470ffad78f316655e2c7fc77a76763c13de0e19ee52149916ba7e44d3b.
+// WatchEcdsaRetired is a free log subscription operation binding the contract event 0xcfd6ec30c5fce5bd571f7b6c440f26edaa4ed4e92387c12806fc47ed888fd014.
 //
-// Solidity: event FraudChallengeDefeated(bytes20 indexed walletPubKeyHash, bytes32 sighash)
-func (_Bridge *BridgeFilterer) WatchFraudChallengeDefeated(opts *bind.WatchOpts, sink chan<- *BridgeFraudChallengeDefeated, walletPubKeyHash [][20]byte) (event.Subscription, error) {
+// Solidity: event EcdsaRetired()
+func (_Bridge *BridgeFilterer) WatchEcdsaRetired(opts *bind.WatchOpts, sink chan<- *BridgeEcdsaRetired) (event.Subscription, error) {
 
-	var walletPubKeyHashRule []interface{}
-	for _, walletPubKeyHashItem := range walletPubKeyHash {
-		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
-	}
-
-	logs, sub, err := _Bridge.contract.WatchLogs(opts, "FraudChallengeDefeated", walletPubKeyHashRule)
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "EcdsaRetired")
 	if err != nil {
 		return nil, err
 	}
@@ -2524,8 +3073,8 @@ func (_Bridge *BridgeFilterer) WatchFraudChallengeDefeated(opts *bind.WatchOpts,
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(BridgeFraudChallengeDefeated)
-				if err := _Bridge.contract.UnpackLog(event, "FraudChallengeDefeated", log); err != nil {
+				event := new(BridgeEcdsaRetired)
+				if err := _Bridge.contract.UnpackLog(event, "EcdsaRetired", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -2546,160 +3095,12 @@ func (_Bridge *BridgeFilterer) WatchFraudChallengeDefeated(opts *bind.WatchOpts,
 	}), nil
 }
 
-// ParseFraudChallengeDefeated is a log parse operation binding the contract event 0x6ff720470ffad78f316655e2c7fc77a76763c13de0e19ee52149916ba7e44d3b.
+// ParseEcdsaRetired is a log parse operation binding the contract event 0xcfd6ec30c5fce5bd571f7b6c440f26edaa4ed4e92387c12806fc47ed888fd014.
 //
-// Solidity: event FraudChallengeDefeated(bytes20 indexed walletPubKeyHash, bytes32 sighash)
-func (_Bridge *BridgeFilterer) ParseFraudChallengeDefeated(log types.Log) (*BridgeFraudChallengeDefeated, error) {
-	event := new(BridgeFraudChallengeDefeated)
-	if err := _Bridge.contract.UnpackLog(event, "FraudChallengeDefeated", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// BridgeFraudChallengeSubmittedIterator is returned from FilterFraudChallengeSubmitted and is used to iterate over the raw logs and unpacked data for FraudChallengeSubmitted events raised by the Bridge contract.
-type BridgeFraudChallengeSubmittedIterator struct {
-	Event *BridgeFraudChallengeSubmitted // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *BridgeFraudChallengeSubmittedIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(BridgeFraudChallengeSubmitted)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(BridgeFraudChallengeSubmitted)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *BridgeFraudChallengeSubmittedIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *BridgeFraudChallengeSubmittedIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// BridgeFraudChallengeSubmitted represents a FraudChallengeSubmitted event raised by the Bridge contract.
-type BridgeFraudChallengeSubmitted struct {
-	WalletPubKeyHash [20]byte
-	Sighash          [32]byte
-	V                uint8
-	R                [32]byte
-	S                [32]byte
-	Raw              types.Log // Blockchain specific contextual infos
-}
-
-// FilterFraudChallengeSubmitted is a free log retrieval operation binding the contract event 0xf4aa58d09ba5de017eac597806dfcfc2cad287816cb1eb7729a032c82680c94d.
-//
-// Solidity: event FraudChallengeSubmitted(bytes20 indexed walletPubKeyHash, bytes32 sighash, uint8 v, bytes32 r, bytes32 s)
-func (_Bridge *BridgeFilterer) FilterFraudChallengeSubmitted(opts *bind.FilterOpts, walletPubKeyHash [][20]byte) (*BridgeFraudChallengeSubmittedIterator, error) {
-
-	var walletPubKeyHashRule []interface{}
-	for _, walletPubKeyHashItem := range walletPubKeyHash {
-		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
-	}
-
-	logs, sub, err := _Bridge.contract.FilterLogs(opts, "FraudChallengeSubmitted", walletPubKeyHashRule)
-	if err != nil {
-		return nil, err
-	}
-	return &BridgeFraudChallengeSubmittedIterator{contract: _Bridge.contract, event: "FraudChallengeSubmitted", logs: logs, sub: sub}, nil
-}
-
-// WatchFraudChallengeSubmitted is a free log subscription operation binding the contract event 0xf4aa58d09ba5de017eac597806dfcfc2cad287816cb1eb7729a032c82680c94d.
-//
-// Solidity: event FraudChallengeSubmitted(bytes20 indexed walletPubKeyHash, bytes32 sighash, uint8 v, bytes32 r, bytes32 s)
-func (_Bridge *BridgeFilterer) WatchFraudChallengeSubmitted(opts *bind.WatchOpts, sink chan<- *BridgeFraudChallengeSubmitted, walletPubKeyHash [][20]byte) (event.Subscription, error) {
-
-	var walletPubKeyHashRule []interface{}
-	for _, walletPubKeyHashItem := range walletPubKeyHash {
-		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
-	}
-
-	logs, sub, err := _Bridge.contract.WatchLogs(opts, "FraudChallengeSubmitted", walletPubKeyHashRule)
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(BridgeFraudChallengeSubmitted)
-				if err := _Bridge.contract.UnpackLog(event, "FraudChallengeSubmitted", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseFraudChallengeSubmitted is a log parse operation binding the contract event 0xf4aa58d09ba5de017eac597806dfcfc2cad287816cb1eb7729a032c82680c94d.
-//
-// Solidity: event FraudChallengeSubmitted(bytes20 indexed walletPubKeyHash, bytes32 sighash, uint8 v, bytes32 r, bytes32 s)
-func (_Bridge *BridgeFilterer) ParseFraudChallengeSubmitted(log types.Log) (*BridgeFraudChallengeSubmitted, error) {
-	event := new(BridgeFraudChallengeSubmitted)
-	if err := _Bridge.contract.UnpackLog(event, "FraudChallengeSubmitted", log); err != nil {
+// Solidity: event EcdsaRetired()
+func (_Bridge *BridgeFilterer) ParseEcdsaRetired(log types.Log) (*BridgeEcdsaRetired, error) {
+	event := new(BridgeEcdsaRetired)
+	if err := _Bridge.contract.UnpackLog(event, "EcdsaRetired", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
@@ -2837,6 +3238,140 @@ func (_Bridge *BridgeFilterer) WatchFraudParametersUpdated(opts *bind.WatchOpts,
 func (_Bridge *BridgeFilterer) ParseFraudParametersUpdated(log types.Log) (*BridgeFraudParametersUpdated, error) {
 	event := new(BridgeFraudParametersUpdated)
 	if err := _Bridge.contract.UnpackLog(event, "FraudParametersUpdated", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeFrostWalletRegistrySetIterator is returned from FilterFrostWalletRegistrySet and is used to iterate over the raw logs and unpacked data for FrostWalletRegistrySet events raised by the Bridge contract.
+type BridgeFrostWalletRegistrySetIterator struct {
+	Event *BridgeFrostWalletRegistrySet // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeFrostWalletRegistrySetIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeFrostWalletRegistrySet)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeFrostWalletRegistrySet)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeFrostWalletRegistrySetIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeFrostWalletRegistrySetIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeFrostWalletRegistrySet represents a FrostWalletRegistrySet event raised by the Bridge contract.
+type BridgeFrostWalletRegistrySet struct {
+	FrostWalletRegistry common.Address
+	Raw                 types.Log // Blockchain specific contextual infos
+}
+
+// FilterFrostWalletRegistrySet is a free log retrieval operation binding the contract event 0xdbe373e942a6a777b9b8e4970445ff3dee716310d6d5d2265c7b01947776b6df.
+//
+// Solidity: event FrostWalletRegistrySet(address frostWalletRegistry)
+func (_Bridge *BridgeFilterer) FilterFrostWalletRegistrySet(opts *bind.FilterOpts) (*BridgeFrostWalletRegistrySetIterator, error) {
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "FrostWalletRegistrySet")
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeFrostWalletRegistrySetIterator{contract: _Bridge.contract, event: "FrostWalletRegistrySet", logs: logs, sub: sub}, nil
+}
+
+// WatchFrostWalletRegistrySet is a free log subscription operation binding the contract event 0xdbe373e942a6a777b9b8e4970445ff3dee716310d6d5d2265c7b01947776b6df.
+//
+// Solidity: event FrostWalletRegistrySet(address frostWalletRegistry)
+func (_Bridge *BridgeFilterer) WatchFrostWalletRegistrySet(opts *bind.WatchOpts, sink chan<- *BridgeFrostWalletRegistrySet) (event.Subscription, error) {
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "FrostWalletRegistrySet")
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeFrostWalletRegistrySet)
+				if err := _Bridge.contract.UnpackLog(event, "FrostWalletRegistrySet", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseFrostWalletRegistrySet is a log parse operation binding the contract event 0xdbe373e942a6a777b9b8e4970445ff3dee716310d6d5d2265c7b01947776b6df.
+//
+// Solidity: event FrostWalletRegistrySet(address frostWalletRegistry)
+func (_Bridge *BridgeFilterer) ParseFrostWalletRegistrySet(log types.Log) (*BridgeFrostWalletRegistrySet, error) {
+	event := new(BridgeFrostWalletRegistrySet)
+	if err := _Bridge.contract.UnpackLog(event, "FrostWalletRegistrySet", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
@@ -3106,6 +3641,303 @@ func (_Bridge *BridgeFilterer) WatchInitialized(opts *bind.WatchOpts, sink chan<
 func (_Bridge *BridgeFilterer) ParseInitialized(log types.Log) (*BridgeInitialized, error) {
 	event := new(BridgeInitialized)
 	if err := _Bridge.contract.UnpackLog(event, "Initialized", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeLegacyFraudChallengeMigratedIterator is returned from FilterLegacyFraudChallengeMigrated and is used to iterate over the raw logs and unpacked data for LegacyFraudChallengeMigrated events raised by the Bridge contract.
+type BridgeLegacyFraudChallengeMigratedIterator struct {
+	Event *BridgeLegacyFraudChallengeMigrated // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeLegacyFraudChallengeMigratedIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeLegacyFraudChallengeMigrated)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeLegacyFraudChallengeMigrated)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeLegacyFraudChallengeMigratedIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeLegacyFraudChallengeMigratedIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeLegacyFraudChallengeMigrated represents a LegacyFraudChallengeMigrated event raised by the Bridge contract.
+type BridgeLegacyFraudChallengeMigrated struct {
+	RouterKind    uint8
+	ChallengeKey  *big.Int
+	Challenger    common.Address
+	DepositAmount *big.Int
+	Raw           types.Log // Blockchain specific contextual infos
+}
+
+// FilterLegacyFraudChallengeMigrated is a free log retrieval operation binding the contract event 0xef4dd86f5d8e036d15cf4958485bdef0a43da00304fa8ad123bda135dfca8f8f.
+//
+// Solidity: event LegacyFraudChallengeMigrated(uint8 indexed routerKind, uint256 indexed challengeKey, address indexed challenger, uint256 depositAmount)
+func (_Bridge *BridgeFilterer) FilterLegacyFraudChallengeMigrated(opts *bind.FilterOpts, routerKind []uint8, challengeKey []*big.Int, challenger []common.Address) (*BridgeLegacyFraudChallengeMigratedIterator, error) {
+
+	var routerKindRule []interface{}
+	for _, routerKindItem := range routerKind {
+		routerKindRule = append(routerKindRule, routerKindItem)
+	}
+	var challengeKeyRule []interface{}
+	for _, challengeKeyItem := range challengeKey {
+		challengeKeyRule = append(challengeKeyRule, challengeKeyItem)
+	}
+	var challengerRule []interface{}
+	for _, challengerItem := range challenger {
+		challengerRule = append(challengerRule, challengerItem)
+	}
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "LegacyFraudChallengeMigrated", routerKindRule, challengeKeyRule, challengerRule)
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeLegacyFraudChallengeMigratedIterator{contract: _Bridge.contract, event: "LegacyFraudChallengeMigrated", logs: logs, sub: sub}, nil
+}
+
+// WatchLegacyFraudChallengeMigrated is a free log subscription operation binding the contract event 0xef4dd86f5d8e036d15cf4958485bdef0a43da00304fa8ad123bda135dfca8f8f.
+//
+// Solidity: event LegacyFraudChallengeMigrated(uint8 indexed routerKind, uint256 indexed challengeKey, address indexed challenger, uint256 depositAmount)
+func (_Bridge *BridgeFilterer) WatchLegacyFraudChallengeMigrated(opts *bind.WatchOpts, sink chan<- *BridgeLegacyFraudChallengeMigrated, routerKind []uint8, challengeKey []*big.Int, challenger []common.Address) (event.Subscription, error) {
+
+	var routerKindRule []interface{}
+	for _, routerKindItem := range routerKind {
+		routerKindRule = append(routerKindRule, routerKindItem)
+	}
+	var challengeKeyRule []interface{}
+	for _, challengeKeyItem := range challengeKey {
+		challengeKeyRule = append(challengeKeyRule, challengeKeyItem)
+	}
+	var challengerRule []interface{}
+	for _, challengerItem := range challenger {
+		challengerRule = append(challengerRule, challengerItem)
+	}
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "LegacyFraudChallengeMigrated", routerKindRule, challengeKeyRule, challengerRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeLegacyFraudChallengeMigrated)
+				if err := _Bridge.contract.UnpackLog(event, "LegacyFraudChallengeMigrated", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseLegacyFraudChallengeMigrated is a log parse operation binding the contract event 0xef4dd86f5d8e036d15cf4958485bdef0a43da00304fa8ad123bda135dfca8f8f.
+//
+// Solidity: event LegacyFraudChallengeMigrated(uint8 indexed routerKind, uint256 indexed challengeKey, address indexed challenger, uint256 depositAmount)
+func (_Bridge *BridgeFilterer) ParseLegacyFraudChallengeMigrated(log types.Log) (*BridgeLegacyFraudChallengeMigrated, error) {
+	event := new(BridgeLegacyFraudChallengeMigrated)
+	if err := _Bridge.contract.UnpackLog(event, "LegacyFraudChallengeMigrated", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeLifecycleRouterSetIterator is returned from FilterLifecycleRouterSet and is used to iterate over the raw logs and unpacked data for LifecycleRouterSet events raised by the Bridge contract.
+type BridgeLifecycleRouterSetIterator struct {
+	Event *BridgeLifecycleRouterSet // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeLifecycleRouterSetIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeLifecycleRouterSet)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeLifecycleRouterSet)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeLifecycleRouterSetIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeLifecycleRouterSetIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeLifecycleRouterSet represents a LifecycleRouterSet event raised by the Bridge contract.
+type BridgeLifecycleRouterSet struct {
+	LifecycleRouter common.Address
+	Raw             types.Log // Blockchain specific contextual infos
+}
+
+// FilterLifecycleRouterSet is a free log retrieval operation binding the contract event 0xd34c360c4ba3b0ef69ec75dd2fd413d2432504b21290e9dfdd9d0bffab5376d7.
+//
+// Solidity: event LifecycleRouterSet(address lifecycleRouter)
+func (_Bridge *BridgeFilterer) FilterLifecycleRouterSet(opts *bind.FilterOpts) (*BridgeLifecycleRouterSetIterator, error) {
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "LifecycleRouterSet")
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeLifecycleRouterSetIterator{contract: _Bridge.contract, event: "LifecycleRouterSet", logs: logs, sub: sub}, nil
+}
+
+// WatchLifecycleRouterSet is a free log subscription operation binding the contract event 0xd34c360c4ba3b0ef69ec75dd2fd413d2432504b21290e9dfdd9d0bffab5376d7.
+//
+// Solidity: event LifecycleRouterSet(address lifecycleRouter)
+func (_Bridge *BridgeFilterer) WatchLifecycleRouterSet(opts *bind.WatchOpts, sink chan<- *BridgeLifecycleRouterSet) (event.Subscription, error) {
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "LifecycleRouterSet")
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeLifecycleRouterSet)
+				if err := _Bridge.contract.UnpackLog(event, "LifecycleRouterSet", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseLifecycleRouterSet is a log parse operation binding the contract event 0xd34c360c4ba3b0ef69ec75dd2fd413d2432504b21290e9dfdd9d0bffab5376d7.
+//
+// Solidity: event LifecycleRouterSet(address lifecycleRouter)
+func (_Bridge *BridgeFilterer) ParseLifecycleRouterSet(log types.Log) (*BridgeLifecycleRouterSet, error) {
+	event := new(BridgeLifecycleRouterSet)
+	if err := _Bridge.contract.UnpackLog(event, "LifecycleRouterSet", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
@@ -4270,6 +5102,168 @@ func (_Bridge *BridgeFilterer) ParseMovingFundsTimeoutReset(log types.Log) (*Bri
 	return event, nil
 }
 
+// BridgeNewFrostWalletRegisteredIterator is returned from FilterNewFrostWalletRegistered and is used to iterate over the raw logs and unpacked data for NewFrostWalletRegistered events raised by the Bridge contract.
+type BridgeNewFrostWalletRegisteredIterator struct {
+	Event *BridgeNewFrostWalletRegistered // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeNewFrostWalletRegisteredIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeNewFrostWalletRegistered)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeNewFrostWalletRegistered)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeNewFrostWalletRegisteredIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeNewFrostWalletRegisteredIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeNewFrostWalletRegistered represents a NewFrostWalletRegistered event raised by the Bridge contract.
+type BridgeNewFrostWalletRegistered struct {
+	WalletID         [32]byte
+	WalletPubKeyHash [20]byte
+	XOnlyOutputKey   [32]byte
+	Raw              types.Log // Blockchain specific contextual infos
+}
+
+// FilterNewFrostWalletRegistered is a free log retrieval operation binding the contract event 0xd9aa9c3636339f9edab116054e0fff7f31ff75da8fb201345c31980bb7644334.
+//
+// Solidity: event NewFrostWalletRegistered(bytes32 indexed walletID, bytes20 indexed walletPubKeyHash, bytes32 indexed xOnlyOutputKey)
+func (_Bridge *BridgeFilterer) FilterNewFrostWalletRegistered(opts *bind.FilterOpts, walletID [][32]byte, walletPubKeyHash [][20]byte, xOnlyOutputKey [][32]byte) (*BridgeNewFrostWalletRegisteredIterator, error) {
+
+	var walletIDRule []interface{}
+	for _, walletIDItem := range walletID {
+		walletIDRule = append(walletIDRule, walletIDItem)
+	}
+	var walletPubKeyHashRule []interface{}
+	for _, walletPubKeyHashItem := range walletPubKeyHash {
+		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
+	}
+	var xOnlyOutputKeyRule []interface{}
+	for _, xOnlyOutputKeyItem := range xOnlyOutputKey {
+		xOnlyOutputKeyRule = append(xOnlyOutputKeyRule, xOnlyOutputKeyItem)
+	}
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "NewFrostWalletRegistered", walletIDRule, walletPubKeyHashRule, xOnlyOutputKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeNewFrostWalletRegisteredIterator{contract: _Bridge.contract, event: "NewFrostWalletRegistered", logs: logs, sub: sub}, nil
+}
+
+// WatchNewFrostWalletRegistered is a free log subscription operation binding the contract event 0xd9aa9c3636339f9edab116054e0fff7f31ff75da8fb201345c31980bb7644334.
+//
+// Solidity: event NewFrostWalletRegistered(bytes32 indexed walletID, bytes20 indexed walletPubKeyHash, bytes32 indexed xOnlyOutputKey)
+func (_Bridge *BridgeFilterer) WatchNewFrostWalletRegistered(opts *bind.WatchOpts, sink chan<- *BridgeNewFrostWalletRegistered, walletID [][32]byte, walletPubKeyHash [][20]byte, xOnlyOutputKey [][32]byte) (event.Subscription, error) {
+
+	var walletIDRule []interface{}
+	for _, walletIDItem := range walletID {
+		walletIDRule = append(walletIDRule, walletIDItem)
+	}
+	var walletPubKeyHashRule []interface{}
+	for _, walletPubKeyHashItem := range walletPubKeyHash {
+		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
+	}
+	var xOnlyOutputKeyRule []interface{}
+	for _, xOnlyOutputKeyItem := range xOnlyOutputKey {
+		xOnlyOutputKeyRule = append(xOnlyOutputKeyRule, xOnlyOutputKeyItem)
+	}
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "NewFrostWalletRegistered", walletIDRule, walletPubKeyHashRule, xOnlyOutputKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeNewFrostWalletRegistered)
+				if err := _Bridge.contract.UnpackLog(event, "NewFrostWalletRegistered", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseNewFrostWalletRegistered is a log parse operation binding the contract event 0xd9aa9c3636339f9edab116054e0fff7f31ff75da8fb201345c31980bb7644334.
+//
+// Solidity: event NewFrostWalletRegistered(bytes32 indexed walletID, bytes20 indexed walletPubKeyHash, bytes32 indexed xOnlyOutputKey)
+func (_Bridge *BridgeFilterer) ParseNewFrostWalletRegistered(log types.Log) (*BridgeNewFrostWalletRegistered, error) {
+	event := new(BridgeNewFrostWalletRegistered)
+	if err := _Bridge.contract.UnpackLog(event, "NewFrostWalletRegistered", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
 // BridgeNewWalletRegisteredIterator is returned from FilterNewWalletRegistered and is used to iterate over the raw logs and unpacked data for NewWalletRegistered events raised by the Bridge contract.
 type BridgeNewWalletRegisteredIterator struct {
 	Event *BridgeNewWalletRegistered // Event containing the contract specifics and raw log
@@ -4423,6 +5417,168 @@ func (_Bridge *BridgeFilterer) ParseNewWalletRegistered(log types.Log) (*BridgeN
 	return event, nil
 }
 
+// BridgeNewWalletRegisteredV2Iterator is returned from FilterNewWalletRegisteredV2 and is used to iterate over the raw logs and unpacked data for NewWalletRegisteredV2 events raised by the Bridge contract.
+type BridgeNewWalletRegisteredV2Iterator struct {
+	Event *BridgeNewWalletRegisteredV2 // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeNewWalletRegisteredV2Iterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeNewWalletRegisteredV2)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeNewWalletRegisteredV2)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeNewWalletRegisteredV2Iterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeNewWalletRegisteredV2Iterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeNewWalletRegisteredV2 represents a NewWalletRegisteredV2 event raised by the Bridge contract.
+type BridgeNewWalletRegisteredV2 struct {
+	WalletID         [32]byte
+	EcdsaWalletID    [32]byte
+	WalletPubKeyHash [20]byte
+	Raw              types.Log // Blockchain specific contextual infos
+}
+
+// FilterNewWalletRegisteredV2 is a free log retrieval operation binding the contract event 0x6a501a1d441e1c8b5490e52589d0d27d35504cf1063a8c848fef40f326710d4b.
+//
+// Solidity: event NewWalletRegisteredV2(bytes32 indexed walletID, bytes32 indexed ecdsaWalletID, bytes20 indexed walletPubKeyHash)
+func (_Bridge *BridgeFilterer) FilterNewWalletRegisteredV2(opts *bind.FilterOpts, walletID [][32]byte, ecdsaWalletID [][32]byte, walletPubKeyHash [][20]byte) (*BridgeNewWalletRegisteredV2Iterator, error) {
+
+	var walletIDRule []interface{}
+	for _, walletIDItem := range walletID {
+		walletIDRule = append(walletIDRule, walletIDItem)
+	}
+	var ecdsaWalletIDRule []interface{}
+	for _, ecdsaWalletIDItem := range ecdsaWalletID {
+		ecdsaWalletIDRule = append(ecdsaWalletIDRule, ecdsaWalletIDItem)
+	}
+	var walletPubKeyHashRule []interface{}
+	for _, walletPubKeyHashItem := range walletPubKeyHash {
+		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
+	}
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "NewWalletRegisteredV2", walletIDRule, ecdsaWalletIDRule, walletPubKeyHashRule)
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeNewWalletRegisteredV2Iterator{contract: _Bridge.contract, event: "NewWalletRegisteredV2", logs: logs, sub: sub}, nil
+}
+
+// WatchNewWalletRegisteredV2 is a free log subscription operation binding the contract event 0x6a501a1d441e1c8b5490e52589d0d27d35504cf1063a8c848fef40f326710d4b.
+//
+// Solidity: event NewWalletRegisteredV2(bytes32 indexed walletID, bytes32 indexed ecdsaWalletID, bytes20 indexed walletPubKeyHash)
+func (_Bridge *BridgeFilterer) WatchNewWalletRegisteredV2(opts *bind.WatchOpts, sink chan<- *BridgeNewWalletRegisteredV2, walletID [][32]byte, ecdsaWalletID [][32]byte, walletPubKeyHash [][20]byte) (event.Subscription, error) {
+
+	var walletIDRule []interface{}
+	for _, walletIDItem := range walletID {
+		walletIDRule = append(walletIDRule, walletIDItem)
+	}
+	var ecdsaWalletIDRule []interface{}
+	for _, ecdsaWalletIDItem := range ecdsaWalletID {
+		ecdsaWalletIDRule = append(ecdsaWalletIDRule, ecdsaWalletIDItem)
+	}
+	var walletPubKeyHashRule []interface{}
+	for _, walletPubKeyHashItem := range walletPubKeyHash {
+		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
+	}
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "NewWalletRegisteredV2", walletIDRule, ecdsaWalletIDRule, walletPubKeyHashRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeNewWalletRegisteredV2)
+				if err := _Bridge.contract.UnpackLog(event, "NewWalletRegisteredV2", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseNewWalletRegisteredV2 is a log parse operation binding the contract event 0x6a501a1d441e1c8b5490e52589d0d27d35504cf1063a8c848fef40f326710d4b.
+//
+// Solidity: event NewWalletRegisteredV2(bytes32 indexed walletID, bytes32 indexed ecdsaWalletID, bytes20 indexed walletPubKeyHash)
+func (_Bridge *BridgeFilterer) ParseNewWalletRegisteredV2(log types.Log) (*BridgeNewWalletRegisteredV2, error) {
+	event := new(BridgeNewWalletRegisteredV2)
+	if err := _Bridge.contract.UnpackLog(event, "NewWalletRegisteredV2", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
 // BridgeNewWalletRequestedIterator is returned from FilterNewWalletRequested and is used to iterate over the raw logs and unpacked data for NewWalletRequested events raised by the Bridge contract.
 type BridgeNewWalletRequestedIterator struct {
 	Event *BridgeNewWalletRequested // Event containing the contract specifics and raw log
@@ -4550,6 +5706,418 @@ func (_Bridge *BridgeFilterer) WatchNewWalletRequested(opts *bind.WatchOpts, sin
 func (_Bridge *BridgeFilterer) ParseNewWalletRequested(log types.Log) (*BridgeNewWalletRequested, error) {
 	event := new(BridgeNewWalletRequested)
 	if err := _Bridge.contract.UnpackLog(event, "NewWalletRequested", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeNewWalletSchemeSetIterator is returned from FilterNewWalletSchemeSet and is used to iterate over the raw logs and unpacked data for NewWalletSchemeSet events raised by the Bridge contract.
+type BridgeNewWalletSchemeSetIterator struct {
+	Event *BridgeNewWalletSchemeSet // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeNewWalletSchemeSetIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeNewWalletSchemeSet)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeNewWalletSchemeSet)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeNewWalletSchemeSetIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeNewWalletSchemeSetIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeNewWalletSchemeSet represents a NewWalletSchemeSet event raised by the Bridge contract.
+type BridgeNewWalletSchemeSet struct {
+	Scheme uint8
+	Raw    types.Log // Blockchain specific contextual infos
+}
+
+// FilterNewWalletSchemeSet is a free log retrieval operation binding the contract event 0xf02f991b885946929457e15df17c468398baff309f97deb150209e448b9157ca.
+//
+// Solidity: event NewWalletSchemeSet(uint8 indexed scheme)
+func (_Bridge *BridgeFilterer) FilterNewWalletSchemeSet(opts *bind.FilterOpts, scheme []uint8) (*BridgeNewWalletSchemeSetIterator, error) {
+
+	var schemeRule []interface{}
+	for _, schemeItem := range scheme {
+		schemeRule = append(schemeRule, schemeItem)
+	}
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "NewWalletSchemeSet", schemeRule)
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeNewWalletSchemeSetIterator{contract: _Bridge.contract, event: "NewWalletSchemeSet", logs: logs, sub: sub}, nil
+}
+
+// WatchNewWalletSchemeSet is a free log subscription operation binding the contract event 0xf02f991b885946929457e15df17c468398baff309f97deb150209e448b9157ca.
+//
+// Solidity: event NewWalletSchemeSet(uint8 indexed scheme)
+func (_Bridge *BridgeFilterer) WatchNewWalletSchemeSet(opts *bind.WatchOpts, sink chan<- *BridgeNewWalletSchemeSet, scheme []uint8) (event.Subscription, error) {
+
+	var schemeRule []interface{}
+	for _, schemeItem := range scheme {
+		schemeRule = append(schemeRule, schemeItem)
+	}
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "NewWalletSchemeSet", schemeRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeNewWalletSchemeSet)
+				if err := _Bridge.contract.UnpackLog(event, "NewWalletSchemeSet", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseNewWalletSchemeSet is a log parse operation binding the contract event 0xf02f991b885946929457e15df17c468398baff309f97deb150209e448b9157ca.
+//
+// Solidity: event NewWalletSchemeSet(uint8 indexed scheme)
+func (_Bridge *BridgeFilterer) ParseNewWalletSchemeSet(log types.Log) (*BridgeNewWalletSchemeSet, error) {
+	event := new(BridgeNewWalletSchemeSet)
+	if err := _Bridge.contract.UnpackLog(event, "NewWalletSchemeSet", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeP2TRFraudRouterSetIterator is returned from FilterP2TRFraudRouterSet and is used to iterate over the raw logs and unpacked data for P2TRFraudRouterSet events raised by the Bridge contract.
+type BridgeP2TRFraudRouterSetIterator struct {
+	Event *BridgeP2TRFraudRouterSet // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeP2TRFraudRouterSetIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeP2TRFraudRouterSet)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeP2TRFraudRouterSet)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeP2TRFraudRouterSetIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeP2TRFraudRouterSetIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeP2TRFraudRouterSet represents a P2TRFraudRouterSet event raised by the Bridge contract.
+type BridgeP2TRFraudRouterSet struct {
+	P2trFraudRouter common.Address
+	Raw             types.Log // Blockchain specific contextual infos
+}
+
+// FilterP2TRFraudRouterSet is a free log retrieval operation binding the contract event 0x083fc37b87ed978d63df891a75b6e9ab20e73e33ae9fcab66416b8d014ceee54.
+//
+// Solidity: event P2TRFraudRouterSet(address p2trFraudRouter)
+func (_Bridge *BridgeFilterer) FilterP2TRFraudRouterSet(opts *bind.FilterOpts) (*BridgeP2TRFraudRouterSetIterator, error) {
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "P2TRFraudRouterSet")
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeP2TRFraudRouterSetIterator{contract: _Bridge.contract, event: "P2TRFraudRouterSet", logs: logs, sub: sub}, nil
+}
+
+// WatchP2TRFraudRouterSet is a free log subscription operation binding the contract event 0x083fc37b87ed978d63df891a75b6e9ab20e73e33ae9fcab66416b8d014ceee54.
+//
+// Solidity: event P2TRFraudRouterSet(address p2trFraudRouter)
+func (_Bridge *BridgeFilterer) WatchP2TRFraudRouterSet(opts *bind.WatchOpts, sink chan<- *BridgeP2TRFraudRouterSet) (event.Subscription, error) {
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "P2TRFraudRouterSet")
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeP2TRFraudRouterSet)
+				if err := _Bridge.contract.UnpackLog(event, "P2TRFraudRouterSet", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseP2TRFraudRouterSet is a log parse operation binding the contract event 0x083fc37b87ed978d63df891a75b6e9ab20e73e33ae9fcab66416b8d014ceee54.
+//
+// Solidity: event P2TRFraudRouterSet(address p2trFraudRouter)
+func (_Bridge *BridgeFilterer) ParseP2TRFraudRouterSet(log types.Log) (*BridgeP2TRFraudRouterSet, error) {
+	event := new(BridgeP2TRFraudRouterSet)
+	if err := _Bridge.contract.UnpackLog(event, "P2TRFraudRouterSet", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeRebateStakingSetIterator is returned from FilterRebateStakingSet and is used to iterate over the raw logs and unpacked data for RebateStakingSet events raised by the Bridge contract.
+type BridgeRebateStakingSetIterator struct {
+	Event *BridgeRebateStakingSet // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeRebateStakingSetIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeRebateStakingSet)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeRebateStakingSet)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeRebateStakingSetIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeRebateStakingSetIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeRebateStakingSet represents a RebateStakingSet event raised by the Bridge contract.
+type BridgeRebateStakingSet struct {
+	RebateStaking common.Address
+	Raw           types.Log // Blockchain specific contextual infos
+}
+
+// FilterRebateStakingSet is a free log retrieval operation binding the contract event 0xd1d9d4e9f516cb983e81d2a124ec97cb8d4ff00637f2a7f3229eadbed84e2df6.
+//
+// Solidity: event RebateStakingSet(address rebateStaking)
+func (_Bridge *BridgeFilterer) FilterRebateStakingSet(opts *bind.FilterOpts) (*BridgeRebateStakingSetIterator, error) {
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "RebateStakingSet")
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeRebateStakingSetIterator{contract: _Bridge.contract, event: "RebateStakingSet", logs: logs, sub: sub}, nil
+}
+
+// WatchRebateStakingSet is a free log subscription operation binding the contract event 0xd1d9d4e9f516cb983e81d2a124ec97cb8d4ff00637f2a7f3229eadbed84e2df6.
+//
+// Solidity: event RebateStakingSet(address rebateStaking)
+func (_Bridge *BridgeFilterer) WatchRebateStakingSet(opts *bind.WatchOpts, sink chan<- *BridgeRebateStakingSet) (event.Subscription, error) {
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "RebateStakingSet")
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeRebateStakingSet)
+				if err := _Bridge.contract.UnpackLog(event, "RebateStakingSet", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseRebateStakingSet is a log parse operation binding the contract event 0xd1d9d4e9f516cb983e81d2a124ec97cb8d4ff00637f2a7f3229eadbed84e2df6.
+//
+// Solidity: event RebateStakingSet(address rebateStaking)
+func (_Bridge *BridgeFilterer) ParseRebateStakingSet(log types.Log) (*BridgeRebateStakingSet, error) {
+	event := new(BridgeRebateStakingSet)
+	if err := _Bridge.contract.UnpackLog(event, "RebateStakingSet", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
@@ -5418,6 +6986,170 @@ func (_Bridge *BridgeFilterer) WatchSpvMaintainerStatusUpdated(opts *bind.WatchO
 func (_Bridge *BridgeFilterer) ParseSpvMaintainerStatusUpdated(log types.Log) (*BridgeSpvMaintainerStatusUpdated, error) {
 	event := new(BridgeSpvMaintainerStatusUpdated)
 	if err := _Bridge.contract.UnpackLog(event, "SpvMaintainerStatusUpdated", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeTaprootDepositRevealedIterator is returned from FilterTaprootDepositRevealed and is used to iterate over the raw logs and unpacked data for TaprootDepositRevealed events raised by the Bridge contract.
+type BridgeTaprootDepositRevealedIterator struct {
+	Event *BridgeTaprootDepositRevealed // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeTaprootDepositRevealedIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeTaprootDepositRevealed)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeTaprootDepositRevealed)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeTaprootDepositRevealedIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeTaprootDepositRevealedIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeTaprootDepositRevealed represents a TaprootDepositRevealed event raised by the Bridge contract.
+type BridgeTaprootDepositRevealed struct {
+	FundingTxHash        [32]byte
+	FundingOutputIndex   uint32
+	Depositor            common.Address
+	Amount               uint64
+	BlindingFactor       [8]byte
+	WalletPubKeyHash     [20]byte
+	WalletXOnlyPublicKey [32]byte
+	RefundPubKeyHash     [20]byte
+	RefundXOnlyPublicKey [32]byte
+	RefundLocktime       [4]byte
+	Vault                common.Address
+	Raw                  types.Log // Blockchain specific contextual infos
+}
+
+// FilterTaprootDepositRevealed is a free log retrieval operation binding the contract event 0x50a25b08826caa8347dba14b236afbf87a8988553a910cbc953f1a53585d94cf.
+//
+// Solidity: event TaprootDepositRevealed(bytes32 fundingTxHash, uint32 fundingOutputIndex, address indexed depositor, uint64 amount, bytes8 blindingFactor, bytes20 indexed walletPubKeyHash, bytes32 walletXOnlyPublicKey, bytes20 refundPubKeyHash, bytes32 refundXOnlyPublicKey, bytes4 refundLocktime, address vault)
+func (_Bridge *BridgeFilterer) FilterTaprootDepositRevealed(opts *bind.FilterOpts, depositor []common.Address, walletPubKeyHash [][20]byte) (*BridgeTaprootDepositRevealedIterator, error) {
+
+	var depositorRule []interface{}
+	for _, depositorItem := range depositor {
+		depositorRule = append(depositorRule, depositorItem)
+	}
+
+	var walletPubKeyHashRule []interface{}
+	for _, walletPubKeyHashItem := range walletPubKeyHash {
+		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
+	}
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "TaprootDepositRevealed", depositorRule, walletPubKeyHashRule)
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeTaprootDepositRevealedIterator{contract: _Bridge.contract, event: "TaprootDepositRevealed", logs: logs, sub: sub}, nil
+}
+
+// WatchTaprootDepositRevealed is a free log subscription operation binding the contract event 0x50a25b08826caa8347dba14b236afbf87a8988553a910cbc953f1a53585d94cf.
+//
+// Solidity: event TaprootDepositRevealed(bytes32 fundingTxHash, uint32 fundingOutputIndex, address indexed depositor, uint64 amount, bytes8 blindingFactor, bytes20 indexed walletPubKeyHash, bytes32 walletXOnlyPublicKey, bytes20 refundPubKeyHash, bytes32 refundXOnlyPublicKey, bytes4 refundLocktime, address vault)
+func (_Bridge *BridgeFilterer) WatchTaprootDepositRevealed(opts *bind.WatchOpts, sink chan<- *BridgeTaprootDepositRevealed, depositor []common.Address, walletPubKeyHash [][20]byte) (event.Subscription, error) {
+
+	var depositorRule []interface{}
+	for _, depositorItem := range depositor {
+		depositorRule = append(depositorRule, depositorItem)
+	}
+
+	var walletPubKeyHashRule []interface{}
+	for _, walletPubKeyHashItem := range walletPubKeyHash {
+		walletPubKeyHashRule = append(walletPubKeyHashRule, walletPubKeyHashItem)
+	}
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "TaprootDepositRevealed", depositorRule, walletPubKeyHashRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeTaprootDepositRevealed)
+				if err := _Bridge.contract.UnpackLog(event, "TaprootDepositRevealed", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseTaprootDepositRevealed is a log parse operation binding the contract event 0x50a25b08826caa8347dba14b236afbf87a8988553a910cbc953f1a53585d94cf.
+//
+// Solidity: event TaprootDepositRevealed(bytes32 fundingTxHash, uint32 fundingOutputIndex, address indexed depositor, uint64 amount, bytes8 blindingFactor, bytes20 indexed walletPubKeyHash, bytes32 walletXOnlyPublicKey, bytes20 refundPubKeyHash, bytes32 refundXOnlyPublicKey, bytes4 refundLocktime, address vault)
+func (_Bridge *BridgeFilterer) ParseTaprootDepositRevealed(log types.Log) (*BridgeTaprootDepositRevealed, error) {
+	event := new(BridgeTaprootDepositRevealed)
+	if err := _Bridge.contract.UnpackLog(event, "TaprootDepositRevealed", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log

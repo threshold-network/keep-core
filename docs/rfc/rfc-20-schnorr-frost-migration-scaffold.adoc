@@ -1,0 +1,61 @@
+= RFC-20: Schnorr/FROST Migration Scaffold
+
+*Author:* Threshold Labs
+*Status:* Draft
+*Date:* 2026-02-19
+
+== Summary
+
+This RFC introduces the initial keep-core scaffolding for migrating tBTC from
+threshold ECDSA signatures to Schnorr/FROST signatures.
+
+This change does not switch runtime signing logic yet. It defines core data
+types and compatibility helpers required by follow-up protocol, chain, and
+wallet orchestration changes.
+
+== Initial Deliverables
+
+* New `pkg/frost` package with:
+** Taproot x-only output key type (`OutputKey`)
+** BIP-340 Schnorr signature type (`Signature`)
+** Serialization and logging helpers for Schnorr signatures
+** Legacy compatibility alias helper:
+`HASH160(0x02 || xOnlyOutputKey)`
+
+== Compatibility Model
+
+FROST wallets are expected to use 32-byte x-only keys as canonical identifiers.
+During migration, legacy 20-byte wallet key hash paths are supported via
+compatibility alias:
+
+----
+walletPubKeyHashCompat = HASH160(0x02 || xOnlyOutputKey)
+----
+
+== Follow-up Work
+
+1. Add FROST signer and coordinator interfaces to replace `pkg/tecdsa/signing`.
+2. Introduce FROST DKG executor replacing GG18 pre-params and DKG wiring.
+3. Update tBTC chain interfaces and wallet registry integration to accept
+   x-only keys as canonical wallet identities.
+4. Update Bitcoin transaction builders to support P2TR key-path spends.
+5. Add dual-stack runtime routing: GG18 existing wallets + FROST new wallets.
+6. Add full integration tests for mixed wallet generations and migration flows.
+
+== Non-Goals (This RFC Revision)
+
+* No on-chain contract ABI migration in this repository.
+* No replacement of existing GG18 runtime paths in a default build. GG18 (legacy
+  tECDSA) remains the only signing path an untagged build can take.
+
+[NOTE]
+====
+Superseded Non-Goal: earlier revisions of this RFC listed "No production FROST
+coordinator implementation" and an unqualified "No replacement of existing GG18
+runtime paths yet". The production ROAST coordinator now lives in
+`pkg/frost/roast` and is wired into the signing loop, specified separately in
+RFC-21. It is gated off by default: the coordinator only compiles under the
+`frost_roast_retry` build tag and only activates when
+`KEEP_CORE_FROST_ROAST_RETRY_ENABLED` is set, so the Non-Goal above is restated
+in terms of the default build rather than the codebase.
+====

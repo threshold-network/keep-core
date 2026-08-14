@@ -10,8 +10,11 @@ import (
 	"testing"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
+	"github.com/keep-network/keep-core/pkg/sortition"
 )
 
 func TestHeartbeatAction_HappyPath(t *testing.T) {
@@ -40,19 +43,15 @@ func TestHeartbeatAction_HappyPath(t *testing.T) {
 	heartbeatFailureCounter := newHeartbeatFailureCounter()
 	heartbeatFailureCounter.increment(walletPublicKeyStr)
 
-	// sha256(sha256(messageToSign))
-	sha256d, err := hex.DecodeString("38d30dacec5083c902952ce99fc0287659ad0b1ca2086827a8e78b0bef2c8bc1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	hostChain := Connect()
 	hostChain.setOperatorsEligibleStake(big.NewInt(100000))
 	hostChain.setHeartbeatProposalValidationResult(proposal, true)
 
-	// Set the active operators count to the minimum required value.
+	// Use a small, FROST-sized activity threshold to verify the action does not
+	// retain the legacy 70-member floor.
+	minimumActiveMembers := 3
 	mockExecutor := &mockHeartbeatSigningExecutor{}
-	mockExecutor.activeOperatorsCount = heartbeatSigningMinimumActiveMembers
+	mockExecutor.activeOperatorsCount = uint32(minimumActiveMembers)
 
 	inactivityClaimExecutor := &mockInactivityClaimExecutor{}
 
@@ -63,6 +62,7 @@ func TestHeartbeatAction_HappyPath(t *testing.T) {
 			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
+		minimumActiveMembers,
 		proposal,
 		heartbeatFailureCounter,
 		inactivityClaimExecutor,
@@ -84,12 +84,13 @@ func TestHeartbeatAction_HappyPath(t *testing.T) {
 		0,
 		uint64(heartbeatFailureCounter.get(walletPublicKeyStr)),
 	)
-	testutils.AssertBigIntsEqual(
-		t,
-		"message to sign",
-		new(big.Int).SetBytes(sha256d),
-		mockExecutor.requestedMessage,
-	)
+	if mockExecutor.requestedMessage != proposal.Message {
+		t.Fatalf(
+			"heartbeat signing received message [%x], want raw proposal [%x]",
+			mockExecutor.requestedMessage,
+			proposal.Message,
+		)
+	}
 	testutils.AssertUintsEqual(
 		t,
 		"start block",
@@ -142,6 +143,7 @@ func TestHeartbeatAction_OperatorUnstaking(t *testing.T) {
 			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
+		heartbeatSigningMinimumActiveMembers,
 		proposal,
 		heartbeatFailureCounter,
 		inactivityClaimExecutor,
@@ -157,12 +159,154 @@ func TestHeartbeatAction_OperatorUnstaking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	testutils.AssertBigIntsEqual(
-		t,
-		"message to sign",
-		nil, // sign not called
-		mockExecutor.requestedMessage,
+	if mockExecutor.signCalled {
+		t.Fatal("heartbeat signing must not be called for an unstaking operator")
+	}
+}
+
+func TestHeartbeatAction_LegacyWalletUsesEcdsaStakeInDualStack(t *testing.T) {
+	walletPublicKeyHex, err := hex.DecodeString(
+		"0471e30bca60f6548d7b42582a478ea37ada63b402af7b3ddd57f0c95bb6843175" +
+			"aa0d2053a91a050a6797d85c38f2909cb7027f2344a01986aa2f9f8ca7a0c289",
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletPublicKey := mustUnmarshalPublicKey(t, walletPublicKeyHex)
+
+	baseChain := Connect()
+	baseChain.setWallet(
+		bitcoin.PublicKeyHash(walletPublicKey),
+		&WalletChainData{
+			WalletID:      [32]byte{0x01},
+			EcdsaWalletID: [32]byte{0x02},
+			State:         StateLive,
+		},
+	)
+
+	ecdsaView := &heartbeatSortitionView{
+		localChain:    baseChain,
+		eligibleStake: big.NewInt(100),
+	}
+	frostView := &heartbeatSortitionView{
+		localChain:    baseChain,
+		eligibleStake: big.NewInt(0),
+	}
+	dualStackChain := &dualStackHeartbeatChain{
+		localChain: baseChain,
+		ecdsaView:  ecdsaView,
+		frostView:  frostView,
+	}
+
+	action := &heartbeatAction{
+		chain:           dualStackChain,
+		executingWallet: wallet{publicKey: walletPublicKey},
+	}
+
+	isUnstaking, err := action.isOperatorUnstaking()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isUnstaking {
+		t.Fatal("legacy wallet must use its non-zero ECDSA stake")
+	}
+	if ecdsaView.operatorToStakingProviderCalls != 1 || ecdsaView.eligibleStakeCalls != 1 {
+		t.Fatalf("ECDSA stake view was not used: %+v", ecdsaView)
+	}
+	if frostView.operatorToStakingProviderCalls != 0 || frostView.eligibleStakeCalls != 0 {
+		t.Fatalf("FROST stake view must not be used for a legacy wallet: %+v", frostView)
+	}
+}
+
+func TestHeartbeatAction_FrostWalletUsesFrostStakeInDualStack(t *testing.T) {
+	walletPublicKeyHex, err := hex.DecodeString(
+		"0471e30bca60f6548d7b42582a478ea37ada63b402af7b3ddd57f0c95bb6843175" +
+			"aa0d2053a91a050a6797d85c38f2909cb7027f2344a01986aa2f9f8ca7a0c289",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletPublicKey := mustUnmarshalPublicKey(t, walletPublicKeyHex)
+
+	baseChain := Connect()
+	baseChain.setWallet(
+		bitcoin.PublicKeyHash(walletPublicKey),
+		&WalletChainData{
+			WalletID: [32]byte{0x03},
+			State:    StateLive,
+		},
+	)
+
+	ecdsaView := &heartbeatSortitionView{
+		localChain:    baseChain,
+		eligibleStake: big.NewInt(100),
+	}
+	frostView := &heartbeatSortitionView{
+		localChain:    baseChain,
+		eligibleStake: big.NewInt(0),
+	}
+	dualStackChain := &dualStackHeartbeatChain{
+		localChain: baseChain,
+		ecdsaView:  ecdsaView,
+		frostView:  frostView,
+	}
+
+	action := &heartbeatAction{
+		chain:           dualStackChain,
+		executingWallet: wallet{publicKey: walletPublicKey},
+	}
+
+	isUnstaking, err := action.isOperatorUnstaking()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isUnstaking {
+		t.Fatal("FROST wallet must use its zero FROST stake")
+	}
+	if frostView.operatorToStakingProviderCalls != 1 || frostView.eligibleStakeCalls != 1 {
+		t.Fatalf("FROST stake view was not used: %+v", frostView)
+	}
+	if ecdsaView.operatorToStakingProviderCalls != 0 || ecdsaView.eligibleStakeCalls != 0 {
+		t.Fatalf("ECDSA stake view must not be used for a FROST wallet: %+v", ecdsaView)
+	}
+}
+
+type dualStackHeartbeatChain struct {
+	*localChain
+	ecdsaView sortition.Chain
+	frostView sortition.Chain
+}
+
+func (dshc *dualStackHeartbeatChain) LegacyECDSASortitionChain() sortition.Chain {
+	return dshc.ecdsaView
+}
+
+func (dshc *dualStackHeartbeatChain) FrostSortitionChain() (sortition.Chain, bool) {
+	return dshc.frostView, dshc.frostView != nil
+}
+
+type heartbeatSortitionView struct {
+	*localChain
+	eligibleStake *big.Int
+
+	operatorToStakingProviderCalls int
+	eligibleStakeCalls             int
+}
+
+func (hsv *heartbeatSortitionView) OperatorToStakingProvider() (
+	chain.Address,
+	bool,
+	error,
+) {
+	hsv.operatorToStakingProviderCalls++
+	return stakingProvider, true, nil
+}
+
+func (hsv *heartbeatSortitionView) EligibleStake(
+	stakingProvider chain.Address,
+) (*big.Int, error) {
+	hsv.eligibleStakeCalls++
+	return new(big.Int).Set(hsv.eligibleStake), nil
 }
 
 func TestHeartbeatAction_Failure_SigningError(t *testing.T) {
@@ -205,6 +349,7 @@ func TestHeartbeatAction_Failure_SigningError(t *testing.T) {
 			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
+		heartbeatSigningMinimumActiveMembers,
 		proposal,
 		heartbeatFailureCounter,
 		inactivityClaimExecutor,
@@ -271,9 +416,11 @@ func TestHeartbeatAction_Failure_TooFewActiveOperators(t *testing.T) {
 	hostChain.setOperatorsEligibleStake(big.NewInt(100000))
 	hostChain.setHeartbeatProposalValidationResult(proposal, true)
 
-	// Set the active operators count just below the required number.
+	// Use a small, FROST-sized threshold and set the active operators count just
+	// below the required number.
+	minimumActiveMembers := 4
 	mockExecutor := &mockHeartbeatSigningExecutor{}
-	mockExecutor.activeOperatorsCount = heartbeatSigningMinimumActiveMembers - 1
+	mockExecutor.activeOperatorsCount = uint32(minimumActiveMembers - 1)
 
 	inactivityClaimExecutor := &mockInactivityClaimExecutor{}
 
@@ -284,6 +431,7 @@ func TestHeartbeatAction_Failure_TooFewActiveOperators(t *testing.T) {
 			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
+		minimumActiveMembers,
 		proposal,
 		heartbeatFailureCounter,
 		inactivityClaimExecutor,
@@ -364,6 +512,7 @@ func TestHeartbeatAction_Failure_CounterExceeded(t *testing.T) {
 			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
+		heartbeatSigningMinimumActiveMembers,
 		proposal,
 		heartbeatFailureCounter,
 		inactivityClaimExecutor,
@@ -445,6 +594,7 @@ func TestHeartbeatAction_Failure_InactivityExecutionFailure(t *testing.T) {
 			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
+		heartbeatSigningMinimumActiveMembers,
 		proposal,
 		heartbeatFailureCounter,
 		inactivityClaimExecutor,
@@ -604,15 +754,17 @@ type mockHeartbeatSigningExecutor struct {
 	shouldFail           bool
 	activeOperatorsCount uint32
 
-	requestedMessage    *big.Int
+	requestedMessage    [16]byte
 	requestedStartBlock uint64
+	signCalled          bool
 }
 
-func (mhse *mockHeartbeatSigningExecutor) sign(
+func (mhse *mockHeartbeatSigningExecutor) signHeartbeat(
 	ctx context.Context,
-	message *big.Int,
+	message [16]byte,
 	startBlock uint64,
-) (*tecdsa.Signature, *signingActivityReport, uint64, error) {
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	mhse.signCalled = true
 	mhse.requestedMessage = message
 	mhse.requestedStartBlock = startBlock
 
@@ -636,7 +788,7 @@ func (mhse *mockHeartbeatSigningExecutor) sign(
 		inactiveMembers: inactiveMembers,
 	}
 
-	return &tecdsa.Signature{}, activityReport, startBlock + 1, nil
+	return &frost.Signature{}, activityReport, startBlock + 1, nil
 }
 
 type mockInactivityClaimExecutor struct {

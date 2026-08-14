@@ -54,10 +54,6 @@ type Chain interface {
 		redeemerOutputScript bitcoin.Script,
 	) (*big.Int, error)
 
-	// GetRedemptionParameters gets the current value of parameters relevant
-	// for the redemption process.
-	GetRedemptionParameters() (tbtc.RedemptionParameters, error)
-
 	// GetRedemptionMaxSize gets the maximum number of redemption requests that
 	// can be a part of a redemption sweep proposal.
 	GetRedemptionMaxSize() (uint16, error)
@@ -72,6 +68,19 @@ type Chain interface {
 	// that must be fetched externally. Returns an error if the proposal is
 	// not valid or nil otherwise.
 	ValidateDepositSweepProposal(
+		walletPublicKeyHash [20]byte,
+		proposal *tbtc.DepositSweepProposal,
+		depositsExtraInfo []struct {
+			*tbtc.Deposit
+			FundingTx *bitcoin.Transaction
+		},
+	) error
+
+	// ValidateTaprootDepositSweepProposal validates the given Taproot deposit
+	// sweep proposal against the chain. It requires some additional data about
+	// the deposits that must be fetched externally. Returns an error if the
+	// proposal is not valid or nil otherwise.
+	ValidateTaprootDepositSweepProposal(
 		walletPublicKeyHash [20]byte,
 		proposal *tbtc.DepositSweepProposal,
 		depositsExtraInfo []struct {
@@ -96,8 +105,17 @@ type Chain interface {
 
 	AverageBlockTime() time.Duration
 
+	// CurrentBlockTimestamp gets the timestamp of the current anchoring chain
+	// block. Proposal eligibility checks should use this timestamp instead of
+	// the local process clock because Bridge validators use block.timestamp.
+	CurrentBlockTimestamp() (time.Time, error)
+
 	// GetOperatorID returns the operator ID for the given operator address.
 	GetOperatorID(operatorAddress chain.Address) (chain.OperatorID, error)
+
+	// GetFrostOperatorID returns the FROST sortition pool operator ID for the
+	// given operator address.
+	GetFrostOperatorID(operatorAddress chain.Address) (chain.OperatorID, error)
 
 	// ValidateHeartbeatProposal validates the given heartbeat proposal
 	// against the chain. Returns an error if the proposal is not valid or

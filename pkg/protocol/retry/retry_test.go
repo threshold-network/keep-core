@@ -119,6 +119,44 @@ func TestEvaluateRetryParticipantsForKeyGeneration_NotEnoughOperators(t *testing
 	}
 }
 
+func TestExcludeOperatorTriplets_UsesThirdOperatorSeatCount(t *testing.T) {
+	groupMembers := []chain.Address{
+		"A", "A", "A",
+		"B",
+		"C", "C", "C",
+	}
+
+	operatorToSeatCount := calculateSeatCount(groupMembers)
+	operators := []chain.Address{"A", "B", "C"}
+
+	// #nosec G404 (insecure random number source (rand))
+	// Deterministic RNG is sufficient for deterministic unit tests.
+	rng := rand.New(rand.NewSource(1))
+
+	usedOperators, skippedTries, ok := excludeOperatorTriplets(
+		rng,
+		groupMembers,
+		0,
+		operatorToSeatCount,
+		operators,
+		2,
+	)
+
+	if ok {
+		t.Fatalf(
+			"expected no eligible triplet exclusions, got operators: [%v]",
+			usedOperators,
+		)
+	}
+
+	if skippedTries != 0 {
+		t.Fatalf(
+			"expected zero skipped tries when no triplet is eligible, got: [%d]",
+			skippedTries,
+		)
+	}
+}
+
 func TestExcludeOperatorTripletsCountsRightOperatorSeats(t *testing.T) {
 	leftOperator := chain.Address("operator-left")
 	middleOperator := chain.Address("operator-middle")

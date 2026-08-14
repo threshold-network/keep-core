@@ -4,18 +4,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
-	"math/rand"
-	"sort"
 
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa/retry"
-	"github.com/keep-network/keep-core/pkg/tecdsa/signing"
 	"golang.org/x/exp/slices"
 )
 
@@ -43,6 +41,17 @@ func signingAttemptMaximumBlocks() uint {
 		signingAttemptAnnouncementActiveBlocks +
 		signingAttemptMaximumProtocolBlocks +
 		signingAttemptCoolDownBlocks
+}
+
+// signingAttemptSeed computes a deterministic seed used for retry and
+// coordinator selection for a given signed message.
+func signingAttemptSeed(message *big.Int) int64 {
+	// Compute the 8-byte seed needed for the random retry algorithm. We take
+	// the first 8 bytes of the hash of the signed message. This allows us to
+	// not care in this piece of the code about the length of the message and
+	// how this message is proposed.
+	messageSha256 := sha256.Sum256(message.Bytes())
+	return int64(binary.BigEndian.Uint64(messageSha256[:8]))
 }
 
 // signingAnnouncer represents a component responsible for exchanging readiness
@@ -84,6 +93,11 @@ type signingRetryLoop struct {
 
 	message *big.Int
 
+	// roastSessionID is the STABLE ROAST session id (no attempt number) keying
+	// the ROAST transition-record registry + participant-selector lookup across
+	// this signing's attempts. Empty in deployments that do not drive ROAST.
+	roastSessionID string
+
 	signingGroupMemberIndex group.MemberIndex
 	signingGroupOperators   chain.Addresses
 
@@ -95,12 +109,59 @@ type signingRetryLoop struct {
 	attemptStartBlock uint64
 	attemptSeed       int64
 
+	// roastAttemptNumber is the 0-based COMMITTED ROAST attempt index: it advances
+	// only when an iteration reaches selection/observe (a committed attempt), NOT
+	// on the block-timing/announcement/minority-readiness skips that tick
+	// attemptCounter. The ROAST transition chain keys off it (observe context,
+	// freshness, consume) so a skipped loop iteration does not break the
+	// consecutive-transition chain across honest nodes (RFC-21 Phase 7.3 PR2b-1b).
+	roastAttemptNumber uint
+
 	doneCheck signingDoneCheckStrategy
+
+	// participantSelector dispatches qualified-operator selection. The default
+	// build uses the legacy retry shuffle; the frost_roast_retry build installs the
+	// ROAST-driven selector (signing_loop_selector_frost_roast_retry.go), which
+	// consumes the transition record the exchange produces -- now carrying the real
+	// blame evidence the coarse path captures (RFC-21 Phase 7.3 PR2b-2 step 2) --
+	// and falls back to the shuffle only on the uniform initial/inactive condition.
+	participantSelector signingParticipantSelector
+
+	// transitionController, when non-nil, owns the session-scoped ROAST
+	// transition machinery for this signer (RFC-21 Phase 7.3 PR2b-1b): observing
+	// each attempt so the signer holds a handle to verify the attempt's
+	// transition bundle and run NextAttempt for participant selection. nil in the
+	// default build and in deployments that do not drive ROAST retry, in which
+	// case the loop runs no transition steps.
+	transitionController roastTransitionController
+
+	// roastKeyGroupID is THIS wallet's FROST key-group handle, passed to the
+	// participant selector so it scopes the ROAST-vs-legacy activation decision PER
+	// WALLET: a wallet whose ROAST coordinator registration was skipped (non-native or
+	// malformed signer material) must keep falling back to legacy selection even when
+	// a sibling wallet on the same node is ROAST-active. Empty in the default build,
+	// for legacy/non-native wallets, and whenever the key group cannot be derived; the
+	// legacy selector ignores it.
+	roastKeyGroupID string
+
+	// attemptOutcomeReporter, when non-nil, receives the terminal outcome
+	// of every network-wide signing attempt this loop observes (RFC-21
+	// Annex B implied-f liveness alerting). An outcome is reported when an
+	// attempt reaches a terminal disposition: minority readiness after a
+	// completed announcement, a failed protocol run, a failed done-check
+	// exchange, or success. Mechanical iterations that never sample the
+	// group - block-timing skips, local announcement errors, context
+	// cancellation, and a members-selection error (which terminates the
+	// whole loop, not the attempt) - are deliberately not reported, so
+	// the rate feeding the Annex B sampling model is not diluted by
+	// local noise.
+	attemptOutcomeReporter func(success bool)
 }
 
 func newSigningRetryLoop(
 	logger log.StandardLogger,
 	message *big.Int,
+	roastSessionID string,
 	initialStartBlock uint64,
 	signingGroupMemberIndex group.MemberIndex,
 	signingGroupOperators chain.Addresses,
@@ -108,33 +169,69 @@ func newSigningRetryLoop(
 	announcer signingAnnouncer,
 	doneCheck signingDoneCheckStrategy,
 ) *signingRetryLoop {
-	// Compute the 8-byte seed needed for the random retry algorithm. We take
-	// the first 8 bytes of the hash of the signed message. This allows us to
-	// not care in this piece of the code about the length of the message and
-	// how this message is proposed.
-	messageSha256 := sha256.Sum256(message.Bytes())
-	attemptSeed := int64(binary.BigEndian.Uint64(messageSha256[:8]))
-
 	return &signingRetryLoop{
 		logger:                  logger,
 		message:                 message,
+		roastSessionID:          roastSessionID,
 		signingGroupMemberIndex: signingGroupMemberIndex,
 		signingGroupOperators:   signingGroupOperators,
 		groupParameters:         groupParameters,
 		announcer:               announcer,
 		attemptCounter:          0,
 		attemptStartBlock:       initialStartBlock,
-		attemptSeed:             attemptSeed,
+		attemptSeed:             signingAttemptSeed(message),
 		doneCheck:               doneCheck,
+		participantSelector:     defaultSigningParticipantSelector(),
+	}
+}
+
+// setAttemptOutcomeReporter installs the attempt-outcome reporter. See the
+// attemptOutcomeReporter field for the reporting contract.
+func (srl *signingRetryLoop) setAttemptOutcomeReporter(
+	reporter func(success bool),
+) {
+	srl.attemptOutcomeReporter = reporter
+}
+
+// setTransitionController installs the ROAST transition controller. A nil
+// controller leaves the loop running no transition steps (the default).
+func (srl *signingRetryLoop) setTransitionController(
+	controller roastTransitionController,
+) {
+	srl.transitionController = controller
+}
+
+// setRoastKeyGroupID installs THIS wallet's FROST key-group handle so the
+// participant selector can scope ROAST activation per wallet. Empty is the safe
+// default (legacy/non-native wallets, or when the handle cannot be derived); see
+// the roastKeyGroupID field.
+func (srl *signingRetryLoop) setRoastKeyGroupID(keyGroupID string) {
+	srl.roastKeyGroupID = keyGroupID
+}
+
+func (srl *signingRetryLoop) reportAttemptOutcome(success bool) {
+	if srl.attemptOutcomeReporter != nil {
+		srl.attemptOutcomeReporter(success)
 	}
 }
 
 // signingAttemptParams represents parameters of a signing attempt.
 type signingAttemptParams struct {
+	// number is the attempt number the active signing keys its AttemptContext,
+	// coordinator election, and session id off. Under active ROAST retry this is
+	// the COMMITTED roast attempt number (roastAttemptNumber+1), so the active
+	// signing context matches the observe/transition context the loop built for
+	// the same committed attempt; otherwise it is the block-paced attemptCounter
+	// (legacy, unchanged). RFC-21 Phase 7.3 PR2b-1b.
 	number                 uint
 	startBlock             uint64
 	timeoutBlock           uint64
 	excludedMembersIndexes []group.MemberIndex
+	// transientlyParkedMembersIndexes are the members the prior ROAST transition
+	// parked for THIS attempt only. The active signing stamps them onto its
+	// AttemptContext so it is byte-identical to the observe context (which carries
+	// the same parking); empty for the legacy path.
+	transientlyParkedMembersIndexes []group.MemberIndex
 }
 
 // signingAttemptFn represents a function performing a signing attempt.
@@ -305,10 +402,37 @@ func (srl *signingRetryLoop) start(
 				len(readyMembersIndexes),
 				unreadyMembersIndexes,
 			)
+			srl.reportAttemptOutcome(false)
 			continue
 		}
 
-		excludedMembersIndexes, err := srl.performMembersSelection(
+		// RFC-21 Phase 7.3 PR2b-1b: if this seat fell behind the group's committed
+		// ROAST attempt chain -- its listener received a transition for an attempt
+		// it never observed because it skipped a window peers committed -- selecting
+		// now would produce a divergent included set (the fracture class). Skip this
+		// attempt rather than select from a stale position.
+		//
+		// Scoped to one attempt, not the session: ConsumeLostSync clears the marker
+		// as it reads it. A seat that is genuinely behind keeps receiving such
+		// bundles and keeps skipping until it catches up, which is self-correcting.
+		// A seat fed a single forged bundle loses one attempt. Aborting the whole
+		// signing action here would let any authenticated member end a session with
+		// one unverifiable message, since the triggering bundle cannot be verified
+		// without a local observe handle this seat never created.
+		if srl.transitionController != nil &&
+			srl.transitionController.ConsumeLostSync() {
+			srl.logger.Warnf(
+				"[member:%v] skipping attempt [%v]: received a transition for an "+
+					"unobserved attempt, so this seat is behind the group's "+
+					"committed ROAST attempt chain; moving to the next attempt",
+				srl.signingGroupMemberIndex,
+				srl.attemptCounter,
+			)
+			srl.reportAttemptOutcome(false)
+			continue
+		}
+
+		includedMembersIndexes, excludedMembersIndexes, transientlyParkedMembersIndexes, err := srl.performMembersSelection(
 			readyMembersIndexes,
 		)
 		if err != nil {
@@ -319,13 +443,33 @@ func (srl *signingRetryLoop) start(
 			)
 		}
 
-		includedMembersIndexes := make([]group.MemberIndex, 0)
-		for i := range srl.signingGroupOperators {
-			memberIndex := group.MemberIndex(i + 1)
-			if !slices.Contains(excludedMembersIndexes, memberIndex) {
-				includedMembersIndexes = append(includedMembersIndexes, memberIndex)
-			}
+		// committedRoastAttemptNumber is this committed attempt's 0-based ROAST
+		// index, captured BEFORE the advance below so both the observe context and
+		// the active signing context key off the same value (the observe Attempt is
+		// stamped Number = committedRoastAttemptNumber+1, so the active attempt must
+		// use the same number to stay byte-identical).
+		committedRoastAttemptNumber := srl.roastAttemptNumber
+
+		// RFC-21 Phase 7.3 PR2b-1b: record a local observe binding for this
+		// committed ROAST attempt BEFORE the skip branch, so every local seat --
+		// including one excluded from this attempt -- holds a handle to verify the
+		// attempt's transition bundle and run NextAttempt for the next attempt's
+		// selection. The observe context carries the transiently-parked set, so a
+		// one-attempt park is reinstated next time rather than made permanent.
+		if srl.transitionController != nil {
+			srl.transitionController.BeginObservedAttempt(
+				committedRoastAttemptNumber,
+				includedMembersIndexes,
+				excludedMembersIndexes,
+				transientlyParkedMembersIndexes,
+			)
 		}
+		// This iteration reached selection/observe, so it COMMITTED to a ROAST
+		// attempt: advance the committed ROAST attempt number (the block-timing,
+		// announcement, and minority-readiness skips above did not). Every seat --
+		// included or excluded -- advances identically, keeping the transition
+		// chain consecutive across honest nodes.
+		srl.roastAttemptNumber++
 
 		attemptSkipped := slices.Contains(
 			excludedMembersIndexes,
@@ -354,13 +498,58 @@ func (srl *signingRetryLoop) start(
 				srl.attemptCounter,
 			)
 
+			// RFC-21 Phase 7.3 PR2b-1b: when ROAST retry is runtime-active, the
+			// active signing attempt must key off the COMMITTED roast attempt index
+			// (+ parking) so its AttemptContext is byte-identical to the
+			// observe/transition context this seat built for the same committed
+			// attempt above. Keyed off attemptCounter, the two would diverge after a
+			// pre-selection skip or whenever a member is parked, binding signing
+			// messages and transition bundles to different context hashes. ROAST
+			// inactive keeps the block-paced attemptCounter (legacy, unchanged). The
+			// gate is PER-SEAT AND PER-WALLET (RoastRetryActiveForKeyGroupMember): a
+			// multi-seat operator may have one seat registered and another not, and a
+			// node may control two wallets that reuse the same 1..N member index. Scoping
+			// by THIS wallet's key group keeps the decision group-uniform -- it must match
+			// the participant selector's per-key-group activation, or a wallet that fell
+			// back to LEGACY selection would number its attempt with the ROAST counter
+			// (and desync from peers that do not also control the sibling wallet that
+			// happened to register the same seat). Empty key group (legacy/non-native)
+			// yields false -> legacy numbering.
+			activeAttemptNumber := srl.attemptCounter
+			if signing.RoastRetryActiveForKeyGroupMember(
+				srl.roastKeyGroupID,
+				srl.signingGroupMemberIndex,
+			) {
+				activeAttemptNumber = committedRoastAttemptNumber + 1
+			}
+
 			result, endBlock, err := signingAttemptFn(&signingAttemptParams{
-				number:                 srl.attemptCounter,
-				startBlock:             announcementEndBlock,
-				timeoutBlock:           timeoutBlock,
-				excludedMembersIndexes: excludedMembersIndexes,
+				number:                          activeAttemptNumber,
+				startBlock:                      announcementEndBlock,
+				timeoutBlock:                    timeoutBlock,
+				excludedMembersIndexes:          excludedMembersIndexes,
+				transientlyParkedMembersIndexes: transientlyParkedMembersIndexes,
 			})
 			if err != nil {
+				// RFC-21 Phase 7.3 PR2b-1.5 (Codex/Gemini consult): a TERMINAL
+				// orchestration error is a STATIC condition no future attempt can
+				// resolve (e.g. multi-seat interactive ROAST orchestration that is not
+				// yet member-safe). Retrying is futile -- every attempt re-derives the
+				// same outcome -- and would spin until timeout while synthesizing garbage
+				// failed-attempt transitions via OnAttemptFailed below. Abort the loop
+				// immediately, BEFORE the retry/transition machinery; the outer
+				// wallet-signing layer gives up cleanly for this action. Coarse fallback
+				// is not an option here: interactive<->coarse mixing fractures the group.
+				if errors.Is(err, signing.ErrTerminalSigningFailure) {
+					srl.logger.Errorf(
+						"[member:%v] terminal signing failure on attempt [%v]: [%v]; "+
+							"aborting retry loop",
+						srl.signingGroupMemberIndex,
+						srl.attemptCounter,
+						err,
+					)
+					return nil, err
+				}
 				srl.logger.Warnf(
 					"[member:%v] failed attempt [%v]: [%v]; "+
 						"starting next attempt",
@@ -368,7 +557,36 @@ func (srl *signingRetryLoop) start(
 					srl.attemptCounter,
 					err,
 				)
+				// RFC-21 Phase 7.3 PR2b-1b: this seat committed to and failed the
+				// attempt, so drive the transition exchange (forced snapshot, and
+				// the elected coordinator's aggregation) for the next attempt's
+				// selection. Inert until the selector consumes records (C3).
+				if srl.transitionController != nil {
+					srl.transitionController.OnAttemptFailed(
+						srl.attemptCounter,
+						timeoutBlock,
+					)
+				}
+				srl.reportAttemptOutcome(false)
 				continue
+			}
+
+			// RFC-21 Phase 7.3 PR2b-1b: the protocol round succeeded locally (a valid
+			// signature aggregated), so clear this seat's observe binding for the
+			// attempt -- no failure transition may be synthesized or stored for a
+			// succeeded attempt. If the done-check below then fails, the next attempt
+			// finds no fresh transition and fails closed (the honest outcome) instead
+			// of consuming a peer's failure transition for an attempt this seat won.
+			//
+			// Accepted cost: a done-check failure after a local success abandons the
+			// attempt and discards a signature that was actually valid, so the loop
+			// spends an extra attempt. That is deliberate. The alternative -- letting
+			// the loop carry a "succeeded locally, done-check failed" outcome forward
+			// -- reopens exactly the hazard this clear closes, because the next attempt
+			// would again have a transition record available for an attempt this seat
+			// won. Spending one attempt is the cheaper side of that trade.
+			if srl.transitionController != nil {
+				srl.transitionController.OnAttemptSucceeded()
 			}
 
 			srl.logger.Infof(
@@ -393,6 +611,11 @@ func (srl *signingRetryLoop) start(
 					srl.attemptCounter,
 					err,
 				)
+				// A failed done signal is a local fault, but this loop
+				// abandons the attempt here, so from this node's sampler
+				// the attempt did not complete; the baseline calibration
+				// absorbs this as benign noise.
+				srl.reportAttemptOutcome(false)
 				continue
 			}
 		} else {
@@ -413,6 +636,7 @@ func (srl *signingRetryLoop) start(
 				srl.attemptCounter,
 				err,
 			)
+			srl.reportAttemptOutcome(false)
 			continue
 		}
 
@@ -420,6 +644,8 @@ func (srl *signingRetryLoop) start(
 			activeMembers:   readyMembersIndexes,
 			inactiveMembers: unreadyMembersIndexes,
 		}
+
+		srl.reportAttemptOutcome(true)
 
 		return &signingRetryLoopResult{
 			result:              result,
@@ -430,133 +656,73 @@ func (srl *signingRetryLoop) start(
 	}
 }
 
-// performMembersSelection runs the member selection process whose result
-// is a list of members' indexes that should be excluded by the client
-// for the given signing attempt.
+// performMembersSelection runs the member selection process for the given
+// signing attempt, returning the included member indices (the members that
+// participate), the excluded ones (everyone else), and the transiently-parked
+// subset, each sorted ascending.
 //
-// The member selection process is done based on the list of ready members
-// provided as the readyMembersIndexes argument. This list is used twice:
-//
-// First, the algorithm determining the qualified operators set uses the
-// ready members list to build an input consisting of only active operators.
-// This way we guarantee that the qualified operators set contains only
-// ready and active operators that will actually take part in the signing
-// attempt.
-//
-// Second, the ready members list is used to determine a list of excluded
-// members. The excluded members list is built using the qualified operators
-// set. The algorithm that determines the qualified operators set does not
-// care about an exact mapping between operators and controlled members but
-// relies on the members count solely. That means the information about
-// readiness of specific members controlled by the given operators is not
-// included in the resulting qualified operators set. In order to properly
-// decide about inclusion or exclusion of specific members of a given
-// qualified operator, we must take the ready members list into account.
+// Selection is dispatched through participantSelector (RFC-21 Phase 6.4). As of
+// Phase 7.3 PR2b-1a it is MEMBER-LEVEL; PR2b-1b's ROAST implementation returns
+// the transition's IncludedSet + TransientlyParked directly (keyed by the
+// COMMITTED roastAttemptNumber, not the block-paced attemptCounter). The excluded
+// set is the complement of the included set over the whole signing group, so the
+// two partition [1, groupSize]; the parked set is the subset of the excluded set
+// that the next attempt reinstates.
 func (srl *signingRetryLoop) performMembersSelection(
 	readyMembersIndexes []group.MemberIndex,
-) ([]group.MemberIndex, error) {
-	qualifiedOperatorsSet, err := srl.qualifiedOperatorsSet(readyMembersIndexes)
-	if err != nil {
-		return nil, fmt.Errorf("cannot get qualified operators: [%w]", err)
-	}
-
-	// Exclude all members controlled by the operators that were not
-	// qualified for the current attempt.
-	return srl.excludedMembersIndexes(
-		qualifiedOperatorsSet,
-		readyMembersIndexes,
-	), nil
-}
-
-// qualifiedOperatorsSet returns a set of operators qualified to participate
-// in the given signing attempt. The set of qualified operators is taken
-// from the set of active operators who announced readiness through
-// their controlled signing group members.
-func (srl *signingRetryLoop) qualifiedOperatorsSet(
-	readyMembersIndexes []group.MemberIndex,
-) (map[chain.Address]bool, error) {
-	// The retry algorithm expects that we count retries from 0. Since
-	// the first invocation of the algorithm will be for `attemptCounter == 1`
-	// we need to subtract one while determining the number of the given retry.
+) ([]group.MemberIndex, []group.MemberIndex, []group.MemberIndex, error) {
+	// The legacy retry algorithm counts retries from 0. The first invocation is
+	// for attemptCounter == 1, so the legacy retry count is attemptCounter - 1.
+	// The ROAST path instead keys off the committed roastAttemptNumber.
 	retryCount := srl.attemptCounter - 1
 
-	var readySigningGroupOperators []chain.Address
-	for _, memberIndex := range readyMembersIndexes {
-		readySigningGroupOperators = append(
-			readySigningGroupOperators,
-			srl.signingGroupOperators[memberIndex-1],
-		)
-	}
-
-	qualifiedOperators, err := retry.EvaluateRetryParticipantsForSigning(
-		readySigningGroupOperators,
+	selection, err := srl.participantSelector.Select(
+		readyMembersIndexes,
+		srl.signingGroupOperators,
 		srl.attemptSeed,
 		retryCount,
+		srl.roastAttemptNumber,
 		uint(srl.groupParameters.HonestThreshold),
+		srl.roastSessionID,
+		srl.signingGroupMemberIndex,
+		srl.roastKeyGroupID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"random operator selection failed: [%w]",
+		return nil, nil, nil, fmt.Errorf(
+			"participant selection failed: [%w]",
 			err,
 		)
 	}
 
-	return chain.Addresses(qualifiedOperators).Set(), nil
+	excludedMembersIndexes := membersComplement(
+		selection.includedMembersIndexes,
+		len(srl.signingGroupOperators),
+	)
+
+	return selection.includedMembersIndexes,
+		excludedMembersIndexes,
+		selection.transientlyParkedMembersIndexes,
+		nil
 }
 
-// excludedMembersIndexes returns a list of excluded members' indexes for
-// the given qualified operators set.
-func (srl *signingRetryLoop) excludedMembersIndexes(
-	qualifiedOperatorsSet map[chain.Address]bool,
-	readyMembersIndexes []group.MemberIndex,
+// membersComplement returns the member indices in [1, groupSize] that are NOT
+// in the included set, sorted ascending. Together with the included set it
+// partitions the whole signing group.
+func membersComplement(
+	includedMembersIndexes []group.MemberIndex,
+	groupSize int,
 ) []group.MemberIndex {
-	includedMembersIndexes := make([]group.MemberIndex, 0)
-	excludedMembersIndexes := make([]group.MemberIndex, 0)
-	for i, operator := range srl.signingGroupOperators {
-		memberIndex := group.MemberIndex(i + 1)
-
-		if qualifiedOperatorsSet[operator] &&
-			slices.Contains(readyMembersIndexes, memberIndex) {
-			includedMembersIndexes = append(
-				includedMembersIndexes,
-				memberIndex,
-			)
-		} else {
-			excludedMembersIndexes = append(
-				excludedMembersIndexes,
-				memberIndex,
-			)
-		}
+	includedSet := make(map[group.MemberIndex]bool, len(includedMembersIndexes))
+	for _, memberIndex := range includedMembersIndexes {
+		includedSet[memberIndex] = true
 	}
 
-	// Make sure we always use just the smallest required count of
-	// signing members for performance reasons
-	if len(includedMembersIndexes) > srl.groupParameters.HonestThreshold {
-		// #nosec G404 (insecure random number source (rand))
-		// Shuffling does not require secure randomness.
-		rng := rand.New(rand.NewSource(
-			srl.attemptSeed + int64(srl.attemptCounter),
-		))
-		// Sort in ascending order just in case.
-		sort.Slice(includedMembersIndexes, func(i, j int) bool {
-			return includedMembersIndexes[i] < includedMembersIndexes[j]
-		})
-		// Shuffle the included members slice to randomize the
-		// selection of additionally excluded members.
-		rng.Shuffle(len(includedMembersIndexes), func(i, j int) {
-			includedMembersIndexes[i], includedMembersIndexes[j] =
-				includedMembersIndexes[j], includedMembersIndexes[i]
-		})
-		// Get the surplus of included members and add them to
-		// the excluded members list.
-		excludedMembersIndexes = append(
-			excludedMembersIndexes,
-			includedMembersIndexes[srl.groupParameters.HonestThreshold:]...,
-		)
-		// Sort the resulting excluded members list in ascending order.
-		sort.Slice(excludedMembersIndexes, func(i, j int) bool {
-			return excludedMembersIndexes[i] < excludedMembersIndexes[j]
-		})
+	excludedMembersIndexes := make([]group.MemberIndex, 0, groupSize)
+	for i := 0; i < groupSize; i++ {
+		memberIndex := group.MemberIndex(i + 1)
+		if !includedSet[memberIndex] {
+			excludedMembersIndexes = append(excludedMembersIndexes, memberIndex)
+		}
 	}
 
 	return excludedMembersIndexes

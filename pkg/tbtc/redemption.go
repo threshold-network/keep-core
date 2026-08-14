@@ -47,6 +47,23 @@ const (
 	// the transaction is known on the Bitcoin chain. This delay is needed
 	// as spreading the transaction over the Bitcoin network takes time.
 	redemptionBroadcastCheckDelay = 1 * time.Minute
+	// redemptionChangeDustLimit is the minimum satoshi value of the change
+	// output of a redemption transaction. A change output below the Bitcoin
+	// dust threshold makes the transaction non-standard and modern Bitcoin
+	// nodes reject it outright at relay time ("dust, tx with dust output
+	// must be 0-fee"), so such a transaction can never confirm. The exact
+	// dust threshold depends on the change output's script type: at the
+	// default 3 sat/vB dust relay fee it is 294 satoshi for a P2WPKH change
+	// and 330 satoshi for a P2TR change. A single conservative constant of
+	// 546 satoshi (the historical P2PKH dust limit and the highest dust
+	// threshold among standard output types) is used to cover any change
+	// script type with margin. A positive change below this limit is omitted
+	// from the transaction and its value is folded into the transaction fee.
+	// This is safe on-chain: the Bridge accepts redemption transactions
+	// without a change output and validates redeemer output values
+	// individually, so leaving a sub-dust remainder to the miner does not
+	// violate any per-request constraint.
+	redemptionChangeDustLimit = 546
 )
 
 // RedemptionProposal represents a redemption proposal issued by a wallet's
@@ -191,8 +208,8 @@ func (ra *redemptionAction) execute() error {
 		return fmt.Errorf("validate proposal step failed: [%v]", err)
 	}
 
-	walletMainUtxo, err := DetermineWalletMainUtxo(
-		walletPublicKeyHash,
+	walletMainUtxo, err := DetermineWalletMainUtxoForPublicKey(
+		ra.wallet().publicKey,
 		ra.chain,
 		ra.btcChain,
 	)
@@ -215,8 +232,8 @@ func (ra *redemptionAction) execute() error {
 		return fmt.Errorf("redeeming wallet has no main UTXO")
 	}
 
-	err = EnsureWalletSyncedBetweenChains(
-		walletPublicKeyHash,
+	err = EnsureWalletSyncedBetweenChainsForPublicKey(
+		ra.wallet().publicKey,
 		walletMainUtxo,
 		ra.chain,
 		ra.btcChain,
@@ -246,6 +263,31 @@ func (ra *redemptionAction) execute() error {
 		}
 		return fmt.Errorf(
 			"error while assembling redemption transaction: [%v]",
+			err,
+		)
+	}
+
+	redemptionParameters, err := ra.chain.GetRedemptionParameters()
+	if err != nil {
+		if ra.metricsRecorder != nil {
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
+		}
+		return fmt.Errorf(
+			"error while getting redemption parameters: [%v]",
+			err,
+		)
+	}
+
+	err = validateRedemptionTransactionFee(
+		unsignedRedemptionTx,
+		redemptionParameters.TxMaxTotalFee,
+	)
+	if err != nil {
+		if ra.metricsRecorder != nil {
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
+		}
+		return fmt.Errorf(
+			"error while validating redemption transaction fee: [%v]",
 			err,
 		)
 	}
@@ -506,16 +548,57 @@ func assembleRedemptionTransaction(
 		totalRedemptionOutputsValue -
 		totalFee
 
+	// Note that the change value is independent of the transaction fee: the
+	// fee is subtracted from the redeemer outputs while the change carries
+	// the treasury-fee portion of the redeemed amounts that physically stays
+	// with the wallet. If that remainder is positive but below the dust
+	// limit, a change output carrying it would make the whole transaction
+	// non-relayable. Omit the change output in that case and let the sub-dust
+	// remainder become part of the transaction fee. The transaction is then
+	// shaped exactly like a natural zero-change redemption which is supported
+	// by the downstream signing/broadcast pipeline and the Bridge.
+	if changeOutputValue > 0 && changeOutputValue < redemptionChangeDustLimit {
+		logger.Warnf(
+			"redemption transaction change of [%v] satoshi is below "+
+				"the dust limit of [%v] satoshi; omitting the change output "+
+				"and folding its value into the transaction fee which "+
+				"grows from [%v] to [%v] satoshi",
+			changeOutputValue,
+			int64(redemptionChangeDustLimit),
+			totalFee,
+			totalFee+changeOutputValue,
+		)
+
+		changeOutputValue = 0
+	}
+
 	// If we can have a non-zero change, construct it.
 	if changeOutputValue > 0 {
-		changeOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(
-			bitcoin.PublicKeyHash(walletPublicKey),
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot compute change output script: [%v]",
-				err,
+		var changeOutputScript bitcoin.Script
+		var err error
+		if builder.HasOnlyTaprootKeyPathInputs() {
+			walletXOnlyPublicKey, err := walletXOnlyPublicKey(walletPublicKey)
+			if err != nil {
+				return nil, err
+			}
+
+			changeOutputScript, err = bitcoin.PayToTaproot(walletXOnlyPublicKey)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot compute Taproot change output script: [%v]",
+					err,
+				)
+			}
+		} else {
+			changeOutputScript, err = bitcoin.PayToWitnessPublicKeyHash(
+				bitcoin.PublicKeyHash(walletPublicKey),
 			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot compute change output script: [%v]",
+					err,
+				)
+			}
 		}
 
 		changeOutput := &bitcoin.TransactionOutput{
@@ -539,4 +622,31 @@ func assembleRedemptionTransaction(
 	}
 
 	return builder, nil
+}
+
+func validateRedemptionTransactionFee(
+	transaction *bitcoin.TransactionBuilder,
+	maxTotalFee uint64,
+) error {
+	actualFee := transaction.TotalInputsValue()
+	for _, output := range transaction.UnsignedTransaction().Outputs {
+		actualFee -= output.Value
+	}
+
+	if actualFee < 0 {
+		return fmt.Errorf(
+			"redemption transaction fee is negative: [%v]",
+			actualFee,
+		)
+	}
+
+	if uint64(actualFee) > maxTotalFee {
+		return fmt.Errorf(
+			"redemption transaction fee [%v] exceeds maximum total fee [%v]",
+			actualFee,
+			maxTotalFee,
+		)
+	}
+
+	return nil
 }

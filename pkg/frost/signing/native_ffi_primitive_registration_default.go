@@ -1,0 +1,7 @@
+//go:build !frost_native
+
+package signing
+
+func registerNativeExecutionFFISigningPrimitiveForBuild() error {
+	return nil
+}

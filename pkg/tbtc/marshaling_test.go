@@ -12,13 +12,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 
 	fuzz "github.com/google/gofuzz"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/internal/pbutils"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestSignerMarshalling(t *testing.T) {
@@ -29,9 +29,7 @@ func TestSignerMarshalling(t *testing.T) {
 	if err := pbutils.RoundTrip(marshaled, unmarshaled); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(marshaled, unmarshaled) {
-		t.Fatal("unexpected content of unmarshaled signer")
-	}
+	assertSignerEquivalent(t, "unmarshaled signer", marshaled, unmarshaled)
 }
 
 func TestSignerMarshalling_NonTECDSAKey(t *testing.T) {
@@ -84,12 +82,8 @@ func TestSigningDoneMessage_MarshalingRoundtrip(t *testing.T) {
 		senderID:      group.MemberIndex(10),
 		message:       big.NewInt(100),
 		attemptNumber: 2,
-		signature: &tecdsa.Signature{
-			R:          big.NewInt(200),
-			S:          big.NewInt(300),
-			RecoveryID: 3,
-		},
-		endBlock: 4500,
+		signature:     mustFrostSignatureFromBigInts(big.NewInt(200), big.NewInt(300)),
+		endBlock:      4500,
 	}
 	unmarshaled := &signingDoneMessage{}
 
@@ -109,7 +103,7 @@ func TestFuzzSigningDoneMessage_MarshalingRoundtrip(t *testing.T) {
 			senderID      group.MemberIndex
 			message       big.Int
 			attemptNumber uint64
-			signature     tecdsa.Signature
+			signature     frost.Signature
 			endBlock      uint64
 		)
 
@@ -204,6 +198,7 @@ func TestCoordinationMessage_MarshalingRoundtrip(t *testing.T) {
 					big.NewInt(100),
 					big.NewInt(300),
 				},
+				MainUtxoHash: [32]byte{0xaa, 0xbb, 0xcc},
 			},
 		},
 		"with redemption proposal": {

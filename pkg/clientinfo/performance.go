@@ -48,6 +48,12 @@ type PerformanceMetrics struct {
 	// Gauges track current values (like queue sizes)
 	gaugesMutex sync.RWMutex
 	gauges      map[string]*gauge
+
+	// signingLiveness is the process-wide signing-attempt liveness tracker
+	// (RFC-21 Annex B implied-f alerting), shared by all wallet signing
+	// executors so their attempts feed one rolling window.
+	signingLivenessOnce sync.Once
+	signingLiveness     *SigningAttemptLivenessTracker
 }
 
 // Ensure PerformanceMetrics implements PerformanceMetricsRecorder
@@ -113,6 +119,7 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricSigningSuccessTotal,
 		MetricSigningFailedTotal,
 		MetricSigningTimeoutsTotal,
+		MetricSigningNativeTBTCSignerFallbackTotal,
 		MetricRedemptionExecutionsTotal,
 		MetricRedemptionExecutionsSuccessTotal,
 		MetricRedemptionExecutionsFailedTotal,
@@ -176,43 +183,59 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	}
 
 	// Register per-action type wallet metrics
-	// For each action type, register: total, success_total, failed_total, duration_seconds
+	// For each action type, register: total, success_total, failed_total, duration_seconds.
+	// Collect first, then initialize all maps, and only then register observers to
+	// avoid concurrent map writes while observers are reading.
+	perActionCounters := []string{}
+	perActionDurations := []string{}
 	for _, actionType := range GetAllWalletActionTypes() {
-		actionCounters := []string{
+		perActionCounters = append(
+			perActionCounters,
 			WalletActionMetricName(actionType, "total"),
 			WalletActionMetricName(actionType, "success_total"),
 			WalletActionMetricName(actionType, "failed_total"),
-		}
-		for _, name := range actionCounters {
-			pm.countersMutex.Lock()
-			pm.counters[name] = &counter{value: 0}
-			pm.countersMutex.Unlock()
-			metricName := name // Capture for closure
-			pm.registry.ObserveApplicationSource(
-				"performance",
-				map[string]Source{
-					metricName: func() float64 {
-						pm.countersMutex.RLock()
-						c, exists := pm.counters[metricName]
-						pm.countersMutex.RUnlock()
-						if !exists {
-							return 0
-						}
-						c.mutex.RLock()
-						defer c.mutex.RUnlock()
-						return c.value
-					},
-				},
-			)
-		}
+		)
+		perActionDurations = append(
+			perActionDurations,
+			WalletActionMetricName(actionType, "duration_seconds"),
+		)
+	}
 
-		// Register duration metric for this action type
-		durationName := WalletActionMetricName(actionType, "duration_seconds")
-		pm.histogramsMutex.Lock()
+	pm.countersMutex.Lock()
+	for _, name := range perActionCounters {
+		pm.counters[name] = &counter{value: 0}
+	}
+	pm.countersMutex.Unlock()
+
+	for _, name := range perActionCounters {
+		metricName := name // Capture for closure
+		pm.registry.ObserveApplicationSource(
+			"performance",
+			map[string]Source{
+				metricName: func() float64 {
+					pm.countersMutex.RLock()
+					c, exists := pm.counters[metricName]
+					pm.countersMutex.RUnlock()
+					if !exists {
+						return 0
+					}
+					c.mutex.RLock()
+					defer c.mutex.RUnlock()
+					return c.value
+				},
+			},
+		)
+	}
+
+	pm.histogramsMutex.Lock()
+	for _, durationName := range perActionDurations {
 		pm.histograms[durationName] = &histogram{
 			buckets: make(map[float64]float64),
 		}
-		pm.histogramsMutex.Unlock()
+	}
+	pm.histogramsMutex.Unlock()
+
+	for _, durationName := range perActionDurations {
 		durationMetricName := durationName // Capture for closure
 		pm.registry.ObserveApplicationSource(
 			"performance",
@@ -301,6 +324,9 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricIncomingMessageQueueSize,
 		MetricMessageHandlerQueueSize,
 		MetricSigningAttemptsPerOperation,
+		MetricSigningAttemptRollingSuccessRate,
+		MetricSigningAttemptRollingSampleCount,
+		MetricSigningAttemptImpliedFAlert,
 		MetricCPUUtilization,
 		MetricMemoryUsageMB,
 		MetricGoroutineCount,
@@ -556,6 +582,18 @@ func (pm *PerformanceMetrics) updateMachineStats() {
 	}
 }
 
+// SigningAttemptLivenessTracker returns the process-wide signing-attempt
+// liveness tracker bound to this metrics instance, creating it on first
+// use. Signing executors of every wallet share the returned tracker so all
+// attempt outcomes feed one rolling window.
+func (pm *PerformanceMetrics) SigningAttemptLivenessTracker() *SigningAttemptLivenessTracker {
+	pm.signingLivenessOnce.Do(func() {
+		pm.signingLiveness = NewSigningAttemptLivenessTracker(pm)
+	})
+
+	return pm.signingLiveness
+}
+
 // NoOpPerformanceMetrics is a no-op implementation of PerformanceMetricsRecorder
 // that can be used when metrics are disabled.
 type NoOpPerformanceMetrics struct{}
@@ -622,6 +660,9 @@ const (
 	MetricSigningDurationSeconds      = "signing_duration_seconds"
 	MetricSigningAttemptsPerOperation = "signing_attempts_per_operation"
 	MetricSigningTimeoutsTotal        = "signing_timeouts_total"
+	// MetricSigningNativeTBTCSignerFallbackTotal counts the number of times the
+	// frost_tbtc_signer path fell back to legacy tECDSA execution.
+	MetricSigningNativeTBTCSignerFallbackTotal = "signing_native_tbtc_signer_fallback_total"
 
 	// Redemption Metrics
 	MetricRedemptionExecutionsTotal        = "redemption_executions_total"

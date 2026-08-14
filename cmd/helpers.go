@@ -98,6 +98,8 @@ func buildContractAddresses(lineLength int, prefix, suffix string, ethereumConfi
 		chainEthereum.RandomBeaconContractName,
 		chainEthereum.BridgeContractName,
 		chainEthereum.WalletRegistryContractName,
+		chainEthereum.FrostWalletRegistryContractName,
+		chainEthereum.FrostDkgValidatorContractName,
 		chainEthereum.TokenStakingContractName,
 		chainEthereum.WalletProposalValidatorContractName,
 	}

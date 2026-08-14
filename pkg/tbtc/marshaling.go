@@ -12,6 +12,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
@@ -42,15 +43,18 @@ func (s *signer) Marshal() ([]byte, error) {
 		SigningGroupOperators: walletSigningGroupOperators,
 	}
 
-	privateKeyShare, err := s.privateKeyShare.Marshal()
+	signerMaterialBytes, err := marshalSignerMaterialForPersistence(
+		s.signerMaterial,
+		s.privateKeyShare,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("cannot marshal private key share: [%w]", err)
+		return nil, fmt.Errorf("cannot marshal signer material: [%w]", err)
 	}
 
 	return proto.Marshal(&pb.Signer{
 		Wallet:                  pbWallet,
 		SigningGroupMemberIndex: uint32(s.signingGroupMemberIndex),
-		PrivateKeyShare:         privateKeyShare,
+		PrivateKeyShare:         signerMaterialBytes,
 	})
 }
 
@@ -75,9 +79,11 @@ func (s *signer) Unmarshal(bytes []byte) error {
 			chain.Address(pbSigner.Wallet.SigningGroupOperators[i])
 	}
 
-	privateKeyShare := &tecdsa.PrivateKeyShare{}
-	if err := privateKeyShare.Unmarshal(pbSigner.PrivateKeyShare); err != nil {
-		return fmt.Errorf("cannot unmarshal private key share: [%w]", err)
+	signerMaterial, err := unmarshalSignerMaterialFromPersistence(
+		pbSigner.PrivateKeyShare,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot unmarshal signer material: [%w]", err)
 	}
 
 	s.wallet = wallet{
@@ -85,7 +91,8 @@ func (s *signer) Unmarshal(bytes []byte) error {
 		signingGroupOperators: walletSigningGroupOperators,
 	}
 	s.signingGroupMemberIndex = group.MemberIndex(pbSigner.SigningGroupMemberIndex)
-	s.privateKeyShare = privateKeyShare
+	s.privateKeyShare = signerMaterial.privateKeyShare
+	s.signerMaterial = signerMaterial.signerMaterial
 
 	return nil
 }
@@ -117,7 +124,7 @@ func (sdm *signingDoneMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	signature := &tecdsa.Signature{}
+	signature := &frost.Signature{}
 	if err := signature.Unmarshal(pbMsg.Signature); err != nil {
 		return fmt.Errorf("cannot unmarshal signature: [%v]", err)
 	}
@@ -314,6 +321,7 @@ func (dsp *DepositSweepProposal) Marshal() ([]byte, error) {
 			DepositsKeys:         depositsKeys,
 			SweepTxFee:           dsp.SweepTxFee.Bytes(),
 			DepositsRevealBlocks: depositsRevealBlocks,
+			MainUtxoHash:         append([]byte{}, dsp.MainUtxoHash[:]...),
 		},
 	)
 }
@@ -361,6 +369,13 @@ func (dsp *DepositSweepProposal) Unmarshal(bytes []byte) error {
 	dsp.DepositsKeys = depositsKeys
 	dsp.SweepTxFee = new(big.Int).SetBytes(pbMsg.SweepTxFee)
 	dsp.DepositsRevealBlocks = depositsRevealBlocks
+	if len(pbMsg.MainUtxoHash) != 0 && len(pbMsg.MainUtxoHash) != 32 {
+		return fmt.Errorf(
+			"failed to unmarshal main UTXO hash: invalid length [%v]",
+			len(pbMsg.MainUtxoHash),
+		)
+	}
+	copy(dsp.MainUtxoHash[:], pbMsg.MainUtxoHash)
 
 	return nil
 }

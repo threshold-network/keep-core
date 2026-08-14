@@ -33,6 +33,8 @@ const (
 )
 
 type localChain struct {
+	frostWalletRegistryAvailable bool
+
 	dkgResultSubmissionHandlersMutex sync.Mutex
 	dkgResultSubmissionHandlers      map[int]func(submission *DKGResultSubmittedEvent)
 
@@ -55,6 +57,10 @@ type localChain struct {
 	walletsMutex sync.Mutex
 	wallets      map[[20]byte]*WalletChainData
 
+	walletRegistrationChecksMutex sync.Mutex
+	ecdsaWalletRegistrationChecks int
+	frostWalletRegistrationChecks int
+
 	inactivityNonceMutex sync.Mutex
 	inactivityNonces     map[[32]byte]uint64
 
@@ -67,6 +73,9 @@ type localChain struct {
 	pastDepositRevealedEventsMutex sync.Mutex
 	pastDepositRevealedEvents      map[[32]byte][]*DepositRevealedEvent
 
+	pastTaprootDepositRevealedEventsMutex sync.Mutex
+	pastTaprootDepositRevealedEvents      map[[32]byte][]*TaprootDepositRevealedEvent
+
 	pastMovingFundsCommitmentSubmittedEventsMutex sync.Mutex
 	pastMovingFundsCommitmentSubmittedEvents      map[[32]byte][]*MovingFundsCommitmentSubmittedEvent
 
@@ -78,6 +87,9 @@ type localChain struct {
 
 	redemptionProposalValidationsMutex sync.Mutex
 	redemptionProposalValidations      map[[32]byte]bool
+
+	redemptionParametersMutex sync.Mutex
+	redemptionParameters      RedemptionParameters
 
 	movingFundsProposalValidationsMutex sync.Mutex
 	movingFundsProposalValidations      map[[32]byte]bool
@@ -715,6 +727,42 @@ func (lc *localChain) setPastDepositRevealedEvents(
 	return nil
 }
 
+func (lc *localChain) PastTaprootDepositRevealedEvents(
+	filter *DepositRevealedEventFilter,
+) ([]*TaprootDepositRevealedEvent, error) {
+	lc.pastTaprootDepositRevealedEventsMutex.Lock()
+	defer lc.pastTaprootDepositRevealedEventsMutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	events, ok := lc.pastTaprootDepositRevealedEvents[eventsKey]
+	if !ok {
+		return []*TaprootDepositRevealedEvent{}, nil
+	}
+
+	return events, nil
+}
+
+func (lc *localChain) setPastTaprootDepositRevealedEvents(
+	filter *DepositRevealedEventFilter,
+	events []*TaprootDepositRevealedEvent,
+) error {
+	lc.pastTaprootDepositRevealedEventsMutex.Lock()
+	defer lc.pastTaprootDepositRevealedEventsMutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return err
+	}
+
+	lc.pastTaprootDepositRevealedEvents[eventsKey] = events
+
+	return nil
+}
+
 func buildPastDepositRevealedEventsKey(
 	filter *DepositRevealedEventFilter,
 ) ([32]byte, error) {
@@ -874,7 +922,30 @@ func (lc *localChain) GetWallet(walletPublicKeyHash [20]byte) (
 	return walletChainData, nil
 }
 
+func (lc *localChain) WalletPublicKeyHashForWalletID(
+	walletID [32]byte,
+) ([20]byte, error) {
+	lc.walletsMutex.Lock()
+	defer lc.walletsMutex.Unlock()
+
+	for walletPublicKeyHash, walletData := range lc.wallets {
+		if walletData == nil {
+			continue
+		}
+
+		if walletID == walletData.WalletID || walletID == walletData.EcdsaWalletID {
+			return walletPublicKeyHash, nil
+		}
+	}
+
+	return [20]byte{}, fmt.Errorf("wallet not found")
+}
+
 func (lc *localChain) IsWalletRegistered(EcdsaWalletID [32]byte) (bool, error) {
+	lc.walletRegistrationChecksMutex.Lock()
+	lc.ecdsaWalletRegistrationChecks++
+	lc.walletRegistrationChecksMutex.Unlock()
+
 	lc.walletsMutex.Lock()
 	defer lc.walletsMutex.Unlock()
 
@@ -888,7 +959,32 @@ func (lc *localChain) IsWalletRegistered(EcdsaWalletID [32]byte) (bool, error) {
 		}
 	}
 
-	return false, fmt.Errorf("wallet not found")
+	return false, nil
+}
+
+func (lc *localChain) FrostWalletRegistryAvailable() bool {
+	return lc.frostWalletRegistryAvailable
+}
+
+func (lc *localChain) IsFrostWalletRegistered(walletID [32]byte) (bool, error) {
+	lc.walletRegistrationChecksMutex.Lock()
+	lc.frostWalletRegistrationChecks++
+	lc.walletRegistrationChecksMutex.Unlock()
+
+	lc.walletsMutex.Lock()
+	defer lc.walletsMutex.Unlock()
+
+	for _, walletData := range lc.wallets {
+		if walletID == walletData.WalletID {
+			if walletData.State == StateClosed ||
+				walletData.State == StateTerminated {
+				return false, nil
+			}
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func (lc *localChain) setWallet(
@@ -897,6 +993,10 @@ func (lc *localChain) setWallet(
 ) {
 	lc.walletsMutex.Lock()
 	defer lc.walletsMutex.Unlock()
+
+	if walletChainData != nil && walletChainData.WalletID == [32]byte{} {
+		walletChainData.WalletID = DeriveLegacyWalletID(walletPublicKeyHash)
+	}
 
 	lc.wallets[walletPublicKeyHash] = walletChainData
 }
@@ -993,6 +1093,21 @@ func (lc *localChain) ValidateDepositSweepProposal(
 	}
 
 	return nil
+}
+
+func (lc *localChain) ValidateTaprootDepositSweepProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *DepositSweepProposal,
+	depositsExtraInfo []struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return lc.ValidateDepositSweepProposal(
+		walletPublicKeyHash,
+		proposal,
+		depositsExtraInfo,
+	)
 }
 
 func (lc *localChain) setDepositSweepProposalValidationResult(
@@ -1104,6 +1219,36 @@ func (lc *localChain) setRedemptionProposalValidationResult(
 	lc.redemptionProposalValidations[key] = result
 
 	return nil
+}
+
+func (lc *localChain) GetRedemptionParameters() (RedemptionParameters, error) {
+	lc.redemptionParametersMutex.Lock()
+	defer lc.redemptionParametersMutex.Unlock()
+
+	return lc.redemptionParameters, nil
+}
+
+func (lc *localChain) setRedemptionParameters(
+	dustThreshold uint64,
+	treasuryFeeDivisor uint64,
+	txMaxFee uint64,
+	txMaxTotalFee uint64,
+	timeout uint32,
+	timeoutSlashingAmount *big.Int,
+	timeoutNotifierRewardMultiplier uint32,
+) {
+	lc.redemptionParametersMutex.Lock()
+	defer lc.redemptionParametersMutex.Unlock()
+
+	lc.redemptionParameters = RedemptionParameters{
+		DustThreshold:                   dustThreshold,
+		TreasuryFeeDivisor:              treasuryFeeDivisor,
+		TxMaxFee:                        txMaxFee,
+		TxMaxTotalFee:                   txMaxTotalFee,
+		Timeout:                         timeout,
+		TimeoutSlashingAmount:           timeoutSlashingAmount,
+		TimeoutNotifierRewardMultiplier: timeoutNotifierRewardMultiplier,
+	}
 }
 
 func buildRedemptionProposalValidationKey(
@@ -1425,17 +1570,21 @@ func ConnectWithKey(
 		blocksByTimestamp:                        make(map[uint64]uint64),
 		blocksHashesByNumber:                     make(map[uint64][32]byte),
 		pastDepositRevealedEvents:                make(map[[32]byte][]*DepositRevealedEvent),
+		pastTaprootDepositRevealedEvents:         make(map[[32]byte][]*TaprootDepositRevealedEvent),
 		pastMovingFundsCommitmentSubmittedEvents: make(map[[32]byte][]*MovingFundsCommitmentSubmittedEvent),
 		depositSweepProposalValidations:          make(map[[32]byte]bool),
 		pendingRedemptionRequests:                make(map[[32]byte]*RedemptionRequest),
 		redemptionProposalValidations:            make(map[[32]byte]bool),
-		movingFundsProposalValidations:           make(map[[32]byte]bool),
-		movedFundsSweepProposalValidations:       make(map[[32]byte]bool),
-		heartbeatProposalValidations:             make(map[[16]byte]bool),
-		depositRequests:                          make(map[[32]byte]*DepositChainRequest),
-		eligibleStakes:                           make(map[chain.Address]*big.Int),
-		blockCounter:                             blockCounter,
-		operatorPrivateKey:                       operatorPrivateKey,
+		redemptionParameters: RedemptionParameters{
+			TxMaxTotalFee: ^uint64(0),
+		},
+		movingFundsProposalValidations:     make(map[[32]byte]bool),
+		movedFundsSweepProposalValidations: make(map[[32]byte]bool),
+		heartbeatProposalValidations:       make(map[[16]byte]bool),
+		depositRequests:                    make(map[[32]byte]*DepositChainRequest),
+		eligibleStakes:                     make(map[chain.Address]*big.Int),
+		blockCounter:                       blockCounter,
+		operatorPrivateKey:                 operatorPrivateKey,
 	}
 
 	return localChain

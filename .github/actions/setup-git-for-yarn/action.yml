@@ -1,8 +1,9 @@
 name: Setup Git for Yarn (git dependencies)
 description: >
   Configure Git so Yarn can clone dependencies (e.g. thesis/eslint-config) on
-  GitHub-hosted runners. Sets GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM to avoid
-  broken system config ("invalid key core.autocrlf" / unable to write config).
+  GitHub-hosted runners. Sets GIT_CONFIG_GLOBAL to a writable temporary file and
+  GIT_CONFIG_NOSYSTEM to avoid broken system config ("invalid key core.autocrlf"
+  / unable to write config).
 runs:
   using: composite
   steps:
@@ -14,9 +15,11 @@ runs:
         WRAPPER_DIR="${RUNNER_TEMP:-/tmp}/git-clean-bin"
         SAFE_HOME="${SAFE_TMP}/git-clean-home"
         SAFE_XDG_CONFIG_HOME="${SAFE_TMP}/git-clean-xdg-config"
+        SAFE_GLOBAL_CONFIG="${SAFE_HOME}/.gitconfig"
         REAL_GIT="$(command -v git)"
 
         mkdir -p "$WRAPPER_DIR" "$SAFE_HOME" "$SAFE_XDG_CONFIG_HOME"
+        touch "$SAFE_GLOBAL_CONFIG"
         printf '%s\n' \
           '#!/usr/bin/env bash' \
           'set -euo pipefail' \
@@ -28,9 +31,8 @@ runs:
           'done < <(env)' \
           "export HOME=\"${SAFE_HOME}\"" \
           "export XDG_CONFIG_HOME=\"${SAFE_XDG_CONFIG_HOME}\"" \
-          'export GIT_CONFIG_GLOBAL=/dev/null' \
+          "export GIT_CONFIG_GLOBAL=\"${SAFE_GLOBAL_CONFIG}\"" \
           'export GIT_CONFIG_NOSYSTEM=1' \
-          'export GIT_CONFIG_SYSTEM=/dev/null' \
           'export GIT_CONFIG_COUNT=0' \
           "if ! pwd >/dev/null 2>&1; then cd \"${SAFE_TMP}\"; fi" \
           "exec \"${REAL_GIT}\" \"\$@\"" \

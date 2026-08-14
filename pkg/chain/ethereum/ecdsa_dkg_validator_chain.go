@@ -14,13 +14,13 @@ import (
 )
 
 // Minimal ABI for EcdsaDkgValidator public constants used by keep-client.
-var ecdsaDkgValidatorConstantsABI = mustParseABI(`[
+var ecdsaDkgValidatorConstantsABI = mustParseEcdsaDkgValidatorABI(`[
   {"inputs":[],"name":"activeThreshold","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
   {"inputs":[],"name":"groupSize","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
   {"inputs":[],"name":"groupThreshold","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}
 ]`)
 
-func mustParseABI(raw string) abi.ABI {
+func mustParseEcdsaDkgValidatorABI(raw string) abi.ABI {
 	a, err := abi.JSON(strings.NewReader(raw))
 	if err != nil {
 		panic(fmt.Sprintf("invalid bundled EcdsaDkgValidator ABI: %v", err))
@@ -102,17 +102,33 @@ func ecdsaWalletGroupParametersFromValidator(
 		return nil, err
 	}
 
-	groupSize, err := bigIntPositiveIntLimited("groupSize", gsBig, maxReasonableTBTCGroupSize)
+	return walletGroupParametersFromValidatorValues(gsBig, atBig, gtBig)
+}
+
+func walletGroupParametersFromValidatorValues(
+	groupSizeValue *big.Int,
+	activeThresholdValue *big.Int,
+	groupThresholdValue *big.Int,
+) (*tbtc.GroupParameters, error) {
+	groupSize, err := bigIntPositiveIntLimited(
+		"groupSize",
+		groupSizeValue,
+		maxReasonableTBTCGroupSize,
+	)
 	if err != nil {
 		return nil, err
 	}
-	groupQuorum, err := bigIntPositiveIntLimited("activeThreshold", atBig, maxReasonableTBTCGroupSize)
+	groupQuorum, err := bigIntPositiveIntLimited(
+		"activeThreshold",
+		activeThresholdValue,
+		maxReasonableTBTCGroupSize,
+	)
 	if err != nil {
 		return nil, err
 	}
 	honestThreshold, err := bigIntPositiveIntLimited(
 		"groupThreshold",
-		gtBig,
+		groupThresholdValue,
 		maxReasonableTBTCGroupSize,
 	)
 	if err != nil {

@@ -10,6 +10,12 @@ import (
 	"testing"
 )
 
+// publicKeyHashOnlyBitcoinChain exposes only the base bitcoin.Chain interface,
+// hiding the local chain's optional public-key-script transaction lookup.
+type publicKeyHashOnlyBitcoinChain struct {
+	bitcoin.Chain
+}
+
 func TestSubmitRedemptionProof(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
 		value, err := hex.DecodeString(str)
@@ -110,6 +116,140 @@ func TestSubmitRedemptionProof(t *testing.T) {
 	}
 
 	testutils.AssertBytesEqual(t, bytesFromHex("03b74d6893ad46dfdd01b9e0e3b3385f4fce2d1e"), submittedProof.walletPublicKeyHash[:])
+}
+
+func TestSubmitRedemptionProof_TaprootMainUtxo(t *testing.T) {
+	bytesFromHex := func(str string) []byte {
+		value, err := hex.DecodeString(str)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return value
+	}
+
+	bytes20FromHex := func(str string) [20]byte {
+		var value [20]byte
+		copy(value[:], bytesFromHex(str))
+		return value
+	}
+
+	bytes32FromHex := func(str string) [32]byte {
+		var value [32]byte
+		copy(value[:], bytesFromHex(str))
+		return value
+	}
+
+	requiredConfirmations := uint(6)
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	walletPublicKeyHash := bytes20FromHex(
+		"2a621226d6f9916a929c0ab8cc7d3252c1485708",
+	)
+	walletID := bytes32FromHex(
+		"93fd799256287638b1589bc4c8db1b11fcf873796aabeac9edf4cf238f38e596",
+	)
+	walletP2TR, err := bitcoin.PayToTaproot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spvChain.setWallet(
+		walletPublicKeyHash,
+		&tbtc.WalletChainData{
+			WalletID: walletID,
+			State:    tbtc.StateLive,
+		},
+	)
+
+	redemptionInputTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           1000000,
+				PublicKeyScript: walletP2TR,
+			},
+		},
+	}
+	redemptionTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: redemptionInputTransaction.Hash(),
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           900000,
+				PublicKeyScript: bitcoin.Script{0x00, 0x14, 0x01},
+			},
+		},
+	}
+
+	for _, transaction := range []*bitcoin.Transaction{
+		redemptionInputTransaction,
+		redemptionTransaction,
+	} {
+		if err := btcChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	proof := &bitcoin.SpvProof{
+		MerkleProof:    []byte{0x01},
+		TxIndexInBlock: 2,
+		BitcoinHeaders: []byte{0x03},
+	}
+
+	mockSpvProofAssembler := func(
+		hash bitcoin.Hash,
+		confirmations uint,
+		btcChain bitcoin.Chain,
+	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
+		if hash == redemptionTransaction.Hash() && confirmations == requiredConfirmations {
+			return redemptionTransaction, proof, nil
+		}
+
+		return nil, nil, fmt.Errorf("error while assembling spv proof")
+	}
+
+	err = submitRedemptionProof(
+		redemptionTransaction.Hash(),
+		requiredConfirmations,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+		getGlobalMetricsRecorder(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submittedProofs := spvChain.getSubmittedRedemptionProofs()
+	testutils.AssertIntsEqual(t, "proofs count", 1, len(submittedProofs))
+
+	expectedMainUtxo := bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: redemptionInputTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 1000000,
+	}
+	if diff := deep.Equal(expectedMainUtxo, submittedProofs[0].mainUTXO); diff != nil {
+		t.Errorf("invalid main UTXO: %v", diff)
+	}
+
+	testutils.AssertBytesEqual(
+		t,
+		walletPublicKeyHash[:],
+		submittedProofs[0].walletPublicKeyHash[:],
+	)
 }
 
 func TestGetUnprovenRedemptionTransactions(t *testing.T) {
@@ -310,5 +450,374 @@ func TestGetUnprovenRedemptionTransactions(t *testing.T) {
 
 	if diff := deep.Equal(expectedTransactionsHashes, transactionsHashes); diff != nil {
 		t.Errorf("invalid unproven transaction hashes: %v", diff)
+	}
+}
+
+func TestGetUnprovenRedemptionTransactions_TaprootWallet(t *testing.T) {
+	bytesFromHex := func(str string) []byte {
+		value, err := hex.DecodeString(str)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return value
+	}
+
+	bytes20FromHex := func(str string) [20]byte {
+		var value [20]byte
+		copy(value[:], bytesFromHex(str))
+		return value
+	}
+
+	bytes32FromHex := func(str string) [32]byte {
+		var value [32]byte
+		copy(value[:], bytesFromHex(str))
+		return value
+	}
+
+	historyDepth := uint64(5)
+	transactionLimit := 10
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	currentBlock := uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	walletPublicKeyHash := bytes20FromHex(
+		"2a621226d6f9916a929c0ab8cc7d3252c1485708",
+	)
+	walletID := bytes32FromHex(
+		"93fd799256287638b1589bc4c8db1b11fcf873796aabeac9edf4cf238f38e596",
+	)
+	walletP2TR, err := bitcoin.PayToTaproot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemerScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		bytes20FromHex("e3395778bb7f567e5a527ced184320018e59b4de"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mainUtxoTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           1000000,
+				PublicKeyScript: walletP2TR,
+			},
+		},
+	}
+	redemptionTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: mainUtxoTransaction.Hash(),
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           10000,
+				PublicKeyScript: walletP2TR,
+			},
+			{
+				Value:           900000,
+				PublicKeyScript: redeemerScript,
+			},
+		},
+	}
+
+	for _, transaction := range []*bitcoin.Transaction{
+		mainUtxoTransaction,
+		redemptionTransaction,
+	} {
+		if err := btcChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mainUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: mainUtxoTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 1000000,
+	}
+	spvChain.setWallet(
+		walletPublicKeyHash,
+		&tbtc.WalletChainData{
+			WalletID:     walletID,
+			MainUtxoHash: spvChain.ComputeMainUtxoHash(mainUtxo),
+			State:        tbtc.StateLive,
+		},
+	)
+	spvChain.setPendingRedemptionRequest(
+		walletPublicKeyHash,
+		&tbtc.RedemptionRequest{
+			RedeemerOutputScript: redeemerScript,
+		},
+	)
+
+	err = spvChain.addPastRedemptionRequestedEvent(
+		&tbtc.RedemptionRequestedEventFilter{
+			StartBlock: currentBlock - historyDepth,
+		},
+		&tbtc.RedemptionRequestedEvent{
+			WalletPublicKeyHash: walletPublicKeyHash,
+			BlockNumber:         100,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transactions, err := getUnprovenRedemptionTransactions(
+		historyDepth,
+		transactionLimit,
+		btcChain,
+		spvChain,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(t, "transactions count", 1, len(transactions))
+	if transactions[0].Hash() != redemptionTransaction.Hash() {
+		t.Errorf(
+			"invalid transaction hash\nexpected: %v\nactual:   %v",
+			redemptionTransaction.Hash(),
+			transactions[0].Hash(),
+		)
+	}
+}
+
+func TestGetWalletTransactions_WithoutPublicKeyScriptLookup(t *testing.T) {
+	t.Run("rejects P2TR wallet", func(t *testing.T) {
+		btcChain := &publicKeyHashOnlyBitcoinChain{
+			Chain: newLocalBitcoinChain(),
+		}
+
+		_, err := getWalletTransactions(
+			[20]byte{0x01},
+			&tbtc.WalletChainData{WalletID: [32]byte{0x02}},
+			10,
+			btcChain,
+		)
+		if err == nil {
+			t.Fatal("expected unsupported P2TR transaction lookup error")
+		}
+
+		expectedError := "bitcoin chain does not support transaction lookup by " +
+			"public key script required for P2TR wallet"
+		if err.Error() != expectedError {
+			t.Fatalf(
+				"unexpected error\nexpected: [%v]\nactual:   [%v]",
+				expectedError,
+				err,
+			)
+		}
+	})
+
+	t.Run("retains public key hash fallback for legacy wallet", func(t *testing.T) {
+		localChain := newLocalBitcoinChain()
+		walletPublicKeyHash := [20]byte{0x03}
+		walletOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+			walletPublicKeyHash,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		transaction := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{
+				{PublicKeyScript: walletOutputScript},
+			},
+		}
+		if err := localChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+
+		transactions, err := getWalletTransactions(
+			walletPublicKeyHash,
+			&tbtc.WalletChainData{},
+			10,
+			&publicKeyHashOnlyBitcoinChain{Chain: localChain},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(transactions) != 1 || transactions[0].Hash() != transaction.Hash() {
+			t.Fatalf("legacy public key hash fallback returned wrong transactions")
+		}
+	})
+}
+
+func TestGetUnprovenRedemptionTransactions_TaprootWalletIgnoresLegacyAliases(
+	t *testing.T,
+) {
+	bytesFromHex := func(str string) []byte {
+		value, err := hex.DecodeString(str)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return value
+	}
+
+	bytes20FromHex := func(str string) [20]byte {
+		var value [20]byte
+		copy(value[:], bytesFromHex(str))
+		return value
+	}
+
+	bytes32FromHex := func(str string) [32]byte {
+		var value [32]byte
+		copy(value[:], bytesFromHex(str))
+		return value
+	}
+
+	historyDepth := uint64(5)
+	transactionLimit := 1
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	currentBlock := uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	walletPublicKeyHash := bytes20FromHex(
+		"2a621226d6f9916a929c0ab8cc7d3252c1485708",
+	)
+	walletID := bytes32FromHex(
+		"93fd799256287638b1589bc4c8db1b11fcf873796aabeac9edf4cf238f38e596",
+	)
+	walletP2TR, err := bitcoin.PayToTaproot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletP2PKH, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemerScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		bytes20FromHex("e3395778bb7f567e5a527ced184320018e59b4de"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mainUtxoTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           1000000,
+				PublicKeyScript: walletP2TR,
+			},
+		},
+	}
+	redemptionTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: mainUtxoTransaction.Hash(),
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           10000,
+				PublicKeyScript: walletP2TR,
+			},
+			{
+				Value:           900000,
+				PublicKeyScript: redeemerScript,
+			},
+		},
+	}
+	aliasDustTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           1,
+				PublicKeyScript: walletP2PKH,
+			},
+		},
+	}
+
+	for _, transaction := range []*bitcoin.Transaction{
+		mainUtxoTransaction,
+		redemptionTransaction,
+		aliasDustTransaction,
+	} {
+		if err := btcChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mainUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: mainUtxoTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 1000000,
+	}
+	spvChain.setWallet(
+		walletPublicKeyHash,
+		&tbtc.WalletChainData{
+			WalletID:     walletID,
+			MainUtxoHash: spvChain.ComputeMainUtxoHash(mainUtxo),
+			State:        tbtc.StateLive,
+		},
+	)
+	spvChain.setPendingRedemptionRequest(
+		walletPublicKeyHash,
+		&tbtc.RedemptionRequest{
+			RedeemerOutputScript: redeemerScript,
+		},
+	)
+
+	err = spvChain.addPastRedemptionRequestedEvent(
+		&tbtc.RedemptionRequestedEventFilter{
+			StartBlock: currentBlock - historyDepth,
+		},
+		&tbtc.RedemptionRequestedEvent{
+			WalletPublicKeyHash: walletPublicKeyHash,
+			BlockNumber:         100,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transactions, err := getUnprovenRedemptionTransactions(
+		historyDepth,
+		transactionLimit,
+		btcChain,
+		spvChain,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(t, "transactions count", 1, len(transactions))
+	if transactions[0].Hash() != redemptionTransaction.Hash() {
+		t.Errorf(
+			"invalid transaction hash\nexpected: %v\nactual:   %v",
+			redemptionTransaction.Hash(),
+			transactions[0].Hash(),
+		)
 	}
 }

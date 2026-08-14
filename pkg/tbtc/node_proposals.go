@@ -8,6 +8,29 @@ import (
 	"go.uber.org/zap"
 )
 
+// heartbeatMinimumActiveMembers selects the activity threshold for the wallet
+// scheme handled by the signing executor. Legacy ECDSA heartbeats retain their
+// historical fixed threshold while FROST heartbeats use the independent
+// activeThreshold configured on FrostDkgValidator. The validator configuration
+// may change after a wallet is created, making the current active threshold
+// larger than the persisted wallet's signing group, so cap the threshold at
+// that wallet's actual member count.
+func heartbeatMinimumActiveMembers(
+	signingExecutor *signingExecutor,
+	signingGroupMembersCount int,
+) int {
+	if signingExecutor.usesSchnorrSignatures() {
+		minimumActiveMembers := signingExecutor.groupParameters.GroupQuorum
+		if signingGroupMembersCount < minimumActiveMembers {
+			return signingGroupMembersCount
+		}
+
+		return minimumActiveMembers
+	}
+
+	return heartbeatSigningMinimumActiveMembers
+}
+
 // handleHeartbeatProposal handles an incoming heartbeat proposal by
 // orchestrating and dispatching an appropriate wallet action.
 func (n *node) handleHeartbeatProposal(
@@ -78,6 +101,10 @@ func (n *node) handleHeartbeatProposal(
 		n.chain,
 		wallet,
 		signingExecutor,
+		heartbeatMinimumActiveMembers(
+			signingExecutor,
+			len(wallet.signingGroupOperators),
+		),
 		proposal,
 		n.heartbeatFailureCounter,
 		inactivityClaimExecutor,

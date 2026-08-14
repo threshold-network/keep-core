@@ -310,6 +310,36 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		tbtc.DefaultKeyGenerationConcurrency,
 		"tECDSA key generation concurrency.",
 	)
+
+	cmd.Flags().StringVar(
+		&cfg.Tbtc.FrostSigningBackend,
+		"tbtc.frostSigningBackend",
+		"",
+		"FROST signing backend name (legacy, native, ffi). "+
+			"`native` allows transitional legacy fallback; `ffi` requires native execution. "+
+			"Empty value selects legacy.",
+	)
+
+	cmd.Flags().BoolVar(
+		&cfg.Tbtc.DisableLegacyECDSA,
+		"tbtc.disableLegacyECDSA",
+		false,
+		"Disable legacy ECDSA wallet DKG and pre-params generation for FROST-only deployments.",
+	)
+
+	cmd.Flags().BoolVar(
+		&cfg.Tbtc.DisableLegacySortitionPoolMonitoring,
+		"tbtc.disableLegacySortitionPoolMonitoring",
+		false,
+		"Disable legacy ECDSA sortition pool monitoring for FROST-only deployments.",
+	)
+
+	cmd.Flags().BoolVar(
+		&cfg.Tbtc.DisableFrostSortitionPoolMonitoring,
+		"tbtc.disableFrostSortitionPoolMonitoring",
+		false,
+		"Disable FROST sortition pool monitoring for operators that manage FROST pool membership out of band.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.
@@ -395,5 +425,7 @@ func initDeveloperFlags(command *cobra.Command) {
 	initContractAddressFlag(chainEthereum.RandomBeaconContractName)
 	initContractAddressFlag(chainEthereum.TokenStakingContractName)
 	initContractAddressFlag(chainEthereum.WalletRegistryContractName)
+	initContractAddressFlag(chainEthereum.FrostWalletRegistryContractName)
+	initContractAddressFlag(chainEthereum.FrostDkgValidatorContractName)
 	initContractAddressFlag(chainEthereum.WalletProposalValidatorContractName)
 }

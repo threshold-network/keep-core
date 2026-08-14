@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"math/big"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/keep-network/keep-common/pkg/cache"
@@ -39,6 +40,10 @@ type deduplicator struct {
 	dkgSeedCache       *cache.TimeCache
 	dkgResultHashCache *cache.TimeCache
 	walletClosedCache  *cache.TimeCache
+
+	mutex          sync.Mutex
+	inProgress     map[string]struct{}
+	pendingReplays map[string]struct{}
 }
 
 func newDeduplicator() *deduplicator {
@@ -46,7 +51,129 @@ func newDeduplicator() *deduplicator {
 		dkgSeedCache:       cache.NewTimeCache(DKGSeedCachePeriod),
 		dkgResultHashCache: cache.NewTimeCache(DKGResultHashCachePeriod),
 		walletClosedCache:  cache.NewTimeCache(WalletClosedCachePeriod),
+		inProgress:         make(map[string]struct{}),
+		pendingReplays:     make(map[string]struct{}),
 	}
+}
+
+// deduplicationLease suppresses concurrent handling of an event without
+// marking it permanently handled up front. Completing the lease moves the key
+// to the long-lived cache; releasing it after an error lets a subscription or
+// recovery replay retry the work.
+type deduplicationLease struct {
+	owner         *deduplicator
+	cache         *cache.TimeCache
+	cacheKey      string
+	inProgressKey string
+}
+
+func (d *deduplicator) beginDKGStarted(
+	seed *big.Int,
+) (*deduplicationLease, bool) {
+	cacheKey := seed.Text(16)
+	return d.begin(
+		d.dkgSeedCache,
+		cacheKey,
+		"dkg-started:"+cacheKey,
+		false,
+	)
+}
+
+func (d *deduplicator) beginDKGResultSubmitted(
+	seed *big.Int,
+	resultHash DKGChainResultHash,
+	block uint64,
+) (*deduplicationLease, bool) {
+	cacheKey := dkgResultSubmittedCacheKey(seed, resultHash, block)
+	return d.begin(
+		d.dkgResultHashCache,
+		cacheKey,
+		"dkg-result-submitted:"+cacheKey,
+		false,
+	)
+}
+
+func (d *deduplicator) beginWalletClosed(
+	walletScheme WalletScheme,
+	walletID [32]byte,
+) (*deduplicationLease, bool) {
+	cacheKey := walletClosedCacheKey(walletScheme, walletID)
+	return d.begin(
+		d.walletClosedCache,
+		cacheKey,
+		"wallet-closed:"+cacheKey,
+		true,
+	)
+}
+
+func (d *deduplicator) begin(
+	completedCache *cache.TimeCache,
+	cacheKey string,
+	inProgressKey string,
+	preserveConcurrentReplay bool,
+) (*deduplicationLease, bool) {
+	completedCache.Sweep()
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	if completedCache.Has(cacheKey) {
+		return nil, false
+	}
+	if _, ok := d.inProgress[inProgressKey]; ok {
+		if preserveConcurrentReplay {
+			if d.pendingReplays == nil {
+				d.pendingReplays = make(map[string]struct{})
+			}
+			d.pendingReplays[inProgressKey] = struct{}{}
+		}
+		return nil, false
+	}
+	if d.inProgress == nil {
+		d.inProgress = make(map[string]struct{})
+	}
+
+	d.inProgress[inProgressKey] = struct{}{}
+	return &deduplicationLease{
+		owner:         d,
+		cache:         completedCache,
+		cacheKey:      cacheKey,
+		inProgressKey: inProgressKey,
+	}, true
+}
+
+// finish releases the lease. When handling failed and a concurrent replay was
+// recorded, it keeps the lease active and asks the owner to retry immediately.
+func (dl *deduplicationLease) finish(completed bool) bool {
+	dl.owner.mutex.Lock()
+	defer dl.owner.mutex.Unlock()
+
+	if _, ok := dl.owner.inProgress[dl.inProgressKey]; !ok {
+		return false
+	}
+
+	if completed {
+		delete(dl.owner.inProgress, dl.inProgressKey)
+		delete(dl.owner.pendingReplays, dl.inProgressKey)
+		dl.cache.Add(dl.cacheKey)
+		return false
+	}
+
+	if _, ok := dl.owner.pendingReplays[dl.inProgressKey]; ok {
+		delete(dl.owner.pendingReplays, dl.inProgressKey)
+		return true
+	}
+
+	delete(dl.owner.inProgress, dl.inProgressKey)
+	return false
+}
+
+func (dl *deduplicationLease) release() {
+	dl.owner.mutex.Lock()
+	defer dl.owner.mutex.Unlock()
+
+	delete(dl.owner.inProgress, dl.inProgressKey)
+	delete(dl.owner.pendingReplays, dl.inProgressKey)
 }
 
 // notifyDKGStarted notifies the client wants to start the distributed key
@@ -59,16 +186,9 @@ func (d *deduplicator) notifyDKGStarted(
 
 	// The cache key is the hexadecimal representation of the seed.
 	cacheKey := newDKGSeed.Text(16)
-	// If the key is not in the cache, that means the seed was not handled
-	// yet and the client should proceed with the execution.
-	if !d.dkgSeedCache.Has(cacheKey) {
-		d.dkgSeedCache.Add(cacheKey)
-		return true
-	}
 
-	// Otherwise, the DKG seed is a duplicate and the client should not proceed
-	// with the execution.
-	return false
+	// Add performs the presence check and insertion atomically.
+	return d.dkgSeedCache.Add(cacheKey)
 }
 
 // notifyDKGResultSubmitted notifies the client wants to start some actions
@@ -81,38 +201,30 @@ func (d *deduplicator) notifyDKGResultSubmitted(
 ) bool {
 	d.dkgResultHashCache.Sweep()
 
-	cacheKey := newDKGResultSeed.Text(16) +
-		hex.EncodeToString(newDKGResultHash[:]) +
-		strconv.Itoa(int(newDKGResultBlock))
+	cacheKey := dkgResultSubmittedCacheKey(
+		newDKGResultSeed,
+		newDKGResultHash,
+		newDKGResultBlock,
+	)
 
-	// If the key is not in the cache, that means the result was not handled
-	// yet and the client should proceed with the execution.
-	if !d.dkgResultHashCache.Has(cacheKey) {
-		d.dkgResultHashCache.Add(cacheKey)
-		return true
-	}
-
-	// Otherwise, the DKG result is a duplicate and the client should not
-	// proceed with the execution.
-	return false
+	// Add performs the presence check and insertion atomically.
+	return d.dkgResultHashCache.Add(cacheKey)
 }
 
-func (d *deduplicator) notifyWalletClosed(
-	WalletID [32]byte,
-) bool {
-	d.walletClosedCache.Sweep()
+func dkgResultSubmittedCacheKey(
+	seed *big.Int,
+	resultHash DKGChainResultHash,
+	block uint64,
+) string {
+	return seed.Text(16) +
+		hex.EncodeToString(resultHash[:]) +
+		strconv.FormatUint(block, 10)
+}
 
-	// Use wallet ID converted to string as the cache key.
-	cacheKey := hex.EncodeToString(WalletID[:])
-
-	// If the key is not in the cache, that means the wallet closure was not
-	// handled yet and the client should proceed with the execution.
-	if !d.walletClosedCache.Has(cacheKey) {
-		d.walletClosedCache.Add(cacheKey)
-		return true
-	}
-
-	// Otherwise, the wallet closure is a duplicate and the client should not
-	// proceed with the execution.
-	return false
+func walletClosedCacheKey(
+	walletScheme WalletScheme,
+	walletID [32]byte,
+) string {
+	return strconv.Itoa(int(normalizeWalletScheme(walletScheme))) + ":" +
+		hex.EncodeToString(walletID[:])
 }

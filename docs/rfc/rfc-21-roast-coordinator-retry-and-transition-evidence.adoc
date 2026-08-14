@@ -1,0 +1,1204 @@
+= RFC-21: ROAST Coordinator, Retry, and Transition Evidence
+
+*Author:* Threshold Labs
+*Status:* Draft
+*Date:* 2026-05-22
+
+== Summary
+
+This RFC defines the protocol layer that lets keep-core honestly advertise its
+FROST signing path as ROAST-compliant. Today the package layout names ROAST
+concepts (`pkg/frost/roast`, `pkg/frost/retry`) but the actual semantics fall
+short of the protocol in two specific places:
+
+* The retry policy in `pkg/frost/retry/retry.go` is byte-identical to the
+  tECDSA shuffle in `pkg/tecdsa/retry/retry.go`. It is a deterministic
+  participant shuffle, not ROAST-aware attempt advancement.
+* The three FFI/native-FROST receive loops in `pkg/frost/signing/` drop
+  channel overflows with `select { default }`, with no bounded transition
+  evidence and no retransmission contract.
+
+This RFC proposes a layered design that closes both gaps together, because
+they share the same notion of *attempt context* and *transition evidence*.
+It is broken into discrete PR-sized phases so the migration can land
+incrementally without regressing the existing signing flow.
+
+== Motivation
+
+The ROAST paper (Ruffing-Ronge-Aranha-Schneider, CCS 2022) describes a
+coordinator-driven retry protocol that turns FROST's brittle round
+synchronisation into an asynchronous robust signing primitive. The key
+invariants are:
+
+1. *Attempt context.* Every signing attempt is bound to a deterministic
+   context (session, key group, message digest, attempt counter, included
+   participant set). All in-flight protocol messages must reference the
+   attempt context they belong to. Messages for a stale or future attempt
+   must not influence the current attempt's transcript.
+2. *Transition evidence.* When the coordinator moves an attempt forward it
+   must publish (or be able to publish on demand) evidence that justifies
+   the transition: which contributions arrived, which were rejected, which
+   peers failed to respond within the attempt's bound, and what new
+   exclusion set the next attempt should use. This is what makes the
+   protocol *robust* rather than relying on optimistic liveness.
+3. *Deterministic exclusion.* The next attempt's participant set is a pure
+   function of the previous attempt's transition evidence (plus the
+   original group + seed). Two honest coordinators driving the same session
+   must arrive at the same attempt context.
+
+The byte-identical `EvaluateRetryParticipantsForSigning` shuffle satisfies
+none of these. It re-shuffles the same set deterministically using
+`(seed, retryCount)`. It has no notion of which participants were
+*blamable* in the previous attempt, no exclusion ledger, and no message
+context binding.
+
+The receive-loop drop is more subtle but equally protocol-violating: a
+silent drop on channel overflow means that two participants observing the
+same network can end up with divergent transcripts -- one with the
+contribution, one without -- and there is no evidence trail to detect or
+recover from that divergence. The `select { default }` pattern is fine for
+optimistic transport but not as the canonical mechanism for protocol
+membership.
+
+The two findings cluster naturally:
+
+* M4 (the receive drop) is the source of evidence.
+* M7 (the retry shuffle) is the consumer of evidence.
+
+A change that fixes M7 without M4 has nothing to drive retry decisions on.
+A change that fixes M4 without M7 produces evidence that no consumer reads.
+This RFC therefore treats them as one design split into phases, not as two
+independent fixes.
+
+== Background: ROAST in brief
+
+For implementers approaching this RFC fresh, the relevant ROAST surface is:
+
+* A *session* fixes the key group, the message digest, and the original
+  signer set.
+* Each session goes through one or more *attempts*. An attempt is
+  identified by `(session_id, attempt_number)` and contains an *included
+  set* of participants and an *excluded set* of participants known to be
+  unable or unwilling to complete this attempt.
+* The *coordinator* of an attempt is selected deterministically from the
+  included set (this is already implemented in `pkg/frost/roast/coordinator.go`
+  via `SelectCoordinator`).
+* The coordinator collects round-one commitments, round-two signature
+  shares, then either:
+** Aggregates a signature when t-of-n shares arrive within the attempt's
+   time bound -- the session is done.
+** Times out and emits *transition evidence*: the set of peers that did
+   not contribute on time, and the new excluded set the next attempt
+   should use.
+
+The retry shuffle in keep-core's tECDSA path predates ROAST and answers a
+different question -- "if signing fails, who do we try next?". It does so
+without distinguishing inactive peers from corrupted ones, and it makes no
+attempt to construct an evidence trail. That is appropriate for tECDSA
+(which has its own malicious-share detection downstream) and inappropriate
+for FROST (which expects the coordinator to be the source of truth for
+attempt advancement).
+
+== Current state
+
+=== Retry layer
+
+`pkg/frost/retry/retry.go` exports `EvaluateRetryParticipantsForSigning`
+and `EvaluateRetryParticipantsForKeyGeneration`. Both are pure shuffles
+seeded by `(seed, retryCount)`. The signing variant takes no input from
+the previous attempt's transcript. `diff pkg/frost/retry/retry.go
+pkg/tecdsa/retry/retry.go` is empty.
+
+=== Coordinator layer
+
+`pkg/frost/roast/coordinator.go` exports `SelectCoordinator`. The function
+is correct in isolation -- given an included set and an attempt context it
+returns a deterministic coordinator -- but there is no consumer of the
+selected coordinator's state. Attempt context is reconstructed
+implicitly from `(seed, retryCount)` at the retry layer, with no shared
+record of which messages arrived in which attempt.
+
+=== Receive layer
+
+`pkg/frost/signing/native_ffi_primitive_transitional_frost_native.go` and
+`pkg/frost/signing/native_frost_protocol_frost_native.go` together host
+three receive loops:
+
+* `native_ffi_primitive_transitional_frost_native.go:973` -- tbtc-signer
+  round contribution capture.
+* `native_frost_protocol_frost_native.go:568` -- native FROST round-one
+  commitments.
+* `native_frost_protocol_frost_native.go:650` -- native FROST round-two
+  signature shares.
+
+All three use the same shape:
+
+[source,go]
+----
+messageChan := make(chan *T, expectedMessagesCount*4+1)
+request.Channel.Recv(recvCtx, func(message net.Message) {
+    // shouldAcceptNativeFROSTMessage(...) filtering ...
+    select {
+    case messageChan <- payload:
+    default:
+    }
+})
+----
+
+The channel is generously sized (`expected*4+1`), and the assembly side
+applies first-write-wins / equal-or-reject (added in PR #3959). But the
+`default` arm is still a *silent drop*. When it triggers, the protocol
+has no trail to point to: no log of the dropped sender, no count of
+drops by sender, no signal to the coordinator that this peer is being
+under-represented.
+
+== Proposed design
+
+The design is three layers tied together by a single shared *attempt
+context* type.
+
+=== Shared types
+
+A new package `pkg/frost/roast/attempt` introduces:
+
+[source,go]
+----
+type AttemptContext struct {
+    SessionID      string
+    KeyGroupID     string
+    MessageDigest  [32]byte
+    AttemptNumber  uint
+    IncludedSet    []group.MemberIndex
+    ExcludedSet    []group.MemberIndex
+    AttemptSeed    [32]byte
+}
+
+func (AttemptContext) Hash() [32]byte
+----
+
+`AttemptContext.Hash()` becomes the canonical binding for every protocol
+message emitted in the attempt -- contribution messages already carry a
+`SessionIDValue`; we extend them with an `AttemptContextHash` field so
+the receiver can reject stale-attempt messages structurally instead of
+relying on session ID alone.
+
+`AttemptSeed` is widened from `int64` to `[32]byte` and *must* be
+derived from inputs the group already agrees on -- specifically:
+
+[source,go]
+----
+AttemptSeed = SHA256(
+    DkgGroupPublicKey || SessionID || MessageDigest,
+)
+----
+
+This binding prevents a malicious coordinator from picking a seed that
+shapes the included set in its favour. The seed is a pure function of
+session inputs; it is never chosen, only derived. Any signer can
+recompute it from the session header and verify the coordinator's
+participant selection.
+
+*`DkgGroupPublicKey` source.* The runtime extracts `DkgGroupPublicKey`
+from the FFI signer material at attempt construction time -- the same
+material that already carries the DKG-validated group public key and is
+required at signature-verification time anyway. Do not re-read it from
+the wallet registry: the FFI material is the canonical hot-path source,
+removes async/DB lookup latency, and preserves separation between the
+core signing protocol and application state.
+
+=== Layer A: Receiver transition evidence (M4)
+
+The three `select { default }` drops become:
+
+[source,go]
+----
+select {
+case messageChan <- payload:
+default:
+    evidence.RecordOverflow(payload.SenderID(), attemptCtx)
+}
+----
+
+`evidence` is an `AttemptEvidenceRecorder` instantiated per attempt by
+the coordinator-aware caller. It tracks:
+
+* Overflow events keyed by sender -- a sender that overflows
+  repeatedly is suspect either of attack or of being on a degraded
+  link, and the next attempt should treat the channel as evidence
+  rather than dropping it.
+* Reject events keyed by sender and reason
+  (`shouldAcceptNativeFROSTMessage` returning false already).
+* First-write-wins conflicts keyed by sender -- already logged in
+  PR #3959 but not yet structured into evidence.
+* Per-attempt time bound expiry -- which senders failed to respond at
+  all before the attempt's context deadline.
+
+The recorder produces a `TransitionEvidence` value when the attempt
+completes (either by signature aggregation or by timeout), which the
+coordinator consumes. The recorder itself never decides who is excluded;
+it only collects.
+
+Bounded means bounded: the recorder has a fixed-size ring *per sender,
+per blame category*. The categories are tracked with separate quotas so
+one category cannot mask another -- a peer cannot spam overflow events
+to drown out reject evidence or vice-versa:
+
+[source,go]
+----
+type categoryQuota struct {
+    Overflow uint8 // default 8
+    Reject   uint8 // default 8
+    Conflict uint8 // default 4
+    Silence  uint8 // default 1 (single bit per attempt deadline)
+}
+----
+
+The point is to produce a fixed-size attestation, not to log
+everything forever. Per-attempt evidence is at most
+`O(|IncludedSet| * sum(quotas))` bytes -- bounded, predictable, and
+small enough to be signed and broadcast as a single message. The
+broadcast mechanism is the coordinator-aggregated `TransitionMessage`
+defined in the Resolved decisions section.
+
+=== Layer B: Coordinator state (joining M4 and M7)
+
+`pkg/frost/roast/coordinator.go` grows from a single selection function
+into a state machine:
+
+[source,go]
+----
+type AttemptState int
+const (
+    AttemptPending AttemptState = iota
+    AttemptCollecting
+    AttemptAggregating
+    AttemptSucceeded
+    AttemptTransitioned
+)
+
+type Coordinator interface {
+    BeginAttempt(ctx AttemptContext) (AttemptHandle, error)
+    RecordEvidence(handle AttemptHandle, evidence TransitionEvidence) error
+    NextAttempt(handle AttemptHandle) (AttemptContext, error)
+}
+----
+
+`NextAttempt` is the policy function that produces the next attempt's
+context from the previous attempt's evidence. It is deterministic given
+`(AttemptContext, TransitionEvidence)` -- two coordinators with the same
+verified inputs agree on the next attempt without further coordination.
+
+The verified-inputs requirement is critical: gossip is eventually
+consistent, but `NextAttempt` is a synchronous state transition. Two
+honest signers fed differently-timed evidence sets produce divergent
+contexts. To prevent that, the *evidence input itself* is an
+authoritative `TransitionMessage` produced by the current attempt's
+coordinator (the "coordinator-aggregation" model defined in the
+Resolved decisions section); see that section for the full
+agreement-flow specification.
+
+*Seed-bridging.* The legacy `pkg/frost/roast/coordinator.go::SelectCoordinator`
+helper accepts an `int64` seed plus an attempt number. `BeginAttempt`
+wraps it with a sterile bridge that folds the new `[32]byte`
+`AttemptSeed` into the legacy parameter shape -- for example, taking
+the first 8 bytes as a big-endian `int64`. The bridge is a
+non-cryptographic adapter for the deterministic shuffle: equivalent
+seed bytes must produce the same legacy `int64` on every honest
+signer. The bridge is named, isolated, and exhaustively tested so
+later edits cannot accidentally desynchronise it.
+
+The exclusion policy (verifiable-blame revision) starts from one
+observation: every evidence entry in the bundle is an observer-signed
+*claim*, not a self-incriminating proof. Nothing in an overflow,
+reject, or conflict counter lets a third party re-check that the
+accused actually misbehaved. A policy that permanently excludes on
+unverifiable counters inverts ROAST's robustness guarantee -- a single
+byzantine observer could fabricate evidence against honest members
+and grind the `IncludedSet` toward `ErrAttemptInfeasible`. Permanent
+exclusion therefore requires the accusation to be *established*:
+corroborated by a quorum of distinct accusers large enough that, under
+the protocol's own t-of-n honesty assumption, at least one accuser is
+honest.
+
+. Accusation tallying: each bundle snapshot is one observer's claim
+  set. Only observers in the previous attempt's `IncludedSet` are
+  credible; each observer counts at most once per accused member per
+  category regardless of the claimed count magnitude; accusations
+  against members outside the original signer set are ignored. An
+  accusation is established when at least
+  `ExclusionAccuserQuorum(originalGroupSize, threshold)
+  = originalGroupSize - threshold + 1` (that is, `f+1`) distinct
+  observers make it. A real fault is observed by every honest member
+  processing the broadcast, so established faults reach the quorum
+  naturally; fabricated ones cannot, because at most `f` members are
+  byzantine.
+. Established reject or conflict accusations (validation /
+  equivocation blamable) move the accused to `ExcludedSet`
+  permanently. The categories are tallied independently and never
+  summed with each other.
+. Established overflow accusations (transport blamable) move the
+  accused to the *parked* set for one attempt -- never to
+  `ExcludedSet`. Transport pressure is observable only at the
+  transport layer and can never be made self-incriminating, so
+  overflow may cost an attempt of liveness but not permanence.
+. Senders with deadline-expiry only -- silent peers -- are moved to a
+  *parked* set that the next attempt skips but the attempt after that
+  retries (to tolerate transient outages). Parking is *strictly
+  transient*: a single attempt's worth of skip, no escalation. A peer
+  falsely labelled silent because their contribution arrived late (or
+  because a malicious coordinator censored it) is not permanently
+  penalised -- they are reinstated by the very next attempt.
+  Silence is detected as *bundle absence* (the member submitted no
+  evidence snapshot for the transition). A member that submits its
+  snapshot while withholding its signing contribution is therefore
+  not parked by this policy: signing-silence is invisible to the
+  transition layer, costs the attempt, and is bounded only by the
+  retry budget (Annex B) until t-of-included finalize lands.
+. If `IncludedSet` minus exclusions drops below the threshold `t`, the
+  coordinator returns `ErrAttemptInfeasible` and the session is
+  declared failed for this signer set.
+
+The quorum is a *derived constant* of the key-group shape -- for the
+production 51-of-100 group it is 50 -- so honest signers do not need
+to negotiate it and drift cannot desynchronise it. Sub-quorum claims
+are deliberately ignored rather than parked: acting on a single
+unverifiable claim would let one byzantine observer cost any honest
+member an attempt of liveness at will.
+
+*Verifiability roadmap.* Permanent exclusion on a *single* piece of
+evidence becomes sound once the wire format carries
+self-incriminating proof: for conflicts, the accused's own two
+operator-signed payloads with identical (attempt, sender) and
+different bytes; for rejects, the accused's operator-signed
+contribution plus a deterministic validation failure any member can
+re-run. When those land, the per-category quorum gate can be relaxed
+to proof-verified entries. The cost of the interim quorum policy is
+bounded: a fault observed by fewer than `f+1` honest members (for
+example a targeted, per-recipient equivocation) is not permanently
+excluded and instead burns retry attempts, which the serial-attempt
+latency analysis already budgets for. Near the assumption boundary
+the gate is intentionally demanding -- at worst-case `f` only `t`
+honest observers exist, so establishment needs all but `2t-n-1` of
+them (50 of 51 at the production shape) to have observed the fault
+and landed snapshots in the bundle. In that regime the quorum acts
+as a fabrication firewall rather than a working exclusion mechanism;
+restoring per-category exclusion under heavy attack is exactly what
+proof-carrying blame is for.
+
+==== Coordinator equivocation: single-observer exclusion
+
+The verifiability roadmap above lands first for one specific accused
+party: the *coordinator*. A coordinator equivocates when it issues two
+different signing packages for the same attempt -- for example sending
+one signer subset to member A and a different one to member B, splitting
+the honest set so no subset can finalize.
+
+This case is exempt from the `f+1` accuser quorum, and the exemption is
+principled rather than pragmatic. The quorum exists to bound
+*unverifiable* claims: an overflow or reject counter is an observer's
+assertion that a third party cannot re-check. A coordinator-equivocation
+accusation is not an assertion at all. The evidence is a pair of
+*coordinator-signed* signing packages carrying the same attempt and
+coordinator identity but two different authenticated body hashes. Any
+member can verify both signatures against the coordinator's own operator
+key, so the evidence is self-incriminating and cannot be fabricated
+without that key. One honest observer is therefore sufficient, exactly
+as the roadmap describes for conflicts: the quorum is replaced by a
+signature check, not weakened.
+
+. *Category.* Coordinator equivocation is tallied separately from the
+  overflow / reject / conflict categories and is never summed with them.
+  It accuses only the attempt's coordinator; a proof naming any other
+  member is ignored.
+. *Wire path.* A member that receives a second, body-different signing
+  package for an attempt retains both signed envelopes. They travel in
+  that seat's evidence snapshot alongside its ordinary evidence and the
+  elected coordinator of the transition aggregates them into the bundle
+  like any other snapshot content.
+. *Verification.* `NextAttempt` authenticates every proof pair before
+  counting it: both envelopes must carry a valid operator signature from
+  the accused coordinator, the same attempt identity, and genuinely
+  different body hashes. Pairs failing any check are discarded without
+  effect.
+. *Disposition.* A single verified pair moves the coordinator to
+  `ExcludedSet` permanently, so it cannot be re-elected for this signer
+  set. Because the evidence is unforgeable this cannot be used to grind
+  the `IncludedSet`: an attacker without the coordinator's key cannot
+  produce a pair, and a coordinator that produces one has provably
+  broken the protocol.
+. *Infeasibility.* The resulting exclusion feeds the same
+  `ErrAttemptInfeasible` check as every other permanent exclusion.
+
+=== Layer C: Retry orchestration (M7)
+
+`pkg/frost/retry/retry.go` is renamed to
+`pkg/frost/retry/retry_legacy.go` and kept for the key-generation path
+(which already has its own three-tier exclusion structure that is closer
+to ROAST semantics). The signing path moves to a thin wrapper around
+`Coordinator.NextAttempt`:
+
+[source,go]
+----
+func EvaluateRoastRetryForSigning(
+    coordinator Coordinator,
+    handle AttemptHandle,
+) ([]group.MemberIndex, AttemptContext, error)
+----
+
+The byte-identical-to-tECDSA `EvaluateRetryParticipantsForSigning` is
+removed once all callers migrate. We keep a `roast.SigningRetryAdapter`
+shim implementing the old signature that delegates to the coordinator,
+to make the migration mechanical PR-by-PR.
+
+== Phased implementation
+
+Each phase is one or two PRs. Phases are linear: later PRs assume
+earlier PRs have merged.
+
+=== Phase 0: This RFC
+
+Doc-only. Lands first so subsequent code PRs can reference its design
+choices in their PR descriptions and reviews.
+
+=== Phase 1: Attempt context type and hash
+
+* Add `pkg/frost/roast/attempt` package with `AttemptContext` and
+  canonical hash. No protocol behaviour changes.
+* Extend protocol message structs with `AttemptContextHash` field, with
+  the field optional during the migration so existing peers stay
+  compatible.
+
+=== Phase 2: Receiver overflow tracking (M4 layer A)
+
+* Introduce `AttemptEvidenceRecorder` interface and a no-op default.
+* Plumb the recorder through the three receive loops. Default no-op
+  preserves exact current behaviour.
+* Add unit tests showing the recorder captures overflow without
+  changing receive semantics in the noop path.
+
+=== Phase 3: Coordinator state machine
+
+* Promote `pkg/frost/roast/coordinator.go` to a state-tracking
+  coordinator. Existing `SelectCoordinator` becomes an internal helper.
+* Cover deterministic next-attempt computation under unit tests with
+  property tests for the
+  `(AttemptContext, TransitionEvidence) -> AttemptContext` map.
+* No production code path uses the new coordinator yet -- it ships
+  unused.
+
+=== Phase 4: Wire receiver to coordinator
+
+* Connect the evidence recorder to a real coordinator instance behind
+  a new build tag (`frost_roast_retry`).
+* Existing receive loops still use the noop recorder; the new code
+  path is reachable only when the build tag is set.
+* Add a soak-style test that drives the full attempt -> evidence ->
+  next-attempt loop under fault injection (synthetic overflow,
+  synthetic reject, synthetic silence).
+
+=== Phase 5: Retry adapter, session orchestration, readiness gate
+
+* Add `EvaluateRoastRetryForSigning` and `roast.SigningRetryAdapter`
+  with a `ChainAddressResolver` interface to bridge
+  `group.MemberIndex` (ROAST namespace) to `chain.Address` (legacy
+  namespace).
+* Wire session orchestration at the layer that constructs
+  `NativeExecutionFFISigningRequest`: at session start call
+  `Coordinator.BeginAttempt` and `SetCurrentAttemptHandleForSession`;
+  on session end call `ClearCurrentAttemptHandleForSession` from a
+  deferred cleanup so success and failure paths converge.
+* Add a TTL eviction sweep over `sessionAttemptBindings` (default
+  two hours) so a goroutine panic before the deferred clear cannot
+  leak bindings indefinitely (see Resolved decisions).
+* Wire a feature-flagged readiness gate
+  (`KEEP_CORE_FROST_ROAST_RETRY_ENABLED=true`) so production builds
+  with the `frost_roast_retry` tag still refuse to wire orchestration
+  without explicit operator opt-in. The gate matches the precedent
+  set by `KEEP_CORE_FROST_TBTC_SIGNER_ACCEPT_SCAFFOLD_KEY_GROUP`.
+
+*Important:* Phase 5 ships *no* signing-call-site migrations. The
+adapter exists and is fully wired, but no production receive loop
+calls it yet. A partial migration (round-one on ROAST, round-two on
+legacy shuffle within the same session) would fracture the
+attempt-context binding across the two rounds and disconnect the
+evidence captured in round-one from the participant selection in
+round-two. The readiness gate -- not partial migration -- is the
+risk-management mechanism.
+
+=== Phase 6: Migrate all signing call sites
+
+*Status (2026-06-12): the call-site migration is complete.* The plan
+below originally named three receive loops; the tree evolved under
+it and the honest accounting is:
+
+* `collectBuildTaggedTBTCSignerRoundContributionMessages` - the only
+  receive loop with a production consumer - is migrated: it takes
+  its `EvidenceRecorder` from the roast-retry registry
+  (`roastRetryRecorderForCollect`, NoOp fallback preserving Phase 2
+  semantics when nothing is registered), binds contributions to the
+  session's attempt context via the `attemptContextHash` message
+  field, and submits its end-of-collect snapshot through
+  `submitSnapshotIfActive` into `Coordinator.RecordEvidence`.
+* `collectNativeFROSTRoundOneMessages` and
+  `collectNativeFROSTRoundTwoMessages` were *deleted*, not migrated:
+  commit `1c692bf03` (2026-06-07, "Remove unreachable generic FROST
+  protocol scaffolding") removed the generic two-round exchange they
+  belonged to, because no production flow reached it -
+  `frost-uniffi-v1` payloads execute on the legacy bridge and
+  `frost-tbtc-signer-v1` uses the coarse signing flow. The
+  single-coordinated-change constraint ("the three flows share one
+  attempt context per session") is therefore satisfied by
+  subtraction: exactly one flow exists, and it is fully bound.
+* The surrounding orchestration shipped with the migration: the
+  executor adapter's Phase 6.3 entry
+  (`attemptRoastRetryOrchestrationFromRequest` →
+  `BeginOrchestrationForSession`), the static-vs-runtime error
+  taxonomy, the Phase 7.1 coordinator-side bundle production
+  (`maybeProduceTransitionBundle` in the orchestration cleanup), and
+  the Phase 7.2 bundle-consuming participant selector
+  (`roastSigningParticipantSelector` behind the `frost_roast_retry`
+  tag, legacy-shuffle fallback when no bundle is present).
+
+Two exit items remain deliberately open, gated on Phase 7's manifest
+flip - not on more code:
+
+* Once the legacy `EvaluateRetryParticipantsForSigning` has no
+  callers, delete it. (Key-generation legacy retry stays.) It still
+  has one caller by design: `legacySigningParticipantSelector` is
+  the retained rollback path through Phases 6-7.
+* Remove the `frost_roast_retry` build tag; the new retry path is
+  unconditional once Phase 7's manifest gate flips.
+
+=== Phase 7: Readiness manifest evidence
+
+* Update the FROST readiness manifest to flip ROAST retry +
+  transition evidence from `missing-no-go` to `present` once Phase 6
+  ships and the integration test suite has been run against a real
+  testnet.
+* The manifest lives at
+  `docs/development/frost-readiness-manifest.adoc` in this
+  repository. (It was originally planned for the tBTC monorepo's
+  `docs/operations/` directory; the monorepo signer is retired and
+  keep-core is canonical, so the manifest moved here with the same
+  update discipline.)
+* As with every readiness gate in this repo, the manifest is updated
+  only when the supporting evidence is attached. The RFC does not
+  promise an early flip.
+
+== Resolved decisions
+
+The decisions in this section were settled in a Phase-3 design review
+(2026-05-22) with cross-team protocol-owner input. They are listed
+here so subsequent implementation PRs can reference them.
+
+=== Cross-process coordinator agreement
+
+*Decision: coordinator-proposed aggregation on a dedicated topic,
+signed with the operator key, with receiver-side bundle verification
+for censorship detection.*
+
+The earlier draft of this RFC carried "all-to-all signed-evidence
+gossip with local union" as the recommended path. That recommendation
+silently assumed gossip is synchronously consistent across the signer
+set; in practice gossip is eventually consistent, so two honest
+signers can hold divergent evidence sets at the moment the attempt
+times out. Applying the deterministic `NextAttempt` function to
+divergent inputs produces divergent next-attempt contexts and
+fractures the signing group.
+
+The replacement flow is:
+
+. *Observation.* Each signer's `EvidenceRecorder` (Phase 2)
+  produces a per-attempt local-evidence snapshot.
+. *Submission.* Each signer signs its snapshot with its operator
+  key (the same key `pkg/net` already uses to attribute network
+  messages) and broadcasts it on a dedicated evidence topic.
+. *Aggregation.* The current attempt's elected coordinator
+  (the deterministic `SelectCoordinator` output) collects the
+  signed snapshots, builds a canonical bundle, signs the bundle,
+  and broadcasts it as a `TransitionMessage`.
+. *Verification.* Every receiver validates the bundle's
+  coordinator signature, validates each contained snapshot's
+  operator signature, *and verifies that its own observations
+  appear in the bundle*. A coordinator that omits an honest
+  peer's signed snapshot is caught here.
+. *Transition.* Receivers feed the verified bundle into
+  `NextAttempt`. Because the bundle is the authoritative input,
+  all honest receivers compute the same next-attempt context.
+
+A peer that signs conflicting snapshots is slashable -- the
+signature is the binding. A coordinator that signs an inconsistent
+bundle (omits observations, alters counts, etc.) is detected at
+verification step (4) and the next-attempt coordinator handles the
+exclusion.
+
+Alternatives considered (rejected):
+
+. *All-to-all signed-evidence gossip with local union.* Original
+  recommendation. Rejected because gossip's eventual-consistency
+  semantics let honest signers reach the deterministic
+  `NextAttempt` boundary with divergent inputs, producing
+  divergent outputs.
+. *Piggy-back on existing FROST broadcast channel.* Rejected
+  because it couples evidence rate limits to protocol round-trip
+  rate limits, and re-uses a topic with different traffic
+  characteristics.
+. *Coordinator-only authoritative without aggregation.* Rejected
+  because losing the all-signer signed attestations also loses
+  the audit trail. The aggregation model keeps the per-signer
+  signatures inside the bundle, so the audit trail survives.
+
+Liveness: a malicious coordinator can withhold the
+`TransitionMessage`, stalling the transition. ROAST handles this
+the same way it handles a malicious signer: the attempt times
+out, the next attempt elects a different coordinator (the
+`SelectCoordinator` output is deterministic but rotates with the
+attempt number), and the new coordinator drives the transition.
+The malicious coordinator's evidence is itself parked or
+excluded by the new coordinator's bundle, ending the loop.
+
+Safety: any honest signer that verifies a bundle and computes
+`NextAttempt(ctx, bundle)` produces the same context as any other
+honest signer that verifies the same bundle. Safety reduces to
+"is the bundle correctly verified" -- a local check, not a
+network-consistency requirement.
+
+This design satisfies the formal verified-inputs requirement of
+the deterministic `NextAttempt` policy specified in Layer B.
+
+=== Source of `DkgGroupPublicKey` for the seed
+
+*Decision: extract from FFI signer material at attempt construction.*
+
+The DKG-validated group public key is already present in the FFI
+signer material (it is required at signature-verification time
+anyway), so the seed derivation can take it from there. The
+wallet registry is *not* consulted on the hot path; doing so
+would introduce async lookup latency and entangle the core
+signing protocol with application state. See Shared types above
+for the derivation contract.
+
+=== `AttemptContext` ↔ `NativeExecutionFFISigningRequest` binding
+
+*Decision: extend the request struct with an `AttemptContext`
+field; the context is Go-side orchestration only.*
+
+The context does not cross the CGO/Rust boundary into the
+`tbtc-signer` engine -- the engine remains a pure signing
+primitive. Go-side coordinator wiring populates the context;
+existing call sites construct attempt-zero contexts inline
+during Phase 4.
+
+=== `SelectCoordinator` retention
+
+*Decision: keep the existing helper; bridge the seed type inside
+`BeginAttempt`.*
+
+The deterministic shuffle is correct in isolation. The bridge
+folds the new `[32]byte` `AttemptSeed` into the legacy `int64`
+parameter shape with a sterile, named adapter (see Layer B).
+
+=== Evidence-signing key
+
+*Decision: reuse the existing operator key.*
+
+The operator key already binds every other gossip message a
+keep-core node emits via `pkg/net`. Layering a second key
+surface specifically for evidence signing is premature
+optimization given the current key model.
+
+=== Evidence message format
+
+*Decision: signed-body protobuf envelopes
+(`pkg/frost/roast/gen/pb/evidence.proto`), routed via the
+`net.Message` interface.*
+
+Evidence signatures cover a domain-separated byte stream -- a
+fixed per-message-type tag followed by the exact serialized body --
+while the body itself travels verbatim. A snapshot is
+`SignedLocalEvidenceSnapshot{body, operator_signature}` where
+`body` is the serialized `LocalEvidenceSnapshotBody` and the
+operator signature covers `domain_tag || body`; a transition
+message is `SignedTransitionMessage{body, coordinator_signature}`
+whose body embeds every member's signed snapshot envelope verbatim
+(`repeated bytes signed_snapshots`) and whose coordinator signature
+covers `domain_tag || body`. Each `domain_tag` begins with byte
+0x00 -- an illegal protobuf tag (field 0) -- so the signed payload
+is undecodable as any protobuf message, and each message type uses
+a distinct tag, so a signature over one body can never be accepted
+for another (snapshot: `0x00 "roast/signed-evidence-snapshot/v1"
+0x00`; transition: `0x00 "roast/signed-transition-message/v1"
+0x00`; the Phase 7 signing package uses its own tag). The tag is
+not carried on the wire -- only the body is. A verifier re-derives
+the tag, checks the signature over the tag plus the body bytes it
+received, and only then parses the body; nothing in the evidence
+chain is ever re-encoded. Signature validity therefore never
+depends on any serializer's canonical form -- across protobuf
+library versions or across languages (the Phase 7 Rust signer
+verifies and parses these same bytes). Producers marshal a body
+exactly once, at signing time, and transmit those bytes.
+
+The original Phase 3 implementation used canonical JSON
+(`json.Marshal` over field-order-stable structs) as the signed
+encoding; it was replaced before any persisted or cross-component
+evidence existed because canonical-JSON byte stability is a
+Go-implementation accident, not a portable contract.
+
+=== Maximum evidence-message size
+
+*Decision: single `TransitionMessage` per transition; no
+chunking. The pubsub transport limit is set explicitly to match the
+parser ceiling.*
+
+Under coordinator-aggregation, the per-transition payload is
+`O(N)` not `O(N^2)`. This annex originally estimated ~10-20 KiB at a
+100-signer group with all four quotas saturated, and concluded the
+bundle sat comfortably within libp2p's per-message limits. Both halves
+of that were overtaken once snapshots began carrying coordinator package
+proofs: a proof is a whole signed FROST signing package, and every
+snapshot in the bundle repeats them.
+
+The measured worst case at the mainnet group size of 100 members, every
+member reporting saturated evidence with the maximum two proofs, is
+*~1.95 MiB* -- roughly 100x the original estimate, and above libp2p's
+1 MiB pubsub default. Relying on that default silently dropped
+maximum-evidence bundles at the transport, where the retry path observes
+only a stalled transition. The parser ceiling and the pubsub limit are
+therefore both set to 8 MiB, so the transport accepts exactly what the
+parser accepts, and the measurement is pinned by a test that fails if
+evidence-payload growth outgrows either limit.
+
+=== Session-handle binding TTL eviction
+
+*Decision: a periodic sweep over `sessionAttemptBindings`
+(introduced by Phase 4.3) evicts entries older than a fixed TTL
+(default two hours).*
+
+Phase 4.3's session-handle registry expects the orchestration
+layer (Phase 5) to call `ClearCurrentAttemptHandleForSession`
+from a deferred cleanup when the session ends. A goroutine
+panic before the deferred clear runs would leak the binding
+permanently, since nothing else removes it.
+
+The two-hour TTL is a defence-in-depth backstop. It is long
+enough that no real signing session reaches it (typical sessions
+complete in seconds; a multi-attempt session under ROAST retry
+should not exceed minutes), and short enough that a leaked
+binding does not accumulate across days of node uptime. The
+sweep itself runs on a background goroutine; entries are evicted
+in batches under the registry's existing write lock.
+
+Phase 5.2 introduces both the sweep goroutine and the timestamp
+field on `sessionAttemptBinding`. The eviction does not depend
+on session-completion correctness; it only catches the
+panic-before-defer pathological case.
+
+=== Orchestration error taxonomy
+
+*Decision: orchestration errors are bucketed into three classes, with
+fundamentally different handling.*
+
+When the executor adapter calls `BeginOrchestrationForSession`,
+the call can fail for distinct reasons that the receiver MUST
+distinguish:
+
+. *Static-configuration errors* -- the build was deployed without
+  the readiness env var, or no caller has registered a coordinator.
+  These errors are fully deterministic: every honest signer
+  observes the same error from the same configuration at the same
+  startup state. Safe to log at INFO and fall back to the legacy
+  retry path. Sentinel errors `ErrRoastRetryReadinessOptOut` and
+  `ErrNoRoastRetryCoordinatorRegistered` (introduced in Phase 6.3)
+  signal this class; `errors.Is` checks identify them.
+
+. *Runtime state-machine errors* -- `Coordinator.BeginAttempt`
+  returned an error (out-of-memory, malformed AttemptContext,
+  internal invariant violated, etc.). These errors are
+  non-deterministic across nodes: node A may experience a runtime
+  failure while node B succeeds. Treat them as hard failures:
+  return an error from the executor adapter, declare the session
+  failed.
+
+. *Terminal refusals* -- a deliberately configured safety switch
+  declined the only path it permits, so neither disposition above is
+  correct. The motivating case is interactive-only mode
+  (`KEEP_CORE_FROST_INTERACTIVE_SIGNING_ONLY`): it exists precisely to
+  retire the coarse signing path, so falling back to the legacy retry
+  path would defeat the switch, while retrying cannot help because the
+  refusal is deterministic in the node's own configuration. Signalled by
+  the sentinel `ErrTerminalSigningFailure` and identified with
+  `errors.Is`; the retry loop aborts the session immediately rather than
+  falling back or re-attempting.
++
+Like static-configuration errors these are deterministic per node, but
+unlike them they must NOT fall back. Treating a refusal as a
+static-configuration error would silently reintroduce the very path the
+operator disabled; treating it as a runtime error would imply a
+transient fault and invite retries that can never succeed. The class is
+therefore distinct in disposition, not merely in provenance.
+
+The safety reason is load-bearing. If node A falls back to the
+legacy retry shuffle while node B proceeds with the ROAST state
+machine, the two nodes compute different `NextAttempt` participant
+sets, and the signing group fractures permanently. The legacy
+fallback is only acceptable when every honest signer would make
+the same choice, which is true for static configuration and false
+for runtime errors.
+
+This decision applies to Phase 6.3 (orchestration wiring at the
+executor adapter) and Phase 6.4 (call-site migration). Phase 5
+deliberately ships orchestration as best-effort because it has no
+production consumer; Phase 6 is where the safety distinction
+matters.
+
+=== `FrostUniFFIV1` signer-material prerequisite
+
+*Decision: Phase 7's manifest flip is gated on verified migration
+away from `FrostUniFFIV1` signer material across all production
+signers.*
+
+Phase 6.1's `ExtractDkgGroupPublicKeyFromMaterial` switches on
+`NativeSignerMaterial.Format`. The two production-relevant formats
+(`FrostUniFFIV2` and `FrostTBTCSignerV1`) expose the DKG group
+public key on the material directly. The legacy `FrostUniFFIV1`
+format does not include the group key in a form Phase 6.1 can
+extract; the helper returns a descriptive error directing
+operators to migrate.
+
+Until the network has fully migrated off V1, the Phase 7 readiness
+manifest cannot flip to `present`. The migration tracking
+mechanism is out of scope for this RFC; the prerequisite is
+documented here as a hard dependency of Phase 7.
+
+=== Lost-sync scope and its residual
+
+*Decision: the lost-sync marker is charged to ONE attempt, not the
+session, and is consumed by the first read.*
+
+A seat that receives a transition bundle for an attempt it never
+observed has fallen behind the group's committed attempt chain.
+Selecting from that stale position would produce a divergent included
+set, so the seat must not select: it skips the attempt and lets the
+outer layer retry the whole signing from a fresh position.
+
+The scope of that reaction is the load-bearing part. A marker that
+latched for the session would let one message end the session, and the
+triggering bundle cannot be authenticated at the point it arrives:
+verifying it needs a local observe handle for an attempt this seat never
+created, so any authenticated group member can send one for an arbitrary
+hash. Charging the marker to a single attempt bounds the blast radius of
+a forged bundle to one attempt of added latency -- the cost of an
+ordinary missed attempt -- while keeping the fail-closed property that
+motivated it. The marker is consume-once for the same reason: an
+attacker must keep re-sending, attributably, to sustain a denial.
+
+*Accepted residual.* An authenticated seat can still spend one attempt
+per forged bundle, and the forgery is not attributable to a specific
+attempt the sender participated in. Three properties keep this out of
+P0 territory: the sender is an authenticated, operator-attributed group
+member; the cost is bounded and identical to a benign missed attempt, so
+no signature is produced under the wrong assumptions and no funds move;
+and the behaviour is gated off by default. An anonymous, costless,
+non-attributable variant of this would justify f+1 snapshot
+corroboration before accepting a bundle; this one does not, and the
+existing f+1 accuser-quorum machinery is where that would land if the
+cost/benefit ever changes.
+
+== Open questions
+
+. *Persistence across signer restart.* If a signer crashes mid-attempt,
+  does it lose its evidence? The paper assumes persistent state. For
+  keep-core we likely accept evidence loss on restart at first (the
+  attempt times out and a new attempt is started fresh) and revisit
+  persistence in a follow-up RFC once we have wire-level evidence.
++
+*Sketch for Phase 5+:* introduce a `SyncState` gossip message. A
+restarting node broadcasts
+`(LastKnownAttemptContextHash, KeyGroupID)`; peers reply with their
+current attempt and the set of signed attestations they hold for
+that attempt. This avoids the timeout-and-restart cost on graceful
+redeploys without requiring on-disk persistence -- the peers'
+gossiped attestations *are* the persistent record.
+. *FFI surface.* `tbtc-signer` (the Rust engine) does not need to know
+  about ROAST coordinator state -- it remains a pure signing engine.
+  But it does need to surface structured errors that the coordinator
+  can map to exclusion reasons. PR #425 / #3961 (the L5 paired
+  change) is the template for this style of error-code wiring. Future
+  exclusion-relevant errors should follow the same dedicated-variant
+  pattern.
+. *Backward-compat horizon.* Once the `AttemptContextHash` field is on
+  protocol messages, how long do we accept messages from peers that
+  omit it? Proposal: optional during Phase 1-5, required at Phase 6,
+  validation-rejection at Phase 7.
+
+== Out of scope
+
+* DKG retry. The key-generation legacy retry stays. Re-evaluating DKG
+  retry under ROAST is a separate RFC.
+* Bitcoin transaction-builder changes. Witness restoration and
+  P2WSH/P2TR handling are unaffected.
+* Operator UX (CLI flags, dashboards). Whatever is needed lands
+  alongside Phase 5 / Phase 6 as small, focused PRs.
+* Cross-domain ROAST (e.g., between keep-core and tbtc-signer). The
+  signer remains a single-process engine; coordinator state lives on
+  the keep-core side.
+
+== Annex A (normative): coordinator-shuffle seed derivation
+
+This annex is the single normative definition of the coordinator-
+shuffle seed. Two independent implementations exist -- the Go RFC-21
+layer (`pkg/frost/roast`) and the Rust tbtc-signer attempt-context
+validation (`pkg/tbtc/signer/src/engine.rs`) -- and both MUST derive
+byte-identical values from this text. Conformance is pinned by the
+shared vector file regenerated from the Go implementation
+(`pkg/frost/roast/testdata/coordinator_seed_vectors.json`, mirrored
+byte-identically to `pkg/tbtc/signer/testdata/`); any divergence
+fails the drifting side's own unit suite.
+
+=== Inputs
+
+* `KeyGroupBytes`: the UTF-8 bytes of the canonical FROST key-group
+  handle. For `FrostTBTCSignerV1` signer material this handle is the
+  lowercase hex encoding of the serialized group verifying key as
+  produced by the tbtc-signer engine (the `KeyGroup` string), and
+  `ExtractDkgGroupPublicKeyFromMaterial` returns exactly these bytes.
+  The handle is treated as an opaque byte string; implementations
+  MUST NOT decode it to point bytes before hashing.
+* `SessionID`: the session identifier's raw UTF-8 bytes.
+* `MessageDigest`: the **raw signing message itself**, big-endian
+  left-padded with zeros to exactly 32 bytes; leading zero bytes are
+  insignificant, and more than 32 significant bytes MUST be rejected.
+  This is precisely keep-core's `messageDigestFromBigInt` output: in
+  BIP-340 production the signed message already is the 32-byte
+  sighash, so padding is a no-op. Implementations MUST NOT substitute
+  any transcript hash of the message here -- in particular not the
+  tbtc-signer engine's internal `SHA256(message_bytes)` digest, which
+  feeds only the engine's `round_id`/`attempt_id` derivations. Seeding
+  from the transcript digest instead of the padded message was a
+  cross-language coordinator divergence caught in review; the
+  engine-side contract is pinned by
+  `start_sign_round_accepts_go_derived_attempt_context_in_strict_mode`.
+* `AttemptNumber`: the RFC-21 attempt number, **0-based** (attempt
+  zero is the first attempt). The tbtc-signer FFI `AttemptContext`
+  carries `wire_attempt_number = AttemptNumber + 1` (1-based, zero
+  rejected); implementations consuming the wire form MUST subtract
+  one before the composition below.
+* `IncludedSet`: the attempt's included member indices.
+
+=== Derivation
+
+----
+AttemptSeed32   = SHA256(KeyGroupBytes || SessionID || MessageDigest)
+ShuffleSeed_i64 = int64_from_be_bytes(AttemptSeed32[0..8])
+SourceSeed_i64  = ShuffleSeed_i64 + int64(AttemptNumber)      // two's-complement wrap
+Coordinator     = GoMathRandShuffle(sort_ascending(IncludedSet), SourceSeed_i64)[0]
+----
+
+`GoMathRandShuffle` is the exact shuffle of Go's legacy `math/rand`:
+`rand.New(rand.NewSource(seed)).Shuffle` -- ported bit-exactly to
+Rust in `pkg/tbtc/signer/src/go_math_rand.rs` and pinned by the
+cross-language vectors of keep-core PRs #4026/#4027. The addition is
+two's-complement wrapping on both sides (Go's defined signed
+overflow; Rust `wrapping_add`).
+
+=== Non-goals and accepted properties
+
+* The concatenation `KeyGroupBytes || SessionID || MessageDigest` is
+  not length-framed, so input-boundary collisions are expressible.
+  `KeyGroupBytes` is an opaque handle whose width genuinely varies in
+  practice -- the conformance vectors carry both 18-byte handles and
+  33-byte compressed keys -- so this is reachable in principle rather
+  than merely theoretical. It is accepted regardless: the seed feeds a
+  *non-cryptographic* shuffle whose only job is deterministic agreement
+  on rotation order among honest members; every input is independently
+  and unambiguously bound (and framed) in the `AttemptContext` hash that
+  protocol messages verify. The seed is not a security boundary, and
+  no exclusion or signing decision may ever be derived from it. Framing
+  it would be a normative change to this annex, the Go derivation, the
+  Rust port and both mirrored vector sets, so it is deferred to a single
+  coordinated change if ever wanted.
+* Only the first 8 bytes of `AttemptSeed32` influence the shuffle;
+  the remaining 24 bytes are bound via the `AttemptContext` hash
+  only.
+* Grindability: an adversary who can choose `SessionID` or
+  `MessageDigest` can bias coordinator rotation order. Session and
+  message identifiers are protocol-fixed inputs (deposit/redemption
+  driven), not free adversary choices; rotation-order bias degrades
+  at worst into the serial-attempt latency bound, never into a
+  safety property.
+
+=== History
+
+Before this annex, the two implementations diverged: the Go layer
+derived `fold(SHA256(KeyGroup || SessionID || MessageDigest))` with
+0-based attempts while the Rust engine used the first 8 bytes of the
+raw `MessageDigest` with 1-based wire attempts (the legacy
+`signingAttemptSeed` convention of the pre-ROAST signing loop, which
+`pkg/tbtc/signing_loop.go` retains until Phase-7 migrates it to this
+annex). The divergence was flagged in keep-core PR #4026 and resolved
+by adopting the Go derivation as normative.
+
+== Annex B (informative): serial-attempt latency budget vs on-chain timeouts
+
+Paper-ROAST runs up to `n-t+1` concurrent signing sessions precisely so
+byzantine participants cannot serialize delay; RFC-21 (and the legacy
+retry loop it bridges from) runs attempts *serially*. This annex
+computes what that costs against the bridge's on-chain deadlines, and
+states plainly which constraint actually binds.
+
+=== Parameters (current code and chain values)
+
+[cols="3,1,3"]
+|===
+| Parameter | Value | Source
+
+| Announcement delay + active + protocol + cool-down per attempt
+| `1 + 5 + 30 + 5 = 41` blocks
+| `pkg/tbtc/signing_loop.go` (`signingAttemptMaximumBlocks`)
+
+| Wall-clock per attempt (12 s blocks)
+| ≈ 8.2 min
+| Ethereum mainnet block time
+
+| `signingAttemptsLimit`
+| 5
+| `pkg/tbtc/node.go`
+
+| Engine-side ROAST coordinator timeout
+| 30 s default
+| `TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS` (sub-dominant: the
+  block budget above dominates)
+
+| Signing group shape
+| `n = 100`, `t = 51`, `f = n - t = 49`
+| wallet parameters
+
+| `redemptionTimeout`
+| 5 days (432,000 s)
+| `tbtc-v2 Bridge.sol` (slashing-backed)
+
+| `movingFundsTimeout` / `movedFundsSweepTimeout`
+| 7 days each
+| `tbtc-v2 Bridge.sol`
+|===
+
+=== The serial-delay bound
+
+Each failed attempt costs at most one attempt budget (41 blocks
+≈ 8.2 min). Three regimes:
+
+* *As deployed* (`signingAttemptsLimit = 5`): the loop spends at most
+  `5 × 41 = 205` blocks ≈ **41 minutes** before giving up — roughly
+  **175×** inside the 5-day redemption timeout. Serial latency is
+  nowhere near the binding constraint.
+* *Review-suggested worst case* (`f` byzantine members each burning
+  one timeout, limit raised to `f + 1 = 50` attempts): `50 × 41 =
+  2,050` blocks ≈ **6.8 hours** — still ~**17×** inside the redemption
+  timeout, and ~25× inside the moving-funds timeouts.
+* *Byzantine coordinators only* (the regime bounded concurrency is
+  designed for): coordinator rotation visits at most `f` byzantine
+  coordinators before an honest one; with serial attempts that is the
+  same `f·τ ≈ 6.8 h` worst case as above.
+
+Conclusion of the arithmetic: serial attempts comfortably fit the
+on-chain deadlines whenever attempts *can* succeed at all. The honest
+caveat is the next section.
+
+=== What actually binds: subset sampling, not serial latency
+
+An attempt requires every included member to contribute (the
+transitional finalize rejects partial contribution sets), and each
+attempt's included set is drawn from ready members. The per-attempt
+success probability against `f` byzantine-but-announcing members is
+the probability of drawing an all-honest `t`-subset:
+
+[cols="1,2,2"]
+|===
+| `f` | P(all-honest subset) per attempt | P(success within 5 attempts)
+
+| 1 | 0.490 | 0.966
+| 2 | 0.238 | 0.743
+| 3 | 0.114 | 0.454
+| 5 | 0.025 | 0.120
+|===
+
+(`P = ∏_{i=0}^{f-1} (49-i)/(100-i)` for `n=100, t=51`; the
+`signingAttemptsLimit = 5` rationale in `pkg/tbtc/node.go` assumes
+`f ≤ 2`.)
+
+The table models the *deployed legacy loop*, which draws an
+independent pseudo-random `t`-subset per attempt, so per-attempt
+failures are approximately i.i.d. The RFC-21 Layer B transitional
+path (every included member must contribute) has a different profile
+in both directions: one-shot silence is absorbed in a single attempt
+(the silent member is parked for the next), but the i.i.d. table is
+*not* a worst case there — members that stagger silence across
+attempts (alternating, so someone unparked is always silent), or that
+submit their evidence snapshots while withholding signing
+contributions (which bundle-absence parking does not detect; see
+Layer B), can fail *every* attempt deterministically at small `f`.
+Both regimes reach the same conclusion below.
+
+So for `f ≥ 3` the loop fails with better-than-even odds long before
+any timeout is approached: **the binding liveness constraint is
+sampling probability, not serial latency**. A patient adversary does
+not even need coordinators — any included byzantine member can burn an
+attempt by going silent after announcing, and silence parking is
+strictly transient by design, so re-announcing members re-poison
+later subsets. This is the liveness profile inherited from the
+tECDSA-era loop; its production backstops are outside the signing
+loop: operator-inactivity claims (`pkg/protocol/inactivity`),
+redemption-timeout slashing, and wallet closure/moving-funds
+retirement.
+
+=== The structural fix (Phase-7+ requirement, not an optimization)
+
+True ROAST semantics remove the per-attempt veto entirely: the
+coordinator finalizes with the first `t` *responsive* members of the
+included set (t-of-included finalize) and runs up to `n-t+1` bounded
+concurrent sessions so a stalling coordinator costs nothing but its
+own slot. Under those semantics a silent member costs zero attempts
+(they are simply not among the first `t` responders), the sampling
+table above becomes irrelevant (any `t` honest responders suffice,
+which the `t`-of-`n` assumption guarantees exist), and the worst-case
+added latency degenerates to the coordinator-rotation bound. The
+design groundwork already exists in the signer repo
+(`pkg/tbtc/signer/docs/true-late-t-of-n-finalize-considerations.md`).
+
+Recommendation codified by this annex:
+
+. Before the ECDSA-retirement phases, adopt t-of-included finalize for
+  the ROAST signing path (at minimum for redemption signings, which
+  carry slashing-backed deadlines).
+. Treat bounded concurrent attempts (`n-t+1` cap) as the follow-on
+  once t-of-included finalize lands; with it, the `f·τ` serial bound
+  in this annex stops being the worst case and becomes the
+  no-concurrency fallback.
+. Until then, the `signingAttemptsLimit = 5` / `f ≤ 2` assumption and
+  this annex's tables are the documented envelope; alerting should
+  fire when observed attempt failure rates imply `f ≥ 3` behaviour.
+  (Implemented: the `performance_signing_attempt_rolling_success_rate`
+  / `performance_signing_attempt_implied_f_alert` gauges fed by the
+  retry loop's attempt-outcome reporter; thresholds and operator
+  guidance in `docs/development/frost-roast-retry-rollout.adoc` and
+  `pkg/clientinfo/signing_liveness.go`.)
+
+== References
+
+* Ruffing, Ronge, Aranha, Schneider. ``ROAST: Robust Asynchronous
+  Schnorr Threshold Signatures.'' ACM CCS 2022.
+* Komlo, Goldberg. ``FROST: Flexible Round-Optimized Schnorr Threshold
+  Signatures.'' SAC 2020.
+* RFC-20: Schnorr/FROST Migration Scaffold (`docs/rfc/rfc-20-schnorr-frost-migration-scaffold.adoc`).
+* Independent review of FROST/ROAST readiness branch:
+  https://github.com/threshold-network/keep-core/pull/3866.
+* L5 paired error-code change: `tlabs-xyz/tbtc#425` (Rust producer) +
+  `threshold-network/keep-core#3961` (Go consumer).
+* Receive-loop drop site (the generic two-round exchange's two
+  further sites were removed with the unreachable scaffolding in
+  commit `1c692bf03`; see Phase 6 status):
+** `pkg/frost/signing/native_ffi_primitive_transitional_frost_native.go`
+   (`collectBuildTaggedTBTCSignerRoundContributionMessages`)
+* Byte-identical retry shuffle:
+** `pkg/frost/retry/retry.go`
+** `pkg/tecdsa/retry/retry.go`

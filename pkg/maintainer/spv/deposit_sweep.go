@@ -157,11 +157,23 @@ func parseDepositSweepTransactionInputs(
 		value := previousTransaction.Outputs[outpointIndex].Value
 		scriptType := bitcoin.GetScriptType(publicKeyScript)
 
-		if scriptType == bitcoin.P2PKHScript ||
-			scriptType == bitcoin.P2WPKHScript {
-			// The input is P2PKH or P2WPKH, so we found main UTXO. There should
-			// be at most one main UTXO. If any input of this kind has already
-			// been found, report an error.
+		deposit, found, err := spvChain.GetDepositRequest(
+			outpointTransactionHash,
+			outpointIndex,
+		)
+		if err != nil {
+			return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
+				"failed to get deposit request: [%v]",
+				err,
+			)
+		}
+
+		if !found && (scriptType == bitcoin.P2PKHScript ||
+			scriptType == bitcoin.P2WPKHScript ||
+			scriptType == bitcoin.P2TRScript) {
+			// The input is a direct wallet UTXO, so we found main UTXO.
+			// There should be at most one main UTXO. If any input of this
+			// kind has already been found, report an error.
 			if mainUTXO == nil {
 				mainUTXO = &bitcoin.UnspentTransactionOutput{
 					Outpoint: &bitcoin.TransactionOutpoint{
@@ -176,31 +188,13 @@ func parseDepositSweepTransactionInputs(
 						"inputs",
 				)
 			}
-		} else if scriptType == bitcoin.P2SHScript ||
-			scriptType == bitcoin.P2WSHScript {
-			// The input is P2SH or P2WSH, so we found a deposit input. All
+		} else if found && (scriptType == bitcoin.P2SHScript ||
+			scriptType == bitcoin.P2WSHScript ||
+			scriptType == bitcoin.P2TRScript) {
+			// The input is a deposit input. All
 			// the deposits should have the same vault set or no vault at all.
 			// If the vault if different than the vault from any previous
 			// deposit input, report an error.
-			deposit, found, err := spvChain.GetDepositRequest(
-				outpointTransactionHash,
-				outpointIndex,
-			)
-			if err != nil {
-				return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
-					"failed to get deposit request: [%v]",
-					err,
-				)
-			}
-
-			if !found {
-				return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
-					"deposit: [%v/%v] not found",
-					outpointTransactionHash,
-					outpointIndex,
-				)
-			}
-
 			if depositAlreadyProcessed {
 				if vault != convertVaultAddress(deposit.Vault) {
 					return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
@@ -214,8 +208,8 @@ func parseDepositSweepTransactionInputs(
 				depositAlreadyProcessed = true
 			}
 		} else {
-			// The type of the input is neither P2PKH, P2WPKH, P2SH or P2WSH.
-			// Report an error.
+			// The input is neither a recognized direct wallet UTXO nor a
+			// registered deposit. Report an error.
 			return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
 				"deposit sweep transaction has incorrect input types",
 			)
@@ -270,12 +264,9 @@ func getUnprovenDepositSweepTransactions(
 	// searched for.
 	startBlock := currentBlock - historyDepth
 
-	events, err :=
-		spvChain.PastDepositRevealedEvents(
-			&tbtc.DepositRevealedEventFilter{
-				StartBlock: startBlock,
-			},
-		)
+	filter := &tbtc.DepositRevealedEventFilter{StartBlock: startBlock}
+
+	events, err := spvChain.PastDepositRevealedEvents(filter)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to get past deposit revealed events: [%v]",
@@ -283,13 +274,35 @@ func getUnprovenDepositSweepTransactions(
 		)
 	}
 
-	// There will often be multiple events emitted for a single wallet. Prepare
-	// a list of unique wallet public key hashes.
+	taprootEvents, err := spvChain.PastTaprootDepositRevealedEvents(filter)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get past Taproot deposit revealed events: [%v]",
+			err,
+		)
+	}
+
+	// There will often be multiple events emitted for a single wallet, and a
+	// Taproot reveal may have a compatibility legacy reveal. Prepare one list
+	// of unique wallet public key hashes across both event streams.
 	walletPublicKeyHashes := uniqueWalletPublicKeyHashes(
 		events,
 	)
+	seenWallets := make(map[[20]byte]struct{}, len(walletPublicKeyHashes))
+	for _, walletPublicKeyHash := range walletPublicKeyHashes {
+		seenWallets[walletPublicKeyHash] = struct{}{}
+	}
+	for _, walletPublicKeyHash := range uniqueWalletPublicKeyHashes(taprootEvents) {
+		if _, exists := seenWallets[walletPublicKeyHash]; exists {
+			continue
+		}
+
+		seenWallets[walletPublicKeyHash] = struct{}{}
+		walletPublicKeyHashes = append(walletPublicKeyHashes, walletPublicKeyHash)
+	}
 
 	unprovenDepositSweepTransactions := []*bitcoin.Transaction{}
+	seenTransactions := make(map[bitcoin.Hash]struct{})
 
 	for _, walletPublicKeyHash := range walletPublicKeyHashes {
 		wallet, err := spvChain.GetWallet(walletPublicKeyHash)
@@ -310,9 +323,11 @@ func getUnprovenDepositSweepTransactions(
 			continue
 		}
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		walletTransactions, err := getWalletTransactions(
 			walletPublicKeyHash,
+			wallet,
 			transactionLimit,
+			btcChain,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -322,6 +337,11 @@ func getUnprovenDepositSweepTransactions(
 		}
 
 		for _, transaction := range walletTransactions {
+			transactionHash := transaction.Hash()
+			if _, exists := seenTransactions[transactionHash]; exists {
+				continue
+			}
+
 			isUnproven, err :=
 				isUnprovenDepositSweepTransaction(
 					transaction,
@@ -338,6 +358,7 @@ func getUnprovenDepositSweepTransactions(
 			}
 
 			if isUnproven {
+				seenTransactions[transactionHash] = struct{}{}
 				unprovenDepositSweepTransactions = append(
 					unprovenDepositSweepTransactions,
 					transaction,

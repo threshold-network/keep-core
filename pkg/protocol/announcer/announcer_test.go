@@ -228,6 +228,83 @@ func TestAnnouncer(t *testing.T) {
 	}
 }
 
+func TestAnnouncerAnnounceMany(t *testing.T) {
+	protocolID := "protocol-test"
+	groupSize := 4
+	honestThreshold := 3
+
+	operatorPrivateKey, operatorPublicKey, err := operator.GenerateKeyPair(
+		local_v1.DefaultCurve,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	localChain := local_v1.ConnectWithKey(
+		groupSize,
+		honestThreshold,
+		operatorPrivateKey,
+	)
+
+	operatorAddress, err := localChain.Signing().PublicKeyToAddress(
+		operatorPublicKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var operators []chain.Address
+	for i := 0; i < groupSize; i++ {
+		operators = append(operators, operatorAddress)
+	}
+
+	localProvider := local.ConnectWithKey(operatorPublicKey)
+	broadcastChannel, err := localProvider.BroadcastChannelFor("announce-many")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	membershipValidator := group.NewMembershipValidator(
+		&testutils.MockLogger{},
+		operators,
+		localChain.Signing(),
+	)
+
+	RegisterUnmarshaller(broadcastChannel)
+
+	announcer := New(
+		protocolID,
+		broadcastChannel,
+		membershipValidator,
+	)
+
+	ctx, cancelCtx := context.WithTimeout(
+		context.Background(),
+		4*local.RetransmissionTick,
+	)
+	defer cancelCtx()
+
+	readyMembersIndexes, err := announcer.AnnounceMany(
+		ctx,
+		[]group.MemberIndex{3, 1, 3},
+		"session-test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []group.MemberIndex{1, 3}
+	if !reflect.DeepEqual(expected, readyMembersIndexes) {
+		t.Errorf(
+			"unexpected ready members\n"+
+				"expected: [%v]\n"+
+				"actual:   [%v]",
+			expected,
+			readyMembersIndexes,
+		)
+	}
+}
+
 func TestUnreadyMembers(t *testing.T) {
 	tests := map[string]struct {
 		readyMembers []group.MemberIndex

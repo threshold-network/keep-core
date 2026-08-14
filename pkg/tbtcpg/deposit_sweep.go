@@ -105,6 +105,7 @@ type DepositReference struct {
 	FundingOutputIndex uint32
 	RevealBlock        uint64
 	Vault              *chain.Address
+	IsTaproot          bool
 }
 
 // Deposit holds some detailed data about a deposit.
@@ -114,6 +115,7 @@ type Deposit struct {
 	WalletPublicKeyHash [20]byte
 	DepositKey          string
 	IsSwept             bool
+	IsTaproot           bool
 	AmountBtc           float64
 	Confirmations       uint
 	Vault               *chain.Address
@@ -147,7 +149,7 @@ func FindDeposits(
 // deposit-revealed events are queried.
 func findDeposits(
 	fnLogger log.StandardLogger,
-	chain Chain,
+	hostChain Chain,
 	btcChain bitcoin.Chain,
 	walletPublicKeyHash [20]byte,
 	maxNumberOfDeposits int,
@@ -157,7 +159,7 @@ func findDeposits(
 ) ([]*Deposit, error) {
 	fnLogger.Infof("reading revealed deposits from chain")
 
-	depositMinAgeSeconds, err := chain.GetDepositMinAge()
+	depositMinAgeSeconds, err := hostChain.GetDepositMinAge()
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to get deposit minimum age: [%w]",
@@ -173,7 +175,7 @@ func findDeposits(
 		filter.WalletPublicKeyHash = [][20]byte{walletPublicKeyHash}
 	}
 
-	depositRevealedEvents, err := chain.PastDepositRevealedEvents(filter)
+	depositRevealedEvents, err := hostChain.PastDepositRevealedEvents(filter)
 	if err != nil {
 		return []*Deposit{}, fmt.Errorf(
 			"failed to get past deposit revealed events: [%w]",
@@ -181,35 +183,122 @@ func findDeposits(
 		)
 	}
 
-	fnLogger.Infof("found [%d] DepositRevealed events", len(depositRevealedEvents))
+	taprootDepositRevealedEvents, err := hostChain.PastTaprootDepositRevealedEvents(filter)
+	if err != nil {
+		return []*Deposit{}, fmt.Errorf(
+			"failed to get past Taproot deposit revealed events: [%w]",
+			err,
+		)
+	}
+
+	fnLogger.Infof(
+		"found [%d] DepositRevealed events and [%d] TaprootDepositRevealed events",
+		len(depositRevealedEvents),
+		len(taprootDepositRevealedEvents),
+	)
+
+	type revealedDepositEvent struct {
+		FundingTxHash       bitcoin.Hash
+		FundingOutputIndex  uint32
+		WalletPublicKeyHash [20]byte
+		Amount              uint64
+		Vault               *chain.Address
+		BlockNumber         uint64
+		IsTaproot           bool
+	}
+
+	revealedDepositEvents := make(
+		[]*revealedDepositEvent,
+		0,
+		len(depositRevealedEvents)+len(taprootDepositRevealedEvents),
+	)
+
+	type revealedDepositKey struct {
+		FundingTxHash      bitcoin.Hash
+		FundingOutputIndex uint32
+	}
+
+	revealedDepositEventsIndex := make(map[revealedDepositKey]int)
+	appendRevealedDepositEvent := func(event *revealedDepositEvent) {
+		key := revealedDepositKey{
+			FundingTxHash:      event.FundingTxHash,
+			FundingOutputIndex: event.FundingOutputIndex,
+		}
+
+		if existingIndex, ok := revealedDepositEventsIndex[key]; ok {
+			// A Taproot reveal may also emit a compatibility DepositRevealed
+			// event. Keep only the Taproot-specific representation so the
+			// same deposit cannot appear in both legacy and Taproot sweep groups.
+			if event.IsTaproot {
+				revealedDepositEvents[existingIndex] = event
+			}
+
+			return
+		}
+
+		revealedDepositEventsIndex[key] = len(revealedDepositEvents)
+		revealedDepositEvents = append(revealedDepositEvents, event)
+	}
+
+	for _, event := range depositRevealedEvents {
+		appendRevealedDepositEvent(
+			&revealedDepositEvent{
+				FundingTxHash:       event.FundingTxHash,
+				FundingOutputIndex:  event.FundingOutputIndex,
+				WalletPublicKeyHash: event.WalletPublicKeyHash,
+				Amount:              event.Amount,
+				Vault:               event.Vault,
+				BlockNumber:         event.BlockNumber,
+			},
+		)
+	}
+
+	for _, event := range taprootDepositRevealedEvents {
+		appendRevealedDepositEvent(
+			&revealedDepositEvent{
+				FundingTxHash:       event.FundingTxHash,
+				FundingOutputIndex:  event.FundingOutputIndex,
+				WalletPublicKeyHash: event.WalletPublicKeyHash,
+				Amount:              event.Amount,
+				Vault:               event.Vault,
+				BlockNumber:         event.BlockNumber,
+				IsTaproot:           true,
+			},
+		)
+	}
 
 	// Take the oldest first
-	sort.SliceStable(depositRevealedEvents, func(i, j int) bool {
-		return depositRevealedEvents[i].BlockNumber < depositRevealedEvents[j].BlockNumber
+	sort.SliceStable(revealedDepositEvents, func(i, j int) bool {
+		return revealedDepositEvents[i].BlockNumber < revealedDepositEvents[j].BlockNumber
 	})
 
 	fnLogger.Infof("getting deposits details")
 
-	resultSliceCapacity := len(depositRevealedEvents)
+	resultSliceCapacity := len(revealedDepositEvents)
 	if maxNumberOfDeposits > 0 {
 		resultSliceCapacity = maxNumberOfDeposits
 	}
 
-	// Capture time now for computations.
-	timeNow := time.Now()
+	timeNow, err := hostChain.CurrentBlockTimestamp()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get current block timestamp: [%w]",
+			err,
+		)
+	}
 
 	result := make([]*Deposit, 0, resultSliceCapacity)
-	for _, event := range depositRevealedEvents {
+	for _, event := range revealedDepositEvents {
 		if len(result) == cap(result) {
 			break
 		}
 
-		depositKey := chain.BuildDepositKey(event.FundingTxHash, event.FundingOutputIndex)
+		depositKey := hostChain.BuildDepositKey(event.FundingTxHash, event.FundingOutputIndex)
 		depositKeyStr := depositKey.Text(16)
 
 		fnLogger.Debugf("getting details of deposit [%s]", depositKeyStr)
 
-		depositRequest, found, err := chain.GetDepositRequest(
+		depositRequest, found, err := hostChain.GetDepositRequest(
 			event.FundingTxHash,
 			event.FundingOutputIndex,
 		)
@@ -264,10 +353,12 @@ func findDeposits(
 					FundingTxHash:      event.FundingTxHash,
 					FundingOutputIndex: event.FundingOutputIndex,
 					RevealBlock:        event.BlockNumber,
+					IsTaproot:          event.IsTaproot,
 				},
 				WalletPublicKeyHash: event.WalletPublicKeyHash,
 				DepositKey:          hexutils.Encode(depositKey.Bytes()),
 				IsSwept:             isSwept,
+				IsTaproot:           event.IsTaproot,
 				AmountBtc:           convertSatToBtc(float64(depositRequest.Amount)),
 				Confirmations:       confirmations,
 				Vault:               depositRequest.Vault,
@@ -351,6 +442,10 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 	for _, deposit := range unsweptDeposits {
 		var key string
 		var label string
+		scriptType := "legacy"
+		if deposit.IsTaproot {
+			scriptType = "taproot"
+		}
 
 		if deposit.Vault == nil {
 			key = ""
@@ -359,6 +454,8 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 			key = strings.ToLower(string(*deposit.Vault))
 			label = string(*deposit.Vault)
 		}
+		key = fmt.Sprintf("%s:%s", scriptType, key)
+		label = fmt.Sprintf("%s, %s", label, scriptType)
 
 		g, exists := groups[key]
 		if !exists {
@@ -413,13 +510,15 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 		//     different vault, making it eligible for a future sweep.
 		// The Warn-level log below flags these deposits for operator
 		// awareness and manual follow-up.
-		if nilGroup, ok := groups[""]; ok {
-			for _, deposit := range nilGroup.deposits {
-				taskLogger.Warnf(
-					"vault=0x0 deposit [%s] with wallet PKH [0x%x] requires manual follow-up",
-					deposit.DepositKey,
-					deposit.WalletPublicKeyHash,
-				)
+		for _, nilGroupKey := range []string{"legacy:", "taproot:"} {
+			if nilGroup, ok := groups[nilGroupKey]; ok {
+				for _, deposit := range nilGroup.deposits {
+					taskLogger.Warnf(
+						"vault=0x0 deposit [%s] with wallet PKH [0x%x] requires manual follow-up",
+						deposit.DepositKey,
+						deposit.WalletPublicKeyHash,
+					)
+				}
 			}
 		}
 	}
@@ -452,6 +551,7 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 			FundingOutputIndex: deposit.FundingOutputIndex,
 			RevealBlock:        deposit.RevealBlock,
 			Vault:              deposit.Vault,
+			IsTaproot:          deposit.IsTaproot,
 		}
 	}
 
@@ -469,7 +569,34 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 		return nil, fmt.Errorf("deposits list is empty")
 	}
 
+	isTaproot := deposits[0].IsTaproot
+	for i, deposit := range deposits[1:] {
+		if deposit.IsTaproot != isTaproot {
+			return nil, fmt.Errorf(
+				"cannot mix legacy and Taproot deposits in one sweep proposal (deposit [%d])",
+				i+1,
+			)
+		}
+	}
+
 	taskLogger.Infof("preparing a deposit sweep proposal")
+	mainUtxoHash := [32]byte{}
+	if isTaproot {
+		walletData, err := dst.chain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get wallet data for Taproot sweep main UTXO snapshot: [%w]",
+				err,
+			)
+		}
+		if walletData == nil {
+			return nil, fmt.Errorf(
+				"cannot get wallet data for Taproot sweep main UTXO snapshot: wallet data is nil",
+			)
+		}
+
+		mainUtxoHash = walletData.MainUtxoHash
+	}
 
 	// Estimate fee if it's missing.
 	if fee <= 0 {
@@ -481,10 +608,17 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 		}
 		perDepositMaxFee := depositParameters.TxMaxFee
 
+		hasMainUtxo := true
+		if isTaproot {
+			hasMainUtxo = mainUtxoHash != [32]byte{}
+		}
+
 		estimatedFee, _, err := estimateDepositsSweepFee(
 			dst.btcChain,
 			len(deposits),
 			perDepositMaxFee,
+			isTaproot,
+			hasMainUtxo,
 		)
 		if err != nil {
 			// A failure here means no sweep proposal is produced this round, so
@@ -525,6 +659,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 		DepositsKeys:         depositsKeys,
 		SweepTxFee:           big.NewInt(fee),
 		DepositsRevealBlocks: depositsRevealBlocks,
+		MainUtxoHash:         mainUtxoHash,
 	}
 
 	taskLogger.Infof("validating the deposit sweep proposal")
@@ -605,6 +740,8 @@ func EstimateDepositsSweepFee(
 			btcChain,
 			depositsCountKey,
 			perDepositMaxFee,
+			false,
+			true,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -630,15 +767,39 @@ func estimateDepositsSweepFee(
 	btcChain bitcoin.Chain,
 	depositsCount int,
 	perDepositMaxFee uint64,
+	isTaproot bool,
+	hasMainUtxo bool,
 ) (int64, int64, error) {
-	transactionSize, err := bitcoin.NewTransactionSizeEstimator().
-		// 1 P2WPKH main UTXO input.
-		AddPublicKeyHashInputs(1, true).
-		// depositsCount P2WSH deposit inputs.
-		AddScriptHashInputs(depositsCount, depositScriptByteSize, true).
-		// 1 P2WPKH output.
-		AddPublicKeyHashOutputs(1, true).
-		VirtualSize()
+	sizeEstimator := bitcoin.NewTransactionSizeEstimator()
+	if isTaproot {
+		taprootOutputScript, err := bitcoin.PayToTaproot([32]byte{})
+		if err != nil {
+			return 0, 0, fmt.Errorf(
+				"cannot construct Taproot output script placeholder: [%v]",
+				err,
+			)
+		}
+
+		inputsCount := depositsCount
+		if hasMainUtxo {
+			inputsCount++
+		}
+
+		for i := 0; i < inputsCount; i++ {
+			sizeEstimator.AddPublicKeyScriptInput(taprootOutputScript)
+		}
+		sizeEstimator.AddOutputScript(taprootOutputScript)
+	} else {
+		sizeEstimator.
+			// 1 P2WPKH main UTXO input.
+			AddPublicKeyHashInputs(1, true).
+			// depositsCount P2WSH deposit inputs.
+			AddScriptHashInputs(depositsCount, depositScriptByteSize, true).
+			// 1 P2WPKH output.
+			AddPublicKeyHashOutputs(1, true)
+	}
+
+	transactionSize, err := sizeEstimator.VirtualSize()
 	if err != nil {
 		return 0, 0, fmt.Errorf("cannot estimate transaction virtual size: [%v]", err)
 	}

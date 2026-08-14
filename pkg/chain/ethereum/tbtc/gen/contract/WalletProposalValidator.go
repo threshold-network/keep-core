@@ -585,4 +585,52 @@ func (wpv *WalletProposalValidator) ValidateRedemptionProposalAtBlock(
 	return result, err
 }
 
+func (wpv *WalletProposalValidator) ValidateTaprootDepositSweepProposal(
+	arg_proposal abi.WalletProposalValidatorDepositSweepProposal,
+	arg_depositsExtraInfo []abi.WalletProposalValidatorTaprootDepositExtraInfo,
+) (bool, error) {
+	result, err := wpv.contract.ValidateTaprootDepositSweepProposal(
+		wpv.callerOptions,
+		arg_proposal,
+		arg_depositsExtraInfo,
+	)
+
+	if err != nil {
+		return result, wpv.errorResolver.ResolveError(
+			err,
+			wpv.callerOptions.From,
+			nil,
+			"validateTaprootDepositSweepProposal",
+			arg_proposal,
+			arg_depositsExtraInfo,
+		)
+	}
+
+	return result, err
+}
+
+func (wpv *WalletProposalValidator) ValidateTaprootDepositSweepProposalAtBlock(
+	arg_proposal abi.WalletProposalValidatorDepositSweepProposal,
+	arg_depositsExtraInfo []abi.WalletProposalValidatorTaprootDepositExtraInfo,
+	blockNumber *big.Int,
+) (bool, error) {
+	var result bool
+
+	err := chainutil.CallAtBlock(
+		wpv.callerOptions.From,
+		blockNumber,
+		nil,
+		wpv.contractABI,
+		wpv.caller,
+		wpv.errorResolver,
+		wpv.contractAddress,
+		"validateTaprootDepositSweepProposal",
+		&result,
+		arg_proposal,
+		arg_depositsExtraInfo,
+	)
+
+	return result, err
+}
+
 // ------ Events -------

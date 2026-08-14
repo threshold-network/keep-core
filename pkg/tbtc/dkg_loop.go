@@ -11,8 +11,8 @@ import (
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
+	"github.com/keep-network/keep-core/pkg/protocol/retry"
 	"github.com/keep-network/keep-core/pkg/tecdsa/dkg"
-	"github.com/keep-network/keep-core/pkg/tecdsa/retry"
 	"golang.org/x/exp/slices"
 )
 
@@ -199,6 +199,7 @@ func (drl *dkgRetryLoop) start(
 			drl.memberIndex,
 			fmt.Sprintf("%v-%v", drl.seed, drl.attemptCounter),
 		)
+		cancelAnnounceCtx()
 		if err != nil {
 			drl.logger.Warnf(
 				"[member:%v] announcement for attempt [%v] "+

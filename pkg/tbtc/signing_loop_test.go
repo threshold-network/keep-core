@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -11,9 +12,8 @@ import (
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"github.com/keep-network/keep-core/pkg/tecdsa/signing"
 )
 
 func TestSigningRetryLoop(t *testing.T) {
@@ -46,11 +46,7 @@ func TestSigningRetryLoop(t *testing.T) {
 	}
 
 	testResult := &signing.Result{
-		Signature: &tecdsa.Signature{
-			R:          big.NewInt(300),
-			S:          big.NewInt(400),
-			RecoveryID: 2,
-		},
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
 	}
 
 	var tests = map[string]struct {
@@ -112,10 +108,11 @@ func TestSigningRetryLoop(t *testing.T) {
 			// excludes 4 members (6 is the honest threshold) from the first
 			// attempt: 3, 7, 8 and 10.
 			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 1,
-				startBlock:             206,
-				timeoutBlock:           236, // start block of the first attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
+				number:                          1,
+				startBlock:                      206,
+				timeoutBlock:                    236, // start block of the first attempt + 30
+				excludedMembersIndexes:          []group.MemberIndex{3, 7, 8, 10},
+				transientlyParkedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
 			},
 			outgoingAnnouncementsCount: 1,
 		},
@@ -231,6 +228,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			outgoingAnnouncementsCount: 2,
 		},
@@ -291,6 +292,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			outgoingAnnouncementsCount: 2,
 		},
@@ -351,6 +356,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			outgoingAnnouncementsCount: 2,
 		},
@@ -396,10 +405,11 @@ func TestSigningRetryLoop(t *testing.T) {
 			// and is the last attempt executed by this member because member
 			// 2 is excluded from the second attempt that produced the signature.
 			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 1,
-				startBlock:             206,
-				timeoutBlock:           236, // start block of the first attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
+				number:                          1,
+				startBlock:                      206,
+				timeoutBlock:                    236, // start block of the first attempt + 30
+				excludedMembersIndexes:          []group.MemberIndex{3, 7, 8, 10},
+				transientlyParkedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
 			},
 			// The second announcement is done at the beginning of the
 			// second attempt for which member 2 is eventually excluded.
@@ -478,6 +488,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			outgoingAnnouncementsCount: 2,
 		},
@@ -587,6 +601,10 @@ func TestSigningRetryLoop(t *testing.T) {
 				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
 				timeoutBlock:           277, // start block of the second attempt + 30
 				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+				// Member 9 was dropped by the surplus trim, not for any fault, so
+				// it is reported as transiently parked; 1, 2 and 5 are genuine
+				// exclusions from the retry algorithm.
+				transientlyParkedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
 			},
 			// just the second announcement, the first one was skipped
 			outgoingAnnouncementsCount: 1,
@@ -607,6 +625,7 @@ func TestSigningRetryLoop(t *testing.T) {
 			retryLoop := newSigningRetryLoop(
 				&testutils.MockLogger{},
 				message,
+				"",
 				200,
 				test.signingGroupMemberIndex,
 				signingGroupOperators,
@@ -717,6 +736,7 @@ func TestSigningRetryLoop_GetCurrentBlockErrorCausesRetry(t *testing.T) {
 	retryLoop := newSigningRetryLoop(
 		&testutils.MockLogger{},
 		message,
+		"",
 		200,
 		1,
 		signingGroupOperators,
@@ -755,6 +775,88 @@ func TestSigningRetryLoop_GetCurrentBlockErrorCausesRetry(t *testing.T) {
 	}
 }
 
+// TestSigningRetryLoop_TerminalErrorAbortsWithoutRetry asserts that a terminal
+// signing failure from the attempt function (signing.ErrTerminalSigningFailure,
+// e.g. multi-seat interactive ROAST orchestration that is not yet member-safe)
+// ABORTS the loop after a single attempt instead of being retried. A retryable
+// error would re-invoke the attempt fn until the context deadline; a terminal one
+// must surface immediately so the outer wallet layer fails closed cleanly.
+func TestSigningRetryLoop_TerminalErrorAbortsWithoutRetry(t *testing.T) {
+	message := big.NewInt(100)
+
+	groupParameters := &GroupParameters{
+		GroupSize:       10,
+		HonestThreshold: 6,
+	}
+
+	signingGroupOperators := chain.Addresses{
+		"address-1", "address-2", "address-8", "address-4",
+		"address-2", "address-6", "address-7", "address-8",
+		"address-9", "address-8",
+	}
+
+	allMembers := make([]group.MemberIndex, 0, len(signingGroupOperators))
+	for i := range signingGroupOperators {
+		allMembers = append(allMembers, group.MemberIndex(i+1))
+	}
+
+	retryLoop := newSigningRetryLoop(
+		&testutils.MockLogger{},
+		message,
+		"",
+		200,
+		1,
+		signingGroupOperators,
+		groupParameters,
+		&mockSigningAnnouncer{
+			outgoingAnnouncements: make(map[string]group.MemberIndex),
+			incomingAnnouncementsFn: func(string) ([]group.MemberIndex, error) {
+				return allMembers, nil
+			},
+		},
+		&mockSigningDoneCheck{
+			waitUntilAllDoneOutcomeFn: func(uint64) (*signing.Result, uint64, error) {
+				panic("should not be reached: a terminal error aborts before the done check")
+			},
+		},
+	)
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+
+	// A wrapped terminal sentinel, exactly as BeginOrchestrationForSession produces
+	// for a multi-seat operator.
+	terminalErr := fmt.Errorf(
+		"%w: synthetic multi-seat orchestration",
+		signing.ErrTerminalSigningFailure,
+	)
+	attemptCalls := 0
+
+	_, err := retryLoop.start(
+		ctx,
+		func(context.Context, uint64) error { return nil },
+		func() (uint64, error) { return 200, nil },
+		func(*signingAttemptParams) (*signing.Result, uint64, error) {
+			attemptCalls++
+			return nil, 0, terminalErr
+		},
+	)
+
+	if !errors.Is(err, signing.ErrTerminalSigningFailure) {
+		t.Errorf(
+			"expected a terminal signing failure to propagate; got [%v]",
+			err,
+		)
+	}
+	if attemptCalls != 1 {
+		t.Errorf(
+			"terminal error must abort after exactly one attempt (no retry); "+
+				"got %d attempt calls",
+			attemptCalls,
+		)
+	}
+}
+
 func TestSigningRetryLoop_WaitForBlockErrorCausesRetry(t *testing.T) {
 	message := big.NewInt(100)
 
@@ -772,6 +874,7 @@ func TestSigningRetryLoop_WaitForBlockErrorCausesRetry(t *testing.T) {
 	retryLoop := newSigningRetryLoop(
 		&testutils.MockLogger{},
 		message,
+		"",
 		200,
 		1,
 		signingGroupOperators,
@@ -825,6 +928,7 @@ func TestSigningRetryLoop_ContextCancelled(t *testing.T) {
 	retryLoop := newSigningRetryLoop(
 		&testutils.MockLogger{},
 		big.NewInt(100),
+		"",
 		200,
 		1,
 		signingGroupOperators,
@@ -877,11 +981,7 @@ func TestSigningRetryLoop_SuccessAfterRetry(t *testing.T) {
 	}
 
 	testResult := &signing.Result{
-		Signature: &tecdsa.Signature{
-			R:          big.NewInt(300),
-			S:          big.NewInt(400),
-			RecoveryID: 2,
-		},
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
 	}
 
 	// Session IDs use fmt.Sprintf("%v-%v", message, attemptCounter).
@@ -890,6 +990,7 @@ func TestSigningRetryLoop_SuccessAfterRetry(t *testing.T) {
 	retryLoop := newSigningRetryLoop(
 		&testutils.MockLogger{},
 		message,
+		"",
 		200,
 		1,
 		signingGroupOperators,
@@ -992,4 +1093,108 @@ func (msdc *mockSigningDoneCheck) signalDone(
 
 func (msdc *mockSigningDoneCheck) waitUntilAllDone(ctx context.Context) (*signing.Result, uint64, error) {
 	return msdc.waitUntilAllDoneOutcomeFn(msdc.currentAttemptNumber)
+}
+
+func TestSigningRetryLoop_AttemptOutcomeReporting(t *testing.T) {
+	message := big.NewInt(100)
+
+	groupParameters := &GroupParameters{
+		GroupSize:       10,
+		HonestThreshold: 6,
+	}
+
+	signingGroupOperators := chain.Addresses{
+		"address-1", "address-2", "address-8", "address-4", "address-2",
+		"address-6", "address-7", "address-8", "address-9", "address-8",
+	}
+
+	signingGroupMembersIndexes := make([]group.MemberIndex, 0)
+	for i := range signingGroupOperators {
+		signingGroupMembersIndexes = append(
+			signingGroupMembersIndexes,
+			group.MemberIndex(i+1),
+		)
+	}
+
+	testResult := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
+	}
+
+	announcer := &mockSigningAnnouncer{
+		outgoingAnnouncements: make(map[string]group.MemberIndex),
+		incomingAnnouncementsFn: func(
+			sessionID string,
+		) ([]group.MemberIndex, error) {
+			return signingGroupMembersIndexes, nil
+		},
+	}
+
+	doneCheck := &mockSigningDoneCheck{
+		waitUntilAllDoneOutcomeFn: func(
+			attemptNumber uint64,
+		) (*signing.Result, uint64, error) {
+			if attemptNumber == 1 {
+				return nil, 0, fmt.Errorf("done check timeout")
+			}
+			return testResult, 250, nil
+		},
+	}
+
+	retryLoop := newSigningRetryLoop(
+		&testutils.MockLogger{},
+		message,
+		"",
+		200,
+		group.MemberIndex(1),
+		signingGroupOperators,
+		groupParameters,
+		announcer,
+		doneCheck,
+	)
+
+	reportedOutcomes := make([]bool, 0)
+	retryLoop.setAttemptOutcomeReporter(func(success bool) {
+		reportedOutcomes = append(reportedOutcomes, success)
+	})
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+
+	result, err := retryLoop.start(
+		ctx,
+		func(context.Context, uint64) error {
+			return nil
+		},
+		func() (uint64, error) {
+			return 200, nil
+		},
+		func(params *signingAttemptParams) (*signing.Result, uint64, error) {
+			// The first attempt's protocol run fails; subsequent ones
+			// succeed. Regardless of whether this member is included in
+			// the second attempt's subset, the attempt outcome must be
+			// reported exactly once per attempt: failure for the first,
+			// success for the second.
+			if params.number == 1 {
+				return nil, 0, fmt.Errorf("protocol failure")
+			}
+			return testResult, 250, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected retry loop error: [%v]", err)
+	}
+	if result == nil {
+		t.Fatal("expected a non-nil retry loop result")
+	}
+
+	expectedOutcomes := []bool{false, true}
+	if !reflect.DeepEqual(expectedOutcomes, reportedOutcomes) {
+		t.Errorf(
+			"unexpected reported attempt outcomes\n"+
+				"expected: [%v]\n"+
+				"actual:   [%v]",
+			expectedOutcomes,
+			reportedOutcomes,
+		)
+	}
 }

@@ -32,6 +32,10 @@ type Chain interface {
 		walletPublicKeyHash [20]byte,
 	) (*tbtc.WalletChainData, error)
 
+	// WalletPublicKeyHashForWalletID resolves the canonical wallet ID to the
+	// wallet public key hash used by Bridge mappings.
+	WalletPublicKeyHashForWalletID(walletID [32]byte) ([20]byte, error)
+
 	// ComputeMainUtxoHash computes the hash of the provided main UTXO
 	// according to the on-chain Bridge rules.
 	ComputeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte
@@ -92,6 +96,13 @@ type Chain interface {
 	PastDepositRevealedEvents(
 		filter *tbtc.DepositRevealedEventFilter,
 	) ([]*tbtc.DepositRevealedEvent, error)
+
+	// PastTaprootDepositRevealedEvents fetches past Taproot deposit reveal
+	// events according to the provided filter or unfiltered if the filter is
+	// nil. Returned events are sorted by block number in ascending order.
+	PastTaprootDepositRevealedEvents(
+		filter *tbtc.DepositRevealedEventFilter,
+	) ([]*tbtc.TaprootDepositRevealedEvent, error)
 
 	// PastRedemptionRequestedEvents fetches past redemption requested events according
 	// to the provided filter or unfiltered if the filter is nil. Returned

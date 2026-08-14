@@ -91,16 +91,24 @@ func newDkgExecutor(
 	scheduler *generator.Scheduler,
 	waitForBlockFn waitForBlockFn,
 ) *dkgExecutor {
-	tecdsaExecutor := dkg.NewExecutor(
-		logger,
-		scheduler,
-		workPersistence,
-		config.PreParamsPoolSize,
-		config.PreParamsGenerationTimeout,
-		config.PreParamsGenerationDelay,
-		config.PreParamsGenerationConcurrency,
-		config.KeyGenerationConcurrency,
-	)
+	var tecdsaExecutor *dkg.Executor
+	if config.PreParamsPoolSize > 0 {
+		tecdsaExecutor = dkg.NewExecutor(
+			logger,
+			scheduler,
+			workPersistence,
+			config.PreParamsPoolSize,
+			config.PreParamsGenerationTimeout,
+			config.PreParamsGenerationDelay,
+			config.PreParamsGenerationConcurrency,
+			config.KeyGenerationConcurrency,
+		)
+	} else {
+		logger.Info(
+			"ECDSA DKG pre-parameters pool is disabled; " +
+				"ECDSA DKG execution will be skipped",
+		)
+	}
 
 	return &dkgExecutor{
 		groupParameters: groupParameters,
@@ -126,6 +134,10 @@ func (de *dkgExecutor) setMetricsRecorder(recorder interface {
 
 // preParamsCount returns the current count of the ECDSA DKG pre-parameters.
 func (de *dkgExecutor) preParamsCount() int {
+	if de.tecdsaExecutor == nil {
+		return 0
+	}
+
 	return de.tecdsaExecutor.PreParamsCount()
 }
 
@@ -144,6 +156,11 @@ func (de *dkgExecutor) executeDkgIfEligible(
 	dkgLogger := logger.With(
 		zap.String("seed", fmt.Sprintf("0x%x", seed)),
 	)
+
+	if de.tecdsaExecutor == nil {
+		dkgLogger.Info("ECDSA DKG execution is disabled")
+		return
+	}
 
 	dkgLogger.Info("checking eligibility for DKG")
 	memberIndexes, groupSelectionResult, err := de.checkEligibility(
@@ -521,11 +538,17 @@ func (de *dkgExecutor) registerSigner(
 		)
 	}
 
+	signerMaterial, err := resolveSignerMaterial(result.PrivateKeyShare)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve signer material: [%w]", err)
+	}
+
 	signer := newSigner(
 		result.PrivateKeyShare.PublicKey(),
 		finalSigningGroupOperators,
 		finalSigningGroupMemberIndex,
 		result.PrivateKeyShare,
+		signerMaterial,
 	)
 
 	err = de.walletRegistry.registerSigner(signer)

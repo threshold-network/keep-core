@@ -48,7 +48,7 @@ func TestMonitorPool_NotRegisteredOperator(t *testing.T) {
 		statusCheckTick,
 		UnconditionalJoinPolicy,
 	)
-	testutils.AssertErrorsSame(t, errOperatorUnknown, err)
+	testutils.AssertErrorsSame(t, ErrOperatorUnknown, err)
 }
 
 func TestMonitorPool_NoStake(t *testing.T) {

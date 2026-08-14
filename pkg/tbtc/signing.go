@@ -2,19 +2,23 @@ package tbtc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/frost"
+	"github.com/keep-network/keep-core/pkg/frost/roast"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"github.com/keep-network/keep-core/pkg/tecdsa/signing"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 )
@@ -39,6 +43,141 @@ const (
 // errSigningExecutorBusy is an error returned when the signing executor
 // cannot execute the requested signature due to an ongoing signing.
 var errSigningExecutorBusy = fmt.Errorf("signing executor is busy")
+
+var bindTaprootTxViaNativeSignerFn = bindTaprootTxViaNativeSigner
+
+func bindTaprootPolicyArtifactForSigning(
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	keyGroupID string,
+	unsignedTx *bitcoin.TransactionBuilder,
+	inputIndex int,
+) (string, error) {
+	if unsignedTx == nil {
+		return "", nil
+	}
+	if keyGroupID == "" {
+		return "", fmt.Errorf(
+			"cannot bind transaction policy without a FROST key-group identifier",
+		)
+	}
+
+	roastSID := roastSessionID(
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		keyGroupID,
+	)
+	if err := bindTaprootTxViaNativeSignerFn(
+		roastSID,
+		unsignedTx,
+		inputIndex,
+		message,
+	); err != nil {
+		return "", err
+	}
+
+	return roastSID, nil
+}
+
+func signingSessionID(
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	attemptNumber uint,
+	keyGroupID string,
+) string {
+	// keyGroupID makes the attempt-specific session id WALLET-unique, like
+	// roastSessionID: it is otherwise derived from message/root/(block) and would
+	// collide across two FROST wallets on one node that reuse a member index and sign
+	// the same message. request.SessionID keys the session-handle registry, so a
+	// collision would let one wallet overwrite the other's in-flight binding. Group-
+	// uniform per wallet, so it stays identical across a wallet's honest nodes.
+	if taprootMerkleRoot == nil {
+		// Hash the key-path branch too: a full-length FROST key group (64/66 hex)
+		// concatenated onto the 64-hex message would push the id past the native
+		// signer's session-id length limit (128). The taproot branch below hashes for
+		// the same reason. "kp-" keeps key-path ids disjoint from the taproot "tr-"; the
+		// attempt number stays a readable suffix.
+		keyPathDigest := sha256.New()
+		keyPathDigest.Write([]byte(message.Text(16)))
+		keyPathDigest.Write([]byte{0})
+		keyPathDigest.Write([]byte(keyGroupID))
+		return fmt.Sprintf("kp-%x-%v", keyPathDigest.Sum(nil), attemptNumber)
+	}
+
+	var startBlockBytes [8]byte
+	binary.BigEndian.PutUint64(startBlockBytes[:], startBlock)
+
+	sessionDigest := sha256.New()
+	sessionDigest.Write([]byte(message.Text(16)))
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(taprootMerkleRoot[:])
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(startBlockBytes[:])
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write([]byte(keyGroupID))
+
+	return fmt.Sprintf("tr-%x-%v", sessionDigest.Sum(nil), attemptNumber)
+}
+
+// roastSessionID is the STABLE per-signing ROAST session id: the signing
+// session key WITHOUT the attempt number, so it is constant across every
+// attempt of one message-signing. RFC-21 Phase 7.3 ROAST orchestration, the
+// transition-record registry, and the participant selector key off it so
+// attempt N+1's selector can find attempt N's transition record; the
+// coarse/legacy path keeps using the attempt-specific signingSessionID for its
+// replay isolation. The "roast-" prefix keeps this id disjoint from any
+// signingSessionID value.
+func roastSessionID(
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	keyGroupID string,
+) string {
+	// keyGroupID makes the stable ROAST session id WALLET-unique. It is derived from
+	// message/root/startBlock -- NOT the wallet -- so on a node controlling two FROST
+	// wallets that reuse the same 1..N member index, two wallets signing the SAME
+	// message at the same start block (both key-path, nil merkle root) would otherwise
+	// collide on the session-keyed ROAST registries (transition record, session-handle,
+	// interactive-engine namespace), letting one wallet overwrite the other's state and
+	// break its ROAST retry. Folding the group-uniform key group in disambiguates them
+	// while staying identical across every honest node of one wallet (all derive the
+	// same key group). Empty for legacy/non-native wallets (which do not drive ROAST).
+	if taprootMerkleRoot == nil {
+		// Hash the key-path branch too: this id is passed to the native signer as the
+		// interactive session id (driveInteractiveRoastSigningIfEnabled ->
+		// NewActiveRoastAttempt -> InteractiveSessionOpen), and a full-length FROST key
+		// group (64/66 hex) concatenated onto the 64-hex message would exceed the
+		// signer's 128-char session-id limit and block signing. The taproot branch below
+		// hashes for the same reason. "roast-kp-" keeps key-path ids disjoint from the
+		// taproot "roast-tr-".
+		var keyPathStartBlock [8]byte
+		binary.BigEndian.PutUint64(keyPathStartBlock[:], startBlock)
+		keyPathDigest := sha256.New()
+		keyPathDigest.Write([]byte(message.Text(16)))
+		keyPathDigest.Write([]byte{0})
+		keyPathDigest.Write(keyPathStartBlock[:])
+		keyPathDigest.Write([]byte{0})
+		keyPathDigest.Write([]byte(keyGroupID))
+		return fmt.Sprintf("roast-kp-%x", keyPathDigest.Sum(nil))
+	}
+
+	var startBlockBytes [8]byte
+	binary.BigEndian.PutUint64(startBlockBytes[:], startBlock)
+
+	sessionDigest := sha256.New()
+	sessionDigest.Write([]byte(message.Text(16)))
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(taprootMerkleRoot[:])
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(startBlockBytes[:])
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write([]byte(keyGroupID))
+
+	return fmt.Sprintf("roast-tr-%x", sessionDigest.Sum(nil))
+}
 
 // signingExecutor is a component responsible for executing signing related to
 // a specific wallet whose part is controlled by this node.
@@ -67,7 +206,20 @@ type signingExecutor struct {
 		SetGauge(name string, value float64)
 		RecordDuration(name string, duration time.Duration)
 	}
+
+	// livenessTracker is optional and feeds the RFC-21 Annex B implied-f
+	// signing-attempt liveness gauges. It is shared across all wallets'
+	// executors of this node (acquired from the metrics recorder).
+	livenessTracker *clientinfo.SigningAttemptLivenessTracker
 }
+
+// signingLivenessTrackerProvider is implemented by metrics recorders that
+// own the process-wide signing-attempt liveness tracker.
+type signingLivenessTrackerProvider interface {
+	SigningAttemptLivenessTracker() *clientinfo.SigningAttemptLivenessTracker
+}
+
+var _ schnorrWalletSigningExecutor = (*signingExecutor)(nil)
 
 func newSigningExecutor(
 	signers []*signer,
@@ -92,6 +244,16 @@ func newSigningExecutor(
 	}
 }
 
+func (se *signingExecutor) usesSchnorrSignatures() bool {
+	for _, signer := range se.signers {
+		if signingMaterialUsesSchnorrSignatures(signer.signingMaterial()) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // signBatch performs the signing process for each message from the given
 // messages batch, one after another. If at least one message cannot be signed,
 // this function returns an error. If all messages were signed successfully,
@@ -102,7 +264,72 @@ func (se *signingExecutor) signBatch(
 	ctx context.Context,
 	messages []*big.Int,
 	startBlock uint64,
-) ([]*tecdsa.Signature, error) {
+) ([]*frost.Signature, error) {
+	return se.signBatchWithTaprootMerkleRoots(ctx, messages, nil, startBlock)
+}
+
+func (se *signingExecutor) signBatchWithTaprootMerkleRoots(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+) ([]*frost.Signature, error) {
+	return se.signBatchWithTaprootPolicy(
+		ctx,
+		messages,
+		taprootMerkleRoots,
+		startBlock,
+		nil,
+	)
+}
+
+// signBatchWithTaprootTransaction binds each input's policy-checked transaction
+// artifact under the exact stable ROAST session used for that input's signing.
+// Batch items after the first derive their start block dynamically, so this
+// binding must happen inside the sequential loop rather than as a wallet-level
+// preflight.
+func (se *signingExecutor) signBatchWithTaprootTransaction(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+	unsignedTx *bitcoin.TransactionBuilder,
+) ([]*frost.Signature, error) {
+	if unsignedTx == nil {
+		return nil, fmt.Errorf("unsigned transaction builder is nil")
+	}
+
+	return se.signBatchWithTaprootPolicy(
+		ctx,
+		messages,
+		taprootMerkleRoots,
+		startBlock,
+		unsignedTx,
+	)
+}
+
+func (se *signingExecutor) signBatchWithTaprootPolicy(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+	unsignedTx *bitcoin.TransactionBuilder,
+) ([]*frost.Signature, error) {
+	if taprootMerkleRoots != nil && len(taprootMerkleRoots) != len(messages) {
+		return nil, fmt.Errorf(
+			"taproot merkle roots count [%v] does not match messages count [%v]",
+			len(taprootMerkleRoots),
+			len(messages),
+		)
+	}
+	if unsignedTx != nil && len(unsignedTx.UnsignedTransaction().Inputs) != len(messages) {
+		return nil, fmt.Errorf(
+			"unsigned transaction input count [%v] does not match messages count [%v]",
+			len(unsignedTx.UnsignedTransaction().Inputs),
+			len(messages),
+		)
+	}
+
 	wallet := se.wallet()
 
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
@@ -139,8 +366,9 @@ func (se *signingExecutor) signBatch(
 	)
 
 	signingStartBlock := startBlock // start block for the first signing
-	signatures := make([]*tecdsa.Signature, len(messages))
+	signatures := make([]*frost.Signature, len(messages))
 	endBlocks := make([]uint64, len(messages))
+	roastKeyGroupID := roastSelectorKeyGroupID(se.signers[0])
 
 	for i, message := range messages {
 		signingBatchMessageLogger := signingBatchLogger.With(
@@ -154,7 +382,34 @@ func (se *signingExecutor) signBatch(
 			signingStartBlock = endBlocks[i-1] + signingBatchInterludeBlocks
 		}
 
-		signature, _, endBlock, err := se.sign(ctx, message, signingStartBlock)
+		var taprootMerkleRoot *[32]byte
+		if taprootMerkleRoots != nil {
+			taprootMerkleRoot = taprootMerkleRoots[i]
+		}
+
+		policyBoundRoastSID, err := bindTaprootPolicyArtifactForSigning(
+			message,
+			taprootMerkleRoot,
+			signingStartBlock,
+			roastKeyGroupID,
+			unsignedTx,
+			i,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot bind input [%d] to the native signer policy artifact: [%w]",
+				i,
+				err,
+			)
+		}
+
+		signature, _, endBlock, err := se.signWithTaprootMerkleRootForSession(
+			ctx,
+			message,
+			taprootMerkleRoot,
+			signingStartBlock,
+			policyBoundRoastSID,
+		)
 		if err != nil {
 			// Error metrics are recorded in the sign() method for all error paths.
 			return nil, err
@@ -184,7 +439,75 @@ func (se *signingExecutor) sign(
 	ctx context.Context,
 	message *big.Int,
 	startBlock uint64,
-) (*tecdsa.Signature, *signingActivityReport, uint64, error) {
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	return se.signWithTaprootMerkleRoot(ctx, message, nil, startBlock)
+}
+
+// signHeartbeat computes the canonical SHA256d heartbeat message exactly as the
+// generic path historically did, while retaining the raw 16-byte proposal as a
+// typed authorization intent for the native signing-policy firewall.
+func (se *signingExecutor) signHeartbeat(
+	ctx context.Context,
+	heartbeatMessage [16]byte,
+	startBlock uint64,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	messageToSign := heartbeatSigningMessage(heartbeatMessage)
+
+	return se.signWithTaprootMerkleRootForSessionAndIntent(
+		ctx,
+		messageToSign,
+		nil,
+		startBlock,
+		"",
+		signing.NewHeartbeatSigningIntent(heartbeatMessage),
+	)
+}
+
+func heartbeatSigningMessage(heartbeatMessage [16]byte) *big.Int {
+	messageBytes := bitcoin.ComputeHash(heartbeatMessage[:])
+	return new(big.Int).SetBytes(messageBytes[:])
+}
+
+func (se *signingExecutor) signWithTaprootMerkleRoot(
+	ctx context.Context,
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	return se.signWithTaprootMerkleRootForSession(
+		ctx,
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		"",
+	)
+}
+
+func (se *signingExecutor) signWithTaprootMerkleRootForSession(
+	ctx context.Context,
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	policyBoundRoastSessionID string,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	return se.signWithTaprootMerkleRootForSessionAndIntent(
+		ctx,
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		policyBoundRoastSessionID,
+		nil,
+	)
+}
+
+func (se *signingExecutor) signWithTaprootMerkleRootForSessionAndIntent(
+	ctx context.Context,
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	policyBoundRoastSessionID string,
+	signingIntent *signing.SigningIntent,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
 	if lockAcquired := se.lock.TryAcquire(1); !lockAcquired {
 		// Record failure metrics for lock acquisition failure
 		if se.metricsRecorder != nil {
@@ -223,7 +546,7 @@ func (se *signingExecutor) sign(
 	)
 
 	type signingOutcome struct {
-		signature      *tecdsa.Signature
+		signature      *frost.Signature
 		activityReport *signingActivityReport
 		endBlock       uint64
 	}
@@ -231,6 +554,22 @@ func (se *signingExecutor) sign(
 	wg := sync.WaitGroup{}
 	wg.Add(len(se.signers))
 	signingOutcomeChan := make(chan *signingOutcome, len(se.signers))
+
+	// roastKeyGroupID is THIS wallet's FROST key-group handle (empty for
+	// legacy/non-native/underivable). All of the executor's signers belong to one
+	// wallet, so any seat yields it. It both scopes ROAST-vs-legacy activation (per
+	// seat, below) AND makes roastSID wallet-unique so a sibling wallet reusing a
+	// member index cannot collide on the session-keyed ROAST registries.
+	roastKeyGroupID := roastSelectorKeyGroupID(se.signers[0])
+
+	// roastSID is the STABLE ROAST session id (no attempt number) shared by every
+	// signer's retry loop and signing request, so the ROAST participant selector
+	// and transition-record registry are keyed consistently across this signing's
+	// attempts. Computed once; constant across signers and attempts.
+	roastSID := policyBoundRoastSessionID
+	if roastSID == "" {
+		roastSID = roastSessionID(message, taprootMerkleRoot, startBlock, roastKeyGroupID)
+	}
 
 	for _, currentSigner := range se.signers {
 		go func(signer *signer) {
@@ -247,6 +586,7 @@ func (se *signingExecutor) sign(
 
 			doneCheck := newSigningDoneCheck(
 				se.groupParameters.GroupSize,
+				se.groupParameters.HonestThreshold,
 				se.broadcastChannel,
 				se.membershipValidator,
 			)
@@ -254,6 +594,7 @@ func (se *signingExecutor) sign(
 			retryLoop := newSigningRetryLoop(
 				signingLogger,
 				message,
+				roastSID,
 				startBlock,
 				signer.signingGroupMemberIndex,
 				wallet.signingGroupOperators,
@@ -261,6 +602,16 @@ func (se *signingExecutor) sign(
 				announcer,
 				doneCheck,
 			)
+
+			// Every local signer of this wallet observes the same
+			// network-wide attempts, so exactly one of them reports
+			// outcomes to the liveness tracker to avoid multiplying
+			// observations of a single attempt.
+			if signer == se.signers[0] && se.livenessTracker != nil {
+				retryLoop.setAttemptOutcomeReporter(
+					se.livenessTracker.RecordAttemptOutcome,
+				)
+			}
 
 			// Set up the loop timeout signal. This context is associated with
 			// all attempts and gets canceled in three situations:
@@ -280,6 +631,40 @@ func (se *signingExecutor) sign(
 				se.waitForBlockFn,
 			)
 
+			// Scope ROAST-vs-legacy selection activation to THIS wallet's key group so
+			// a wallet whose ROAST registration was skipped (non-native/malformed
+			// material) keeps falling back to legacy even when a sibling wallet on this
+			// node is ROAST-active. The same handle also made roastSID wallet-unique
+			// above; reuse it so selection scoping and session scoping never disagree.
+			retryLoop.setRoastKeyGroupID(roastKeyGroupID)
+
+			// RFC-21 Phase 7.3 PR2b-1b: install the per-signer ROAST transition
+			// controller, scoped to loopCtx (the session lifetime). It observes
+			// every attempt so this seat can verify the attempt's transition bundle
+			// and run NextAttempt for participant selection. nil in builds/
+			// deployments without ROAST retry, in which case the loop skips all
+			// transition steps. The request template carries the static signing
+			// material; the controller stamps each attempt's metadata itself.
+			retryLoop.setTransitionController(newRoastTransitionController(
+				loopCtx,
+				signingLogger,
+				&signing.Request{
+					Message:           message,
+					RoastSessionID:    roastSID,
+					SigningIntent:     signingIntent,
+					MemberIndex:       signer.signingGroupMemberIndex,
+					SignerMaterial:    signer.signingMaterial(),
+					TaprootMerkleRoot: taprootMerkleRoot,
+					GroupSize:         wallet.groupSize(),
+					DishonestThreshold: wallet.groupDishonestThreshold(
+						se.groupParameters.HonestThreshold,
+					),
+					Channel:             se.broadcastChannel,
+					MembershipValidator: se.membershipValidator,
+				},
+				se.waitForBlockFn,
+			))
+
 			loopResult, err := retryLoop.start(
 				loopCtx,
 				se.waitForBlockFn,
@@ -291,12 +676,47 @@ func (se *signingExecutor) sign(
 						zap.Uint64("attemptTimeoutBlock", attempt.timeoutBlock),
 					)
 
+					includedMembersIndexes := attemptIncludedMembersIndexes(
+						wallet.groupSize(),
+						attempt.excludedMembersIndexes,
+					)
+
+					coordinatorMemberIndex, err := roast.SelectCoordinator(
+						includedMembersIndexes,
+						signingAttemptSeed(message),
+						attempt.number,
+					)
+					if err != nil {
+						return nil, 0, fmt.Errorf(
+							"cannot select signing coordinator for attempt [%v]: [%w]",
+							attempt.number,
+							err,
+						)
+					}
+
+					// RFC-21 Phase 7.3 PR2b-1b: attempt.number is the committed roast
+					// attempt number under active ROAST retry (set by the loop), so the
+					// coordinator election, session id, and this AttemptContext all key
+					// off the committed identity -- matching the observe/transition
+					// context. TransientlyParkedMembersIndexes is carried through so the
+					// active context's parking is byte-identical to the observe context's
+					// (BuildAttemptContextFromRequest splits Excluded into permanent +
+					// parked from it).
+					attemptInfo := &signing.Attempt{
+						Number:                          attempt.number,
+						CoordinatorMemberIndex:          coordinatorMemberIndex,
+						IncludedMembersIndexes:          includedMembersIndexes,
+						ExcludedMembersIndexes:          attempt.excludedMembersIndexes,
+						TransientlyParkedMembersIndexes: attempt.transientlyParkedMembersIndexes,
+					}
+
 					signingAttemptLogger.Infof(
 						"[member:%v] starting signing protocol "+
-							"with [%v] group members (excluded: [%v])",
+							"with [%v] group members (coordinator: [%v], excluded: [%v])",
 						signer.signingGroupMemberIndex,
-						wallet.groupSize()-len(attempt.excludedMembersIndexes),
-						attempt.excludedMembersIndexes,
+						len(includedMembersIndexes),
+						coordinatorMemberIndex,
+						attemptInfo.ExcludedMembersIndexes,
 					)
 
 					// Set up the attempt timeout signal.
@@ -313,26 +733,34 @@ func (se *signingExecutor) sign(
 						se.waitForBlockFn,
 					)
 
-					sessionID := fmt.Sprintf(
-						"%v-%v",
-						message.Text(16),
+					sessionID := signingSessionID(
+						message,
+						taprootMerkleRoot,
+						startBlock,
 						attempt.number,
+						roastKeyGroupID,
 					)
 
-					result, err := signing.Execute(
+					result, err := signing.ExecuteRequest(
 						attemptCtx,
 						signingAttemptLogger,
-						message,
-						sessionID,
-						signer.signingGroupMemberIndex,
-						signer.privateKeyShare,
-						wallet.groupSize(),
-						wallet.groupDishonestThreshold(
-							se.groupParameters.HonestThreshold,
-						),
-						attempt.excludedMembersIndexes,
-						se.broadcastChannel,
-						se.membershipValidator,
+						&signing.Request{
+							Message:           message,
+							SessionID:         sessionID,
+							RoastSessionID:    roastSID,
+							SigningIntent:     signingIntent,
+							MemberIndex:       signer.signingGroupMemberIndex,
+							SignerMaterial:    signer.signingMaterial(),
+							PrivateKeyShare:   signer.privateKeyShare,
+							TaprootMerkleRoot: taprootMerkleRoot,
+							GroupSize:         wallet.groupSize(),
+							DishonestThreshold: wallet.groupDishonestThreshold(
+								se.groupParameters.HonestThreshold,
+							),
+							Channel:             se.broadcastChannel,
+							MembershipValidator: se.membershipValidator,
+							Attempt:             attemptInfo,
+						},
 					)
 					if err != nil {
 						return nil, 0, err
@@ -437,6 +865,26 @@ func (se *signingExecutor) wallet() wallet {
 	return se.signers[0].wallet
 }
 
+func attemptIncludedMembersIndexes(
+	groupSize int,
+	excludedMembersIndexes []group.MemberIndex,
+) []group.MemberIndex {
+	excludedMembersIndexesSet := make(map[group.MemberIndex]bool)
+	for _, excludedMemberIndex := range excludedMembersIndexes {
+		excludedMembersIndexesSet[excludedMemberIndex] = true
+	}
+
+	includedMembersIndexes := make([]group.MemberIndex, 0)
+	for i := 0; i < groupSize; i++ {
+		memberIndex := group.MemberIndex(i + 1)
+		if !excludedMembersIndexesSet[memberIndex] {
+			includedMembersIndexes = append(includedMembersIndexes, memberIndex)
+		}
+	}
+
+	return includedMembersIndexes
+}
+
 // setMetricsRecorder sets the metrics recorder for the signing executor.
 func (se *signingExecutor) setMetricsRecorder(recorder interface {
 	IncrementCounter(name string, value float64)
@@ -444,4 +892,11 @@ func (se *signingExecutor) setMetricsRecorder(recorder interface {
 	RecordDuration(name string, duration time.Duration)
 }) {
 	se.metricsRecorder = recorder
+
+	// Recorders owning the process-wide signing-attempt liveness tracker
+	// (RFC-21 Annex B implied-f alerting) share it with this executor;
+	// no-op recorders simply leave the tracker disabled.
+	if provider, ok := recorder.(signingLivenessTrackerProvider); ok {
+		se.livenessTracker = provider.SigningAttemptLivenessTracker()
+	}
 }

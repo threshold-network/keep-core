@@ -1,0 +1,171 @@
+//go:build frost_native
+
+package signing
+
+import "fmt"
+
+// NativeTBTCSignerDKGResult captures DKG result metadata returned by RunDKG.
+type NativeTBTCSignerDKGResult struct {
+	SessionID        string `json:"sessionID"`
+	KeyGroup         string `json:"keyGroup"`
+	ParticipantCount uint16 `json:"participantCount"`
+	Threshold        uint16 `json:"threshold"`
+	CreatedAtUnix    uint64 `json:"createdAtUnix"`
+}
+
+// NativeTBTCSignerTxInput describes an unsigned transaction input consumed by
+// BuildTaprootTx.
+type NativeTBTCSignerTxInput struct {
+	TxIDHex         string `json:"txIDHex"`
+	Vout            uint32 `json:"vout"`
+	ValueSats       uint64 `json:"valueSats"`
+	ScriptPubKeyHex string `json:"scriptPubKeyHex"`
+}
+
+// NativeTBTCSignerTxOutput describes an unsigned transaction output consumed
+// by BuildTaprootTx.
+type NativeTBTCSignerTxOutput struct {
+	ScriptPubKeyHex string `json:"scriptPubKeyHex"`
+	ValueSats       uint64 `json:"valueSats"`
+}
+
+// NativeTBTCSignerTxResult captures unsigned transaction metadata returned by
+// BuildTaprootTx.
+type NativeTBTCSignerTxResult struct {
+	SessionID                   string   `json:"sessionID"`
+	TxHex                       string   `json:"txHex"`
+	TaprootKeySpendSighashesHex []string `json:"taprootKeySpendSighashesHex"`
+}
+
+// NativeShareVerificationVerdict is the typed result of a single-share FROST
+// re-verification (frost_tbtc_verify_signature_share). It mirrors the engine's
+// tri-state verdict.
+//
+// Indeterminate is deliberately the ZERO value: the boundary between blame
+// (Invalid) and don't-blame is security-critical, so an unset value, a decode
+// failure, or an FFI-transport error all fail closed against false blame. A
+// verdict is only meaningful when the accompanying error is nil.
+type NativeShareVerificationVerdict int
+
+const (
+	// NativeShareVerdictIndeterminate: verification could not be completed for a
+	// reason that is not the member's fault (or could not be obtained at all).
+	// Fail closed against blame. Zero value.
+	NativeShareVerdictIndeterminate NativeShareVerificationVerdict = iota
+	// NativeShareVerdictValid: the share is a valid FROST signature share for the
+	// (tweaked) package. Not blamable.
+	NativeShareVerdictValid
+	// NativeShareVerdictInvalid: the share is member-attributable garbage -
+	// mathematically invalid, or undecodable member-signed bytes. Blamable.
+	NativeShareVerdictInvalid
+)
+
+// NativeInteractiveAttemptContext is the RFC-21 attempt context an interactive
+// signing session is bound to. It mirrors the engine's AttemptContext: the
+// orchestrator derives it from the wallet/session state (never from a peer
+// message) and passes it on InteractiveSessionOpen.
+type NativeInteractiveAttemptContext struct {
+	// AttemptNumber is the RFC-21 ZERO-based attempt ordinal (attempt 0 is the
+	// first), matching attempt.AttemptContext. The bridge converts it to the
+	// engine's ONE-based wire attempt_number (which rejects 0) on the way out, so
+	// callers pass the natural attempt.AttemptContext value unchanged.
+	AttemptNumber                   uint32
+	CoordinatorIdentifier           uint16
+	IncludedParticipants            []uint16
+	IncludedParticipantsFingerprint string
+	AttemptID                       string
+}
+
+// NativeInteractiveSessionOpenResult is the result of InteractiveSessionOpen:
+// the engine's canonical attempt id for the opened (or idempotently re-opened)
+// attempt.
+type NativeInteractiveSessionOpenResult struct {
+	SessionID  string
+	AttemptID  string
+	Idempotent bool
+}
+
+// NativeInteractiveSessionAbortResult is the result of InteractiveSessionAbort.
+// Aborted is false when there was no live attempt to abort.
+type NativeInteractiveSessionAbortResult struct {
+	SessionID string
+	Aborted   bool
+}
+
+// NativeDeriveInteractiveAttemptContextResult is the result of
+// DeriveInteractiveAttemptContext: the canonical attempt context the host passes
+// to InteractiveSessionOpen (AttemptNumber is the RFC-21 ZERO-based ordinal,
+// converted back from the engine's 1-based wire value), plus one FROST
+// identifier per included participant in canonical (ascending) order.
+type NativeDeriveInteractiveAttemptContextResult struct {
+	AttemptContext   NativeInteractiveAttemptContext
+	FrostIdentifiers []NativeFROSTParticipantIdentifier
+}
+
+// NativeFROSTParticipantIdentifier pairs a Go member identifier with the
+// engine's canonical FROST identifier string (the key-package encoding the
+// signing-package and aggregate paths require), so the host never re-implements
+// that serialization.
+type NativeFROSTParticipantIdentifier struct {
+	ParticipantIdentifier uint16
+	FrostIdentifier       string
+}
+
+// NativeTBTCSignerEngine executes session-keyed tbtc-signer operations for the
+// go-forward (interactive / distributed-DKG) paths. The transitional coarse
+// signing round methods (RunDKG / StartSignRound / FinalizeSignRound) and the
+// dealer-seeded DKG helper have been removed with the coarse-FROST path.
+type NativeTBTCSignerEngine interface {
+	BuildTaprootTx(
+		sessionID string,
+		inputs []NativeTBTCSignerTxInput,
+		outputs []NativeTBTCSignerTxOutput,
+		scriptTreeHex *string,
+	) (*NativeTBTCSignerTxResult, error)
+	VerifySignatureShare(
+		sessionID string,
+		signingPackage []byte,
+		signatureShare []byte,
+		memberIdentifier uint16,
+		taprootMerkleRoot *[32]byte,
+	) (NativeShareVerificationVerdict, error)
+}
+
+var nativeTBTCSignerEngine NativeTBTCSignerEngine
+
+// RegisterNativeTBTCSignerEngine registers the coarse tbtc-signer engine used
+// by frost_tbtc_signer builds.
+func RegisterNativeTBTCSignerEngine(engine NativeTBTCSignerEngine) error {
+	if engine == nil {
+		return fmt.Errorf("native tbtc-signer engine is nil")
+	}
+
+	executionBackendMutex.Lock()
+	defer executionBackendMutex.Unlock()
+
+	nativeTBTCSignerEngine = engine
+
+	return nil
+}
+
+// UnregisterNativeTBTCSignerEngine clears coarse tbtc-signer engine
+// registration.
+func UnregisterNativeTBTCSignerEngine() {
+	executionBackendMutex.Lock()
+	defer executionBackendMutex.Unlock()
+
+	nativeTBTCSignerEngine = nil
+}
+
+// CurrentNativeTBTCSignerEngine returns the registered coarse tbtc-signer
+// engine.
+func CurrentNativeTBTCSignerEngine() NativeTBTCSignerEngine {
+	return currentNativeTBTCSignerEngine()
+}
+
+func currentNativeTBTCSignerEngine() NativeTBTCSignerEngine {
+	executionBackendMutex.RLock()
+	defer executionBackendMutex.RUnlock()
+
+	return nativeTBTCSignerEngine
+}

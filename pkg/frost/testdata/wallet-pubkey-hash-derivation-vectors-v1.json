@@ -1,0 +1,71 @@
+{
+  "name": "wallet-pubkey-hash-derivation-vectors",
+  "version": "v1",
+  "description": "Cross-repo test vectors for HASH160-based wallet pubkey hash derivation. Both the tbtc bridge contracts (tlabs-xyz/tbtc) and the keep-core FROST protocol (threshold-network/keep-core) must derive the same 20-byte alias from the same input. Drift between the two derivations silently breaks the bridge-protocol identity contract for any wallet whose canonical identity is established cross-repo. This fixture is the tripwire: identical JSON is checked into both repos; each side has a test that reads it and asserts its own derivation function reproduces the expected output. If the two sides diverge, at least one repo's test fails.",
+  "ecdsa_legacy": [
+    {
+      "name": "secp256k1 generator point (compressed, even y)",
+      "input": {
+        "compressedPubKey": "0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+      },
+      "expected": {
+        "walletPubKeyHash": "0x751e76e8199196d454941c45d1b3a323f1433bd6"
+      },
+      "note": "Bitcoin's classic generator-point compressed pubkey, well-known HASH160. Corresponds to mainnet address 1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2."
+    },
+    {
+      "name": "Near-zero scalar pubkey (compressed, even y)",
+      "input": {
+        "compressedPubKey": "0x02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+      },
+      "expected": {
+        "walletPubKeyHash": "0x06afd46bcdfd22ef94ac122aa11f241244a37ecc"
+      }
+    },
+    {
+      "name": "tBTC fixture pubkey (matches contracts/tbtc-v2/test/data/ecdsa.ts)",
+      "input": {
+        "compressedPubKey": "0x0250863ad64a87ae8a2fe83c1af1a8403cb53f53e486d8511dad8a04887e5b2352"
+      },
+      "expected": {
+        "walletPubKeyHash": "0xf54a5851e9372b87810a8e60cdd2e7cfd80b6e31"
+      },
+      "note": "Cross-validates against the existing pubKeyHash160 constant in the tBTC ECDSA test fixture data, ensuring this vector matches what the tBTC test suite already pins."
+    }
+  ],
+  "frost_p2tr": [
+    {
+      "name": "Representative FROST x-only output key",
+      "input": {
+        "xOnlyOutputKey": "0xb1de1afa17e1cbb20d8a4f8e54f8a55fbf5c8d2da9e1c6c4d1f0c7b3a2e5d4c8"
+      },
+      "expected": {
+        "walletPubKeyHash": "0xac756e3ad02acf580218a3ba2232b081906be776"
+      },
+      "note": "The high 12 bytes are non-zero, matching the native-shape constraint required by the FROST wallet registration entry point (see PR #431). The expected pubKeyHash is HASH160(0x02 || xOnlyOutputKey)."
+    },
+    {
+      "name": "All-ones x-only key (regression case)",
+      "input": {
+        "xOnlyOutputKey": "0x0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      "expected": {
+        "walletPubKeyHash": "0x9b596d772a3bfe0335f36c38357f026221212c90"
+      }
+    },
+    {
+      "name": "All-max x-only key (boundary case)",
+      "input": {
+        "xOnlyOutputKey": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "expected": {
+        "walletPubKeyHash": "0x2914980c04dec23ab03cfcd610adf39d62d7c5fb"
+      }
+    }
+  ],
+  "drift_check": {
+    "tbtc_path": "docs/test-vectors/wallet-pubkey-hash-derivation-vectors-v1.json",
+    "keep_core_path": "pkg/frost/testdata/wallet-pubkey-hash-derivation-vectors-v1.json",
+    "rule": "The byte-identical JSON file must exist at both paths. A future CI check should compare file hashes between repos; for now, the per-repo tests catch derivation drift even if the JSON itself drifts (the harder failure mode is silently identical JSON with different implementations underneath)."
+  }
+}

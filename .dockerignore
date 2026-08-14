@@ -29,6 +29,11 @@ token-tracker/
 **/gen/**/*.go
 !**/gen/gen.go
 !**/gen/cmd/cmd.go
+!pkg/chain/ethereum/frost/gen/abi/*.go
+!pkg/chain/ethereum/frost/gen/validatorabi/*.go
+!pkg/chain/ethereum/tbtc/gen/abi/*.go
+!pkg/chain/ethereum/tbtc/gen/contract/*.go
+!pkg/chain/ethereum/tbtc/gen/cmd/*.go
 
 # Contract addresses.
 # We do not want to overwrite extracted contract addresses with empty content while

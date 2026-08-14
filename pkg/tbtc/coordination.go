@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -209,6 +210,7 @@ func (cf *coordinationFault) String() string {
 // CoordinationProposalRequest represents a request for a coordination proposal.
 type CoordinationProposalRequest struct {
 	WalletPublicKeyHash [20]byte
+	WalletPublicKey     *ecdsa.PublicKey
 	WalletOperators     []chain.Address
 	ExecutingOperator   chain.Address
 	ActionsChecklist    []WalletActionType
@@ -655,6 +657,7 @@ func (ce *coordinationExecutor) executeLeaderRoutine(
 	proposal, err := ce.generateProposal(
 		&CoordinationProposalRequest{
 			WalletPublicKeyHash: walletPublicKeyHash,
+			WalletPublicKey:     ce.coordinatedWallet.publicKey,
 			WalletOperators:     ce.coordinatedWallet.signingGroupOperators,
 			ExecutingOperator:   ce.operatorAddress,
 			ActionsChecklist:    actionsChecklist,
