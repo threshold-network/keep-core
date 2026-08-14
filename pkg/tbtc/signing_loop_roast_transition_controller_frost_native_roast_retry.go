@@ -16,7 +16,7 @@ import (
 type roastTransitionExchange interface {
 	BroadcastForcedSnapshot(attemptHash [32]byte)
 	AggregateAndBroadcast(attemptHash [32]byte)
-	HasLostSync() bool
+	ConsumeLostSync() bool
 }
 
 // roastTransitionControllerImpl is the active (frost_native && frost_roast_retry)
@@ -210,8 +210,8 @@ func (c *roastTransitionControllerImpl) OnAttemptSucceeded() {
 	)
 }
 
-func (c *roastTransitionControllerImpl) HasLostSync() bool {
+func (c *roastTransitionControllerImpl) ConsumeLostSync() bool {
 	// nil when ROAST retry is inactive (the controller only observes): never lost
 	// sync, since no listener runs to receive a peer's transition.
-	return c.exchange != nil && c.exchange.HasLostSync()
+	return c.exchange != nil && c.exchange.ConsumeLostSync()
 }

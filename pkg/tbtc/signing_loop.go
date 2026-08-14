@@ -409,16 +409,27 @@ func (srl *signingRetryLoop) start(
 		// RFC-21 Phase 7.3 PR2b-1b: if this seat fell behind the group's committed
 		// ROAST attempt chain -- its listener received a transition for an attempt
 		// it never observed because it skipped a window peers committed -- selecting
-		// now would produce a divergent included set (the fracture class). Fail
-		// closed before selection; the outer layer retries the whole signing from a
-		// fresh election. The check is deterministic per seat (a nil controller or
-		// inactive ROAST is never lost-sync).
-		if srl.transitionController != nil && srl.transitionController.HasLostSync() {
-			return nil, fmt.Errorf(
-				"cannot select members for attempt [%v]: lost ROAST sync "+
-					"(received a transition for an unobserved attempt); fail closed",
+		// now would produce a divergent included set (the fracture class). Skip this
+		// attempt rather than select from a stale position.
+		//
+		// Scoped to one attempt, not the session: ConsumeLostSync clears the marker
+		// as it reads it. A seat that is genuinely behind keeps receiving such
+		// bundles and keeps skipping until it catches up, which is self-correcting.
+		// A seat fed a single forged bundle loses one attempt. Aborting the whole
+		// signing action here would let any authenticated member end a session with
+		// one unverifiable message, since the triggering bundle cannot be verified
+		// without a local observe handle this seat never created.
+		if srl.transitionController != nil &&
+			srl.transitionController.ConsumeLostSync() {
+			srl.logger.Warnf(
+				"[member:%v] skipping attempt [%v]: received a transition for an "+
+					"unobserved attempt, so this seat is behind the group's "+
+					"committed ROAST attempt chain; moving to the next attempt",
+				srl.signingGroupMemberIndex,
 				srl.attemptCounter,
 			)
+			srl.reportAttemptOutcome(false)
+			continue
 		}
 
 		includedMembersIndexes, excludedMembersIndexes, transientlyParkedMembersIndexes, err := srl.performMembersSelection(

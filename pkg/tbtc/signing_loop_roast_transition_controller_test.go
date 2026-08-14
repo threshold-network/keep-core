@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"strings"
 	"testing"
 	"time"
 
@@ -34,8 +33,8 @@ type fakeTransitionController struct {
 	calls          []observedAttemptCall
 	failedCalls    []failedAttemptCall
 	succeededCalls int
-	// lostSync is returned by HasLostSync; a test sets it to drive the loop's
-	// fail-closed-before-selection path.
+	// lostSync is consumed by ConsumeLostSync; a test sets it to drive the loop's
+	// skip-attempt-before-selection path.
 	lostSync bool
 }
 
@@ -67,8 +66,13 @@ func (f *fakeTransitionController) OnAttemptSucceeded() {
 	f.succeededCalls++
 }
 
-func (f *fakeTransitionController) HasLostSync() bool {
-	return f.lostSync
+func (f *fakeTransitionController) ConsumeLostSync() bool {
+	if !f.lostSync {
+		return false
+	}
+	f.lostSync = false
+
+	return true
 }
 
 func newObserveTestRetryLoop(
@@ -420,13 +424,15 @@ func TestSigningRetryLoop_DoneCheckFailureAfterSuccessDoesNotSignalFailure(t *te
 	}
 }
 
-// TestSigningRetryLoop_LostSyncFailsClosedBeforeSelection asserts the loop fails
-// closed -- before selection and before observing -- when the controller reports
+// TestSigningRetryLoop_LostSyncSkipsOneAttempt asserts the loop skips a single
+// attempt -- before selection and before observing -- when the controller reports
 // lost ROAST sync (its listener received a transition for an attempt this seat
-// never observed). Selecting from a stale position would diverge from peers (the
-// fracture class), so the loop terminates and the outer layer retries the whole
-// signing.
-func TestSigningRetryLoop_LostSyncFailsClosedBeforeSelection(t *testing.T) {
+// never observed), then carries on. Selecting from a stale position would diverge
+// from peers (the fracture class), so the attempt must be abandoned; but the
+// triggering bundle is unverifiable on arrival, so any authenticated member can
+// produce one. Aborting the session here would hand a single unverifiable message
+// a session kill.
+func TestSigningRetryLoop_LostSyncSkipsOneAttempt(t *testing.T) {
 	testResult := &signing.Result{
 		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
 	}
@@ -447,7 +453,7 @@ func TestSigningRetryLoop_LostSyncFailsClosedBeforeSelection(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := retryLoop.start(
+	result, err := retryLoop.start(
 		ctx,
 		func(context.Context, uint64) error { return nil },
 		func() (uint64, error) { return 200, nil },
@@ -455,14 +461,29 @@ func TestSigningRetryLoop_LostSyncFailsClosedBeforeSelection(t *testing.T) {
 			return testResult, 215, nil
 		},
 	)
-	if err == nil {
-		t.Fatal("expected a fail-closed error on lost ROAST sync")
+	// The session must survive: one unobserved-attempt bundle costs one attempt.
+	if err != nil {
+		t.Fatalf("lost sync must not abort the signing session, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "lost ROAST sync") {
-		t.Fatalf("expected a lost-sync fail-closed error, got %v", err)
+	if result == nil {
+		t.Fatal("expected the attempt after the skipped one to produce a result")
 	}
-	// Fail-closed happens BEFORE selection/observe, so no attempt is observed.
-	if len(controller.calls) != 0 {
-		t.Fatalf("lost sync must fail closed before observing any attempt, got %d", len(controller.calls))
+	// Two announcement rounds ran (the announcement phase precedes the lost-sync
+	// check, and each attempt announces under its own session id), proving the first
+	// attempt was reached and then skipped rather than never attempted.
+	if len(announcer.outgoingAnnouncements) != 2 {
+		t.Fatalf(
+			"expected 2 announcement rounds (one skipped attempt, one committed), got %d",
+			len(announcer.outgoingAnnouncements),
+		)
+	}
+	// The skip happens BEFORE selection/observe, so only the second attempt is
+	// observed. Observing the skipped attempt would put a stale record on the
+	// transition chain.
+	if len(controller.calls) != 1 {
+		t.Fatalf(
+			"expected exactly 1 observed attempt (the skipped one must not be observed), got %d",
+			len(controller.calls),
+		)
 	}
 }

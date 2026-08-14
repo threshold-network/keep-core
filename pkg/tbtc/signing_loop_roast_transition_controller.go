@@ -45,11 +45,17 @@ type roastTransitionController interface {
 	// failure then fails closed (no fresh record) instead of consuming a dishonest
 	// failure transition. Best-effort.
 	OnAttemptSucceeded()
-	// HasLostSync reports whether this seat fell behind the group's committed ROAST
-	// attempt chain -- it received a transition bundle for an attempt it never
-	// observed (it skipped a window peers committed). The retry loop checks it
-	// before selection and fails closed when true, since selecting from a stale
-	// position diverges from peers (the fracture class). Always false for a nil
-	// controller or inactive ROAST.
-	HasLostSync() bool
+	// ConsumeLostSync reports whether this seat fell behind the group's committed
+	// ROAST attempt chain -- it received a transition bundle for an attempt it never
+	// observed (it skipped a window peers committed) -- and clears the marker in the
+	// same call. The retry loop checks it before selection and skips the attempt
+	// when true, since selecting from a stale position diverges from peers (the
+	// fracture class).
+	//
+	// Consuming bounds one such bundle to one attempt. The bundle is unverifiable
+	// on arrival (VerifyBundle needs an observe handle this seat never created), so
+	// any authenticated member can produce one; charging it to the whole session
+	// would hand a single message a session kill. Always false for a nil controller
+	// or inactive ROAST.
+	ConsumeLostSync() bool
 }

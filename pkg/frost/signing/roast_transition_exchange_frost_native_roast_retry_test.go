@@ -318,12 +318,24 @@ func TestRoastTransitionExchange_LostSyncOnUnobservedBundle(t *testing.T) {
 		lagging,
 	)
 
-	if laggingEx.HasLostSync() {
+	if laggingEx.ConsumeLostSync() {
 		t.Fatal("a seat must not start in lost sync")
 	}
 	laggingEx.onBundle(bundle)
-	if !laggingEx.HasLostSync() {
+	if !laggingEx.ConsumeLostSync() {
 		t.Fatal("a bundle for an attempt this seat never observed must trip lost sync")
+	}
+	// The blast radius: the marker is charged to exactly ONE attempt. The
+	// triggering bundle cannot be verified here (VerifyBundle needs a local observe
+	// handle this seat never created), so any authenticated member can send one for
+	// an arbitrary hash. If the marker survived this second read, the retry loop
+	// would skip every remaining attempt and one unverifiable message would end the
+	// whole signing session.
+	if laggingEx.ConsumeLostSync() {
+		t.Fatal(
+			"lost sync must be consumed by the first read: one unobserved-attempt " +
+				"bundle must cost one attempt, not the session",
+		)
 	}
 }
 
@@ -365,7 +377,7 @@ func TestRoastTransitionExchange_ConsumedRetransmitDoesNotLoseSync(t *testing.T)
 
 	// The same bundle re-delivered (a retransmit) must not trip lost sync.
 	nodes[receiver].ex.onBundle(bundle)
-	if nodes[receiver].ex.HasLostSync() {
+	if nodes[receiver].ex.ConsumeLostSync() {
 		t.Fatal("a retransmit of an already-consumed bundle must not trip lost sync")
 	}
 }
@@ -545,7 +557,7 @@ func TestRoastTransitionExchange_SucceededSeatDoesNotStorePeerFailureBundle(t *t
 	if _, ok := RoastTransitionForSession(roastSessionID, succeeded); ok {
 		t.Fatal("a succeeded seat must not store a peer's failure transition for its won attempt")
 	}
-	if nodes[succeeded].ex.HasLostSync() {
+	if nodes[succeeded].ex.ConsumeLostSync() {
 		t.Fatal("a bundle for a succeeded (observed) attempt must not trip lost sync")
 	}
 }

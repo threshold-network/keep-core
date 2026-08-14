@@ -167,13 +167,18 @@ func (e *RoastTransitionExchange) onBundle(msg RunnerMessage) {
 		// fail-closed-terminate liveness regression (a single bad actor can already
 		// kill a round by withholding a bundle).
 		//
-		// Under the PERMISSIONED operator set this residual is accepted: the
-		// triggering seat is operator-authenticated (logged below for attribution),
-		// the action is liveness-only (fail-closed, never an unsafe/divergent
-		// signature), and a misbehaving operator is governance-removable. REVISIT
-		// before any move to a PERMISSIONLESS operator set, where an anonymous,
-		// costless, non-attributable DoS would warrant the f+1 snapshot-corroboration
-		// (or resync) fix rather than accepting it.
+		// The marker is scoped to ONE attempt: the retry loop consumes it at its
+		// next selection check (see ConsumeLostSync), so a bundle for a bogus hash
+		// costs the receiving seat a single attempt rather than the whole signing
+		// session. A seat that is genuinely behind keeps receiving such bundles and
+		// keeps skipping, which is self-correcting; an attacker must keep spamming,
+		// attributably, once per attempt to sustain any denial. Under the
+		// PERMISSIONED operator set that residual is accepted: the triggering seat is
+		// operator-authenticated (logged below), the action is liveness-only (never an
+		// unsafe or divergent signature), and a misbehaving operator is
+		// governance-removable. REVISIT before any move to a PERMISSIONLESS operator
+		// set, where anonymous costless spam would warrant f+1 snapshot-corroboration
+		// (or resync) instead.
 		if e.markLostSync() {
 			e.logger.Warnf(
 				"roast transition exchange: seat %d entered lost-sync from an "+
@@ -196,11 +201,19 @@ func (e *RoastTransitionExchange) markLostSync() bool {
 	return e.lostSync.CompareAndSwap(false, true)
 }
 
-// HasLostSync reports whether this seat fell behind the group's committed ROAST
-// attempt chain (it received a transition for an attempt it never observed). The
-// retry loop checks it before selection and fails closed when true.
-func (e *RoastTransitionExchange) HasLostSync() bool {
-	return e.lostSync.Load()
+// ConsumeLostSync reports whether this seat fell behind the group's committed
+// ROAST attempt chain (it received a transition bundle for an attempt it never
+// observed) AND clears the marker, so each recorded lost-sync event is charged to
+// exactly one attempt.
+//
+// Consuming rather than latching is what bounds the blast radius. The triggering
+// bundle cannot be cryptographically verified here -- VerifyBundle needs a local
+// observe handle this seat never created -- so any authenticated member can
+// produce one. A session-wide latch would let a single unverifiable message end
+// the whole signing session; consuming per attempt costs one attempt and forces an
+// attacker to keep re-sending, attributably, to sustain a denial.
+func (e *RoastTransitionExchange) ConsumeLostSync() bool {
+	return e.lostSync.CompareAndSwap(true, false)
 }
 
 // BroadcastForcedSnapshot publishes this seat's proof-of-attendance snapshot for

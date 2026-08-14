@@ -36,10 +36,15 @@ func (f *fakeExchange) AggregateAndBroadcast(hash [32]byte) {
 	}
 }
 
-func (f *fakeExchange) HasLostSync() bool {
+func (f *fakeExchange) ConsumeLostSync() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.lostSync
+	if !f.lostSync {
+		return false
+	}
+	f.lostSync = false
+
+	return true
 }
 
 func (f *fakeExchange) broadcasts() [][32]byte {
@@ -140,32 +145,41 @@ func TestRoastTransitionController_OnAttemptFailedZeroHashIsNoOp(t *testing.T) {
 	}
 }
 
-// TestRoastTransitionController_HasLostSyncDelegatesToExchange asserts HasLostSync
-// reflects the exchange's lost-sync state, and is false when no exchange is
-// installed (ROAST retry inactive -> observe-only -> no listener -> never lost
-// sync).
-func TestRoastTransitionController_HasLostSyncDelegatesToExchange(t *testing.T) {
+// TestRoastTransitionController_ConsumeLostSyncDelegatesToExchange asserts
+// ConsumeLostSync reflects the exchange's lost-sync state, charges it to exactly
+// one attempt, and is false when no exchange is installed (ROAST retry inactive ->
+// observe-only -> no listener -> never lost sync).
+func TestRoastTransitionController_ConsumeLostSyncDelegatesToExchange(t *testing.T) {
 	exchange := &fakeExchange{}
 	controller := &roastTransitionControllerImpl{
 		ctx:      context.Background(),
 		logger:   &testutils.MockLogger{},
 		exchange: exchange,
 	}
-	if controller.HasLostSync() {
+	if controller.ConsumeLostSync() {
 		t.Fatal("expected not lost sync initially")
 	}
 	exchange.mu.Lock()
 	exchange.lostSync = true
 	exchange.mu.Unlock()
-	if !controller.HasLostSync() {
-		t.Fatal("expected HasLostSync to reflect the exchange's lost-sync state")
+	if !controller.ConsumeLostSync() {
+		t.Fatal("expected ConsumeLostSync to reflect the exchange's lost-sync state")
+	}
+	// The blast-radius bound: one recorded lost-sync event is charged to one
+	// attempt. A second read must be false, so the retry loop skips a single
+	// attempt rather than every remaining attempt in the session.
+	if controller.ConsumeLostSync() {
+		t.Fatal(
+			"expected lost sync to be consumed by the first read, so it costs " +
+				"one attempt rather than the whole session",
+		)
 	}
 
 	noExchange := &roastTransitionControllerImpl{
 		ctx:    context.Background(),
 		logger: &testutils.MockLogger{},
 	}
-	if noExchange.HasLostSync() {
+	if noExchange.ConsumeLostSync() {
 		t.Fatal("a controller without an exchange must never report lost sync")
 	}
 }
