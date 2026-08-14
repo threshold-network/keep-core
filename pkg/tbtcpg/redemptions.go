@@ -529,8 +529,16 @@ func EstimateRedemptionFee(
 			sizeEstimator.AddScriptHashOutputs(1, false)
 		case bitcoin.P2WSHScript:
 			sizeEstimator.AddScriptHashOutputs(1, true)
+		case bitcoin.P2TRScript:
+			// AddOutputScript rather than a dedicated Add*Outputs helper: an
+			// output costs its script length plus a fixed header, and the real
+			// script is already in hand, so no canonical placeholder is needed.
+			sizeEstimator.AddOutputScript(script)
 		default:
-			return 0, fmt.Errorf("non-standard redeemer output script type")
+			return 0, fmt.Errorf(
+				"non-standard redeemer output script type [%v]",
+				bitcoin.GetScriptType(script),
+			)
 		}
 	}
 
