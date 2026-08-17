@@ -1,4 +1,5 @@
 {
+  "_comment": "approved_at_unix must be <= now (not in the future); any past value is accepted. The TTL is expires_at_unix - approved_at_unix and must not exceed dao_override_max_ttl_seconds from the active policy.",
   "payload_json": "{\"override_id\":\"override-operator-gcp-us-central1-1-20260302-0001\",\"operator_id\":\"operator-gcp-us-central1-1\",\"decision\":\"allow\",\"reason\":\"emergency governance override for onboarding window\",\"approved_by\":\"dao-multisig-1\",\"approved_at_unix\":1700000000,\"expires_at_unix\":1700003600}",
   "signature_hex": "REPLACE_WITH_SCHNORR_SIGNATURE_HEX_OVER_SHA256_OF_PAYLOAD_JSON"
 }

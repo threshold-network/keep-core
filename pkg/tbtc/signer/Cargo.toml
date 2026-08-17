@@ -28,7 +28,8 @@ chacha20poly1305 = "0.10"
 rand_chacha = "0.3"
 libc = "0.2"
 zeroize = { version = "1.8", default-features = false, features = ["alloc", "serde"] }
-bitcoin = "0.32"
+# Pinned exactly to 0.32.8 to prevent silent upstream patch changes; updates require changelog review.
+bitcoin = "=0.32.8"
 
 [dev-dependencies]
 criterion = "0.5"

@@ -102,11 +102,20 @@ pub fn persist_distributed_dkg_key_package(
         auto_quarantine_config.as_ref(),
     )?;
 
-    let key_package = decode_key_package(
-        OP,
-        &request.key_package.identifier,
-        data_hex.expose_secret(),
-    )?;
+    // Bind a `Zeroizing<Option<KeyPackage>>` guard so any Err return below
+    // (validation, BTreeMap insert, etc.) zeroizes the signing-share bytes
+    // via KeyPackage::ZeroizeOnDrop on the contained value or via the
+    // wrapper's Drop on the success path. Extract a bare KeyPackage once
+    // here so the rest of the body stays unchanged; the guard keeps owning
+    // `None` and drops harmlessly at scope end.
+    let mut key_package_guard: Zeroizing<Option<frost::keys::KeyPackage>> =
+        Zeroizing::new(Some(decode_key_package(
+            OP,
+            &request.key_package.identifier,
+            data_hex.expose_secret(),
+        )?));
+    let key_package: frost::keys::KeyPackage =
+        std::mem::take(&mut *key_package_guard).expect("initialized");
 
     // The key package must belong to this participant AND be consistent with the
     // group public key package: matching identifier, embedded threshold, group

@@ -66,16 +66,12 @@ in `docs/rust-rewrite-bootstrap.md`.
 
 ```bash
 cd pkg/tbtc/signer
-cargo build
-```
-
-For a dynamic library artifact:
-
-```bash
-cd pkg/tbtc/signer
-cargo build --release
+cargo build --release --locked
 # target/release/libfrost_tbtc.{so,dylib,dll}
 ```
+
+`--locked` is required for production to ensure `Cargo.lock` is respected
+and the supply-chain is not silently mutated via `cargo update`.
 
 ## Test
 
@@ -155,6 +151,8 @@ Semantics:
   `_signature_hex`, `provenance_trust_root`, `min_approved_version`); the
   init-time pass does not exempt runtime re-checks — attestation TTL aging
   still applies per call.
+- Six gates enforce persistence: provenance, admission-policy, dao-override, signer-config attestation set, and added provenance check. The PR body summarises this as "three gates" for brevity; the operative gate sequence is documented in `src/engine/dkg.rs` and `src/engine/persistence.rs`.
+- Production profile defaults to PERMISSIVE numeric caps; the egress and contract-call budgets in `src/engine/policy.rs` are configurable via env vars (see Operations matrix below).
 - **Secrets never ride the config FFI**: `TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX`
   is read exclusively from the dedicated key-provider channel below, even
   when a config is installed. Do not inline key material into the
@@ -356,6 +354,39 @@ visible. They do not emulate sudden power loss that also loses an unsynced
 directory entry; operators must use the supported local durable filesystem and
 storage guarantees for that hardware-level failure boundary.
 
+## Formal Verification (Phase 5)
+
+### Prerequisites
+
+Java 11+ is required for TLA+ TLC verification (`scripts/formal/run_tla_models.sh`).
+Install OpenJDK 11 (or later) and ensure `java` is on PATH. The script checks
+`command -v java` and exits with code 1 if missing. TLA tools download to /tmp
+by default and need a noexec-friendly mount; override via the `TLA_TOOLS_JAR`
+env var.
+
+### TLA+ model checks
+
+Run the executable TLA+ model suite for the signer:
+
+```bash
+cd pkg/tbtc/signer
+scripts/formal/run_tla_models.sh
+```
+
+The script resolves models relative to `pkg/tbtc/signer/docs/formal/models`
+and downloads the pinned `tla2tools.jar` (SHA-256 verified against the
+release asset). See `pkg/tbtc/signer/docs/formal/models/README.md` for the
+model-by-model coverage map and the corresponding Rust-side enforcement
+points.
+
+### ROAST attempt context vectors
+
+ROAST attempt context vectors are validated by
+`scripts/formal/check_roast_attempt_context_vectors.mjs`. Run with:
+`node scripts/formal/check_roast_attempt_context_vectors.mjs` (requires
+Node.js 22+). The tool verifies the canonical attempt-context derivation
+against `pkg/tbtc/signer/test/vectors/roast-attempt-context-v1.json`.
+
 ## FFI contract
 
 - Header: `pkg/tbtc/signer/include/frost_tbtc.h`
@@ -553,3 +584,18 @@ storage guarantees for that hardware-level failure boundary.
   - `synthetic_contribution_rejected`: synthetic finalize payload used while
     bootstrap mode is disabled.
 - Call `frost_tbtc_free_buffer` for every returned buffer.
+
+## Canary promotion runbook
+
+- (a) Confirm prerequisite env vars: `TBTC_SIGNER_CANARY_PERCENT`,
+  `TBTC_SIGNER_CANARY_MIN_SAMPLES_PER_OP` (default 100),
+  `TBTC_SIGNER_CANARY_PROMOTE_GATE_SLO_P99_MS` (default 1500ms).
+- (b) Query `CanaryRolloutStatus` to read current stage and accumulated
+  sample counts.
+- (c) Confirm `CanaryRolloutStatus.lastEvidenceAtUnix >
+  stage_entry_at_unix + 600s` (cooldown).
+- (d) Call `PromoteCanary(next_stage_percent)` to advance
+  10% -> 50% -> 100%.
+- (e) Note: evidence counters reset after each `PromoteCanary` call.
+
+See `docs/roast-phase-5-security-rollout-gates.md` for the full gate logic.

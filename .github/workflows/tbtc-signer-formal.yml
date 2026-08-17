@@ -68,6 +68,17 @@ jobs:
           manifest-path: pkg/tbtc/signer/Cargo.toml
           command: check advisories
 
+      - name: Check banned and multiply-versioned crates
+        # Blocking gate: complements `check advisories`. Catches (a) wildcards
+        # and explicit bans declared in deny.toml's [bans] section (e.g. the
+        # openssl -> rustls redirect), and (b) duplicate crate versions that
+        # indicate a Cargo.lock drift we have not reviewed. The corresponding
+        # configuration lives in pkg/tbtc/signer/deny.toml.
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
+        with:
+          manifest-path: pkg/tbtc/signer/Cargo.toml
+          command: check bans --all
+
   signer-formal-invariants:
     name: Signer formal invariants
     runs-on: ubuntu-latest

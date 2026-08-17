@@ -8,6 +8,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Monorepo source path was `docs/frost-migration/formal-verification/models`
 # relative to monorepo root. Override via MODELS_PATH env var for
 # alternate environments.
+# TLA_TOOLS_JAR /tmp noexec risk: TLA tools download to /tmp by default. If
+# /tmp is mounted with noexec (common in hardened containers), the JAR will
+# fail to execute. Override TLA_TOOLS_JAR to a non-noexec location.
 MODEL_DIR="${MODELS_PATH:-$ROOT_DIR/docs/formal/models}"
 TLA_TOOLS_VERSION="${TLA_TOOLS_VERSION:-v1.8.0}"
 TLA_TOOLS_JAR="${TLA_TOOLS_JAR:-/tmp/tla2tools-${TLA_TOOLS_VERSION}.jar}"
@@ -62,7 +65,17 @@ verify_tla_tools_jar_sha256() {
 
 if [[ ! -f "$TLA_TOOLS_JAR" ]]; then
   echo "downloading tlaplus tools jar to $TLA_TOOLS_JAR"
-  curl -fsSL "$TLA_TOOLS_URL" -o "$TLA_TOOLS_JAR"
+  # Pin the TLS trust root explicitly so a compromised intermediate CA
+  # cannot MITM the jar download. Prefer the Debian/Ubuntu bundle; fall
+  # back to curl-config (macOS Homebrew), then to the macOS system path.
+  CA_BUNDLE=
+  if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+    CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+  else
+    CA_BUNDLE="$(curl-config --ca 2>/dev/null || echo /etc/ssl/cert.pem)"
+  fi
+  curl --cacert "$CA_BUNDLE" -fsSL "$TLA_TOOLS_URL" -o "$TLA_TOOLS_JAR" \
+    || { echo "fatal: TLA tools download failed (TLS or network error): $TLA_TOOLS_URL" >&2; exit 1; }
 fi
 
 verify_tla_tools_jar_sha256 "$TLA_TOOLS_SHA256" "$TLA_TOOLS_JAR"

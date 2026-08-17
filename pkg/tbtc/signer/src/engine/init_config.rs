@@ -308,6 +308,11 @@ pub(crate) fn config_values_from_request(
     );
     insert_u64(
         &mut values,
+        TBTC_SIGNER_POLICY_MAX_INPUT_COUNT_ENV,
+        request.policy_max_input_count,
+    );
+    insert_u64(
+        &mut values,
         TBTC_SIGNER_POLICY_MAX_OUTPUT_VALUE_SATS_ENV,
         request.policy_max_output_value_sats,
     );

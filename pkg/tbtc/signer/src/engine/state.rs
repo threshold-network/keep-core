@@ -70,7 +70,7 @@ pub(crate) struct InteractiveSigningState {
     /// Round2 share can be released, so the host must open and validate a fresh
     /// intent rather than relying on a durable generic-message allowlist.
     pub(crate) signing_intent: Option<InteractiveSigningIntent>,
-    pub(crate) key_package: frost::keys::KeyPackage,
+    pub(crate) key_package: Zeroizing<frost::keys::KeyPackage>,
     /// Monotonic time of the last successful activity for this member's live
     /// attempt. Exact Open and Round1 retries refresh it, as does a validated
     /// Round2 whose retry-preserving durability work fails. Rejected traffic
@@ -93,6 +93,18 @@ pub(crate) struct InteractiveRound1State {
 impl Drop for InteractiveRound1State {
     fn drop(&mut self) {
         self.nonces.zeroize();
+    }
+}
+
+// Belt-and-suspenders zeroization backstop for InteractiveSigningState: the
+// field is now `Zeroizing<KeyPackage>` (so its `Drop` already calls
+// `KeyPackage::zeroize()`), and the per-member `Drop for
+// InteractiveSigningState` here covers paths where the containing map is
+// mutated or compacted while a borrow into the entry is held. Field drops
+// run after this body, so this is additive and never double-frees.
+impl Drop for InteractiveSigningState {
+    fn drop(&mut self) {
+        self.key_package.zeroize();
     }
 }
 

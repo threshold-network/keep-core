@@ -151,13 +151,23 @@ pub fn dkg_part3(request: DkgPart3Request) -> Result<DkgPart3Result, EngineError
     secret_package.zeroize();
     let (key_package, public_key_package) =
         dkg_result.map_err(|e| EngineError::Validation(format!("DKGPart3 failed: {e}")))?;
-
+    // Wrap the key_package in `Zeroizing<Option<KeyPackage>>` so any Err
+    // return below zeroizes the signing-share bytes via the wrapper's Drop.
+    // Extract via `mem::take` so `into_even_y` can consume the bare
+    // KeyPackage (it takes `self`); re-wrap the post-even-y result so the
+    // remaining Err paths still zeroize. The guard owns `None` after the
+    // take and drops harmlessly at scope end.
+    let mut key_package_guard: Zeroizing<Option<frost::keys::KeyPackage>> =
+        Zeroizing::new(Some(key_package));
     let is_even_y = public_key_package.has_even_y();
-    let key_package = key_package.into_even_y(Some(is_even_y));
+    let key_package: frost::keys::KeyPackage =
+        std::mem::take(&mut *key_package_guard).expect("initialized");
     let public_key_package = public_key_package.into_even_y(Some(is_even_y));
+    let key_package = Zeroizing::new(key_package.into_even_y(Some(is_even_y)));
 
     let native_public_key_package = native_public_key_package_from_frost(&public_key_package)?;
-    let mut key_package_bytes = key_package
+
+    let mut key_package_bytes = (*key_package)
         .serialize()
         .map_err(|e| EngineError::Internal(format!("failed to serialize DKG key package: {e}")))?;
     let result = DkgPart3Result {

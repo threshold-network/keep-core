@@ -406,8 +406,8 @@ mod tests {
     use crate::{
         frost_tbtc_abi_version, frost_tbtc_build_taproot_tx, frost_tbtc_canary_rollout_status,
         frost_tbtc_dkg_part1, frost_tbtc_dkg_part2, frost_tbtc_dkg_part3, frost_tbtc_free_buffer,
-        frost_tbtc_hardening_metrics, frost_tbtc_promote_canary, frost_tbtc_quarantine_status,
-        frost_tbtc_refresh_cadence_status, frost_tbtc_refresh_shares,
+        frost_tbtc_hardening_metrics, frost_tbtc_init_signer_config, frost_tbtc_promote_canary,
+        frost_tbtc_quarantine_status, frost_tbtc_refresh_cadence_status, frost_tbtc_refresh_shares,
         frost_tbtc_roast_liveness_policy, frost_tbtc_roast_transcript_audit,
         frost_tbtc_rollback_canary, frost_tbtc_run_differential_fuzzing,
         frost_tbtc_trigger_emergency_rekey, frost_tbtc_verify_blame_proof,
@@ -521,7 +521,7 @@ mod tests {
 
         let round1 = crate::api::InteractiveRound1Request {
             session_id: "ffi-interactive-smoke-missing".to_string(),
-            attempt_id: "missing".to_string(),
+            attempt_id: "ff01ff02ff03ff04ff05ff06ff07ff08".to_string(), // valid 1-128 hex chars (validate_attempt_id)
             member_identifier: 1,
         };
         let (status, payload) = call_ffi(&round1, super::frost_tbtc_interactive_round1);
@@ -531,7 +531,7 @@ mod tests {
 
         let round2 = crate::api::InteractiveRound2Request {
             session_id: "ffi-interactive-smoke-missing".to_string(),
-            attempt_id: "missing".to_string(),
+            attempt_id: "ff01ff02ff03ff04ff05ff06ff07ff08".to_string(), // valid 1-128 hex chars (validate_attempt_id)
             member_identifier: 1,
             signing_package_hex: "00".to_string(),
         };
@@ -555,7 +555,7 @@ mod tests {
         // symbol -> parse -> engine -> structured-error dispatch.
         let aggregate = crate::api::InteractiveAggregateRequest {
             session_id: "ffi-interactive-smoke-missing".to_string(),
-            attempt_id: "missing".to_string(),
+            attempt_id: "ff01ff02ff03ff04ff05ff06ff07ff08".to_string(), // valid 1-128 hex chars (validate_attempt_id)
             signing_package_hex: "00".to_string(),
             signature_shares: vec![crate::api::NativeFrostSignatureShare {
                 identifier: "00".to_string(),
@@ -1440,5 +1440,115 @@ mod tests {
 
         // Clear the installed snapshot so env-driven tests are unaffected.
         crate::engine::reset_for_tests();
+    }
+
+    // --- FFI boundary regression tests ---
+    //
+    // These tests exercise the request-buffer plumbing on the FFI boundary
+    // (parse_request -> ffi_entry). They pin fail-closed behavior against
+    // malformed host calls so a regression in the parse layer cannot crash
+    // the signer process or silently accept garbage.
+
+    // Drain the response buffer into an owned Vec so the caller can free it
+    // regardless of whether the FFI succeeded or failed.
+    fn drain_ffi_response(result: crate::ffi::TbtcSignerResult) -> (i32, Vec<u8>) {
+        let response_bytes = if result.buffer.ptr.is_null() || result.buffer.len == 0 {
+            Vec::new()
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len).to_vec()
+            }
+        };
+        frost_tbtc_free_buffer(result.buffer.ptr, result.buffer.len);
+        (result.status_code, response_bytes)
+    }
+
+    // ffi_entry accepts `*const u8` + `usize` from the host. A null pointer
+    // must be rejected at the boundary, not dereferenced. request_bytes
+    // checks len > MAX_REQUEST_BYTES first, then null; len=0 reaches the
+    // null check.
+    #[test]
+    fn ffi_entry_rejects_null_buffer() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+
+        let result = frost_tbtc_init_signer_config(std::ptr::null(), 0);
+        let (status, payload) = drain_ffi_response(result);
+        assert_ne!(status, 0, "null request buffer must fail closed");
+        let error: ErrorResponse = serde_json::from_slice(&payload)
+            .expect("error response payload must deserialize");
+        assert_eq!(error.code, "validation_error");
+    }
+
+    // ffi_entry rejects a request whose declared length exceeds the maximum
+    // (16 MiB). The size check MUST run before the pointer is dereferenced so
+    // a malicious host cannot force a multi-gigabyte allocation just by
+    // declaring a huge len with a tiny allocation. We deliberately allocate
+    // only a single byte and lie about the length: if the check regresses
+    // into a `from_raw_parts` call before the size check, this test segfaults.
+    #[test]
+    fn ffi_entry_rejects_oversized_request() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+
+        let max_request_bytes: usize = 16 * 1024 * 1024;
+        let payload = vec![0u8; 1];
+        let declared_len = max_request_bytes + 1;
+        let result = frost_tbtc_init_signer_config(payload.as_ptr(), declared_len);
+        let (status, response_payload) = drain_ffi_response(result);
+        assert_ne!(status, 0, "oversized request must fail closed at the size check");
+        let error: ErrorResponse = serde_json::from_slice(&response_payload)
+            .expect("error response payload must deserialize");
+        assert_eq!(error.code, "validation_error");
+
+        // The engine must remain unmutated: a malformed boundary call cannot
+        // leave a half-installed config behind.
+        crate::engine::reset_for_tests();
+    }
+
+    // JSON string fields carry UTF-8 bytes verbatim. A host is free to submit
+    // a multi-byte string in any String field; the FFI must either parse
+    // and accept it, or surface a structured validation error. Panicking,
+    // truncating bytes, or treating non-ASCII as invalid would all break
+    // legitimate callers (e.g. UTF-8 wallet names). Build a request whose
+    // `state_path` contains multi-byte characters; under the hermetic
+    // development env the call must complete cleanly without panicking.
+    #[test]
+    fn ffi_entry_handles_unicode_in_string_fields() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+        let _profile_env = EnvVarGuard::set(super::TBTC_SIGNER_PROFILE_ENV, "development");
+        let _provenance_env = EnvVarGuard::set("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false");
+
+        // éèê / 中文 — multi-byte UTF-8 in state_path. Either the install
+        // succeeds (preferred) or it returns a structured validation error.
+        // The invariant under test is "no panic, no raw byte truncation".
+        let request_json =
+            br#"{"profile":"development","statePath":"\u00e9\u00e8\u00ea/\u4e2d\u6587/signer"}"#;
+        let result = frost_tbtc_init_signer_config(request_json.as_ptr(), request_json.len());
+        let (status, _response_payload) = drain_ffi_response(result);
+        assert!(
+            status == 0 || status == 1,
+            "FFI boundary must not panic on UTF-8 input; got status_code={status}"
+        );
+
+        crate::engine::reset_for_tests();
+    }
+
+    // The FFI boundary deserializes the request body as JSON. Anything that
+    // is not valid JSON must be rejected with a structured error, not
+    // panic, hang, or accept the bytes and crash the engine downstream.
+    #[test]
+    fn ffi_entry_rejects_malformed_json() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+
+        let raw = b"not valid json{";
+        let result = frost_tbtc_init_signer_config(raw.as_ptr(), raw.len());
+        let (status, response_payload) = drain_ffi_response(result);
+        assert_ne!(status, 0, "non-JSON request body must fail closed at parse_request");
+        let error: ErrorResponse = serde_json::from_slice(&response_payload)
+            .expect("error response payload must deserialize");
+        assert_eq!(error.code, "validation_error");
     }
 }

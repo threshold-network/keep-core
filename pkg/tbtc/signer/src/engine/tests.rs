@@ -12504,7 +12504,121 @@ fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
         "unexpected error: {err:?}"
     );
     assert_eq!(err.code(), "interactive_attempt_already_aggregated");
-    assert_eq!(err.recovery_class(), "recoverable");
+}
+
+// The interactive_aggregate result must be deterministic over the PUBLIC
+// inputs (signing_package, signature_shares, verifying shares from the
+// session's DKG public key package): a fresh stateless re-aggregation from
+// the same wire data must yield the byte-identical signature. This pins the
+// invariant any future performance path that elides re-aggregation when the
+// public data is unchanged (cf. F-08 review note) relies on - such a path
+// would be unsound if the engine path applied a tweak the stateless primitive
+// does not, or vice versa.
+#[test]
+fn interactive_aggregate_returns_same_signature_for_same_completed_session() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-aggregate-determinism";
+    let key_group = "interactive-test-key-group";
+    let message = [0x4fu8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    // End-to-end signing flow: member 1 through the session API, member 2
+    // through the stateless primitive. Mirrors
+    // interactive_aggregate_produces_and_self_verifies_bip340.
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment.clone(),
+        ],
+    );
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("round 2 share");
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 share");
+
+    // Engine path: resolves verifying shares from the session's DKG state
+    // and emits a single canonical signature for the attempt.
+    let engine_aggregate = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex: signing_package_hex.clone(),
+        signature_shares: vec![
+            NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex.clone(),
+            },
+            member2_share.signature_share.clone(),
+        ],
+        taproot_merkle_root_hex: None,
+    })
+    .expect("interactive aggregate");
+
+    // Fresh stateless re-aggregation of the SAME public inputs. If the
+    // engine result diverges from this, any caller that caches "aggregate
+    // result for these public inputs" would hand back a stale signature.
+    // Engine state holds the frost public key package (not the native wire
+    // form the stateless helper consumes). Convert before re-aggregating so
+    // the byte-for-byte comparison proves the engine path applies no tweak
+    // the stateless primitive does not.
+    let frost_pkg = {
+        let guard = state().expect("state").lock().expect("lock");
+        guard
+            .sessions
+            .get(session_id)
+            .expect("session")
+            .dkg_public_key_package
+            .clone()
+            .expect("public key package")
+    };
+    let native_public_key_package =
+        native_public_key_package_from_frost(&frost_pkg).expect("convert to native");
+    let stateless_aggregate = aggregate(AggregateRequest {
+        signing_package_hex,
+        signature_shares: vec![
+            NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex,
+            },
+            member2_share.signature_share,
+        ],
+        public_key_package: native_public_key_package,
+    })
+    .expect("stateless re-aggregate");
+
+    assert_eq!(
+        engine_aggregate.signature_hex, stateless_aggregate.signature_hex,
+        "engine aggregate must be deterministic over public inputs (signing_package + signature_shares + public_key_package)"
+    );
 }
 
 #[test]

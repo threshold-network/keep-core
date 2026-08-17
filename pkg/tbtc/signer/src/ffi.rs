@@ -7,6 +7,10 @@ use zeroize::Zeroize;
 use crate::api::ErrorResponse;
 use crate::errors::EngineError;
 
+/// SAFETY: the caller MUST guarantee `ptr` points to a heap allocation of
+/// EXACTLY `len` bytes (`Box<[u8]>::into_raw`), and MUST release it exactly
+/// once via `frost_tbtc_free_buffer`. Misuse (double-free, sized mismatch,
+/// non-heap pointer) is undefined behavior.
 #[repr(C)]
 pub struct TbtcBuffer {
     pub ptr: *mut u8,
@@ -52,27 +56,55 @@ pub fn serialize_response<T: serde::Serialize>(response: &T) -> Result<Vec<u8>, 
 fn install_redacting_panic_hook() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
-        let default_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let development_profile =
-                crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
-                    .map(|raw| {
-                        raw.trim()
-                            .eq_ignore_ascii_case(crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT)
-                    })
-                    .unwrap_or(false);
-            if development_profile {
-                default_hook(info);
-            } else if let Some(location) = info.location() {
-                eprintln!(
-                    "panic at {}:{} (payload redacted)",
-                    location.file(),
-                    location.line()
-                );
-            } else {
-                eprintln!("panic (payload redacted)");
-            }
+        // Wrap the hook in a single-use mechanism so the install-set_hook
+        // branch can drop it into the closure, and the failure branch can
+        // retrieve it back to restore the global state.
+        let default_hook_cell: std::sync::Mutex<Option<_>> =
+            std::sync::Mutex::new(Some(std::panic::take_hook()));
+        // set_hook can panic during Box::new under allocator pressure. If it
+        // does, restore the previously-installed hook so the process still has
+        // SOME panic handler (the default hook we captured is still in memory).
+        // Otherwise a partial install leaves the Once poisoned (no further
+        // installs) AND no panic hook at all (the default was take_hook'd).
+        let install = catch_unwind(AssertUnwindSafe(|| {
+            let mut guard = default_hook_cell.lock().expect("poisoned");
+            let default_hook = guard.take().expect("default_hook available");
+            std::panic::set_hook(Box::new(move |info| {
+                let development_profile =
+                    crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
+                        .map(|raw| {
+                            raw.trim()
+                                .eq_ignore_ascii_case(
+                                    crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT,
+                                )
+                        })
+                        .unwrap_or(false);
+                if development_profile {
+                    default_hook(info);
+                } else if let Some(location) = info.location() {
+                    eprintln!(
+                        "panic at {}:{} (payload redacted)",
+                        location.file(),
+                        location.line()
+                    );
+                } else {
+                    eprintln!("panic (payload redacted)");
+                }
+            }));
         }));
+        if install.is_err() {
+            // Restore the hook we previously captured so the global state is
+            // consistent. Once will not re-fire on the next ffi_entry.
+            if let Some(hook) = default_hook_cell
+                .lock()
+                .expect("poisoned")
+                .take()
+            {
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    std::panic::set_hook(hook);
+                }));
+            }
+        }
     });
 }
 
@@ -80,6 +112,7 @@ pub fn ffi_entry<F>(f: F) -> TbtcSignerResult
 where
     F: FnOnce() -> Result<Vec<u8>, EngineError>,
 {
+
     install_redacting_panic_hook();
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(bytes)) => success_from_serialized(bytes),

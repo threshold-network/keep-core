@@ -132,6 +132,11 @@ a named follow-up with the same design shape as section 4; until it
 lands, the audit scope statement must describe the DKG boundary
 as-is rather than inheriting this section's claim.
 
+> **FFI boundary (explicit):** the **DKG path is OUTSIDE this secret-boundary**.
+> `dkg_part1` still produces `secret_package_hex` that crosses the FFI;
+> subsequent DKG parts operate on hex deserialisation back to in-memory structs.
+> The non-persistence guarantee is enforced only for the interactive signing path.
+
 ## 5. Session model and API contract
 
 An interactive session is identified by `(session_id,

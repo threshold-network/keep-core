@@ -3,6 +3,173 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+/// Hard cap (in hex characters) for the small hex fields that ride the FFI:
+/// signature shares, ciphertexts for key package material, etc. 4 KiB is
+/// generous enough for any legitimate payload (a FROST signature share is 32
+/// bytes = 64 hex chars) while still small enough that an adversarial host
+/// cannot pre-allocate gigabytes through this surface.
+pub(crate) const MAX_SHORT_HEX_CHARS: usize = 4 * 1024;
+
+/// Hard cap (in hex characters) for the large hex fields: signing packages,
+/// taproot key-spend sighash lists, etc. 64 KiB fits any practical signing
+/// package and keeps the in-Rust memory footprint bounded.
+pub(crate) const MAX_LONG_HEX_CHARS: usize = 64 * 1024;
+
+/// Hard cap (in hex characters) for the script-pubkey hex fields. P2TR scripts
+/// are bounded well below 1 KiB; 4 KiB leaves headroom for future script
+/// classes while still capping adversarial payloads.
+pub(crate) const MAX_SCRIPT_PUBKEY_HEX_CHARS: usize = 4 * 1024;
+
+/// Hard cap (in hex characters) for `message_hex`/`message_digest_hex`. The
+/// signing path operates on a 32-byte digest, but the heartbeat intent may
+/// carry a longer preimage; 4 KiB is plenty for either.
+pub(crate) const MAX_MESSAGE_HEX_CHARS: usize = 4 * 1024;
+
+/// Hard cap for human-readable free-text fields (operator-supplied reason,
+/// key_group label, etc.) that are persisted into durable state and could be
+/// echoed back through telemetry. 1 KiB is far more than a sane operator note.
+pub(crate) const MAX_TEXT_CHARS: usize = 1024;
+
+/// serde `deserialize_with` helper: cap the length of a `String` hex field at
+/// deserialization time, BEFORE the engine reaches the (much more expensive)
+/// `hex::decode` step. Without this cap, a hostile host can send a 4 GiB hex
+/// string that survives serde's parse and only fails (or worse, succeeds in
+/// allocating) at decode. Used by every hex-typed request field on the FFI
+/// surface.
+pub(crate) fn deserialize_bounded_hex<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.len() > MAX_LONG_HEX_CHARS {
+        return Err(serde::de::Error::custom(format!(
+            "hex field exceeds max length [{}] bytes",
+            MAX_LONG_HEX_CHARS
+        )));
+    }
+    Ok(value)
+}
+
+/// Strict (4 KiB) variant of `deserialize_bounded_hex` for short hex fields.
+pub(crate) fn deserialize_bounded_short_hex<'de, D>(
+    deserializer: D,
+) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.len() > MAX_SHORT_HEX_CHARS {
+        return Err(serde::de::Error::custom(format!(
+            "hex field exceeds max length [{}] bytes",
+            MAX_SHORT_HEX_CHARS
+        )));
+    }
+    Ok(value)
+}
+
+/// Strict variant capping at `MAX_SCRIPT_PUBKEY_HEX_CHARS` for script-pubkey
+/// hex fields. Same shape as `deserialize_bounded_short_hex`; split out so a
+/// future change to one cap cannot silently widen the other.
+pub(crate) fn deserialize_bounded_script_pubkey_hex<'de, D>(
+    deserializer: D,
+) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.len() > MAX_SCRIPT_PUBKEY_HEX_CHARS {
+        return Err(serde::de::Error::custom(format!(
+            "hex field exceeds max length [{}] bytes",
+            MAX_SCRIPT_PUBKEY_HEX_CHARS
+        )));
+    }
+    Ok(value)
+}
+
+/// Strict variant capping at `MAX_MESSAGE_HEX_CHARS` for message/digest hex.
+pub(crate) fn deserialize_bounded_message_hex<'de, D>(
+    deserializer: D,
+) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.len() > MAX_MESSAGE_HEX_CHARS {
+        return Err(serde::de::Error::custom(format!(
+            "hex field exceeds max length [{}] bytes",
+            MAX_MESSAGE_HEX_CHARS
+        )));
+    }
+    Ok(value)
+}
+
+/// Strict variant capping at `MAX_TEXT_CHARS` for free-text operator fields.
+pub(crate) fn deserialize_bounded_text<'de, D>(
+    deserializer: D,
+) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.len() > MAX_TEXT_CHARS {
+        return Err(serde::de::Error::custom(format!(
+            "text field exceeds max length [{}] bytes",
+            MAX_TEXT_CHARS
+        )));
+    }
+    Ok(value)
+}
+
+/// Apply the `MAX_LONG_HEX_CHARS` cap inside the existing `SecretHex`
+/// deserializer so secrets ALSO cannot pre-allocate unbounded state. Uses
+/// the LONG cap (64 KiB) rather than the TEXT cap (1 KiB) because the
+/// payload here is `secret_package_hex` / `data_hex` / `key_package.data_hex`
+/// - serialized FROST key packages and DKG secret packages grow past 1 KiB at
+/// realistic participant counts (a 100-of-128 DKG secret package is ~hundreds
+/// of KiB in the limit; 64 KiB is the practical envelope). SecretHex is
+/// `#[serde(transparent)]` over `Zeroizing<String>`, so the cap rides the
+/// shared cap and the secret allocation still zeros on drop.
+pub(crate) fn deserialize_bounded_secret_hex<'de, D>(
+    deserializer: D,
+) -> Result<SecretHex, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.len() > MAX_LONG_HEX_CHARS {
+        return Err(serde::de::Error::custom(format!(
+            "secret hex field exceeds max length [{}] bytes",
+            MAX_LONG_HEX_CHARS
+        )));
+    }
+    Ok(SecretHex::new(value))
+}
+
+
+
+/// Opt variant of `deserialize_bounded_short_hex` for `Option<String>` fields
+/// such as `taproot_merkle_root_hex`. Bounded-length validated, accepts `null`
+/// or absent, then runs the same cap check as the non-opt counterpart.
+pub(crate) fn deserialize_bounded_short_hex_opt<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Option::deserialize(deserializer)?;
+    if let Some(value) = value {
+        if value.len() > MAX_SHORT_HEX_CHARS {
+            return Err(serde::de::Error::custom(format!(
+                "hex field exceeds max length [{}] bytes",
+                MAX_SHORT_HEX_CHARS
+            )));
+        }
+        Ok(Some(value))
+    } else {
+        Ok(None)
+    }
+}
+
 /// A hex-encoded secret whose owned Rust allocation is wiped on drop and whose
 /// `Debug` representation never exposes its contents. Serde remains transparent
 /// so the C-ABI JSON contract continues to carry an ordinary string.
@@ -44,7 +211,9 @@ impl ZeroizeOnDrop for SecretHex {}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub key_group: String,
     pub participant_count: u16,
     pub threshold: u16,
@@ -53,20 +222,25 @@ pub struct DkgResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgRound1Package {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub identifier: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub package_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgRound2Package {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub identifier: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_identifier: Option<String>,
+    #[serde(deserialize_with = "deserialize_bounded_secret_hex")]
     pub package_hex: SecretHex,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgPart1Request {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub participant_identifier: String,
     pub max_signers: u16,
     pub min_signers: u16,
@@ -74,36 +248,43 @@ pub struct DkgPart1Request {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgPart1Result {
+    #[serde(deserialize_with = "deserialize_bounded_secret_hex")]
     pub secret_package_hex: SecretHex,
     pub package: DkgRound1Package,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgPart2Request {
+    #[serde(deserialize_with = "deserialize_bounded_secret_hex")]
     pub secret_package_hex: SecretHex,
     pub round1_packages: Vec<DkgRound1Package>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgPart2Result {
+    #[serde(deserialize_with = "deserialize_bounded_secret_hex")]
     pub secret_package_hex: SecretHex,
     pub packages: Vec<DkgRound2Package>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostKeyPackage {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub identifier: String,
+    #[serde(deserialize_with = "deserialize_bounded_secret_hex")]
     pub data_hex: SecretHex,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostPublicKeyPackage {
     pub verifying_shares: std::collections::BTreeMap<String, String>,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub verifying_key: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgPart3Request {
+    #[serde(deserialize_with = "deserialize_bounded_secret_hex")]
     pub secret_package_hex: SecretHex,
     pub round1_packages: Vec<DkgRound1Package>,
     pub round2_packages: Vec<DkgRound2Package>,
@@ -121,6 +302,7 @@ pub struct DkgPart3Result {
 /// `run_dkg`, a distributed node holds only its OWN secret key package.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct PersistDistributedDkgKeyPackageRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub participant_identifier: u16,
     pub threshold: u16,
@@ -131,24 +313,30 @@ pub struct PersistDistributedDkgKeyPackageRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostCommitment {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub identifier: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub data_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostSignatureShare {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub identifier: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub data_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NewSigningPackageRequest {
+    #[serde(deserialize_with = "deserialize_bounded_message_hex")]
     pub message_hex: String,
     pub commitments: Vec<NativeFrostCommitment>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NewSigningPackageResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub signing_package_hex: String,
 }
 
@@ -172,16 +360,19 @@ pub enum InteractiveSigningIntent {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveSessionOpenRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub member_identifier: u16,
+    #[serde(deserialize_with = "deserialize_bounded_message_hex")]
     pub message_hex: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub key_group: String,
     /// Signing threshold; must equal the session's DKG threshold. The
     /// key material itself is resolved from the engine's DKG state and
     /// is never carried in this request - no signing secret crosses the
     /// FFI (frozen spec section 4).
     pub threshold: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_bounded_short_hex_opt")]
     pub taproot_merkle_root_hex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing_intent: Option<InteractiveSigningIntent>,
@@ -192,14 +383,18 @@ pub struct InteractiveSessionOpenRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveSessionOpenResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub attempt_id: String,
     pub idempotent: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveRound1Request {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub attempt_id: String,
     pub member_identifier: u16,
 }
@@ -209,12 +404,15 @@ pub struct InteractiveRound1Result {
     /// The member's public signing commitments. Idempotent until the
     /// attempt's nonces are consumed; the secret nonces they
     /// correspond to never leave the engine.
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub commitments_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveRound2Request {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub attempt_id: String,
     pub member_identifier: u16,
     /// The coordinator's signing package (the chosen responsive
@@ -222,22 +420,29 @@ pub struct InteractiveRound2Request {
     /// subset-of-included, exact threshold size, message binding, and
     /// byte-identity of this member's own commitment entry - BEFORE
     /// the nonces are consumed.
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub signing_package_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveRound2Result {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub attempt_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_short_hex")]
     pub signature_share_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveAggregateRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub attempt_id: String,
     /// The signing package the shares were produced over (carries the
     /// message and the chosen subset's commitments).
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub signing_package_hex: String,
     /// The collected signature shares from the responsive subset. Each is
     /// verified against the member's verifying share (resolved from the
@@ -249,20 +454,24 @@ pub struct InteractiveAggregateRequest {
     /// adjudication (frozen Phase 7.2b spec, section 6); the engine never
     /// inspects operator-signed envelopes itself.
     pub signature_shares: Vec<NativeFrostSignatureShare>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_bounded_short_hex_opt")]
     pub taproot_merkle_root_hex: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveAggregateResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub attempt_id: String,
     /// The aggregated BIP-340 Schnorr signature, hex-encoded.
+    #[serde(deserialize_with = "deserialize_bounded_short_hex")]
     pub signature_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveSessionAbortRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     /// When set, abort only if the live attempt matches; when unset,
     /// abort whatever attempt is live for the session.
@@ -272,6 +481,7 @@ pub struct InteractiveSessionAbortRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveSessionAbortResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub aborted: bool,
 }
@@ -308,11 +518,14 @@ pub enum ShareVerificationVerdict {
 /// does, so the verdict matches what aggregation would conclude for that share.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct VerifySignatureShareRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub signing_package_hex: String,
+    #[serde(deserialize_with = "deserialize_bounded_short_hex")]
     pub signature_share_hex: String,
     pub member_identifier: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_bounded_short_hex_opt")]
     pub taproot_merkle_root_hex: Option<String>,
 }
 
@@ -324,6 +537,7 @@ pub struct VerifySignatureShareResult {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RoundContribution {
     pub identifier: u16,
+    #[serde(deserialize_with = "deserialize_bounded_short_hex")]
     pub signature_share_hex: String,
 }
 
@@ -333,6 +547,7 @@ pub struct AttemptTransitionTelemetry {
     pub to_attempt_number: u32,
     pub from_coordinator_identifier: u16,
     pub to_coordinator_identifier: u16,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub reason: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded_member_identifiers: Vec<u16>,
@@ -341,11 +556,14 @@ pub struct AttemptTransitionTelemetry {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RoundState {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub round_id: String,
     pub required_contributions: u16,
+    #[serde(deserialize_with = "deserialize_bounded_message_hex")]
     pub message_digest_hex: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_bounded_short_hex_opt")]
     pub taproot_merkle_root_hex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing_participants: Option<Vec<u16>>,
@@ -359,7 +577,9 @@ pub struct AttemptContext {
     pub attempt_number: u32,
     pub coordinator_identifier: u16,
     pub included_participants: Vec<u16>,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub included_participants_fingerprint: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub attempt_id: String,
 }
 
@@ -370,8 +590,11 @@ pub struct AttemptContext {
 /// no nonce/session state, no policy decision.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DeriveInteractiveAttemptContextRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_message_hex")]
     pub message_hex: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub key_group: String,
     /// Validation gate only - the derivation requires `included_participants`
     /// to hold at least `threshold` members; it is NOT an input to the
@@ -399,11 +622,13 @@ pub struct DeriveInteractiveAttemptContextResult {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ParticipantFrostIdentifier {
     pub participant_identifier: u16,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub frost_identifier: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TranscriptAuditRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
 }
 
@@ -411,23 +636,30 @@ pub struct TranscriptAuditRequest {
 pub struct TranscriptAuditRecord {
     pub from_attempt_number: u32,
     pub to_attempt_number: u32,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub from_attempt_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub to_attempt_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub previous_round_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub previous_sign_request_fingerprint: String,
     pub from_coordinator_identifier: u16,
     pub to_coordinator_identifier: u16,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub reason: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded_member_identifiers: Vec<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invalid_share_proof_fingerprint: Option<String>,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub transcript_hash: String,
     pub recorded_at_unix: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TranscriptAuditResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub transition_count: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -436,9 +668,11 @@ pub struct TranscriptAuditResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct VerifyBlameProofRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub from_attempt_number: u32,
     pub accused_member_identifier: u16,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invalid_share_proof_fingerprint: Option<String>,
@@ -446,13 +680,16 @@ pub struct VerifyBlameProofRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct BlameProofVerificationResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub from_attempt_number: u32,
     pub accused_member_identifier: u16,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub reason: String,
     pub verified: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_hash: Option<String>,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub detail: String,
 }
 
@@ -473,30 +710,37 @@ pub struct QuarantineStatusResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct SignatureResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub round_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_short_hex")]
     pub signature_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TxInput {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub txid_hex: String,
     pub vout: u32,
     pub value_sats: u64,
     /// Script pubkey of the output being spent. BIP-341 SIGHASH_DEFAULT commits
     /// to every input's ordered prevout amount and script pubkey, so the signer
     /// cannot derive the messages it is allowed to sign without this metadata.
+    #[serde(deserialize_with = "deserialize_bounded_script_pubkey_hex")]
     pub script_pubkey_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TxOutput {
+    #[serde(deserialize_with = "deserialize_bounded_script_pubkey_hex")]
     pub script_pubkey_hex: String,
     pub value_sats: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct BuildTaprootTxRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub inputs: Vec<TxInput>,
     pub outputs: Vec<TxOutput>,
@@ -506,7 +750,9 @@ pub struct BuildTaprootTxRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TransactionResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub tx_hex: String,
     /// One BIP-341 key-spend SIGHASH_DEFAULT message per transaction input, in
     /// input order. `serde(default)` lets pre-ABI-3 persisted state decode so the
@@ -518,11 +764,13 @@ pub struct TransactionResult {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ShareMaterial {
     pub identifier: u16,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub encrypted_share_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RefreshSharesRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub current_shares: Vec<ShareMaterial>,
 }
@@ -533,6 +781,7 @@ pub struct RefreshSharesRequest {
 /// `cryptographic_refresh_not_supported`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RefreshSharesResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub refresh_epoch: u64,
     pub new_shares: Vec<ShareMaterial>,
@@ -540,11 +789,13 @@ pub struct RefreshSharesResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RefreshCadenceStatusRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RefreshCadenceStatusResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     /// Number of cryptographically valid refreshes. Always zero until the
     /// versioned multi-round protocol is implemented.
@@ -569,16 +820,21 @@ pub struct RefreshCadenceStatusResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TriggerEmergencyRekeyRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub reason: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TriggerEmergencyRekeyResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
     pub emergency_rekey_required: bool,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub reason: String,
     pub triggered_at_unix: u64,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub recommended_new_session_id: String,
 }
 
@@ -593,8 +849,11 @@ pub struct DifferentialFuzzRequest {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DifferentialDivergence {
     pub case_index: u32,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub check: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub severity: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub detail: String,
 }
 
@@ -623,6 +882,7 @@ pub struct PromoteCanaryResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RollbackCanaryRequest {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub reason: String,
 }
 
@@ -631,6 +891,7 @@ pub struct RollbackCanaryResult {
     pub from_percent: u8,
     pub to_percent: u8,
     pub config_version: u64,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub reason: String,
     pub rolled_back_at_unix: u64,
 }
@@ -651,8 +912,11 @@ pub struct CanaryRolloutStatusResult {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RoastLivenessPolicyResult {
     pub coordinator_timeout_ms: u64,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub timeout_source: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub advance_trigger: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub exclusion_evidence_policy: String,
 }
 
@@ -674,6 +938,7 @@ pub struct FrostTbtcAbiVersionResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct SignerHardeningMetricsResult {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub runtime_version: String,
     pub provenance_enforced: bool,
     pub admission_policy_enforced: bool,
@@ -754,8 +1019,11 @@ pub struct SignerHardeningMetricsResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ErrorResponse {
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub code: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub message: String,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub recovery_class: String,
     /// CANDIDATE culprits for an `aggregate_share_verification_failed` error:
     /// the u16 Go member identifiers whose FROST signature shares failed
@@ -842,6 +1110,8 @@ pub struct InitSignerConfigRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_max_output_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_max_input_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_max_output_value_sats: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_max_total_output_value_sats: Option<u64>,
@@ -887,6 +1157,7 @@ pub struct InitSignerConfigRequest {
 pub struct InitSignerConfigResult {
     pub installed: bool,
     pub idempotent: bool,
+    #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub config_fingerprint: String,
     pub configured_key_count: u32,
 }

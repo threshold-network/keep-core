@@ -1,5 +1,15 @@
 #!/usr/bin/env node
-
+//
+// Usage:
+//   node scripts/formal/check_roast_attempt_context_vectors.mjs
+//
+// Verifies that every entry in
+//   pkg/tbtc/signer/test/vectors/roast-attempt-context-v1.json
+// reproduces the canonical ROAST attempt-context hash derived from the
+// FROST-ROAST-INCLUDED-FPR-v1 / FROST-ROAST-ATTEMPT-ID-v1 domain constants.
+// Exits 0 on full conformance, 1 on any mismatch (which would invalidate
+// the canonical signer state-machine contract).
+//
 import crypto from "crypto"
 import fs from "fs"
 import path from "path"

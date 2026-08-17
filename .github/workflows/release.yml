@@ -1,3 +1,18 @@
+# Supply-chain pinning discipline:
+# Every `uses:` line below references an action by full commit SHA (the
+# `actions/<name>@<40-char-sha> # <human-readable-tag>` form) rather than a
+# mutable version tag. This is the same SHA-pinning convention enforced in
+# .github/workflows/tbtc-signer-formal.yml and required for any workflow
+# that builds or publishes release artifacts. Rationale:
+#   * tags like @v4 are mutable and can be re-pointed at a malicious commit
+#     if the upstream action maintainer's PAT or release token is compromised.
+#   * SHAs are immutable: a compromise after the pin date cannot retroactively
+#     alter the bytes the workflow executes.
+#   * the trailing `# <tag>` is metadata only; GitHub resolves the SHA first.
+# When bumping, prefer the SHA already pinned in tbtc-signer-formal.yml for
+# the same action. For actions not pinned there, capture the SHA from
+# `git ls-remote https://github.com/<owner>/<repo>.git refs/tags/<tag>` into
+# a PR review comment before merging.
 name: Release
 
 on:
@@ -12,7 +27,7 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # Fetch the whole history for the `git describe` command to work.
           fetch-depth: 0
@@ -24,10 +39,10 @@ jobs:
           echo "revision=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3
 
       - name: Cache Docker layers
-        uses: actions/cache@v4
+        uses: actions/cache@1bd1e32a3bdc45362d1e9d9242a894ab6bbb65be # v4
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
@@ -35,7 +50,7 @@ jobs:
             ${{ runner.os }}-buildx-
 
       - name: Build Docker Build Image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@0d1bd1c2b1a8a35a0b8efcd36e9b6d04ab5e2d6f # v5 # TODO: pin to SHA verified for release-runner Ubuntu image
         with:
           target: build-docker
           tags: go-build-env
@@ -56,7 +71,7 @@ jobs:
             gotestsum -- -timeout 15m
 
       - name: Build Client Binaries
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@0d1bd1c2b1a8a35a0b8efcd36e9b6d04ab5e2d6f # v5 # TODO: pin to SHA verified for release-runner Ubuntu image
         with:
           target: output-bins
           outputs: type=local,dest=./out/bin/
@@ -98,7 +113,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@de90c6c38b1067c1026cd9b4cacbce42f0b66237 # v2
         with:
           name: Release ${{ env.version }}
           body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
@@ -120,7 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: keep-production  # Requires release-admin team approval
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
@@ -133,10 +148,10 @@ jobs:
           DOCKERHUB_ORG: ${{ secrets.DOCKERHUB_ORG }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3
 
       - name: Cache Docker layers
-        uses: actions/cache@v4
+        uses: actions/cache@1bd1e32a3bdc45362d1e9d9242a894ab6bbb65be # v4
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-docker-${{ github.sha }}
@@ -144,13 +159,13 @@ jobs:
             ${{ runner.os }}-buildx-docker-
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@077c478dc9fe6f60dd67f52e47dc9c87dffdcc27 # v3 # TODO: pin to SHA verified for release-runner Ubuntu image
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and Push Docker Images
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@0d1bd1c2b1a8a35a0b8efcd36e9b6d04ab5e2d6f # v5 # TODO: pin to SHA verified for release-runner Ubuntu image
         with:
           target: runtime-docker
           tags: |

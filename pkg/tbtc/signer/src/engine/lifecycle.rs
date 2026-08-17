@@ -225,6 +225,17 @@ pub fn trigger_emergency_rekey(
             "reason must not be empty".to_string(),
         ));
     }
+    // Cap the human-readable reason so a malformed or adversarial request
+    // cannot persist an unbounded string into the durable emergency-rekey
+    // event (or echo it back through subsequent reads and canary-rollback
+    // telemetry). 256 bytes is plenty for an operator-supplied free-text
+    // explanation; anything longer is rejected up-front rather than
+    // truncated silently.
+    if reason.len() > 256 {
+        return Err(EngineError::Validation(
+            "reason exceeds max length 256 bytes".to_string(),
+        ));
+    }
 
     let mut guard = state()?
         .lock()
@@ -467,6 +478,14 @@ pub fn rollback_canary(
     if reason.is_empty() {
         return Err(EngineError::Validation(
             "reason must not be empty".to_string(),
+        ));
+    }
+    // See trigger_emergency_rekey: cap the operator-supplied reason so it
+    // cannot balloon the durable canary-rollback record. 256 bytes is plenty
+    // for a free-text operator note.
+    if reason.len() > 256 {
+        return Err(EngineError::Validation(
+            "reason exceeds max length 256 bytes".to_string(),
         ));
     }
 

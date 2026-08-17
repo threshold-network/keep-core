@@ -34,7 +34,8 @@ Traceability matrix:
 - `RoastAttemptStateMachine.tla`:
   `MonotonicAttemptNumber`, `ReplaySafe` ->
   `validate_attempt_context` in `src/engine/roast.rs`; replay guards in
-  start/finalize flow in `src/engine/signing.rs`.
+  start/finalize flow in `src/engine/` (coarse-flow helpers formerly in
+  `src/engine/signing.rs`, which was deleted in the extraction).
 - `StateKeyProviderPolicy.tla`:
   `LoadSuccessImpliesExactBinding`, `FailClosedDisallowedProvider` ->
   `decode_encrypted_state_envelope`, `encode_encrypted_state_envelope` in
@@ -52,20 +53,27 @@ Traceability matrix:
 Implementation status (read before trusting a green check):
 
 - **Implemented** — invariants trace to shipped code:
-  - `RoastAttemptStateMachine.tla` -> `src/engine/roast.rs`, `src/engine/signing.rs`.
+  - `RoastAttemptStateMachine.tla` -> `src/engine/roast.rs` (replay guards
+    live in the engine module the former `src/engine/signing.rs` helpers
+    were folded into during the extraction).
   - `StateKeyProviderPolicy.tla` -> `src/engine/persistence.rs`.
+  - `RoastRolloutPolicy.tla` -> `src/engine/lifecycle.rs` and
+    `src/engine/persistence.rs`. Implemented as of 2026-05-26 in this crate
+    (staged canary rollout, rollback, halted-mode terminal behavior). The
+    `RoastRolloutPolicy.tla` invariants map onto the canary progression
+    helpers (`next_canary_percent`, `can_promote_to_target_percent`) and
+    the persisted `CanaryRolloutState` envelope validated on load.
 - **Planned / not yet implemented** — invariants trace to design docs, not code:
-  - `TeeEnforcementModes.tla` and `RoastRolloutPolicy.tla` model the three-mode
-    (`disabled`/`audit`/`enforce`) + break-glass enforcement profile and the
-    staged rollout/rollback policy. The shipped signer implements only a binary
+  - `TeeEnforcementModes.tla` models the three-mode
+    (`disabled`/`audit`/`enforce`) + break-glass enforcement profile. The
+    shipped signer implements only a binary
     provenance enforce gate (`src/engine/provenance.rs`) and has no audit-mode
-    ramp, break-glass path, or rollout state machine. Both trace to plans that
-    are explicitly "not active" future hardening profiles
-    (`tee-whitelisted-signer-enforcement-plan.md`,
-    `roast-phase-5-security-rollout-gates.md`).
+    ramp or break-glass path. This model traces to a plan that is explicitly
+    "not active" future hardening profile
+    (`tee-whitelisted-signer-enforcement-plan.md`).
 
-A passing TLC run proves each model is internally consistent; for the two
-planned models it does **not** prove the shipped signer enforces that behavior.
+A passing TLC run proves each model is internally consistent; for the one
+planned model it does **not** prove the shipped signer enforces that behavior.
 
 Run all models with:
 

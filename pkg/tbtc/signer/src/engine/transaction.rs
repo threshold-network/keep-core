@@ -16,6 +16,19 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
             "inputs must not be empty".to_string(),
         ));
     }
+    // Cap the input count before any per-input work (txid parsing, script
+    // pubkey decode, sighash derivation) so an adversarial request cannot
+    // balloon the work into O(N) of an attacker-chosen N. Mirrors the
+    // output-count cap that lives inside the signing-policy firewall; both
+    // are operator-tunable via the policy config.
+    let max_input_count = crate::engine::policy::policy_max_input_count();
+    if request.inputs.len() > max_input_count {
+        return Err(EngineError::Validation(format!(
+            "input count [{}] exceeds policy max [{}]",
+            request.inputs.len(),
+            max_input_count
+        )));
+    }
 
     if request.outputs.is_empty() {
         return Err(EngineError::Validation(

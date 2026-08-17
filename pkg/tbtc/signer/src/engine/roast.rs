@@ -519,3 +519,38 @@ pub(crate) fn validate_session_id(session_id: &str) -> Result<(), EngineError> {
 
     Ok(())
 }
+/// Mirrors `validate_session_id` but for the (session_id, attempt_id) pair that
+/// keys every interactive-signing state transition. This helper enforces a
+/// BROADER shape (1-128 bytes, hex-only) than `canonical_aggregate_attempt_id`,
+/// which still enforces the strict 64-hex-character rule at the
+/// canonical-aggregate boundary. Two helpers, two contracts: the interactive
+/// entry points (round1/round2/abort) accept the wider envelope; the
+/// canonical-aggregate entry point keeps its strict rule because that boundary
+/// is the authoritative attempt-id canonicalizer.
+///
+/// Rejecting on length and charset here closes a DoS path where an attacker
+/// could otherwise pre-allocate unbounded state (live nonces, persisted
+/// markers) keyed by a session_id + a malformed attempt_id that no other
+/// validation gate inspects before the map insert.
+pub(crate) fn validate_attempt_id(attempt_id: &str) -> Result<(), EngineError> {
+    if attempt_id.is_empty() {
+        return Err(EngineError::Validation(
+            "attempt_id must be non-empty".to_string(),
+        ));
+    }
+
+    if attempt_id.len() > 128 {
+        return Err(EngineError::Validation(
+            "attempt_id exceeds max length 128 bytes".to_string(),
+        ));
+    }
+
+    if !attempt_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(EngineError::Validation(
+            "attempt_id must contain only hexadecimal characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+

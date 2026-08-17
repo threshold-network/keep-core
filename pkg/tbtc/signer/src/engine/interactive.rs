@@ -748,7 +748,7 @@ pub fn interactive_session_open(
             message_bytes: Zeroizing::new(message_bytes),
             taproot_merkle_root,
             signing_intent: request.signing_intent,
-            key_package,
+            key_package: Zeroizing::new(key_package),
             last_activity_at: interactive_now(),
             round1: None,
         },
@@ -778,6 +778,7 @@ pub fn interactive_round1(
         HardeningOperationLatencyGuard::success_only(HardeningOperation::InteractiveRound1);
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
+    validate_attempt_id(&request.attempt_id)?;
 
     // The live state and markers are keyed on the canonical (lowercase)
     // attempt_id; the wire form may differ in casing.
@@ -857,6 +858,7 @@ pub fn interactive_round2(
         HardeningOperationLatencyGuard::success_only(HardeningOperation::InteractiveRound2);
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
+    validate_attempt_id(&request.attempt_id)?;
 
     let mut signing_package_bytes = decode_hex_field(
         "InteractiveRound2",
@@ -1629,6 +1631,12 @@ pub fn interactive_session_abort(
     });
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
+    // `attempt_id` is optional here; when supplied, it must satisfy the same
+    // length + charset envelope as the entry points so a malformed filter
+    // cannot survive past the gates below.
+    if let Some(attempt_id) = request.attempt_id.as_deref() {
+        validate_attempt_id(attempt_id)?;
+    }
 
     // Canonicalize the optional attempt_id filter to match the
     // canonical form the live state is keyed on.

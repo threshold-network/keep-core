@@ -1,21 +1,60 @@
 # cargo-deny configuration for the tbtc-signer crate.
 #
-# CI runs `cargo deny check advisories` as a blocking gate (see
-# .github/workflows/tbtc-signer-formal.yml) so a newly-published RustSec
-# advisory against any of the ~190 locked dependencies fails the build. This
-# is the dependency-scanning gate that complements the external cryptographic
-# audit tracked in docs/roast-phase-5-security-rollout-gates.md (Gate 1).
+# CI runs `cargo deny check advisories` and `cargo deny check bans --all` as
+# blocking gates (see .github/workflows/tbtc-signer-formal.yml) so a newly-
+# published RustSec advisory against any of the ~190 locked dependencies or
+# a banned crate sneaking in through an updated transitive fails the build.
+# This is the dependency-scanning gate that complements the external
+# cryptographic audit tracked in
+# docs/roast-phase-5-security-rollout-gates.md (Gate 1).
 #
-# Only the advisories section is enforced here; licenses/bans/sources are
-# intentionally left at defaults to keep this gate scoped to security and
-# maintenance advisories and avoid unrelated CI churn.
+# Intent summary:
+#   * [advisories]  -- blocking: RustSec database.
+#   * [licenses]    -- permissive allow-list; "confidence-threshold = 0.8"
+#                      keeps SPDX expressions from false-positive tripping.
+#   * [bans]        -- "warn" on multiple versions (signals duplicate deps
+#                      for triage) and "deny" wildcards in version specs.
+#                      The `openssl` ban redirects contributors to
+#                      rustls-native-certs / rustls-webpki.
+#   * [sources]     -- crates.io only; no git/path deps by default (avoids
+#                      unreviewed upstream re-pointing).
+# Note: yanked-crate detection is intentionally NOT enabled here (no
+# [yanked] section). The gap is tracked separately: build.sh already pins
+# `cargo build --release --locked`, which refuses to resolve a yanked
+# version at lockfile-mismatch time. Adding `[yanked]` would only catch
+# advisories that already trigger the lockfile build, so the additional
+# signal is marginal -- tracked in a follow-up rather than enforced here.
 
 [advisories]
 ignore = [
   # atomic-polyfill is unmaintained (informational advisory, not a security
   # vulnerability). It is pulled in transitively via
-  # frost-core -> postcard -> heapless 0.7 and has no safe upgrade available
-  # until that chain moves off heapless 0.7. Accepted as a known risk; revisit
-  # when frost-core updates its heapless dependency.
-  { id = "RUSTSEC-2023-0089", reason = "unmaintained-only; transitive via frost-core/heapless 0.7; no fix available upstream yet" },
+  # frost-core -> postcard -> heapless 0.7 -> atomic-polyfill 1.0.3 and has
+  # no safe upgrade available until that chain moves off heapless 0.7.
+  # Accepted as a known risk; revisit when frost-core updates its heapless
+  # dependency.
+  { id = "RUSTSEC-2023-0089", reason = "unmaintained-only; transitive via frost-core -> postcard -> heapless 0.7 -> atomic-polyfill 1.0.3; no fix available until heapless moves off atomic-polyfill or frost-core updates heapless" },
 ]
+
+[licenses]
+# MITNFA is required because hex_lit (a transitive of the exact-pinned
+# bitcoin 0.32.8) uses "MIT +no-false-attribs"; the rest match common
+# permissive crates in the tbtc-signer / frost-secp256k1-tr dependency
+# graph. Unicode licenses are kept for forward-compat even though no
+# current locked crate uses them.
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "CC0-1.0", "Unicode-DFS-2016", "Unicode-3.0", "Zlib", "MPL-2.0", "MITNFA"]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Inline-table form (cargo-deny 0.19.x schema; the `[[bans.crates]]`
+# table-array form supported by older versions is not deserializable here).
+# The action pins cargo-deny 0.19.8, so we use this shape.
+deny = [
+  { crate = "openssl", reason = "use rustls-native-certs or rustls-webpki instead" },
+]
+
+[sources]
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

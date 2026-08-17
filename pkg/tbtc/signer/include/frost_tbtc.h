@@ -49,6 +49,12 @@ TbtcSignerResult frost_tbtc_build_taproot_tx(const uint8_t* request_ptr, size_t 
 TbtcSignerResult frost_tbtc_refresh_shares(const uint8_t* request_ptr, size_t request_len);
 
 /*
+ * Stateless nonce primitive FFI symbols were NOT exposed — see
+ * src/engine/frost_ops.rs. Production-signing nonces are held inside the
+ * engine (Phase 7.1 hardened interactive session below); no symbol on this
+ * header accepts or returns secret nonce material.
+ */
+/*
  * Phase 7.1 hardened interactive signing session.
  *
  * Secret nonces NEVER cross this boundary in either direction: the engine

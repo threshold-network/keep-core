@@ -19,6 +19,14 @@ pub(crate) const DEFAULT_ALLOWED_SCRIPT_CLASSES: &[&str] =
     &["p2pkh", "p2sh", "p2wpkh", "p2wsh", "p2tr"];
 pub(crate) const DEFAULT_MAX_OUTPUT_COUNT: usize = 10_000;
 
+/// Mirror of `DEFAULT_MAX_OUTPUT_COUNT`: the per-request input-count cap that
+/// `build_taproot_tx` enforces before iterating. Mirrored as a separate constant
+/// (rather than aliasing the output cap) so operators can tune input and output
+/// independently for wallet sizing. Inputs are bounded alongside outputs so an
+/// adversary cannot blow up transaction-building work via one side of the
+/// shape while staying under the other.
+pub(crate) const DEFAULT_MAX_INPUT_COUNT: usize = 10_000;
+
 pub(crate) static POLICY_GATE_WARNING_EMITTED: OnceLock<()> = OnceLock::new();
 
 pub(crate) static BUILD_TX_RATE_LIMITER: OnceLock<Mutex<PolicyRateLimiterState>> = OnceLock::new();
@@ -46,6 +54,7 @@ pub(crate) struct AdmissionPolicyConfig {
 pub(crate) struct SigningPolicyFirewallConfig {
     pub(crate) allowed_script_classes: HashSet<String>,
     pub(crate) max_output_count: usize,
+    pub(crate) max_input_count: usize,
     pub(crate) max_output_value_sats: u64,
     pub(crate) max_total_output_value_sats: u64,
     pub(crate) allowed_utc_start_hour: Option<u8>,
@@ -293,6 +302,10 @@ pub(crate) fn load_signing_policy_firewall_config(
         TBTC_SIGNER_POLICY_MAX_OUTPUT_COUNT_ENV,
         DEFAULT_MAX_OUTPUT_COUNT,
     )?;
+    let max_input_count = parse_usize_from_env_with_default(
+        TBTC_SIGNER_POLICY_MAX_INPUT_COUNT_ENV,
+        DEFAULT_MAX_INPUT_COUNT,
+    )?;
     let max_output_value_sats = parse_u64_from_env_with_default(
         TBTC_SIGNER_POLICY_MAX_OUTPUT_VALUE_SATS_ENV,
         BITCOIN_MAX_MONEY_SATS,
@@ -347,6 +360,7 @@ pub(crate) fn load_signing_policy_firewall_config(
     Ok(Some(SigningPolicyFirewallConfig {
         allowed_script_classes,
         max_output_count,
+        max_input_count,
         max_output_value_sats,
         max_total_output_value_sats,
         allowed_utc_start_hour,
@@ -688,6 +702,24 @@ pub(crate) fn enforce_signing_policy_firewall(
     total_output_value_sats: u64,
 ) -> Result<(), EngineError> {
     enforce_signing_policy_firewall_inner(session_id, outputs, total_output_value_sats, true)
+}
+
+/// Read the configured `max_input_count` from the loaded signing-policy
+/// firewall config, falling back to `DEFAULT_MAX_INPUT_COUNT` when the firewall
+/// is not enforced (dev profile without `TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL`).
+/// Mirrors the symmetric role of the output-count cap that lives inside
+/// `enforce_signing_policy_firewall_inner`, but kept as a separate accessor so
+/// `build_taproot_tx` can gate the input cap before any work without having to
+/// refactor the firewall inner signature to take a `inputs` slice.
+pub(crate) fn policy_max_input_count() -> usize {
+    match load_signing_policy_firewall_config() {
+        Ok(Some(policy)) => policy.max_input_count,
+        // The firewall loader returns `Err` only on a malformed numeric env.
+        // For that rare case we conservatively fall back to the built-in default
+        // rather than panicking, because the build_taproot_tx input-count gate
+        // is a DoS safeguard, not a security policy decision.
+        Ok(None) | Err(_) => DEFAULT_MAX_INPUT_COUNT,
+    }
 }
 
 pub(crate) fn recheck_signing_policy_firewall_without_rate_limit(
