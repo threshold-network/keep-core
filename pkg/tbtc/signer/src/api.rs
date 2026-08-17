@@ -28,6 +28,7 @@ pub(crate) const MAX_MESSAGE_HEX_CHARS: usize = 4 * 1024;
 /// Hard cap for human-readable free-text fields (operator-supplied reason,
 /// key_group label, etc.) that are persisted into durable state and could be
 /// echoed back through telemetry. 1 KiB is far more than a sane operator note.
+#[allow(dead_code)]
 pub(crate) const MAX_TEXT_CHARS: usize = 1024;
 
 /// serde `deserialize_with` helper: cap the length of a `String` hex field at
@@ -100,6 +101,7 @@ where
 }
 
 /// Strict variant capping at `MAX_TEXT_CHARS` for free-text operator fields.
+#[allow(dead_code)]
 pub(crate) fn deserialize_bounded_text<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -117,12 +119,13 @@ where
 /// Apply the `MAX_LONG_HEX_CHARS` cap inside the existing `SecretHex`
 /// deserializer so secrets ALSO cannot pre-allocate unbounded state. Uses
 /// the LONG cap (64 KiB) rather than the TEXT cap (1 KiB) because the
-/// payload here is `secret_package_hex` / `data_hex` / `key_package.data_hex`
-/// - serialized FROST key packages and DKG secret packages grow past 1 KiB at
-/// realistic participant counts (a 100-of-128 DKG secret package is ~hundreds
-/// of KiB in the limit; 64 KiB is the practical envelope). SecretHex is
-/// `#[serde(transparent)]` over `Zeroizing<String>`, so the cap rides the
-/// shared cap and the secret allocation still zeros on drop.
+/// payload here is `secret_package_hex`, `data_hex`, and
+/// `key_package.data_hex` - serialized FROST key packages and DKG secret
+/// packages grow past 1 KiB at realistic participant counts (a 100-of-128
+/// DKG secret package is hundreds of KiB in the limit; 64 KiB is the
+/// practical envelope). `SecretHex` is `#[serde(transparent)]` over
+/// `Zeroizing<String>`, so the cap rides the shared cap and the secret
+/// allocation still zeros on drop.
 pub(crate) fn deserialize_bounded_secret_hex<'de, D>(deserializer: D) -> Result<SecretHex, D::Error>
 where
     D: serde::Deserializer<'de>,

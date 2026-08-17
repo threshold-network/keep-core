@@ -1490,7 +1490,7 @@ mod tests {
         crate::engine::reset_for_tests();
 
         let max_request_bytes: usize = 16 * 1024 * 1024;
-        let payload = vec![0u8; 1];
+        let payload = [0u8; 1];
         let declared_len = max_request_bytes + 1;
         let result = frost_tbtc_init_signer_config(payload.as_ptr(), declared_len);
         let (status, response_payload) = drain_ffi_response(result);
