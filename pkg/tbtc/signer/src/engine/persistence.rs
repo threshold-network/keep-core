@@ -207,6 +207,15 @@ pub(crate) const TBTC_SIGNER_STATE_ENVELOPE_NONCE_BYTES: usize = 24;
 
 pub(crate) const TBTC_SIGNER_STATE_ENVELOPE_AUTH_TAG_BYTES: usize = 16;
 
+/// Hard upper bound on the decoded ciphertext length of a persisted state
+/// envelope. The AEAD path spends linear time authenticating arbitrary input
+/// the moment a tampered or accidentally-grown envelope is loaded off disk;
+/// bound it before allocating the decoded buffer the AEAD will walk. Calibrated
+/// to the FFI's `MAX_REQUEST_BYTES` ceiling plus the AEAD tag; a healthy state
+/// file is orders of magnitude smaller than this cap.
+pub(crate) const TBTC_SIGNER_STATE_ENVELOPE_MAX_CIPHERTEXT_BYTES: usize =
+    16 * 1024 * 1024 + TBTC_SIGNER_STATE_ENVELOPE_AUTH_TAG_BYTES;
+
 #[cfg(test)]
 pub(crate) const TEST_STATE_ENCRYPTION_KEY_HEX: &str =
     "1111111111111111111111111111111111111111111111111111111111111111";
@@ -1252,10 +1261,33 @@ pub(crate) fn decode_encrypted_state_envelope(
         )));
     }
 
+    // Bound the ciphertext hex length BEFORE hex::decode. hex::decode on an
+    // adversarially-grown input still allocates to the input size; closing the
+    // amplification at the hex-string layer avoids decoding Gigabytes just to
+    // reject them.
+    if envelope.ciphertext.len() > TBTC_SIGNER_STATE_ENVELOPE_MAX_CIPHERTEXT_BYTES * 2 {
+        return Err(EngineError::Internal(format!(
+            "envelope ciphertext hex exceeds max length [{}] bytes",
+            TBTC_SIGNER_STATE_ENVELOPE_MAX_CIPHERTEXT_BYTES * 2
+        )));
+    }
     let ciphertext_decode = hex::decode(&envelope.ciphertext);
     envelope.ciphertext.zeroize();
     let mut ciphertext = ciphertext_decode
         .map_err(|_| EngineError::Internal("invalid envelope ciphertext hex".to_string()))?;
+    // Belt-and-braces bound on the DECODED ciphertext length: hex::decode
+    // halves the byte count, so the worst-case allocation is MAX/2. The AEAD
+    // would otherwise walk and MAC every byte, including an attacker-controlled
+    // peak of MAX bytes.
+    if ciphertext.len() > TBTC_SIGNER_STATE_ENVELOPE_MAX_CIPHERTEXT_BYTES {
+        ciphertext.zeroize();
+        nonce_bytes.zeroize();
+        return Err(EngineError::Internal(format!(
+            "envelope ciphertext exceeds max length [{}] bytes, got [{}]",
+            TBTC_SIGNER_STATE_ENVELOPE_MAX_CIPHERTEXT_BYTES,
+            ciphertext.len()
+        )));
+    }
     let auth_tag_decode = hex::decode(&envelope.authentication_tag);
     envelope.authentication_tag.zeroize();
     let mut authentication_tag = auth_tag_decode.map_err(|_| {
