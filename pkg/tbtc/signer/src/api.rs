@@ -51,9 +51,7 @@ where
 }
 
 /// Strict (4 KiB) variant of `deserialize_bounded_hex` for short hex fields.
-pub(crate) fn deserialize_bounded_short_hex<'de, D>(
-    deserializer: D,
-) -> Result<String, D::Error>
+pub(crate) fn deserialize_bounded_short_hex<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -87,9 +85,7 @@ where
 }
 
 /// Strict variant capping at `MAX_MESSAGE_HEX_CHARS` for message/digest hex.
-pub(crate) fn deserialize_bounded_message_hex<'de, D>(
-    deserializer: D,
-) -> Result<String, D::Error>
+pub(crate) fn deserialize_bounded_message_hex<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -104,9 +100,7 @@ where
 }
 
 /// Strict variant capping at `MAX_TEXT_CHARS` for free-text operator fields.
-pub(crate) fn deserialize_bounded_text<'de, D>(
-    deserializer: D,
-) -> Result<String, D::Error>
+pub(crate) fn deserialize_bounded_text<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -129,9 +123,7 @@ where
 /// of KiB in the limit; 64 KiB is the practical envelope). SecretHex is
 /// `#[serde(transparent)]` over `Zeroizing<String>`, so the cap rides the
 /// shared cap and the secret allocation still zeros on drop.
-pub(crate) fn deserialize_bounded_secret_hex<'de, D>(
-    deserializer: D,
-) -> Result<SecretHex, D::Error>
+pub(crate) fn deserialize_bounded_secret_hex<'de, D>(deserializer: D) -> Result<SecretHex, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -144,8 +136,6 @@ where
     }
     Ok(SecretHex::new(value))
 }
-
-
 
 /// Opt variant of `deserialize_bounded_short_hex` for `Option<String>` fields
 /// such as `taproot_merkle_root_hex`. Bounded-length validated, accepts `null`
@@ -372,7 +362,11 @@ pub struct InteractiveSessionOpenRequest {
     /// is never carried in this request - no signing secret crosses the
     /// FFI (frozen spec section 4).
     pub threshold: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_bounded_short_hex_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_bounded_short_hex_opt"
+    )]
     pub taproot_merkle_root_hex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing_intent: Option<InteractiveSigningIntent>,
@@ -454,7 +448,11 @@ pub struct InteractiveAggregateRequest {
     /// adjudication (frozen Phase 7.2b spec, section 6); the engine never
     /// inspects operator-signed envelopes itself.
     pub signature_shares: Vec<NativeFrostSignatureShare>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_bounded_short_hex_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_bounded_short_hex_opt"
+    )]
     pub taproot_merkle_root_hex: Option<String>,
 }
 
@@ -525,7 +523,11 @@ pub struct VerifySignatureShareRequest {
     #[serde(deserialize_with = "deserialize_bounded_short_hex")]
     pub signature_share_hex: String,
     pub member_identifier: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_bounded_short_hex_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_bounded_short_hex_opt"
+    )]
     pub taproot_merkle_root_hex: Option<String>,
 }
 
@@ -563,7 +565,11 @@ pub struct RoundState {
     pub required_contributions: u16,
     #[serde(deserialize_with = "deserialize_bounded_message_hex")]
     pub message_digest_hex: String,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_bounded_short_hex_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_bounded_short_hex_opt"
+    )]
     pub taproot_merkle_root_hex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing_participants: Option<Vec<u16>>,

@@ -1455,9 +1455,7 @@ mod tests {
         let response_bytes = if result.buffer.ptr.is_null() || result.buffer.len == 0 {
             Vec::new()
         } else {
-            unsafe {
-                std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len).to_vec()
-            }
+            unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len).to_vec() }
         };
         frost_tbtc_free_buffer(result.buffer.ptr, result.buffer.len);
         (result.status_code, response_bytes)
@@ -1475,8 +1473,8 @@ mod tests {
         let result = frost_tbtc_init_signer_config(std::ptr::null(), 0);
         let (status, payload) = drain_ffi_response(result);
         assert_ne!(status, 0, "null request buffer must fail closed");
-        let error: ErrorResponse = serde_json::from_slice(&payload)
-            .expect("error response payload must deserialize");
+        let error: ErrorResponse =
+            serde_json::from_slice(&payload).expect("error response payload must deserialize");
         assert_eq!(error.code, "validation_error");
     }
 
@@ -1496,7 +1494,10 @@ mod tests {
         let declared_len = max_request_bytes + 1;
         let result = frost_tbtc_init_signer_config(payload.as_ptr(), declared_len);
         let (status, response_payload) = drain_ffi_response(result);
-        assert_ne!(status, 0, "oversized request must fail closed at the size check");
+        assert_ne!(
+            status, 0,
+            "oversized request must fail closed at the size check"
+        );
         let error: ErrorResponse = serde_json::from_slice(&response_payload)
             .expect("error response payload must deserialize");
         assert_eq!(error.code, "validation_error");
@@ -1546,7 +1547,10 @@ mod tests {
         let raw = b"not valid json{";
         let result = frost_tbtc_init_signer_config(raw.as_ptr(), raw.len());
         let (status, response_payload) = drain_ffi_response(result);
-        assert_ne!(status, 0, "non-JSON request body must fail closed at parse_request");
+        assert_ne!(
+            status, 0,
+            "non-JSON request body must fail closed at parse_request"
+        );
         let error: ErrorResponse = serde_json::from_slice(&response_payload)
             .expect("error response payload must deserialize");
         assert_eq!(error.code, "validation_error");

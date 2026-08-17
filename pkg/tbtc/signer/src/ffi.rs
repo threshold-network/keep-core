@@ -73,10 +73,9 @@ fn install_redacting_panic_hook() {
                 let development_profile =
                     crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
                         .map(|raw| {
-                            raw.trim()
-                                .eq_ignore_ascii_case(
-                                    crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT,
-                                )
+                            raw.trim().eq_ignore_ascii_case(
+                                crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT,
+                            )
                         })
                         .unwrap_or(false);
                 if development_profile {
@@ -95,11 +94,7 @@ fn install_redacting_panic_hook() {
         if install.is_err() {
             // Restore the hook we previously captured so the global state is
             // consistent. Once will not re-fire on the next ffi_entry.
-            if let Some(hook) = default_hook_cell
-                .lock()
-                .expect("poisoned")
-                .take()
-            {
+            if let Some(hook) = default_hook_cell.lock().expect("poisoned").take() {
                 let _ = catch_unwind(AssertUnwindSafe(|| {
                     std::panic::set_hook(hook);
                 }));
@@ -112,7 +107,6 @@ pub fn ffi_entry<F>(f: F) -> TbtcSignerResult
 where
     F: FnOnce() -> Result<Vec<u8>, EngineError>,
 {
-
     install_redacting_panic_hook();
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(bytes)) => success_from_serialized(bytes),

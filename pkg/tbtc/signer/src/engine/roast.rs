@@ -553,4 +553,3 @@ pub(crate) fn validate_attempt_id(attempt_id: &str) -> Result<(), EngineError> {
 
     Ok(())
 }
-
