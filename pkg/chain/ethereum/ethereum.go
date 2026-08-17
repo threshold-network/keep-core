@@ -12,11 +12,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ipfs/go-log"
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-common/pkg/rate"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen/contract"
 	"github.com/keep-network/keep-core/pkg/maintainer"
@@ -34,9 +34,12 @@ var logger = log.Logger("keep-ethereum")
 // provides the implementation of generic features like balance monitor,
 // block counter and similar.
 type baseChain struct {
-	key     *keystore.Key
-	client  ethutil.EthereumClient
-	chainID *big.Int
+	key                                *keystore.Key
+	client                             ethutil.EthereumClient
+	rpcClient                          *rpc.Client
+	rpcLimiter                         ethereumRPCLimiter
+	chainID                            *big.Int
+	frostPrimaryEthereumRequestTimeout time.Duration
 
 	blockCounter *ethereum.BlockCounter
 	nonceManager *ethereum.NonceManager
@@ -59,6 +62,19 @@ type baseChain struct {
 	tokenStaking *contract.TokenStaking
 }
 
+// EthereumClient is the client surface required to build chain handles from
+// an already-established transport.
+type EthereumClient interface {
+	ethutil.EthereumClient
+	ChainID(context.Context) (*big.Int, error)
+	Client() *rpc.Client
+}
+
+type ethereumRPCLimiter interface {
+	AcquirePermit(context.Context) error
+	ReleasePermit()
+}
+
 // Connect creates Random Beacon and TBTC Ethereum chain handles.
 func Connect(
 	ctx context.Context,
@@ -79,7 +95,44 @@ func Connect(
 			err,
 		)
 	}
+	return connectWithClient(ctx, config, client)
+}
 
+// ConnectWithClient creates Random Beacon and TBTC Ethereum chain handles
+// using the exact supplied client. It is used by the FROST start path so the
+// chain handle and retained-history independence monitor share one guarded
+// primary transport.
+func ConnectWithClient(
+	ctx context.Context,
+	config ethereum.Config,
+	client EthereumClient,
+) (
+	*BeaconChain,
+	*TbtcChain,
+	chain.BlockCounter,
+	chain.Signing,
+	*operator.PrivateKey,
+	error,
+) {
+	if client == nil {
+		return nil, nil, nil, nil, nil,
+			fmt.Errorf("Ethereum client is nil")
+	}
+	return connectWithClient(ctx, config, client)
+}
+
+func connectWithClient(
+	ctx context.Context,
+	config ethereum.Config,
+	client EthereumClient,
+) (
+	*BeaconChain,
+	*TbtcChain,
+	chain.BlockCounter,
+	chain.Signing,
+	*operator.PrivateKey,
+	error,
+) {
 	baseChain, err := newBaseChain(ctx, config, client)
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf(
@@ -216,7 +269,7 @@ func validateContractsAddresses(
 func newBaseChain(
 	ctx context.Context,
 	config ethereum.Config,
-	client *ethclient.Client,
+	client EthereumClient,
 ) (*baseChain, error) {
 	chainID, err := client.ChainID(ctx)
 	if err != nil {
@@ -247,6 +300,17 @@ func newBaseChain(
 	}
 
 	clientWithAddons := wrapClientAddons(config, client)
+	rpcLimiter, err := sharedEthereumRPCLimiter(config, clientWithAddons)
+	if err != nil {
+		return nil, err
+	}
+	var frostPrimaryEthereumRequestTimeout time.Duration
+	if timeoutSource, ok := client.(interface {
+		FrostPrimaryEthereumRequestTimeout() time.Duration
+	}); ok {
+		frostPrimaryEthereumRequestTimeout =
+			timeoutSource.FrostPrimaryEthereumRequestTimeout()
+	}
 
 	blockCounter, err := ethutil.NewBlockCounter(clientWithAddons)
 	if err != nil {
@@ -295,14 +359,17 @@ func newBaseChain(
 	}
 
 	return &baseChain{
-		key:              key,
-		client:           clientWithAddons,
-		chainID:          chainID,
-		blockCounter:     blockCounter,
-		nonceManager:     nonceManager,
-		miningWaiter:     miningWaiter,
-		transactionMutex: transactionMutex,
-		tokenStaking:     tokenStaking,
+		key:                                key,
+		client:                             clientWithAddons,
+		rpcClient:                          client.Client(),
+		rpcLimiter:                         rpcLimiter,
+		chainID:                            chainID,
+		frostPrimaryEthereumRequestTimeout: frostPrimaryEthereumRequestTimeout,
+		blockCounter:                       blockCounter,
+		nonceManager:                       nonceManager,
+		miningWaiter:                       miningWaiter,
+		transactionMutex:                   transactionMutex,
+		tokenStaking:                       tokenStaking,
 	}, nil
 }
 
@@ -503,16 +570,34 @@ func wrapClientAddons(
 			config.ConcurrencyLimit,
 		)
 
-		return ethutil.WrapRateLimiting(
+		return wrapEthereumClientWithRPCLimiter(
 			loggingClient,
-			&rate.LimiterConfig{
-				RequestsPerSecondLimit: config.RequestsPerSecondLimit,
-				ConcurrencyLimit:       config.ConcurrencyLimit,
-			},
+			newEthereumRPCLimiter(
+				config.RequestsPerSecondLimit,
+				config.ConcurrencyLimit,
+			),
 		)
 	}
 
 	return loggingClient
+}
+
+func sharedEthereumRPCLimiter(
+	config ethereum.Config,
+	client ethutil.EthereumClient,
+) (ethereumRPCLimiter, error) {
+	if config.RequestsPerSecondLimit <= 0 && config.ConcurrencyLimit <= 0 {
+		return nil, nil
+	}
+
+	limiter, ok := client.(ethereumRPCLimiter)
+	if !ok {
+		return nil, fmt.Errorf(
+			"configured Ethereum rate-limited client does not expose its shared limiter",
+		)
+	}
+
+	return limiter, nil
 }
 
 // decryptKey decrypts the chain key pointed by the config.

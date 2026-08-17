@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	btcec2 "github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -709,23 +710,34 @@ func TestWalletTransactionExecutor_SignTransaction_PolicyBoundSchnorrChargesOnly
 		return true
 	}
 	mandatoryBuildCalls := 0
+	outbox := openTestBitcoinBroadcastOutbox(
+		t,
+		t.TempDir(),
+		newOutboxTestBitcoinChain(),
+	)
+	t.Cleanup(func() { _ = outbox.close() })
 
 	wte := &walletTransactionExecutor{
 		executingWallet: generateWallet(big.NewInt(111)),
 		signingExecutor: &deterministicSchnorrSigningExecutorForTaproot{
-			privateKey: privateKey,
+			privateKey:   privateKey,
+			currentBlock: 20,
 			beforePolicyBinding: func() error {
 				mandatoryBuildCalls++
 				return consumeBuildToken()
 			},
 		},
 		waitForBlockFn: func(ctx context.Context, block uint64) error {
-			return nil
+			<-ctx.Done()
+			return ctx.Err()
 		},
+		action:                   ActionDepositSweep,
+		preSignAuthorizationGate: &testFrostPreSignAuthorizationGate{},
+		broadcastOutbox:          outbox,
 	}
 
 	logger := &warningCaptureLogger{}
-	tx, err := wte.signTransaction(logger, unsignedTx, 0, 0)
+	tx, err := wte.signTransaction(logger, unsignedTx, 1, 1000)
 	if err != nil {
 		t.Fatalf("unexpected signTransaction error: [%v]", err)
 	}
@@ -837,18 +849,29 @@ func TestWalletTransactionExecutor_SignTransaction_AppliesTaprootKeyPathSignatur
 		Value:           90000,
 		PublicKeyScript: outputScript,
 	})
+	outbox := openTestBitcoinBroadcastOutbox(
+		t,
+		t.TempDir(),
+		newOutboxTestBitcoinChain(),
+	)
+	t.Cleanup(func() { _ = outbox.close() })
 
 	wte := &walletTransactionExecutor{
 		executingWallet: generateWallet(big.NewInt(111)),
 		signingExecutor: &deterministicSchnorrSigningExecutorForTaproot{
-			privateKey: privateKey,
+			privateKey:   privateKey,
+			currentBlock: 20,
 		},
 		waitForBlockFn: func(ctx context.Context, block uint64) error {
-			return nil
+			<-ctx.Done()
+			return ctx.Err()
 		},
+		action:                   ActionDepositSweep,
+		preSignAuthorizationGate: &testFrostPreSignAuthorizationGate{},
+		broadcastOutbox:          outbox,
 	}
 
-	tx, err := wte.signTransaction(&warningCaptureLogger{}, unsignedTx, 0, 0)
+	tx, err := wte.signTransaction(&warningCaptureLogger{}, unsignedTx, 1, 1000)
 	if err != nil {
 		t.Fatalf("unexpected signTransaction error: [%v]", err)
 	}
@@ -981,18 +1004,29 @@ func TestWalletTransactionExecutor_SignTransaction_AppliesTweakedTaprootKeyPathS
 	tweakedPrivateKey, _ := btcec2.PrivKeyFromBytes(tweakedPrivateKeyBytes)
 
 	signingExecutor := &taprootMerkleRootRecordingSchnorrSigningExecutor{
-		privateKey: tweakedPrivateKey,
+		privateKey:   tweakedPrivateKey,
+		currentBlock: 20,
 	}
+	outbox := openTestBitcoinBroadcastOutbox(
+		t,
+		t.TempDir(),
+		newOutboxTestBitcoinChain(),
+	)
+	t.Cleanup(func() { _ = outbox.close() })
 
 	wte := &walletTransactionExecutor{
 		executingWallet: generateWallet(big.NewInt(111)),
 		signingExecutor: signingExecutor,
 		waitForBlockFn: func(ctx context.Context, block uint64) error {
-			return nil
+			<-ctx.Done()
+			return ctx.Err()
 		},
+		action:                   ActionDepositSweep,
+		preSignAuthorizationGate: &testFrostPreSignAuthorizationGate{},
+		broadcastOutbox:          outbox,
 	}
 
-	tx, err := wte.signTransaction(&warningCaptureLogger{}, unsignedTx, 0, 0)
+	tx, err := wte.signTransaction(&warningCaptureLogger{}, unsignedTx, 1, 1000)
 	if err != nil {
 		t.Fatalf("unexpected signTransaction error: [%v]", err)
 	}
@@ -1031,6 +1065,232 @@ func TestWalletTransactionExecutor_SignTransaction_AppliesTweakedTaprootKeyPathS
 			tx.Inputs[0].SignatureScript,
 		)
 	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_FrostAuthorizationFailurePrecedesNativeBinding(
+	t *testing.T,
+) {
+	testCases := map[string]*testFrostPreSignAuthorizationGate{
+		"authorization denied": {
+			authorizeErr: errors.New("authorization denied"),
+		},
+		"finalized state changed": {
+			revalidateErr: errors.New("finalized state changed"),
+		},
+	}
+
+	for name, gate := range testCases {
+		t.Run(name, func(t *testing.T) {
+			unsignedTx, privateKey := buildTaprootKeyPathUnsignedTxForTest(t)
+			nativeBindingCalls := 0
+			signingExecutor := &deterministicSchnorrSigningExecutorForTaproot{
+				privateKey:   privateKey,
+				currentBlock: 20,
+				beforePolicyBinding: func() error {
+					nativeBindingCalls++
+					return nil
+				},
+			}
+			outbox := openTestBitcoinBroadcastOutbox(
+				t,
+				t.TempDir(),
+				newOutboxTestBitcoinChain(),
+			)
+			t.Cleanup(func() { _ = outbox.close() })
+
+			wte := &walletTransactionExecutor{
+				executingWallet:          generateWallet(big.NewInt(111)),
+				signingExecutor:          signingExecutor,
+				waitForBlockFn:           blockingTestWaitForBlock,
+				action:                   ActionDepositSweep,
+				preSignAuthorizationGate: gate,
+				broadcastOutbox:          outbox,
+			}
+
+			_, err := wte.signTransaction(
+				&warningCaptureLogger{},
+				unsignedTx,
+				1,
+				1000,
+			)
+			if err == nil || !strings.Contains(err.Error(), "before nonce generation") {
+				t.Fatalf("unexpected authorization failure: [%v]", err)
+			}
+			if signingExecutor.authorizedCalls != 0 || nativeBindingCalls != 0 {
+				t.Fatal("native signing was reached before finalized authorization")
+			}
+			outbox.mutex.Lock()
+			recordCount := len(outbox.records)
+			outbox.mutex.Unlock()
+			if recordCount != 0 {
+				t.Fatal("authorization failure wrote a broadcast outbox record")
+			}
+		})
+	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_ReorgDuringNativeSigningCancelsBeforeSignature(
+	t *testing.T,
+) {
+	unsignedTx, privateKey := buildTaprootKeyPathUnsignedTxForTest(t)
+	gate := &testFrostPreSignAuthorizationGate{finalizedBlock: 500}
+	signingExecutor := &deterministicSchnorrSigningExecutorForTaproot{
+		privateKey:   privateKey,
+		currentBlock: 520,
+		duringAuthorizedSigning: func(ctx context.Context) error {
+			gate.setRevalidateError(errors.New("injected finalized-block reorg"))
+			<-ctx.Done()
+			return errors.New("native signing canceled before signature production")
+		},
+	}
+	outbox := openTestBitcoinBroadcastOutbox(
+		t,
+		t.TempDir(),
+		newOutboxTestBitcoinChain(),
+	)
+	t.Cleanup(func() { _ = outbox.close() })
+	wte := &walletTransactionExecutor{
+		executingWallet:                   generateWallet(big.NewInt(111)),
+		signingExecutor:                   signingExecutor,
+		waitForBlockFn:                    blockingTestWaitForBlock,
+		action:                            ActionDepositSweep,
+		preSignAuthorizationGate:          gate,
+		broadcastOutbox:                   outbox,
+		frostAuthorizationMonitorInterval: time.Millisecond,
+	}
+
+	tx, err := wte.signTransaction(
+		&warningCaptureLogger{},
+		unsignedTx,
+		10,
+		600,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "changed during native signing") {
+		t.Fatalf("unexpected mid-signing reorg result: [%v]", err)
+	}
+	if tx != nil {
+		t.Fatal("mid-signing reorg released a signed transaction")
+	}
+	if signingExecutor.signatureCalls != 0 {
+		t.Fatal("mid-signing reorg reached signature production")
+	}
+	outbox.mutex.Lock()
+	recordCount := len(outbox.records)
+	outbox.mutex.Unlock()
+	if recordCount != 0 {
+		t.Fatal("mid-signing reorg wrote a broadcast outbox record")
+	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_UsesSharedFinalityBlockAndPersistsBeforeReturn(
+	t *testing.T,
+) {
+	unsignedTx, privateKey := buildTaprootKeyPathUnsignedTxForTest(t)
+	signingExecutor := &deterministicSchnorrSigningExecutorForTaproot{
+		privateKey:   privateKey,
+		currentBlock: 520,
+	}
+	gate := &testFrostPreSignAuthorizationGate{finalizedBlock: 500}
+	outbox := openTestBitcoinBroadcastOutbox(
+		t,
+		t.TempDir(),
+		newOutboxTestBitcoinChain(),
+	)
+	t.Cleanup(func() { _ = outbox.close() })
+	executingWallet := generateWallet(big.NewInt(111))
+	wte := &walletTransactionExecutor{
+		executingWallet:          executingWallet,
+		signingExecutor:          signingExecutor,
+		waitForBlockFn:           blockingTestWaitForBlock,
+		action:                   ActionDepositSweep,
+		preSignAuthorizationGate: gate,
+		broadcastOutbox:          outbox,
+	}
+
+	tx, err := wte.signTransaction(
+		&warningCaptureLogger{},
+		unsignedTx,
+		10,
+		600,
+	)
+	if err != nil {
+		t.Fatalf("unexpected signTransaction error: [%v]", err)
+	}
+	if signingExecutor.authorizedCalls != 1 ||
+		len(signingExecutor.authorizedStarts) != 1 ||
+		signingExecutor.authorizedStarts[0] != 500 {
+		t.Fatalf(
+			"signing did not use the shared authorization finality block: [%v]",
+			signingExecutor.authorizedStarts,
+		)
+	}
+	if signingExecutor.currentBlockCalls != 0 {
+		t.Fatalf(
+			"signing consulted the node-local head [%d] times",
+			signingExecutor.currentBlockCalls,
+		)
+	}
+	if gate.revalidateCalls < 6 {
+		t.Fatalf("finalized state was not guarded through signing: [%d]", gate.revalidateCalls)
+	}
+
+	outbox.mutex.Lock()
+	record, ok := outbox.records[tx.Hash()]
+	outbox.mutex.Unlock()
+	if !ok {
+		t.Fatal("signed transaction returned before durable outbox insertion")
+	}
+	if record.Authorization.AuthorizationID == [32]byte{} ||
+		record.Authorization.ReservationID == [32]byte{} ||
+		record.Authorization.FinalizedBlock != 500 ||
+		record.Action != FrostPreSignActionDepositSweep ||
+		record.WalletPublicKeyHash != bitcoin.PublicKeyHash(executingWallet.publicKey) {
+		t.Fatalf("persisted record lost finalized authorization identity: [%+v]", record)
+	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_RejectsAuthorizationAtTimeoutBoundary(
+	t *testing.T,
+) {
+	unsignedTx, privateKey := buildTaprootKeyPathUnsignedTxForTest(t)
+	signingExecutor := &deterministicSchnorrSigningExecutorForTaproot{
+		privateKey:   privateKey,
+		currentBlock: 599,
+	}
+	gate := &testFrostPreSignAuthorizationGate{finalizedBlock: 600}
+	outbox := openTestBitcoinBroadcastOutbox(
+		t,
+		t.TempDir(),
+		newOutboxTestBitcoinChain(),
+	)
+	t.Cleanup(func() { _ = outbox.close() })
+	wte := &walletTransactionExecutor{
+		executingWallet:          generateWallet(big.NewInt(111)),
+		signingExecutor:          signingExecutor,
+		waitForBlockFn:           blockingTestWaitForBlock,
+		action:                   ActionDepositSweep,
+		preSignAuthorizationGate: gate,
+		broadcastOutbox:          outbox,
+	}
+
+	_, err := wte.signTransaction(
+		&warningCaptureLogger{},
+		unsignedTx,
+		10,
+		600,
+	)
+	if err == nil || !strings.Contains(err.Error(), "at/after signing timeout") {
+		t.Fatalf("unexpected timeout-boundary result: [%v]", err)
+	}
+	if signingExecutor.authorizedCalls != 0 {
+		t.Fatal("native signing reached the timeout boundary")
+	}
+}
+
+func blockingTestWaitForBlock(ctx context.Context, block uint64) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func TestWalletTransactionExecutor_SignTransaction_RejectsMixedTaprootAndLegacyInputsBeforeSigning(
@@ -1523,8 +1783,15 @@ func (desefbts *deterministicECDSASigningExecutorForBuildTaprootTxSubstitution) 
 }
 
 type deterministicSchnorrSigningExecutorForTaproot struct {
-	privateKey          *btcec2.PrivateKey
-	beforePolicyBinding func() error
+	privateKey              *btcec2.PrivateKey
+	beforePolicyBinding     func() error
+	duringAuthorizedSigning func(context.Context) error
+	currentBlock            uint64
+	currentBlockCalls       int
+	authorizedCalls         int
+	signatureCalls          int
+	authorizedStarts        []uint64
+	authorizationIDs        [][32]byte
 }
 
 // nonPolicyBoundTaprootSigningExecutor returns valid Schnorr signature bytes
@@ -1548,6 +1815,7 @@ func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatch(
 	messages []*big.Int,
 	startBlock uint64,
 ) ([]*frost.Signature, error) {
+	dsseft.signatureCalls++
 	signatures := make([]*frost.Signature, 0, len(messages))
 
 	for _, message := range messages {
@@ -1590,10 +1858,101 @@ func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatchWithTaproo
 	return dsseft.signBatch(ctx, messages, startBlock)
 }
 
+// exerciseTestPerInputAnchorAdmission mirrors what the real batch loop does
+// with the admission it is handed: one reservation per input, released before
+// the next one is taken. The stubs below sign nothing real, but they must still
+// exercise the admission the same way, or a regression that takes a single
+// reservation for the whole batch would pass every test that uses them.
+func exerciseTestPerInputAnchorAdmission(
+	ctx context.Context,
+	messageCount int,
+	admitInput func(context.Context) (func(), error),
+) error {
+	if admitInput == nil {
+		return errors.New("nil native signer anchor input admission")
+	}
+	for i := 0; i < messageCount; i++ {
+		release, err := admitInput(ctx)
+		if err != nil {
+			return fmt.Errorf(
+				"cannot reserve native signer anchor capacity for input [%d]: [%w]",
+				i,
+				err,
+			)
+		}
+		if release == nil {
+			return errors.New("anchor input admission returned no release")
+		}
+		release()
+	}
+	return nil
+}
+
+func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatchWithAuthorizedTaprootTransaction(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+	unsignedTx *bitcoin.TransactionBuilder,
+	authorizationID [32]byte,
+	authorizationGuard func(context.Context) error,
+	admitInput func(context.Context) (func(), error),
+) ([]*frost.Signature, error) {
+	if authorizationID == [32]byte{} {
+		return nil, errors.New("zero authorization ID")
+	}
+	if authorizationGuard == nil {
+		return nil, errors.New("nil authorization guard")
+	}
+	if err := authorizationGuard(ctx); err != nil {
+		return nil, err
+	}
+	if err := exerciseTestPerInputAnchorAdmission(
+		ctx,
+		len(messages),
+		admitInput,
+	); err != nil {
+		return nil, err
+	}
+	dsseft.authorizedCalls++
+	dsseft.authorizedStarts = append(dsseft.authorizedStarts, startBlock)
+	dsseft.authorizationIDs = append(dsseft.authorizationIDs, authorizationID)
+	if dsseft.duringAuthorizedSigning != nil {
+		if err := dsseft.duringAuthorizedSigning(ctx); err != nil {
+			return nil, err
+		}
+	}
+	signatures, err := dsseft.signBatchWithTaprootTransaction(
+		ctx,
+		messages,
+		taprootMerkleRoots,
+		startBlock,
+		unsignedTx,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizationGuard(ctx); err != nil {
+		return nil, err
+	}
+	return signatures, nil
+}
+
+func (dsseft *deterministicSchnorrSigningExecutorForTaproot) currentSigningBlock() (uint64, error) {
+	dsseft.currentBlockCalls++
+	if dsseft.currentBlock == 0 {
+		return 20, nil
+	}
+	return dsseft.currentBlock, nil
+}
+
 type taprootMerkleRootRecordingSchnorrSigningExecutor struct {
 	privateKey         *btcec2.PrivateKey
 	signBatchCalled    bool
 	taprootMerkleRoots []*[32]byte
+	currentBlock       uint64
+	authorizedCalls    int
+	authorizedStarts   []uint64
 }
 
 func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) signBatch(
@@ -1660,6 +2019,57 @@ func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) signBatchWithTa
 		taprootMerkleRoots,
 		startBlock,
 	)
+}
+
+func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) signBatchWithAuthorizedTaprootTransaction(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+	unsignedTx *bitcoin.TransactionBuilder,
+	authorizationID [32]byte,
+	authorizationGuard func(context.Context) error,
+	admitInput func(context.Context) (func(), error),
+) ([]*frost.Signature, error) {
+	if authorizationID == [32]byte{} {
+		return nil, errors.New("zero authorization ID")
+	}
+	if authorizationGuard == nil {
+		return nil, errors.New("nil authorization guard")
+	}
+	if err := authorizationGuard(ctx); err != nil {
+		return nil, err
+	}
+	if err := exerciseTestPerInputAnchorAdmission(
+		ctx,
+		len(messages),
+		admitInput,
+	); err != nil {
+		return nil, err
+	}
+	tmrrsse.authorizedCalls++
+	tmrrsse.authorizedStarts = append(tmrrsse.authorizedStarts, startBlock)
+	signatures, err := tmrrsse.signBatchWithTaprootTransaction(
+		ctx,
+		messages,
+		taprootMerkleRoots,
+		startBlock,
+		unsignedTx,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizationGuard(ctx); err != nil {
+		return nil, err
+	}
+	return signatures, nil
+}
+
+func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) currentSigningBlock() (uint64, error) {
+	if tmrrsse.currentBlock == 0 {
+		return 20, nil
+	}
+	return tmrrsse.currentBlock, nil
 }
 
 type unexpectedSigningExecutorForBuildTaprootTxError struct{}

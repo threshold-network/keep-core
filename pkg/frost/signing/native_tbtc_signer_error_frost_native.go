@@ -20,7 +20,8 @@ type buildTaggedTBTCSignerErrorResponse struct {
 	// CandidateCulprits is populated only for the
 	// aggregate_share_verification_failed error: the u16 Go member identifiers
 	// whose shares failed verification (omitted for every other error).
-	CandidateCulprits []uint16 `json:"candidate_culprits,omitempty"`
+	CandidateCulprits        []uint16                                              `json:"candidate_culprits,omitempty"`
+	StateAnchorTrustRecovery *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire `json:"state_anchor_trust_recovery,omitempty"`
 }
 
 // buildTaggedTBTCSignerStructuredError carries the FFI error envelope's
@@ -34,7 +35,8 @@ type buildTaggedTBTCSignerStructuredError struct {
 	Message string
 	// CandidateCulprits carries the aggregate_share_verification_failed culprit
 	// list when present; empty for every other error.
-	CandidateCulprits []uint16
+	CandidateCulprits        []uint16
+	StateAnchorTrustRecovery *NativeTBTCSignerStateAnchorTrustRecoveryRequired
 }
 
 func (e *buildTaggedTBTCSignerStructuredError) Error() string {
@@ -71,11 +73,27 @@ func buildTaggedTBTCSignerErrorPayload(payload []byte) *buildTaggedTBTCSignerStr
 		}
 	}
 
-	return &buildTaggedTBTCSignerStructuredError{
+	structured := &buildTaggedTBTCSignerStructuredError{
 		Code:              errorResponse.Code,
 		Message:           errorResponse.Message,
 		CandidateCulprits: errorResponse.CandidateCulprits,
 	}
+	if errorResponse.StateAnchorTrustRecovery != nil {
+		recovery, err :=
+			decodeNativeTBTCSignerStateAnchorTrustRecoveryRequired(
+				errorResponse.StateAnchorTrustRecovery,
+			)
+		if err != nil {
+			structured.Message = fmt.Sprintf(
+				"%s (invalid state-anchor trust-recovery context: %v)",
+				structured.Message,
+				err,
+			)
+			return structured
+		}
+		structured.StateAnchorTrustRecovery = recovery
+	}
+	return structured
 }
 
 // InteractiveAggregateShareVerificationError is returned by InteractiveAggregate

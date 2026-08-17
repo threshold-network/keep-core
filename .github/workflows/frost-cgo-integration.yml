@@ -79,6 +79,49 @@ jobs:
           test -f "$lib" || { echo "libfrost_tbtc.so not found at $lib"; exit 1; }
           echo "FROST_LIB_DIR=${CARGO_TARGET_DIR}/debug" >> "$GITHUB_ENV"
 
+      - name: Verify the witness geometry reservations agree across languages
+        run: |
+          set -euo pipefail
+          # The Go validators mint and pre-verify the offline-authority-signed trust
+          # certificates, so a geometry Go accepts must be exactly a geometry the signer
+          # accepts. Go cannot see the crate (it lives on the mirror branch), so its own
+          # test can only pin its own constants - it cannot notice the signer moving.
+          # This job can: it has the pinned crate checked out, so it compares the two
+          # sources directly. A reservation raised in Rust fails HERE, in the same gate
+          # that builds the pinned library, instead of surfacing after an operator has
+          # already run the offline signing ceremony against a geometry the node rejects.
+          rust_const() {
+            grep -oE "pub\(crate\) const $1: usize = [0-9]+" \
+              _signer-mirror/pkg/tbtc/signer/src/engine/store.rs \
+              | grep -oE '[0-9]+$'
+          }
+          go_const() {
+            grep -oE "$1 uint64 = [0-9]+" \
+              pkg/frost/signing/native_tbtc_signer_state_anchor_trust.go \
+              | grep -oE '[0-9]+$'
+          }
+          mismatch=0
+          check() {
+            rust_value="$(rust_const "$1" || true)"
+            go_value="$(go_const "$2" || true)"
+            if [ -z "$rust_value" ] || [ -z "$go_value" ]; then
+              echo "could not read $1 (rust) / $2 (go); a constant was renamed"
+              mismatch=1
+              return
+            fi
+            if [ "$rust_value" != "$go_value" ]; then
+              echo "witness geometry drift: $1 is [$rust_value] but $2 is [$go_value]"
+              mismatch=1
+            fi
+          }
+          check TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION \
+            NativeTBTCSignerStateWitnessRotationTerminalRecordReservation
+          check TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION \
+            NativeTBTCSignerStateWitnessQuarantineRecordReservation
+          test "$mismatch" -eq 0 || {
+            echo "update the Go reservation constants and their validator in the same change"
+            exit 1; }
+
       - name: Verify the engine ABI symbols are exported
         run: |
           set -euo pipefail
@@ -89,6 +132,7 @@ jobs:
           missing=0
           for sym in \
             frost_tbtc_persist_distributed_dkg_key_package \
+            frost_tbtc_retire_distributed_dkg_key_packages \
             frost_tbtc_dkg_part1 \
             frost_tbtc_derive_interactive_attempt_context \
             frost_tbtc_interactive_session_open \
@@ -96,6 +140,15 @@ jobs:
             frost_tbtc_new_signing_package \
             frost_tbtc_interactive_aggregate \
             frost_tbtc_verify_signature_share \
+            frost_tbtc_durable_store_identity \
+            frost_tbtc_retained_key_package_inventory \
+            frost_tbtc_state_witness_proof \
+            frost_tbtc_state_witness_tip \
+            frost_tbtc_state_anchor_trust_head \
+            frost_tbtc_transition_state_witness_anchor \
+            frost_tbtc_state_anchor_bootstrap_facts \
+            frost_tbtc_acknowledge_state_witness_checkpoint \
+            frost_tbtc_recover_state_witness_checkpoint \
             frost_tbtc_version \
             frost_tbtc_abi_version; do
             if ! nm -D --defined-only "$lib" | grep -q " ${sym}$"; then

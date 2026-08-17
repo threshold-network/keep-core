@@ -116,6 +116,7 @@ func newDepositSweepAction(
 		signingExecutor,
 		waitForBlockFn,
 	)
+	transactionExecutor.action = ActionDepositSweep
 
 	return &depositSweepAction{
 		logger:                           logger,
@@ -242,6 +243,13 @@ func (dsa *depositSweepAction) execute() error {
 	}
 
 	signingStartTime := time.Now()
+	dsa.transactionExecutor.frostPreSignActionContext = &FrostPreSignActionContext{
+		DepositSweep: &FrostPreSignDepositSweepActionContext{
+			Proposal: dsa.proposal,
+			Deposits: validatedDeposits,
+			MainUtxo: walletMainUtxo,
+		},
+	}
 	sweepTx, err := dsa.transactionExecutor.signTransaction(
 		signTxLogger,
 		unsignedSweepTx,
@@ -545,6 +553,7 @@ func ValidateDepositSweepProposal(
 			}(),
 			FundingTx: fundingTx,
 		}
+		depositExtraInfo[i].Deposit.FundingTx = fundingTx
 	}
 
 	if taprootDepositsCount > 0 && taprootDepositsCount != len(proposal.DepositsKeys) {

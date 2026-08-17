@@ -7,7 +7,10 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/big"
+	"slices"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"go.uber.org/zap"
@@ -22,6 +25,25 @@ import (
 )
 
 const frostDKGResultSubmissionDelayStepBlocks = 30
+
+var errFrostDKGSubmissionOutcomeUncertain = errors.New(
+	"FROST DKG submission outcome is uncertain",
+)
+
+// frostDKGInteractiveSigningReady is the process-wide interactive-signing gate
+// executeFrostDKGIfPossible evaluates before it may run an attempt. Production
+// never reassigns it; it is a variable solely so tests in this package can
+// reach the code BELOW the gate.
+//
+// That seam is needed because the real predicate additionally requires a
+// registered interactive engine provider, and the provider registration takes
+// an unexported pkg/frost/signing interface, so no package outside
+// pkg/frost/signing can install one. Without the seam every unit test of
+// executeFrostDKGIfPossible stops at this gate and the attempt-admission
+// ordering below it - persist the DKG attempt boundary BEFORE anything can
+// create a key package - would be exercised only through its extracted helper,
+// never through the caller that has to honour its failure.
+var frostDKGInteractiveSigningReady = frostsigning.InteractiveSigningReady
 
 func executeFrostDKGIfPossible(
 	ctx context.Context,
@@ -41,13 +63,23 @@ func executeFrostDKGIfPossible(
 		)
 		return false
 	}
+	if _, ok := nativeTBTCSignerEngine.(frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine); !ok {
+		logger.Errorf(
+			"FROST DKG with seed [0x%x] selected this operator, but the native "+
+				"tbtc-signer engine cannot durably retire orphaned DKG packages, "+
+				"so key material this attempt creates could never be reclaimed "+
+				"if the attempt resolves without this wallet",
+			event.Seed,
+		)
+		return false
+	}
 
 	// Distributed DKG produces signing material usable ONLY via the complete
 	// interactive ROAST path. The interactive audit flag alone is insufficient:
 	// without the ROAST readiness opt-in or a build containing the transition
 	// producer, orchestration takes its static fallback and reaches the removed
 	// coarse primitive. Refuse to run rather than create an unsignable wallet.
-	if !frostsigning.InteractiveSigningReady() {
+	if !frostDKGInteractiveSigningReady() {
 		logger.Errorf(
 			"FROST DKG with seed [0x%x] selected this operator, but the distributed "+
 				"DKG requires the complete interactive ROAST signing path (%s=true, "+
@@ -103,7 +135,21 @@ func executeFrostDKGIfPossible(
 	fullMembers := frostFullMembers(groupSelectionResult)
 	dkgTimeoutBlock := event.BlockNumber + params.SubmissionTimeoutBlocks
 
+	anchorReservation, err := admitFrostDKGAttempt(
+		ctx,
+		node,
+		event.Seed,
+		event.BlockNumber,
+		memberIndexes,
+	)
+	if err != nil {
+		logger.Errorf("FROST DKG attempt was not admitted: [%v]", err)
+		return false
+	}
+
 	go func() {
+		defer anchorReservation.Release()
+
 		dkgLogger := logger.With(
 			zap.String("seed", fmt.Sprintf("0x%x", event.Seed)),
 			zap.String("memberIndexes", fmt.Sprintf("%v", memberIndexes)),
@@ -121,17 +167,30 @@ func executeFrostDKGIfPossible(
 
 		sessionID := fmt.Sprintf("%s-%s", channelName, "attempt-1")
 
-		// Capture DKG round messages off the channel BEFORE the readiness barrier below.
-		// announceFrostDKGReadiness releases every peer once the quorum announces, but a
-		// node installs its DKG receiver only later, inside executeDistributedFrostDKG.
-		// A peer released ahead of a slower node can broadcast round-1 before that node
-		// is receiving; the transport would drop it (no subscriber) and not retransmit,
-		// stalling the DKG. The prebuffer catches those from before the barrier so they
-		// are replayed once the receiver is up.
-		dkgPrebuffer := frostsigning.StartDKGMessagePrebuffer(dkgCtx, channel)
-
-		activeMemberIndexes, misbehavedMembersIndices, err :=
-			announceFrostDKGReadiness(
+		var dkgPrebuffer *frostsigning.DKGMessagePrebuffer
+		announceReadiness := func() (
+			[]group.MemberIndex,
+			registry.MisbehavedMemberIndices,
+			error,
+		) {
+			// Capture DKG round messages off the channel BEFORE the
+			// readiness barrier below. The reservation is deliberately
+			// acquired before this callback, so no local seat can announce
+			// readiness unless worst-case anchor capacity is already held.
+			//
+			// announceFrostDKGReadiness releases every peer once the
+			// quorum announces, but a node installs its DKG receiver only
+			// later, inside executeDistributedFrostDKG. A peer released
+			// ahead of a slower node can broadcast round-1 before that
+			// node is receiving; the transport would drop it (no
+			// subscriber) and not retransmit, stalling the DKG. The
+			// prebuffer catches those messages so they are replayed once
+			// the receiver is up.
+			dkgPrebuffer = frostsigning.StartDKGMessagePrebuffer(
+				dkgCtx,
+				channel,
+			)
+			return announceFrostDKGReadiness(
 				dkgCtx,
 				node,
 				channel,
@@ -141,8 +200,11 @@ func executeFrostDKGIfPossible(
 				memberIndexes,
 				len(groupSelectionResult.OperatorsIDs),
 			)
+		}
+		activeMemberIndexes, misbehavedMembersIndices, err :=
+			announceReadiness()
 		if err != nil {
-			dkgLogger.Errorf("FROST DKG readiness announcement failed: [%v]", err)
+			dkgLogger.Errorf("FROST DKG readiness failed: [%v]", err)
 			return
 		}
 
@@ -162,7 +224,6 @@ func executeFrostDKGIfPossible(
 			)
 			return
 		}
-
 		tbtcSignerMemberIndexes, err := finalFrostDKGMemberIndexes(
 			activeMemberIndexes,
 			groupSelectionResult,
@@ -190,6 +251,11 @@ func executeFrostDKGIfPossible(
 			dkgLogger.Errorf("FROST DKG execution failed: [%v]", err)
 			return
 		}
+		// From this point every local key package is durable. Do not retire it
+		// from any error exit below using latest-state DKG or registration reads:
+		// replicas can observe those values at different chain points. Only
+		// reconciliation rooted in finalized retained history may prove that the
+		// attempt resolved without this wallet and retire the material.
 
 		for _, localMemberIndex := range localActiveMemberIndexes {
 			if err := registerFrostSignerWithMaterial(
@@ -260,6 +326,91 @@ func executeFrostDKGIfPossible(
 	}()
 
 	return true
+}
+
+// admitFrostDKGAttempt performs the two ordered, fail-closed steps that must
+// both succeed before this operator may run a DKG attempt, and returns the
+// anchor reservation the attempt goroutine releases when it finishes.
+//
+// The order is load-bearing. The attempt boundary is persisted FIRST, before
+// readiness or native DKG execution can create any key package: orphan
+// reconciliation is intentionally unable to retire packages until its finalized
+// snapshot covers this block, so a package that exists without a recorded
+// boundary could be retired from a snapshot taken before the attempt started.
+// A boundary that cannot be persisted therefore aborts the attempt outright -
+// nothing may reach the persist stage behind an unrecorded boundary.
+//
+// The reversible capacity reservation is acquired second, still before crossing
+// the goroutine boundary, so a transient admission failure stays visible to the
+// coordinator, which releases the event lease so a replay can retry.
+func admitFrostDKGAttempt(
+	ctx context.Context,
+	node *node,
+	seed *big.Int,
+	startBlock uint64,
+	memberIndexes []group.MemberIndex,
+) (
+	*frostNativeSignerAnchorRevisionReservation,
+	error,
+) {
+	if node == nil {
+		return nil, fmt.Errorf("node is unavailable")
+	}
+	if node.frostNativeSignerAnchorAdmission == nil {
+		return nil, fmt.Errorf(
+			"native signer anchor admission is unavailable: " +
+				"EnableFrostPreSignAuthorization is not configured",
+		)
+	}
+	if err := node.walletRegistry.recordFrostDKGAttempt(
+		seed,
+		startBlock,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"cannot persist the FROST DKG attempt boundary: [%w]",
+			err,
+		)
+	}
+
+	anchorReservation, err := reserveFrostDKGReadiness(
+		ctx,
+		node.frostNativeSignerAnchorAdmission,
+		memberIndexes,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return anchorReservation, nil
+}
+
+func reserveFrostDKGReadiness(
+	ctx context.Context,
+	anchorAdmission *frostNativeSignerAnchorAdmissionController,
+	localMemberIndexes []group.MemberIndex,
+) (
+	*frostNativeSignerAnchorRevisionReservation,
+	error,
+) {
+	if anchorAdmission == nil {
+		return nil, fmt.Errorf(
+			"native signer anchor admission is unavailable",
+		)
+	}
+	// Every selected local seat may become active once readiness is announced.
+	// Reserve that worst-case persistence cost before starting asynchronous
+	// readiness work.
+	anchorReservation, err := anchorAdmission.reserveDKG(
+		ctx,
+		uint64(len(localMemberIndexes)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"native signer anchor admission failed: [%w]",
+			err,
+		)
+	}
+	return anchorReservation, nil
 }
 
 type frostDKGExecutionResult struct {
@@ -355,6 +506,29 @@ func executeDistributedFrostDKG(
 		prebuffer,
 	)
 	if err != nil {
+		// Every seat that reached the persist stage owns a DURABLE secret share,
+		// and it broadcast all of its round-1 and round-2 packages before that:
+		// persistence runs strictly after the runner completed part 3. A local
+		// failure here - a sibling seat's persist I/O, an anchor briefly
+		// unreachable between two anchored persists - therefore proves nothing
+		// about the DISTRIBUTED outcome. The remaining members can still collect
+		// HonestThreshold result signatures without this node and register a
+		// wallet whose member list is the full sortition group, this operator
+		// included. Retiring the persisted key groups from this error exit would
+		// irreversibly destroy the shares of a wallet that goes live, so it is
+		// deliberately not done - the same rule the caller applies to every
+		// error exit after this function returns. The attempt boundary recorded
+		// before this run keeps the orphaned key group visible to orphan
+		// reconciliation, which retires it only once finalized retained history
+		// proves the attempt resolved without this wallet.
+		if len(persistBySeat) > 0 {
+			logger.Warnf(
+				"preserving [%d] durably persisted FROST DKG key package(s) "+
+					"from a failed local DKG run; only finalized reconciliation "+
+					"may retire them",
+				len(persistBySeat),
+			)
+		}
 		return nil, err
 	}
 
@@ -683,15 +857,97 @@ func submitFrostDKGResultWithDelay(
 		return err
 	}
 	if state != AwaitingResult {
-		logger.Infof(
-			"skipping FROST DKG result submission by member [%d]; current state is [%v]",
-			memberIndex,
+		matches, matchErr := currentFrostDKGResultMatches(frostChain, result)
+		if matchErr != nil {
+			return fmt.Errorf(
+				"cannot verify the result that advanced FROST DKG state to [%v]: [%w]",
+				state,
+				matchErr,
+			)
+		}
+		if matches {
+			return nil
+		}
+		return fmt.Errorf(
+			"FROST DKG state advanced to [%v] without this wallet result",
 			state,
 		)
-		return nil
 	}
 
-	return frostChain.SubmitFrostDKGResult(result)
+	if err := frostChain.SubmitFrostDKGResult(result); err != nil {
+		matches, matchErr := currentFrostDKGResultMatches(frostChain, result)
+		if matchErr == nil && matches {
+			return nil
+		}
+		if matchErr != nil {
+			return fmt.Errorf(
+				"%w: submission failed [%v] and its canonical outcome "+
+					"could not be verified: [%w]",
+				errFrostDKGSubmissionOutcomeUncertain,
+				err,
+				matchErr,
+			)
+		}
+		stateAfterSubmission, stateErr := frostChain.GetFrostDKGState()
+		if stateErr != nil || stateAfterSubmission == AwaitingResult {
+			return fmt.Errorf(
+				"%w: submission failed: [%v]",
+				errFrostDKGSubmissionOutcomeUncertain,
+				err,
+			)
+		}
+		return err
+	}
+	return nil
+}
+
+func currentFrostDKGResultMatches(
+	frostChain FrostDKGChain,
+	expected *registry.Result,
+) (bool, error) {
+	if frostChain == nil || expected == nil {
+		return false, fmt.Errorf("FROST DKG result comparison dependencies are nil")
+	}
+	state, err := frostChain.GetFrostDKGState()
+	if err != nil {
+		return false, err
+	}
+	if state != Challenge {
+		return false, nil
+	}
+	events, err := frostChain.PastFrostDKGResultSubmittedEvents(nil)
+	if err != nil {
+		return false, err
+	}
+	var latest *FrostDKGResultSubmittedEvent
+	for _, event := range events {
+		if event == nil || event.Result == nil {
+			continue
+		}
+		if latest == nil || event.BlockNumber >= latest.BlockNumber {
+			latest = event
+		}
+	}
+	if latest == nil || !sameFrostDKGWalletResult(latest.Result, expected) {
+		return false, nil
+	}
+	valid, _, err := frostChain.IsFrostDKGResultValid(latest.Result)
+	if err != nil {
+		return false, err
+	}
+	return valid, nil
+}
+
+func sameFrostDKGWalletResult(first, second *registry.Result) bool {
+	return first != nil &&
+		second != nil &&
+		first.XOnlyOutputKey == second.XOnlyOutputKey &&
+		first.MembersHash == second.MembersHash &&
+		slices.Equal(first.Members, second.Members) &&
+		slices.Equal(
+			first.MisbehavedMembersIndices,
+			second.MisbehavedMembersIndices,
+		)
 }
 
 func frostOutputKeyToECDSAPublicKey(

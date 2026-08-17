@@ -46,8 +46,8 @@ func withCancelOnBlock(
 	go func() {
 		defer cancelBlockCtx()
 
-		err := waitForBlockFn(ctx, block)
-		if err != nil {
+		err := waitForBlockFn(blockCtx, block)
+		if err != nil && blockCtx.Err() == nil {
 			logger.Errorf(
 				"failed to wait for block [%v]; "+
 					"context cancelled earlier than expected",

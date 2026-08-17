@@ -1,0 +1,417 @@
+package signing
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestDecodeNativeTBTCSignerStateAnchorTrustTransitionResult(t *testing.T) {
+	checkpoint := testNativeTBTCSignerStateAnchorCheckpointWire(9, 0x11)
+	base := testNativeTBTCSignerStateAnchorCheckpointWire(8, 0x21)
+	reference := nativeTBTCSignerStateAnchorTrustReferenceWire{
+		ServiceEpoch:        "3",
+		Revision:            "1",
+		PreviousEventRoot:   testNativeTBTCSignerTrustHex32(0x31),
+		EventRoot:           testNativeTBTCSignerTrustHex32(0x32),
+		CheckpointAckDigest: testNativeTBTCSignerTrustHex32(0x33),
+		Checkpoint:          checkpoint,
+	}
+	head := nativeTBTCSignerStateAnchorTrustHeadWire{
+		Schema:                          NativeTBTCSignerStateAnchorTrustHeadSchema,
+		CertificateSequence:             "3",
+		CertificateDigest:               testNativeTBTCSignerTrustHex32(0x41),
+		ActivationManifestSequence:      "5",
+		ActivationManifestHash:          testNativeTBTCSignerTrustHex32(0x42),
+		BindingHash:                     testNativeTBTCSignerTrustHex32(0x43),
+		ResponsePublicKeySPKISHA256:     testNativeTBTCSignerTrustHex32(0x44),
+		OfflineAuthoritySPKISHA256:      testNativeTBTCSignerTrustHex32(0x45),
+		ServiceEpoch:                    "3",
+		CertifiedFloor:                  reference,
+		WitnessMaximumRecords:           "4096",
+		WitnessRotationThresholdRecords: "1024",
+	}
+	wire := nativeTBTCSignerStateAnchorTrustTransitionResultWire{
+		Schema:                  NativeTBTCSignerStateAnchorTrustTransitionResultSchema,
+		Installed:               testNativeTBTCSignerTrustBool(true),
+		Idempotent:              testNativeTBTCSignerTrustBool(false),
+		AppliedCertificateCount: "2",
+		TrustHead:               head,
+		CurrentCheckpoint:       checkpoint,
+		WitnessBaseCheckpoint:   base,
+		CurrentAnchorReference:  reference,
+	}
+	payload, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := DecodeNativeTBTCSignerStateAnchorTrustTransitionResult(payload)
+	if err != nil {
+		t.Fatalf("valid trust transition result was rejected: %v", err)
+	}
+	if !result.Installed || result.Idempotent ||
+		result.AppliedCertificateCount != 2 ||
+		result.TrustHead.CertificateSequence != 3 ||
+		result.CurrentCheckpoint.Generation != 9 ||
+		result.WitnessBaseCheckpoint.Generation != 8 ||
+		result.CurrentAnchorReference.PreviousEventRoot[0] != 0x31 {
+		t.Fatalf("unexpected trust transition result: %+v", result)
+	}
+}
+
+func TestDecodeNativeTBTCSignerStateAnchorTrustRejectsUnknownAndInconsistent(
+	t *testing.T,
+) {
+	checkpoint := testNativeTBTCSignerStateAnchorCheckpointWire(9, 0x11)
+	reference := nativeTBTCSignerStateAnchorTrustReferenceWire{
+		ServiceEpoch:        "3",
+		Revision:            "1",
+		PreviousEventRoot:   testNativeTBTCSignerTrustHex32(0x31),
+		EventRoot:           testNativeTBTCSignerTrustHex32(0x32),
+		CheckpointAckDigest: testNativeTBTCSignerTrustHex32(0x33),
+		Checkpoint:          checkpoint,
+	}
+	head := nativeTBTCSignerStateAnchorTrustHeadWire{
+		Schema:                          NativeTBTCSignerStateAnchorTrustHeadSchema,
+		CertificateSequence:             "3",
+		CertificateDigest:               testNativeTBTCSignerTrustHex32(0x41),
+		ActivationManifestSequence:      "5",
+		ActivationManifestHash:          testNativeTBTCSignerTrustHex32(0x42),
+		BindingHash:                     testNativeTBTCSignerTrustHex32(0x43),
+		ResponsePublicKeySPKISHA256:     testNativeTBTCSignerTrustHex32(0x44),
+		OfflineAuthoritySPKISHA256:      testNativeTBTCSignerTrustHex32(0x45),
+		ServiceEpoch:                    "3",
+		CertifiedFloor:                  reference,
+		WitnessMaximumRecords:           "4096",
+		WitnessRotationThresholdRecords: "1024",
+	}
+	payload, err := json.Marshal(head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := []byte(strings.Replace(
+		string(payload),
+		`"certificateSequence"`,
+		`"unknown":"x","certificateSequence"`,
+		1,
+	))
+	if _, err := DecodeNativeTBTCSignerStateAnchorTrustHead(unknown); err == nil {
+		t.Fatal("trust head with an unknown field was accepted")
+	}
+
+	head.ServiceEpoch = "4"
+	payload, err = json.Marshal(head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeNativeTBTCSignerStateAnchorTrustHead(payload); err == nil {
+		t.Fatal("trust head whose service epoch differs from its floor was accepted")
+	}
+
+	head.ServiceEpoch = "3"
+	head.CertifiedFloor.Revision = "2"
+	payload, err = json.Marshal(head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeNativeTBTCSignerStateAnchorTrustHead(payload); err == nil {
+		t.Fatal("trust head whose certified floor is not revision one was accepted")
+	}
+}
+
+func TestDecodeNativeTBTCSignerStateAnchorTrustRecoveryRequired(t *testing.T) {
+	wire := testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire()
+
+	recovery, err :=
+		decodeNativeTBTCSignerStateAnchorTrustRecoveryRequired(&wire)
+	if err != nil {
+		t.Fatalf("valid trust-recovery selector was rejected: %v", err)
+	}
+	if recovery.Schema !=
+		NativeTBTCSignerStateAnchorTrustRecoveryRequiredSchema ||
+		recovery.StoreFingerprint != [32]byte{0x77} ||
+		recovery.CertificateCount != 2 ||
+		recovery.FirstCertificateSequence != 4 ||
+		len(recovery.OrderedCertificateDigests) != 2 ||
+		recovery.OrderedCertificateDigests[0] != [32]byte{0x41} ||
+		recovery.OrderedCertificateDigests[1] != [32]byte{0x42} ||
+		recovery.FinalCertificateSequence != 5 ||
+		recovery.FinalCertificateDigest != [32]byte{0x42} ||
+		recovery.TargetBindingHash != [32]byte{0x51} ||
+		recovery.TargetServiceEpoch != 7 ||
+		recovery.TargetRevision != 9 ||
+		recovery.TargetCheckpoint.Generation != 12 {
+		t.Fatalf("unexpected decoded trust-recovery selector: %+v", recovery)
+	}
+}
+
+func TestDecodeNativeTBTCSignerStateAnchorTrustRecoveryRequiredRejectsInvalid(
+	t *testing.T,
+) {
+	tests := map[string]func(*nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire){
+		"unsupported schema": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.Schema = "unsupported"
+		},
+		"non-canonical count": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.CertificateCount = "02"
+		},
+		"zero count": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.CertificateCount = "0"
+		},
+		"count differs from digests": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.CertificateCount = "1"
+		},
+		"sequence range overflows": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.FirstCertificateSequence = "18446744073709551615"
+		},
+		"final sequence differs from range": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.FinalCertificateSequence = "6"
+		},
+		"duplicate certificate digest": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.OrderedCertificateDigests[1] =
+				wire.OrderedCertificateDigests[0]
+			wire.FinalCertificateDigest =
+				wire.OrderedCertificateDigests[0]
+		},
+		"final digest differs from ordered suffix": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.FinalCertificateDigest =
+				testNativeTBTCSignerTrustHex32(0x43)
+		},
+		"checkpoint belongs to another store": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.StoreFingerprint =
+				testNativeTBTCSignerTrustHex32(0x78)
+		},
+		"checkpoint commitment is invalid": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.TargetCheckpoint.StateCommitment =
+				testNativeTBTCSignerTrustHex32(0x61)
+		},
+	}
+
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			wire := testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire()
+			mutate(&wire)
+			if _, err :=
+				decodeNativeTBTCSignerStateAnchorTrustRecoveryRequired(
+					&wire,
+				); err == nil {
+				t.Fatal("invalid trust-recovery selector was accepted")
+			}
+		})
+	}
+}
+
+func testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire() nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire {
+	return nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire{
+		Schema: NativeTBTCSignerStateAnchorTrustRecoveryRequiredSchema,
+		StoreFingerprint: testNativeTBTCSignerTrustHex32(
+			0x77,
+		),
+		CertificateCount:         "2",
+		FirstCertificateSequence: "4",
+		OrderedCertificateDigests: []string{
+			testNativeTBTCSignerTrustHex32(0x41),
+			testNativeTBTCSignerTrustHex32(0x42),
+		},
+		FinalCertificateSequence: "5",
+		FinalCertificateDigest: testNativeTBTCSignerTrustHex32(
+			0x42,
+		),
+		TargetBindingHash: testNativeTBTCSignerTrustHex32(
+			0x51,
+		),
+		TargetServiceEpoch: "7",
+		TargetRevision:     "9",
+		TargetCheckpoint: testNativeTBTCSignerStateAnchorCheckpointWire(
+			12,
+			0x61,
+		),
+	}
+}
+
+func testNativeTBTCSignerStateAnchorCheckpointWire(
+	generation uint64,
+	seed byte,
+) nativeTBTCSignerStateAnchorCheckpointWire {
+	store := [32]byte{0x77}
+	previous := [32]byte{seed}
+	image := [32]byte{seed + 1}
+	commitment := ComputeNativeTBTCSignerStateWitnessCommitment(
+		store,
+		generation,
+		previous,
+		image,
+	)
+	return nativeTBTCSignerStateAnchorCheckpointWire{
+		StoreFingerprint:        testNativeTBTCSignerTrustHexValue(store),
+		Generation:              uint64ToCanonicalString(generation),
+		PreviousStateCommitment: testNativeTBTCSignerTrustHexValue(previous),
+		StateImageDigest:        testNativeTBTCSignerTrustHexValue(image),
+		StateCommitment:         testNativeTBTCSignerTrustHexValue(commitment),
+	}
+}
+
+func testNativeTBTCSignerTrustHex32(first byte) string {
+	return testNativeTBTCSignerTrustHexValue([32]byte{first})
+}
+
+func testNativeTBTCSignerTrustHexValue(value [32]byte) string {
+	return "0x" + hex.EncodeToString(value[:])
+}
+
+func testNativeTBTCSignerTrustBool(value bool) *bool {
+	return &value
+}
+
+func uint64ToCanonicalString(value uint64) string {
+	// Keep this test helper independent from the decoder under test.
+	const digits = "0123456789"
+	if value == 0 {
+		return "0"
+	}
+	var buffer [20]byte
+	index := len(buffer)
+	for value > 0 {
+		index--
+		buffer[index] = digits[value%10]
+		value /= 10
+	}
+	return string(buffer[index:])
+}
+
+// TestValidateNativeTBTCSignerStateWitnessGeometry pins the exact bound the
+// native signer enforces in configured_state_anchor (engine/anchor.rs) and
+// parse_endpoint (engine/anchor_trust.rs). Both reject a rotation threshold
+// below two or one that does not leave
+// TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION plus
+// TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION records below the
+// maximum.
+//
+// This pins the Go side only. The crate is not in this branch, so nothing here
+// can observe the signer moving; raising a reservation in Rust does NOT fail
+// this test. The cross-language comparison lives in the frost-cgo-integration
+// workflow, which has the pinned crate checked out and compares the two sources
+// directly. What this test does buy: the bound is computed in one helper over
+// named constants, so once that workflow reports a drift there is exactly one
+// place to change, and these cases document the boundary that moves.
+func TestValidateNativeTBTCSignerStateWitnessGeometry(t *testing.T) {
+	if NativeTBTCSignerStateWitnessRotationTerminalRecordReservation != 6 {
+		t.Fatalf(
+			"terminal-record reservation [%d] no longer mirrors the signer's six",
+			NativeTBTCSignerStateWitnessRotationTerminalRecordReservation,
+		)
+	}
+	if NativeTBTCSignerStateWitnessQuarantineRecordReservation != 2 {
+		t.Fatalf(
+			"quarantine-record reservation [%d] no longer mirrors the signer's two",
+			NativeTBTCSignerStateWitnessQuarantineRecordReservation,
+		)
+	}
+
+	var tests = map[string]struct {
+		maximumRecords           uint64
+		rotationThresholdRecords uint64
+		valid                    bool
+	}{
+		"production geometry": {
+			maximumRecords:           4096,
+			rotationThresholdRecords: 1024,
+			valid:                    true,
+		},
+		"smallest geometry the signer accepts": {
+			maximumRecords:           10,
+			rotationThresholdRecords: 2,
+			valid:                    true,
+		},
+		"threshold exactly at the reserved band": {
+			maximumRecords:           1024,
+			rotationThresholdRecords: 1016,
+			valid:                    true,
+		},
+		"threshold one record inside the reserved band": {
+			maximumRecords:           1024,
+			rotationThresholdRecords: 1017,
+			valid:                    false,
+		},
+		"threshold leaving only the terminal band without its quarantine pair": {
+			maximumRecords:           1024,
+			rotationThresholdRecords: 1018,
+			valid:                    false,
+		},
+		"threshold leaving only the retired two-record reserve": {
+			maximumRecords:           64,
+			rotationThresholdRecords: 60,
+			valid:                    false,
+		},
+		"maximum one record below the reserved band": {
+			maximumRecords:           9,
+			rotationThresholdRecords: 2,
+			valid:                    false,
+		},
+		"threshold below the signer minimum": {
+			maximumRecords:           4096,
+			rotationThresholdRecords: 1,
+			valid:                    false,
+		},
+		"zero maximum": {
+			maximumRecords:           0,
+			rotationThresholdRecords: 2,
+			valid:                    false,
+		},
+		"maximum above the signer hard maximum": {
+			maximumRecords:           NativeTBTCSignerStateWitnessHardMaximumRecords + 1,
+			rotationThresholdRecords: 2,
+			valid:                    false,
+		},
+		"threshold at the top of the unsigned range": {
+			maximumRecords:           4096,
+			rotationThresholdRecords: ^uint64(0),
+			valid:                    false,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			err := ValidateNativeTBTCSignerStateWitnessGeometry(
+				test.maximumRecords,
+				test.rotationThresholdRecords,
+			)
+			if test.valid && err != nil {
+				t.Fatalf(
+					"geometry [%d/%d] the signer accepts was rejected: %v",
+					test.maximumRecords,
+					test.rotationThresholdRecords,
+					err,
+				)
+			}
+			if !test.valid && err == nil {
+				t.Fatalf(
+					"geometry [%d/%d] the signer rejects was accepted",
+					test.maximumRecords,
+					test.rotationThresholdRecords,
+				)
+			}
+		})
+	}
+}

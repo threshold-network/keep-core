@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/binary"
@@ -985,6 +986,39 @@ func (lc *localChain) IsFrostWalletRegistered(walletID [32]byte) (bool, error) {
 	}
 
 	return false, nil
+}
+
+func (lc *localChain) FrostDKGRetirementSnapshot(
+	_ context.Context,
+	point FrostPreSignFinality,
+	walletIDs [][32]byte,
+) (*FrostDKGRetirementSnapshot, error) {
+	lc.dkgMutex.Lock()
+	state := lc.dkgState
+	lc.dkgMutex.Unlock()
+
+	lc.walletsMutex.Lock()
+	defer lc.walletsMutex.Unlock()
+	registeredWallets := make(map[[32]byte]bool, len(walletIDs))
+	for _, walletID := range walletIDs {
+		for _, walletData := range lc.wallets {
+			if walletID == walletData.WalletID &&
+				walletData.State != StateClosed &&
+				walletData.State != StateTerminated {
+				registeredWallets[walletID] = true
+				break
+			}
+		}
+		if _, exists := registeredWallets[walletID]; !exists {
+			registeredWallets[walletID] = false
+		}
+	}
+
+	return &FrostDKGRetirementSnapshot{
+		Point:             point,
+		State:             state,
+		RegisteredWallets: registeredWallets,
+	}, nil
 }
 
 func (lc *localChain) setWallet(

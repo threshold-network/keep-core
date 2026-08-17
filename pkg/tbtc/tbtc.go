@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -121,6 +122,74 @@ type Config struct {
 	// ECDSA drain and after the legacy pool is retired. This flag is an opt-out
 	// for operators that manage FROST pool membership out of band.
 	DisableFrostSortitionPoolMonitoring bool
+	// EnableFrostPreSignAuthorization activates finalized on-chain authorization
+	// for reserved FROST Bitcoin transactions. When false, FROST wallet
+	// transaction signing remains fail-closed before native nonce generation.
+	// Enabling does not select a permissive default adapter: the configured
+	// chain must provide the deployment-specific authorization backend and the
+	// Bitcoin chain must provide authenticated canonical status, or startup
+	// fails before coordination.
+	EnableFrostPreSignAuthorization bool
+	// FrostPreSignActivationManifestPath points at the strict production
+	// manifest whose chain, contract, runtime-code, crosslink, and protocol
+	// commitments are verified at a finalized Ethereum block during startup.
+	// Production chain adapters reject activation without this file.
+	FrostPreSignActivationManifestPath string
+	// FrostPreSignActivationEnvelopeSignerKeyHash is the lowercase 0x-prefixed
+	// SHA-256 digest of the DER SubjectPublicKeyInfo for the Ed25519 activation
+	// authority. It authenticates the signed production manifest independently
+	// of the runtime handshake key embedded in that manifest.
+	FrostPreSignActivationEnvelopeSignerKeyHash string
+	// FrostPreSignLinkedLibraryDescriptorSetHash independently pins the
+	// compiler-derived recursive Solidity link layout expected by this signer
+	// build. It must match the signed manifest's global descriptor-set hash.
+	FrostPreSignLinkedLibraryDescriptorSetHash string
+	// FrostPreSignActivationProfile pins the reviewed chain, contract addresses,
+	// runtime code hashes, and protocol/policy identifiers independently of the
+	// anchoring backend. It is mandatory when activation is enabled.
+	FrostPreSignActivationProfile *FrostPreSignActivationProfile
+	// BitcoinBroadcastOutboxDirectory is the exclusively owned crash-safe
+	// journal for signed FROST Bitcoin transactions. It is mandatory when
+	// EnableFrostPreSignAuthorization is true and must reside on durable local
+	// storage supporting fsync, atomic rename, and advisory file locks.
+	BitcoinBroadcastOutboxDirectory string
+	// FrostActivationHandshakeURL is the exact numeric-loopback HTTP URL used
+	// by the independent activation auditor for nonce-bound signer readiness.
+	FrostActivationHandshakeURL string
+	// FrostActivationHandshakePrivateKeyPath contains one owner-only PKCS#8
+	// Ed25519 private key whose SPKI hash is pinned by the signed manifest.
+	FrostActivationHandshakePrivateKeyPath string
+	// FrostRetainedGroupJournalDirectory is the exclusively owned durable root
+	// whose distinct canonical lifecycle/DKG and quarantine sub-journals feed
+	// the activation handshake.
+	FrostRetainedGroupJournalDirectory string
+	// FrostRetainedGroupHistorySource is an independently authenticated,
+	// receipt-complete source. It must not share the primary Ethereum adapter's
+	// trust domain, endpoint, operator, or history store.
+	FrostRetainedGroupHistorySource FrostRetainedGroupHistorySource `mapstructure:"-"`
+	// FrostRetainedGroupHistory configures the production signed, paginated
+	// retained-group export and its independent finalized Ethereum verifier.
+	// The start command constructs FrostRetainedGroupHistorySource from this
+	// configuration before TBTC initialization whenever FROST activation is on.
+	FrostRetainedGroupHistory FrostRetainedGroupHistorySourceConfig
+	// FrostNativeSignerAnchorURL is the exact authenticated checkpoint-service
+	// endpoint. HTTPS uses normal PKIX validation plus the manifest-pinned leaf
+	// SPKI. Plain HTTP is accepted only for a canonical numeric loopback host.
+	FrostNativeSignerAnchorURL string
+	// FrostNativeSignerAnchorClientPrivateKeyPath contains the owner-only PKCS#8
+	// Ed25519 key authorized by the signed activation manifest.
+	FrostNativeSignerAnchorClientPrivateKeyPath string
+	// FrostNativeSignerAnchorOnlinePublicKeyPath contains the DER SubjectPublicKeyInfo
+	// for the online Ed25519 service key pinned by the signed manifest.
+	FrostNativeSignerAnchorOnlinePublicKeyPath string
+	// FrostNativeSignerAnchorTrustCertificatePath contains an owner-only,
+	// bounded JSON array of one to 64 offline-authority-signed bootstrap or
+	// rotation certificates. The final certificate must exactly match the
+	// verified activation manifest and installed native signer config.
+	FrostNativeSignerAnchorTrustCertificatePath string
+	// FrostNativeSignerAnchorRequestTimeout bounds each authenticated Read/CAS.
+	// Zero selects the protocol client's conservative production default.
+	FrostNativeSignerAnchorRequestTimeout time.Duration
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
@@ -224,10 +293,50 @@ func Initialize(
 	}
 	node.frostGroupParameters = frostGroupParameters
 
+	var closeFrostResourcesOnce sync.Once
+	closeFrostResources := func() {
+		closeFrostResourcesOnce.Do(func() {
+			if node.frostActivationHandshakeExporter != nil {
+				_ = node.frostActivationHandshakeExporter.close()
+			}
+			if node.frostRetainedGroupJournal != nil {
+				_ = node.frostRetainedGroupJournal.close()
+			}
+			if node.bitcoinBroadcastOutbox != nil {
+				_ = node.bitcoinBroadcastOutbox.close()
+			}
+		})
+	}
+	initializationComplete := false
+	defer func() {
+		if !initializationComplete {
+			closeFrostResources()
+		}
+	}()
+
 	// Note: the FROST signing-backend guard runs inside newNode above (right
 	// after the backend is configured and before the legacy pre-params pool is
 	// started), so an invalid backend fails Initialize with no protocol or
 	// pre-params side effects.
+
+	if node.bitcoinBroadcastOutbox != nil {
+		if err := node.bitcoinBroadcastOutbox.start(ctx); err != nil {
+			return fmt.Errorf(
+				"cannot replay durable Bitcoin broadcast outbox before coordination: [%w]",
+				err,
+			)
+		}
+		if err := node.frostActivationHandshakeExporter.start(ctx); err != nil {
+			return fmt.Errorf(
+				"cannot start FROST activation handshake exporter: [%w]",
+				err,
+			)
+		}
+		go func() {
+			<-ctx.Done()
+			closeFrostResources()
+		}()
+	}
 
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
@@ -263,6 +372,21 @@ func Initialize(
 		// Prometheus.
 		frostsigning.RegisterRoastRetryMetrics(clientInfo)
 		frostsigning.RegisterInteractiveSigningMetrics(clientInfo)
+		// The native signer state anchor is registered on exactly the same
+		// terms, and it needs them more than the counters above do. Its two
+		// failure modes - the barrier latching terminally poisoned, and the
+		// certified restart windows draining - both leave the process running
+		// and attesting healthy while it silently stops signing, and the
+		// headroom numbers were until now readable only through the activation
+		// handshake, whose endpoint validator requires a loopback host and so
+		// cannot be reached from a monitoring host at all.
+		frostsigning.RegisterNativeTBTCSignerStateAnchorMetrics(clientInfo)
+		// The admission controller's refusals are the other half of that
+		// picture: the anchor gauges say the window is draining, these say
+		// which workflows were already turned away and why. A non-zero
+		// seat-ceiling or poisoned count is the signal that a node has stopped
+		// taking work it will never be able to finish.
+		RegisterFrostNativeSignerAnchorAdmissionMetrics(clientInfo)
 
 		if perfMetrics == nil {
 			perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfo)
@@ -536,6 +660,7 @@ func Initialize(
 		}()
 	})
 
+	initializationComplete = true
 	return nil
 }
 

@@ -44,6 +44,15 @@ func (n *node) handleHeartbeatProposal(
 		logger.Errorf("cannot marshal wallet public key: [%v]", err)
 		return
 	}
+	signers := n.walletRegistry.getSigners(wallet.publicKey)
+	if len(signers) > 0 &&
+		signingMaterialUsesSchnorrSignatures(signers[0].signingMaterial()) {
+		logger.Infof(
+			"ignoring heartbeat request for transaction-only FROST wallet [0x%x]",
+			walletPublicKeyBytes,
+		)
+		return
+	}
 
 	signingExecutor, ok, err := n.getSigningExecutor(wallet.publicKey)
 	if err != nil {

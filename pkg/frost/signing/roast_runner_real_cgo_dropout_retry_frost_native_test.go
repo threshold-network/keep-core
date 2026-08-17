@@ -79,6 +79,13 @@ func TestRealCgoInteractiveSigning_DropoutForcesNextAttemptAndReshuffledSubsetFi
 
 	engine := &buildTaggedTBTCSignerEngine{}
 	sessionID := fmt.Sprintf("real-cgo-dropout-retry-%d", realCgoSessionSeq.Add(1))
+	// The production executor owns the aggregate memo session for the outer
+	// signing operation; the harness stands in for it here.
+	memoSession, err := BeginInteractiveAggregateMemoSession(sessionID)
+	if err != nil {
+		t.Fatalf("begin aggregate memo session: %v", err)
+	}
+	t.Cleanup(memoSession.Release)
 
 	const n = 3
 	const threshold uint16 = 2

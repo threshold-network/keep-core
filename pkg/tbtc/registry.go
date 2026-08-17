@@ -31,6 +31,27 @@ type walletRegistry struct {
 	// wallet persistence.
 	walletStorage *walletStorage
 
+	// retainedFrostKeyGroups contains public, exact key-group handles captured
+	// before FROST wallet signer records are archived. The active wallet cache
+	// intentionally drops terminal wallets, while the native signer retains
+	// their key packages; this durable binding lets activation readiness
+	// reconcile those retained packages without trusting the native inventory
+	// to identify itself.
+	retainedFrostKeyGroups map[[32]byte]string
+
+	// frostDKGRetirementBoundaries is an append-only durable ledger of every
+	// DKG this node admitted before native package persistence, plus the
+	// one-time upgrade boundary for packages created before the ledger
+	// existed. Orphan retirement rejects finalized snapshots older than its
+	// newest block.
+	frostDKGRetirementBoundaries map[string]uint64
+
+	// revision advances after each successful DKG retirement-boundary
+	// persistence, active-session registration, or archive. Readiness pins it
+	// across its Go/Rust reconciliation so relevant durable state cannot change
+	// mid-check.
+	revision uint64
+
 	// calculateWalletIdFunc calculates the ECDSA wallet ID based on the
 	// provided wallet public key.
 	calculateWalletIdFunc CalculateWalletIdFunc
@@ -53,6 +74,22 @@ func newWalletRegistry(
 	calculateWalletIdFunc CalculateWalletIdFunc,
 ) (*walletRegistry, error) {
 	walletStorage := newWalletStorage(persistence)
+	retainedFrostKeyGroups, err :=
+		walletStorage.loadRetainedFrostKeyGroupBindings()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"could not load retained FROST key-group bindings: [%w]",
+			err,
+		)
+	}
+	frostDKGRetirementBoundaries, err :=
+		walletStorage.loadFrostDKGRetirementBoundaries()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"could not load durable FROST DKG retirement boundaries: [%w]",
+			err,
+		)
+	}
 
 	// Pre-populate the wallet cache using the wallet storage.
 	walletCache := make(map[string]*walletCacheValue)
@@ -85,6 +122,27 @@ func newWalletRegistry(
 				walletID:            walletID,
 				signers:             signers,
 			}
+			keyGroup, isFrostWallet, err :=
+				frostKeyGroupFromWalletCacheValue(walletCache[walletStorageKey])
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot resolve stored FROST wallet key group: [%w]",
+					err,
+				)
+			}
+			if isFrostWallet {
+				if err := ensureRetainedFrostKeyGroupBinding(
+					walletStorage,
+					retainedFrostKeyGroups,
+					walletID,
+					keyGroup,
+				); err != nil {
+					return nil, fmt.Errorf(
+						"cannot persist stored FROST wallet key-group binding: [%w]",
+						err,
+					)
+				}
+			}
 
 			logger.Infof(
 				"wallet signing group [0x%v] loaded from storage "+
@@ -99,9 +157,11 @@ func newWalletRegistry(
 	}
 
 	return &walletRegistry{
-		walletCache:           walletCache,
-		walletStorage:         walletStorage,
-		calculateWalletIdFunc: calculateWalletIdFunc,
+		walletCache:                  walletCache,
+		walletStorage:                walletStorage,
+		retainedFrostKeyGroups:       retainedFrostKeyGroups,
+		frostDKGRetirementBoundaries: frostDKGRetirementBoundaries,
+		calculateWalletIdFunc:        calculateWalletIdFunc,
 	}, nil
 }
 
@@ -121,41 +181,70 @@ func (wr *walletRegistry) getWalletsPublicKeys() []*ecdsa.PublicKey {
 }
 
 // registerSigner registers the given signer using in the walletRegistry.
-func (wr *walletRegistry) registerSigner(signer *signer) error {
+func (wr *walletRegistry) registerSigner(walletSigner *signer) error {
 	wr.mutex.Lock()
 	defer wr.mutex.Unlock()
 
-	err := wr.walletStorage.saveSigner(signer)
-	if err != nil {
-		return fmt.Errorf("cannot save signer in the storage: [%w]", err)
+	if walletSigner == nil || walletSigner.wallet.publicKey == nil {
+		return fmt.Errorf("cannot register malformed signer")
 	}
 
-	walletStorageKey := getWalletStorageKey(signer.wallet.publicKey)
+	walletStorageKey := getWalletStorageKey(walletSigner.wallet.publicKey)
+	candidate, exists := wr.walletCache[walletStorageKey]
 
 	// If the wallet cache does not have the given entry yet, initialize
 	// the value and compute the wallet ID and wallet public key hash. This way,
 	// the hashes are computed only once. No need to initialize signers slice as
 	// appending works with nil values.
-	if _, ok := wr.walletCache[walletStorageKey]; !ok {
+	if !exists {
 		walletID, err := calculateWalletIDForSigner(
-			signer,
+			walletSigner,
 			wr.calculateWalletIdFunc,
 		)
 		if err != nil {
 			return fmt.Errorf("cannot calculate wallet ID: [%v]", err)
 		}
 
-		wr.walletCache[walletStorageKey] = &walletCacheValue{
-			walletPublicKeyHash: bitcoin.PublicKeyHash(signer.wallet.publicKey),
+		candidate = &walletCacheValue{
+			walletPublicKeyHash: bitcoin.PublicKeyHash(walletSigner.wallet.publicKey),
 			walletID:            walletID,
 		}
 	}
+	candidate = &walletCacheValue{
+		walletPublicKeyHash: candidate.walletPublicKeyHash,
+		walletID:            candidate.walletID,
+		signers: append(
+			append([]*signer{}, candidate.signers...),
+			walletSigner,
+		),
+	}
 
-	wr.walletCache[walletStorageKey].signers = append(
-		wr.walletCache[walletStorageKey].signers,
-		signer,
-	)
+	keyGroup, isFrostWallet, err := frostKeyGroupFromWalletCacheValue(candidate)
+	if err != nil {
+		return fmt.Errorf("cannot resolve FROST wallet key group: [%w]", err)
+	}
+	if isFrostWallet {
+		if wr.retainedFrostKeyGroups == nil {
+			wr.retainedFrostKeyGroups = make(map[[32]byte]string)
+		}
+		if err := ensureRetainedFrostKeyGroupBinding(
+			wr.walletStorage,
+			wr.retainedFrostKeyGroups,
+			candidate.walletID,
+			keyGroup,
+		); err != nil {
+			return fmt.Errorf(
+				"cannot persist FROST wallet key-group binding: [%w]",
+				err,
+			)
+		}
+	}
 
+	if err := wr.walletStorage.saveSigner(walletSigner); err != nil {
+		return fmt.Errorf("cannot save signer in the storage: [%w]", err)
+	}
+	wr.walletCache[walletStorageKey] = candidate
+	wr.revision++
 	return nil
 }
 
@@ -193,6 +282,41 @@ func (wr *walletRegistry) getWalletByPublicKeyHash(
 	return wallet{}, false
 }
 
+func (wr *walletRegistry) getWalletIDByPublicKeyHash(
+	walletPublicKeyHash [20]byte,
+) ([32]byte, bool) {
+	wr.mutex.Lock()
+	defer wr.mutex.Unlock()
+
+	for _, value := range wr.walletCache {
+		if value.walletPublicKeyHash == walletPublicKeyHash {
+			return value.walletID, true
+		}
+	}
+
+	return [32]byte{}, false
+}
+
+func (wr *walletRegistry) isFrostWalletByPublicKeyHash(
+	walletPublicKeyHash [20]byte,
+) (bool, error) {
+	wr.mutex.Lock()
+	defer wr.mutex.Unlock()
+
+	for _, value := range wr.walletCache {
+		if value.walletPublicKeyHash != walletPublicKeyHash {
+			continue
+		}
+		_, isFrostWallet, err := frostKeyGroupFromWalletCacheValue(value)
+		if err != nil {
+			return false, err
+		}
+		return isFrostWallet, nil
+	}
+
+	return false, fmt.Errorf("wallet not found in the wallet cache")
+}
+
 // getWalletByID gets the given wallet by its 32-byte wallet ID. Second boolean
 // return value denotes whether the wallet was found in the registry or not.
 func (wr *walletRegistry) getWalletByID(walletID [32]byte) (wallet, bool) {
@@ -220,12 +344,14 @@ func (wr *walletRegistry) archiveWallet(
 	defer wr.mutex.Unlock()
 
 	var walletPublicKey *ecdsa.PublicKey
+	var walletValue *walletCacheValue
 
 	for _, value := range wr.walletCache {
 		if value.walletPublicKeyHash == walletPublicKeyHash {
 			// All signers belong to one wallet. Take the wallet public key from
 			//  the first signer.
 			walletPublicKey = value.signers[0].wallet.publicKey
+			walletValue = value
 			break
 		}
 	}
@@ -236,14 +362,39 @@ func (wr *walletRegistry) archiveWallet(
 
 	walletStorageKey := getWalletStorageKey(walletPublicKey)
 
+	keyGroup, isFrostWallet, err := frostKeyGroupFromWalletCacheValue(walletValue)
+	if err != nil {
+		return fmt.Errorf(
+			"could not resolve FROST wallet key group before archive: [%w]",
+			err,
+		)
+	}
+	if isFrostWallet {
+		if wr.retainedFrostKeyGroups == nil {
+			wr.retainedFrostKeyGroups = make(map[[32]byte]string)
+		}
+		if err := ensureRetainedFrostKeyGroupBinding(
+			wr.walletStorage,
+			wr.retainedFrostKeyGroups,
+			walletValue.walletID,
+			keyGroup,
+		); err != nil {
+			return fmt.Errorf(
+				"could not persist retained FROST wallet key group: [%w]",
+				err,
+			)
+		}
+	}
+
 	// Archive the entire wallet storage.
-	err := wr.walletStorage.archiveWallet(walletStorageKey)
+	err = wr.walletStorage.archiveWallet(walletStorageKey)
 	if err != nil {
 		return fmt.Errorf("could not archive wallet: [%v]", err)
 	}
 
 	// Remove the wallet from the wallet cache.
 	delete(wr.walletCache, walletStorageKey)
+	wr.revision++
 
 	return nil
 }
@@ -319,6 +470,11 @@ func (ws *walletStorage) loadSigners() map[string][]*signer {
 
 	go func() {
 		for descriptor := range descriptorsChan {
+			if descriptor.Directory() ==
+				frostRetainedKeyGroupBindingDirectory ||
+				descriptor.Directory() == frostDKGAttemptDirectory {
+				continue
+			}
 			content, err := descriptor.Content()
 			if err != nil {
 				logger.Errorf(

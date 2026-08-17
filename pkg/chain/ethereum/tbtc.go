@@ -86,17 +86,19 @@ var frostWalletRegistryAuthorizationABI = mustParseABI(
 type TbtcChain struct {
 	*baseChain
 
-	bridge                  *tbtccontract.Bridge
-	bridgeAddress           common.Address
-	maintainerProxy         *tbtccontract.MaintainerProxy
-	walletRegistry          *ecdsacontract.WalletRegistry
-	sortitionPool           *ecdsacontract.EcdsaSortitionPool
-	frostWalletRegistry     *frostabi.FrostWalletRegistry
-	frostWalletRegistryAddr common.Address
-	frostDkgValidator       *frostvalidatorabi.FrostDkgValidator
-	frostSortitionPool      *ecdsacontract.EcdsaSortitionPool
-	walletProposalValidator *tbtccontract.WalletProposalValidator
-	redemptionWatchtower    *tbtccontract.RedemptionWatchtower
+	bridge                            *tbtccontract.Bridge
+	bridgeAddress                     common.Address
+	maintainerProxy                   *tbtccontract.MaintainerProxy
+	walletRegistry                    *ecdsacontract.WalletRegistry
+	sortitionPool                     *ecdsacontract.EcdsaSortitionPool
+	frostWalletRegistry               *frostabi.FrostWalletRegistry
+	frostWalletRegistryAddr           common.Address
+	frostDkgValidator                 *frostvalidatorabi.FrostDkgValidator
+	frostSortitionPool                *ecdsacontract.EcdsaSortitionPool
+	walletProposalValidator           *tbtccontract.WalletProposalValidator
+	redemptionWatchtower              *tbtccontract.RedemptionWatchtower
+	frostPreSignAuthorizationAdapter  *frostPreSignEthereumAdapter
+	frostPreSignAuthorizationVerifier *frostPreSignEthereumAdapter
 	// ecdsaDkgValidatorAddress optional; when zero, TBTC uses defaultGroupParameters(network).
 	ecdsaDkgValidatorAddress common.Address
 

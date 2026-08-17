@@ -109,6 +109,14 @@ func newDriveFixture(t *testing.T) driveFixture {
 	// mint a unique session id per attempt, so this collision is test-only.
 	t.Cleanup(ResetInteractiveAggregateMemoForTest)
 
+	// The production executor owns the aggregate memo session for the outer
+	// signing operation; the drive fixture stands in for it here.
+	memoSession, err := BeginInteractiveAggregateMemoSession(roastSessionID)
+	if err != nil {
+		t.Fatalf("begin aggregate memo session: %v", err)
+	}
+	t.Cleanup(memoSession.Release)
+
 	// The handle is minted by the registered coordinator - exactly the handle
 	// the executor entry threads into the drive for this Execute.
 	handle, err := coord.BeginAttempt(attemptCtx)

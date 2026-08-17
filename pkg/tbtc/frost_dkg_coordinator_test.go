@@ -10,11 +10,12 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 func TestHandleFrostDKGStartedReleasesDeduplicationKeyAfterFailure(t *testing.T) {
 	localChain := Connect()
-	node := &node{chain: localChain}
+	testNode := &node{chain: localChain}
 	event := &FrostDKGStartedEvent{Seed: big.NewInt(100), BlockNumber: 500}
 	frostChain := &transientFrostDKGStartedChain{event: event}
 	deduplicator := newDeduplicator()
@@ -24,7 +25,7 @@ func TestHandleFrostDKGStartedReleasesDeduplicationKeyAfterFailure(t *testing.T)
 	for i := 0; i < 4; i++ {
 		handleFrostDKGStarted(
 			context.Background(),
-			node,
+			testNode,
 			frostChain,
 			deduplicator,
 			event,
@@ -47,7 +48,7 @@ func TestHandleFrostDKGStartedReleasesDeduplicationKeyAfterFailure(t *testing.T)
 	// terminal local handling; further duplicates must stay suppressed.
 	handleFrostDKGStarted(
 		context.Background(),
-		node,
+		testNode,
 		frostChain,
 		deduplicator,
 		event,
@@ -56,6 +57,65 @@ func TestHandleFrostDKGStartedReleasesDeduplicationKeyAfterFailure(t *testing.T)
 	if frostChain.stateCalls != 4 {
 		t.Fatalf("completed event was processed again")
 	}
+}
+
+func TestHandleFrostDKGStartedRetriesWhenExecutionAdmissionFails(
+	t *testing.T,
+) {
+	localChain := Connect()
+	operatorAddress, err := localChain.operatorAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testNode := &node{chain: localChain}
+	event := &FrostDKGStartedEvent{Seed: big.NewInt(101), BlockNumber: 500}
+	frostChain := &retryableFrostDKGExecutionChain{
+		event:           event,
+		operatorAddress: operatorAddress,
+	}
+	deduplicator := newDeduplicator()
+	executionAttempts := 0
+	execute := func(
+		context.Context,
+		*node,
+		FrostDKGChain,
+		*FrostDKGStartedEvent,
+		[]group.MemberIndex,
+		*GroupSelectionResult,
+	) bool {
+		executionAttempts++
+		return executionAttempts > 1
+	}
+
+	handleFrostDKGStartedWithExecutor(
+		context.Background(),
+		testNode,
+		frostChain,
+		deduplicator,
+		event,
+		false,
+		execute,
+	)
+	if executionAttempts != 1 {
+		t.Fatalf("unexpected first execution attempt count: [%d]", executionAttempts)
+	}
+	if deduplicator.dkgSeedCache.Has(event.Seed.Text(16)) {
+		t.Fatal("transient execution admission failure completed the DKG seed")
+	}
+
+	handleFrostDKGStartedWithExecutor(
+		context.Background(),
+		testNode,
+		frostChain,
+		deduplicator,
+		event,
+		false,
+		execute,
+	)
+	if executionAttempts != 2 {
+		t.Fatalf("DKG execution admission was not retried")
+	}
+	assertFrostDKGStartedSeedCompleted(t, deduplicator, event.Seed)
 }
 
 func TestHandleFrostDKGStartedRekeysToLatestSeedAlreadyInProgress(
@@ -285,6 +345,87 @@ func TestHandleFrostDKGResultSubmittedReleasesDeduplicationKeyAfterFailure(
 	}
 }
 
+func TestRecoverFrostDKGCoordinatorStateRetriesInitialStateRead(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	frostChain := &retryingFrostDKGRecoveryStateChain{failures: 2}
+	recoverFrostDKGCoordinatorStateWithRetryInterval(
+		ctx,
+		&node{},
+		frostChain,
+		newDeduplicator(),
+		time.Millisecond,
+	)
+
+	if frostChain.calls != 3 {
+		t.Fatalf(
+			"unexpected recovery state calls\nexpected: [3]\nactual:   [%d]",
+			frostChain.calls,
+		)
+	}
+}
+
+func TestRecoverFrostDKGCoordinatorStateStopsBeforeReadAfterCancellation(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	frostChain := &retryingFrostDKGRecoveryStateChain{failures: 1}
+	recoverFrostDKGCoordinatorStateWithRetryInterval(
+		ctx,
+		&node{},
+		frostChain,
+		newDeduplicator(),
+		time.Millisecond,
+	)
+
+	if frostChain.calls != 0 {
+		t.Fatalf("recovery queried state after cancellation")
+	}
+}
+
+func TestRecoverFrostDKGCoordinatorStateRetriesActiveStateReads(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	localChain := Connect()
+	testNode := &node{
+		chain: localChain,
+		frostGroupParameters: &GroupParameters{
+			GroupSize: 1,
+		},
+	}
+	event := &FrostDKGStartedEvent{Seed: big.NewInt(100), BlockNumber: 1}
+	frostChain := &retryingFrostDKGRecoveryReadsChain{event: event}
+
+	recoverFrostDKGCoordinatorStateWithRetryInterval(
+		ctx,
+		testNode,
+		frostChain,
+		newDeduplicator(),
+		time.Millisecond,
+	)
+
+	if frostChain.stateCalls != 3 ||
+		frostChain.parametersCalls != 2 ||
+		frostChain.pastEventsCalls != 3 ||
+		frostChain.selectionCalls != 1 {
+		t.Fatalf(
+			"unexpected recovery calls: state [%d], parameters [%d], past events [%d], selection [%d]",
+			frostChain.stateCalls,
+			frostChain.parametersCalls,
+			frostChain.pastEventsCalls,
+			frostChain.selectionCalls,
+		)
+	}
+}
+
 func TestScheduleFrostDKGResultApprovalStopsAfterContextCancellation(
 	t *testing.T,
 ) {
@@ -359,6 +500,70 @@ type retryingFrostDKGChallengeChain struct {
 	successOnAttempt int
 }
 
+type retryingFrostDKGRecoveryStateChain struct {
+	FrostDKGChain
+
+	calls    int
+	failures int
+}
+
+func (rfdkgrsc *retryingFrostDKGRecoveryStateChain) GetFrostDKGState() (
+	DKGState,
+	error,
+) {
+	rfdkgrsc.calls++
+	if rfdkgrsc.calls <= rfdkgrsc.failures {
+		return Idle, fmt.Errorf("transient state error")
+	}
+
+	return Idle, nil
+}
+
+type retryingFrostDKGRecoveryReadsChain struct {
+	FrostDKGChain
+
+	event           *FrostDKGStartedEvent
+	stateCalls      int
+	parametersCalls int
+	pastEventsCalls int
+	selectionCalls  int
+}
+
+func (rfdkgrrc *retryingFrostDKGRecoveryReadsChain) GetFrostDKGState() (
+	DKGState,
+	error,
+) {
+	rfdkgrrc.stateCalls++
+	return AwaitingResult, nil
+}
+
+func (rfdkgrrc *retryingFrostDKGRecoveryReadsChain) FrostDKGParameters() (
+	*DKGParameters,
+	error,
+) {
+	rfdkgrrc.parametersCalls++
+	return &DKGParameters{}, nil
+}
+
+func (rfdkgrrc *retryingFrostDKGRecoveryReadsChain) PastFrostDKGStartedEvents(
+	*FrostDKGStartedEventFilter,
+) ([]*FrostDKGStartedEvent, error) {
+	rfdkgrrc.pastEventsCalls++
+	if rfdkgrrc.pastEventsCalls == 1 {
+		return nil, fmt.Errorf("transient past events error")
+	}
+
+	return []*FrostDKGStartedEvent{rfdkgrrc.event}, nil
+}
+
+func (rfdkgrrc *retryingFrostDKGRecoveryReadsChain) SelectFrostGroup() (
+	*GroupSelectionResult,
+	error,
+) {
+	rfdkgrrc.selectionCalls++
+	return &GroupSelectionResult{}, nil
+}
+
 type transientFrostDKGStartedChain struct {
 	FrostDKGChain
 
@@ -366,6 +571,35 @@ type transientFrostDKGStartedChain struct {
 	stateCalls      int
 	pastEventsCalls int
 	selectionCalls  int
+}
+
+type retryableFrostDKGExecutionChain struct {
+	FrostDKGChain
+
+	event           *FrostDKGStartedEvent
+	operatorAddress chain.Address
+}
+
+func (testChain *retryableFrostDKGExecutionChain) GetFrostDKGState() (
+	DKGState,
+	error,
+) {
+	return AwaitingResult, nil
+}
+
+func (testChain *retryableFrostDKGExecutionChain) PastFrostDKGStartedEvents(
+	*FrostDKGStartedEventFilter,
+) ([]*FrostDKGStartedEvent, error) {
+	return []*FrostDKGStartedEvent{testChain.event}, nil
+}
+
+func (testChain *retryableFrostDKGExecutionChain) SelectFrostGroup() (
+	*GroupSelectionResult,
+	error,
+) {
+	return &GroupSelectionResult{
+		OperatorsAddresses: chain.Addresses{testChain.operatorAddress},
+	}, nil
 }
 
 type rekeyingFrostDKGStartedChain struct {

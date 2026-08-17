@@ -4,7 +4,6 @@ package signing
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -52,7 +51,7 @@ func installConfiguredTBTCSignerInitConfig() error {
 		return nil
 	}
 
-	configJSON, err := os.ReadFile(configPath)
+	configJSON, err := readSecureNativeTBTCSignerInitConfig(configPath)
 	if err != nil {
 		err = fmt.Errorf(
 			"read tbtc-signer init config [%s]: %w",
@@ -67,6 +66,7 @@ func installConfiguredTBTCSignerInitConfig() error {
 		)
 		return err
 	}
+	defer zeroBytes(configJSON)
 
 	result, err := InstallNativeTBTCSignerConfig(configJSON)
 	if err != nil {
@@ -79,6 +79,22 @@ func installConfiguredTBTCSignerInitConfig() error {
 				"engine registration fails closed and the process will "+
 				"terminate at the end of registration (config-mode demand "+
 				"unmet): [%v]",
+			err,
+		)
+		return err
+	}
+	if err := recordNativeTBTCSignerInstalledStateAnchorConfig(
+		configJSON,
+		result.ConfigFingerprint,
+	); err != nil {
+		err = fmt.Errorf(
+			"bind installed tbtc-signer anchor config from [%s]: %w",
+			configPath,
+			err,
+		)
+		registrationLogger.Errorf(
+			"tbtc-signer anchor config binding failed; FROST-native engine "+
+				"registration fails closed: [%v]",
 			err,
 		)
 		return err
@@ -349,50 +365,6 @@ func decodeBuildTaggedLegacyPrivateKeyShare(
 	}
 
 	return privateKeyShare, nil
-}
-
-func decodeBuildTaggedTBTCSignerMaterialPayload(
-	signerMaterial *NativeSignerMaterial,
-) (*NativeTBTCSignerMaterialPayload, error) {
-	if signerMaterial == nil {
-		return nil, fmt.Errorf(
-			"%w: signer material is nil",
-			ErrNativeCryptographyUnavailable,
-		)
-	}
-
-	if signerMaterial.Format != NativeSignerMaterialFormatFrostTBTCSignerV1 {
-		return nil, fmt.Errorf(
-			"%w: unsupported signer material format: [%s]",
-			ErrNativeCryptographyUnavailable,
-			signerMaterial.Format,
-		)
-	}
-
-	if len(signerMaterial.Payload) == 0 {
-		return nil, fmt.Errorf(
-			"%w: signer material payload is empty",
-			ErrNativeCryptographyUnavailable,
-		)
-	}
-
-	var payload NativeTBTCSignerMaterialPayload
-	if err := json.Unmarshal(signerMaterial.Payload, &payload); err != nil {
-		return nil, fmt.Errorf(
-			"%w: cannot unmarshal tbtc-signer payload: [%v]",
-			ErrNativeCryptographyUnavailable,
-			err,
-		)
-	}
-
-	if payload.KeyGroup == "" {
-		return nil, fmt.Errorf(
-			"%w: tbtc-signer key group is empty",
-			ErrNativeCryptographyUnavailable,
-		)
-	}
-
-	return &payload, nil
 }
 
 // decodeBuildTaggedTBTCSignerSignature decodes and canonicality-checks a
