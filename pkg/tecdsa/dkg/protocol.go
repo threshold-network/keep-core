@@ -17,7 +17,7 @@ func (ekpgm *ephemeralKeyPairGeneratingMember) generateEphemeralKeyPair() (
 	*ephemeralPublicKeyMessage,
 	error,
 ) {
-	ephemeralKeys := make(map[group.MemberIndex]*ephemeral.PublicKey)
+	ephemeralKeys := make(map[group.MemberIndex][]byte)
 
 	// Calculate ephemeral key pair for every other group member
 	for _, member := range ekpgm.group.MemberIndexes() {
@@ -34,8 +34,8 @@ func (ekpgm *ephemeralKeyPairGeneratingMember) generateEphemeralKeyPair() (
 		// save the generated ephemeral key to our state
 		ekpgm.ephemeralKeyPairs[member] = ephemeralKeyPair
 
-		// store the public key to the map for the message
-		ephemeralKeys[member] = ephemeralKeyPair.PublicKey
+		// store the serialized public key to the map for the message
+		ephemeralKeys[member] = ephemeralKeyPair.PublicKey.Marshal()
 	}
 
 	return &ephemeralPublicKeyMessage{
@@ -78,9 +78,18 @@ func (skgm *symmetricKeyGeneratingMember) generateSymmetricKeys(
 		thisMemberEphemeralPrivateKey := ephemeralKeyPair.PrivateKey
 
 		// Get the ephemeral public key broadcasted by the other group member,
-		// which was intended for this group member.
-		otherMemberEphemeralPublicKey :=
-			ephemeralPubKeyMessage.ephemeralPublicKeys[skgm.id]
+		// which was intended for this group member, and parse it. Only this
+		// one key per message is needed for ECDH; the rest are validated for
+		// presence in isValidEphemeralPublicKeyMessage but never parsed.
+		otherMemberEphemeralPublicKey, err := ephemeral.UnmarshalPublicKey(
+			ephemeralPubKeyMessage.ephemeralPublicKeys[skgm.id],
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"could not unmarshal ephemeral public key from member [%v]: [%v]",
+				otherMember, err,
+			)
+		}
 
 		// Create symmetric key for the current group member and the other
 		// group member by ECDH'ing the public and private key.

@@ -81,3 +81,52 @@ func assertEqual(t *testing.T, n int, n2 int, msg string) {
 		t.Errorf("%v: [%v] != [%v]", msg, n, n2)
 	}
 }
+
+// --- Benchmarks ---
+
+func BenchmarkCompressG1(b *testing.B) {
+	_, p, err := bn256.RandomG1(rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		G1Point{p}.Compress()
+	}
+}
+
+func BenchmarkDecompressG1(b *testing.B) {
+	_, p, err := bn256.RandomG1(rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	buf := G1Point{p}.Compress()
+	b.ResetTimer()
+	for range b.N {
+		_, _ = DecompressToG1(buf)
+	}
+}
+
+func BenchmarkCompressDecompressRoundTripG1(b *testing.B) {
+	_, p, err := bn256.RandomG1(rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		buf := G1Point{p}.Compress()
+		_, _ = DecompressToG1(buf)
+	}
+}
+
+func BenchmarkCompressDecompressRoundTripG2(b *testing.B) {
+	_, p, err := bn256.RandomG2(rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		buf := G2Point{p}.Compress()
+		_, _ = DecompressToG2(buf)
+	}
+}

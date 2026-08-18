@@ -434,3 +434,91 @@ func TestFuzzMisbehavedEphemeralKeysMessageRoundtrip(t *testing.T) {
 func TestFuzzMisbehavedEphemeralKeysMessageUnmarshaler(t *testing.T) {
 	pbutils.FuzzUnmarshaler(&MisbehavedEphemeralKeysMessage{})
 }
+
+// --- Benchmarks ---
+
+// buildEphemeralKeyMap generates n key pairs and returns the public key map as
+// it would appear in a real EphemeralPublicKeyMessage (one entry per peer).
+func buildEphemeralKeyMap(b *testing.B, n int) map[group.MemberIndex]*ephemeral.PublicKey {
+	b.Helper()
+	m := make(map[group.MemberIndex]*ephemeral.PublicKey, n)
+	for i := 0; i < n; i++ {
+		kp, err := ephemeral.GenerateKeyPair()
+		if err != nil {
+			b.Fatal(err)
+		}
+		m[group.MemberIndex(i+1)] = kp.PublicKey
+	}
+	return m
+}
+
+func BenchmarkMarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, _ := ephemeral.GenerateKeyPair()
+	kp2, _ := ephemeral.GenerateKeyPair()
+	msg := &EphemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
+			group.MemberIndex(211): kp1.PublicKey,
+			group.MemberIndex(19):  kp2.PublicKey,
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, _ := ephemeral.GenerateKeyPair()
+	kp2, _ := ephemeral.GenerateKeyPair()
+	msg := &EphemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
+			group.MemberIndex(211): kp1.PublicKey,
+			group.MemberIndex(19):  kp2.PublicKey,
+		},
+		sessionID: "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(EphemeralPublicKeyMessage).Unmarshal(data)
+	}
+}
+
+// BenchmarkMarshalEphemeralPublicKeyMessage_64Keys benchmarks marshaling with
+// the beacon group size (64 members = 63 peer keys per message).
+func BenchmarkMarshalEphemeralPublicKeyMessage_64Keys(b *testing.B) {
+	msg := &EphemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 63),
+		sessionID:           "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+// BenchmarkUnmarshalEphemeralPublicKeyMessage_64Keys benchmarks unmarshaling
+// with the beacon group size. Each btcec.ParsePubKey call dominates; with 63
+// peers this represents the real per-participant beacon DKG cost.
+func BenchmarkUnmarshalEphemeralPublicKeyMessage_64Keys(b *testing.B) {
+	msg := &EphemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 63),
+		sessionID:           "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(EphemeralPublicKeyMessage).Unmarshal(data)
+	}
+}
