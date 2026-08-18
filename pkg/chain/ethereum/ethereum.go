@@ -450,7 +450,16 @@ func (bc *baseChain) blockByNumber(number uint64) (*types.Block, error) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelCtx()
 
-	return bc.client.BlockByNumber(ctx, big.NewInt(int64(number)))
+	// Fetch the header to avoid decoding full transactions (some providers
+	// may return transaction types the client library does not support yet).
+	// The returned *types.Block carries only header fields; transactions and
+	// uncles are empty. Callers that need tx data must fetch the full block.
+	header, err := bc.client.HeaderByNumber(ctx, big.NewInt(int64(number)))
+	if err != nil {
+		return nil, err
+	}
+
+	return types.NewBlockWithHeader(header), nil
 }
 
 // headerByNumber returns the header for the given block number. Times out
