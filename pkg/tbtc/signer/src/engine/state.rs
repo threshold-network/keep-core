@@ -629,6 +629,11 @@ pub(crate) fn retire_idle_per_message_session_ids(
     protected_session_id: Option<&str>,
 ) -> Vec<String> {
     let retired_at = now_unix().max(1);
+    // Clone once per retire cycle. The same in-memory snapshot is reused by
+    // the compaction step below; cloning it a second time under the same
+    // PERSISTENCE_PENDING_OPERATIONS mutex would re-allocate the full set
+    // (size scales with max_sessions_limit, default 1024) for every retire
+    // call inside the persist path.
     let pending_session_ids = persistence_pending_session_ids();
     let mut newly_retired = Vec::new();
     for (session_id, session) in &mut engine_state.sessions {
@@ -642,9 +647,11 @@ pub(crate) fn retire_idle_per_message_session_ids(
         }
     }
 
-    drop(compact_retired_per_message_sessions(
+    drop(compact_retired_per_message_sessions_to_total(
         engine_state,
+        max_sessions_limit(),
         protected_session_id,
+        Some(&pending_session_ids),
     ));
     newly_retired.retain(|session_id| engine_state.sessions.contains_key(session_id));
     newly_retired
@@ -658,6 +665,7 @@ pub(crate) fn compact_retired_per_message_sessions(
         engine_state,
         max_sessions_limit(),
         protected_session_id,
+        None,
     )
 }
 
@@ -665,13 +673,27 @@ fn compact_retired_per_message_sessions_to_total(
     engine_state: &mut EngineState,
     max_total_sessions: usize,
     protected_session_id: Option<&str>,
+    pending_session_ids: Option<&HashSet<String>>,
 ) -> Vec<(String, SessionState)> {
     // A post-replacement persistence failure leaves the replacement snapshot's
     // marker in memory and records a process-local repair operation. Evicting
     // that session before a later successful snapshot would persist the
     // marker's absence and then clear the repair record. Protect every
     // session-scoped pending operation until a successful snapshot covers it.
-    let pending_session_ids = persistence_pending_session_ids();
+    //
+    // Callers that already hold a snapshot of the pending-session set (e.g.
+    // `retire_idle_per_message_session_ids`, which uses the same set for the
+    // retire pass above) pass it through `pending_session_ids` to avoid
+    // taking the PERSISTENCE_PENDING_OPERATIONS mutex a second time and
+    // re-cloning the full set inside a single persist cycle.
+    let pending_session_ids_owned;
+    let pending_session_ids = match pending_session_ids {
+        Some(ids) => ids,
+        None => {
+            pending_session_ids_owned = persistence_pending_session_ids();
+            &pending_session_ids_owned
+        }
+    };
     let mut removed = Vec::new();
     // Schema version 1 readers predating retirement enforce this same bound on
     // the TOTAL map. Retired tombstones therefore consume only the portion of
@@ -827,6 +849,7 @@ pub(crate) fn ensure_session_insert_capacity(
     let compacted = compact_retired_per_message_sessions_to_total(
         engine_state,
         max_sessions.saturating_sub(1),
+        None,
         None,
     );
     if engine_state.sessions.len() >= max_sessions {
