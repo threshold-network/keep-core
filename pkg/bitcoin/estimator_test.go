@@ -8,6 +8,15 @@ import (
 )
 
 func TestTransactionSizeEstimator_VirtualSize(t *testing.T) {
+	taprootScript, err := PayToTaproot([32]byte{0x01})
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessPublicKeyHashScript, err := PayToWitnessPublicKeyHash([20]byte{0x02})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var tests = map[string]struct {
 		estimator           *TransactionSizeEstimator
 		expectedVirtualSize int
@@ -62,6 +71,28 @@ func TestTransactionSizeEstimator_VirtualSize(t *testing.T) {
 				AddScriptHashOutputs(1, false).
 				AddScriptHashOutputs(1, true),
 			expectedVirtualSize: 250,
+		},
+		"1 P2TR key-path input and 1 P2TR output": {
+			estimator: NewTransactionSizeEstimator().
+				AddPublicKeyScriptInput(taprootScript).
+				AddOutputScript(taprootScript),
+			expectedVirtualSize: 111,
+		},
+		"2 P2TR key-path inputs and 1 P2TR output": {
+			estimator: NewTransactionSizeEstimator().
+				AddPublicKeyScriptInput(taprootScript).
+				AddPublicKeyScriptInput(taprootScript).
+				AddOutputScript(taprootScript),
+			expectedVirtualSize: 169,
+		},
+		"1 P2TR input and mixed P2TR and P2WPKH outputs": {
+			estimator: NewTransactionSizeEstimator().
+				AddPublicKeyScriptInput(taprootScript).
+				AddOutputScript(taprootScript).
+				AddOutputScript(taprootScript).
+				AddOutputScript(witnessPublicKeyHashScript).
+				AddOutputScript(witnessPublicKeyHashScript),
+			expectedVirtualSize: 216,
 		},
 	}
 

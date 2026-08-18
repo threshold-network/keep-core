@@ -188,3 +188,76 @@ func TestFeeFallbackResult(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectLatestUniqueTxHashes(t *testing.T) {
+	t.Parallel()
+
+	hash := func(marker byte) bitcoin.Hash {
+		var txHash bitcoin.Hash
+		txHash[0] = marker
+		return txHash
+	}
+
+	first := hash(0x01)
+	second := hash(0x02)
+	third := hash(0x03)
+
+	tests := map[string]struct {
+		txHashes []bitcoin.Hash
+		limit    int
+		expected []bitcoin.Hash
+	}{
+		"negative limit": {
+			txHashes: []bitcoin.Hash{first, second},
+			limit:    -1,
+			expected: []bitcoin.Hash{},
+		},
+		"zero limit": {
+			txHashes: []bitcoin.Hash{first, second},
+			limit:    0,
+			expected: []bitcoin.Hash{},
+		},
+		"no hashes": {
+			txHashes: []bitcoin.Hash{},
+			limit:    5,
+			expected: []bitcoin.Hash{},
+		},
+		"duplicates deduplicated within limit": {
+			txHashes: []bitcoin.Hash{first, second, first, second},
+			limit:    5,
+			expected: []bitcoin.Hash{first, second},
+		},
+		"deduplication happens before the limit is applied": {
+			// Without dedup-before-limit, the duplicated first hash would
+			// consume one of the two available slots.
+			txHashes: []bitcoin.Hash{first, first, second},
+			limit:    2,
+			expected: []bitcoin.Hash{first, second},
+		},
+		"more unique hashes than limit keeps the latest ones in order": {
+			txHashes: []bitcoin.Hash{first, second, third},
+			limit:    2,
+			expected: []bitcoin.Hash{second, third},
+		},
+		"fewer unique hashes than limit": {
+			txHashes: []bitcoin.Hash{first, second},
+			limit:    5,
+			expected: []bitcoin.Hash{first, second},
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			t.Parallel()
+
+			actual := selectLatestUniqueTxHashes(test.txHashes, test.limit)
+			if !reflect.DeepEqual(test.expected, actual) {
+				t.Fatalf(
+					"unexpected selection\nexpected: [%v]\nactual:   [%v]",
+					test.expected,
+					actual,
+				)
+			}
+		})
+	}
+}

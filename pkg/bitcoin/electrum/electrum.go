@@ -30,7 +30,7 @@ var (
 type Connection struct {
 	parentCtx   context.Context
 	client      *electrum.Client
-	clientMutex *sync.Mutex
+	clientMutex *sync.RWMutex
 	config      Config
 }
 
@@ -55,7 +55,7 @@ func Connect(parentCtx context.Context, config Config) (bitcoin.Chain, error) {
 	c := &Connection{
 		parentCtx:   parentCtx,
 		config:      config,
-		clientMutex: &sync.Mutex{},
+		clientMutex: &sync.RWMutex{},
 	}
 
 	if err := c.electrumConnect(); err != nil {
@@ -414,12 +414,7 @@ func (c *Connection) GetTransactionsForPublicKeyHash(
 		return nil, err
 	}
 
-	var selectedTxHashes []bitcoin.Hash
-	if len(txHashes) > limit {
-		selectedTxHashes = txHashes[len(txHashes)-limit:]
-	} else {
-		selectedTxHashes = txHashes
-	}
+	selectedTxHashes := selectLatestUniqueTxHashes(txHashes, limit)
 
 	transactions := make([]*bitcoin.Transaction, len(selectedTxHashes))
 	for i, txHash := range selectedTxHashes {
@@ -432,6 +427,69 @@ func (c *Connection) GetTransactionsForPublicKeyHash(
 	}
 
 	return transactions, nil
+}
+
+// GetTransactionsForPublicKeyScripts gets confirmed transactions that pay to
+// any of the given public key scripts. The returned transactions are ordered
+// by block height in ascending order, i.e. the latest transaction is at the
+// end of the list.
+func (c *Connection) GetTransactionsForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+	limit int,
+) ([]*bitcoin.Transaction, error) {
+	txHashes, err := c.GetTxHashesForPublicKeyScripts(publicKeyScripts)
+	if err != nil {
+		return nil, err
+	}
+
+	selectedTxHashes := selectLatestUniqueTxHashes(txHashes, limit)
+
+	transactions := make([]*bitcoin.Transaction, len(selectedTxHashes))
+	for i, txHash := range selectedTxHashes {
+		transaction, err := c.GetTransaction(txHash)
+		if err != nil {
+			return nil, fmt.Errorf("cannot get transaction: [%v]", err)
+		}
+
+		transactions[i] = transaction
+	}
+
+	return transactions, nil
+}
+
+// selectLatestUniqueTxHashes deduplicates the given transaction hashes,
+// preserving their original (block-height ascending) order, and returns at
+// most limit trailing entries, i.e. the latest ones. Deduplication happens
+// before the limit is applied, so a transaction paying two of the queried
+// scripts consumes a single slot.
+//
+// A limit lower than or equal to zero returns an empty slice. The SPV
+// maintainer's transaction limit is an operator-provided flag, so the guard
+// keeps a misconfigured negative value from panicking on the slice bound; it
+// makes the maintainer observe no transactions rather than crash.
+func selectLatestUniqueTxHashes(
+	txHashes []bitcoin.Hash,
+	limit int,
+) []bitcoin.Hash {
+	if limit <= 0 {
+		return []bitcoin.Hash{}
+	}
+	uniqueTxHashes := make([]bitcoin.Hash, 0, len(txHashes))
+	seen := make(map[bitcoin.Hash]bool)
+	for _, txHash := range txHashes {
+		if seen[txHash] {
+			continue
+		}
+
+		seen[txHash] = true
+		uniqueTxHashes = append(uniqueTxHashes, txHash)
+	}
+
+	if len(uniqueTxHashes) > limit {
+		return uniqueTxHashes[len(uniqueTxHashes)-limit:]
+	}
+
+	return uniqueTxHashes
 }
 
 // GetTxHashesForPublicKeyHash gets hashes of confirmed transactions that pays
@@ -461,25 +519,20 @@ func (c *Connection) GetTxHashesForPublicKeyHash(
 		)
 	}
 
-	p2pkhItems, err := c.getConfirmedScriptHistory(p2pkh)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2PKH history for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
-	}
+	return c.GetTxHashesForPublicKeyScripts([]bitcoin.Script{p2pkh, p2wpkh})
+}
 
-	p2wpkhItems, err := c.getConfirmedScriptHistory(p2wpkh)
+// GetTxHashesForPublicKeyScripts gets hashes of confirmed transactions that
+// pay to any of the given public key scripts. The returned transactions
+// hashes are ordered by block height in the ascending order, i.e. the
+// latest transaction hash is at the end of the list.
+func (c *Connection) GetTxHashesForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+) ([]bitcoin.Hash, error) {
+	items, err := c.getConfirmedScriptHistories(publicKeyScripts)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2WPKH history for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
+		return nil, err
 	}
-
-	items := append(p2pkhItems, p2wpkhItems...)
 
 	sort.SliceStable(
 		items,
@@ -494,6 +547,27 @@ func (c *Connection) GetTxHashesForPublicKeyHash(
 	}
 
 	return txHashes, nil
+}
+
+func (c *Connection) getConfirmedScriptHistories(
+	publicKeyScripts []bitcoin.Script,
+) ([]*scriptHistoryItem, error) {
+	items := make([]*scriptHistoryItem, 0)
+
+	for _, publicKeyScript := range publicKeyScripts {
+		scriptItems, err := c.getConfirmedScriptHistory(publicKeyScript)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get history for script [0x%x]: [%v]",
+				publicKeyScript,
+				err,
+			)
+		}
+
+		items = append(items, scriptItems...)
+	}
+
+	return items, nil
 }
 
 type scriptHistoryItem struct {
@@ -752,45 +826,15 @@ func (c *Connection) GetUtxosForPublicKeyHash(
 		)
 	}
 
-	p2pkhItems, err := c.getScriptUtxos(p2pkh, true)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2PKH UTXOs for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
-	}
+	return c.GetUtxosForPublicKeyScripts([]bitcoin.Script{p2pkh, p2wpkh})
+}
 
-	p2wpkhItems, err := c.getScriptUtxos(p2wpkh, true)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2WPKH UTXOs for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
-	}
-
-	items := append(p2pkhItems, p2wpkhItems...)
-
-	sort.SliceStable(
-		items,
-		func(i, j int) bool {
-			return items[i].blockHeight < items[j].blockHeight
-		},
-	)
-
-	utxos := make([]*bitcoin.UnspentTransactionOutput, len(items))
-	for i, item := range items {
-		utxos[i] = &bitcoin.UnspentTransactionOutput{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: item.txHash,
-				OutputIndex:     item.outputIndex,
-			},
-			Value: int64(item.value),
-		}
-	}
-
-	return utxos, nil
+// GetUtxosForPublicKeyScripts gets unspent outputs of confirmed transactions
+// that are controlled by any of the given public key scripts.
+func (c *Connection) GetUtxosForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	return c.getUtxosForPublicKeyScripts(publicKeyScripts, true)
 }
 
 // GetMempoolUtxosForPublicKeyHash gets unspent outputs of unconfirmed transactions
@@ -820,25 +864,34 @@ func (c *Connection) GetMempoolUtxosForPublicKeyHash(
 		)
 	}
 
-	p2pkhItems, err := c.getScriptUtxos(p2pkh, false)
+	return c.GetMempoolUtxosForPublicKeyScripts([]bitcoin.Script{p2pkh, p2wpkh})
+}
+
+// GetMempoolUtxosForPublicKeyScripts gets unspent outputs of unconfirmed
+// transactions that are controlled by any of the given public key scripts.
+func (c *Connection) GetMempoolUtxosForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	return c.getUtxosForPublicKeyScripts(publicKeyScripts, false)
+}
+
+func (c *Connection) getUtxosForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+	confirmed bool,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	items, err := c.getScriptUtxosForScripts(publicKeyScripts, confirmed)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2PKH UTXOs for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
-		)
+		return nil, err
 	}
 
-	p2wpkhItems, err := c.getScriptUtxos(p2wpkh, false)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get P2WPKH UTXOs for public key hash [0x%x]: [%v]",
-			publicKeyHash,
-			err,
+	if confirmed {
+		sort.SliceStable(
+			items,
+			func(i, j int) bool {
+				return items[i].blockHeight < items[j].blockHeight
+			},
 		)
 	}
-
-	items := append(p2pkhItems, p2wpkhItems...)
 
 	utxos := make([]*bitcoin.UnspentTransactionOutput, len(items))
 	for i, item := range items {
@@ -852,6 +905,39 @@ func (c *Connection) GetMempoolUtxosForPublicKeyHash(
 	}
 
 	return utxos, nil
+}
+
+func (c *Connection) getScriptUtxosForScripts(
+	publicKeyScripts []bitcoin.Script,
+	confirmed bool,
+) ([]*scriptUtxoItem, error) {
+	items := make([]*scriptUtxoItem, 0)
+	seen := make(map[bitcoin.TransactionOutpoint]bool)
+
+	for _, publicKeyScript := range publicKeyScripts {
+		scriptItems, err := c.getScriptUtxos(publicKeyScript, confirmed)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get UTXOs for script [0x%x]: [%v]",
+				publicKeyScript,
+				err,
+			)
+		}
+
+		for _, item := range scriptItems {
+			outpoint := bitcoin.TransactionOutpoint{
+				TransactionHash: item.txHash,
+				OutputIndex:     item.outputIndex,
+			}
+			if seen[outpoint] {
+				continue
+			}
+			seen[outpoint] = true
+			items = append(items, item)
+		}
+	}
+
+	return items, nil
 }
 
 type scriptUtxoItem struct {
@@ -1015,9 +1101,7 @@ func (c *Connection) getFeeBtcPerKbOnce(blocks uint32) (float32, error) {
 		c.config.RequestTimeout,
 	)
 	defer requestCancel()
-	c.clientMutex.Lock()
-	fee, err := c.client.GetFee(requestCtx, blocks)
-	c.clientMutex.Unlock()
+	fee, err := c.currentClient().GetFee(requestCtx, blocks)
 	if err != nil {
 		return 0, fmt.Errorf("request failed: [%w]", err)
 	}
@@ -1231,7 +1315,7 @@ func (c *Connection) keepAlive() {
 			}
 		case <-c.parentCtx.Done():
 			ticker.Stop()
-			c.client.Shutdown()
+			c.currentClient().Shutdown()
 			return
 		}
 	}
@@ -1285,9 +1369,7 @@ func requestWithRetry[K interface{}](
 			requestCtx, requestCancel := context.WithTimeout(ctx, c.config.RequestTimeout)
 			defer requestCancel()
 
-			c.clientMutex.Lock()
-			r, err := requestFn(requestCtx, c.client)
-			c.clientMutex.Unlock()
+			r, err := requestFn(requestCtx, c.currentClient())
 
 			if err != nil {
 				return fmt.Errorf("request failed: [%w]", err)
@@ -1313,6 +1395,34 @@ func requestWithRetry[K interface{}](
 	return result, err
 }
 
+// currentClient returns the live Electrum client under a read lock.
+//
+// The lock protects the client POINTER against a concurrent reconnect swap and
+// nothing else. It is released before the caller issues its request, so a
+// reconnect may swap the client while that request is still in flight against
+// the old one.
+//
+// How such a stale-client request fails depends on the caller. Requests issued
+// through requestWithRetry fail and are reconnected and repeated by its retry
+// loop -- the same fallback it applies to any other request failure.
+// getFeeBtcPerKbOnce calls currentClient directly, outside any retry wrapper,
+// and surfaces a plain error to EstimateSatPerVByteFee's fallback loop, which
+// moves on to the next confirmation target instead of retrying the same one.
+//
+// Note that the underlying go-electrum client's Shutdown() is not thread-safe
+// against in-flight requests: it clears the transport and handler maps without
+// holding the handler lock. That is a known upstream issue tracked separately;
+// this lock does not protect against it.
+func (c *Connection) currentClient() *electrum.Client {
+	c.clientMutex.RLock()
+	defer c.clientMutex.RUnlock()
+
+	return c.client
+}
+
+// reconnectIfShutdown replaces a shut-down client with a fresh connection. It is
+// the only writer of c.client, so it takes the write lock: readers hold the read
+// lock just long enough to copy the pointer (see currentClient).
 func (c *Connection) reconnectIfShutdown() error {
 	c.clientMutex.Lock()
 	defer c.clientMutex.Unlock()

@@ -95,6 +95,78 @@ func TestEstimateRedemptionFee(t *testing.T) {
 	}
 }
 
+// TestEstimateRedemptionFee_P2TRRedeemerScript asserts a redemption batch that
+// contains a P2TR redeemer output script is priced rather than rejected.
+//
+// The Bridge accepts P2TR redeemer addresses, so a single such request in a batch
+// used to abort the estimate for the whole batch and stall every pending
+// redemption for that wallet, not just its own.
+func TestEstimateRedemptionFee_P2TRRedeemerScript(t *testing.T) {
+	fromHex := func(hexString string) []byte {
+		bytes, err := hex.DecodeString(hexString)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes
+	}
+
+	// OP_1 (0x51) OP_DATA_32 (0x20) followed by the 32-byte output key.
+	p2trScript := bitcoin.Script(fromHex(
+		"5120a60869f0dbcf1dc659c9cecbaf8050135ea9e8cdc487053f1dc6880949dc684c",
+	))
+	p2wpkhScript := bitcoin.Script(fromHex(
+		"0014e6f9d74726b19b75f16fe1e9feaec048aa4fa1d0",
+	))
+
+	estimate := func(scripts []bitcoin.Script) (int64, error) {
+		btcChain := tbtcpg.NewLocalBitcoinChain()
+		btcChain.SetEstimateSatPerVByteFee(1, 16)
+
+		return tbtcpg.EstimateRedemptionFee(btcChain, scripts, 100000)
+	}
+
+	withoutP2TR, err := estimate([]bitcoin.Script{p2wpkhScript})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withP2TR, err := estimate([]bitcoin.Script{p2wpkhScript, p2trScript})
+	if err != nil {
+		t.Fatalf("a P2TR redeemer script must be priced, not rejected: %v", err)
+	}
+
+	// The P2TR request adds an output, so it must cost strictly more. An equal fee
+	// would mean the script was silently dropped from the size estimate and every
+	// redemption in the batch underpaid.
+	if withP2TR <= withoutP2TR {
+		t.Fatalf(
+			"adding a P2TR redeemer output must raise the fee: without [%d], with [%d]",
+			withoutP2TR,
+			withP2TR,
+		)
+	}
+}
+
+// TestEstimateRedemptionFee_NonStandardRedeemerScript asserts a genuinely
+// non-standard redeemer script is still rejected, and that the error names the
+// offending type so an operator can identify the request.
+func TestEstimateRedemptionFee_NonStandardRedeemerScript(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	btcChain.SetEstimateSatPerVByteFee(1, 16)
+
+	_, err := tbtcpg.EstimateRedemptionFee(
+		btcChain,
+		[]bitcoin.Script{bitcoin.Script{0x6a, 0x01, 0x00}}, // OP_RETURN
+		100000,
+	)
+	if err == nil {
+		t.Fatal("expected a non-standard redeemer output script to be rejected")
+	}
+	if !strings.Contains(err.Error(), "non-standard redeemer output script type") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRedemptionAction_FindPendingRedemptions(t *testing.T) {
 	scenarios, err := test.LoadFindPendingRedemptionsTestScenario()
 	if err != nil {

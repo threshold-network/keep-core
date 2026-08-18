@@ -17,6 +17,10 @@ var signaturePlaceholder = make([]byte, 72)
 // Compressed public keys have always 33 bytes.
 var publicKeyPlaceholder = make([]byte, 33)
 
+// Taproot key-path signatures use the 64-byte BIP-340 Schnorr encoding when
+// SIGHASH_DEFAULT is used.
+var taprootKeyPathSignaturePlaceholder = make([]byte, 64)
+
 // TransactionSizeEstimator is a component allowing to estimate the size
 // of a Bitcoin transaction of the provided shape, without constructing it.
 type TransactionSizeEstimator struct {
@@ -69,6 +73,40 @@ func (tse *TransactionSizeEstimator) AddPublicKeyHashInputs(
 				signatureScript,
 				witness,
 			),
+		)
+	}
+
+	return tse
+}
+
+// AddPublicKeyScriptInput adds an input spending an output locked by the
+// provided direct-key public key script. P2PKH, P2WPKH, and P2TR key-path
+// spends are supported. If the estimator already errored out during previous
+// actions, this method does nothing.
+func (tse *TransactionSizeEstimator) AddPublicKeyScriptInput(
+	publicKeyScript Script,
+) *TransactionSizeEstimator {
+	if tse.err != nil {
+		return tse
+	}
+
+	switch GetScriptType(publicKeyScript) {
+	case P2PKHScript:
+		return tse.AddPublicKeyHashInputs(1, false)
+	case P2WPKHScript:
+		return tse.AddPublicKeyHashInputs(1, true)
+	case P2TRScript:
+		tse.internal.AddTxIn(
+			wire.NewTxIn(
+				wire.NewOutPoint((*chainhash.Hash)(&[32]byte{}), 0),
+				nil,
+				wire.TxWitness{taprootKeyPathSignaturePlaceholder},
+			),
+		)
+	default:
+		tse.err = fmt.Errorf(
+			"unsupported direct-key input script type: [%v]",
+			GetScriptType(publicKeyScript),
 		)
 	}
 
@@ -197,6 +235,28 @@ func (tse *TransactionSizeEstimator) AddScriptHashOutputs(
 			wire.NewTxOut(0, scriptPlaceholder),
 		)
 	}
+
+	return tse
+}
+
+// AddOutputScript adds an output locked by the provided public key script. If
+// the estimator already errored out during previous actions, this method does
+// nothing.
+func (tse *TransactionSizeEstimator) AddOutputScript(
+	publicKeyScript Script,
+) *TransactionSizeEstimator {
+	if tse.err != nil {
+		return tse
+	}
+
+	if len(publicKeyScript) == 0 {
+		tse.err = fmt.Errorf("output public key script is empty")
+		return tse
+	}
+
+	tse.internal.AddTxOut(
+		wire.NewTxOut(0, append([]byte(nil), publicKeyScript...)),
+	)
 
 	return tse
 }
