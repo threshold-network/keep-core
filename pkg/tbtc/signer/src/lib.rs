@@ -2,8 +2,10 @@ mod api;
 mod engine;
 mod errors;
 mod ffi;
+mod ffi_macros;
 mod go_math_rand;
 
+use crate::ffi_macros::{ffi_no_request, ffi_no_request_infallible, ffi_request_response};
 use api::{
     BuildTaprootTxRequest, DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest,
     DkgPart1Request, DkgPart2Request, DkgPart3Request, FrostTbtcAbiVersionResult,
@@ -54,6 +56,9 @@ use engine::TBTC_SIGNER_PROFILE_ENV;
 /// FFI ownership contract:
 /// - On return, `TbtcSignerResult.buffer` (if non-null) is owned by the caller.
 /// - The caller must release that buffer exactly once via `frost_tbtc_free_buffer`.
+// Outlier: success-only version probe. No panic-redaction wrapper - the version
+// string must succeed unconditionally; routing it through ffi_entry would add
+// error-path machinery that the original never had.
 #[no_mangle]
 pub extern "C" fn frost_tbtc_version() -> TbtcSignerResult {
     success_from_string(TBTC_SIGNER_VERSION.to_string())
@@ -64,6 +69,9 @@ pub extern "C" fn frost_tbtc_version() -> TbtcSignerResult {
 /// TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR for the bump rules. This response
 /// shape is the ROOT compatibility surface and must stay stable: {abi_major, abi_minor}
 /// as unsigned integers.
+// Outlier: hand-written because the response is an inline FrostTbtcAbiVersionResult
+// constructed from TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR, not a parsed
+// request → engine::fn round-trip; no ffi_request_response! body matches it.
 #[no_mangle]
 pub extern "C" fn frost_tbtc_abi_version() -> TbtcSignerResult {
     ffi_entry(|| {
@@ -74,131 +82,29 @@ pub extern "C" fn frost_tbtc_abi_version() -> TbtcSignerResult {
     })
 }
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_init_signer_config(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: InitSignerConfigRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::init_signer_config(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_init_signer_config, InitSignerConfigRequest, engine::init_signer_config);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_roast_liveness_policy() -> TbtcSignerResult {
-    ffi_entry(|| serialize_response(&engine::roast_liveness_policy()))
-}
+ffi_no_request_infallible!(frost_tbtc_roast_liveness_policy, engine::roast_liveness_policy);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_hardening_metrics() -> TbtcSignerResult {
-    ffi_entry(|| serialize_response(&engine::hardening_metrics()))
-}
+ffi_no_request_infallible!(frost_tbtc_hardening_metrics, engine::hardening_metrics);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_roast_transcript_audit(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: TranscriptAuditRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::roast_transcript_audit(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_roast_transcript_audit, TranscriptAuditRequest, engine::roast_transcript_audit);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_verify_blame_proof(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: VerifyBlameProofRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::verify_blame_proof(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_verify_blame_proof, VerifyBlameProofRequest, engine::verify_blame_proof);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_quarantine_status(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: QuarantineStatusRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::quarantine_status(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_quarantine_status, QuarantineStatusRequest, engine::quarantine_status);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_refresh_cadence_status(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: RefreshCadenceStatusRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::refresh_cadence_status(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_refresh_cadence_status, RefreshCadenceStatusRequest, engine::refresh_cadence_status);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_trigger_emergency_rekey(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: TriggerEmergencyRekeyRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::trigger_emergency_rekey(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_trigger_emergency_rekey, TriggerEmergencyRekeyRequest, engine::trigger_emergency_rekey);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_run_differential_fuzzing(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: DifferentialFuzzRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::run_differential_fuzzing(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_run_differential_fuzzing, DifferentialFuzzRequest, engine::run_differential_fuzzing);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_canary_rollout_status() -> TbtcSignerResult {
-    ffi_entry(|| {
-        let response = engine::canary_rollout_status()?;
-        serialize_response(&response)
-    })
-}
+ffi_no_request!(frost_tbtc_canary_rollout_status, engine::canary_rollout_status);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_promote_canary(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: PromoteCanaryRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::promote_canary(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_promote_canary, PromoteCanaryRequest, engine::promote_canary);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_rollback_canary(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: RollbackCanaryRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::rollback_canary(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_rollback_canary, RollbackCanaryRequest, engine::rollback_canary);
 
 #[cfg(any(test, feature = "bench-restart-hook"))]
 #[doc(hidden)]
@@ -206,186 +112,46 @@ pub fn frost_tbtc_reload_state_from_storage_for_benchmarks() -> Result<(), Strin
     engine::reload_state_from_storage_for_benchmarks().map_err(|error| error.to_string())
 }
 
+// Outlier: distinct ABI - returns void (NOT TbtcSignerResult), takes a *mut u8
+// buffer + length the caller previously received from another entry. None of
+// the three FFI macros apply because the return type is not TbtcSignerResult.
 #[no_mangle]
 pub extern "C" fn frost_tbtc_free_buffer(ptr: *mut u8, len: usize) {
     free_buffer(ptr, len)
 }
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_dkg_part1(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: DkgPart1Request = parse_request(request_ptr, request_len)?;
-        let response = engine::dkg_part1(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_dkg_part1, DkgPart1Request, engine::dkg_part1);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_dkg_part2(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: DkgPart2Request = parse_request(request_ptr, request_len)?;
-        let response = engine::dkg_part2(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_dkg_part2, DkgPart2Request, engine::dkg_part2);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_dkg_part3(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: DkgPart3Request = parse_request(request_ptr, request_len)?;
-        let response = engine::dkg_part3(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_dkg_part3, DkgPart3Request, engine::dkg_part3);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_persist_distributed_dkg_key_package(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: PersistDistributedDkgKeyPackageRequest =
-            parse_request(request_ptr, request_len)?;
-        let response = engine::persist_distributed_dkg_key_package(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_persist_distributed_dkg_key_package, PersistDistributedDkgKeyPackageRequest, engine::persist_distributed_dkg_key_package);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_new_signing_package(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: NewSigningPackageRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::new_signing_package(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_new_signing_package, NewSigningPackageRequest, engine::new_signing_package);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_verify_signature_share(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: crate::api::VerifySignatureShareRequest =
-            parse_request(request_ptr, request_len)?;
-        let response = engine::verify_signature_share(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_verify_signature_share, crate::api::VerifySignatureShareRequest, engine::verify_signature_share);
 
 // Phase 7.1 hardened interactive signing session (frozen spec
 // docs/phase-7-interactive-session-spec-freeze.md). Additive ABI: the
 // Go host adopts these in Phase 7.3; nothing breaks until it calls
 // them. Secret nonces never cross this boundary in either direction.
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_interactive_session_open(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: InteractiveSessionOpenRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::interactive_session_open(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_interactive_session_open, InteractiveSessionOpenRequest, engine::interactive_session_open);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_interactive_round1(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: InteractiveRound1Request = parse_request(request_ptr, request_len)?;
-        let response = engine::interactive_round1(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_interactive_round1, InteractiveRound1Request, engine::interactive_round1);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_interactive_round2(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: InteractiveRound2Request = parse_request(request_ptr, request_len)?;
-        let response = engine::interactive_round2(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_interactive_round2, InteractiveRound2Request, engine::interactive_round2);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_interactive_session_abort(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: InteractiveSessionAbortRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::interactive_session_abort(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_interactive_session_abort, InteractiveSessionAbortRequest, engine::interactive_session_abort);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_interactive_aggregate(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: InteractiveAggregateRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::interactive_aggregate(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_interactive_aggregate, InteractiveAggregateRequest, engine::interactive_aggregate);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_derive_interactive_attempt_context(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: DeriveInteractiveAttemptContextRequest =
-            parse_request(request_ptr, request_len)?;
-        let response = engine::derive_interactive_attempt_context(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_derive_interactive_attempt_context, DeriveInteractiveAttemptContextRequest, engine::derive_interactive_attempt_context);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_build_taproot_tx(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: BuildTaprootTxRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::build_taproot_tx(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_build_taproot_tx, BuildTaprootTxRequest, engine::build_taproot_tx);
 
-#[no_mangle]
-pub extern "C" fn frost_tbtc_refresh_shares(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> TbtcSignerResult {
-    ffi_entry(|| {
-        let request: RefreshSharesRequest = parse_request(request_ptr, request_len)?;
-        let response = engine::refresh_shares(request)?;
-        serialize_response(&response)
-    })
-}
+ffi_request_response!(frost_tbtc_refresh_shares, RefreshSharesRequest, engine::refresh_shares);
 
 #[cfg(test)]
 mod tests {
