@@ -43,9 +43,10 @@ type covenantSignerEngine struct {
 // engine also providing a current block height; losing this interface
 // silently would make certificates never expire.
 var (
-	_ covenantsigner.Engine                     = (*covenantSignerEngine)(nil)
-	_ covenantsigner.SignerApprovalVerifier     = (*covenantSignerEngine)(nil)
-	_ covenantsigner.CurrentBlockHeightProvider = (*covenantSignerEngine)(nil)
+	_ covenantsigner.Engine                          = (*covenantSignerEngine)(nil)
+	_ covenantsigner.SignerApprovalVerifier          = (*covenantSignerEngine)(nil)
+	_ covenantsigner.CurrentBlockHeightProvider      = (*covenantSignerEngine)(nil)
+	_ covenantsigner.SignerApprovalCertificateIssuer = (*covenantSignerEngine)(nil)
 )
 
 // defaultMinActiveOutpointConfirmations is the confirmation threshold applied
@@ -330,6 +331,105 @@ func (cse *covenantSignerEngine) CurrentBlockHeight(context.Context) (uint64, er
 	}
 
 	return blockCounter.CurrentBlock()
+}
+
+// IssueSignerApprovalCertificate threshold-signs a v2 signer approval
+// certificate for a wallet this node controls. approvalDigest must match the
+// artifact-approval payload digest of the Submit request that will carry the
+// certificate. endBlock is the host-chain expiry height.
+func (cse *covenantSignerEngine) IssueSignerApprovalCertificate(
+	ctx context.Context,
+	walletPublicKeyHash [20]byte,
+	approvalDigest []byte,
+	endBlock uint64,
+) (*covenantsigner.SignerApprovalCertificate, error) {
+	if len(approvalDigest) != sha256.Size {
+		return nil, covenantsigner.NewInputError(
+			fmt.Sprintf(
+				"approvalDigest must be exactly %d bytes",
+				sha256.Size,
+			),
+		)
+	}
+
+	wallet, ok := cse.node.walletRegistry.getWalletByPublicKeyHash(
+		walletPublicKeyHash,
+	)
+	if !ok {
+		return nil, covenantsigner.NewInputError(
+			"walletPublicKeyHash does not resolve to a wallet controlled by this node",
+		)
+	}
+
+	walletChainData, err := cse.node.chain.GetWallet(walletPublicKeyHash)
+	if err != nil {
+		if errors.Is(err, ErrWalletNotFound) {
+			return nil, covenantsigner.NewInputError(
+				"walletPublicKeyHash must resolve to a registered on-chain wallet",
+			)
+		}
+		return nil, fmt.Errorf(
+			"cannot resolve on-chain wallet for signer approval certificate: %w",
+			err,
+		)
+	}
+	if err := ensureWalletRegistryDataAvailable(
+		walletChainData,
+		"issue signer approval certificate",
+	); err != nil {
+		return nil, err
+	}
+	if !isCovenantSigningEligibleState(walletChainData.State) {
+		return nil, covenantsigner.NewInputError(
+			fmt.Sprintf(
+				"walletPublicKeyHash resolves to a wallet in state [%v] that is "+
+					"not eligible for covenant signing",
+				walletChainData.State,
+			),
+		)
+	}
+
+	signingExecutor, ok, err := cse.node.getSigningExecutor(wallet.publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve signing executor: %w", err)
+	}
+	if !ok {
+		return nil, covenantsigner.NewInputError(
+			"wallet is not controlled by this node",
+		)
+	}
+
+	startBlock, err := signingExecutor.getCurrentBlockFn()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get current host-chain block for signer approval certificate: %w",
+			err,
+		)
+	}
+	if endBlock <= startBlock {
+		return nil, covenantsigner.NewInputError(
+			fmt.Sprintf(
+				"endBlock [%d] must be greater than the current host-chain block [%d]",
+				endBlock,
+				startBlock,
+			),
+		)
+	}
+
+	certificate, err := signingExecutor.issueSignerApprovalCertificate(
+		ctx,
+		approvalDigest,
+		startBlock,
+		endBlock,
+	)
+	if err != nil {
+		if errors.Is(err, errSigningExecutorBusy) {
+			return nil, covenantsigner.ErrSignerApprovalCertificateIssuerBusy
+		}
+		return nil, err
+	}
+
+	return certificate, nil
 }
 
 func (cse *covenantSignerEngine) submitSelfV1(

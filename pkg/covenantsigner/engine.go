@@ -33,9 +33,9 @@ type Transition struct {
 // underlying signing job. The service treats this as a terminal failure and
 // transitions the job to JobStateFailed.
 //
-// An Engine may also implement SignerApprovalVerifier and
-// CurrentBlockHeightProvider; see their doc comments for the constraints
-// between them.
+// An Engine may also implement SignerApprovalVerifier,
+// CurrentBlockHeightProvider, and SignerApprovalCertificateIssuer; see their
+// doc comments for the constraints between them.
 type Engine interface {
 	OnSubmit(ctx context.Context, job *Job) (*Transition, error)
 	OnPoll(ctx context.Context, job *Job) (*Transition, error)
@@ -69,6 +69,40 @@ func (savf SignerApprovalVerifierFunc) VerifySignerApproval(
 ) error {
 	return savf(request)
 }
+
+// SignerApprovalCertificateIssuer is implemented by Engines that can produce a
+// v2 SignerApprovalCertificate for a wallet they control by running a threshold
+// signing round over the certificate digest. The admin HTTP issuer endpoint
+// type-asserts the engine to this interface; engines that omit it return 501.
+//
+// approvalDigest must be the 32-byte artifact-approval payload digest that the
+// eventual Submit request will carry — VerifySignerApproval rejects certificates
+// whose ApprovalDigest does not match request.artifactApprovals.payload.
+// endBlock is a host-chain (e.g. Ethereum) height after which the certificate
+// must be rejected as expired.
+type SignerApprovalCertificateIssuer interface {
+	IssueSignerApprovalCertificate(
+		ctx context.Context,
+		walletPublicKeyHash [20]byte,
+		approvalDigest []byte,
+		endBlock uint64,
+	) (*SignerApprovalCertificate, error)
+}
+
+// ErrSignerApprovalCertificateIssuerUnsupported is returned when the configured
+// engine does not implement SignerApprovalCertificateIssuer.
+var ErrSignerApprovalCertificateIssuerUnsupported = errors.New(
+	"covenant signer engine does not support signer approval certificate issuance",
+)
+
+// ErrSignerApprovalCertificateIssuerBusy is returned when the engine's signing
+// executor for the requested wallet is already running another signing
+// operation (e.g. a concurrent Submit or a concurrent issuance). Callers
+// should retry after a short delay; the request was rejected before any
+// threshold signing began, so retrying is always safe.
+var ErrSignerApprovalCertificateIssuerBusy = errors.New(
+	"covenant signer engine is busy signing for this wallet",
+)
 
 type passiveEngine struct{}
 

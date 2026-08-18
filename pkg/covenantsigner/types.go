@@ -232,6 +232,23 @@ type SignerApprovalCertificate struct {
 	EndBlock           *uint64  `json:"endBlock"`
 }
 
+// IssueSignerApprovalCertificateInput is the request body for
+// POST /v1/admin/signer-approval-certificates. The caller supplies an
+// authenticated artifact approval, not a bare digest: Route/Reserve/Network
+// select the trust-root scope this node uses to resolve the depositor (and,
+// for qc_v1, custodian) identity that must have signed ArtifactApprovals.
+// The server verifies that signature itself -- the same authenticity check
+// the Submit path runs -- and derives the signed digest from the
+// authenticated payload; it never signs a caller-asserted digest.
+type IssueSignerApprovalCertificateInput struct {
+	WalletPublicKeyHash string                   `json:"walletPublicKeyHash"`
+	Route               TemplateID               `json:"route"`
+	Reserve             string                   `json:"reserve"`
+	Network             string                   `json:"network"`
+	ArtifactApprovals   ArtifactApprovalEnvelope `json:"artifactApprovals"`
+	EndBlock            uint64                   `json:"endBlock"`
+}
+
 type SigningRequirements struct {
 	SignerRequired    bool `json:"signerRequired"`
 	CustodianRequired bool `json:"custodianRequired"`

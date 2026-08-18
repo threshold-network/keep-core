@@ -204,6 +204,17 @@ func validateBytes32HexString(name string, value string) error {
 
 	return nil
 }
+func validateBytes20HexString(name string, value string) error {
+	if err := validateHexString(name, value); err != nil {
+		return err
+	}
+
+	if len(value) != 42 {
+		return &inputError{fmt.Sprintf("%s must be a 20-byte 0x-prefixed hex string", name)}
+	}
+
+	return nil
+}
 
 func validateUint32Range(name string, value uint64) error {
 	if value > math.MaxUint32 {
@@ -217,6 +228,22 @@ func decodeBytes32HexString(name string, value string) ([32]byte, error) {
 	var decoded [32]byte
 
 	if err := validateBytes32HexString(name, value); err != nil {
+		return decoded, err
+	}
+
+	rawValue, err := hex.DecodeString(strings.TrimPrefix(value, "0x"))
+	if err != nil {
+		return decoded, &inputError{fmt.Sprintf("%s must be valid hex", name)}
+	}
+
+	copy(decoded[:], rawValue)
+	return decoded, nil
+}
+
+func decodeBytes20HexString(name string, value string) ([20]byte, error) {
+	var decoded [20]byte
+
+	if err := validateBytes20HexString(name, value); err != nil {
 		return decoded, err
 	}
 

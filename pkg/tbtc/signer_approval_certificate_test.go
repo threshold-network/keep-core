@@ -1031,3 +1031,163 @@ func TestSignerApprovalCertificateSigningDigestMatchesCrossLanguageVectorAboveUi
 		)
 	}
 }
+
+func TestCovenantSignerEngineIssueSignerApprovalCertificateHappyPath(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	cse := &covenantSignerEngine{node: node}
+
+	executor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+	startBlock, err := executor.getCurrentBlockFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approvalDigest := sha256.Sum256([]byte("engine-issue-happy-path"))
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+
+	certificate, err := cse.IssueSignerApprovalCertificate(
+		context.Background(),
+		walletPublicKeyHash,
+		approvalDigest[:],
+		startBlock+100000,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certificate == nil {
+		t.Fatal("expected a certificate")
+	}
+	if !strings.EqualFold(
+		certificate.ApprovalDigest,
+		"0x"+hex.EncodeToString(approvalDigest[:]),
+	) {
+		t.Fatalf("unexpected approval digest: %s", certificate.ApprovalDigest)
+	}
+	if certificate.EndBlock == nil || *certificate.EndBlock != startBlock+100000 {
+		t.Fatalf("unexpected end block: %v", certificate.EndBlock)
+	}
+}
+
+func TestCovenantSignerEngineIssueSignerApprovalCertificateRejectsUnknownWallet(t *testing.T) {
+	node, _, _ := setupCovenantSignerTestNode(t)
+	cse := &covenantSignerEngine{node: node}
+
+	approvalDigest := sha256.Sum256([]byte("unknown-wallet"))
+	var unknownPKH [20]byte
+	copy(unknownPKH[:], bytes.Repeat([]byte{0x11}, 20))
+
+	_, err := cse.IssueSignerApprovalCertificate(
+		context.Background(),
+		unknownPKH,
+		approvalDigest[:],
+		math.MaxUint64,
+	)
+	if err == nil || !strings.Contains(err.Error(), "controlled by this node") {
+		t.Fatalf("expected uncontrolled-wallet rejection, got %v", err)
+	}
+}
+
+func TestCovenantSignerEngineIssueSignerApprovalCertificateRejectsMissingOnChainWallet(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	cse := &covenantSignerEngine{node: node}
+
+	localChain, ok := node.chain.(*localChain)
+	if !ok {
+		t.Fatal("expected local chain implementation")
+	}
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+	localChain.walletsMutex.Lock()
+	delete(localChain.wallets, walletPublicKeyHash)
+	localChain.walletsMutex.Unlock()
+
+	approvalDigest := sha256.Sum256([]byte("missing-on-chain-wallet"))
+	_, err := cse.IssueSignerApprovalCertificate(
+		context.Background(),
+		walletPublicKeyHash,
+		approvalDigest[:],
+		math.MaxUint64,
+	)
+	if err == nil || !strings.Contains(err.Error(), "must resolve to a registered on-chain wallet") {
+		t.Fatalf("expected missing on-chain wallet rejection, got %v", err)
+	}
+}
+func TestCovenantSignerEngineIssueSignerApprovalCertificateRejectsBadDigestLength(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	cse := &covenantSignerEngine{node: node}
+
+	_, err := cse.IssueSignerApprovalCertificate(
+		context.Background(),
+		bitcoin.PublicKeyHash(walletPublicKey),
+		[]byte("too-short"),
+		math.MaxUint64,
+	)
+	if err == nil || !strings.Contains(err.Error(), "exactly 32 bytes") {
+		t.Fatalf("expected digest-length rejection, got %v", err)
+	}
+}
+
+func TestCovenantSignerEngineIssueSignerApprovalCertificateRejectsEndBlockNotAfterCurrent(
+	t *testing.T,
+) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	cse := &covenantSignerEngine{node: node}
+
+	executor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+	startBlock, err := executor.getCurrentBlockFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approvalDigest := sha256.Sum256([]byte("end-block-too-soon"))
+	_, err = cse.IssueSignerApprovalCertificate(
+		context.Background(),
+		bitcoin.PublicKeyHash(walletPublicKey),
+		approvalDigest[:],
+		startBlock,
+	)
+	if err == nil || !strings.Contains(err.Error(), "must be greater than the current host-chain block") {
+		t.Fatalf("expected endBlock rejection, got %v", err)
+	}
+}
+
+func TestCovenantSignerEngineIssueSignerApprovalCertificateRejectsClosedWallet(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	cse := &covenantSignerEngine{node: node}
+
+	localChain, ok := node.chain.(*localChain)
+	if !ok {
+		t.Fatal("expected local chain implementation")
+	}
+
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+	existing, err := localChain.GetWallet(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := *existing
+	closed.State = StateClosed
+	localChain.setWallet(walletPublicKeyHash, &closed)
+
+	approvalDigest := sha256.Sum256([]byte("closed-wallet"))
+	_, err = cse.IssueSignerApprovalCertificate(
+		context.Background(),
+		walletPublicKeyHash,
+		approvalDigest[:],
+		math.MaxUint64,
+	)
+	if err == nil || !strings.Contains(err.Error(), "not eligible for covenant signing") {
+		t.Fatalf("expected closed-wallet rejection, got %v", err)
+	}
+}

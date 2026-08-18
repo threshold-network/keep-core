@@ -14,6 +14,12 @@ type Config struct {
 	// config files over CLI flags to avoid exposing the token in
 	// /proc/PID/cmdline.
 	AuthToken string
+	// AdminAuthToken enables static Bearer authentication for the
+	// certificate-issuer admin route (POST /v1/admin/signer-approval-certificates).
+	// It is a distinct credential from AuthToken and never falls back to it:
+	// an ordinary submit/poll client token must never be sufficient to mint a
+	// signer approval certificate. Non-loopback binds must set this.
+	AdminAuthToken string
 	// EnableSelfV1 exposes the self_v1 signer HTTP routes. Keep this disabled
 	// for a qc_v1-first launch unless self_v1 has cleared its own go-live gate.
 	EnableSelfV1 bool

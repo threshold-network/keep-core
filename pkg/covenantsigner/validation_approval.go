@@ -832,3 +832,148 @@ func resolveExpectedCustodianPublicKey(
 
 	return "", false
 }
+
+// deriveIssuanceApprovalDigest verifies that artifactApprovals carries
+// exactly the roles required for route, each authentically signed by the
+// depositor (and, for qc_v1, custodian) identity pinned in this node's own
+// depositorTrustRoots/custodianTrustRoots for the (route, reserve, network)
+// scope -- the same authenticity check validateArtifactApprovalAuthenticity
+// runs on the Submit path -- then returns the EIP-712 digest this node
+// derived from the authenticated payload. It never trusts a caller-asserted
+// digest: the issuer only ever signs a digest it computed itself.
+func deriveIssuanceApprovalDigest(
+	route TemplateID,
+	reserve string,
+	network string,
+	artifactApprovals ArtifactApprovalEnvelope,
+	depositorTrustRoots []DepositorTrustRoot,
+	custodianTrustRoots []CustodianTrustRoot,
+	chainID uint64,
+	salt [32]byte,
+) ([]byte, error) {
+	requiredRoles, err := requiredStructuredArtifactApprovalRoles(route)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := artifactApprovals.Payload
+	if payload.ApprovalVersion != artifactApprovalVersion {
+		return nil, &inputError{"artifactApprovals.payload.approvalVersion must equal 2"}
+	}
+	if payload.Route != route {
+		return nil, &inputError{"artifactApprovals.payload.route must match route"}
+	}
+	if payload.ScriptTemplateID != route {
+		return nil, &inputError{"artifactApprovals.payload.scriptTemplateId must match route"}
+	}
+	if err := validateBytes32HexString(
+		"artifactApprovals.payload.destinationCommitmentHash",
+		payload.DestinationCommitmentHash,
+	); err != nil {
+		return nil, err
+	}
+	if err := validateBytes32HexString(
+		"artifactApprovals.payload.planCommitmentHash",
+		payload.PlanCommitmentHash,
+	); err != nil {
+		return nil, err
+	}
+	if err := validateIssuanceApprovalRoles(artifactApprovals.Approvals, requiredRoles); err != nil {
+		return nil, err
+	}
+
+	// trustRootLookupScope only reads Route, Reserve, and the network of
+	// whichever destination reservation is set. RedeemDestination is used
+	// purely as a carrier for the (reserve, network) trust-root scope here --
+	// certificate issuance has no real destination reservation of its own.
+	scopeRequest := RouteSubmitRequest{
+		Route:   route,
+		Reserve: reserve,
+		RedeemDestination: &RedeemDestinationReservation{
+			Network: strings.ToLower(strings.TrimSpace(network)),
+		},
+	}
+
+	depositorPublicKey, hasDepositorTrustRoot := resolveExpectedDepositorPublicKey(
+		scopeRequest,
+		depositorTrustRoots,
+	)
+	if !hasDepositorTrustRoot {
+		return nil, &inputError{
+			"no depositorTrustRoots entry is configured for the requested route/reserve/network; certificate issuance requires a pinned depositor identity",
+		}
+	}
+	depositorEthAddress := resolveExpectedDepositorEthAddress(scopeRequest, depositorTrustRoots)
+
+	var custodianPublicKey string
+	if containsArtifactApprovalRole(requiredRoles, ArtifactApprovalRoleCustodian) {
+		expectedCustodianPublicKey, hasCustodianTrustRoot := resolveExpectedCustodianPublicKey(
+			scopeRequest,
+			custodianTrustRoots,
+		)
+		if !hasCustodianTrustRoot {
+			return nil, &inputError{
+				"no custodianTrustRoots entry is configured for the requested route/reserve/network; certificate issuance requires a pinned custodian identity",
+			}
+		}
+		custodianPublicKey = expectedCustodianPublicKey
+	}
+
+	authenticityRequest := RouteSubmitRequest{ArtifactApprovals: &artifactApprovals}
+	if err := validateArtifactApprovalAuthenticity(
+		authenticityRequest,
+		depositorPublicKey,
+		depositorEthAddress,
+		custodianPublicKey,
+		chainID,
+		salt,
+	); err != nil {
+		return nil, err
+	}
+
+	return ComputeArtifactApprovalDigest(payload, chainID, salt)
+}
+
+func validateIssuanceApprovalRoles(
+	approvals []ArtifactRoleApproval,
+	requiredRoles []ArtifactApprovalRole,
+) error {
+	if len(approvals) != len(requiredRoles) {
+		return &inputError{"artifactApprovals.approvals must include exactly the roles required for route"}
+	}
+
+	seenRoles := make(map[ArtifactApprovalRole]struct{}, len(requiredRoles))
+	for i, approval := range approvals {
+		if !containsArtifactApprovalRole(requiredRoles, approval.Role) {
+			return &inputError{fmt.Sprintf(
+				"artifactApprovals.approvals[%d].role is not allowed for route",
+				i,
+			)}
+		}
+		if _, ok := seenRoles[approval.Role]; ok {
+			return &inputError{fmt.Sprintf(
+				"artifactApprovals.approvals[%d].role duplicates role %s",
+				i,
+				approval.Role,
+			)}
+		}
+		if err := validateHexString(
+			fmt.Sprintf("artifactApprovals.approvals[%d].signature", i),
+			approval.Signature,
+		); err != nil {
+			return err
+		}
+		seenRoles[approval.Role] = struct{}{}
+	}
+
+	return nil
+}
+
+func containsArtifactApprovalRole(roles []ArtifactApprovalRole, role ArtifactApprovalRole) bool {
+	for _, candidate := range roles {
+		if candidate == role {
+			return true
+		}
+	}
+	return false
+}

@@ -218,6 +218,68 @@ func newRequestID(prefix string) (string, error) {
 	return fmt.Sprintf("%s_%s", prefix, hex.EncodeToString(randomBytes)), nil
 }
 
+// IssueSignerApprovalCertificate asks the engine to threshold-sign a v2
+// SignerApprovalCertificate for the given wallet over a digest this node
+// derives itself from an authenticated artifact approval -- never a
+// caller-asserted digest. Engines that do not implement
+// SignerApprovalCertificateIssuer return ErrSignerApprovalCertificateIssuerUnsupported.
+func (s *Service) IssueSignerApprovalCertificate(
+	ctx context.Context,
+	input IssueSignerApprovalCertificateInput,
+) (*SignerApprovalCertificate, error) {
+	issuer, ok := s.engine.(SignerApprovalCertificateIssuer)
+	if !ok {
+		return nil, ErrSignerApprovalCertificateIssuerUnsupported
+	}
+
+	walletPublicKeyHash, err := decodeBytes20HexString(
+		"walletPublicKeyHash",
+		input.WalletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if input.EndBlock == 0 {
+		return nil, NewInputError("endBlock is required")
+	}
+
+	approvalDigest, err := deriveIssuanceApprovalDigest(
+		input.Route,
+		input.Reserve,
+		input.Network,
+		input.ArtifactApprovals,
+		s.depositorTrustRoots,
+		s.custodianTrustRoots,
+		s.eip712ChainID,
+		s.eip712Salt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Certificate issuance runs the same class of expensive threshold-signing
+	// round as Submit and Poll, so it is bounded by the same maxInFlight
+	// semaphore -- an unbounded number of concurrent issuance rounds must
+	// never be able to saturate the engine when Submit/Poll already respect
+	// this cap.
+	if s.inFlightSlots != nil {
+		select {
+		case s.inFlightSlots <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		defer func() { <-s.inFlightSlots }()
+	}
+
+	return issuer.IssueSignerApprovalCertificate(
+		ctx,
+		walletPublicKeyHash,
+		approvalDigest,
+		input.EndBlock,
+	)
+}
+
 func applyTransition(job *Job, transition *Transition, now time.Time) {
 	if transition == nil {
 		return

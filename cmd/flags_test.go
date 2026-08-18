@@ -212,6 +212,13 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: "secret-token",
 		defaultValue:          "",
 	},
+	"covenantSigner.adminAuthToken": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.AdminAuthToken },
+		flagName:              "--covenantSigner.adminAuthToken",
+		flagValue:             "secret-admin-token",
+		expectedValueFromFlag: "secret-admin-token",
+		defaultValue:          "",
+	},
 	"covenantSigner.enableSelfV1": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.EnableSelfV1 },
 		flagName:              "--covenantSigner.enableSelfV1",

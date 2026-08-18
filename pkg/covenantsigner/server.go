@@ -55,6 +55,12 @@ func Initialize(
 			listenAddress,
 		)
 	}
+	if !isLoopback && strings.TrimSpace(config.AdminAuthToken) == "" {
+		return nil, false, fmt.Errorf(
+			"covenant signer adminAuthToken is required for non-loopback listenAddress [%s]",
+			listenAddress,
+		)
+	}
 
 	eip712DomainOption, err := WithEIP712Domain(config.EIP712ChainID, config.EIP712Salt)
 	if err != nil {
@@ -167,7 +173,7 @@ func Initialize(
 		cancelService: cancelService,
 		httpServer: &http.Server{
 			Addr:              net.JoinHostPort(listenAddress, strconv.Itoa(config.Port)),
-			Handler:           newHandler(service, serviceCtx, config.AuthToken, config.EnableSelfV1),
+			Handler:           newHandler(service, serviceCtx, config.AuthToken, config.AdminAuthToken, config.EnableSelfV1),
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       30 * time.Second,
 			WriteTimeout:      30 * time.Second,
@@ -209,9 +215,10 @@ func Initialize(
 	}()
 
 	logger.Infof(
-		"enabled covenant signer provider endpoint on [%v] auth=[%v] self_v1=[%v]",
+		"enabled covenant signer provider endpoint on [%v] auth=[%v] admin_auth=[%v] self_v1=[%v]",
 		server.httpServer.Addr,
 		strings.TrimSpace(config.AuthToken) != "",
+		strings.TrimSpace(config.AdminAuthToken) != "",
 		config.EnableSelfV1,
 	)
 
@@ -311,9 +318,24 @@ func hasCustodianTrustRootForRoute(
 	return false
 }
 
-func newHandler(service *Service, serviceCtx context.Context, authToken string, enableSelfV1 bool) http.Handler {
+func newHandler(
+	service *Service,
+	serviceCtx context.Context,
+	authToken string,
+	adminAuthToken string,
+	enableSelfV1 bool,
+) http.Handler {
 	mux := http.NewServeMux()
 	protectedHandler := withBearerAuth(mux, authToken)
+
+	// The admin certificate-issuer route is authenticated separately from
+	// submit/poll: it mints a threshold-signed authorization artifact rather
+	// than consuming one, so it must never be reachable with the ordinary
+	// client token. adminAuthToken never falls back to authToken -- an empty
+	// adminAuthToken makes withBearerAuth a no-op here exactly as it does for
+	// authToken, which Initialize forbids on a non-loopback listen address.
+	adminMux := http.NewServeMux()
+	protectedAdminHandler := withBearerAuth(adminMux, adminAuthToken)
 
 	// Single rate limiter shared across all submit routes. The server uses one
 	// static auth token, so this is equivalent to per-token limiting.
@@ -337,6 +359,10 @@ func newHandler(service *Service, serviceCtx context.Context, authToken string, 
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	adminMux.HandleFunc(
+		"POST /v1/admin/signer-approval-certificates",
+		issueSignerApprovalCertificateHandler(service, serviceCtx, submitLimiter),
+	)
 	mux.HandleFunc("POST /v1/qc_v1/signer/requests", submitHandler(service, serviceCtx, TemplateQcV1, submitLimiter))
 	mux.HandleFunc("POST /v1/qc_v1/signer/requests:poll", pollBodyHandler(service, TemplateQcV1, pollLimiter))
 	mux.HandleFunc("/v1/qc_v1/signer/requests/", pollPathHandler(service, TemplateQcV1, pollLimiter))
@@ -349,6 +375,10 @@ func newHandler(service *Service, serviceCtx context.Context, authToken string, 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
 			mux.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/v1/admin/") {
+			protectedAdminHandler.ServeHTTP(w, r)
 			return
 		}
 
@@ -431,6 +461,15 @@ func handleError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, ErrSignerApprovalCertificateIssuerUnsupported) {
+		http.Error(w, err.Error(), http.StatusNotImplemented)
+		return
+	}
+	if errors.Is(err, ErrSignerApprovalCertificateIssuerBusy) {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 
 	logger.Errorf("covenant signer request failed: [%v]", err)
 	http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -476,6 +515,45 @@ func submitHandler(service *Service, serviceCtx context.Context, route TemplateI
 		}
 
 		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func issueSignerApprovalCertificateHandler(
+	service *Service,
+	serviceCtx context.Context,
+	limiter *rate.Limiter,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !limiter.Allow() {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+
+		input := IssueSignerApprovalCertificateInput{}
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+
+		// Certificate issuance runs a full threshold signing round, so use the
+		// same service-level timeout and detached context as submit. Unlike
+		// submit there is no poll route to recover the result: a slow round
+		// finishes and is discarded if the connection is gone by then, and
+		// the server's WriteTimeout (30s) is shorter than submitTimeout, so
+		// any round exceeding it cannot deliver its result at all. Callers
+		// MUST use a client timeout >= submitTimeout and treat a lost
+		// connection as "outcome unknown, safe to retry" rather than
+		// "failed" -- retrying issues a fresh signature over the same
+		// (payload, endBlock), never a duplicate side effect.
+		issueCtx, cancelIssue := context.WithTimeout(serviceCtx, submitTimeout)
+		defer cancelIssue()
+
+		certificate, err := service.IssueSignerApprovalCertificate(issueCtx, input)
+		if err != nil {
+			handleError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, certificate)
 	}
 }
 
