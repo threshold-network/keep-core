@@ -204,12 +204,42 @@ func (tb *TransactionBuilder) TaprootKeyPathInputMerkleRoots() []*[32]byte {
 	return merkleRoots
 }
 
+// assertUniformTaprootShape rejects transaction shapes that mix P2TR inputs
+// with non-P2TR inputs. Such a mix is not supported by the signing paths:
+// AddSignatures refuses builders holding any P2TR input and
+// AddTaprootKeyPathSignatures requires all inputs to be P2TR. Catching the mix
+// at construction time avoids discovering it only after a completed
+// distributed signing round.
+func (tb *TransactionBuilder) assertUniformTaprootShape(
+	scriptType ScriptType,
+) error {
+	isTaproot := scriptType == P2TRScript
+
+	for i, existing := range tb.sigHashArgs {
+		if (existing.scriptType == P2TRScript) != isTaproot {
+			return fmt.Errorf(
+				"cannot add [%v] input: mixed P2TR and non-P2TR inputs are "+
+					"not supported; existing input [%d] is [%v]",
+				scriptType,
+				i,
+				existing.scriptType,
+			)
+		}
+	}
+
+	return nil
+}
+
 func (tb *TransactionBuilder) addDirectKeySpendInput(
 	utxo *UnspentTransactionOutput,
 	utxoScript Script,
 	scriptType ScriptType,
 	taprootMerkleRoot *[32]byte,
 ) error {
+	if err := tb.assertUniformTaprootShape(scriptType); err != nil {
+		return err
+	}
+
 	// The UTXO was locked using a direct key-spend script, so the scriptCode
 	// required to build the sighash is equivalent to that script. Worth noting
 	// that the P2WPKH script is actually converted to the P2PKH script when
@@ -234,6 +264,8 @@ func (tb *TransactionBuilder) addDirectKeySpendInput(
 	tb.internal.AddTxIn(wire.NewTxIn(outpoint, nil, nil))
 
 	tb.sigHashArgs = append(tb.sigHashArgs, sigHashArgs)
+	// Adding an input invalidates any previously computed signature hashes.
+	tb.sigHashes = nil
 
 	return nil
 }
@@ -261,6 +293,10 @@ func (tb *TransactionBuilder) AddScriptHashInput(
 		return fmt.Errorf(
 			"UTXO pointed by the input is not P2SH/P2WSH",
 		)
+	}
+
+	if err := tb.assertUniformTaprootShape(scriptType); err != nil {
+		return err
 	}
 
 	// The UTXO was locked using a P2SH/P2WSH script so, the scriptCode required
@@ -291,6 +327,8 @@ func (tb *TransactionBuilder) AddScriptHashInput(
 	}
 
 	tb.sigHashArgs = append(tb.sigHashArgs, sigHashArgs)
+	// Adding an input invalidates any previously computed signature hashes.
+	tb.sigHashes = nil
 
 	return nil
 }
@@ -605,10 +643,10 @@ func (tb *TransactionBuilder) TotalInputsValue() int64 {
 // preserving per-input sighash metadata collected during builder input setup.
 // It also validates that the replacement's inputs carry no pre-existing signature
 // data, that each replacement input's PreviousOutPoint matches the prior input
-// at the same index, that the TxOut set matches the prior builder state (when
-// outputs had been committed), and restores each input's pre-signing witness
-// or signature-script from the previous builder state; replacement inputs whose
-// previous witness had more than one element are rejected.
+// at the same index, that the TxOut set matches the prior builder state, and
+// restores each input's pre-signing witness or signature-script from the
+// previous builder state; replacement inputs whose previous witness had more
+// than one element are rejected.
 func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
 	transaction *Transaction,
 ) error {
@@ -630,9 +668,9 @@ func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
 	replacedInternal := newInternalTransaction()
 	replacedInternal.fromTransaction(transaction)
 
-	// Bind the replacement to the builder's prior state: per-index PreviousOutPoint
-	// must match, and TxOut set must match when the builder had committed to
-	// outputs. Without these checks, a caller-controlled replacement could redirect
+	// Bind the replacement to the builder's prior state: per-index
+	// PreviousOutPoint must match and the TxOut set must match, always.
+	// Without these checks, a caller-controlled replacement could redirect
 	// funds (different TxOut set) or misalign sigHashArgs[i] with the new-order
 	// tx.TxIn[i], producing a self-consistent-but-wrong digest that survives the
 	// local Verify gate and broadcasts an unintended transaction.
@@ -645,30 +683,28 @@ func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
 			)
 		}
 	}
-	if len(previousOutputs) > 0 {
-		if len(replacedInternal.TxOut) != len(previousOutputs) {
+	if len(replacedInternal.TxOut) != len(previousOutputs) {
+		return fmt.Errorf(
+			"replacement TxOut set has [%d] entries; builder state has [%d]",
+			len(replacedInternal.TxOut),
+			len(previousOutputs),
+		)
+	}
+	for i, prevOut := range previousOutputs {
+		replOut := replacedInternal.TxOut[i]
+		if replOut.Value != prevOut.Value {
 			return fmt.Errorf(
-				"replacement TxOut set has [%d] entries; builder state has [%d]",
-				len(replacedInternal.TxOut),
-				len(previousOutputs),
+				"replacement TxOut [%d] value [%d] differs from builder state [%d]",
+				i,
+				replOut.Value,
+				prevOut.Value,
 			)
 		}
-		for i, prevOut := range previousOutputs {
-			replOut := replacedInternal.TxOut[i]
-			if replOut.Value != prevOut.Value {
-				return fmt.Errorf(
-					"replacement TxOut [%d] value [%d] differs from builder state [%d]",
-					i,
-					replOut.Value,
-					prevOut.Value,
-				)
-			}
-			if !bytes.Equal(replOut.PkScript, prevOut.PkScript) {
-				return fmt.Errorf(
-					"replacement TxOut [%d] PkScript differs from builder state",
-					i,
-				)
-			}
+		if !bytes.Equal(replOut.PkScript, prevOut.PkScript) {
+			return fmt.Errorf(
+				"replacement TxOut [%d] PkScript differs from builder state",
+				i,
+			)
 		}
 	}
 

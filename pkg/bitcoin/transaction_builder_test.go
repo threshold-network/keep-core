@@ -542,6 +542,18 @@ func TestTransactionBuilder_AddOutput(t *testing.T) {
 	builder.AddOutput(output)
 
 	assertInternalOutput(t, builder, 0, output)
+
+	// AddOutput must invalidate previously computed signature hashes so a
+	// stale digest can never be applied to a transaction whose output set
+	// changed after ComputeSignatureHashes.
+	builder.sigHashes = []*big.Int{big.NewInt(1)}
+	builder.AddOutput(output)
+	if len(builder.sigHashes) != 0 {
+		t.Fatalf(
+			"expected sighashes reset after AddOutput: [%d]",
+			len(builder.sigHashes),
+		)
+	}
 }
 
 func TestTransactionBuilder_AddTaprootKeyPathSignatures(t *testing.T) {
@@ -1072,14 +1084,18 @@ func TestTransactionBuilder_ReplaceUnsignedTransaction(t *testing.T) {
 		&inputSigHashArgs{value: 111, scriptCode: []byte{0x51}, witness: false},
 		&inputSigHashArgs{value: 222, scriptCode: []byte{0x52}, witness: true},
 	)
+	builder.AddOutput(&TransactionOutput{
+		Value:           1000,
+		PublicKeyScript: hexToSlice(t, "0014deadbeef"),
+	})
 	builder.sigHashes = []*big.Int{big.NewInt(1), big.NewInt(2)}
 
 	var replacementInputHash1 chainhash.Hash
 	var replacementInputHash2 chainhash.Hash
 	// Preserve the outpoints that the builder was initialized with so the
-	// replacement's per-index PreviousOutPoint matches the prior builder state
-	// (transaction_builder.go now binds the replacement's outpoints and TxOut
-	// set to the builder's prior state before rebinding tb.internal).
+	// replacement's per-index PreviousOutPoint matches the prior builder
+	// state. The replacement must also carry the exact output set the builder
+	// committed to; ReplaceUnsignedTransaction binds both unconditionally.
 	replacementInputHash1 = initialInputHash1
 	replacementInputHash2 = initialInputHash2
 
@@ -1933,5 +1949,298 @@ func TestTransactionBuilder_AddTaprootKeyPathSignatures_RejectsInvalid(
 				"got: [%v]",
 			err,
 		)
+	}
+}
+
+func TestTransactionBuilder_RejectsMixedP2TRNonP2TR(t *testing.T) {
+	localChain := newLocalChain()
+
+	var publicKeyHash [20]byte
+	copy(
+		publicKeyHash[:],
+		hexToSlice(t, "0102030405060708090a0b0c0d0e0f1011121314"),
+	)
+	publicKeyHashScript, err := PayToWitnessPublicKeyHash(publicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, publicKey := btcec2.PrivKeyFromBytes(
+		hexToSlice(
+			t,
+			"0101010101010101010101010101010101010101010101010101010101010101",
+		),
+	)
+
+	var taprootOutputKey [32]byte
+	copy(taprootOutputKey[:], schnorr.SerializePubKey(publicKey))
+
+	taprootScript, err := PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fundingTransaction := func(marker byte, script Script) *Transaction {
+		return &Transaction{
+			Version: 1,
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash{marker},
+						OutputIndex:     0,
+					},
+					SignatureScript: []byte{0x51},
+					Sequence:        0xffffffff,
+				},
+			},
+			Outputs: []*TransactionOutput{
+				{
+					Value:           100000,
+					PublicKeyScript: script,
+				},
+			},
+			Locktime: 0,
+		}
+	}
+
+	publicKeyHashFunding := fundingTransaction(0x41, publicKeyHashScript)
+	taprootFunding := fundingTransaction(0x42, taprootScript)
+
+	for _, transaction := range []*Transaction{
+		publicKeyHashFunding,
+		taprootFunding,
+	} {
+		if err := localChain.addTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	utxo := func(transaction *Transaction) *UnspentTransactionOutput {
+		return &UnspentTransactionOutput{
+			Outpoint: &TransactionOutpoint{
+				TransactionHash: transaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		}
+	}
+
+	t.Run("taproot input added to non-taproot builder", func(t *testing.T) {
+		builder := NewTransactionBuilder(localChain)
+
+		if err := builder.AddPublicKeyHashInput(
+			utxo(publicKeyHashFunding),
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		err := builder.AddTaprootKeyPathInput(utxo(taprootFunding))
+		if err == nil {
+			t.Fatal("expected mixed input shape to be rejected")
+		}
+		if !strings.Contains(err.Error(), "mixed") {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+
+		testutils.AssertIntsEqual(
+			t,
+			"builder inputs count",
+			1,
+			len(builder.internal.TxIn),
+		)
+	})
+
+	t.Run("non-taproot input added to taproot builder", func(t *testing.T) {
+		builder := NewTransactionBuilder(localChain)
+
+		if err := builder.AddTaprootKeyPathInput(
+			utxo(taprootFunding),
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		err := builder.AddPublicKeyHashInput(utxo(publicKeyHashFunding))
+		if err == nil {
+			t.Fatal("expected mixed input shape to be rejected")
+		}
+		if !strings.Contains(err.Error(), "mixed") {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+
+		testutils.AssertIntsEqual(
+			t,
+			"builder inputs count",
+			1,
+			len(builder.internal.TxIn),
+		)
+	})
+}
+
+// newReplaceableBuilder returns a builder holding two unsigned inputs and a
+// single committed output, i.e. the prior state ReplaceUnsignedTransaction
+// binds a replacement transaction to.
+func newReplaceableBuilder(t *testing.T) (
+	*TransactionBuilder,
+	[]*TransactionInput,
+	[]*TransactionOutput,
+) {
+	t.Helper()
+
+	builder := NewTransactionBuilder(nil)
+
+	var inputHash1 chainhash.Hash
+	var inputHash2 chainhash.Hash
+	inputHash1[0] = 0x11
+	inputHash2[0] = 0x22
+
+	builder.internal.AddTxIn(
+		wire.NewTxIn(wire.NewOutPoint(&inputHash1, 1), nil, nil),
+	)
+	builder.internal.AddTxIn(
+		wire.NewTxIn(wire.NewOutPoint(&inputHash2, 2), nil, nil),
+	)
+	builder.sigHashArgs = append(
+		builder.sigHashArgs,
+		&inputSigHashArgs{value: 111, scriptCode: []byte{0x51}, witness: false},
+		&inputSigHashArgs{value: 222, scriptCode: []byte{0x52}, witness: false},
+	)
+
+	output := &TransactionOutput{
+		Value:           1000,
+		PublicKeyScript: hexToSlice(t, "0014deadbeef"),
+	}
+	builder.AddOutput(output)
+
+	inputs := []*TransactionInput{
+		{
+			Outpoint: &TransactionOutpoint{
+				TransactionHash: Hash(inputHash1),
+				OutputIndex:     1,
+			},
+			Sequence: 0xffffffff,
+		},
+		{
+			Outpoint: &TransactionOutpoint{
+				TransactionHash: Hash(inputHash2),
+				OutputIndex:     2,
+			},
+			Sequence: 0xffffffff,
+		},
+	}
+
+	return builder, inputs, []*TransactionOutput{output}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsOutpointMismatch(
+	t *testing.T,
+) {
+	builder, inputs, outputs := newReplaceableBuilder(t)
+
+	inputs[1].Outpoint.OutputIndex = 7
+
+	err := builder.ReplaceUnsignedTransaction(&Transaction{
+		Version:  1,
+		Inputs:   inputs,
+		Outputs:  outputs,
+		Locktime: 0,
+	})
+	if err == nil {
+		t.Fatal("expected outpoint mismatch error")
+	}
+	if !strings.Contains(
+		err.Error(),
+		"replacement input [1] PreviousOutPoint differs from builder state",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsTxOutValueMismatch(
+	t *testing.T,
+) {
+	builder, inputs, outputs := newReplaceableBuilder(t)
+
+	outputs[0].Value = 999
+
+	err := builder.ReplaceUnsignedTransaction(&Transaction{
+		Version:  1,
+		Inputs:   inputs,
+		Outputs:  outputs,
+		Locktime: 0,
+	})
+	if err == nil {
+		t.Fatal("expected TxOut value mismatch error")
+	}
+	if !strings.Contains(
+		err.Error(),
+		"replacement TxOut [0] value [999] differs from builder state [1000]",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsTxOutScriptMismatch(
+	t *testing.T,
+) {
+	builder, inputs, outputs := newReplaceableBuilder(t)
+
+	outputs[0].PublicKeyScript = hexToSlice(t, "0014beefdead")
+
+	err := builder.ReplaceUnsignedTransaction(&Transaction{
+		Version:  1,
+		Inputs:   inputs,
+		Outputs:  outputs,
+		Locktime: 0,
+	})
+	if err == nil {
+		t.Fatal("expected TxOut script mismatch error")
+	}
+	if !strings.Contains(
+		err.Error(),
+		"replacement TxOut [0] PkScript differs from builder state",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsOutputCountMismatch(
+	t *testing.T,
+) {
+	tests := map[string]struct {
+		replacementOutputCount int
+	}{
+		"no outputs":   {replacementOutputCount: 0},
+		"extra output": {replacementOutputCount: 2},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			builder, inputs, outputs := newReplaceableBuilder(t)
+
+			replacementOutputs := make([]*TransactionOutput, 0)
+			for range test.replacementOutputCount {
+				replacementOutputs = append(replacementOutputs, outputs[0])
+			}
+
+			err := builder.ReplaceUnsignedTransaction(&Transaction{
+				Version:  1,
+				Inputs:   inputs,
+				Outputs:  replacementOutputs,
+				Locktime: 0,
+			})
+			if err == nil {
+				t.Fatal("expected TxOut count mismatch error")
+			}
+			if !strings.Contains(
+				err.Error(),
+				fmt.Sprintf(
+					"replacement TxOut set has [%d] entries; builder "+
+						"state has [1]",
+					test.replacementOutputCount,
+				),
+			) {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+		})
 	}
 }
