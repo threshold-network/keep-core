@@ -21,13 +21,16 @@ impl std::fmt::Debug for PersistedKeyPackage {
             .finish()
     }
 }
-
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct PersistedSessionState {
     pub(crate) dkg_request_fingerprint: Option<String>,
     pub(crate) dkg_key_packages: Option<Vec<PersistedKeyPackage>>,
     pub(crate) dkg_public_key_package_hex: Option<String>,
     pub(crate) dkg_result: Option<DkgResult>,
+    /// DKG signing-policy firewall compatibility check. `#[serde(default)]`
+    /// keeps state written before this field existed loadable (absent -> 0).
+    #[serde(default)]
+    pub(crate) policy_snapshot_version: u32,
     pub(crate) sign_request_fingerprint: Option<String>,
     pub(crate) sign_message_hex: Option<SecretString>,
     pub(crate) round_state: Option<RoundState>,
@@ -147,6 +150,10 @@ impl std::fmt::Debug for PersistedSessionState {
             .field(
                 "retired_interactive_at_unix",
                 &self.retired_interactive_at_unix,
+            )
+            .field(
+                "policy_snapshot_version",
+                &self.policy_snapshot_version,
             )
             .field(
                 "authorized_interactive_aggregate_markers",
@@ -431,7 +438,7 @@ fn clear_snapshot_covered_operations(engine_state: &EngineState) {
                 .get(session_id)
                 .is_some_and(|session| {
                     session
-                        .consumed_interactive_attempt_markers
+                        .interactive.consumed_attempt_markers
                         .contains(consumed_marker)
                 }),
             PersistencePendingOperation::InteractiveAggregate {
@@ -442,7 +449,7 @@ fn clear_snapshot_covered_operations(engine_state: &EngineState) {
                 .get(session_id)
                 .is_some_and(|session| {
                     session
-                        .aggregated_interactive_attempt_markers
+                        .interactive.aggregated_attempt_markers
                         .contains(aggregated_marker)
                 }),
             PersistencePendingOperation::InteractiveState { session_id } => {
@@ -1675,7 +1682,7 @@ impl TryFrom<PersistedEngineState> for EngineState {
         let mut key_group_owners = HashMap::<String, String>::new();
         for (session_id, session_state) in persisted.sessions {
             let session_state: SessionState = session_state.try_into()?;
-            if let Some(dkg_result) = session_state.dkg_result.as_ref() {
+            if let Some(dkg_result) = session_state.dkg.result.as_ref() {
                 if let Some(existing_owner) =
                     key_group_owners.insert(dkg_result.key_group.clone(), session_id.clone())
                 {
@@ -1693,11 +1700,11 @@ impl TryFrom<PersistedEngineState> for EngineState {
         // legacy registry cannot remain permanently wedged after upgrade.
         let migration_retired_at = now_unix().max(1);
         for session in sessions.values_mut() {
-            if session.retired_interactive_at_unix.is_none()
-                && session.interactive_signing.is_empty()
+            if session.capacity_pins.retired_interactive_at_unix.is_none()
+                && session.interactive.interactive_signing.is_empty()
                 && per_message_interactive_session(session)
             {
-                session.retired_interactive_at_unix = Some(migration_retired_at);
+                session.capacity_pins.retired_interactive_at_unix = Some(migration_retired_at);
             }
         }
         let mut quarantined_operator_identifiers = HashSet::new();
@@ -2045,51 +2052,76 @@ impl TryFrom<PersistedSessionState> for SessionState {
         }
 
         let session = SessionState {
-            dkg_request_fingerprint: persisted.dkg_request_fingerprint,
-            dkg_key_packages,
-            dkg_public_key_package,
-            dkg_result: persisted.dkg_result,
-            sign_request_fingerprint: persisted.sign_request_fingerprint,
-            sign_message_bytes,
-            round_state: persisted.round_state,
-            active_attempt_context: persisted.active_attempt_context,
-            attempt_transition_records: persisted.attempt_transition_records,
-            consumed_attempt_ids,
-            consumed_sign_round_ids,
-            finalize_request_fingerprint: persisted.finalize_request_fingerprint,
-            signature_result: persisted.signature_result,
-            consumed_finalize_round_ids,
-            consumed_finalize_request_fingerprints,
-            build_tx_request_fingerprint: persisted.build_tx_request_fingerprint,
-            tx_result: persisted.tx_result,
-            refresh_request_fingerprint: persisted.refresh_request_fingerprint,
-            refresh_result: persisted.refresh_result,
-            // Preserve the legacy synthetic count losslessly for schema
-            // compatibility and diagnostics. Lifecycle status deliberately
-            // ignores it until a versioned cryptographic refresh protocol exists.
-            // Evaluated before refresh_history is moved below.
-            refresh_count: persisted
-                .refresh_count
-                .max(persisted.refresh_history.len() as u64),
-            refresh_history: persisted.refresh_history,
-            emergency_rekey_event: persisted.emergency_rekey_event,
-            heartbeat_rate_limiter: PolicyRateLimiterState::default(),
-            // Live interactive state never restores: nonces are gone by
-            // construction after a restart, so the attempt fails safe and
-            // only the consumption markers survive. Empty map (no live members).
-            interactive_signing: BTreeMap::new(),
-            // Restore the wallet binding: for a cross-session signing session it is the
-            // only durable link to the wallet DKG, needed so an InteractiveAggregate that
-            // runs after a restart (past a member's Round2) can still resolve the wallet
-            // by key_group. Public data; survives with the consumed/aggregate markers.
-            bound_key_group: persisted.bound_key_group,
-            retired_interactive_at_unix: persisted.retired_interactive_at_unix,
-            aggregate_eviction_pin: Arc::new(()),
-            consumed_interactive_attempt_markers,
-            authorized_interactive_aggregate_markers,
-            aggregated_interactive_attempt_markers,
+            dkg: DkgSessionState {
+                request_fingerprint: persisted.dkg_request_fingerprint,
+                key_packages: dkg_key_packages,
+                public_key_package: dkg_public_key_package,
+                result: persisted.dkg_result,
+                // Persisted schema does not carry this field; reset to 0 on
+                // every load (matches the absence of any production reader
+                // today). A future spec that wires this into persistence
+                // will replace the literal here.
+                policy_snapshot_version: persisted.policy_snapshot_version,
+                ..Default::default()
+            },
+            signing: LegacySigningSessionState {
+                request_fingerprint: persisted.sign_request_fingerprint,
+                message_bytes: sign_message_bytes,
+                round_state: persisted.round_state,
+                active_attempt_context: persisted.active_attempt_context,
+                finalize_request_fingerprint: persisted.finalize_request_fingerprint,
+                signature_result: persisted.signature_result,
+                build_tx_request_fingerprint: persisted.build_tx_request_fingerprint,
+                tx_result: persisted.tx_result,
+                consumed_attempt_ids,
+                consumed_sign_round_ids,
+                consumed_finalize_round_ids,
+                consumed_finalize_request_fingerprints,
+                ..Default::default()
+            },
+            interactive: InteractiveSessionState {
+                // Live interactive state never restores: nonces are gone by
+                // construction after a restart, so the attempt fails safe and
+                // only the consumption markers survive. Empty map (no live members).
+                interactive_signing: BTreeMap::new(),
+                // Restore the wallet binding: for a cross-session signing session it
+                // is the only durable link to the wallet DKG, needed so an
+                // InteractiveAggregate that runs after a restart (past a member's
+                // Round2) can still resolve the wallet by key_group. Public data;
+                // survives with the consumed/aggregate markers.
+                bound_key_group: persisted.bound_key_group,
+                consumed_attempt_markers: consumed_interactive_attempt_markers,
+                authorized_aggregate_markers: authorized_interactive_aggregate_markers,
+                aggregated_attempt_markers: aggregated_interactive_attempt_markers,
+                ..Default::default()
+            },
+            audit: AuditTrail(persisted.attempt_transition_records),
+            lifecycle: LifecycleState {
+                refresh_request_fingerprint: persisted.refresh_request_fingerprint,
+                refresh_result: persisted.refresh_result,
+                // Preserve the legacy synthetic count losslessly for schema
+                // compatibility and diagnostics. Lifecycle status deliberately
+                // ignores it until a versioned cryptographic refresh protocol
+                // exists. Computed before refresh_history is moved below.
+                refresh_count: persisted
+                    .refresh_count
+                    .max(persisted.refresh_history.len() as u64),
+                refresh_history: persisted.refresh_history,
+                emergency_rekey_event: persisted.emergency_rekey_event,
+                ..Default::default()
+            },
+            capacity_pins: OperationalState {
+                // Transient: never written into the persisted schema.
+                heartbeat_rate_limiter: PolicyRateLimiterState::default(),
+                // Persisted: round-trips through this TryFrom.
+                retired_interactive_at_unix: persisted.retired_interactive_at_unix,
+                // Transient: never persisted; no operation can remain in flight
+                // across a restart.
+                aggregate_eviction_pin: Arc::new(()),
+                ..Default::default()
+            },
         };
-        if session.retired_interactive_at_unix.is_some()
+        if session.capacity_pins.retired_interactive_at_unix.is_some()
             && !per_message_interactive_session(&session)
         {
             return Err(EngineError::Internal(
@@ -2105,7 +2137,7 @@ impl TryFrom<&SessionState> for PersistedSessionState {
 
     fn try_from(session_state: &SessionState) -> Result<Self, Self::Error> {
         let dkg_key_packages = session_state
-            .dkg_key_packages
+            .dkg.key_packages
             .as_ref()
             .map(|key_packages| {
                 key_packages
@@ -2129,7 +2161,7 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             .transpose()?;
 
         let dkg_public_key_package_hex = session_state
-            .dkg_public_key_package
+            .dkg.public_key_package
             .as_ref()
             .map(|public_key_package| {
                 let mut public_key_package_bytes = public_key_package.serialize().map_err(|e| {
@@ -2144,113 +2176,114 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             .transpose()?;
 
         let sign_message_hex = session_state
-            .sign_message_bytes
+            .signing.message_bytes
             .as_ref()
             .map(|sign_message_bytes| Zeroizing::new(hex::encode(sign_message_bytes.as_slice())));
         ensure_consumed_registry_persisted_bound(
-            session_state.consumed_attempt_ids.len(),
+            session_state.signing.consumed_attempt_ids.len(),
             "consumed_attempt_ids",
         )?;
         ensure_consumed_registry_persisted_bound(
-            session_state.consumed_sign_round_ids.len(),
+            session_state.signing.consumed_sign_round_ids.len(),
             "consumed_sign_round_ids",
         )?;
         ensure_consumed_registry_persisted_bound(
-            session_state.consumed_finalize_round_ids.len(),
+            session_state.signing.consumed_finalize_round_ids.len(),
             "consumed_finalize_round_ids",
         )?;
         ensure_consumed_registry_persisted_bound(
-            session_state.consumed_finalize_request_fingerprints.len(),
+            session_state.signing.consumed_finalize_request_fingerprints.len(),
             "consumed_finalize_request_fingerprints",
         )?;
         ensure_consumed_registry_persisted_bound(
-            session_state.consumed_interactive_attempt_markers.len(),
+            session_state.interactive.consumed_attempt_markers.len(),
             "consumed_interactive_attempt_markers",
         )?;
         ensure_consumed_registry_persisted_bound(
-            session_state.authorized_interactive_aggregate_markers.len(),
+            session_state.interactive.authorized_aggregate_markers.len(),
             "authorized_interactive_aggregate_markers",
         )?;
-        if session_state.attempt_transition_records.len()
+        if session_state.audit.0.len()
             > TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION
         {
             return Err(EngineError::Internal(format!(
                 "attempt_transition_records size [{}] exceeds max [{}]",
-                session_state.attempt_transition_records.len(),
+                session_state.audit.0.len(),
                 TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION
             )));
         }
         let mut consumed_attempt_ids = session_state
-            .consumed_attempt_ids
+            .signing.consumed_attempt_ids
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_attempt_ids.sort_unstable();
         let mut consumed_sign_round_ids = session_state
-            .consumed_sign_round_ids
+            .signing.consumed_sign_round_ids
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_sign_round_ids.sort_unstable();
         let mut consumed_finalize_round_ids = session_state
-            .consumed_finalize_round_ids
+            .signing.consumed_finalize_round_ids
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_finalize_round_ids.sort_unstable();
         let mut consumed_finalize_request_fingerprints = session_state
-            .consumed_finalize_request_fingerprints
+            .signing.consumed_finalize_request_fingerprints
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_finalize_request_fingerprints.sort_unstable();
         let mut consumed_interactive_attempt_markers = session_state
-            .consumed_interactive_attempt_markers
+            .interactive.consumed_attempt_markers
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_interactive_attempt_markers.sort_unstable();
         let mut aggregated_interactive_attempt_markers = session_state
-            .aggregated_interactive_attempt_markers
+            .interactive.aggregated_attempt_markers
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         aggregated_interactive_attempt_markers.sort_unstable();
         let mut authorized_interactive_aggregate_markers = session_state
-            .authorized_interactive_aggregate_markers
+            .interactive.authorized_aggregate_markers
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         authorized_interactive_aggregate_markers.sort_unstable();
 
         Ok(PersistedSessionState {
-            dkg_request_fingerprint: session_state.dkg_request_fingerprint.clone(),
+            dkg_request_fingerprint: session_state.dkg.request_fingerprint.clone(),
             dkg_key_packages,
             dkg_public_key_package_hex,
-            dkg_result: session_state.dkg_result.clone(),
-            sign_request_fingerprint: session_state.sign_request_fingerprint.clone(),
+            dkg_result: session_state.dkg.result.clone(),
+            sign_request_fingerprint: session_state.signing.request_fingerprint.clone(),
             sign_message_hex,
-            round_state: session_state.round_state.clone(),
-            active_attempt_context: session_state.active_attempt_context.clone(),
-            attempt_transition_records: session_state.attempt_transition_records.clone(),
+            round_state: session_state.signing.round_state.clone(),
+            active_attempt_context: session_state.signing.active_attempt_context.clone(),
+            attempt_transition_records: session_state.audit.0.clone(),
             consumed_attempt_ids,
             consumed_sign_round_ids,
-            finalize_request_fingerprint: session_state.finalize_request_fingerprint.clone(),
-            signature_result: session_state.signature_result.clone(),
+            finalize_request_fingerprint: session_state.signing.finalize_request_fingerprint.clone(),
+            signature_result: session_state.signing.signature_result.clone(),
             consumed_finalize_round_ids,
             consumed_finalize_request_fingerprints,
-            build_tx_request_fingerprint: session_state.build_tx_request_fingerprint.clone(),
-            tx_result: session_state.tx_result.clone(),
-            refresh_request_fingerprint: session_state.refresh_request_fingerprint.clone(),
-            refresh_result: session_state.refresh_result.clone(),
-            refresh_history: session_state.refresh_history.clone(),
-            refresh_count: session_state.refresh_count,
-            emergency_rekey_event: session_state.emergency_rekey_event.clone(),
+            build_tx_request_fingerprint: session_state.signing.build_tx_request_fingerprint.clone(),
+            tx_result: session_state.signing.tx_result.clone(),
+            refresh_request_fingerprint: session_state.lifecycle.refresh_request_fingerprint.clone(),
+            refresh_result: session_state.lifecycle.refresh_result.clone(),
+            refresh_history: session_state.lifecycle.refresh_history.clone(),
+            refresh_count: session_state.lifecycle.refresh_count,
+            emergency_rekey_event: session_state.lifecycle.emergency_rekey_event.clone(),
             consumed_interactive_attempt_markers,
             aggregated_interactive_attempt_markers,
-            bound_key_group: session_state.bound_key_group.clone(),
-            retired_interactive_at_unix: session_state.retired_interactive_at_unix,
+            bound_key_group: session_state.interactive.bound_key_group.clone(),
+            retired_interactive_at_unix: session_state.capacity_pins.retired_interactive_at_unix,
             authorized_interactive_aggregate_markers,
+            policy_snapshot_version: session_state.dkg.policy_snapshot_version,
         })
     }
 }
