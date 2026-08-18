@@ -10,6 +10,7 @@ import (
 	btcec2 "github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/keep-network/keep-core/internal/testutils"
 )
@@ -689,6 +690,150 @@ func TestTransactionBuilder_AddTaprootKeyPathSignatures(t *testing.T) {
 		transaction.Inputs[0].Witness[0],
 	)
 	testutils.AssertBytesEqual(t, nil, transaction.Inputs[0].SignatureScript)
+
+	// The hardcoded vector above pins a transaction shape where both the
+	// input sequence (0xffffffff) and the spent outpoint index (0) are
+	// byte-order-symmetric constants, so it cannot detect an endianness or
+	// width regression in those two committed sighash fields. This subtest
+	// covers them with non-default values and compares against a reference
+	// transaction assembled independently of the builder, so the assertion
+	// also covers what the builder committed to (per-input sequences,
+	// outpoint indices, values and scripts), not only the digest arithmetic.
+	t.Run("non-default sequences and outpoint indices", func(t *testing.T) {
+		localChain := newLocalChain()
+		builder := NewTransactionBuilder(localChain)
+
+		makeFundingTransaction := func(marker byte) *Transaction {
+			outputs := make([]*TransactionOutput, 3)
+			for i := range outputs {
+				outputs[i] = &TransactionOutput{
+					Value:           int64(50000 + 1000*i),
+					PublicKeyScript: inputScript,
+				}
+			}
+
+			return &Transaction{
+				Version: 1,
+				Inputs: []*TransactionInput{
+					{
+						Outpoint: &TransactionOutpoint{
+							TransactionHash: Hash{marker},
+							OutputIndex:     0,
+						},
+						SignatureScript: []byte{0x51},
+						Sequence:        0xffffffff,
+					},
+				},
+				Outputs:  outputs,
+				Locktime: 0,
+			}
+		}
+
+		firstFunding := makeFundingTransaction(0x31)
+		secondFunding := makeFundingTransaction(0x32)
+
+		for _, fundingTransaction := range []*Transaction{
+			firstFunding,
+			secondFunding,
+		} {
+			if err := localChain.addTransaction(fundingTransaction); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		type spentOutput struct {
+			transactionHash Hash
+			outputIndex     uint32
+			value           int64
+			sequence        uint32
+		}
+
+		spentOutputs := []spentOutput{
+			{firstFunding.Hash(), 2, 52000, 0xfffffffd},
+			{secondFunding.Hash(), 1, 51000, 0x12345678},
+		}
+
+		for _, spent := range spentOutputs {
+			if err := builder.AddTaprootKeyPathInput(
+				&UnspentTransactionOutput{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: spent.transactionHash,
+						OutputIndex:     spent.outputIndex,
+					},
+					Value: spent.value,
+				},
+			); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// The builder always creates inputs with the default sequence so the
+		// non-default values must be applied to the assembled transaction.
+		for i, spent := range spentOutputs {
+			builder.internal.TxIn[i].Sequence = spent.sequence
+		}
+
+		builder.AddOutput(&TransactionOutput{
+			Value:           40000,
+			PublicKeyScript: outputScript,
+		})
+		builder.AddOutput(&TransactionOutput{
+			Value:           60000,
+			PublicKeyScript: inputScript,
+		})
+
+		sigHashes, err := builder.ComputeSignatureHashes()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testutils.AssertIntsEqual(
+			t,
+			"signature hashes count",
+			len(spentOutputs),
+			len(sigHashes),
+		)
+
+		reference := wire.NewMsgTx(1)
+		referencePrevOuts := make(map[wire.OutPoint]*wire.TxOut)
+
+		for _, spent := range spentOutputs {
+			hash := chainhash.Hash(spent.transactionHash)
+			outpoint := wire.NewOutPoint(&hash, spent.outputIndex)
+			input := wire.NewTxIn(outpoint, nil, nil)
+			input.Sequence = spent.sequence
+			reference.AddTxIn(input)
+			referencePrevOuts[*outpoint] = wire.NewTxOut(
+				spent.value,
+				inputScript,
+			)
+		}
+
+		reference.AddTxOut(wire.NewTxOut(40000, outputScript))
+		reference.AddTxOut(wire.NewTxOut(60000, inputScript))
+
+		fetcher := txscript.NewMultiPrevOutFetcher(referencePrevOuts)
+		fragments := txscript.NewTxSigHashes(reference, fetcher)
+
+		for i := range spentOutputs {
+			expected, err := txscript.CalcTaprootSignatureHash(
+				fragments,
+				txscript.SigHashDefault,
+				reference,
+				i,
+				fetcher,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			testutils.AssertBytesEqual(
+				t,
+				expected,
+				sigHashes[i].FillBytes(make([]byte, 32)),
+			)
+		}
+	})
 }
 
 func TestTransactionBuilder_AddTaprootKeyPathSignatures_MultipleInputs(

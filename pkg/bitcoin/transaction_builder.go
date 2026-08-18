@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -360,20 +359,6 @@ func (tb *TransactionBuilder) ComputeSignatureHashes() ([]*big.Int, error) {
 		tb.prevOuts,
 	)
 
-	var taprootSigHashMidstate *taprootSignatureHashMidstate
-	if tb.HasTaprootKeyPathInputs() {
-		var err error
-		taprootSigHashMidstate, err = tb.taprootSignatureHashMidstate(
-			tb.internal.MsgTx,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot calculate taproot sighash midstate: [%v]",
-				err,
-			)
-		}
-	}
-
 	for i := range tb.internal.TxIn {
 		sigHashArgs := tb.sigHashArgs[i]
 
@@ -382,10 +367,12 @@ func (tb *TransactionBuilder) ComputeSignatureHashes() ([]*big.Int, error) {
 
 		switch sigHashArgs.scriptType {
 		case P2TRScript:
-			sigHashBytes, err = tb.calcTaprootKeyPathSignatureHash(
+			sigHashBytes, err = txscript.CalcTaprootSignatureHash(
+				witnessSigHashFragments,
+				txscript.SigHashDefault,
 				tb.internal.MsgTx,
 				i,
-				taprootSigHashMidstate,
+				tb.prevOuts,
 			)
 		case P2WPKHScript, P2WSHScript:
 			sigHashBytes, err = txscript.CalcWitnessSigHash(
@@ -822,229 +809,6 @@ func (tb *TransactionBuilder) UnsignedTransactionIO() (
 	}
 
 	return inputs, outputs, nil
-}
-
-func (tb *TransactionBuilder) calcTaprootKeyPathSignatureHash(
-	tx *wire.MsgTx,
-	inputIndex int,
-	midstate *taprootSignatureHashMidstate,
-) ([]byte, error) {
-	if tx == nil {
-		return nil, fmt.Errorf("transaction is nil")
-	}
-	if midstate == nil {
-		return nil, fmt.Errorf("taproot sighash midstate is nil")
-	}
-
-	if inputIndex < 0 || inputIndex >= len(tx.TxIn) {
-		return nil, fmt.Errorf(
-			"input index [%d] out of range for [%d] inputs",
-			inputIndex,
-			len(tx.TxIn),
-		)
-	}
-
-	if len(tx.TxIn) != len(tb.sigHashArgs) {
-		return nil, fmt.Errorf(
-			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
-			len(tx.TxIn),
-			len(tb.sigHashArgs),
-		)
-	}
-
-	var sigMsg bytes.Buffer
-
-	// BIP-341 defines the final digest as tagged_hash("TapSighash",
-	// 0x00 || SigMsg(0x00, 0)). The first byte is the epoch and the second
-	// byte is SIGHASH_DEFAULT.
-	sigMsg.WriteByte(0x00)
-	sigMsg.WriteByte(0x00)
-
-	if err := binary.Write(&sigMsg, binary.LittleEndian, tx.Version); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(&sigMsg, binary.LittleEndian, tx.LockTime); err != nil {
-		return nil, err
-	}
-
-	sigMsg.Write(midstate.hashPrevOuts[:])
-	sigMsg.Write(midstate.hashInputAmounts[:])
-	sigMsg.Write(midstate.hashInputScripts[:])
-	sigMsg.Write(midstate.hashSequences[:])
-	sigMsg.Write(midstate.hashOutputs[:])
-
-	// Key-path spends use ext_flag=0 and this implementation does not attach
-	// a Taproot annex, so spend_type is 0.
-	sigMsg.WriteByte(0x00)
-
-	if err := binary.Write(
-		&sigMsg,
-		binary.LittleEndian,
-		uint32(inputIndex),
-	); err != nil {
-		return nil, err
-	}
-	hash := chainhash.TaggedHash(chainhash.TagTapSighash, sigMsg.Bytes())
-	return hash.CloneBytes(), nil
-}
-
-type taprootSignatureHashMidstate struct {
-	hashPrevOuts     [chainhash.HashSize]byte
-	hashInputAmounts [chainhash.HashSize]byte
-	hashInputScripts [chainhash.HashSize]byte
-	hashSequences    [chainhash.HashSize]byte
-	hashOutputs      [chainhash.HashSize]byte
-}
-
-func (tb *TransactionBuilder) taprootSignatureHashMidstate(
-	tx *wire.MsgTx,
-) (*taprootSignatureHashMidstate, error) {
-	if tx == nil {
-		return nil, fmt.Errorf("transaction is nil")
-	}
-
-	if len(tx.TxIn) != len(tb.sigHashArgs) {
-		return nil, fmt.Errorf(
-			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
-			len(tx.TxIn),
-			len(tb.sigHashArgs),
-		)
-	}
-
-	hashPrevOuts, err := tb.taprootHashPrevOuts(tx)
-	if err != nil {
-		return nil, err
-	}
-
-	hashInputAmounts, err := tb.taprootHashInputAmounts()
-	if err != nil {
-		return nil, err
-	}
-
-	hashInputScripts, err := tb.taprootHashInputScripts()
-	if err != nil {
-		return nil, err
-	}
-
-	hashSequences, err := tb.taprootHashSequences(tx)
-	if err != nil {
-		return nil, err
-	}
-
-	hashOutputs, err := tb.taprootHashOutputs(tx)
-	if err != nil {
-		return nil, err
-	}
-
-	return &taprootSignatureHashMidstate{
-		hashPrevOuts:     hashPrevOuts,
-		hashInputAmounts: hashInputAmounts,
-		hashInputScripts: hashInputScripts,
-		hashSequences:    hashSequences,
-		hashOutputs:      hashOutputs,
-	}, nil
-}
-
-func (tb *TransactionBuilder) taprootHashPrevOuts(
-	tx *wire.MsgTx,
-) ([chainhash.HashSize]byte, error) {
-	var buffer bytes.Buffer
-	for _, input := range tx.TxIn {
-		if err := writeOutPoint(&buffer, &input.PreviousOutPoint); err != nil {
-			return [chainhash.HashSize]byte{}, err
-		}
-	}
-
-	return chainhash.HashH(buffer.Bytes()), nil
-}
-
-func (tb *TransactionBuilder) taprootHashInputAmounts() (
-	[chainhash.HashSize]byte,
-	error,
-) {
-	var buffer bytes.Buffer
-	for i, sigHashArgs := range tb.sigHashArgs {
-		if sigHashArgs.value < 0 {
-			return [chainhash.HashSize]byte{}, fmt.Errorf(
-				"input [%d] value is negative",
-				i,
-			)
-		}
-
-		if err := binary.Write(
-			&buffer,
-			binary.LittleEndian,
-			uint64(sigHashArgs.value),
-		); err != nil {
-			return [chainhash.HashSize]byte{}, err
-		}
-	}
-
-	return chainhash.HashH(buffer.Bytes()), nil
-}
-
-func (tb *TransactionBuilder) taprootHashInputScripts() (
-	[chainhash.HashSize]byte,
-	error,
-) {
-	var buffer bytes.Buffer
-	for i, sigHashArgs := range tb.sigHashArgs {
-		if err := wire.WriteVarBytes(
-			&buffer,
-			0,
-			sigHashArgs.publicKeyScript,
-		); err != nil {
-			return [chainhash.HashSize]byte{}, fmt.Errorf(
-				"cannot write public key script for input [%d]: [%v]",
-				i,
-				err,
-			)
-		}
-	}
-
-	return chainhash.HashH(buffer.Bytes()), nil
-}
-
-func (tb *TransactionBuilder) taprootHashSequences(
-	tx *wire.MsgTx,
-) ([chainhash.HashSize]byte, error) {
-	var buffer bytes.Buffer
-	for _, input := range tx.TxIn {
-		if err := binary.Write(
-			&buffer,
-			binary.LittleEndian,
-			input.Sequence,
-		); err != nil {
-			return [chainhash.HashSize]byte{}, err
-		}
-	}
-
-	return chainhash.HashH(buffer.Bytes()), nil
-}
-
-func (tb *TransactionBuilder) taprootHashOutputs(
-	tx *wire.MsgTx,
-) ([chainhash.HashSize]byte, error) {
-	var buffer bytes.Buffer
-	for i, output := range tx.TxOut {
-		if err := wire.WriteTxOut(&buffer, 0, 0, output); err != nil {
-			return [chainhash.HashSize]byte{}, fmt.Errorf(
-				"cannot write output [%d]: [%v]",
-				i,
-				err,
-			)
-		}
-	}
-
-	return chainhash.HashH(buffer.Bytes()), nil
-}
-
-func writeOutPoint(buffer *bytes.Buffer, outpoint *wire.OutPoint) error {
-	if _, err := buffer.Write(outpoint.Hash[:]); err != nil {
-		return err
-	}
-
-	return binary.Write(buffer, binary.LittleEndian, outpoint.Index)
 }
 
 // inputSigHashArgs is a helper structure holding some arguments required to
