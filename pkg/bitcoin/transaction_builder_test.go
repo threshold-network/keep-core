@@ -1643,3 +1643,146 @@ func TestTransactionBuilder_ComputeSignatureHashesMissingPrevOut(t *testing.T) {
 		t.Fatalf("unexpected error: [%v]", err)
 	}
 }
+
+// TestTransactionBuilder_AddTaprootKeyPathSignatures_RejectsInvalid exercises
+// the Verify gate and the wrong-counts branch in
+// AddTaprootKeyPathSignatures (pkg/bitcoin/transaction_builder.go:525-592).
+// Both branches are currently untested; a regression weakening the Verify
+// check would ship a transaction with an invalid Schnorr signature undetected.
+func TestTransactionBuilder_AddTaprootKeyPathSignatures_RejectsInvalid(
+	t *testing.T,
+) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	privateKeyBytes := hexToSlice(
+		t,
+		"0101010101010101010101010101010101010101010101010101010101010101",
+	)
+	privateKey, publicKey := btcec2.PrivKeyFromBytes(privateKeyBytes)
+
+	var taprootOutputKey [32]byte
+	copy(taprootOutputKey[:], schnorr.SerializePubKey(publicKey))
+
+	inputScript, err := PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var outputPublicKeyHash [20]byte
+	copy(
+		outputPublicKeyHash[:],
+		hexToSlice(t, "0202020202020202020202020202020202020202"),
+	)
+	outputScript, err := PayToWitnessPublicKeyHash(outputPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	previousTransaction := &Transaction{
+		Version: 1,
+		Inputs: []*TransactionInput{
+			{
+				Outpoint: &TransactionOutpoint{
+					TransactionHash: Hash{
+						0x10, 0x11, 0x12, 0x13,
+						0x14, 0x15, 0x16, 0x17,
+						0x18, 0x19, 0x1a, 0x1b,
+						0x1c, 0x1d, 0x1e, 0x1f,
+						0x20, 0x21, 0x22, 0x23,
+						0x24, 0x25, 0x26, 0x27,
+						0x28, 0x29, 0x2a, 0x2b,
+						0x2c, 0x2d, 0x2e, 0x2f,
+					},
+					OutputIndex: 0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: inputScript,
+			},
+		},
+		Locktime: 0,
+	}
+	if err := localChain.addTransaction(previousTransaction); err != nil {
+		t.Fatal(err)
+	}
+	err = builder.AddTaprootKeyPathInput(&UnspentTransactionOutput{
+		Outpoint: &TransactionOutpoint{
+			TransactionHash: previousTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder.AddOutput(&TransactionOutput{
+		Value:           90000,
+		PublicKeyScript: outputScript,
+	})
+
+	if _, err := builder.ComputeSignatureHashes(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Case (a): nil signatures container triggers the "wrong signatures
+	// count" branch (len(nil) == 0, len(inputs) == 1).
+	_, err = builder.AddTaprootKeyPathSignatures(nil)
+	if err == nil {
+		t.Fatal(
+			"expected 'wrong signatures count' for nil signatures, got nil",
+		)
+	}
+	if !strings.Contains(err.Error(), "wrong signatures count") {
+		t.Fatalf(
+			"expected 'wrong signatures count' error, got: [%v]",
+			err,
+		)
+	}
+
+	// Case (b): Verify gate - produce a valid Schnorr signature over a
+	// different 32-byte message. schnorr.ParseSignature succeeds because
+	// the bytes form a structurally valid BIP-340 signature, but
+	// signature.Verify(sigHashBytes, taprootPublicKey) returns false
+	// because the signature was produced for a different hash.
+	wrongMessage := []byte{
+		0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99,
+		0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99,
+		0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99,
+		0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99,
+	}
+	badSignature, err := schnorr.Sign(privateKey, wrongMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badSignatureBytes := badSignature.Serialize()
+
+	var badSignatureContainer [64]byte
+	copy(badSignatureContainer[:], badSignatureBytes)
+
+	_, err = builder.AddTaprootKeyPathSignatures(
+		[]*SchnorrSignatureContainer{
+			{
+				Signature: badSignatureContainer,
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal(
+			"expected 'invalid taproot key-path signature' for non-" +
+				"verifying signature, got nil",
+		)
+	}
+	if !strings.Contains(err.Error(), "invalid taproot key-path signature") {
+		t.Fatalf(
+			"expected 'invalid taproot key-path signature' error, "+
+				"got: [%v]",
+			err,
+		)
+	}
+}
