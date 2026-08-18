@@ -1,3 +1,4 @@
+// tbtc_dkg.go: DKG lifecycle, result assembly and validation for the TbtcChain adapter.
 package ethereum
 
 import (
@@ -498,6 +499,16 @@ func parseDkgResultValidationOutcome(
 	value := reflect.ValueOf(outcome)
 	switch value.Kind() {
 	case reflect.Pointer:
+		if value.IsNil() {
+			return false, fmt.Errorf("result validation outcome is nil")
+		}
+		elem := value.Elem()
+		if elem.Kind() != reflect.Struct {
+			return false, fmt.Errorf("result validation outcome is not a struct")
+		}
+		if elem.NumField() == 0 {
+			return false, fmt.Errorf("result validation outcome has no fields")
+		}
 	default:
 		return false, fmt.Errorf("result validation outcome is not a pointer")
 	}
@@ -528,8 +539,7 @@ func (tc *TbtcChain) ApproveDKGResult(dkgResult *tbtc.DKGChainResult) error {
 	}
 
 	// The original estimate for this contract call turned out to be too low.
-	// Here we add a 20% margin to overcome the gas problems.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.walletRegistry.ApproveDkgResult(
 		result,

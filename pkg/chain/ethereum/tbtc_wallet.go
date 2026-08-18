@@ -1,3 +1,4 @@
+// tbtc_wallet.go: wallet registry read/write methods for the TbtcChain adapter.
 package ethereum
 
 import (
@@ -110,7 +111,7 @@ func (tc *TbtcChain) GetWallet(
 	if wallet.CreatedAt == 0 {
 		return nil, fmt.Errorf(
 			"no wallet for public key hash [0x%x]",
-			wallet,
+			walletPublicKeyHash,
 		)
 	}
 

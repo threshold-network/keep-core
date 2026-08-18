@@ -1,3 +1,4 @@
+// tbtc_moving_funds.go: moving-funds lifecycle for the TbtcChain adapter.
 package ethereum
 
 import (
@@ -182,8 +183,7 @@ func (tc *TbtcChain) SubmitMovingFundsProofWithReimbursement(
 	// The original estimate for this contract call is too low and the call
 	// fails on reimbursing the submitter. Example:
 	// 0xe27a92883e0e64da8a3a54a15a260ea2f4d3d48470129ac5c09bfe9637d7e114
-	// Here we add a 20% margin to overcome the gas problems.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.maintainerProxy.SubmitMovingFundsProof(
 		bitcoinTxInfo,
@@ -234,8 +234,7 @@ func (tc *TbtcChain) SubmitMovedFundsSweepProofWithReimbursement(
 	// The original estimate for this contract call is too low and the call
 	// fails on reimbursing the submitter. Example:
 	// 0xe27a92883e0e64da8a3a54a15a260ea2f4d3d48470129ac5c09bfe9637d7e114
-	// Here we add a 20% margin to overcome the gas problems.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.maintainerProxy.SubmitMovedFundsSweepProof(
 		bitcoinTxInfo,

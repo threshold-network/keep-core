@@ -649,6 +649,9 @@ func buildSigHashBuilder(b *testing.B, n int) *TransactionBuilder {
 
 func BenchmarkComputeSignatureHashes_1Input(b *testing.B) {
 	builder := buildSigHashBuilder(b, 1)
+	if _, err := builder.ComputeSignatureHashes(); err != nil {
+		b.Fatal(err)
+	}
 	b.ResetTimer()
 	for range b.N {
 		_, _ = builder.ComputeSignatureHashes()
@@ -657,6 +660,9 @@ func BenchmarkComputeSignatureHashes_1Input(b *testing.B) {
 
 func BenchmarkComputeSignatureHashes_5Inputs(b *testing.B) {
 	builder := buildSigHashBuilder(b, 5)
+	if _, err := builder.ComputeSignatureHashes(); err != nil {
+		b.Fatal(err)
+	}
 	b.ResetTimer()
 	for range b.N {
 		_, _ = builder.ComputeSignatureHashes()
@@ -665,6 +671,9 @@ func BenchmarkComputeSignatureHashes_5Inputs(b *testing.B) {
 
 func BenchmarkComputeSignatureHashes_20Inputs(b *testing.B) {
 	builder := buildSigHashBuilder(b, 20)
+	if _, err := builder.ComputeSignatureHashes(); err != nil {
+		b.Fatal(err)
+	}
 	b.ResetTimer()
 	for range b.N {
 		_, _ = builder.ComputeSignatureHashes()

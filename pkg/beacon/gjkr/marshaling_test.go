@@ -453,8 +453,14 @@ func buildEphemeralKeyMap(b *testing.B, n int) map[group.MemberIndex]*ephemeral.
 }
 
 func BenchmarkMarshalEphemeralPublicKeyMessage(b *testing.B) {
-	kp1, _ := ephemeral.GenerateKeyPair()
-	kp2, _ := ephemeral.GenerateKeyPair()
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
 	msg := &EphemeralPublicKeyMessage{
 		senderID: group.MemberIndex(38),
 		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
@@ -470,8 +476,14 @@ func BenchmarkMarshalEphemeralPublicKeyMessage(b *testing.B) {
 }
 
 func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
-	kp1, _ := ephemeral.GenerateKeyPair()
-	kp2, _ := ephemeral.GenerateKeyPair()
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
 	msg := &EphemeralPublicKeyMessage{
 		senderID: group.MemberIndex(38),
 		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{

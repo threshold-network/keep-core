@@ -434,9 +434,8 @@ func BenchmarkMarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
 	}
 }
 
-// BenchmarkUnmarshalEphemeralPublicKeyMessage_100Keys benchmarks unmarshaling
-// with a realistic group size. Each btcec.ParsePubKey call dominates; with 99
-// peers this represents the real per-participant DKG cost.
+// Benchmarks unmarshaling the wire-format bytes. EC point parsing is
+// deferred to use-time in generateSymmetricKeys (protocol.go).
 func BenchmarkUnmarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
 	msg := &ephemeralPublicKeyMessage{
 		senderID:            group.MemberIndex(1),
