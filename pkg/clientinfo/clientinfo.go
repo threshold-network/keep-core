@@ -2,8 +2,8 @@ package clientinfo
 
 import (
 	"context"
-	_ "net/http/pprof" // `net/http/pprof` registers `/debug/pprof/*` on `http.DefaultServeMux` at
-	// init; `EnablePprof` only controls the startup log message and does not
+	_ "net/http/pprof" // #nosec G108 -- registers /debug/pprof/* on DefaultServeMux at
+	// init; EnablePprof only controls the startup log message and does not
 	// gate registration. See docs/profiling.md.
 	"time"
 
