@@ -168,7 +168,7 @@ func convertDkgResultToAbiType(
 
 func validateMemberIndex(chainMemberIndex *big.Int) error {
 	maxMemberIndex := big.NewInt(group.MaxMemberIndex)
-	if chainMemberIndex.Cmp(maxMemberIndex) > 0 {
+	if chainMemberIndex.Sign() <= 0 || chainMemberIndex.Cmp(maxMemberIndex) > 0 {
 		return fmt.Errorf("invalid member index value: [%v]", chainMemberIndex)
 	}
 

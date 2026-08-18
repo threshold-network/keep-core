@@ -86,7 +86,7 @@ func (skgm *symmetricKeyGeneratingMember) generateSymmetricKeys(
 		)
 		if err != nil {
 			return fmt.Errorf(
-				"could not unmarshal ephemeral public key from member [%v]: [%v]",
+				"could not unmarshal ephemeral public key from member [%v]: [%w]",
 				otherMember, err,
 			)
 		}

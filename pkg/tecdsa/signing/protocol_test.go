@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -310,6 +311,16 @@ func TestGenerateSymmetricKeys_CorruptEphemeralPublicKeyBytes(t *testing.T) {
 					member.id,
 					expectedErrPrefix,
 					err.Error(),
+				)
+			} else if !errors.Is(err, ephemeral.ErrInvalidPublicKey) {
+				// The deferred (use-time) unmarshal must keep wrapping
+				// ephemeral.ErrInvalidPublicKey via %w so retry-policy code
+				// upstream can classify this failure with errors.Is instead
+				// of matching on the message string.
+				t.Errorf(
+					"[member:%v] expected error chain to contain ephemeral.ErrInvalidPublicKey, got: %v",
+					member.id,
+					err,
 				)
 			}
 		} else {

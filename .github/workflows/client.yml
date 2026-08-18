@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths-ignore:
       - "docs/**"
       - "infrastructure/**"
@@ -373,7 +374,7 @@ jobs:
 
   client-bench:
     needs: [client-build-test-publish]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -418,7 +419,7 @@ jobs:
           cat bench.txt
 
       - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@latest
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260813145340-fd4a688df892
 
       - name: Compare benchmarks
         if: steps.download-prev.outcome == 'success' && hashFiles('bench-prev/**') != ''
@@ -432,10 +433,10 @@ jobs:
               if '~' in line or not line.strip():
                   continue
               m = re.search(r'\+(\d+\.\d+)%', line)
-              if m and float(m.group(1)) > 20:
+              if m and float(m.group(1)) > 12:
                   regressions.append(line)
           if regressions:
-              print('Performance regressions >20% detected:')
+              print('Performance regressions >12% detected:')
               for r in regressions:
                   print(' ', r)
               sys.exit(1)

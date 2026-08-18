@@ -61,7 +61,7 @@ func (tc *TbtcChain) PastRedemptionRequestedEvents(
 			Redeemer:             chain.Address(event.Redeemer.Hex()),
 			RequestedAmount:      event.RequestedAmount,
 			TreasuryFee:          event.TreasuryFee,
-			TxMaxFee:             event.TreasuryFee,
+			TxMaxFee:             event.TxMaxFee,
 			BlockNumber:          event.Raw.BlockNumber,
 		}
 
