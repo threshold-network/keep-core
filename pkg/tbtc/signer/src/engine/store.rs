@@ -60,18 +60,23 @@ const TBTC_SIGNER_DURABLE_STORE_LOCK_FINGERPRINT_DOMAIN: &[u8] =
 const TBTC_SIGNER_STATE_IMAGE_DIGEST_DOMAIN: &[u8] = b"tbtc-signer-durable-state-image-digest-v1\0";
 const TBTC_SIGNER_STATE_WITNESS_GENESIS_DOMAIN: &[u8] = b"tbtc-signer-state-witness-genesis-v2\0";
 const TBTC_SIGNER_STATE_COMMITMENT_DOMAIN: &[u8] = b"tbtc-signer-state-witness-commitment-v2\0";
-const TBTC_SIGNER_STATE_WITNESS_MAGIC: &[u8; 16] = b"TBTCWITNESSv2\0\0\0";
+const TBTC_SIGNER_STATE_WITNESS_MAGIC: &[u8; 16] = b"TBTCWITNESSv3\0\0\0";
 const TBTC_SIGNER_STATE_WITNESS_SEGMENT_MAGIC: &[u8; 16] = b"TBTCWITNESSSEG1\0";
 /// The retired v1 journal magic. It is never written and never repaired; it is
 /// recognized only so a v1 store fails closed with an actionable migration
 /// error instead of a generic "invalid commitment".
 const TBTC_SIGNER_STATE_WITNESS_MAGIC_V1: &[u8; 16] = b"TBTCWITNESSv1\0\0\0";
+/// The retired v2 journal magic (pre-record-hash-chain). Never written and
+/// never repaired; recognized only so a v2 store fails closed with an
+/// actionable migration error instead of a generic parse failure caused by
+/// the 105- vs 137-byte record length mismatch.
+const TBTC_SIGNER_STATE_WITNESS_MAGIC_V2: &[u8; 16] = b"TBTCWITNESSv2\0\0\0";
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH: usize = 48;
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH: usize = 472;
 /// The journal is a fixed-width header followed by fixed-width records; the
 /// tests build on-disk fixtures from this geometry, so it is part of the
 /// crate-visible store contract.
-pub(crate) const TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH: usize = 105;
+pub(crate) const TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH: usize = 137;
 /// Reconciliation can commit an interrupted write at the rotation threshold
 /// before a mutating interactive retry persists two expiry-sweep repairs and
 /// its requested mutation. Those three snapshots need six records to finish
@@ -97,6 +102,7 @@ const TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_VERSION: u32 = 1;
 const TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_DOMAIN: &[u8] =
     b"tbtc-signer-state-witness-segment-header/v1\0";
 
+const TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN: &[u8] = b"tbtc-signer-state-witness-record-chain/v1\0";
 const TBTC_SIGNER_STATE_ANCHOR_MAGIC: &[u8; 16] = b"TBTCSTATEANCH1\0\0";
 const TBTC_SIGNER_STATE_ANCHOR_VERSION: u32 = 1;
 // Fixed-width canonical encoding of every field in
@@ -345,6 +351,7 @@ struct ParsedStateWitnessJournal {
     header_bytes: Vec<u8>,
     segment_header: Option<StateWitnessSegmentHeader>,
     tail_record: [u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
+    tail_chain_hash: [u8; 32],
 }
 
 #[cfg(unix)]
@@ -587,6 +594,9 @@ pub(crate) struct StateFileLock {
     #[cfg(unix)]
     last_appended_stamp: Option<FileChangeStamp>,
     current_state_file: Option<fs::File>,
+    /// Chain hash of the most recently appended record, used to compute the chain hash for the next append.
+    #[cfg(unix)]
+    last_chain_hash: [u8; 32],
     current_state_identity: Option<OpenedObjectIdentity>,
     identity: DurableStoreIdentity,
     lock_held: bool,
@@ -1289,6 +1299,7 @@ impl StateFileLock {
             last_appended_record: [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
             last_appended_stamp: None,
             current_state_file,
+            last_chain_hash: opened_witness.parsed.tail_chain_hash,
             current_state_identity,
             identity,
             lock_held: true,
@@ -3283,6 +3294,7 @@ impl StateFileLock {
         self.witness_header_length = opened.parsed.header_length;
         self.witness_header_bytes = opened.parsed.header_bytes;
         self.witness_segment_header = opened.parsed.segment_header;
+        self.last_chain_hash = opened.parsed.tail_chain_hash;
         self.witness_prefix = None;
         self.last_appended_record = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
         self.last_appended_stamp = None;
@@ -3454,6 +3466,7 @@ impl StateFileLock {
         self.witness_header_length = parsed.header_length;
         self.witness_header_bytes = parsed.header_bytes;
         self.witness_segment_header = parsed.segment_header;
+        self.last_chain_hash = parsed.tail_chain_hash;
         self.witness_prefix = None;
         self.last_appended_record = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
         self.last_appended_stamp = None;
@@ -3685,7 +3698,7 @@ impl StateFileLock {
                 "signer state witness journal length changed before append".to_string(),
             ));
         }
-        let record = encode_state_witness_record(record_type, witness);
+        let record = encode_state_witness_record(record_type, witness, &self.last_chain_hash);
         append_file_at(
             &self.witness_file,
             self.witness_length,
@@ -3701,6 +3714,7 @@ impl StateFileLock {
         self.witness_length += record.len();
         self.last_appended_record.copy_from_slice(&record);
         self.last_appended_stamp = Some(appended_stamp);
+        self.last_chain_hash.copy_from_slice(&record[record.len() - 32..]);
         Ok(())
     }
 
@@ -4038,10 +4052,12 @@ pub(crate) fn encode_v1_state_witness_genesis_journal(
     bytes.extend_from_slice(&encode_state_witness_record(
         TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
         &genesis,
+        &[0u8; 32],
     ));
     bytes.extend_from_slice(&encode_state_witness_record(
         TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
         &genesis,
+        &[0u8; 32],
     ));
     bytes
 }
@@ -5907,18 +5923,24 @@ fn open_or_create_state_witness(
         commitment: state_commitment(&store_identity.fingerprint, 1, &genesis_root, &digest),
         state_image_digest: digest,
     };
+    let genesis_chain_hash = [0u8; 32];
+    let prepare_record = encode_state_witness_record(
+        TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+        &genesis,
+        &genesis_chain_hash,
+    );
+    let mut commit_chain_hash = [0u8; 32];
+    commit_chain_hash.copy_from_slice(&prepare_record[prepare_record.len() - 32..]);
     let mut bytes = Vec::with_capacity(
         TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 2 * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
     );
     bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
     bytes.extend_from_slice(&store_identity.store_id);
-    bytes.extend_from_slice(&encode_state_witness_record(
-        TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
-        &genesis,
-    ));
+    bytes.extend_from_slice(&prepare_record);
     bytes.extend_from_slice(&encode_state_witness_record(
         TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
         &genesis,
+        &commit_chain_hash,
     ));
     let (file, identity) = create_entry_atomically(directory, name, &bytes, LABEL)?;
     Ok(OpenedStateWitnessJournal {
@@ -5934,6 +5956,11 @@ fn open_or_create_state_witness(
             tail_record: bytes[bytes.len() - TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH..]
                 .try_into()
                 .expect("genesis journal has one trailing fixed-width record"),
+            tail_chain_hash: {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&bytes[bytes.len() - 32..]);
+                hash
+            },
         },
     })
 }
@@ -6020,13 +6047,25 @@ fn current_state_image_digest(state_file: Option<&fs::File>) -> Result<[u8; 32],
     }
 }
 
-fn encode_state_witness_record(record_type: u8, witness: &StateWitness) -> Vec<u8> {
+fn encode_state_witness_record(
+    record_type: u8,
+    witness: &StateWitness,
+    previous_chain_hash: &[u8; 32],
+) -> Vec<u8> {
     let mut record = Vec::with_capacity(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
     record.push(record_type);
     record.extend_from_slice(&witness.generation.to_be_bytes());
     record.extend_from_slice(&witness.previous_commitment);
     record.extend_from_slice(&witness.state_image_digest);
     record.extend_from_slice(&witness.commitment);
+
+    let mut digest = Sha256::new();
+    digest.update(TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN);
+    digest.update(previous_chain_hash);
+    digest.update(&record);
+    let chain_hash = digest.finalize();
+    record.extend_from_slice(&chain_hash);
+
     debug_assert_eq!(record.len(), TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
     record
 }
@@ -6070,6 +6109,9 @@ fn read_state_witness_journal_streaming(
     WITNESS_VERIFIED_BYTES_READ.fetch_add(prefix.len() as u64, std::sync::atomic::Ordering::SeqCst);
     if is_retired_v1_state_witness_journal(&prefix) {
         return Err(retired_v1_state_witness_journal_error());
+    }
+    if is_retired_v2_state_witness_journal(&prefix) {
+        return Err(retired_v2_state_witness_journal_error());
     }
     if length < TBTC_SIGNER_STATE_WITNESS_MAGIC.len() {
         return Err(truncated_state_witness_journal_error(format!(
@@ -6139,6 +6181,10 @@ fn read_state_witness_journal_streaming(
     history.reserve(record_count.div_ceil(2));
     let mut pending = None::<StateWitness>;
     let mut tail = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
+    let mut chain_hash: [u8; 32] = match &segment_header {
+        Some(header) => header.header_commitment,
+        None => [0u8; 32],
+    };
     for index in 0..record_count {
         let offset = header_length + index * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH;
         let record =
@@ -6146,7 +6192,13 @@ fn read_state_witness_journal_streaming(
         #[cfg(test)]
         WITNESS_VERIFIED_BYTES_READ
             .fetch_add(record.len() as u64, std::sync::atomic::Ordering::SeqCst);
-        apply_state_witness_record(&record, store_fingerprint, &mut history, &mut pending)?;
+        apply_state_witness_record(
+            &record,
+            store_fingerprint,
+            &mut history,
+            &mut pending,
+            &mut chain_hash,
+        )?;
         if index + 1 == record_count {
             tail.copy_from_slice(&record);
         }
@@ -6170,6 +6222,7 @@ fn read_state_witness_journal_streaming(
         header_bytes,
         segment_header,
         tail_record: tail,
+        tail_chain_hash: chain_hash,
     })
 }
 
@@ -6181,6 +6234,9 @@ fn parse_state_witness_journal(
 ) -> Result<(Vec<StateWitness>, Option<StateWitness>), EngineError> {
     if is_retired_v1_state_witness_journal(bytes) {
         return Err(retired_v1_state_witness_journal_error());
+    }
+    if is_retired_v2_state_witness_journal(bytes) {
+        return Err(retired_v2_state_witness_journal_error());
     }
     if bytes.len() < TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH {
         return Err(truncated_state_witness_journal_error(format!(
@@ -6207,8 +6263,15 @@ fn parse_state_witness_journal(
 
     let mut history = Vec::<StateWitness>::new();
     let mut pending = None::<StateWitness>;
+    let mut chain_hash = [0u8; 32];
     for record in complete_records {
-        apply_state_witness_record(record, store_fingerprint, &mut history, &mut pending)?;
+        apply_state_witness_record(
+            record,
+            store_fingerprint,
+            &mut history,
+            &mut pending,
+            &mut chain_hash,
+        )?;
     }
     if history.is_empty() {
         return Err(truncated_state_witness_journal_error(
@@ -6223,6 +6286,7 @@ fn apply_state_witness_record(
     store_fingerprint: &[u8; 32],
     history: &mut Vec<StateWitness>,
     pending: &mut Option<StateWitness>,
+    chain_hash: &mut [u8; 32],
 ) -> Result<(), EngineError> {
     if record.len() != TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH {
         return Err(truncated_state_witness_journal_error(
@@ -6241,6 +6305,18 @@ fn apply_state_witness_record(
     state_image_digest.copy_from_slice(&record[41..73]);
     let mut commitment = [0u8; 32];
     commitment.copy_from_slice(&record[73..105]);
+    let mut recorded_chain_hash = [0u8; 32];
+    recorded_chain_hash.copy_from_slice(&record[105..137]);
+    let mut chain_digest = Sha256::new();
+    chain_digest.update(TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN);
+    chain_digest.update(chain_hash.as_slice());
+    chain_digest.update(&record[..105]);
+    let expected_chain_hash: [u8; 32] = chain_digest.finalize().into();
+    if recorded_chain_hash != expected_chain_hash {
+        return Err(EngineError::Internal(
+            "signer state witness journal record chain hash is invalid".to_string(),
+        ));
+    }
     let witness = StateWitness {
         generation,
         previous_commitment,
@@ -6313,6 +6389,7 @@ fn apply_state_witness_record(
             )))
         }
     }
+    *chain_hash = recorded_chain_hash;
     Ok(())
 }
 
@@ -6323,6 +6400,32 @@ fn apply_state_witness_record(
 fn is_retired_v1_state_witness_journal(bytes: &[u8]) -> bool {
     bytes.len() >= TBTC_SIGNER_STATE_WITNESS_MAGIC_V1.len()
         && &bytes[..TBTC_SIGNER_STATE_WITNESS_MAGIC_V1.len()] == TBTC_SIGNER_STATE_WITNESS_MAGIC_V1
+}
+
+/// True when the journal carries the retired v2 magic (pre-record-hash-chain,
+/// 105-byte records). The v3 record layout is 32 bytes wider, so an
+/// unrecognized v2 journal would otherwise fail with a generic "missing or
+/// partial record" error instead of an actionable migration message.
+fn is_retired_v2_state_witness_journal(bytes: &[u8]) -> bool {
+    bytes.len() >= TBTC_SIGNER_STATE_WITNESS_MAGIC_V2.len()
+        && &bytes[..TBTC_SIGNER_STATE_WITNESS_MAGIC_V2.len()] == TBTC_SIGNER_STATE_WITNESS_MAGIC_V2
+}
+
+fn retired_v2_state_witness_journal_error() -> EngineError {
+    EngineError::Internal(format!(
+        "signer state witness journal uses the retired v2 record layout (magic [{}]); this \
+         build commits under v3, which adds a 32-byte per-record hash chain and grows every \
+         record from 105 to 137 bytes. The journal was left byte-for-byte intact - it was not \
+         modified, read, or parsed. Recovery procedure: (1) stop the signer process; (2) rename \
+         the existing .state-witness journal aside to a non-conflicting name such as \
+         .state-witness.v2-retired-<timestamp>; do NOT delete it; (3) restart the signer with \
+         the new ABI; the new build will regenerate the journal at generation 1, accepting the \
+         v2->v3 break as a one-time migration event; (4) verify the migration by checking the \
+         new state-witness genesis fingerprint matches the v3 fingerprint derived from the \
+         existing .store-id. Do NOT delete the journal under any circumstance, which would \
+         silently re-genesis the anti-rollback chain at generation 1.",
+        String::from_utf8_lossy(TBTC_SIGNER_STATE_WITNESS_MAGIC_V2).trim_end_matches('\0')
+    ))
 }
 
 fn retired_v1_state_witness_journal_error() -> EngineError {
@@ -7522,13 +7625,19 @@ mod witness_transcript_tests {
         let mut genesis_journal = Vec::new();
         genesis_journal.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
         genesis_journal.extend_from_slice(&store_id);
-        genesis_journal.extend_from_slice(&encode_state_witness_record(
+        let genesis_prepare_record = encode_state_witness_record(
             TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
             &genesis,
-        ));
+            &[0u8; 32],
+        );
+        let mut genesis_commit_chain_hash = [0u8; 32];
+        genesis_commit_chain_hash
+            .copy_from_slice(&genesis_prepare_record[genesis_prepare_record.len() - 32..]);
+        genesis_journal.extend_from_slice(&genesis_prepare_record);
         genesis_journal.extend_from_slice(&encode_state_witness_record(
             TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
             &genesis,
+            &genesis_commit_chain_hash,
         ));
 
         let acknowledgement = fixture_acknowledgement();
@@ -7555,7 +7664,7 @@ mod witness_transcript_tests {
             ),
         };
         let segment_record =
-            encode_state_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &segment_next);
+            encode_state_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &segment_next, &[0u8; 32]);
 
         let mut random = [0u8; 12];
         OsRng.fill_bytes(&mut random);
@@ -7716,7 +7825,7 @@ mod witness_transcript_tests {
             ),
         };
         let segment_record =
-            encode_state_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &segment_next);
+            encode_state_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &segment_next, &[0u8; 32]);
         let mid_record_offset = 50;
         assert!(mid_record_offset < TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
 
@@ -9450,13 +9559,19 @@ mod witness_transcript_tests {
         let mut legacy = Vec::new();
         legacy.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
         legacy.extend_from_slice(&store_id);
-        legacy.extend_from_slice(&encode_state_witness_record(
+        let legacy_prepare_record = encode_state_witness_record(
             TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
             &base,
-        ));
+            &[0u8; 32],
+        );
+        let mut legacy_commit_chain_hash = [0u8; 32];
+        legacy_commit_chain_hash
+            .copy_from_slice(&legacy_prepare_record[legacy_prepare_record.len() - 32..]);
+        legacy.extend_from_slice(&legacy_prepare_record);
         legacy.extend_from_slice(&encode_state_witness_record(
             TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
             &base,
+            &legacy_commit_chain_hash,
         ));
         create_entry_atomically(&directory, &current, &legacy, "fixture current witness")
             .expect("publish legacy current");
