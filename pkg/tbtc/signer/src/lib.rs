@@ -17,7 +17,7 @@ use api::{
     VerifyBlameProofRequest,
 };
 use ffi::{
-    ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
+    ffi_entry, free_buffer, serialize_response, success_from_string,
     TbtcSignerResult,
 };
 
