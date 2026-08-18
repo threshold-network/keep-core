@@ -1,11 +1,11 @@
-FROM node:11 AS runtime
+FROM node:20-slim AS runtime
 
 WORKDIR /tmp
 
 COPY ./package.json /tmp/package.json
 COPY ./package-lock.json /tmp/package-lock.json
 
-RUN npm install
+RUN npm ci --omit=dev
 
 COPY ./TokenStaking.json /tmp/TokenStaking.json
 COPY ./KeepToken.json /tmp/KeepToken.json
