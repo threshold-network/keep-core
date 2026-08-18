@@ -286,6 +286,10 @@ func TestHistogramBucketPlacement(t *testing.T) {
 		{1000 * time.Second, 0, false},        // > 600s (overflow)
 	}
 
+	pm.histogramsMutex.Lock()
+	pm.histograms[metricName] = &histogram{buckets: make(map[float64]float64)}
+	pm.histogramsMutex.Unlock()
+
 	for _, tc := range testCases {
 		pm.RecordDuration(metricName, tc.duration)
 	}
@@ -472,6 +476,47 @@ func TestDepositSweepProofSubmissionCountersRegistered(t *testing.T) {
 		MetricDepositSweepProofSubmissionsTotal,
 		MetricDepositSweepProofSubmissionsSuccessTotal,
 		MetricDepositSweepProofSubmissionsFailedTotal,
+	}
+
+	for _, counterName := range expectedCounters {
+		pm.countersMutex.RLock()
+		_, exists := pm.counters[counterName]
+		pm.countersMutex.RUnlock()
+		if !exists {
+			t.Errorf("counter %s should be registered upfront", counterName)
+			continue
+		}
+
+		assertCounterExportedInRegistry(t, registry, counterName)
+
+		if value := pm.GetCounterValue(counterName); value != 0 {
+			t.Errorf("counter %s should start at 0, got %v", counterName, value)
+		}
+
+		pm.IncrementCounter(counterName, 1)
+		if value := pm.GetCounterValue(counterName); value != 1 {
+			t.Errorf("counter %s should increment to 1, got %v", counterName, value)
+		}
+	}
+}
+
+// TestSpvProofSkipCountersRegistered tests that the SPV proof-skip counters
+// are registered upfront so they appear in the metrics endpoint before any
+// increment. The spv.go maintainer emits IncrementCounter calls for these
+// counters from the relay-range and exceeded-max-headers skip branches; a
+// missing upfront registration would cause the values to be silently dropped
+// from /metrics because the lazy-create-without-register path in
+// IncrementCounter never calls ObserveApplicationSource.
+func TestSpvProofSkipCountersRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry)
+
+	expectedCounters := []string{
+		MetricSpvProofSkippedOutsideRelayRangeTotal,
+		MetricSpvProofSkippedExceededMaxHeadersTotal,
 	}
 
 	for _, counterName := range expectedCounters {

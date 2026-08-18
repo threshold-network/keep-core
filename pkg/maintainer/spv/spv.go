@@ -25,6 +25,7 @@ import (
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/maintainer/btcdiff"
 )
 
@@ -278,7 +279,7 @@ func (sm *spvMaintainer) proveTransactions(
 			)
 			if recorder := getMetricsRecorder(); recorder != nil {
 				recorder.IncrementCounter(
-					"spv_proof_skipped_outside_relay_range_total",
+					clientinfo.MetricSpvProofSkippedOutsideRelayRangeTotal,
 					1,
 				)
 			}
@@ -297,7 +298,7 @@ func (sm *spvMaintainer) proveTransactions(
 			)
 			if recorder := getMetricsRecorder(); recorder != nil {
 				recorder.IncrementCounter(
-					"spv_proof_skipped_exceeded_max_headers_total",
+					clientinfo.MetricSpvProofSkippedExceededMaxHeadersTotal,
 					1,
 				)
 			}
