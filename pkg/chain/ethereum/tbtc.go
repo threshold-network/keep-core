@@ -1,3 +1,4 @@
+// tbtc.go: TbtcChain adapter construction and shared state. See tbtc_*.go for per-concern implementations.
 package ethereum
 
 import (

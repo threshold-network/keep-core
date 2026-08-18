@@ -1,3 +1,4 @@
+// marshaling.go: protobuf (un)marshalling for the public types in this package.
 package registry
 
 import (

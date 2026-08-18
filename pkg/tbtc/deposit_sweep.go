@@ -75,6 +75,20 @@ const (
 // so code outside this module that builds a DepositSweepProposal from the
 // old anonymous struct literal must switch to constructing []DepositKey
 // values instead.
+//
+// Migrating from the old anonymous-struct literal:
+//
+//	// Before:
+//	DepositsKeys: []struct{
+//	    FundingTxHash:      chain.Hash(...),
+//	    FundingOutputIndex: 0,
+//	}{...},
+//
+//	// After:
+//	DepositsKeys: []DepositKey{
+//	    {FundingTxHash: chain.Hash(...), FundingOutputIndex: 0},
+//	    ...
+//	},
 type DepositKey struct {
 	FundingTxHash      bitcoin.Hash
 	FundingOutputIndex uint32

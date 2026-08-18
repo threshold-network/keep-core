@@ -1,3 +1,4 @@
+// tbtc_inactivity.go: inactivity-claim lifecycle for the TbtcChain adapter.
 package ethereum
 
 import (

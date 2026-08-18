@@ -1,3 +1,4 @@
+// tbtc_sortition.go: sortition pool membership and unwinding for the TbtcChain adapter.
 package ethereum
 
 import (

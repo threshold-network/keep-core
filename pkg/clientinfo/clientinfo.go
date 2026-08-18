@@ -2,7 +2,9 @@ package clientinfo
 
 import (
 	"context"
-	_ "net/http/pprof" // #nosec G108 -- opt-in profiling; registered on DefaultServeMux intentionally
+	_ "net/http/pprof" // `net/http/pprof` registers `/debug/pprof/*` on `http.DefaultServeMux` at
+	// init; `EnablePprof` only controls the startup log message and does not
+	// gate registration. See docs/profiling.md.
 	"time"
 
 	"github.com/ipfs/go-log"
