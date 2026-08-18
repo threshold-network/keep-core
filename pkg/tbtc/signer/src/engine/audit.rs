@@ -340,8 +340,7 @@ pub fn verify_blame_proof(
         && reason != ROAST_EXCLUSION_REASON_INVALID_SHARE_PROOF
     {
         return Err(EngineError::Validation(format!(
-            "reason [{}] is unsupported",
-            request.reason
+            "reason [{reason}] is unsupported"
         )));
     }
 
@@ -365,12 +364,13 @@ pub fn verify_blame_proof(
         .iter()
         .find(|record| record.from_attempt_number == request.from_attempt_number);
     let (verified, detail, transcript_hash) = if let Some(record) = maybe_record {
-        if record.reason != reason {
+        let recorded_reason = record.reason.trim().to_ascii_lowercase();
+        if recorded_reason != reason {
             (
                 false,
                 format!(
                     "reason mismatch: requested [{}], recorded [{}]",
-                    reason, record.reason
+                    reason, recorded_reason
                 ),
                 Some(record.transcript_hash.clone()),
             )
