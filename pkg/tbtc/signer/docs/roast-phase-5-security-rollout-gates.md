@@ -43,8 +43,20 @@ Required before stage 1 canary:
 Recommended stages:
 
 1. Stage 1: 10% signer fleet / limited wallet cohort, hold for 24h.
+   The Stage 1 cohort ships under the `advisory_only` FROST shadow mode
+   (see the FROST Shadow Mode section below) — FROST-derived signatures
+   are gated to advisory output and the legacy path remains the
+   release-able channel. Operators do not change the shadow mode for
+   Stage 1.
 2. Stage 2: 50% signer fleet / broader cohort, hold for 24h.
 3. Stage 3: 100% rollout after Phase 5 acceptance criteria remain green.
+   Flipping Stage 3 to the `production` FROST shadow mode is gated by
+   the FROST Shadow Mode section's three-condition disjunction (audit
+   report / enforced TEE attestation / keep-core PR #4044); the
+   cohort-percent promotion and the shadow-mode promotion are
+   independent decisions and Stage 3 may roll forward at 100% with
+   `advisory_only` for the cohort-percent leg if the shadow-mode
+   disjunction is not yet satisfied.
 
 The executable promotion gate requires, for each stage, at least 100 successful
 samples from Interactive Round1, Interactive Round2, and Interactive Aggregate,
@@ -54,6 +66,85 @@ promotion/rollback; a restart therefore blocks promotion until the current
 stage rebuilds its window. Fast failures and idempotent replays are excluded.
 Operators can tune the bounded minimum/window and the three per-operation p95
 thresholds with the `TBTC_SIGNER_CANARY_*` knobs documented in `README.md`.
+
+## FROST Shadow Mode
+
+Decision 1 introduced a software-side rollout gate for the FROST signing
+output that is conceptually distinct from the cohort-based canary of
+Gate 3: `FROST_SHADOW_MODE` controls how the engine treats a signing
+output that is FROST-derived rather than the legacy ECDSA-derived
+one. The mode is selected by the operator at process start; it is
+**not** hot-reloaded (env vars are parsed at init only), and the
+existing provenance gate already enforces an operator-supplied
+attestation set on every load.
+
+### Mode values
+
+| Mode | Default? | Behavior | When appropriate |
+| --- | --- | --- | --- |
+| `advisory_only` | yes | FROST signing outputs are produced under their normal handshake, but the resulting signature is **not** released to the host. The engine emits a `frost_shadow_mode_advisory` audit signal (Decision 1) for every gated output and the host continues with the legacy ECDSA path. This is the **fail-closed** default. | All canary cohorts of Gate 3 Stage 1 and Stage 2 (testnet and pre-ECDSA-retirement production rehearsal). |
+| `internal_canary` | no | FROST signing outputs are produced and released but tagged with the `internal_canary` shadow marker for downstream observers; the legacy path is retained as a backstop for the canary window. Capacity-controlled; the operator is expected to keep this mode on a bounded cohort. | Internal testnet and post-audit staging, when a downstream observer exists to consume the `internal_canary` marker. |
+| `production` | no | FROST signing outputs are produced and released without the shadow marker; the legacy path is dropped from the output chain. | Production, only after ALL THREE gate conditions below are met. |
+
+### Gate conditions for `production`
+
+The `production` mode is **only** appropriate when AT LEAST ONE of the
+following holds. (This is a disjunction-of-hard-gates, not a graded
+score; "we have one of the three" is sufficient to flip the mode, but
+operators should still prefer the strongest available justification.)
+
+1. **External audit report.** A completed external audit covering
+   `frost-core` 3.x and the `frost-secp256k1-tr` ciphersuite, as
+   required by the Decision Log entry 1 "external audit = hard gate
+   for ECDSA retirement" clause. The audit report must be attached to
+   the release decision (the Evidence Checklist, item 5).
+2. **Enforced TEE attestation.** TEE enforcement is active, the
+   per-call measurement check passes, and the operator's trust roots
+   ratify the active attestation set (P0-M2 and the future
+   `pkg/tbtc/signer/docs/tee-whitelisted-signer-enforcement-plan.md`).
+   Without TEE enforcement actually running on the cohort, an
+   attestation set alone is not enough.
+3. **keep-core PR #4044 proof-carrying blame.** The proof-carrying
+   blame stack from PR #4044 (the `EquivocationEvidence`
+   instrumentation + retention condition; see Decision Log entry 4)
+   is merged and shipping in the active keep-core build, so an
+   equivocating coordinator is detected and attributable rather than
+   merely observed.
+
+Until at least one of these three holds, `production` MUST NOT be
+selected — the engine will accept the env var but the resulting
+signature carries no FROST-side blame attribution, which is the whole
+point of the migration. The `advisory_only` default is the safe
+starting state for every new operator install.
+
+### Operator procedure for transitioning modes
+
+The mode is selected by the `TBTC_SIGNER_FROST_SHADOW_MODE` env var.
+The recognized values are `advisory_only`, `internal_canary`, and
+`production`; any other value is treated as `advisory_only` (fail
+closed). The env var is read once at signer init; **env vars are not
+hot-reloaded**. To change the mode, an operator:
+
+1. Edits the operator-supplied unit/env file to set
+   `TBTC_SIGNER_FROST_SHADOW_MODE` to the desired mode.
+2. Restarts the signer process (the env var is consumed during init,
+   then frozen for the lifetime of the process).
+3. Verifies the new mode in the engine's startup log line
+   (`frost_shadow_mode_active=…`) — the line is emitted on every
+   protected-operation entry, so an operator can confirm the active
+   mode without dumping the full env. The log line is sanitized via
+   `sanitize_policy_log_field` (no identifier cross-leakage).
+
+### Testnet canary currently ships under `advisory_only`
+
+The testnet canary cohort of Gate 3 Stage 1 currently ships under
+the default `advisory_only` mode. Operators should not change the
+mode for the testnet canary cohort until the audit/TEE blame
+conditions in the table above are met for the testnet cohort
+specifically. Bumping the mode for a canary cohort that does not
+yet have blame attribution defeats the purpose of the canary and
+reintroduces the F1-class bug surface (round-nonce-v3) that the
+shadow mode is designed to guard against.
 
 ## Cryptographic Dependency Audit Status (Gate 1 Input)
 
