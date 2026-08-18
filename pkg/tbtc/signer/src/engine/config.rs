@@ -502,3 +502,18 @@ pub(crate) fn signer_profile_is_production() -> bool {
         }
     }
 }
+
+/// Returns a profile-gated view of an internal error message.
+///
+/// In production the message is reduced to a stable category and the path /
+/// syscall detail is replaced with a placeholder, so an error path that leaks
+/// through the FFI cannot reveal absolute on-disk paths, env var values, or
+/// host identifiers. The development profile returns the original message
+/// verbatim so debugging is not impeded.
+pub(crate) fn redacted_internal_error(category: &str, detail: &str) -> String {
+    if signer_profile_is_production() {
+        format!("signer {category} failed (detail redacted; see server log)")
+    } else {
+        format!("signer {category} failed: {detail}")
+    }
+}

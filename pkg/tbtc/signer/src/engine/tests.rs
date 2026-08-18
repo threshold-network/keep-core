@@ -7,10 +7,8 @@ use proptest::prelude::*;
 use serde::Deserialize;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
-
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 #[cfg(unix)]
 use std::{
@@ -1108,6 +1106,37 @@ fn production_profile_forces_provenance_gate_without_env_flag() {
 
     std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
     assert!(!provenance_gate_enforced());
+}
+
+#[test]
+fn redacted_internal_error_strips_path_detail_in_production_profile() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let sensitive = "/var/lib/signer/secret.lock: permission denied";
+    std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+    let redacted = redacted_internal_error("truncate signer state lock file", sensitive);
+    assert!(
+        !redacted.contains(sensitive),
+        "production redaction leaked the path: {redacted}"
+    );
+    assert!(
+        redacted.contains("truncate signer state lock file"),
+        "production redaction must preserve the category: {redacted}"
+    );
+    assert!(
+        redacted.contains("redacted"),
+        "production redaction must mark the detail as redacted: {redacted}"
+    );
+
+    std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
+    let verbose = redacted_internal_error("truncate signer state lock file", sensitive);
+    assert!(
+        verbose.contains(sensitive),
+        "development redaction must preserve the full detail: {verbose}"
+    );
+
+    std::env::remove_var(TBTC_SIGNER_PROFILE_ENV);
 }
 
 #[test]

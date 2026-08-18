@@ -694,26 +694,6 @@ pub struct FrostTbtcAbiVersionResult {
     pub abi_major: u32,
     pub abi_minor: u32,
 }
-
-/// Runtime identity of the exact durable session store the signer opened and
-/// locked. The affirmative safety claims are mandatory on the Go side; this
-/// response is emitted only after descriptor/path revalidation succeeds.
-/// This stable identity does not attest state freshness or key inventory.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct DurableStoreIdentityResult {
-    pub schema: String,
-    pub backend: String,
-    pub store_id: String,
-    pub canonical_path_fingerprint: String,
-    pub filesystem_fingerprint: String,
-    pub lock_fingerprint: String,
-    pub fingerprint: String,
-    pub descriptor_bound: bool,
-    pub exclusive_lock_held: bool,
-    pub symlink_free: bool,
-    pub replacement_protected: bool,
-}
-
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RetainedKeyPackageInventoryPackage {

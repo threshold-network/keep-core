@@ -787,15 +787,15 @@ impl StateFileLock {
             set_owner_only_permissions(&lock_file, "signer state lock file")?;
             validate_secure_regular_file(&lock_file, "signer state lock file")?;
             lock_file.set_len(0).map_err(|error| {
-                EngineError::Internal(format!(
-                    "failed to truncate signer state lock file [{}]: {error}",
-                    lock_path.display()
+                EngineError::Internal(redacted_internal_error(
+                    "truncate signer state lock file",
+                    &format!("{lock_path:?}: {error}"),
                 ))
             })?;
             lock_file.seek(SeekFrom::Start(0)).map_err(|error| {
-                EngineError::Internal(format!(
-                    "failed to seek signer state lock file [{}]: {error}",
-                    lock_path.display()
+                EngineError::Internal(redacted_internal_error(
+                    "seek signer state lock file",
+                    &format!("{lock_path:?}: {error}"),
                 ))
             })?;
             writeln!(
@@ -805,15 +805,15 @@ impl StateFileLock {
                 canonical_parent.join(&state_name).display()
             )
             .map_err(|error| {
-                EngineError::Internal(format!(
-                    "failed to write signer state lock file [{}]: {error}",
-                    lock_path.display()
+                EngineError::Internal(redacted_internal_error(
+                    "write signer state lock file",
+                    &format!("{lock_path:?}: {error}"),
                 ))
             })?;
             lock_file.sync_all().map_err(|error| {
-                EngineError::Internal(format!(
-                    "failed to sync signer state lock file [{}]: {error}",
-                    lock_path.display()
+                EngineError::Internal(redacted_internal_error(
+                    "sync signer state lock file",
+                    &format!("{lock_path:?}: {error}"),
                 ))
             })?;
         }
@@ -847,9 +847,9 @@ impl StateFileLock {
         // durability to the host.
         if !recovery_intent_present {
             directory.sync_all().map_err(|error| {
-                EngineError::Internal(format!(
-                    "failed to sync signer state directory [{}]: {error}",
-                    canonical_parent.display()
+                EngineError::Internal(redacted_internal_error(
+                    "sync signer state directory",
+                    &format!("{canonical_parent:?}: {error}"),
                 ))
             })?;
         }
@@ -4274,6 +4274,7 @@ fn open_or_create_store_id(
         validate_owned_unlinked_regular(&file, LABEL)?;
         set_owner_only_permissions(&file, LABEL)?;
         validate_secure_regular_file(&file, LABEL)?;
+        advisory_exclusive_lock(&file, LABEL);
         let store_id = read_store_id(&file)?;
         let identity = descriptor_identity(&file, LABEL)?;
         return Ok((file, store_id, identity));
@@ -4287,6 +4288,7 @@ fn open_or_create_store_id(
         }
     }
     let (file, identity) = create_entry_atomically(directory, name, &store_id, LABEL)?;
+    advisory_exclusive_lock(&file, LABEL);
     Ok((file, store_id, identity))
 }
 
@@ -5859,9 +5861,8 @@ fn open_or_create_state_witness(
     const LABEL: &str = "signer state witness journal";
 
     if let Some(file) = openat_optional(directory.as_raw_fd(), name, libc::O_RDWR, LABEL)? {
-        validate_owned_unlinked_regular(&file, LABEL)?;
-        set_owner_only_permissions(&file, LABEL)?;
         validate_secure_regular_file(&file, LABEL)?;
+        advisory_exclusive_lock(&file, LABEL);
 
         // The journal is a fixed header followed by fixed-width records, each
         // appended and fsynced individually, and the genesis header+PREPARE+
@@ -5943,6 +5944,7 @@ fn open_or_create_state_witness(
         &commit_chain_hash,
     ));
     let (file, identity) = create_entry_atomically(directory, name, &bytes, LABEL)?;
+    advisory_exclusive_lock(&file, LABEL);
     Ok(OpenedStateWitnessJournal {
         file,
         identity,
@@ -6565,6 +6567,27 @@ fn acquire_exclusive_lock(file: &fs::File, lock_path: &Path) -> Result<(), Engin
         "failed to lock signer state file [{}]: {error}",
         lock_path.display()
     )))
+}
+
+/// Acquires a non-blocking advisory `flock` on a durable store file. The signer
+/// state lock is the primary mutex; this is a defense-in-depth guard against a
+/// second process that bypasses the lock file (e.g. by holding its own copy
+/// of the witness journal or store-id file). A contention failure does NOT
+/// fail the store acquire: the held store lock and the descriptor-stamp
+/// revalidation are the authoritative guards, so an `EWOULDBLOCK` here only
+/// surfaces a diagnostic warning to the operator.
+#[cfg(unix)]
+fn advisory_exclusive_lock(file: &fs::File, label: &str) {
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if !error.raw_os_error().is_some_and(is_lock_contention_errno) {
+            eprintln!(
+                "warning: failed to advisory-flock {label}: {error} \
+                 (signer state lock is the primary guard; this is diagnostic only)"
+            );
+        }
+    }
 }
 
 #[cfg(unix)]
