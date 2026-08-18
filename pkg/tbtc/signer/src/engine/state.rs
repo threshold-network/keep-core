@@ -1,4 +1,6 @@
-// In-memory engine/session state, the state-file lock, and registry capacity guards.
+//! In-memory engine/session state, the state-file lock, and registry capacity guards.
+//!
+#![allow(dead_code)]
 
 use super::*;
 
@@ -57,6 +59,7 @@ impl Drop for ZeroizingChaCha20Rng {
 // and without them the rest of this struct is useless after a
 // restart, so none of it is mirrored into PersistedSessionState.
 // The durable artifact is SessionState.consumed_interactive_attempt_markers.
+#[derive(Debug)]
 pub(crate) struct InteractiveSigningState {
     pub(crate) open_request_fingerprint: String,
     pub(crate) attempt_context: AttemptContext,
@@ -85,6 +88,7 @@ pub(crate) struct InteractiveSigningState {
 // expiry, replacement) by the interactive module; the Drop impl is
 // the backstop for paths that drop the struct without going through
 // one of those.
+#[derive(Debug)]
 pub(crate) struct InteractiveRound1State {
     pub(crate) nonces: frost::round1::SigningNonces,
     pub(crate) commitments_hex: String,
@@ -96,7 +100,8 @@ impl Drop for InteractiveRound1State {
     }
 }
 
-#[derive(Default)]
+#[allow(dead_code)]
+#[derive(Debug, Default)]
 pub(crate) struct SessionState {
     pub(crate) dkg_request_fingerprint: Option<String>,
     pub(crate) dkg_key_packages: Option<BTreeMap<u16, frost::keys::KeyPackage>>,

@@ -16,13 +16,18 @@ use ed25519_dalek::{Signature, VerifyingKey};
 #[cfg(test)]
 use ed25519_dalek::{Signer, SigningKey};
 
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_TRUST_CERTIFICATE_SCHEMA: &str =
     "tbtc-frost-native-signer-state-anchor-trust-certificate/v1";
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_TRUST_TRANSITION_SCHEMA: &str =
     "tbtc-signer-state-anchor-trust-transition/v1";
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_TRUST_TRANSITION_RESULT_SCHEMA: &str =
     "tbtc-signer-state-anchor-trust-transition-result/v1";
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_TRUST_HEAD_SCHEMA: &str = "tbtc-signer-state-anchor-trust-head/v1";
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_BOOTSTRAP_FACTS_SCHEMA: &str =
     "tbtc-signer-state-anchor-bootstrap-facts/v1";
 
@@ -94,6 +99,7 @@ pub(crate) struct StateAnchorTrustCheckpointModel {
 }
 
 impl StateAnchorTrustCheckpointModel {
+    #[allow(dead_code)]
     pub(crate) fn from_witness(store_fingerprint: [u8; 32], witness: &StateWitness) -> Self {
         Self {
             store_fingerprint,
@@ -104,6 +110,7 @@ impl StateAnchorTrustCheckpointModel {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn to_wire(&self) -> StateAnchorTrustCheckpoint {
         StateAnchorTrustCheckpoint {
             store_fingerprint: bytes32_hex(self.store_fingerprint),
@@ -143,6 +150,7 @@ impl StateAnchorTrustReferenceModel {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn to_wire(&self) -> StateAnchorTrustReference {
         StateAnchorTrustReference {
             service_epoch: self.service_epoch.to_string(),
@@ -635,6 +643,7 @@ fn state_anchor_trust_record_commitment(
     )
 }
 
+#[allow(dead_code)]
 pub(crate) fn encode_state_anchor_trust_transition_intent(
     store_fingerprint: &[u8; 32],
     request: &TransitionStateWitnessAnchorRequest,
@@ -1626,6 +1635,7 @@ fn hash_direct(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
     digest.finalize().into()
 }
 
+#[allow(dead_code)]
 pub(crate) fn state_anchor_trust_head_result(
     sequence: u64,
     digest: [u8; 32],
@@ -1647,6 +1657,7 @@ pub(crate) fn state_anchor_trust_head_result(
     }
 }
 
+#[allow(dead_code)]
 fn transition_state_witness_anchor_result(
     outcome: StateAnchorTrustTransitionStoreOutcome,
 ) -> TransitionStateWitnessAnchorResult {
@@ -1684,6 +1695,7 @@ fn transition_state_witness_anchor_result(
 /// the durable store, then executes the crash-safe transition under the
 /// startup gate. Trust replacement is intentionally unavailable once normal
 /// engine/store initialization has begun.
+#[allow(dead_code)]
 pub(crate) fn transition_state_witness_anchor(
     request: TransitionStateWitnessAnchorRequest,
 ) -> Result<TransitionStateWitnessAnchorResult, EngineError> {
@@ -1697,6 +1709,7 @@ pub(crate) fn transition_state_witness_anchor(
 /// Returns the committed offline-certified trust head. A preflight call uses
 /// an ephemeral, descriptor-bound inspection acquisition so observing the
 /// head does not prevent the startup-only transition symbol from running.
+#[allow(dead_code)]
 pub(crate) fn state_anchor_trust_head() -> Result<StateAnchorTrustHeadResult, EngineError> {
     let outcome = with_startup_state_anchor_trust_head_inspection(|store| {
         store.state_anchor_trust_head_snapshot()
@@ -1708,6 +1721,7 @@ pub(crate) fn state_anchor_trust_head() -> Result<StateAnchorTrustHeadResult, En
     ))
 }
 
+#[allow(dead_code)]
 pub(crate) fn state_anchor_bootstrap_facts() -> Result<StateAnchorBootstrapFactsResult, EngineError>
 {
     let (store_fingerprint, checkpoint) = with_startup_state_anchor_bootstrap_facts(|store| {

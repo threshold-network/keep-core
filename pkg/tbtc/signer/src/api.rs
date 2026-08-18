@@ -1,7 +1,14 @@
+#![allow(dead_code)]
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+// The FFI request/response types in this module are currently unused because
+// the corresponding FFI exports were removed in this PR. They will be
+// re-enabled in the follow-up PR. Silencing `dead_code` keeps the follow-up
+// diff purely additive (no reintroductions of types already declared here).
 
 /// A hex-encoded secret whose owned Rust allocation is wiped on drop and whose
 /// `Debug` representation never exposes its contents. Serde remains transparent
@@ -701,7 +708,7 @@ pub struct DurableStoreIdentityResult {
     pub filesystem_fingerprint: String,
     pub lock_fingerprint: String,
     pub fingerprint: String,
-    pub durable: bool,
+    pub descriptor_bound: bool,
     pub exclusive_lock_held: bool,
     pub symlink_free: bool,
     pub replacement_protected: bool,

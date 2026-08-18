@@ -1,4 +1,6 @@
-//! Retained FROST key-package readiness and dynamic state-witness readback.
+//! Retained FROST key-package readiness and dynamic state-witness readbackback.
+//!
+#![allow(dead_code)]
 
 use super::*;
 
@@ -109,6 +111,7 @@ pub(crate) fn retained_key_package_inventory(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn state_witness_proof(
     request: StateWitnessProofRequest,
 ) -> Result<StateWitnessProofResult, EngineError> {
@@ -353,6 +356,7 @@ pub(crate) fn parse_key_group(key_group: &str) -> Result<([u8; 32], [u8; 33]), E
     Ok((x_only.serialize(), compressed))
 }
 
+#[allow(dead_code)]
 fn parse_bytes32(value: &str, label: &str) -> Result<[u8; 32], EngineError> {
     if value.len() != 66 || !value.starts_with("0x") || value != value.to_ascii_lowercase() {
         return Err(EngineError::Validation(format!(

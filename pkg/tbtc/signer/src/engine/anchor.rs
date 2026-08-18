@@ -104,6 +104,7 @@ pub(crate) struct StateAnchorMetadata {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub(crate) struct StateWitnessTipSnapshot {
     pub(crate) store_fingerprint: [u8; 32],
     pub(crate) tip: StateWitness,
@@ -112,6 +113,7 @@ pub(crate) struct StateWitnessTipSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub(crate) struct AnchorAcknowledgeOutcome {
     pub(crate) idempotent: bool,
     pub(crate) rotated: bool,
@@ -346,6 +348,7 @@ fn parse_required_nonzero_u64(value: Option<String>, name: &str) -> Result<u64, 
     Ok(parsed)
 }
 
+#[allow(dead_code)]
 pub(crate) fn state_witness_tip() -> Result<StateWitnessTipResult, EngineError> {
     // First load/migration can advance the witness. Take the same
     // ENGINE_STATE -> durable-store lock order as every mutation and keep the
@@ -359,6 +362,7 @@ pub(crate) fn state_witness_tip() -> Result<StateWitnessTipResult, EngineError> 
     Ok(state_witness_tip_result(&snapshot))
 }
 
+#[allow(dead_code)]
 pub(crate) fn acknowledge_state_witness_checkpoint(
     request: AcknowledgeStateWitnessCheckpointRequest,
 ) -> Result<AcknowledgeStateWitnessCheckpointResult, EngineError> {
@@ -402,6 +406,7 @@ pub(crate) fn acknowledge_state_witness_checkpoint(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn recover_state_witness_checkpoint(
     request: RecoverStateWitnessCheckpointRequest,
 ) -> Result<RecoverStateWitnessCheckpointResult, EngineError> {
@@ -444,6 +449,7 @@ pub(crate) fn recover_state_witness_checkpoint(
     })
 }
 
+#[allow(dead_code)]
 fn state_witness_tip_result(snapshot: &StateWitnessTipSnapshot) -> StateWitnessTipResult {
     let zero = [0u8; 32];
     let (binding_hash, epoch, revision, event_root, acknowledgement_digest) =
@@ -474,6 +480,7 @@ fn state_witness_tip_result(snapshot: &StateWitnessTipSnapshot) -> StateWitnessT
     }
 }
 
+#[allow(dead_code)]
 fn validate_recovery_request(
     request: RecoverStateWitnessCheckpointRequest,
     configuration: &StateAnchorConfiguration,
@@ -754,6 +761,7 @@ pub(crate) fn state_anchor_read_response_signing_digest_for_tests(
     )
 }
 
+#[allow(dead_code)]
 fn validate_acknowledgement_request(
     request: AcknowledgeStateWitnessCheckpointRequest,
     configuration: &StateAnchorConfiguration,
@@ -787,6 +795,7 @@ pub(crate) fn validate_certified_transition_acknowledgement(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 enum AcknowledgementParentRule {
     Ordinary,
     CertifiedEpochGenesis([u8; 32]),
@@ -1102,6 +1111,7 @@ fn validate_acknowledgement_time(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 enum AcknowledgementTimeMode {
     IntrinsicOnly,
     Recovery,

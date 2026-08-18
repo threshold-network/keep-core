@@ -1,4 +1,6 @@
-// Distributed-DKG key-package persistence.
+//! Distributed-DKG key-package persistence.
+//!
+#![allow(dead_code)]
 
 use super::*;
 
@@ -317,6 +319,7 @@ pub fn persist_distributed_dkg_key_package(
 /// secret package and the corresponding public package. Absence is a successful
 /// no-op, which makes recovery safe after a crash that committed the native
 /// removal before the caller archived its local wallet registry entry.
+#[allow(dead_code)]
 pub fn retire_distributed_dkg_key_packages(
     request: RetireDistributedDkgKeyPackagesRequest,
 ) -> Result<RetireDistributedDkgKeyPackagesResult, EngineError> {

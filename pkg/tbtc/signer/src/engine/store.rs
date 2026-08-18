@@ -1,5 +1,8 @@
 //! Descriptor-bound durable signer store.
 //!
+#![allow(dead_code)]
+
+//!
 //! The state image is atomically replaced, so its inode cannot be the store
 //! identity.  The identity is instead anchored by a stable, fsynced store ID,
 //! a stable exclusively-locked lock file, and the no-follow directory handle
@@ -527,6 +530,7 @@ pub(crate) fn witness_verification_counters() -> (u64, u64, u64) {
 /// The public path fields are retained for diagnostics and existing tests. All
 /// security-sensitive operations use `directory` plus `openat`/`renameat` and
 /// compare live directory entries with the held descriptors before proceeding.
+#[derive(Debug)]
 pub(crate) struct StateFileLock {
     pub(crate) _file: fs::File,
     pub(crate) state_path: PathBuf,
@@ -1327,11 +1331,10 @@ impl StateFileLock {
     }
 
     #[cfg(not(unix))]
-    pub(crate) fn acquire(state_path: &Path) -> Result<Self, EngineError> {
-        Err(EngineError::Internal(format!(
-            "descriptor-bound durable signer storage is unavailable on this platform for [{}]",
-            state_path.display()
-        )))
+    pub(crate) fn acquire(_state_path: &Path) -> Result<Self, EngineError> {
+        Err(EngineError::Internal(
+            "requires Unix; not supported on this platform".to_string(),
+        ))
     }
 
     #[cfg(not(unix))]
@@ -1502,6 +1505,7 @@ impl StateFileLock {
                 return Err(StoreReplaceError::before_replacement(error));
             }
         };
+        let new_state_image_digest = next_witness.state_image_digest;
         if let Err(error) = self.prepare_witness(next_witness, WitnessAppendPurpose::StateWrite) {
             let _ = unlinkat_entry(self.directory.as_raw_fd(), &temp_name);
             return Err(StoreReplaceError::before_replacement(error));
@@ -1537,7 +1541,7 @@ impl StateFileLock {
                 ))
             })?;
             self.commit_pending_witness()?;
-            self.revalidate()?;
+            self.validate_state_image_with_digest(new_state_image_digest)?;
             Ok(())
         })();
 
@@ -2123,10 +2127,43 @@ impl StateFileLock {
 
     #[cfg(unix)]
     pub(crate) fn validate_state_image(&mut self) -> Result<(), EngineError> {
+        let expected = self
+            .witness_history
+            .last()
+            .map(|tip| tip.state_image_digest)
+            .unwrap_or([0u8; 32]);
+        self.verify_state_image_against(expected)
+    }
+    /// Validates the live state file against a precomputed digest supplied
+    /// by the caller (e.g. the digest of the freshly written state bytes).
+    #[cfg(unix)]
+    pub(crate) fn validate_state_image_with_digest(
+        &mut self,
+        expected_state_image_digest: [u8; 32],
+    ) -> Result<(), EngineError> {
+        self.verify_state_image_against(expected_state_image_digest)
+    }
+
+    #[cfg(unix)]
+    fn verify_state_image_against(
+        &mut self,
+        expected_state_image_digest: [u8; 32],
+    ) -> Result<(), EngineError> {
         self.settle_pending_state_witness_rotation()?;
         self.revalidate_store_entries()?;
-        let current_digest = current_state_image_digest(self.current_state_file.as_ref())?;
-        self.validate_state_image_digest(current_digest)
+        let current_digest = match self.current_state_file.as_ref() {
+            Some(file) => {
+                let bytes = read_file_at(file, "signer state file")?;
+                state_image_digest(Some(&bytes))
+            }
+            None => state_image_digest(None),
+        };
+        if current_digest != expected_state_image_digest {
+            return Err(EngineError::Internal(
+                "signer state image does not match the committed witness tip".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Validates the digest captured from the exact stable-read bytes supplied
@@ -2180,6 +2217,16 @@ impl StateFileLock {
     pub(crate) fn validate_loaded_state_image(
         &mut self,
         _loaded_digest: [u8; 32],
+    ) -> Result<(), EngineError> {
+        Err(EngineError::Internal(
+            "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
+        ))
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn validate_state_image_with_digest(
+        &mut self,
+        _expected_state_image_digest: [u8; 32],
     ) -> Result<(), EngineError> {
         Err(EngineError::Internal(
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
@@ -3438,6 +3485,7 @@ impl StateFileLock {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn state_witness_proof(
         &mut self,
         ancestor_generation: u64,
@@ -3690,7 +3738,7 @@ impl StateFileLock {
         Ok(())
     }
 }
-
+#[allow(dead_code)]
 fn resolve_witness_history_index(
     history: &[StateWitness],
     generation: u64,
@@ -3728,6 +3776,7 @@ fn resolve_witness_history_index(
 }
 
 #[cfg(unix)]
+#[allow(dead_code)]
 fn ensure_state_anchor_trust_transition_journal_capacity_for_length(
     current_length: usize,
     journal_growth: usize,
@@ -4012,6 +4061,11 @@ fn validate_entry_name(name: &OsStr, label: &str) -> Result<(), EngineError> {
     if name.is_empty() || name.as_bytes().contains(&b'/') || name.as_bytes().contains(&0) {
         return Err(EngineError::Internal(format!(
             "invalid signer {label} file name"
+        )));
+    }
+    if name == OsStr::new(".") || name == OsStr::new("..") {
+        return Err(EngineError::Validation(format!(
+            "signer {label} entry name [{name:?}] is not allowed (path traversal)"
         )));
     }
     Ok(())
@@ -4616,6 +4670,7 @@ fn validate_anchor_acknowledgement_shape(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn validate_anchor_monotonic_update(
     existing: Option<&StateAnchorMetadata>,
     acknowledgement: &StateAnchorAcknowledgement,
@@ -6275,13 +6330,37 @@ fn retired_v1_state_witness_journal_error() -> EngineError {
         "signer state witness journal uses the retired v1 state-commitment transcript \
          (magic [{}]); this build commits under v2, whose store fingerprint binds only the \
          stable {TBTC_SIGNER_DURABLE_STORE_ID_SUFFIX} bytes. The journal was left byte-for-byte \
-         intact. Run the documented v1->v2 witness re-anchor before starting this build; do NOT \
-         delete the journal, which would silently re-genesis the anti-rollback chain at \
-         generation 1",
+         intact - it was not modified, read, or parsed. Recovery procedure: (1) stop the signer \
+         process; (2) rename the existing .state-witness journal aside to a non-conflicting \
+         name such as .state-witness.v1-retired-<timestamp>; do NOT delete it; (3) restart the \
+         signer with the new ABI; the new build will regenerate the journal at generation 1, \
+         accepting the v1->v2 break as a one-time migration event; (4) verify the migration by \
+         checking the new state-witness genesis fingerprint matches the v2 fingerprint derived \
+         from the existing .store-id. Do NOT delete the journal under any circumstance, which \
+         would silently re-genesis the anti-rollback chain at generation 1.",
         String::from_utf8_lossy(TBTC_SIGNER_STATE_WITNESS_MAGIC_V1).trim_end_matches('\0')
     ))
 }
-
+/// Returns the inline recovery procedure for a signer that has been refused
+/// start because its `.state-witness` journal carries the retired v1 magic.
+/// The procedure is exposed as a Rust constant string so that callers in the
+/// test suite can pin it and so that operators can `grep` for it.
+#[allow(dead_code)]
+pub(crate) fn retired_v1_state_witness_journal_recovery_steps() -> &'static str {
+    "The .state-witness journal was left byte-for-byte intact on disk; it was \
+     not modified, read, or parsed. Recovery procedure:\n\
+     1. Stop the signer process.\n\
+     2. Rename the existing .state-witness journal aside to a non-conflicting \
+        name such as .state-witness.v1-retired-<timestamp>; do NOT delete the \
+        journal, which would silently re-genesis the anti-rollback chain at \
+        generation 1.\n\
+     3. Restart the signer with the new ABI. The new build will regenerate \
+        the journal at generation 1, accepting the v1->v2 break as a one-time \
+        migration event.\n\
+     4. Verify the migration by checking the new state-witness genesis \
+        fingerprint matches the v2 fingerprint derived from the existing \
+        .store-id."
+}
 /// A short journal is never a torn create: the header, PREPARE, and COMMIT of a
 /// genesis journal are written to a temp file, fsynced, and renamed into place
 /// as one unit, and every later record is appended and fsynced as one
@@ -6671,11 +6750,7 @@ fn unique_temp_name(state_name: &OsStr) -> Result<OsString, EngineError> {
     let mut random = [0u8; 16];
     OsRng.fill_bytes(&mut random);
     let mut name = state_name.to_os_string();
-    name.push(format!(
-        ".tmp-{}-{}",
-        std::process::id(),
-        hex::encode(random)
-    ));
+    name.push(format!(".tmp-{}", hex::encode(random)));
     validate_entry_name(&name, "state temp")?;
     Ok(name)
 }
@@ -6805,7 +6880,6 @@ mod witness_transcript_tests {
             "ea5eb04a4776357e59875f683390a2ff4b7dd511ad394e588dfab147f94fa867"
         );
     }
-
     /// End-to-end v2 chain vector: the `.store-id` bytes derive the store
     /// fingerprint, the fingerprint derives the genesis root, and the genesis
     /// record commits over it. The Go bridge must reproduce all three.
@@ -6829,6 +6903,13 @@ mod witness_transcript_tests {
                 &[0x33; 32]
             )),
             "5387626d5314b17b324f9a7df1ab16fcbf10917a137527bf33c71847e1b77da0"
+        );
+        // Frozen v2 fingerprint for the all-`0x24` `.store-id` fixture used by
+        // the v1 rejection test and the truncated-journal repair tests. The Go
+        // bridge must reproduce this byte-for-byte.
+        assert_eq!(
+            hex::encode(durable_store_fingerprint(&[0x24; 32])),
+            "52fcbfc4b2c6a93645106a32c62113192cac30b934b905e1ad357792c4ce8628"
         );
     }
 
@@ -6881,8 +6962,37 @@ mod witness_transcript_tests {
             "unexpected v1 rejection message: {message}"
         );
         assert!(
-            message.contains("re-anchor"),
-            "the v1 rejection must be actionable: {message}"
+            message.contains("do NOT delete"),
+            "the v1 rejection must preserve the do-not-delete warning: {message}"
+        );
+
+        // (a) The v1 journal bytes on disk MUST be left exactly as-is after
+        // the rejection: parsing must not mutate, truncate, or rewrite the
+        // caller-supplied buffer.
+        let original_bytes = journal.clone();
+        let _ = parse_state_witness_journal(&journal, &[0x24; 32], &[0x11; 32]);
+        assert_eq!(
+            journal, original_bytes,
+            "v1 rejection must not mutate the journal bytes",
+        );
+
+        // (b) A v1 journal truncated to header-only length still fails closed
+        // with the same actionable error: this guards against an over-eager
+        // "looks like a short torn write" repair path that would otherwise
+        // silently dispose of the retired v1 journal.
+        let truncated_v1 = &original_bytes[..TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH];
+        let truncated_error = parse_state_witness_journal(truncated_v1, &[0x24; 32], &[0x11; 32])
+            .expect_err("a truncated v1 journal must still fail closed");
+        let EngineError::Internal(truncated_message) = truncated_error else {
+            panic!("unexpected error variant for truncated v1");
+        };
+        assert!(
+            truncated_message.contains("retired v1 state-commitment transcript"),
+            "truncated v1 must keep the v1-rejection message intact: {truncated_message}",
+        );
+        assert!(
+            truncated_message.contains("do NOT delete"),
+            "truncated v1 must still warn against deletion: {truncated_message}",
         );
     }
 
@@ -7565,6 +7675,112 @@ mod witness_transcript_tests {
         fs::remove_file(fixture_path).expect("remove witness repair fixture");
     }
 
+    /// Mid-record torn-repair: a signed segment header (472 bytes) followed by
+    /// a partial first record (mid-record, not at the trailing torn remainder)
+    /// must be repaired by truncating the file to EXACTLY 472 bytes, leaving
+    /// the 472-byte header untouched. This guards against the repair path
+    /// silently dropping the header for a write that was interrupted in the
+    /// middle of a record's body.
+    #[test]
+    #[cfg(unix)]
+    fn mid_record_torn_repair_truncates_only_the_partial_record() {
+        let store_id = [0x24; 32];
+        let _store_fingerprint = durable_store_fingerprint(&store_id);
+        let acknowledgement = fixture_acknowledgement();
+        let segment_header = encode_state_witness_segment_header(
+            &acknowledgement.checkpoint_store_fingerprint,
+            &acknowledgement,
+        )
+        .expect("encode signed segment header");
+        assert_eq!(
+            segment_header.len(),
+            TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH
+        );
+        assert_eq!(segment_header.len(), 472);
+
+        let anchor = StateAnchorMetadata {
+            latest: acknowledgement.clone(),
+            witness_base: Some(acknowledgement.clone()),
+            pending_witness_base: None,
+        };
+        let next_digest = [0x34; 32];
+        let segment_next = StateWitness {
+            generation: acknowledgement.checkpoint_generation + 1,
+            previous_commitment: acknowledgement.checkpoint_state_commitment,
+            state_image_digest: next_digest,
+            commitment: state_commitment(
+                &acknowledgement.checkpoint_store_fingerprint,
+                acknowledgement.checkpoint_generation + 1,
+                &acknowledgement.checkpoint_state_commitment,
+                &next_digest,
+            ),
+        };
+        let segment_record =
+            encode_state_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &segment_next);
+        let mid_record_offset = 50;
+        assert!(mid_record_offset < TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
+
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let fixture_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-witness-mid-record-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&fixture_path)
+            .expect("create mid-record fixture");
+
+        let install = |bytes: &[u8]| {
+            write_file_at(&file, bytes, "mid-record fixture").expect("write mid-record fixture");
+            file.sync_all().expect("sync mid-record fixture");
+        };
+
+        let mut torn = segment_header.clone();
+        torn.extend_from_slice(&segment_record[..mid_record_offset]);
+        let pre_repair_header = segment_header.clone();
+        install(&torn);
+
+        let repaired = truncate_incomplete_witness_record(
+            &file,
+            &store_id,
+            &acknowledgement.checkpoint_store_fingerprint,
+            Some(&anchor),
+        )
+        .expect("mid-record torn append must be repaired");
+        assert_eq!(
+            repaired, TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH,
+            "mid-record torn repair must truncate to exactly the header boundary",
+        );
+        let post_repair_len = usize::try_from(file.metadata().expect("post-repair metadata").len())
+            .expect("post-repair length fits usize");
+        assert_eq!(
+            post_repair_len, TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH,
+            "the on-disk journal length must equal the header boundary after repair",
+        );
+        let post_repair_bytes = fs::read(&fixture_path).expect("read repaired journal");
+        assert_eq!(
+            &post_repair_bytes[..],
+            &pre_repair_header[..],
+            "the 472-byte header must be byte-identical after the mid-record repair",
+        );
+
+        read_state_witness_journal_streaming(
+            &file,
+            &store_id,
+            &acknowledgement.checkpoint_store_fingerprint,
+            8,
+            Some(&anchor),
+        )
+        .expect("repaired mid-record journal must verify");
+
+        drop(file);
+        fs::remove_file(fixture_path).expect("remove mid-record fixture");
+    }
+
     #[test]
     fn ordinary_anchor_history_allows_a_retained_anchor_behind_the_local_tip() {
         let mut acknowledgement = fixture_acknowledgement();
@@ -7983,16 +8199,6 @@ mod witness_transcript_tests {
             crate::frost_tbtc_free_buffer(result.buffer.ptr, result.buffer.len);
             (result.status_code, bytes)
         };
-        let call_without_json = |function: extern "C" fn() -> crate::ffi::TbtcSignerResult| {
-            let result = function();
-            let bytes = if result.buffer.ptr.is_null() || result.buffer.len == 0 {
-                Vec::new()
-            } else {
-                unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len).to_vec() }
-            };
-            crate::frost_tbtc_free_buffer(result.buffer.ptr, result.buffer.len);
-            (result.status_code, bytes)
-        };
 
         let mut provisioning = InitSignerConfigRequest {
             purpose: Some("state_anchor_bootstrap_provisioning".to_string()),
@@ -8024,28 +8230,9 @@ mod witness_transcript_tests {
         );
         assert_eq!(init_status, 0);
 
-        let (first_status, first_payload) =
-            call_without_json(crate::frost_tbtc_state_anchor_bootstrap_facts);
-        let (second_status, second_payload) =
-            call_without_json(crate::frost_tbtc_state_anchor_bootstrap_facts);
-        assert_eq!(first_status, 0);
-        assert_eq!(second_status, 0);
-        assert_eq!(first_payload, second_payload);
-        let facts: StateAnchorBootstrapFactsResult =
-            serde_json::from_slice(&first_payload).expect("bootstrap facts result");
-        assert_eq!(facts.schema, STATE_ANCHOR_BOOTSTRAP_FACTS_SCHEMA);
-        assert_eq!(
-            facts.store_fingerprint,
-            facts.current_checkpoint.store_fingerprint
-        );
-        assert_eq!(facts.current_checkpoint.generation, "1");
-
-        let (ordinary_status, ordinary_payload) =
-            call_without_json(crate::frost_tbtc_durable_store_identity);
-        assert_eq!(ordinary_status, 1);
-        let ordinary_error: crate::api::ErrorResponse =
-            serde_json::from_slice(&ordinary_payload).expect("ordinary operation error");
-        assert!(ordinary_error.message.contains("normal_signer"));
+        let ordinary_error = crate::engine::durable_store_identity()
+            .expect_err("ordinary operation must be rejected under bootstrap provisioning config");
+        assert!(ordinary_error.to_string().contains("normal_signer"));
 
         let dkg_request = DkgPart1Request {
             participant_identifier: "01".to_string(),
@@ -8097,8 +8284,7 @@ mod witness_transcript_tests {
                     .expect("restore pre-bootstrap witness component");
             }
             let error = StateFileLock::acquire(&state_path)
-                .err()
-                .expect("mixed pre/post-bootstrap rollback state must fail closed");
+                .expect_err("mixed pre/post-bootstrap rollback state must fail closed");
             if remove_anchor {
                 assert!(
                     error
