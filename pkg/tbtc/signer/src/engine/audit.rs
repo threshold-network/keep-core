@@ -117,6 +117,19 @@ fn reference_bip341_key_spend_sighash_default(
     sig_msg.extend_from_slice(&sequences_hasher.finalize());
     sig_msg.extend_from_slice(&outputs_hasher.finalize());
     sig_msg.push(0x00); // ext_flag=0, annex_present=0.
+    // BIP-341 specifies the input index as a 4-byte little-endian integer. This
+    // matches rust-bitcoin's actual encoding: the production path's
+    // `SighashCache::taproot_encode_signing_data_to` serializes `input_index`
+    // via `(input_index as u32).consensus_encode(writer)` (bitcoin-0.32.8
+    // src/crypto/sighash.rs:660), and `consensus_encode` for `u32` is
+    // implemented through the `emit_u32` write extension, which writes
+    // `v.to_le_bytes()` (bitcoin-0.32.8 src/consensus/encode.rs:246).
+    // The differential fuzzer's reference leg therefore uses the same byte
+    // order as the production `SighashCache` path. Note: the existing
+    // differential fuzz corpus only exercises `input_index == 0` (single-input
+    // txs), so the test cannot on its own detect a byte-order disagreement
+    // here -- the LE choice is anchored on the rust-bitcoin source above, not
+    // on the fuzz test passing.
     sig_msg.extend_from_slice(&(input_index as u32).to_le_bytes());
 
     let tag_hash = Sha256::digest(b"TapSighash");
