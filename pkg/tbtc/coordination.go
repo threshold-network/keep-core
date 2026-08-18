@@ -380,9 +380,6 @@ func (ce *coordinationExecutor) coordinate(
 
 	startTime := time.Now()
 
-	// Record duration metric once at the end using defer
-	var coordinationFailed bool
-
 	seed, err := ce.getSeed(window.coordinationBlock)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute coordination seed: [%v]", err)
@@ -431,7 +428,6 @@ func (ce *coordinationExecutor) coordinate(
 			// no point to keep the context active as retransmissions do not
 			// occur anyway.
 			cancelCtx()
-			coordinationFailed = true
 			if ce.metricsRecorder != nil {
 				ce.metricsRecorder.IncrementCounter(clientinfo.MetricCoordinationFailedTotal, 1)
 			}
@@ -455,7 +451,6 @@ func (ce *coordinationExecutor) coordinate(
 			append(actionsChecklist, ActionNoop),
 		)
 		if err != nil {
-			coordinationFailed = true
 			// Record as leader timeout observation, not as a failure of this node.
 			// The actual failure is on the leader's side.
 			if ce.metricsRecorder != nil {
@@ -498,7 +493,7 @@ func (ce *coordinationExecutor) coordinate(
 	execLogger.Infof("coordination completed with result: [%s]", result)
 
 	// Record successful coordination counter
-	if ce.metricsRecorder != nil && !coordinationFailed {
+	if ce.metricsRecorder != nil {
 		ce.metricsRecorder.IncrementCounter(clientinfo.MetricCoordinationProceduresExecutedTotal, 1)
 		ce.metricsRecorder.RecordDuration(clientinfo.MetricCoordinationDurationSeconds, time.Since(startTime))
 	}
@@ -608,15 +603,12 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// proposal generator performs a full-history chain scan.
 	if coordinationBlock < DepositSweepEveryWindowActivationBlock {
 		if windowIndex%frequencyWindows == 0 {
-			actions = append(actions, ActionDepositSweep)
-		}
-
-		if windowIndex%frequencyWindows == 0 {
-			actions = append(actions, ActionMovedFundsSweep)
-		}
-
-		if windowIndex%frequencyWindows == 0 {
-			actions = append(actions, ActionMovingFunds)
+			actions = append(
+				actions,
+				ActionDepositSweep,
+				ActionMovedFundsSweep,
+				ActionMovingFunds,
+			)
 		}
 	} else {
 		actions = append(actions, ActionDepositSweep)

@@ -42,10 +42,7 @@ func TestDepositSweepAction_Execute(t *testing.T) {
 			}
 
 			// depositsKeys will be needed to build the proposal instance.
-			depositsKeys := make([]struct {
-				FundingTxHash      bitcoin.Hash
-				FundingOutputIndex uint32
-			}, len(scenario.Deposits))
+			depositsKeys := make([]DepositKey, len(scenario.Deposits))
 
 			// depositsExtraInfo will be needed to perform on-chain proposal
 			// validation.
@@ -66,10 +63,7 @@ func TestDepositSweepAction_Execute(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				depositsKeys[i] = struct {
-					FundingTxHash      bitcoin.Hash
-					FundingOutputIndex uint32
-				}{
+				depositsKeys[i] = DepositKey{
 					FundingTxHash:      fundingTxHash,
 					FundingOutputIndex: fundingOutputIndex,
 				}

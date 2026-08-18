@@ -37,15 +37,12 @@ type PerformanceMetrics struct {
 	registry *Registry
 	cancel   context.CancelFunc
 
-	// Counters track cumulative counts of events
 	countersMutex sync.RWMutex
 	counters      map[string]*counter
 
-	// Histograms track distributions of values (like durations)
 	histogramsMutex sync.RWMutex
 	histograms      map[string]*histogram
 
-	// Gauges track current values (like queue sizes)
 	gaugesMutex sync.RWMutex
 	gauges      map[string]*gauge
 }
@@ -102,7 +99,16 @@ func (pm *PerformanceMetrics) Stop() {
 // registerAllMetrics registers all performance metrics with 0 values
 // so they appear in the /metrics endpoint even before operations occur.
 func (pm *PerformanceMetrics) registerAllMetrics() {
-	// Register all counter metrics with 0 initial value
+	pm.registerCounterMetrics()
+	pm.registerWalletActionMetrics()
+	pm.registerHistogramMetrics()
+	pm.registerGaugeMetrics()
+}
+
+// registerCounterMetrics registers all counter metrics with 0 initial values.
+// Map entries are populated before observers are registered so that observer
+// callbacks never read the map while it is being written concurrently.
+func (pm *PerformanceMetrics) registerCounterMetrics() {
 	counters := []string{
 		MetricDKGJoinedTotal,
 		MetricDKGFailedTotal,
@@ -119,6 +125,9 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricRedemptionProofSubmissionsTotal,
 		MetricRedemptionProofSubmissionsSuccessTotal,
 		MetricRedemptionProofSubmissionsFailedTotal,
+		MetricDepositSweepProofSubmissionsTotal,
+		MetricDepositSweepProofSubmissionsSuccessTotal,
+		MetricDepositSweepProofSubmissionsFailedTotal,
 		MetricWalletActionsTotal,
 		MetricWalletActionSuccessTotal,
 		MetricWalletActionFailedTotal,
@@ -149,14 +158,12 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		counters = append(counters, NetworkJoinFailureMetricName(reason))
 	}
 
-	// First, initialize all counters in the map
 	pm.countersMutex.Lock()
 	for _, name := range counters {
 		pm.counters[name] = &counter{value: 0}
 	}
 	pm.countersMutex.Unlock()
 
-	// Then, register observers (this prevents concurrent map read/write)
 	for _, name := range counters {
 		metricName := name // Capture for closure
 		pm.registry.ObserveApplicationSource(
@@ -177,7 +184,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// Register per-action type wallet metrics
+}
+
+// registerWalletActionMetrics registers per-action-type wallet counters and
+// duration histograms with 0 initial values.
+func (pm *PerformanceMetrics) registerWalletActionMetrics() {
 	// For each action type, register: total, success_total, failed_total, duration_seconds
 	for _, actionType := range GetAllWalletActionTypes() {
 		actionCounters := []string{
@@ -238,8 +249,12 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// Register all duration/histogram metrics with 0 initial values
-	// Note: These use the actual metric names as used in the codebase
+}
+
+// registerHistogramMetrics registers standalone duration/histogram metrics with
+// 0 initial values.
+func (pm *PerformanceMetrics) registerHistogramMetrics() {
+	// These use the actual metric names as used in the codebase.
 	durationMetrics := []string{
 		MetricDKGDurationSeconds,
 		MetricSigningDurationSeconds,
@@ -251,7 +266,6 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricNetworkHandshakeDurationSeconds,
 	}
 
-	// First, initialize all histograms in the map
 	pm.histogramsMutex.Lock()
 	for _, name := range durationMetrics {
 		pm.histograms[name] = &histogram{
@@ -260,7 +274,6 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	}
 	pm.histogramsMutex.Unlock()
 
-	// Then, register observers (this prevents concurrent map read/write)
 	for _, name := range durationMetrics {
 		metricName := name
 		sources := map[string]Source{
@@ -297,7 +310,10 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		pm.registry.ObserveApplicationSource("performance", sources)
 	}
 
-	// Register all gauge metrics with 0 initial value
+}
+
+// registerGaugeMetrics registers all gauge metrics with 0 initial values.
+func (pm *PerformanceMetrics) registerGaugeMetrics() {
 	gauges := []string{
 		MetricWalletDispatcherActiveActions,
 		MetricIncomingMessageQueueSize,
@@ -311,14 +327,12 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricSwapUtilizationPercent,
 	}
 
-	// First, initialize all gauges in the map
 	pm.gaugesMutex.Lock()
 	for _, name := range gauges {
 		pm.gauges[name] = &gauge{value: 0}
 	}
 	pm.gaugesMutex.Unlock()
 
-	// Then, register observers (this prevents concurrent map read/write)
 	for _, name := range gauges {
 		metricName := name // Capture for closure
 		pm.registry.ObserveApplicationSource(
@@ -435,7 +449,7 @@ func (pm *PerformanceMetrics) SetGauge(name string, value float64) {
 // observeSystemMetrics periodically collects and updates system metrics
 // including CPU utilization, memory usage, and goroutine count.
 func (pm *PerformanceMetrics) observeSystemMetrics(ctx context.Context) {
-	ticker := time.NewTicker(60 * time.Second) // Update every 10 seconds
+	ticker := time.NewTicker(60 * time.Second) // Update every 60 seconds
 	defer ticker.Stop()
 
 	var lastMemStats runtime.MemStats
@@ -635,6 +649,11 @@ const (
 	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"
 	MetricRedemptionProofSubmissionsSuccessTotal = "redemption_proof_submissions_success_total"
 	MetricRedemptionProofSubmissionsFailedTotal  = "redemption_proof_submissions_failed_total"
+
+	// Deposit Sweep Proof Submission Metrics (SPV maintainer)
+	MetricDepositSweepProofSubmissionsTotal        = "deposit_sweep_proof_submissions_total"
+	MetricDepositSweepProofSubmissionsSuccessTotal = "deposit_sweep_proof_submissions_success_total"
+	MetricDepositSweepProofSubmissionsFailedTotal  = "deposit_sweep_proof_submissions_failed_total"
 
 	// Wallet Action Metrics (aggregate)
 	MetricWalletActionsTotal                 = "wallet_actions_total"

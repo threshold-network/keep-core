@@ -353,6 +353,21 @@ func ValidateMovingFundsProposal(
 	return nil
 }
 
+// movingFundsSafetyMarginChain is the chain interface required to evaluate the
+// moving funds safety margin and to determine whether a wallet is a pending
+// moving funds target.
+type movingFundsSafetyMarginChain interface {
+	BlockCounter() (chain.BlockCounter, error)
+
+	GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
+
+	GetMovingFundsParameters() (MovingFundsParameters, error)
+
+	PastMovingFundsCommitmentSubmittedEvents(
+		filter *MovingFundsCommitmentSubmittedEventFilter,
+	) ([]*MovingFundsCommitmentSubmittedEvent, error)
+}
+
 // ValidateMovingFundsSafetyMargin checks if the moving funds safety margin
 // is in force.
 //
@@ -370,17 +385,7 @@ func ValidateMovingFundsProposal(
 // wallets. In this case a longer safety margin should be used.
 func ValidateMovingFundsSafetyMargin(
 	walletPublicKeyHash [20]byte,
-	chain interface {
-		BlockCounter() (chain.BlockCounter, error)
-
-		GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
-
-		GetMovingFundsParameters() (MovingFundsParameters, error)
-
-		PastMovingFundsCommitmentSubmittedEvents(
-			filter *MovingFundsCommitmentSubmittedEventFilter,
-		) ([]*MovingFundsCommitmentSubmittedEvent, error)
-	},
+	chain movingFundsSafetyMarginChain,
 ) error {
 	// In most cases the safety margin of 24 hours should be enough. It will
 	// allow the wallet to sweep the last deposits that were made before the
@@ -447,17 +452,7 @@ func (mfa *movingFundsAction) actionType() WalletActionType {
 
 func isWalletPendingMovingFundsTarget(
 	walletPublicKeyHash [20]byte,
-	chain interface {
-		BlockCounter() (chain.BlockCounter, error)
-
-		GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
-
-		GetMovingFundsParameters() (MovingFundsParameters, error)
-
-		PastMovingFundsCommitmentSubmittedEvents(
-			filter *MovingFundsCommitmentSubmittedEventFilter,
-		) ([]*MovingFundsCommitmentSubmittedEvent, error)
-	},
+	chain movingFundsSafetyMarginChain,
 ) (bool, error) {
 	blockCounter, err := chain.BlockCounter()
 	if err != nil {

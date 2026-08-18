@@ -52,13 +52,24 @@ const (
 	depositSweepBroadcastCheckDelay = 1 * time.Minute
 )
 
+// DepositKey identifies a deposit by the outpoint of its funding transaction.
+//
+// Note: DepositKey is a named type; it replaced the anonymous struct
+// previously used inline as the element type of
+// DepositSweepProposal.DepositsKeys. Go does not allow assigning an
+// anonymous-struct-typed slice literal to a named-struct-typed slice field,
+// so code outside this module that builds a DepositSweepProposal from the
+// old anonymous struct literal must switch to constructing []DepositKey
+// values instead.
+type DepositKey struct {
+	FundingTxHash      bitcoin.Hash
+	FundingOutputIndex uint32
+}
+
 // DepositSweepProposal represents a deposit sweep proposal issued by a
 // wallet's coordination leader.
 type DepositSweepProposal struct {
-	DepositsKeys []struct {
-		FundingTxHash      bitcoin.Hash
-		FundingOutputIndex uint32
-	}
+	DepositsKeys         []DepositKey
 	SweepTxFee           *big.Int
 	DepositsRevealBlocks []*big.Int
 }
