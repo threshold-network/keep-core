@@ -163,6 +163,177 @@ where
     }
 }
 
+/// Hard cap for ASCII-only short identifier strings (codes, recovery
+/// classes). The wire format is still a plain JSON string; the cap
+/// prevents an adversarial host from claiming a multi-megabyte code
+/// in an error response and pre-allocating sidecar allocations.
+pub(crate) const MAX_ASCII_CODES_CHARS: usize = 256;
+
+/// Hard cap for free-form human-readable error message text (the ASCII
+/// "message" of `ErrorResponse`). 4 KiB is generous for any operator
+/// note or detail string the engine surfaces.
+pub(crate) const MAX_MESSAGE_ASCII_CHARS: usize = 4 * 1024;
+
+/// Hard cap for hex-encoded FROST verifying-share values inside each
+/// entry of `NativeFrostPublicKeyPackage.verifying_shares`. 256 chars is
+/// more than enough for any plausible encoding (a secp256k1 verifying
+/// share is 33 bytes = 66 hex chars), but accepts future metadata
+/// encodings while bounding the worst case against a hostile host.
+pub(crate) const MAX_VERIFYING_SHARE_HEX_CHARS: usize = 256;
+
+/// Hard cap on per-collection length for the bounded `Vec` fields on
+/// the FFI surface. 256 entries is well above any realistic FROST
+/// participant count (a few dozen at most) while bounding the
+/// in-memory footprint of an adversarial payload.
+pub(crate) const MAX_BOUNDED_COLLECTION_LEN: usize = 256;
+
+/// serde `deserialize_with` helper: cap an ASCII short identifier
+/// string (e.g. `ErrorResponse.code` / `.recovery_class`) at
+/// `MAX_ASCII_CODES_CHARS`. Same wire shape as the hex helpers
+/// (a plain JSON string), distinct from the hex helpers because the
+/// existing `deserialize_bounded_hex` name mis-describes the data and
+/// would silently widen on future cap edits.
+pub(crate) fn deserialize_bounded_ascii<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.len() > MAX_ASCII_CODES_CHARS {
+        return Err(serde::de::Error::custom(format!(
+            "ascii field exceeds max length [{}] bytes",
+            MAX_ASCII_CODES_CHARS
+        )));
+    }
+    Ok(value)
+}
+
+/// serde `deserialize_with` helper: cap an ASCII free-form message
+/// string (e.g. `ErrorResponse.message`) at `MAX_MESSAGE_ASCII_CHARS`.
+/// Wider cap than `deserialize_bounded_ascii` because error `message`
+/// strings may carry operator-readable detail text.
+pub(crate) fn deserialize_bounded_message_ascii<'de, D>(
+    deserializer: D,
+) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.len() > MAX_MESSAGE_ASCII_CHARS {
+        return Err(serde::de::Error::custom(format!(
+            "message field exceeds max length [{}] bytes",
+            MAX_MESSAGE_ASCII_CHARS
+        )));
+    }
+    Ok(value)
+}
+
+/// serde `deserialize_with` helper: cap a `Vec<u16>` at
+/// `MAX_BOUNDED_COLLECTION_LEN` (256) entries. Used for FROST
+/// participant-identifier vectors (excluded members, included
+/// participants) where the realistic upper bound is a handful to a
+/// few dozen.
+pub(crate) fn deserialize_bounded_u16_vec<'de, D>(deserializer: D) -> Result<Vec<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Vec::<u16>::deserialize(deserializer)?;
+    if value.len() > MAX_BOUNDED_COLLECTION_LEN {
+        return Err(serde::de::Error::custom(format!(
+            "vector field exceeds max length [{}] entries",
+            MAX_BOUNDED_COLLECTION_LEN
+        )));
+    }
+    Ok(value)
+}
+
+/// serde `deserialize_with` helper: deserialize a
+/// `BTreeMap<String, String>` AND validate every value's length is
+/// within the per-entry verifying-share hex cap. Keys are short
+/// FROST identifier encodings and not separately bounded.
+pub(crate) fn deserialize_bounded_verifying_shares_map<'de, D>(
+    deserializer: D,
+) -> Result<std::collections::BTreeMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = std::collections::BTreeMap::<String, String>::deserialize(deserializer)?;
+    for (key, share_hex) in &value {
+        if share_hex.len() > MAX_VERIFYING_SHARE_HEX_CHARS {
+            return Err(serde::de::Error::custom(format!(
+                "verifying_shares[{key}] exceeds max length [{}] hex chars",
+                MAX_VERIFYING_SHARE_HEX_CHARS
+            )));
+        }
+    }
+    Ok(value)
+}
+
+/// Macro for generating per-element-type bounded `Vec` deserializers.
+/// The existing serde-derive style in this file uses named functions
+/// (e.g. `deserialize_bounded_hex`), not const-generic turbofish, so
+/// each bounded `Vec` field gets a small named helper that repeats
+/// the cap check inline. This keeps the derive site readable and the
+/// cap explicit per field.
+macro_rules! define_bounded_vec_deserializer {
+    ($name:ident, $element:ty) => {
+        pub(crate) fn $name<'de, D>(deserializer: D) -> Result<Vec<$element>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Vec::<$element>::deserialize(deserializer)?;
+            if value.len() > MAX_BOUNDED_COLLECTION_LEN {
+                return Err(serde::de::Error::custom(format!(
+                    "vector field exceeds max length [{}] entries",
+                    MAX_BOUNDED_COLLECTION_LEN
+                )));
+            }
+            Ok(value)
+        }
+    };
+}
+
+define_bounded_vec_deserializer!(
+    deserialize_bounded_commitments_vec,
+    NativeFrostCommitment
+);
+define_bounded_vec_deserializer!(
+    deserialize_bounded_round1_packages_vec,
+    DkgRound1Package
+);
+define_bounded_vec_deserializer!(
+    deserialize_bounded_round2_packages_vec,
+    DkgRound2Package
+);
+define_bounded_vec_deserializer!(
+    deserialize_bounded_signature_shares_vec,
+    NativeFrostSignatureShare
+);
+define_bounded_vec_deserializer!(
+    deserialize_bounded_share_material_vec,
+    ShareMaterial
+);
+
+/// serde `deserialize_with` helper for the `policy_allowed_utc_*_hour`
+/// init-config fields: validate `0 <= value <= 23` BEFORE the value
+/// reaches the policy gate, so an out-of-range hour can't widen the
+/// operational window past midnight. Accepts `null`/absent as
+/// `Ok(None)`.
+pub(crate) fn deserialize_utc_hour_opt<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<u8> = Option::deserialize(deserializer)?;
+    if let Some(hour) = value {
+        if hour > 23 {
+            return Err(serde::de::Error::custom(format!(
+                "policy UTC hour value [{hour}] is out of range [0, 23]"
+            )));
+        }
+    }
+    Ok(value)
+}
+
+
 /// A hex-encoded secret whose owned Rust allocation is wiped on drop and whose
 /// `Debug` representation never exposes its contents. Serde remains transparent
 /// so the C-ABI JSON contract continues to carry an ordinary string.
@@ -250,6 +421,7 @@ pub struct DkgPart1Result {
 pub struct DkgPart2Request {
     #[serde(deserialize_with = "deserialize_bounded_secret_hex")]
     pub secret_package_hex: SecretHex,
+    #[serde(deserialize_with = "deserialize_bounded_round1_packages_vec")]
     pub round1_packages: Vec<DkgRound1Package>,
 }
 
@@ -270,6 +442,7 @@ pub struct NativeFrostKeyPackage {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostPublicKeyPackage {
+    #[serde(deserialize_with = "deserialize_bounded_verifying_shares_map")]
     pub verifying_shares: std::collections::BTreeMap<String, String>,
     #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub verifying_key: String,
@@ -279,7 +452,9 @@ pub struct NativeFrostPublicKeyPackage {
 pub struct DkgPart3Request {
     #[serde(deserialize_with = "deserialize_bounded_secret_hex")]
     pub secret_package_hex: SecretHex,
+    #[serde(deserialize_with = "deserialize_bounded_round1_packages_vec")]
     pub round1_packages: Vec<DkgRound1Package>,
+    #[serde(deserialize_with = "deserialize_bounded_round2_packages_vec")]
     pub round2_packages: Vec<DkgRound2Package>,
 }
 
@@ -324,6 +499,7 @@ pub struct NativeFrostSignatureShare {
 pub struct NewSigningPackageRequest {
     #[serde(deserialize_with = "deserialize_bounded_message_hex")]
     pub message_hex: String,
+    #[serde(deserialize_with = "deserialize_bounded_commitments_vec")]
     pub commitments: Vec<NativeFrostCommitment>,
 }
 
@@ -450,6 +626,7 @@ pub struct InteractiveAggregateRequest {
     /// pure-crypto candidates for the Go host's envelope-bound blame
     /// adjudication (frozen Phase 7.2b spec, section 6); the engine never
     /// inspects operator-signed envelopes itself.
+    #[serde(deserialize_with = "deserialize_bounded_signature_shares_vec")]
     pub signature_shares: Vec<NativeFrostSignatureShare>,
     #[serde(
         default,
@@ -554,7 +731,11 @@ pub struct AttemptTransitionTelemetry {
     pub to_coordinator_identifier: u16,
     #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub reason: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_bounded_u16_vec"
+    )]
     pub excluded_member_identifiers: Vec<u16>,
     pub coordinator_rotated: bool,
 }
@@ -612,6 +793,7 @@ pub struct DeriveInteractiveAttemptContextRequest {
     /// 1-based wire attempt number (the host's 0-based value + 1), matching
     /// `AttemptContext.attempt_number`.
     pub attempt_number: u32,
+    #[serde(deserialize_with = "deserialize_bounded_u16_vec")]
     pub included_participants: Vec<u16>,
 }
 
@@ -781,6 +963,7 @@ pub struct ShareMaterial {
 pub struct RefreshSharesRequest {
     #[serde(deserialize_with = "deserialize_bounded_hex")]
     pub session_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_share_material_vec")]
     pub current_shares: Vec<ShareMaterial>,
 }
 
@@ -1028,11 +1211,11 @@ pub struct SignerHardeningMetricsResult {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ErrorResponse {
-    #[serde(deserialize_with = "deserialize_bounded_hex")]
+    #[serde(deserialize_with = "deserialize_bounded_ascii")]
     pub code: String,
-    #[serde(deserialize_with = "deserialize_bounded_hex")]
+    #[serde(deserialize_with = "deserialize_bounded_message_ascii")]
     pub message: String,
-    #[serde(deserialize_with = "deserialize_bounded_hex")]
+    #[serde(deserialize_with = "deserialize_bounded_ascii")]
     pub recovery_class: String,
     /// CANDIDATE culprits for an `aggregate_share_verification_failed` error:
     /// the u16 Go member identifiers whose FROST signature shares failed
@@ -1124,9 +1307,17 @@ pub struct InitSignerConfigRequest {
     pub policy_max_output_value_sats: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_max_total_output_value_sats: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_utc_hour_opt"
+    )]
     pub policy_allowed_utc_start_hour: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_utc_hour_opt"
+    )]
     pub policy_allowed_utc_end_hour: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_rate_limit_per_minute: Option<u64>,

@@ -13,6 +13,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SECONDS_PER_DAY: u64 = 86_400;
 const DEFAULT_DAO_OVERRIDE_MAX_TTL_SECONDS: u64 = 7 * SECONDS_PER_DAY;
 
+/// Lower bound for `AdmissionOverridePayload.approved_at_unix`. Any value
+/// older than the year-2001 epoch (Sat 09 Sep 2001 01:46:40 UTC, the
+/// canonical `1_000_000_000` Unix second) is incompatible with the
+/// override's TTL semantics and lets a hostile actor slip a degenerate
+/// override past the `approved_at_unix > now_unix_seconds` temporal
+/// guard via a reverse-time-travel scenario.
+const DAO_OVERRIDE_APPROVED_AT_MIN_UNIX: u64 = 1_000_000_000;
+
+/// Hard cap on the number of consumed-override entries the on-disk replay
+/// registry is allowed to retain. The legitimate flow produces one entry
+/// per approved DAO override within its TTL window, so the realistic
+/// steady state is hundreds to low thousands of records. 10_000 caps a
+/// malicious DAO key minting unique `override_id` values to drive
+/// unbounded disk growth; once the cap is hit, `OverrideReplayRegistry::insert`
+/// returns an error and `apply_dao_override` rejects the override.
+const MAX_OVERRIDE_REGISTRY_ENTRIES: usize = 10_000;
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AdmissionPolicyV1 {
@@ -31,6 +48,7 @@ struct AdmissionPolicyV1 {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AdmissionCandidate {
     operator_id: String,
     provider: String,
@@ -62,6 +80,7 @@ struct AdmissionOverrideArtifact {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AdmissionOverridePayload {
     override_id: String,
     operator_id: String,
@@ -104,6 +123,12 @@ impl OverrideReplayRegistry {
         self.consumed_override_ids.get(override_id)
     }
 
+    /// Insert a consumed-override record. Returns an error if the registry
+    /// already holds [`MAX_OVERRIDE_REGISTRY_ENTRIES`] entries, capping
+    /// disk growth against a malicious DAO key minting unique
+    /// `override_id` values. Existing entries are still updated (re-key
+    /// under the same override_id is not a capacity event); only the
+    /// INSERT of a NEW key into a full map is rejected.
     fn insert(
         &mut self,
         override_id: String,
@@ -112,7 +137,17 @@ impl OverrideReplayRegistry {
         approved_at_unix: u64,
         expires_at_unix: u64,
         consumed_at_unix: u64,
-    ) {
+    ) -> Result<(), String> {
+        if !self.consumed_override_ids.contains_key(&override_id)
+            && self.consumed_override_ids.len() >= MAX_OVERRIDE_REGISTRY_ENTRIES
+        {
+            return Err(format!(
+                "override replay registry is full ({} entries); \
+                 refusing to accept new override_id [{}] until expired entries are pruned",
+                self.consumed_override_ids.len(),
+                override_id
+            ));
+        }
         self.consumed_override_ids.insert(
             override_id.clone(),
             ConsumedOverrideRecord {
@@ -124,6 +159,7 @@ impl OverrideReplayRegistry {
                 consumed_at_unix,
             },
         );
+        Ok(())
     }
 }
 
@@ -242,7 +278,25 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Hard cap on the policy/candidate/existing/override JSON file size the
+/// checker is willing to slurp into memory. A genuine admission policy is
+/// on the order of single-digit KiB; a 1 MiB cap is generous for the
+/// legitimate input envelope while preventing a hostile actor from
+/// triggering multi-gigabyte allocations through this surface.
+const MAX_JSON_INPUT_FILE_BYTES: u64 = 1 * 1024 * 1024;
+
 fn load_json_file<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> Result<T, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|e| format!("failed to stat file [{}]: {e}", path.display()))?;
+    if metadata.len() > MAX_JSON_INPUT_FILE_BYTES {
+        return Err(format!(
+            "policy/candidate JSON file [{}] size [{}] bytes exceeds the [{}] byte cap; \
+             refusing to load unbounded input",
+            path.display(),
+            metadata.len(),
+            MAX_JSON_INPUT_FILE_BYTES
+        ));
+    }
     let bytes =
         fs::read(path).map_err(|e| format!("failed to read file [{}]: {e}", path.display()))?;
     serde_json::from_slice(&bytes)
@@ -552,6 +606,25 @@ fn apply_dao_override(
         return decision;
     }
 
+    // Floor check: any approved_at_unix older than the year-2001 epoch
+    // boundary is incompatible with the override's TTL semantics (a
+    // seven-day MAX_TTL relative to a 1970 anchor would silently
+    // "expire" in the next check) and lets a hostile actor slip a
+    // degenerate override past the temporal guards.
+    if override_payload.approved_at_unix < DAO_OVERRIDE_APPROVED_AT_MIN_UNIX {
+        push_override_rejection_reason(
+            &mut decision,
+            "dao_override_approved_at_predates_floor",
+            format!(
+                "override approved_at_unix [{}] predates a sane floor (year 2001); \
+                 refusing to apply overrides anchored before the [{}] second epoch",
+                override_payload.approved_at_unix,
+                DAO_OVERRIDE_APPROVED_AT_MIN_UNIX
+            ),
+        );
+        return decision;
+    }
+
     if override_payload.approved_by.trim().is_empty() {
         push_override_rejection_reason(
             &mut decision,
@@ -613,14 +686,17 @@ fn apply_dao_override(
         return decision;
     }
 
-    replay_registry.insert(
+    if let Err(detail) = replay_registry.insert(
         override_id,
         candidate_operator_id.clone(),
         override_payload.approved_by.trim().to_string(),
         override_payload.approved_at_unix,
         override_payload.expires_at_unix,
         now_unix_seconds,
-    );
+    ) {
+        push_override_rejection_reason(&mut decision, "dao_override_registry_full", detail);
+        return decision;
+    }
 
     decision.decision = "allow".to_string();
     decision.override_applied = true;
@@ -1667,15 +1743,16 @@ mod tests {
         let registry_path = tmp_dir.join("override-registry.json");
 
         let mut registry = OverrideReplayRegistry::default();
-        registry.insert(
-            "test-override-id-1".to_string(),
-            "operator-1".to_string(),
-            "dao-approver-1".to_string(),
-            1_700_000_000,
-            1_700_003_600,
-            1_700_000_100,
-        );
-
+        registry
+            .insert(
+                "test-override-id-1".to_string(),
+                "operator-1".to_string(),
+                "dao-approver-1".to_string(),
+                1_700_000_000,
+                1_700_003_600,
+                1_700_000_100,
+            )
+            .expect("single test insert must not hit the registry cap");
         persist_override_replay_registry(&registry_path, &registry).expect("persist registry");
         let reloaded = load_override_replay_registry(&registry_path).expect("load registry");
 
