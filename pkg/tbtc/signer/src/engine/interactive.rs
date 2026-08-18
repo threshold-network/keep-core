@@ -1911,14 +1911,14 @@ fn enforce_interactive_signing_gates(
     if let Some(emergency_rekey_event) =
         signing_emergency_rekey_event.or(wallet_emergency_rekey_event)
     {
-        return Err(EngineError::LifecyclePolicyRejected {
-            session_id: session_id.to_string(),
-            reason_code: "emergency_rekey_required".to_string(),
-            detail: format!(
+        return reject_lifecycle_policy(
+            session_id,
+            "emergency_rekey_required",
+            format!(
                 "emergency rekey required for session [{}] since [{}]: {}",
                 session_id, emergency_rekey_event.triggered_at_unix, emergency_rekey_event.reason
             ),
-        });
+        );
     }
     if session_finalized {
         return Err(EngineError::SessionFinalized {

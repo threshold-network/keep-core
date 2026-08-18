@@ -141,6 +141,7 @@ pub(crate) struct HardeningTelemetryState {
     pub(crate) build_taproot_tx_success_total: u64,
     pub(crate) build_taproot_tx_policy_reject_total: u64,
     pub(crate) heartbeat_signing_policy_reject_total: u64,
+    pub(crate) interactive_rate_limit_reject_total: u64,
     pub(crate) finalize_sign_round_calls_total: u64,
     pub(crate) finalize_sign_round_success_total: u64,
     pub(crate) refresh_shares_calls_total: u64,
