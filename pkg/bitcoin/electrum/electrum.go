@@ -457,6 +457,16 @@ func (c *Connection) GetTransactionsForPublicKeyScripts(
 	return transactions, nil
 }
 
+// selectLatestUniqueTxHashes deduplicates the given transaction hashes,
+// preserving their original (block-height ascending) order, and returns at
+// most limit trailing entries, i.e. the latest ones. Deduplication happens
+// before the limit is applied, so a transaction paying two of the queried
+// scripts consumes a single slot.
+//
+// A limit lower than or equal to zero returns an empty slice. The SPV
+// maintainer's transaction limit is an operator-provided flag, so the guard
+// keeps a misconfigured negative value from panicking on the slice bound; it
+// makes the maintainer observe no transactions rather than crash.
 func selectLatestUniqueTxHashes(
 	txHashes []bitcoin.Hash,
 	limit int,
@@ -1387,17 +1397,22 @@ func requestWithRetry[K interface{}](
 
 // currentClient returns the live Electrum client under a read lock.
 //
-// The lock protects the client POINTER against a concurrent reconnect swap, not
-// the request itself: go-electrum multiplexes concurrent requests over an
-// id-to-channel map with a single reader goroutine dispatching responses, so it is
-// safe to call from several goroutines at once. Holding the lock across the round
-// trip instead serialized every Electrum request in the process, so independent
-// lookups queued behind each other for a full network round trip each.
+// The lock protects the client POINTER against a concurrent reconnect swap and
+// nothing else. It is released before the caller issues its request, so a
+// reconnect may swap the client while that request is still in flight against
+// the old one.
 //
-// A reconnect can now swap the client immediately after this returns, while
-// the caller's request is still in flight against the old client. That request
-// will fail and requestWithRetry's retry loop reconnects and repeats it -- the
-// same fallback the retry loop already uses for any other request failure.
+// How such a stale-client request fails depends on the caller. Requests issued
+// through requestWithRetry fail and are reconnected and repeated by its retry
+// loop -- the same fallback it applies to any other request failure.
+// getFeeBtcPerKbOnce calls currentClient directly, outside any retry wrapper,
+// and surfaces a plain error to EstimateSatPerVByteFee's fallback loop, which
+// moves on to the next confirmation target instead of retrying the same one.
+//
+// Note that the underlying go-electrum client's Shutdown() is not thread-safe
+// against in-flight requests: it clears the transport and handler maps without
+// holding the handler lock. That is a known upstream issue tracked separately;
+// this lock does not protect against it.
 func (c *Connection) currentClient() *electrum.Client {
 	c.clientMutex.RLock()
 	defer c.clientMutex.RUnlock()

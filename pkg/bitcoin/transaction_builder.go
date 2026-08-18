@@ -363,6 +363,10 @@ func (tb *TransactionBuilder) getScript(
 }
 
 // AddOutput adds a new transaction's output.
+//
+// Adding an output after ComputeSignatureHashes invalidates the builder's
+// cached signature hashes; ComputeSignatureHashes must be called again before
+// signing.
 func (tb *TransactionBuilder) AddOutput(output *TransactionOutput) {
 	tb.internal.AddTxOut(wire.NewTxOut(output.Value, output.PublicKeyScript))
 	tb.sigHashes = nil

@@ -653,8 +653,7 @@ func TestTransactionBuilder_AddTaprootKeyPathSignatures(t *testing.T) {
 		"96653d19d603d309d22cfe2ccd0ba445e40629dea18d46108caa601055ec4318",
 	)
 	// This vector was generated with btcd v0.23.4's BIP-341
-	// CalcTaprootSignatureHash implementation and independently
-	// cross-checked by reviewers.
+	// CalcTaprootSignatureHash implementation.
 	sigHashBytes := sigHashes[0].FillBytes(make([]byte, 32))
 	testutils.AssertBytesEqual(t, expectedSigHash, sigHashBytes)
 
