@@ -55,7 +55,15 @@ in `docs/rust-rewrite-bootstrap.md`.
 
 ## Not yet implemented
 
-- ROAST coordinator logic.
+- End-to-end ROAST coordinator orchestration (timeouts -> blame -> advance to a
+  new attempt): the crate has the cryptographic primitives that drive it
+  (deterministic coordinator selection via `select_coordinator_identifier`,
+  canonical `AttemptContext` derivation/validation, `attempt_id` and
+  included-participants fingerprinting, and `roast_liveness_policy`
+  metadata) plus the per-attempt interactive-signing FFI
+  (`InteractiveSessionOpen` / `Round1` / `Round2` / `Abort` / `Aggregate`),
+  but the coordinator failover loop that ties them together lives outside
+  this crate (host-side Go layer).
 - Full Taproot script-tree construction/signing policy semantics (current
   `BuildTaprootTx` path assembles validated unsigned transactions from provided
   inputs/outputs).
@@ -305,11 +313,11 @@ Failure-mode responses:
 
 ## Benchmarks
 
-The coarse-path `phase5_roast` Criterion target was retired with
-StartSignRound/FinalizeSignRound. There is currently no supported benchmark
-command. Promotion evidence comes from fresh interactive latency windows and the
-exact-filter chaos suite below; do not archive a missing benchmark as a passed
-rollout gate.
+The coarse-path Criterion target was retired along with the coarse operations
+it measured. There is currently no supported benchmark command. Promotion
+evidence comes from fresh interactive latency windows and the exact-filter
+chaos suite below; do not archive a missing benchmark as a passed rollout
+gate.
 
 ## Chaos Suite (Phase 5)
 
