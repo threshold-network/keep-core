@@ -414,12 +414,7 @@ func (c *Connection) GetTransactionsForPublicKeyHash(
 		return nil, err
 	}
 
-	var selectedTxHashes []bitcoin.Hash
-	if len(txHashes) > limit {
-		selectedTxHashes = txHashes[len(txHashes)-limit:]
-	} else {
-		selectedTxHashes = txHashes
-	}
+	selectedTxHashes := selectLatestUniqueTxHashes(txHashes, limit)
 
 	transactions := make([]*bitcoin.Transaction, len(selectedTxHashes))
 	for i, txHash := range selectedTxHashes {
@@ -466,6 +461,9 @@ func selectLatestUniqueTxHashes(
 	txHashes []bitcoin.Hash,
 	limit int,
 ) []bitcoin.Hash {
+	if limit <= 0 {
+		return []bitcoin.Hash{}
+	}
 	uniqueTxHashes := make([]bitcoin.Hash, 0, len(txHashes))
 	seen := make(map[bitcoin.Hash]bool)
 	for _, txHash := range txHashes {
@@ -515,7 +513,9 @@ func (c *Connection) GetTxHashesForPublicKeyHash(
 }
 
 // GetTxHashesForPublicKeyScripts gets hashes of confirmed transactions that
-// pay to any of the given public key scripts.
+// pay to any of the given public key scripts. The returned transactions
+// hashes are ordered by block height in the ascending order, i.e. the
+// latest transaction hash is at the end of the list.
 func (c *Connection) GetTxHashesForPublicKeyScripts(
 	publicKeyScripts []bitcoin.Script,
 ) ([]bitcoin.Hash, error) {
@@ -902,6 +902,7 @@ func (c *Connection) getScriptUtxosForScripts(
 	confirmed bool,
 ) ([]*scriptUtxoItem, error) {
 	items := make([]*scriptUtxoItem, 0)
+	seen := make(map[bitcoin.TransactionOutpoint]bool)
 
 	for _, publicKeyScript := range publicKeyScripts {
 		scriptItems, err := c.getScriptUtxos(publicKeyScript, confirmed)
@@ -913,7 +914,17 @@ func (c *Connection) getScriptUtxosForScripts(
 			)
 		}
 
-		items = append(items, scriptItems...)
+		for _, item := range scriptItems {
+			outpoint := bitcoin.TransactionOutpoint{
+				TransactionHash: item.txHash,
+				OutputIndex:     item.outputIndex,
+			}
+			if seen[outpoint] {
+				continue
+			}
+			seen[outpoint] = true
+			items = append(items, item)
+		}
 	}
 
 	return items, nil
@@ -1294,7 +1305,7 @@ func (c *Connection) keepAlive() {
 			}
 		case <-c.parentCtx.Done():
 			ticker.Stop()
-			c.client.Shutdown()
+			c.currentClient().Shutdown()
 			return
 		}
 	}
@@ -1383,9 +1394,10 @@ func requestWithRetry[K interface{}](
 // trip instead serialized every Electrum request in the process, so independent
 // lookups queued behind each other for a full network round trip each.
 //
-// A reconnect may still swap the client immediately after this returns. The
-// request then fails against the stale client and the retry wrapper reconnects and
-// repeats it -- the same recovery path a reconnect landing mid-request always took.
+// A reconnect can now swap the client immediately after this returns, while
+// the caller's request is still in flight against the old client. That request
+// will fail and requestWithRetry's retry loop reconnects and repeats it -- the
+// same fallback the retry loop already uses for any other request failure.
 func (c *Connection) currentClient() *electrum.Client {
 	c.clientMutex.RLock()
 	defer c.clientMutex.RUnlock()

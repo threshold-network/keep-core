@@ -328,6 +328,7 @@ func (tb *TransactionBuilder) getScript(
 // AddOutput adds a new transaction's output.
 func (tb *TransactionBuilder) AddOutput(output *TransactionOutput) {
 	tb.internal.AddTxOut(wire.NewTxOut(output.Value, output.PublicKeyScript))
+	tb.sigHashes = nil
 }
 
 // ComputeSignatureHashes computes the signature hashes for all transaction
@@ -459,7 +460,7 @@ func (tb *TransactionBuilder) AddSignatures(
 		// Make a sanity check to avoid producing crap transactions.
 		if !ecdsa.Verify(
 			signature.PublicKey,
-			tb.sigHashes[i].Bytes(),
+			tb.sigHashes[i].FillBytes(make([]byte, sha256.Size)),
 			signature.R,
 			signature.S,
 		) {
@@ -826,7 +827,7 @@ func (tb *TransactionBuilder) calcTaprootKeyPathSignatureHash(
 		return nil, err
 	}
 
-	hash := chainhash.TaggedHash([]byte("TapSighash"), sigMsg.Bytes())
+	hash := chainhash.TaggedHash(chainhash.TagTapSighash, sigMsg.Bytes())
 	return hash.CloneBytes(), nil
 }
 

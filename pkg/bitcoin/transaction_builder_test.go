@@ -931,8 +931,12 @@ func TestTransactionBuilder_ReplaceUnsignedTransaction(t *testing.T) {
 
 	var replacementInputHash1 chainhash.Hash
 	var replacementInputHash2 chainhash.Hash
-	replacementInputHash1[0] = 0x33
-	replacementInputHash2[0] = 0x44
+	// Preserve the outpoints that the builder was initialized with so the
+	// replacement's per-index PreviousOutPoint matches the prior builder state
+	// (transaction_builder.go now binds the replacement's outpoints and TxOut
+	// set to the builder's prior state before rebinding tb.internal).
+	replacementInputHash1 = initialInputHash1
+	replacementInputHash2 = initialInputHash2
 
 	err := builder.ReplaceUnsignedTransaction(
 		&Transaction{
@@ -941,14 +945,14 @@ func TestTransactionBuilder_ReplaceUnsignedTransaction(t *testing.T) {
 				{
 					Outpoint: &TransactionOutpoint{
 						TransactionHash: Hash(replacementInputHash1),
-						OutputIndex:     7,
+						OutputIndex:     1,
 					},
 					Sequence: 0xffffffff,
 				},
 				{
 					Outpoint: &TransactionOutpoint{
 						TransactionHash: Hash(replacementInputHash2),
-						OutputIndex:     8,
+						OutputIndex:     2,
 					},
 					Sequence: 0xffffffff,
 				},
@@ -1001,11 +1005,11 @@ func TestTransactionBuilder_ReplaceUnsignedTransaction(t *testing.T) {
 		t.Fatalf("unexpected input count after replacement: [%d]", len(inputs))
 	}
 
-	if inputs[0].TxIDHex != replacementInputHash1.String() || inputs[0].Vout != 7 {
+	if inputs[0].TxIDHex != initialInputHash1.String() || inputs[0].Vout != 1 {
 		t.Fatalf("unexpected first input after replacement: [%+v]", inputs[0])
 	}
 
-	if inputs[1].TxIDHex != replacementInputHash2.String() || inputs[1].Vout != 8 {
+	if inputs[1].TxIDHex != initialInputHash2.String() || inputs[1].Vout != 2 {
 		t.Fatalf("unexpected second input after replacement: [%+v]", inputs[1])
 	}
 

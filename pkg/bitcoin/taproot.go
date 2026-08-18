@@ -11,7 +11,7 @@ import (
 
 const taprootBaseLeafVersion = 0xc0
 
-// TaprootLeafHash computes the BIP-342 TapLeaf hash for a base-version script.
+// TaprootLeafHash computes the BIP-341 TapLeaf hash for a base-version script.
 func TaprootLeafHash(script Script) ([32]byte, error) {
 	var buffer bytes.Buffer
 
