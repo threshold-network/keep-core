@@ -446,6 +446,15 @@ func (tb *TransactionBuilder) AddSignatures(
 		return nil, fmt.Errorf("wrong signatures count")
 	}
 
+	// Hoist the P2TR guard above the per-input loop so that, for a mixed
+	// transaction, the loop does not mutate Witness/SignatureScript on
+	// preceding inputs before erroring out. The per-input guard below is
+	// kept as a defense-in-depth check.
+	if tb.HasTaprootKeyPathInputs() {
+		return nil, fmt.Errorf(
+			"transaction has P2TR inputs; use AddTaprootKeyPathSignatures",
+		)
+	}
 	for i, input := range tb.internal.TxIn {
 		signature := signatures[i]
 		sigHashArgs := tb.sigHashArgs[i]
@@ -524,7 +533,9 @@ type SchnorrSignatureContainer struct {
 }
 
 // AddTaprootKeyPathSignatures adds Schnorr signature data for P2TR key-path
-// transaction inputs and returns a signed Transaction instance.
+// transaction inputs and returns a signed Transaction instance. Each signature
+// is verified against the corresponding input's sighash and an error is
+// produced if any signature is invalid.
 func (tb *TransactionBuilder) AddTaprootKeyPathSignatures(
 	signatures []*SchnorrSignatureContainer,
 ) (*Transaction, error) {
@@ -605,6 +616,12 @@ func (tb *TransactionBuilder) TotalInputsValue() int64 {
 
 // ReplaceUnsignedTransaction replaces the internal unsigned transaction while
 // preserving per-input sighash metadata collected during builder input setup.
+// It also validates that the replacement's inputs carry no pre-existing signature
+// data, that each replacement input's PreviousOutPoint matches the prior input
+// at the same index, that the TxOut set matches the prior builder state (when
+// outputs had been committed), and restores each input's pre-signing witness
+// or signature-script from the previous builder state; replacement inputs whose
+// previous witness had more than one element are rejected.
 func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
 	transaction *Transaction,
 ) error {
@@ -621,9 +638,52 @@ func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
 	}
 
 	previousInputs := tb.internal.TxIn
+	previousOutputs := append([]*wire.TxOut{}, tb.internal.TxOut...)
 
 	replacedInternal := newInternalTransaction()
 	replacedInternal.fromTransaction(transaction)
+
+	// Bind the replacement to the builder's prior state: per-index PreviousOutPoint
+	// must match, and TxOut set must match when the builder had committed to
+	// outputs. Without these checks, a caller-controlled replacement could redirect
+	// funds (different TxOut set) or misalign sigHashArgs[i] with the new-order
+	// tx.TxIn[i], producing a self-consistent-but-wrong digest that survives the
+	// local Verify gate and broadcasts an unintended transaction.
+	for i, prevIn := range previousInputs {
+		replIn := replacedInternal.TxIn[i]
+		if replIn.PreviousOutPoint != prevIn.PreviousOutPoint {
+			return fmt.Errorf(
+				"replacement input [%d] PreviousOutPoint differs from builder state",
+				i,
+			)
+		}
+	}
+	if len(previousOutputs) > 0 {
+		if len(replacedInternal.TxOut) != len(previousOutputs) {
+			return fmt.Errorf(
+				"replacement TxOut set has [%d] entries; builder state has [%d]",
+				len(replacedInternal.TxOut),
+				len(previousOutputs),
+			)
+		}
+		for i, prevOut := range previousOutputs {
+			replOut := replacedInternal.TxOut[i]
+			if replOut.Value != prevOut.Value {
+				return fmt.Errorf(
+					"replacement TxOut [%d] value [%d] differs from builder state [%d]",
+					i,
+					replOut.Value,
+					prevOut.Value,
+				)
+			}
+			if !bytes.Equal(replOut.PkScript, prevOut.PkScript) {
+				return fmt.Errorf(
+					"replacement TxOut [%d] PkScript differs from builder state",
+					i,
+				)
+			}
+		}
+	}
 
 	for i := range replacedInternal.TxIn {
 		previousInput := previousInputs[i]
@@ -653,13 +713,11 @@ func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
 		if tb.sigHashArgs[i].witness {
 			// Witness inputs may carry a single-element pre-signing witness
 			// that holds a P2WSH-style redeem script. Multi-element witnesses
-			// belong to P2TR script-path spends or other workflows that are
-			// not in scope for the current FROST migration, and silently
-			// dropping them produced malformed transactions later — refuse
-			// instead so the unsupported case fails loudly. Lifting this to
-			// support multi-element witnesses requires a per-input policy
-			// rather than a blanket copy because the replacement could
-			// legitimately differ in witness shape from the previous input.
+			// belong to P2TR script-path spends or other workflows. Multi-
+			// element witnesses are not supported by this restore path: refuse
+			// rather than silently drop pre-signing witness data, which would
+			// produce a malformed transaction.
+
 			switch len(previousInput.Witness) {
 			case 0:
 				// Nothing to restore (typical P2TR key-path or P2WPKH).
@@ -826,7 +884,6 @@ func (tb *TransactionBuilder) calcTaprootKeyPathSignatureHash(
 	); err != nil {
 		return nil, err
 	}
-
 	hash := chainhash.TaggedHash(chainhash.TagTapSighash, sigMsg.Bytes())
 	return hash.CloneBytes(), nil
 }
