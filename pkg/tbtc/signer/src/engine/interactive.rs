@@ -253,6 +253,47 @@ pub(crate) fn interactive_attempt_aggregated(
         taproot_merkle_root,
     )) || markers.contains(attempt_id)
 }
+// Phase-entry helper: take the engine-state lock and run the
+// interactive-state sweep. Every `pub fn` phase handler
+// (interactive_session_open, round1, round2, aggregate, abort) calls this as
+// the very first step, so a future change to the lock-prologue (e.g. an
+// additional sweep) is one diff line, not five. Deliberately does NOT call
+// `load_auto_quarantine_config` — that helper is phase-specific and does
+// not run at every entry point, and folding it in would run it before
+// round2's marker-durability flush instead of after.
+pub(crate) fn enter_phase()
+-> Result<std::sync::MutexGuard<'static, EngineState>, EngineError> {
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    sweep_expired_interactive_state_durably(&mut guard)?;
+    Ok(guard)
+}
+
+// Marker-durability helper: when an earlier phase write replaced the state
+// file but failed its directory sync, the fail-closed marker the call was
+// about to install is preserved in memory but not on disk. Re-persist the
+// guard now so the retry that follows succeeds (or is rejected by the
+// marker just installed) instead of leaking a second share. The predicate
+// is the phase-specific check for the phase's own pending marker. The
+// helper takes the guard by reference because `persist_engine_state_to_storage`
+// borrows the same state — `std::sync::Mutex` is not reentrant, so a real
+// second acquisition would deadlock. The guard is held for the duration of
+// the phase, matching the existing lock model.
+pub(crate) fn flush_pending_marker<F>(
+    guard: &std::sync::MutexGuard<'static, EngineState>,
+    session_id: &str,
+    predicate: F,
+) -> Result<(), EngineError>
+where
+    F: FnOnce() -> bool,
+{
+    if predicate() {
+        persist_engine_state_to_storage(guard).map_err(PersistEngineStateError::into_engine_error)?;
+    }
+    Ok(())
+}
+
 
 pub fn interactive_session_open(
     mut request: InteractiveSessionOpenRequest,
@@ -316,10 +357,7 @@ pub fn interactive_session_open(
     let request_fingerprint = interactive_open_request_fingerprint(&request)?;
     let attempt_id = request.attempt_context.attempt_id.clone();
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state_durably(&mut guard)?;
+    let mut guard = enter_phase()?;
 
     let auto_quarantine_config = load_auto_quarantine_config()?;
 
@@ -784,10 +822,7 @@ pub fn interactive_round1(
     // attempt_id; the wire form may differ in casing.
     let attempt_id = canonical_attempt_id(&request.attempt_id);
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state_durably(&mut guard)?;
+    let mut guard = enter_phase()?;
 
     let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
         EngineError::SessionNotFound {
@@ -876,18 +911,14 @@ pub fn interactive_round2(
     let attempt_id = canonical_attempt_id(&request.attempt_id);
     let consumed_marker = interactive_consumed_marker(&attempt_id, request.member_identifier);
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state_durably(&mut guard)?;
+    let mut guard = enter_phase()?;
 
     // An earlier marker write may have replaced the state file but failed its
     // directory sync. Flush that fail-closed marker before consulting the replay
     // gate; after a successful write, the marker below rejects the retry.
-    if interactive_round2_persistence_pending(&request.session_id, &consumed_marker) {
-        persist_engine_state_to_storage(&guard)
-            .map_err(PersistEngineStateError::into_engine_error)?;
-    }
+    flush_pending_marker(&guard, &request.session_id, || {
+        interactive_round2_persistence_pending(&request.session_id, &consumed_marker)
+    })?;
 
     // Quarantine inputs must be read before the session is borrowed
     // mutably from the same guard below.
@@ -1268,19 +1299,15 @@ pub fn interactive_aggregate(
         taproot_merkle_root.as_ref(),
     )?;
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    let mut guard = enter_phase()?;
     // Sweep first so a failure while repairing any prior completion marker can
     // never postpone destruction of newly expired nonce handles.
-    sweep_expired_interactive_state_durably(&mut guard)?;
     // A prior completion-marker write may have replaced the state file but failed
     // its directory sync. Re-persist that fail-closed marker before the completed
     // attempt check so a retry repairs durability and is then rejected normally.
-    if interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker) {
-        persist_engine_state_to_storage(&guard)
-            .map_err(PersistEngineStateError::into_engine_error)?;
-    }
+    flush_pending_marker(&guard, &request.session_id, || {
+        interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker)
+    })?;
     // Resolve the group's public key package (the verifying shares used
     // to check each contribution) from the session's own DKG state, not
     // the request - consistent with the no-secret-on-the-FFI discipline
@@ -1642,16 +1669,13 @@ pub fn interactive_session_abort(
     // canonical form the live state is keyed on.
     let attempt_id_filter = request.attempt_id.as_deref().map(canonical_attempt_id);
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    let mut guard = enter_phase()?;
     // Abort takes the lock like every other entry point, so it sweeps
     // expired interactive state too: the TTL guarantee (nonces gone
     // within the TTL of inactivity) must hold even when the only
     // post-expiry traffic is aborts for other sessions. The durable helper also
     // repairs a prior post-rename Abort snapshot before an idempotent retry can
     // return `aborted: false` without writing.
-    sweep_expired_interactive_state_durably(&mut guard)?;
 
     let members_to_abort = match guard.sessions.get(&request.session_id) {
         Some(session) => {
