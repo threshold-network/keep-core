@@ -685,7 +685,14 @@ fn compact_retired_per_message_sessions_to_total(
     // `retire_idle_per_message_session_ids`, which uses the same set for the
     // retire pass above) pass it through `pending_session_ids` to avoid
     // taking the PERSISTENCE_PENDING_OPERATIONS mutex a second time and
-    // re-cloning the full set inside a single persist cycle.
+    // re-cloning the full set inside a single persist cycle. This is safe
+    // only because every caller holds the engine-state mutex for the whole
+    // window from the snapshot to this use: `mark_persistence_pending` /
+    // `clear_persistence_pending_operation` cannot run concurrently and
+    // stale the snapshot mid-cycle. A future call site that takes the
+    // snapshot outside the engine-state lock (or across an await/drop of
+    // the guard) must not reuse this parameter — it must pass `None` so a
+    // fresh snapshot is taken under the lock instead.
     let pending_session_ids_owned;
     let pending_session_ids = match pending_session_ids {
         Some(ids) => ids,
