@@ -498,11 +498,9 @@ mod tests {
 
         {
             let mut guard = state().expect("engine state").lock().expect("engine lock");
-            let session = guard
-                .sessions
-                .entry(session_id.to_string())
-                .or_insert_with(SessionState::default);
-            session.attempt_transition_records = vec![record_match.clone(), record_mismatch.clone()];
+            let session = guard.sessions.entry(session_id.to_string()).or_default();
+            session.attempt_transition_records =
+                vec![record_match.clone(), record_mismatch.clone()];
         }
 
         // (a) Match path: request reason is whitespace-padded and lower-case,
