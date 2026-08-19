@@ -510,7 +510,9 @@ pub fn interactive_session_open(
                     .find(|(_, interactive)| interactive.member_identifier == member_identifier);
                 let matching_attempt_idempotent = live
                     .filter(|(_, interactive)| interactive.attempt_context.attempt_id == attempt_id)
-                    .map(|(_, interactive)| interactive.open_request_fingerprint == request_fingerprint);
+                    .map(|(_, interactive)| {
+                        interactive.open_request_fingerprint == request_fingerprint
+                    });
                 let live_attempt = live.map(|(_, interactive)| {
                     (
                         interactive.attempt_context.attempt_id.clone(),
@@ -613,14 +615,15 @@ pub fn interactive_session_open(
                     .count()
             })
             .unwrap_or(0);
-        let cap = concurrent_attempt_cap_for_dkg(dkg_participant_count, dkg_threshold)
-            .ok_or_else(|| {
+        let cap = concurrent_attempt_cap_for_dkg(dkg_participant_count, dkg_threshold).ok_or_else(
+            || {
                 EngineError::Internal(format!(
                     "cannot compute per-session concurrent-attempt cap from DKG \
                      participant_count [{}] and threshold [{}] for session [{}]",
                     dkg_participant_count, dkg_threshold, request.session_id
                 ))
-            })?;
+            },
+        )?;
         if current_attempts >= cap {
             return Err(EngineError::SigningPolicyRejected {
                 session_id: request.session_id.clone(),
@@ -634,7 +637,6 @@ pub fn interactive_session_open(
             });
         }
     }
-
 
     // this session already holds one of those slots, so the cap does
     // not apply; when not replacing, a new slot is being taken.
@@ -853,12 +855,8 @@ pub fn interactive_session_open(
     // never share nonce material. The outer map's keys are distinct attempt_ids.
     // The cap is checked above; this assert confirms the install did not
     // somehow exceed it (e.g. through a future change that bypasses the gate).
-    let cap_after_install = concurrent_attempt_cap_for_dkg(
-
-        dkg_participant_count,
-        dkg_threshold,
-    )
-    .unwrap_or(usize::MAX);
+    let cap_after_install =
+        concurrent_attempt_cap_for_dkg(dkg_participant_count, dkg_threshold).unwrap_or(usize::MAX);
     debug_assert!(
         session.interactive_signing.len() <= cap_after_install,
         "concurrent attempt count exceeded the per-session n-t+1 cap after install"
@@ -1087,10 +1085,11 @@ pub fn interactive_round2(
                 )
             });
     if attempt_finalized {
-        remove_interactive_entry(session, &attempt_id, request.member_identifier)
-            .map(|mut removed| {
-                zeroize_interactive_round1(&mut removed);
-            });
+        if let Some(mut removed) =
+            remove_interactive_entry(session, &attempt_id, request.member_identifier)
+        {
+            zeroize_interactive_round1(&mut removed);
+        }
         return Err(EngineError::InteractiveAttemptAlreadyAggregated {
             session_id: request.session_id.clone(),
             attempt_id,
@@ -1247,10 +1246,11 @@ pub fn interactive_round2(
                 session_id: request.session_id.clone(),
                 consumed_marker: consumed_marker.clone(),
             });
-            remove_interactive_entry(session, &attempt_id, request.member_identifier)
-                .map(|mut removed| {
-                    zeroize_interactive_round1(&mut removed);
-                });
+            if let Some(mut removed) =
+                remove_interactive_entry(session, &attempt_id, request.member_identifier)
+            {
+                zeroize_interactive_round1(&mut removed);
+            }
         } else {
             session
                 .consumed_interactive_attempt_markers
@@ -1840,10 +1840,9 @@ pub fn interactive_session_abort(
                 .get_mut(&request.session_id)
                 .expect("abort session existed after state-file replacement");
             for (attempt_id, member) in &members_to_abort {
-                remove_interactive_entry(session, attempt_id, *member)
-                    .map(|mut removed| {
-                        zeroize_interactive_round1(&mut removed);
-                    });
+                if let Some(mut removed) = remove_interactive_entry(session, attempt_id, *member) {
+                    zeroize_interactive_round1(&mut removed);
+                }
             }
             mark_persistence_pending(PersistencePendingOperation::InteractiveState {
                 session_id: request.session_id.clone(),
@@ -1866,10 +1865,9 @@ pub fn interactive_session_abort(
         .get_mut(&request.session_id)
         .expect("abort session existed after durable retirement");
     for (attempt_id, member) in &members_to_abort {
-        remove_interactive_entry(session, attempt_id, *member)
-            .map(|mut removed| {
-                zeroize_interactive_round1(&mut removed);
-            });
+        if let Some(mut removed) = remove_interactive_entry(session, attempt_id, *member) {
+            zeroize_interactive_round1(&mut removed);
+        }
     }
     // aborted. A no-op call (no session, or an attempt_id filter that
     // matched nothing) returns aborted == false and must not inflate the
@@ -2163,10 +2161,9 @@ fn remove_finalized_interactive_members(
         })
         .unwrap_or_default();
     for member in finalized_members {
-        remove_interactive_entry(session, attempt_id, member)
-            .map(|mut removed| {
-                zeroize_interactive_round1(&mut removed);
-            });
+        if let Some(mut removed) = remove_interactive_entry(session, attempt_id, member) {
+            zeroize_interactive_round1(&mut removed);
+        }
     }
 }
 
@@ -2222,7 +2219,6 @@ pub(crate) fn resolve_wallet_session_id(
 }
 
 pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) -> Vec<String> {
-
     let ttl = Duration::from_secs(interactive_session_ttl_seconds());
     let now = interactive_now();
     let mut changed_session_ids = HashSet::new();
@@ -2253,10 +2249,9 @@ pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) ->
             changed_session_ids.insert(session_id.clone());
         }
         for (attempt_id, member) in &expired {
-            remove_interactive_entry(session, attempt_id, *member)
-                .map(|mut removed| {
-                    zeroize_interactive_round1(&mut removed);
-                });
+            if let Some(mut removed) = remove_interactive_entry(session, attempt_id, *member) {
+                zeroize_interactive_round1(&mut removed);
+            }
         }
     }
     // Expiry has abort semantics. Retire idle per-message entries while

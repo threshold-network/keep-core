@@ -7263,7 +7263,6 @@ fn interactive_last_activity_at_for_test(session_id: &str, member_identifier: u1
         .last_activity_at
 }
 
-
 /// Returns the live interactive signing state for a member, if present.
 fn live_member(session: &SessionState, member_identifier: u16) -> Option<&InteractiveSigningState> {
     session
@@ -7271,7 +7270,6 @@ fn live_member(session: &SessionState, member_identifier: u16) -> Option<&Intera
         .values()
         .find_map(|members| members.get(&member_identifier))
 }
-
 
 fn stateless_package_and_shares_for_test(
     message_bytes: &[u8],
@@ -8016,12 +8014,10 @@ fn first_open_binding_persist_failures_are_transactional_and_repairable() {
     {
         let guard = state().expect("state").lock().expect("lock");
         assert!(!guard.sessions.contains_key(retired_session));
-        assert!(
-            guard.sessions[pre_replace_session]
-                .interactive_signing
-                .values()
-                .any(|members| members.contains_key(&1)),
-        );
+        assert!(guard.sessions[pre_replace_session]
+            .interactive_signing
+            .values()
+            .any(|members| members.contains_key(&1)),);
         assert_eq!(guard.sessions.len(), 3);
     }
 
@@ -8058,7 +8054,10 @@ fn first_open_binding_persist_failures_are_transactional_and_repairable() {
         let session = &guard.sessions[post_replace_session];
         assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
         assert!(session.retired_interactive_at_unix.is_none());
-        assert!(session.interactive_signing.values().any(|members| members.contains_key(&1)));
+        assert!(session
+            .interactive_signing
+            .values()
+            .any(|members| members.contains_key(&1)));
         assert_eq!(guard.sessions.len(), 3);
     }
 
@@ -8136,8 +8135,14 @@ fn partial_member_expiry_persists_binding_before_restart() {
         let session = &guard.sessions[signing_session];
         assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
         assert!(session.retired_interactive_at_unix.is_none());
-        assert!(!session.interactive_signing.values().any(|members| members.contains_key(&1)));
-        assert!(session.interactive_signing.values().any(|members| members.contains_key(&2)));
+        assert!(!session
+            .interactive_signing
+            .values()
+            .any(|members| members.contains_key(&1)));
+        assert!(session
+            .interactive_signing
+            .values()
+            .any(|members| members.contains_key(&2)));
     }
 
     // The partial sweep is itself a durability boundary. Although member 2 is
@@ -8262,7 +8267,10 @@ fn interactive_round2_pre_replace_failure_restores_staged_retirement() {
         assert_eq!(retired_interactive_session_count(&guard.sessions), 1);
         let signing = &guard.sessions[signing_session];
         assert!(signing.retired_interactive_at_unix.is_none());
-        assert!(signing.interactive_signing.values().any(|members| members.contains_key(&1)));
+        assert!(signing
+            .interactive_signing
+            .values()
+            .any(|members| members.contains_key(&1)));
         assert!(!interactive_attempt_consumed(
             &signing.consumed_interactive_attempt_markers,
             &opened.attempt_id,
@@ -8709,11 +8717,17 @@ fn interactive_multi_seat_two_members_one_process_aggregate_bip340() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
-            !session.interactive_signing.values().any(|members| members.contains_key(&1)),
+            !session
+                .interactive_signing
+                .values()
+                .any(|members| members.contains_key(&1)),
             "member 1's entry is freed after its Round2"
         );
         assert!(
-            session.interactive_signing.values().any(|members| members.contains_key(&2)),
+            session
+                .interactive_signing
+                .values()
+                .any(|members| members.contains_key(&2)),
             "member 2's entry stays live - a sibling seat's Round2 must not free it"
         );
         assert!(
@@ -8903,7 +8917,10 @@ fn interactive_round2_refused_after_aggregate_for_unsigned_sibling() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
-            !session.interactive_signing.values().any(|members| members.contains_key(&3)),
+            !session
+                .interactive_signing
+                .values()
+                .any(|members| members.contains_key(&3)),
             "the non-signing sibling is freed when the attempt aggregates"
         );
     }
@@ -8953,7 +8970,10 @@ fn interactive_round2_refused_after_aggregate_for_unsigned_sibling() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
-            !session.interactive_signing.values().any(|members| members.contains_key(&3)),
+            !session
+                .interactive_signing
+                .values()
+                .any(|members| members.contains_key(&3)),
             "seat 3's dead entry is freed when Round2 is refused for the finalized attempt"
         );
     }
@@ -9350,15 +9370,24 @@ fn interactive_abort_by_attempt_removes_all_members_on_that_attempt() {
     let guard = state().expect("state").lock().expect("lock");
     let session = guard.sessions.get(session_id).expect("session exists");
     assert!(
-        !session.interactive_signing.values().any(|members| members.contains_key(&1)),
+        !session
+            .interactive_signing
+            .values()
+            .any(|members| members.contains_key(&1)),
         "member 1 (attempt 1) is aborted"
     );
     assert!(
-        !session.interactive_signing.values().any(|members| members.contains_key(&2)),
+        !session
+            .interactive_signing
+            .values()
+            .any(|members| members.contains_key(&2)),
         "member 2 (attempt 1) is aborted"
     );
     assert!(
-        session.interactive_signing.values().any(|members| members.contains_key(&3)),
+        session
+            .interactive_signing
+            .values()
+            .any(|members| members.contains_key(&3)),
         "member 3 (attempt 2) survives the attempt-1 abort"
     );
 }
@@ -9927,7 +9956,10 @@ fn interactive_round2_post_rename_persist_failure_consumes_attempt_and_retry_flu
             .consumed_interactive_attempt_markers
             .contains(&consumed_marker));
         assert!(
-            !session.interactive_signing.values().any(|members| members.contains_key(&1)),
+            !session
+                .interactive_signing
+                .values()
+                .any(|members| members.contains_key(&1)),
             "post-rename failure must destroy the live nonce-bearing member state"
         );
     }
@@ -10146,9 +10178,10 @@ fn interactive_abort_persist_failures_are_retryable_before_replace_and_fail_clos
     {
         let guard = state().expect("state").lock().expect("engine lock");
         let session = &guard.sessions[retryable_session];
-        assert!(
-            session.interactive_signing.values().any(|members| members.contains_key(&1)),
-        );
+        assert!(session
+            .interactive_signing
+            .values()
+            .any(|members| members.contains_key(&1)),);
         assert!(session.retired_interactive_at_unix.is_none());
     }
     assert!(
@@ -10952,7 +10985,9 @@ fn interactive_round2_rechecks_stored_heartbeat_intent_before_share_release() {
     ));
     let guard = state().expect("state").lock().expect("engine lock");
     let session = &guard.sessions[signing_session];
-    assert!(session.interactive_signing[&opened.attempt_id][&1].round1.is_some());
+    assert!(session.interactive_signing[&opened.attempt_id][&1]
+        .round1
+        .is_some());
     assert!(!interactive_attempt_consumed(
         &session.consumed_interactive_attempt_markers,
         &opened.attempt_id,
@@ -14189,14 +14224,19 @@ fn interactive_two_attempts_coexist_same_session() {
     let key_packages = ensure_interactive_dkg_session(session_id, key_group);
 
     // Open attempt A for member 1
-    let opened_a1 = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, threshold)
-        .expect("member 1 opens attempt A");
+    let opened_a1 =
+        open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, threshold)
+            .expect("member 1 opens attempt A");
 
     // Open attempt B for member 2
-    let opened_b2 = open_interactive_for_test(session_id, key_group, &message, &included, 2, 2, threshold)
-        .expect("member 2 opens attempt B");
+    let opened_b2 =
+        open_interactive_for_test(session_id, key_group, &message, &included, 2, 2, threshold)
+            .expect("member 2 opens attempt B");
 
-    assert_ne!(opened_a1.attempt_id, opened_b2.attempt_id, "attempt IDs must differ");
+    assert_ne!(
+        opened_a1.attempt_id, opened_b2.attempt_id,
+        "attempt IDs must differ"
+    );
 
     // Attempt B's member 2 creates live Round1 nonces, independent of attempt A.
     interactive_round1(InteractiveRound1Request {
@@ -14211,8 +14251,12 @@ fn interactive_two_attempts_coexist_same_session() {
         let session = guard.sessions.get(session_id).expect("session exists");
 
         // Verify both attempt scopes exist
-        assert!(session.interactive_signing.contains_key(&opened_a1.attempt_id));
-        assert!(session.interactive_signing.contains_key(&opened_b2.attempt_id));
+        assert!(session
+            .interactive_signing
+            .contains_key(&opened_a1.attempt_id));
+        assert!(session
+            .interactive_signing
+            .contains_key(&opened_b2.attempt_id));
 
         // Verify member 1 is in attempt A scope
         assert!(session
@@ -14239,8 +14283,14 @@ fn interactive_two_attempts_coexist_same_session() {
             .get(&opened_b2.attempt_id)
             .expect("attempt B scope exists")
             .len();
-        assert_eq!(attempt_a_members, 1, "attempt A should have exactly 1 member");
-        assert_eq!(attempt_b_members, 1, "attempt B should have exactly 1 member");
+        assert_eq!(
+            attempt_a_members, 1,
+            "attempt A should have exactly 1 member"
+        );
+        assert_eq!(
+            attempt_b_members, 1,
+            "attempt B should have exactly 1 member"
+        );
     }
 
     // Complete attempt A via round1 -> round2 -> aggregate, using an ad-hoc
@@ -14300,21 +14350,29 @@ fn interactive_two_attempts_coexist_same_session() {
         let session = guard.sessions.get(session_id).expect("session exists");
 
         // Verify attempt A scope is cleared (aggregated)
-        assert!(!session.interactive_signing.contains_key(&opened_a1.attempt_id));
+        assert!(!session
+            .interactive_signing
+            .contains_key(&opened_a1.attempt_id));
 
         // Verify attempt B scope still exists with member 2's Round1 nonces live
-        assert!(session.interactive_signing.contains_key(&opened_b2.attempt_id));
+        assert!(session
+            .interactive_signing
+            .contains_key(&opened_b2.attempt_id));
         let attempt_b_scope = session
             .interactive_signing
             .get(&opened_b2.attempt_id)
             .expect("attempt B scope still exists");
-        assert!(attempt_b_scope.contains_key(&2), "member 2 still in attempt B scope");
+        assert!(
+            attempt_b_scope.contains_key(&2),
+            "member 2 still in attempt B scope"
+        );
 
         // Verify member 2's Round1 nonces are still live (not zeroized)
-        let member_b_state = attempt_b_scope
-            .get(&2)
-            .expect("member 2 state exists");
-        assert!(member_b_state.round1.is_some(), "member 2's Round1 nonces still live");
+        let member_b_state = attempt_b_scope.get(&2).expect("member 2 state exists");
+        assert!(
+            member_b_state.round1.is_some(),
+            "member 2's Round1 nonces still live"
+        );
     }
 }
 
@@ -14368,7 +14426,11 @@ fn interactive_concurrent_attempt_cap_enforced() {
                 .interactive_signing
                 .get(&opened.attempt_id)
                 .unwrap_or_else(|| panic!("attempt {} scope exists", i + 1));
-            assert_eq!(attempt_scope.len(), 1, "attempt should have exactly one member");
+            assert_eq!(
+                attempt_scope.len(),
+                1,
+                "attempt should have exactly one member"
+            );
             assert!(
                 attempt_scope.contains_key(&member_identifier),
                 "member {member_identifier} should be in attempt"
@@ -14440,8 +14502,7 @@ fn interactive_round2_durable_markers_persist_before_share_release() {
     // restart reload sees an empty marker set, and the retry below is
     // NOT rejected as a replay.
     let _guard = lock_test_state();
-    let state_path =
-        configure_test_state_path("interactive_round2_marker_ordering");
+    let state_path = configure_test_state_path("interactive_round2_marker_ordering");
     reset_for_tests();
 
     let key_packages = interactive_test_key_packages();
@@ -14597,9 +14658,7 @@ fn interactive_round1_reports_attempt_id_mismatch_for_superseded_member() {
                 message,
             );
         }
-        other => panic!(
-            "expected EngineError::Validation for attempt-id mismatch, got {other:?}"
-        ),
+        other => panic!("expected EngineError::Validation for attempt-id mismatch, got {other:?}"),
     }
     // The Round2 path shares the same lookup. A Round2 with the stale
     // attempt_id must report the same specific mismatch error, not a
@@ -14700,7 +14759,10 @@ fn interactive_cap_does_not_double_count_member_vacating_own_attempt_scope() {
     let opened_b =
         open_interactive_for_test(session_id, key_group, &message, &included, 2, 2, threshold)
             .expect("member 2 opens attempt B");
-    assert_ne!(opened_a.attempt_id, opened_b.attempt_id, "attempts must differ");
+    assert_ne!(
+        opened_a.attempt_id, opened_b.attempt_id,
+        "attempts must differ"
+    );
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
@@ -14716,15 +14778,11 @@ fn interactive_cap_does_not_double_count_member_vacating_own_attempt_scope() {
         open_interactive_for_test(session_id, key_group, &message, &included, 3, 3, threshold)
             .expect_err("opening a 3rd attempt while at cap must fail");
     match &overflow {
-        EngineError::SigningPolicyRejected {
-            reason_code, ..
-        } => assert_eq!(
+        EngineError::SigningPolicyRejected { reason_code, .. } => assert_eq!(
             reason_code, "concurrent_attempt_cap_exceeded",
             "expected concurrent_attempt_cap_exceeded, got {overflow:?}"
         ),
-        other => panic!(
-            "expected SigningPolicyRejected for cap overflow, got {other:?}"
-        ),
+        other => panic!("expected SigningPolicyRejected for cap overflow, got {other:?}"),
     }
 
     // Member 1 advances to a NEW attempt under a fresh attempt_id
@@ -14752,17 +14810,23 @@ fn interactive_cap_does_not_double_count_member_vacating_own_attempt_scope() {
         let session = guard.sessions.get(session_id).expect("session exists");
         // The vacated scope is gone (member 1 was the sole member there).
         assert!(
-            !session.interactive_signing.contains_key(&opened_a.attempt_id),
+            !session
+                .interactive_signing
+                .contains_key(&opened_a.attempt_id),
             "the vacated attempt scope is pruned immediately"
         );
         // Member 2's scope on attempt B is untouched by member 1's advance.
         assert!(
-            session.interactive_signing.contains_key(&opened_b.attempt_id),
+            session
+                .interactive_signing
+                .contains_key(&opened_b.attempt_id),
             "sibling member's scope is untouched by the advance"
         );
         // Member 1 is now under the new attempt C.
         assert!(
-            session.interactive_signing.contains_key(&opened_c.attempt_id),
+            session
+                .interactive_signing
+                .contains_key(&opened_c.attempt_id),
             "the new attempt scope holds the advancing member"
         );
         let new_scope = session
