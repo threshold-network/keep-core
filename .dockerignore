@@ -3,7 +3,6 @@
 
 # Top-level directories unrelated to the build.
 docs*/
-infrastructure/
 scripts/
 tmp/
 
