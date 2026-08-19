@@ -341,9 +341,21 @@ Conceptually:
 - Governance (the DAO or a multisig authorized by the DAO) emits a
   signed approval: `refresh_approval` = `{session_id, new_participants,
   new_threshold_t, new_threshold_n, refresh_reason, expires_at_unix}`,
-  signed by an f+1 quorum of the operator cohort's governance keys
-  (the same keys that already sign the existing per-round envelopes;
-  see `pkg/tbtc/signer/docs/phase-7-sidecar-transport-addendum.md`).
+  signed by an f+1 quorum of a **new, distinct** set of operator
+  governance keys. These governance keys **do not exist today** and
+  must NOT be reused from the existing per-round envelope operator
+  key — that key is the FROST signing key, per
+  `pkg/tbtc/signer/docs/phase-7-2b-package-envelope-design.md` §2
+  (the doc that actually describes today's signed-body envelope
+  pattern; `phase-7-sidecar-transport-addendum.md` is about the
+  sidecar IPC process boundary, not envelope transport). The §2
+  envelope pattern explicitly signs with the operator signing key,
+  not a governance key — confirming that the governance key set
+  Option B requires is fresh, captured in §3.6's "Governance
+  approval workflow" line item, and subject to the §3.7 / §7.5
+  separation requirement. Key reuse between governance approvals
+  and FROST signing would couple a governance-key compromise to a
+  signing-key compromise.
 - An operator elected as the **dealer** for this refresh collects the
   approval, samples a fresh degree-(t-1) polynomial `f(x)` over the
   **same secret key** (the dealer reconstructs the secret from the
@@ -428,9 +440,13 @@ RefreshFinalizeResult      { refresh_session_id, refresh_epoch,
 ```
 
 The governance approval envelope is **not** a new FFI type — it is a
-fixed-format signed payload the signer parses and verifies. The
-approval signatures are the existing operator governance keys
-(reused from the envelope transport).
+fixed-format signed payload the signer parses and verifies. The approval
+signatures are the **new, distinct** governance keys introduced in §3.1
+— NOT the existing per-round envelope operator key (the FROST signing
+key, per §3.1's citation of `phase-7-2b-package-envelope-design.md`
+§2). The signer has no operator-key registry today; the governance key
+set must be established in a fresh key ceremony before Option B can
+ship (see §3.5 item 2 and §7.5).
 
 ### 3.4 State and persistence changes
 
@@ -487,12 +503,12 @@ work is new and falls outside the signer.
 | `frost_ops` dealer primitive + verify | 2-3 weeks | One new FROST primitive (sample new polynomial at known secret), test vectors, golden tests. |
 | FFI surface (3 new request/response types, 3 new entrypoints) | 1-2 weeks | Same pattern as Option A. |
 | SessionState + persistence changes | 1-2 weeks | Smaller than Option A (no round-1 commitment map, no round-2 sub-share map). |
-| Governance approval workflow (DAO proposal type, multisig option, key registry, replay/revocation registry) | 4-8 weeks | **Off-signer work** — separate repo, separate audit, separate governance ratification timeline. |
+| Governance approval workflow + governance key ceremony (DAO proposal type, multisig option, new governance key registry incl. fresh key ceremony, replay/revocation registry) | 4-8 weeks | **Off-signer work** — separate repo, separate audit, separate governance ratification timeline. Per §3.1 / §3.7, the governance key set does not exist today (the existing operator envelope-signing key is the FROST signing key, per §3.1's `phase-7-2b-package-envelope-design.md` §2 citation), so the key ceremony is a hard prerequisite for Option B. |
 | Operator runbook | 1 week | New operator workflow for refresh-approval and dealer selection. |
 | Test coverage | 2-3 weeks | Equivocation, malicious-dealer blame, partial-cohort refresh, replay-rejection, governance-revocation mid-refresh. |
 | External security audit (signer) | 3-6 weeks | Smaller than Option A's audit (less novel crypto), but still hard-required. |
 | External security audit (governance workflow) | 2-4 weeks | The approval / revocation registry is its own audit surface. |
-| **Total** | **~3-5 months** if the governance workflow is already built, **+3-6 months** if the workflow has to be designed and ratified. |
+| **Total** | **~3-5 months** if the governance approval workflow AND the new governance key ceremony are already built and audited; **+3-6 months** if either has to be designed, ratified, and audited from scratch (per §3.1 / §3.7 the governance key set is fresh, so this branch covers the key ceremony plus the DAO proposal type, multisig option, key registry, and replay / revocation registry). |
 
 ### 3.7 Residual risks
 
@@ -534,7 +550,7 @@ work is new and falls outside the signer.
 | --- | --- | --- |
 | **Cryptographic novelty / audit burden** | New multi-round FROST sub-protocol (zero-share VSS, new polynomial composition). High novelty. Needs external audit by a FROST-experienced firm. **~4-8 week audit.** | Single new primitive (sample polynomial at known secret) + XOR-Shamir split. Lower novelty. Needs external audit of signer changes **and** the governance approval registry. **~3-6 week signer audit + 2-4 week governance audit.** |
 | **Implementation effort** | Large: new FROST primitive trio, 4 FFI entrypoints, new persisted state map, blame-proof integration. **~4-6 months** with protocol engineer + cryptographer + security reviewer. | Medium-large: 1 new FROST primitive, 3 FFI entrypoints, smaller persisted state. **~3-5 months** if governance workflow already exists; **+3-6 months** to build the governance workflow. |
-| **New external dependencies** | None new — uses the existing envelope transport, existing operator governance keys, existing session model. | DAO governance proposal type, governance signing key registry, replay/revocation registry, operator runbook for dealer selection. **All of these must be built and audited.** |
+| **New external dependencies** | None new — uses the existing envelope transport, the existing operator envelope-signing keys (the FROST signing keys, per §3.1's `phase-7-2b-package-envelope-design.md` §2 citation), existing session model. | DAO governance proposal type, new governance signing key registry incl. fresh key ceremony (per §3.1 / §3.7 the governance key set does not exist today), replay/revocation registry, operator runbook for dealer selection. **All of these must be built and audited.** |
 | **Operator / governance burden** | Low. Operators run the protocol like a DKG; no governance action required. Governance only gates the *cadence* (scheduled vs emergency) via the existing `cadence_reason` field. | High. Every refresh requires f+1 operator governance signatures, a DAO-or-multisig approval, a designated dealer, and a revocation-window monitor. Operator runbook is meaningfully larger. |
 | **Recovery from fully-compromised-but-still-online set** | **Yes.** As long as t honest operators participate in the refresh, the new shares are sound and the compromised operators' old shares are zeroized post-refresh. The compromised operators' *new* shares (they get new shares too) are also valid, but they no longer have the *old* share which was the compromise vector. | **Partially.** Governance must be able to approve the refresh against a compromised set, which requires the governance keys to be on a path *separate* from the compromised operators. If the compromise extends to operator governance keys, Option B cannot refresh. |
 | **Recovery from offline set** | **Yes, partial.** Needs t *online* operators to form the new polynomial — same as signing. Operators that are offline simply don't get new shares and are removed from the cohort. Re-onboarding them later requires a new refresh (or DKG, if cohort shrinks below n). | **No.** f+1 operator governance signatures cannot form if the operator set is offline. This is the central liveness gap. |
@@ -722,12 +738,7 @@ implementation until these are resolved.**
    question that the implementer should answer before
    implementation, and the answer affects the FFI surface (do we
    need a `refresh_reopen` entrypoint?).
-5. **Governance key separation (Option B).** §3.7 notes that
-   governance keys must be distinct from signing keys. The
-   current `pkg/tbtc/signer/docs/` does not document whether such
-   a key set exists. If it does not, Option B's incremental cost
-   includes a key-ceremony workstream that is not captured in
-   §3.6.
+5. **Governance key separation (Option B).** §3.1 / §3.7 establish that the governance key set is a new, distinct key ceremony separate from the FROST signing keys (the existing operator envelope-signing key is the FROST signing key, per §3.1's `phase-7-2b-package-envelope-design.md` §2 citation). The key ceremony is captured in §3.6's "Governance approval workflow + governance key ceremony" row (4-8 weeks, off-signer). **Open:** confirm with the operator team that 4-8 weeks is the right magnitude for a separate key ceremony (rotation policy, dedicated audit, revocation-registry integration) — today's tBTC operator key infrastructure is FROST-signing-key-only and does not double as governance keys.
 6. **Refresh cadence after a refresh.** §2.4 / §3.4 add a
    `refresh_epoch` counter, but how does the cadence calculation
    in `RefreshCadenceStatus` change? Specifically: does a
@@ -795,7 +806,13 @@ implementation until these are resolved.**
 - `pkg/tbtc/signer/docs/phase-7-interactive-session-spec-freeze.md:238`
   — f+1 accuser quorum convention.
 - `pkg/tbtc/signer/docs/phase-7-sidecar-transport-addendum.md` —
-  envelope transport (assumed for the new sub-share envelopes).
+  sidecar IPC process boundary (NOT envelope transport; cited only by
+  §2.2, which still assumed this doc for envelope transport).
+- `pkg/tbtc/signer/docs/phase-7-2b-package-envelope-design.md` §2 —
+  signed-body envelope pattern (the doc that actually describes
+  today's operator-key-signed envelope; cited in §3.1 / §3.3 / §3.6
+  / §4 / §7.5 to ground the "operator envelope-signing key is the
+  FROST signing key, not a governance key" claim).
 - `pkg/tbtc/signer/docs/permissioned-signer-hardening-rfc.md:55` —
   P2-M1 refresh-reshare policy placeholder; this RFC is the
   proposal that milestone points to.
