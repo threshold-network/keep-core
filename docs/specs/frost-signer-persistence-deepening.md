@@ -72,7 +72,7 @@ pub(crate) const PERSISTED_STATE_SCHEMA_VERSION: u16;     // moved here
 pub(crate) const PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION: u16;  // moved here
 ```
 
-The two `TryFrom` impls (`PersistedEngineState → EngineState` and `PersistedSessionState → SessionState`, plus their inverses) move into `schema_codec.rs` as concrete functions. The `From` / `TryFrom` traits are NOT implemented on the new module's functions — the function-call form is preferred for testability.
+The two `TryFrom` impls (`PersistedEngineState → EngineState` and `PersistedSessionState → SessionState`, plus their inverses) move into `schema_codec.rs` unchanged in shape. The trait impls are kept on the codec types themselves (`EngineState`, `SessionState`, `PersistedEngineState`, `PersistedSessionState`) — the codec module exposes them through the trait, not through a separate function-call interface. Callers in `envelope_io` use the `TryFrom` impls via `.try_into()` (e.g. `persisted.try_into()` for the load path, `state.try_into()` for the persist path), which is the same call shape the pre-split single-file code used. The `encode_state` / `decode_state` / `encode_session` / `decode_session` signatures shown above are illustrative shorthand for the `TryFrom` impl bodies' shapes; the actual API surface is the `TryFrom` impls, not those standalone functions.
 
 ### `envelope_io` interface
 
@@ -116,7 +116,7 @@ pub(crate) fn state_key_command_timeout_secs() -> u64;
 
 No test-only fake type moves into this module. Tests continue to define their own `StateKeyProvider` impls locally (the existing `tests.rs` pattern: `TrackingMockKeyProvider` + `StdArcMockProvider`), matching the current convention.
 
-Production wires `EnvKeyProvider` or `CommandKeyProvider` based on the `TBTC_SIGNER_STATE_KEY_PROVIDER` env, then wraps the choice in `CachedStateKeyProvider` — this is exactly what `resolve_state_key_provider()` already does today. The existing `state_encryption_key_material()` function stays a thin wrapper: `resolve_state_key_provider()?.material()`.
+Production wires `EnvKeyProvider` or `CommandKeyProvider` based on the `TBTC_SIGNER_STATE_KEY_PROVIDER` env, then wraps the choice in `CachedStateKeyProvider`. The `CachedStateKeyProvider` is a **new** decorator introduced by this change: the pre-split code re-resolved the key (and re-spawned the configured key-command subprocess, where applicable) on every `state_encryption_key_material()` invocation, with no per-process caching. The new code caches the resolved material for the process lifetime, keyed on the wrapped provider's `key_id()`, so a fresh `material()` is only invoked when the provider identity changes. This is a deliberate, beneficial behavior change — fewer subprocess spawns, lower KMS/HSM contact rate — and reviewers should be aware of it even though it is unlikely to reach a test that previously asserted per-call re-resolution. The `state_encryption_key_material()` function stays a thin wrapper: `resolve_state_key_provider()?.material()`.
 
 ### `pending_ops` interface
 
@@ -197,7 +197,7 @@ The existing `engine::tests::state_lock_rejects_multi_process_contention` test (
 ### Definition of Done
 
 - The 4 new modules are reachable from `engine::persistence::*` (re-exported via `mod.rs`).
-- The existing `engine::tests` suite passes with no behavioral change.
+- The existing `engine::tests` suite passes. The on-disk file format and the persisted schema are unchanged; the only intentional behavioral change is the new `CachedStateKeyProvider` process-lifetime cache (see the `key_provider` section), which reduces subprocess spawns / KMS contact rate but does not alter any externally observable error semantics.
 - The chaos suite (`scripts/run_phase5_chaos_suite.sh`) passes.
 - The on-disk file format is byte-for-byte stable: a state file written by the previous code loads cleanly with the new code, and vice versa.
 - The `TBTC_SIGNER_ABI_*` constants are not bumped.
@@ -221,7 +221,7 @@ The existing `engine::tests::state_lock_rejects_multi_process_contention` test (
 
 ### Risks
 
-- The trait `StateKeyProvider` already exists in current code (persistence.rs:1050); this spec relocates it, unchanged, into `key_provider.rs`. If a future key-provider variant (e.g. an HSM-backed provider with a different lifecycle) does not fit the trait shape, the trait must evolve. The risk is small — the trait is intentionally minimal — but the maintainer should be aware that the trait is a contract.
+- The trait `StateKeyProvider` is **newly introduced** by this change (it lives in `key_provider.rs` in the implementation commit). It replaces the pre-split code's `StateKeyProviderPlan` enum-based dispatch (`pub(crate) enum StateKeyProviderPlan { Env, Command { command_spec: String } }` at `persistence.rs:1041` in the base commit `555f2c514`), which routed the per-call key resolution through a `match` on the env-selected plan. The two prod adapters (`EnvKeyProvider`, `CommandKeyProvider`) correspond to the two enum variants, and the new `CachedStateKeyProvider` decorator layers process-lifetime caching on top — see the `key_provider` section above for the caching behavior change. If a future key-provider variant (e.g. an HSM-backed provider with a different lifecycle) does not fit the trait shape, the trait must evolve. The risk is small — the trait is intentionally minimal — but the maintainer should be aware that the trait is a new contract.
 - The four modules are wired through `mod.rs`. The orchestration logic (the "what to do in what order") is centralized. If the orchestration grows, the `mod.rs` becomes a god file. The risk is mitigated by keeping the four modules narrowly scoped and relying on the trait for the key-provider boundary.
 - The `CachedStateKeyProvider` decorator sits between production adapters and the process-lifetime static cache. If a future adapter's `key_id()` is not actually cheap (e.g. it touches the secret channel), the cache's identity check would leak the cost it exists to avoid. The risk is mitigated by the trait doc comment's explicit contract: `key_id()` MUST NOT touch the secret channel.
 
