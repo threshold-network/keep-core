@@ -25,16 +25,21 @@ four-line `roast_attempt_shuffle_seed` derivation in `src/engine/roast.rs`
 described in the "Derivation" and "Conformance vectors" sections
 below. No behavior changed.
 
-**What was kept from the partially-applied migration.** A single
-`COORDINATOR_SHUFFLE_VERSION: u8 = 1` byte (the prior unified state)
-is fed into the attempt-context hash as a version-pin. The version
-byte is intentionally inert at version `1` — it does not alter the
-computed seed or the selected coordinator — but it establishes the
-versioning slot so a future real migration can bump to `2` (or
-higher) without confusing the conformance corpus. Bumping the version
-byte deliberately drops compatibility with the existing test vectors
-and forces a documented re-pinning, which is the whole point of the
-pin.
+**What the reverted migration would have kept.** The design called for
+a single `COORDINATOR_SHUFFLE_VERSION: u8 = 1` byte (the prior unified
+state) to be fed into the attempt-context hash as a version-pin. This
+byte does not exist in the current derivation — `roast_attempt_shuffle_seed`
+in `src/engine/roast.rs` hashes only `key_group || session_id ||
+rfc21_message_digest`, with no version byte. The design intent is that
+the byte would be intentionally inert at version `1` — it would not
+alter the computed seed or the selected coordinator — but would
+establish the versioning slot so a future real migration could bump to
+`2` (or higher) without confusing the conformance corpus. Bumping the
+version byte would deliberately drop compatibility with the existing
+test vectors and force a documented re-pinning, which is the whole
+point of the pin. **None of this is implemented today; it is a design
+note for the eventual HKDF-SHA256 + CSPRNG migration, not a description
+of current behavior.**
 
 **Open follow-up.** The HKDF-SHA256 + CSPRNG migration itself is
 tracked as a follow-up to PR #4005. Until that follow-up lands and

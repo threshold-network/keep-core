@@ -159,7 +159,7 @@ from the original §8 apply unchanged to the addendum entries.
 | `interactive_cross_operator_cap_exceeded` | Policy-rejection code returned by `InteractiveSessionOpen` when the per-`(member, key_group)` cross-operator cap is exceeded. The cross-operator cap aggregates across attempts to bound a member's effective work rate on a given wallet even when the member rotates `sender` identifiers or attempt contexts, so the primary per-`(sender, key_group)` bucket alone cannot police it. Charged at `InteractiveSessionOpen` only, never at `InteractiveRound1`. | Decision 7 (PR #4005) |
 | `frost_shadow_mode_advisory` | Audit signal (not an error code emitted as a rejection) emitted when a FROST signing output is gated to advisory-only under the FROST shadow mode (Decision 1). The signal is emitted on every gated output regardless of the final success/failure of the surrounding handshake; downstream observers consume the signal to confirm the shadow mode is active and to attribute the gated output to the caller. Pairs with the `TBTC_SIGNER_FROST_SHADOW_MODE` env var and the three-condition disjunction documented in `roast-phase-5-security-rollout-gates.md`. | Decision 1 (PR #4005) |
 
-`wallet_deadline_exceeded` is **terminal**; the other four Phase 7
+`wallet_deadline_exceeded` is **terminal**; the other five Phase 7
 and Decision 7 codes are **recoverable** in the same sense as the
 existing `attempt_exhausted` (the caller may mint a new attempt
 subject to the budget). `frost_shadow_mode_advisory` is an audit
