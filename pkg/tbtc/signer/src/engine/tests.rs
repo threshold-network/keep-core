@@ -7263,13 +7263,6 @@ fn interactive_last_activity_at_for_test(session_id: &str, member_identifier: u1
         .last_activity_at
 }
 
-/// Returns true if the given member has a live interactive entry in any attempt scope.
-fn has_live_member(session: &SessionState, member_identifier: u16) -> bool {
-    session
-        .interactive_signing
-        .values()
-        .any(|members| members.contains_key(&member_identifier))
-}
 
 /// Returns the live interactive signing state for a member, if present.
 fn live_member(session: &SessionState, member_identifier: u16) -> Option<&InteractiveSigningState> {
@@ -7279,10 +7272,6 @@ fn live_member(session: &SessionState, member_identifier: u16) -> Option<&Intera
         .find_map(|members| members.get(&member_identifier))
 }
 
-/// Returns true if the session has exactly N live member entries across all attempt scopes.
-fn member_count(session: &SessionState) -> usize {
-    session.interactive_signing.values().map(|m| m.len()).sum()
-}
 
 fn stateless_package_and_shares_for_test(
     message_bytes: &[u8],
@@ -14425,6 +14414,367 @@ fn interactive_concurrent_attempt_cap_enforced() {
             session.interactive_signing.len(),
             cap,
             "overflow attempt should not increase attempt count"
+        );
+    }
+}
+
+#[test]
+fn interactive_round2_durable_markers_persist_before_share_release() {
+    // Regression test for the Round2 durable-marker-ordering fix.
+    //
+    // `interactive_round2` MUST insert the consumed-attempt and aggregate-
+    // authorization markers BEFORE persisting, so that any failure path
+    // that hits the persisted state file (a post-rename directory-sync
+    // fault, a process restart, a crash) still finds the markers on disk
+    // and a retry is rejected as a replay. The install path removes the
+    // member's nonce-bearing entry in the same step, so a non-durable
+    // marker would silently allow a second share to be released for an
+    // already-consumed attempt - which is exactly the silent handoff
+    // break this fix is supposed to prevent.
+    //
+    // The test exercises the post-rename persist-failure path
+    // (state_file_replaced = true) and then simulates a process restart
+    // to force a reload from disk. If a future change regresses the
+    // ordering back to "insert markers after persist", the markers are
+    // in memory only, the saved state file does not contain them, the
+    // restart reload sees an empty marker set, and the retry below is
+    // NOT rejected as a replay.
+    let _guard = lock_test_state();
+    let state_path =
+        configure_test_state_path("interactive_round2_marker_ordering");
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-round2-marker-ordering";
+    let key_group = "interactive-test-key-group";
+    let message = [0x73u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let round2_request = InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex,
+    };
+    let consumed_marker = interactive_consumed_marker(&opened.attempt_id, 1);
+
+    // Post-rename persist fault: the temp file is renamed onto the
+    // state-file path (state_file_replaced = true), but the parent
+    // directory sync fails. This is the durability boundary the
+    // marker ordering protects: the markers in memory at the moment of
+    // persist are exactly the markers in the saved state file.
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let faulted = interactive_round2(round2_request.clone())
+        .expect_err("post-rename persist fault must release no share");
+    clear_persist_fault_injection_for_tests();
+    assert!(
+        matches!(faulted, EngineError::Internal(ref m) if m.contains("injected persist fault")),
+        "unexpected error: {faulted:?}"
+    );
+
+    // Crash before any successful in-process repair. The pending registry
+    // is memory-only and disappears; the saved state file MUST carry
+    // the marker, otherwise the markers were only in memory and a real
+    // restart would lose them (a future regression that inserts markers
+    // AFTER persist would land here).
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            session
+                .consumed_interactive_attempt_markers
+                .contains(&consumed_marker),
+            "consumed-attempt marker must survive a process restart when the \
+             post-rename persist replaced the state file (markers are inserted \
+             BEFORE persist, so they ride the same write that fails the directory sync)"
+        );
+        assert!(
+            session.interactive_signing.is_empty(),
+            "post-rename failure destroys the live nonce-bearing state"
+        );
+    }
+
+    // A retry must be rejected as a consumed-nonce replay because the
+    // marker is on disk. If the marker were lost across restart, the
+    // retry would proceed and could re-release a share.
+    let retry = interactive_round2(round2_request)
+        .expect_err("restart retry rejects the durable consumed attempt");
+    assert!(
+        matches!(retry, EngineError::ConsumedNonceReplay { .. }),
+        "unexpected retry error: {retry:?}"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_round1_reports_attempt_id_mismatch_for_superseded_member() {
+    // Regression test for the stale-attempt-id lookup fix.
+    //
+    // `interactive_state_for_attempt_mut` MUST distinguish "member has no
+    // live attempt at all" from "member's live attempt moved to a
+    // different attempt_id". The nested-map restructure makes the outer
+    // key the attempt_id, so a lookup that just did
+    // `session.interactive_signing.get_mut(attempt_id)?` would return
+    // SessionNotFound for a member who has a live entry under a DIFFERENT
+    // attempt_id - masking the fact that the member is actively signing,
+    // just on a newer attempt. The fix adds a fallback scan of the other
+    // live attempt scopes for this member, and returns a Validation
+    // error specifically identifying the attempt-id MISMATCH (both the
+    // stale id passed in and the current live id on the member).
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-round1-supersede-mismatch";
+    let key_group = "interactive-test-key-group";
+    let message = [0x74u8; 32];
+    let included = [1u16, 2];
+
+    let first = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("member 1 opens attempt 1");
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: first.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1 on attempt 1");
+
+    let second = open_interactive_for_test(session_id, key_group, &message, &included, 2, 1, 2)
+        .expect("member 1 advances to attempt 2");
+    assert_ne!(first.attempt_id, second.attempt_id);
+
+    // Round1 with the stale attempt_id must report a Validation error
+    // that specifically identifies the attempt-id MISMATCH (both the
+    // stale id we passed and the live id this member now occupies),
+    // not a generic SessionNotFound. Without the fix, the function
+    // would do session.interactive_signing.get_mut(stale_id)? and
+    // return SessionNotFound on the None.
+    let stale = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: first.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect_err("stale attempt id must be rejected");
+    match &stale {
+        EngineError::Validation(message) => {
+            assert!(
+                message.contains(&first.attempt_id)
+                    && message.contains(&second.attempt_id)
+                    && message.contains("does not match"),
+                "expected a specific attempt-id mismatch error mentioning \
+                 both stale id [{}] and live id [{}], got {:?}",
+                first.attempt_id,
+                second.attempt_id,
+                message,
+            );
+        }
+        other => panic!(
+            "expected EngineError::Validation for attempt-id mismatch, got {other:?}"
+        ),
+    }
+    // The Round2 path shares the same lookup. A Round2 with the stale
+    // attempt_id must report the same specific mismatch error, not a
+    // generic not-found (the Round2 entry point also gates on this).
+    // The signing package only needs to deserialize cleanly - the
+    // stale attempt_id lookup fails BEFORE any package verification.
+    let key_packages = interactive_test_key_packages();
+    let second_round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: second.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1 on attempt 2 to seed a valid signing package");
+    let second_member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 stateless commitments for the live attempt");
+    let live_signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: second_round1.commitments_hex,
+            },
+            second_member2.commitment,
+        ],
+    );
+    let stale_round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: first.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: live_signing_package_hex,
+    })
+    .expect_err("stale attempt id on Round2 must be rejected");
+    match &stale_round2 {
+        EngineError::Validation(message) => {
+            assert!(
+                message.contains(&first.attempt_id)
+                    && message.contains(&second.attempt_id)
+                    && message.contains("does not match"),
+                "Round2 expected attempt-id mismatch mentioning both stale id \
+                 [{}] and live id [{}], got {:?}",
+                first.attempt_id,
+                second.attempt_id,
+                message,
+            );
+        }
+        other => panic!(
+            "expected EngineError::Validation for attempt-id mismatch on \
+             Round2, got {other:?}"
+        ),
+    }
+
+    // A truly-absent member (no live entry at all) gets a different
+    // error: SessionNotFound. The fix must distinguish this from
+    // "the member has a live entry, just under a different attempt_id".
+    let absent = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: first.attempt_id.clone(),
+        member_identifier: 7, // not opened at all
+    })
+    .expect_err("a member with no live entry must be SessionNotFound");
+    assert!(
+        matches!(absent, EngineError::SessionNotFound { .. }),
+        "absent member lookup must be SessionNotFound (not the supersede \
+         error), got {absent:?}"
+    );
+}
+
+#[test]
+fn interactive_cap_does_not_double_count_member_vacating_own_attempt_scope() {
+    // Regression test for the cap-accounting vacating path.
+    //
+    // When a member advances to a NEW attempt under a fresh attempt_id,
+    // the prior scope they vacate must NOT count against the n-t+1
+    // cap (the install path drops it because empty scopes are pruned
+    // immediately). The Open cap check excludes the scope this member
+    // would vacate entirely, so the net effect is one attempt in / one
+    // attempt out, not two attempts added. Without that exclusion the
+    // Open would reject the advance at the cap, blocking the retry
+    // loop entirely.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_group = "interactive-cap-vacate-key-group";
+    let session_id = "interactive-cap-vacate";
+    let message = [0x75u8; 32];
+    // DKG fixture is threshold=2; cap = 3 - 2 + 1 = 2.
+    let included = [1u16, 2, 3];
+    let threshold = 2u16;
+    // Fill the cap: member 1 opens attempt A (wire attempt 1),
+    // member 2 opens attempt B (wire attempt 2 - different attempt_id
+    // so they hold distinct concurrent attempts under the n-t+1 cap).
+    let opened_a =
+        open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, threshold)
+            .expect("member 1 opens attempt A");
+    let opened_b =
+        open_interactive_for_test(session_id, key_group, &message, &included, 2, 2, threshold)
+            .expect("member 2 opens attempt B");
+    assert_ne!(opened_a.attempt_id, opened_b.attempt_id, "attempts must differ");
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert_eq!(
+            session.interactive_signing.len(),
+            2,
+            "two attempt scopes are at the cap"
+        );
+    }
+
+    // Member 3 cannot open a 3rd attempt - cap reached.
+    let overflow =
+        open_interactive_for_test(session_id, key_group, &message, &included, 3, 3, threshold)
+            .expect_err("opening a 3rd attempt while at cap must fail");
+    match &overflow {
+        EngineError::SigningPolicyRejected {
+            reason_code, ..
+        } => assert_eq!(
+            reason_code, "concurrent_attempt_cap_exceeded",
+            "expected concurrent_attempt_cap_exceeded, got {overflow:?}"
+        ),
+        other => panic!(
+            "expected SigningPolicyRejected for cap overflow, got {other:?}"
+        ),
+    }
+
+    // Member 1 advances to a NEW attempt under a fresh attempt_id
+    // (wire attempt number 2). The prior scope they vacate is dropped
+    // because empty scopes are pruned immediately; the cap check
+    // excludes the scope this member would vacate, so the net is one
+    // in / one out and the open succeeds. Without that exclusion, the
+    let opened_c =
+        open_interactive_for_test(session_id, key_group, &message, &included, 3, 1, threshold)
+            .expect(
+                "member 1 advancing to a new attempt must not double-count: \
+                 the vacated prior scope is excluded from the cap",
+            );
+    assert_ne!(
+        opened_c.attempt_id, opened_a.attempt_id,
+        "the advancing member's NEW attempt must have a fresh attempt_id"
+    );
+    assert_ne!(
+        opened_c.attempt_id, opened_b.attempt_id,
+        "the advancing member's NEW attempt must not collide with member 2's attempt"
+    );
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        // The vacated scope is gone (member 1 was the sole member there).
+        assert!(
+            !session.interactive_signing.contains_key(&opened_a.attempt_id),
+            "the vacated attempt scope is pruned immediately"
+        );
+        // Member 2's scope on attempt B is untouched by member 1's advance.
+        assert!(
+            session.interactive_signing.contains_key(&opened_b.attempt_id),
+            "sibling member's scope is untouched by the advance"
+        );
+        // Member 1 is now under the new attempt C.
+        assert!(
+            session.interactive_signing.contains_key(&opened_c.attempt_id),
+            "the new attempt scope holds the advancing member"
+        );
+        let new_scope = session
+            .interactive_signing
+            .get(&opened_c.attempt_id)
+            .expect("new attempt scope exists");
+        assert!(new_scope.contains_key(&1), "member 1 is on the new attempt");
+        // Cap is still 2 (B and C), not 3.
+        assert_eq!(
+            session.interactive_signing.len(),
+            2,
+            "the cap is n-t+1 = 2, not n-t = 1; the vacated scope did not double-count"
         );
     }
 }
