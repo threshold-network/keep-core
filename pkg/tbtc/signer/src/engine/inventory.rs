@@ -1,6 +1,5 @@
 //! Retained FROST key-package readiness and dynamic state-witness readbackback.
 //!
-#![allow(dead_code)]
 
 use super::*;
 
@@ -39,7 +38,9 @@ struct ValidatedInventoryEntry {
     public_key_package_commitment: [u8; 32],
     key_packages: Vec<ValidatedInventoryPackage>,
 }
-
+// `frost_tbtc_retained_key_package_inventory` FFI export was removed in
+// PR #4198 followup; tests in engine/tests.rs still exercise the inventory path.
+#[allow(dead_code)]
 pub(crate) fn retained_key_package_inventory(
 ) -> Result<RetainedKeyPackageInventoryResult, EngineError> {
     // Keep the engine guard through store-tip capture. Every state mutation

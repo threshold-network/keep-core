@@ -5,16 +5,34 @@ in `docs/rust-rewrite-bootstrap.md`.
 
 ## Current scope
 
-- Exposes a C ABI (`libfrost_tbtc`) with coarse operations keyed by `session_id`:
-  - `RunDKG`
-  - `StartSignRound`
-  - `FinalizeSignRound`
-  - `BuildTaprootTx`
-  - `RefreshShares` (symbol retained in ABI 4.0, but fail-closed with
-    `cryptographic_refresh_not_supported` until a multi-round FROST refresh
-    protocol is implemented; metadata from the retired synthetic stub cannot
-    postpone cadence or establish key continuity, and an unanchored legacy
-    refresh-only session is immediately overdue)
+- Exposes a C ABI (`libfrost_tbtc`) with a hybrid surface. The
+  `session_id`-keyed subset is:
+  - `BuildTaprootTx` (`frost_tbtc_build_taproot_tx`)
+  - `RefreshShares` (`frost_tbtc_refresh_shares`; symbol retained in
+    ABI 3, but fail-closed with `cryptographic_refresh_not_supported`
+    until a multi-round FROST refresh protocol is implemented;
+    metadata from the retired synthetic stub cannot postpone cadence
+    or establish key continuity, and an unanchored legacy refresh-only
+    session is immediately overdue)
+  - `VerifySignatureShare` (`frost_tbtc_verify_signature_share`)
+  - The hardened interactive signing session ops
+    (`InteractiveSessionOpen`, `InteractiveRound1`, `InteractiveRound2`,
+    `InteractiveSessionAbort`, `InteractiveAggregate`), all keyed by
+    `(session_id, attempt_id, member_identifier)` per the frozen Phase 7
+    interactive-session spec.
+  The round-level subset is NOT `session_id`-keyed and matches the
+  round-level calls keep-core's native FROST engine expects:
+  - `frost_tbtc_dkg_part1` / `_dkg_part2` / `_dkg_part3` take
+    `DkgPart{1,2,3}Request` shaped for a single round of DKG with no
+    `session_id`.
+  - `frost_tbtc_new_signing_package` takes
+    `NewSigningPackageRequest { message_hex, commitments }` with no
+    `session_id`.
+  The wire-contract version reported by `frost_tbtc_abi_version` is
+  `abi_major = 3, abi_minor = 0` (see `TBTC_SIGNER_ABI_MAJOR` /
+  `TBTC_SIGNER_ABI_MINOR` in `pkg/tbtc/signer/src/lib.rs`). Earlier
+  references in this crate's docs to an `ABI 4.0` value for the same
+  major are stale and should be read as ABI 3.
 - Exposes fine-grained interactive (member-custodied nonce) signing via:
   - `InteractiveSessionOpen`
   - `InteractiveRound1`
@@ -448,11 +466,14 @@ storage guarantees for that hardware-level failure boundary.
     transient with the live nonce state, so restart requires a fresh Open.
     ABI 3.2 adds the independent per-wallet heartbeat rate-limit config and
     dedicated heartbeat policy-rejection metric.
-  - ABI 4.0 reserves `RefreshShares` as fail-closed until a real multi-round,
-    zero-constant FROST refresh protocol exists. Because valid refresh requests
-    now return terminal `cryptographic_refresh_not_supported` instead of a
-    synthetic success result, ABI-3 bridges must reject this library during
-    compatibility negotiation.
+  - At ABI 3, `RefreshShares` is reserved as fail-closed until a real
+    multi-round, zero-constant FROST refresh protocol exists. Refresh
+    requests return terminal `cryptographic_refresh_not_supported`
+    instead of a synthetic success result, so consumers must not rely
+    on `RefreshShares` for share continuity; persisted metadata from the
+    retired synthetic stub is non-authoritative for refresh cadence and
+    key continuity, and any plan that depends on it must be retargeted
+    at a future ABI bump rather than relied on under ABI 3.
   - ABI-3 migration is intentionally fail closed. A pre-ABI-3 in-flight ROAST
     session has no stored BIP-341 sighashes and must be abandoned and restarted
     under a fresh `session_id`; its cached fingerprint cannot be upgraded in

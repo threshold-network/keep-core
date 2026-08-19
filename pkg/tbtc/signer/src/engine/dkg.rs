@@ -1,6 +1,5 @@
 //! Distributed-DKG key-package persistence.
 //!
-#![allow(dead_code)]
 
 use super::*;
 
@@ -14,6 +13,10 @@ use super::*;
 /// operator calls it once per local seat and the key packages accumulate under
 /// one session (same key group). There is NO production gate: this is the real
 /// distributed path, not the transitional dealer one.
+// `frost_tbtc_persist_distributed_dkg_key_package` FFI export was removed in
+// PR #4198 followup; tests in engine/tests.rs still exercise the persist/retire
+// pair.
+#[allow(dead_code)]
 pub fn persist_distributed_dkg_key_package(
     mut request: PersistDistributedDkgKeyPackageRequest,
 ) -> Result<DkgResult, EngineError> {

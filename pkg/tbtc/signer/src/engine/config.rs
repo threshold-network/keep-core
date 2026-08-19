@@ -503,17 +503,26 @@ pub(crate) fn signer_profile_is_production() -> bool {
     }
 }
 
-/// Returns a profile-gated view of an internal error message.
+/// Whether the engine is running under the development profile.
 ///
-/// In production the message is reduced to a stable category and the path /
-/// syscall detail is replaced with a placeholder, so an error path that leaks
-/// through the FFI cannot reveal absolute on-disk paths, env var values, or
-/// host identifiers. The development profile returns the original message
-/// verbatim so debugging is not impeded.
-pub(crate) fn redacted_internal_error(category: &str, detail: &str) -> String {
-    if signer_profile_is_production() {
-        format!("signer {category} failed (detail redacted; see server log)")
-    } else {
-        format!("signer {category} failed: {detail}")
-    }
+/// Reads `TBTC_SIGNER_PROFILE_ENV` directly via `signer_env_var` (NOT
+/// `signer_profile_is_production`) so a missing or malformed value fails
+/// CLOSED: callers can treat a `false` return as "we are not in development"
+/// and apply production-style redaction. Routing through `signer_profile_is_production`
+/// would PANIC on a malformed profile and convert a handled error path
+/// into a second panic across the FFI boundary - which is why the FFI
+/// panic hook, the FFI redaction boundary, and the stderr diagnostic gate
+/// all read the env var directly rather than calling the strict validator.
+///
+/// A return value of `true` means the operator explicitly opted in to
+/// verbose diagnostic detail (paths, syscall errors, panic payloads) on
+/// every channel that uses this gate. Anything else - including an absent
+/// env var - returns `false` and forces production-style suppression.
+pub(crate) fn development_profile_active() -> bool {
+    signer_env_var(TBTC_SIGNER_PROFILE_ENV)
+        .map(|raw| {
+            raw.trim()
+                .eq_ignore_ascii_case(TBTC_SIGNER_PROFILE_DEVELOPMENT)
+        })
+        .unwrap_or(false)
 }

@@ -1,6 +1,5 @@
 //! In-memory engine/session state, the state-file lock, and registry capacity guards.
 //!
-#![allow(dead_code)]
 
 use super::*;
 
@@ -584,6 +583,9 @@ pub(crate) fn with_state_file_lock_before_startup_rewrite<T>(
     Ok(outcome)
 }
 
+// `frost_tbtc_durable_store_identity` FFI export was removed in PR #4198 followup;
+// tests in engine/tests.rs + engine/store.rs still exercise the preflight path.
+#[allow(dead_code)]
 pub(crate) fn durable_store_identity() -> Result<DurableStoreIdentity, EngineError> {
     // Store identity is deliberately available before state classification.
     // Use the load-safe structural path so a malformed image can still reach

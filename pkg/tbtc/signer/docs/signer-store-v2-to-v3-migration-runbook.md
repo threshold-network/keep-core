@@ -191,6 +191,51 @@ does not enforce a coordinated migration. However:
   per-record chain hashes, the cross-language commitment checks at the Go
   boundary will fail for any record produced by a v3 signer.
 
+## Security model / limitations
+
+The v3 per-record `chain_hash` is an UNKEYED SHA-256 accumulator over
+the journal records. It is tamper-evident, not tamper-RESISTANT: a
+same-uid attacker with equal compute can rewrite a historical record
+and recompute a self-consistent downstream chain (including the
+segment header's `header_commitment`) without invalidating the
+`chain_hash` link, up to the next signed segment-header checkpoint or,
+on an unanchored signer, up to the next local compaction.
+
+The chain is CT-log-like: it detects rewrites against an
+independently-observed prior head (a previously-seen segment header
+commitment, a signed anchor checkpoint, a snapshot of the journal
+taken before the rewrite, or a compaction's pre-state journal kept
+under `.state-witness.previous`). It does NOT provide a cryptographic
+tamper-resistance guarantee absent one of those external anchors.
+
+Operators who need tamper-resistance rather than tamper-evidence
+must ensure the signer is configured to anchor: a signed anchor
+checkpoint makes segment rotation the preferred path and gives
+external observers a signed prior head to detect against. Unanchored
+signers rely on the local compaction path to bound the length of any
+unanchored rewrite window; see `signer-store-compaction-runbook.md`
+for that path.
+
+## Filesystem dependency
+
+The store's exclusive writer lock relies on POSIX `flock(2)` advisory
+locking semantics. On some shared or network filesystems - notably
+NFS, and some container overlay filesystems - `flock(2)` may be weak
+or absent, and a second process on the same store directory can
+acquire the lock at the same time as the first. The store will
+appear to be running cleanly with two writers, and the resulting
+journal corruption will only surface on reload.
+
+Deployments MUST verify their target filesystem supports standard
+POSIX advisory locking before bringing the signer into a threshold
+set. Local filesystems (ext4, xfs, btrfs) and container-native
+overlay filesystems with proven `flock(2)` support are acceptable.
+Filesystems that do not support `flock(2)` or that map it to a
+no-op MUST be replaced with a local filesystem; the signer must
+not be deployed against NFS-mounted state, container volumes that
+do not preserve `flock(2)` semantics, or any filesystem documented
+to weaken advisory locks.
+
 ## References
 
 - The rejection error path is `retired_v2_state_witness_journal_error` in
@@ -204,3 +249,5 @@ does not enforce a coordinated migration. However:
 - The 472-byte segment header layout is unchanged between v2 and v3; the
   cross-language byte vector still pins
   `TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_VERSION = 1`.
+- The compaction path that bounds an unanchored rewrite window is
+  documented in `signer-store-compaction-runbook.md`.

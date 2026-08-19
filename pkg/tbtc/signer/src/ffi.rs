@@ -84,7 +84,23 @@ where
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(bytes)) => success_from_serialized(bytes),
         Ok(Err(err)) => error_result(err),
-        Err(payload) => error_result(EngineError::Internal(panic_boundary_message(payload))),
+        Err(payload) => {
+            // `panic_boundary_message` already performs its own profile-aware
+            // redaction specifically for this case (a fixed, safe "panic
+            // crossed FFI boundary" marker in production, the full payload in
+            // development). Route it through `error_response_bytes` directly
+            // with that resolved message, bypassing `ffi_redacted_message`'s
+            // generic `Internal` redaction - applying that a second time
+            // would collapse the meaningful, already-safe "a panic occurred"
+            // signal down to the same generic "detail redacted" text every
+            // other Internal error produces, losing the distinction.
+            let message = panic_boundary_message(payload);
+            let response = error_response_bytes(&EngineError::Internal(String::new()), message);
+            TbtcSignerResult {
+                status_code: STATUS_ERROR,
+                buffer: to_ffi_buffer(response),
+            }
+        }
     }
 }
 
@@ -133,7 +149,22 @@ pub fn free_buffer(ptr: *mut u8, len: usize) {
 }
 
 fn error_result(error: EngineError) -> TbtcSignerResult {
-    let (requested_generation, witness_base_generation) = match &error {
+    let message = ffi_redacted_message(&error);
+    let bytes = error_response_bytes(&error, message);
+    TbtcSignerResult {
+        status_code: STATUS_ERROR,
+        buffer: to_ffi_buffer(bytes),
+    }
+}
+
+/// Builds the serialized `ErrorResponse` for `error`, using `message` as
+/// the (already profile-resolved) message field. Split out of
+/// `error_result` so the panic-boundary path in `ffi_entry` can supply its
+/// own pre-redacted message (from `panic_boundary_message`) without routing
+/// it through `ffi_redacted_message`'s generic `Internal` redaction a
+/// second time.
+fn error_response_bytes(error: &EngineError, message: String) -> Vec<u8> {
+    let (requested_generation, witness_base_generation) = match error {
         EngineError::HistoryPruned {
             requested_generation,
             witness_base_generation,
@@ -192,7 +223,7 @@ fn error_result(error: EngineError) -> TbtcSignerResult {
     });
     let payload = ErrorResponse {
         code: error.code().to_string(),
-        message: error.to_string(),
+        message,
         recovery_class: error.recovery_class().to_string(),
         requested_generation,
         witness_base_generation,
@@ -200,13 +231,39 @@ fn error_result(error: EngineError) -> TbtcSignerResult {
         state_anchor_trust_recovery,
     };
 
-    let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| {
+    serde_json::to_vec(&payload).unwrap_or_else(|_| {
         b"{\"code\":\"internal_error\",\"message\":\"failed to encode error\",\"recovery_class\":\"terminal\"}".to_vec()
-    });
+    })
+}
 
-    TbtcSignerResult {
-        status_code: STATUS_ERROR,
-        buffer: to_ffi_buffer(bytes),
+/// Returns the message string for `ErrorResponse`.
+///
+/// Only `Internal` carries absolute paths, syscall errors, env-var values,
+/// or other host-identifying detail (it wraps ad hoc `format!(...)` text
+/// built from filesystem operations throughout the engine). Its message is
+/// replaced by a fixed redacted string outside the development profile.
+/// Every other variant, including `Validation`, is user-facing
+/// business-rule text by construction (bounds checks, schema mismatches,
+/// malformed field errors) built from request fields and named constants,
+/// never from filesystem paths or syscall errors - redacting it would
+/// break the caller-facing feedback those variants exist to provide, for
+/// no confidentiality benefit.
+///
+/// Profile detection uses `development_profile_active`, which reads the
+/// profile env var directly and fails CLOSED for any missing or malformed
+/// value. Routing through `signer_profile_is_production` would panic on a
+/// malformed profile, which would convert this FFI error path into a second
+/// panic across the C boundary - exactly the failure mode the panic hook
+/// exists to prevent.
+fn ffi_redacted_message(error: &EngineError) -> String {
+    let rendered = error.to_string();
+    if !matches!(error, EngineError::Internal(_)) {
+        return rendered;
+    }
+    if crate::engine::development_profile_active() {
+        rendered
+    } else {
+        "signer error detail redacted (see server log)".to_string()
     }
 }
 
@@ -362,6 +419,117 @@ mod tests {
             message.contains(secret_detail),
             "development must preserve the panic payload: {message}"
         );
+
         free_buffer(result.buffer.ptr, result.buffer.len);
+    }
+    // `Internal` messages carry path-bearing detail by construction (e.g.
+    // `format!("failed to open [{}]: {e}", path.display())`). Production
+    // must suppress that detail across the FFI boundary; development must
+    // keep it verbatim for operator diagnostics. The redaction is applied
+    // by the FFI error-result construction (`ffi_redacted_message`), not by
+    // every call site - which is what makes a stray path in any of the ~30
+    // `EngineError::Internal` constructors in store.rs and persistence.rs
+    // still fail to leak. `Validation` is deliberately excluded: it is
+    // user-facing business-rule text, never built from filesystem paths in
+    // real code. Serialized under the shared test state lock because the
+    // profile is a process-global env var.
+    #[test]
+    fn error_result_redacts_internal_paths_in_production_profile() {
+        use std::path::PathBuf;
+
+        let _guard = crate::engine::lock_test_state();
+
+        let decode_message = |result: &TbtcSignerResult| -> String {
+            assert_eq!(result.status_code, STATUS_ERROR);
+            let bytes = unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len) };
+            let response: ErrorResponse =
+                serde_json::from_slice(bytes).expect("decode error response");
+            response.message
+        };
+
+        // Production: `Internal` messages must not reflect either a
+        // `Path::display()` rendering or a `PathBuf`-shaped `{:?}` rendering
+        // to the host. Use a synthetic absolute path so the assertion cannot
+        // accidentally pass on a benign prefix.
+        let sensitive_path = PathBuf::from("/secret/absolute/signer-state-leak");
+        std::env::set_var(
+            crate::engine::TBTC_SIGNER_PROFILE_ENV,
+            crate::engine::TBTC_SIGNER_PROFILE_PRODUCTION,
+        );
+
+        let internal_display = error_result(EngineError::Internal(format!(
+            "failed to open signer state file at {}",
+            sensitive_path.display()
+        )));
+        let internal_msg = decode_message(&internal_display);
+        assert!(
+            !internal_msg.contains(&sensitive_path.display().to_string()),
+            "production Internal message leaked .display() path: {internal_msg}"
+        );
+        assert!(
+            !internal_msg.contains("/secret/absolute"),
+            "production Internal message leaked absolute path prefix: {internal_msg}"
+        );
+        free_buffer(internal_display.buffer.ptr, internal_display.buffer.len);
+
+        let internal_debug = error_result(EngineError::Internal(format!(
+            "failed to open signer state file at {sensitive_path:?}"
+        )));
+        let internal_msg = decode_message(&internal_debug);
+        assert!(
+            !internal_msg.contains("/secret/absolute"),
+            "production Internal message leaked {{:?}}-formatted PathBuf: {internal_msg}"
+        );
+        free_buffer(internal_debug.buffer.ptr, internal_debug.buffer.len);
+
+        // `Validation` is user-facing business-rule text by construction
+        // (bounds checks, schema mismatches) and is never built from
+        // filesystem paths in real code - it must pass through unchanged so
+        // callers still see actionable validation feedback. This uses a
+        // synthetic path only to prove the pass-through, not because real
+        // `Validation` errors carry one.
+        let validation_display = error_result(EngineError::Validation(format!(
+            "validation rejected envelope at {}",
+            sensitive_path.display()
+        )));
+        let validation_msg = decode_message(&validation_display);
+        assert!(
+            validation_msg.contains("/secret/absolute"),
+            "Validation must pass through unchanged, even in production: {validation_msg}"
+        );
+        free_buffer(validation_display.buffer.ptr, validation_display.buffer.len);
+
+        // Every other variant must NOT be redacted either: their messages
+        // are bounded by construction (variant fields carry ids / sequences /
+        // digests, not paths), so the host still receives the diagnostic that
+        // tells it which condition was matched.
+        let passthrough = error_result(EngineError::StateAnchorTrustHeadAbsent);
+        let passthrough_msg = decode_message(&passthrough);
+        assert!(
+            passthrough_msg.contains("state-anchor trust head is absent"),
+            "non-Internal variant must pass through unchanged: {passthrough_msg}"
+        );
+        free_buffer(passthrough.buffer.ptr, passthrough.buffer.len);
+
+        // Development: every detail is preserved verbatim so operators see the
+        // path / syscall detail that production redacts.
+        std::env::set_var(
+            crate::engine::TBTC_SIGNER_PROFILE_ENV,
+            crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT,
+        );
+        let dev_internal = error_result(EngineError::Internal(format!(
+            "failed to open signer state file at {}",
+            sensitive_path.display()
+        )));
+        let dev_msg = decode_message(&dev_internal);
+        assert!(
+            dev_msg.contains(sensitive_path.display().to_string().as_str()),
+            "development Internal message must preserve the path: {dev_msg}"
+        );
+        assert!(
+            dev_msg.contains("internal error:"),
+            "development Internal message keeps the original Display prefix: {dev_msg}"
+        );
+        free_buffer(dev_internal.buffer.ptr, dev_internal.buffer.len);
     }
 }

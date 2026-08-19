@@ -1,7 +1,7 @@
 # tbtc-signer Secret Material Hardening Plan (Long-Term)
 
 Date: 2026-03-01
-Status: Proposed (pre-implementation)
+Status: Superseded — implemented, see README.md § Encrypted State Key Providers
 Owner: Threshold Labs
 Scope: `pkg/tbtc/signer` persistent secret-material handling before FROST/ROAST
 production rollout.

@@ -1109,37 +1109,6 @@ fn production_profile_forces_provenance_gate_without_env_flag() {
 }
 
 #[test]
-fn redacted_internal_error_strips_path_detail_in_production_profile() {
-    let _guard = lock_test_state();
-    reset_for_tests();
-
-    let sensitive = "/var/lib/signer/secret.lock: permission denied";
-    std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
-    let redacted = redacted_internal_error("truncate signer state lock file", sensitive);
-    assert!(
-        !redacted.contains(sensitive),
-        "production redaction leaked the path: {redacted}"
-    );
-    assert!(
-        redacted.contains("truncate signer state lock file"),
-        "production redaction must preserve the category: {redacted}"
-    );
-    assert!(
-        redacted.contains("redacted"),
-        "production redaction must mark the detail as redacted: {redacted}"
-    );
-
-    std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
-    let verbose = redacted_internal_error("truncate signer state lock file", sensitive);
-    assert!(
-        verbose.contains(sensitive),
-        "development redaction must preserve the full detail: {verbose}"
-    );
-
-    std::env::remove_var(TBTC_SIGNER_PROFILE_ENV);
-}
-
-#[test]
 fn unknown_profile_value_fails_closed_to_production() {
     let _guard = lock_test_state();
     reset_for_tests();
@@ -1414,6 +1383,68 @@ fn retire_distributed_dkg_key_packages_pre_replace_failure_restores_owner() {
         .expect("engine lock")
         .sessions
         .contains_key(&session_id));
+}
+#[test]
+fn retire_distributed_dkg_key_packages_post_replace_failure_leaves_unconfirmed_durability() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("distributed_dkg_retirement_post_replace");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(15);
+    let session_id = "session-distributed-retirement-post-replace-failure".to_string();
+    let persisted =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("local seat").clone(),
+            public_key_package: native_public,
+        })
+        .expect("persist distributed DKG seat");
+
+    // AfterRenameBeforeDirectorySync: the rename completed before the fault
+    // fired, so the retired session is gone from the persisted image too. The
+    // fault must not resurrect it on restart.
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let error =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: persisted.key_group.clone(),
+        })
+        .expect_err("post-replacement retirement failure must report unconfirmed durability");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(
+        !state()
+            .expect("state")
+            .lock()
+            .expect("engine lock")
+            .sessions
+            .contains_key(&session_id),
+        "the rename completed before the fault fired, so the session must not be restored"
+    );
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    assert!(
+        !state()
+            .expect("state")
+            .lock()
+            .expect("engine lock")
+            .sessions
+            .contains_key(&session_id),
+        "the persisted image already replaced the retired session; restart must not resurrect it"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 #[test]
@@ -7063,8 +7094,8 @@ fn init_signer_config_rolls_back_install_when_policy_validation_fails() {
 
     // Firewall enforcement on with an INVALID policy (a UTC start hour without a
     // matching end hour) -> the loader rejects and the install must roll back.
-    // Absent firewall knobs no longer trip this: the loader now falls back to
-    // conservative built-in defaults, so only an explicitly-invalid value fails.
+    // Absent firewall knobs fall back to conservative built-in defaults; only
+    // an explicitly-invalid value fails.
     let error = init_signer_config(InitSignerConfigRequest {
         profile: Some("development".to_string()),
         enforce_signing_policy_firewall: Some(true),
@@ -14850,9 +14881,9 @@ fn pending_commit_refuses_to_absorb_same_length_prefix_corruption() {
 
 #[test]
 #[cfg(unix)]
-fn state_witness_record_ceiling_fails_closed_before_prepare_and_on_restart() {
+fn state_witness_record_ceiling_triggers_local_compaction_for_unanchored_store() {
     let _guard = lock_test_state();
-    let state_path = configure_test_state_path("witness_record_ceiling");
+    let state_path = configure_test_state_path("witness_record_ceiling_compaction");
     std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
 
     let mut store = StateFileLock::acquire(&state_path).expect("open capped durable store");
@@ -14862,15 +14893,75 @@ fn state_witness_record_ceiling_fails_closed_before_prepare_and_on_restart() {
     let full_tip = store.state_witness_tip().expect("tip at record ceiling");
     assert_eq!(full_tip.generation, 2);
 
-    let rejected = store
-        .replace_state(b"must not be installed")
-        .expect_err("a new PREPARE must reserve its terminal record");
-    assert!(!rejected.replaced());
-    expect_internal_error_contains(rejected.into_engine_error(), "record ceiling [4] reached");
+    // An unanchored store (no anchor service configured, so
+    // `witness_rotation_threshold` is permanently `None`) has no
+    // externally-signed rotation path to fall back on. Hitting the record
+    // ceiling now triggers automatic local compaction instead of a
+    // permanent write-lockout: the write below must succeed, not fail.
+    store
+        .replace_state(b"write after local compaction")
+        .expect("local compaction frees capacity so the write continues");
     assert_eq!(
-        store.read_state().expect("state after ceiling rejection"),
-        Some(b"only permitted replacement".to_vec())
+        store.read_state().expect("state after compaction"),
+        Some(b"write after local compaction".to_vec())
     );
+    let compacted_tip = store
+        .state_witness_tip()
+        .expect("tip after local compaction");
+    // The compaction commits its own synthetic generation bump before the
+    // caller's write proceeds, so the tip advances by two generations
+    // (compaction's own commit, then the actual write), not one.
+    assert_eq!(compacted_tip.generation, full_tip.generation + 2);
+
+    // Local compaction retires the previous segment immediately, matching
+    // the existing signed-rotation convention: `revalidate_store_entries`
+    // asserts `.state-witness.previous` never lingers outside an
+    // in-progress rotation/compaction.
+    let mut previous_path = state_witness_file_path(&state_path).into_os_string();
+    previous_path.push(".previous");
+    assert!(
+        !Path::new(&previous_path).exists(),
+        "local compaction must retire .state-witness.previous immediately, matching rotation"
+    );
+
+    drop(store);
+
+    let mut reopened = StateFileLock::acquire(&state_path).expect("reopen after compaction");
+    assert_eq!(
+        reopened.read_state().expect("state after reopen"),
+        Some(b"write after local compaction".to_vec())
+    );
+    assert_eq!(
+        reopened
+            .state_witness_tip()
+            .expect("reopened tip after compaction"),
+        compacted_tip
+    );
+    drop(reopened);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn state_witness_journal_exceeding_reduced_ceiling_fails_closed_at_startup() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_record_ceiling_startup");
+    // A generous ceiling that neither replace_state call below comes close
+    // to reaching, so this test exercises only the startup record-count
+    // check, independent of the local-compaction path covered separately
+    // above.
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "20");
+
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    store
+        .replace_state(b"first replacement")
+        .expect("first replacement under the generous ceiling");
+    store
+        .replace_state(b"second replacement")
+        .expect("second replacement under the generous ceiling");
+    let full_tip = store.state_witness_tip().expect("tip before reopen");
     drop(store);
 
     std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "2");
@@ -14882,7 +14973,7 @@ fn state_witness_record_ceiling_fails_closed_before_prepare_and_on_restart() {
         "exceeding the configured fail-closed ceiling [2]",
     );
 
-    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "20");
     let mut reopened = StateFileLock::acquire(&state_path).expect("reopen with adequate ceiling");
     assert_eq!(
         reopened.state_witness_tip().expect("reopened tip"),

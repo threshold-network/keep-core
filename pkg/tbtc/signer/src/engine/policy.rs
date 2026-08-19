@@ -1,6 +1,5 @@
 //! Admission, signing-policy firewall, rate limiting, and auto-quarantine enforcement.
 //!
-#![allow(dead_code)]
 
 use super::*;
 

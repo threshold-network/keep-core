@@ -1,6 +1,7 @@
 # Rust Rewrite Bootstrap (tbtc-signer)
 
 Date: 2026-02-23
+Status: Partial — bootstrap landed, production gates open
 
 This document tracks the initial code bootstrap for the `tbtc-signer` Rust
 rewrite architecture.
@@ -25,7 +26,7 @@ rewrite architecture.
   - `frost_tbtc_start_sign_round`
   - `frost_tbtc_finalize_sign_round`
   - `frost_tbtc_build_taproot_tx`
-  - `frost_tbtc_refresh_shares` (symbol retained, but ABI 4.0 fails closed; the
+  - `frost_tbtc_refresh_shares` (symbol retained, but ABI 3 fails closed; the
     one-shot request cannot perform cryptographic FROST share refresh, and the
     major bump prevents ABI-3 consumers from accepting the changed response
     semantics)

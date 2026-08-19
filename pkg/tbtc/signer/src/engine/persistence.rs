@@ -1,6 +1,8 @@
 // Encrypted state-file persistence: envelope codec, key providers, corruption recovery, persisted<->live conversions.
 
 use super::*;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct PersistedKeyPackage {
@@ -635,21 +637,41 @@ pub(crate) fn sync_state_file_parent_directory(path: &Path) -> Result<(), Engine
     let Some(parent) = state_file_parent_directory(path) else {
         return Ok(());
     };
-    let directory = fs::File::open(parent).map_err(|e| {
-        EngineError::Internal(format!(
-            "failed to open signer state directory [{}] for sync: {e}",
-            parent.display()
-        ))
-    })?;
-    directory.sync_all().map_err(|e| {
-        EngineError::Internal(format!(
-            "failed to sync signer state directory [{}]: {e}",
-            parent.display()
-        ))
-    })?;
-    #[cfg(test)]
-    STATE_FILE_PARENT_DIRECTORY_SYNCS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    Ok(())
+    #[cfg(unix)]
+    {
+        // Open the parent directory through the no-follow `openat` traversal
+        // rather than re-resolving `parent` as a path: a symlink swap on
+        // the parent directory would otherwise redirect the fsync at an
+        // attacker-controlled location.
+        let directory = persistence_unix::open_state_directory_nofollow(parent)?;
+        directory.sync_all().map_err(|e| {
+            EngineError::Internal(format!(
+                "failed to sync signer state directory [{}]: {e}",
+                parent.display()
+            ))
+        })?;
+        #[cfg(test)]
+        STATE_FILE_PARENT_DIRECTORY_SYNCS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let directory = fs::File::open(parent).map_err(|e| {
+            EngineError::Internal(format!(
+                "failed to open signer state directory [{}] for sync: {e}",
+                parent.display()
+            ))
+        })?;
+        directory.sync_all().map_err(|e| {
+            EngineError::Internal(format!(
+                "failed to sync signer state directory [{}]: {e}",
+                parent.display()
+            ))
+        })?;
+        #[cfg(test)]
+        STATE_FILE_PARENT_DIRECTORY_SYNCS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 /// Repairs directory durability for an existing state-file entry while
@@ -695,29 +717,53 @@ pub(crate) fn sorted_corrupted_state_backups(path: &Path) -> Result<Vec<PathBuf>
     };
     let backup_prefix = corrupted_state_backup_prefix(path);
 
-    let mut backups = fs::read_dir(parent)
-        .map_err(|e| {
-            EngineError::Internal(format!(
-                "failed to read signer state directory [{}] for backup retention: {e}",
-                parent.display()
-            ))
-        })?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let file_name = entry.file_name();
-            let file_name = file_name.to_string_lossy();
-            if !file_name.starts_with(&backup_prefix) {
-                return None;
-            }
+    #[cfg(unix)]
+    let mut backups: Vec<(PathBuf, SystemTime)> = {
+        // Open the parent directory through the no-follow `openat` traversal
+        // and enumerate entries through `fdopendir`+`readdir`; per-entry
+        // mtime comes from `fstatat`. None of these operations re-resolve
+        // the directory by name, so a symlink swap on the parent cannot
+        // divert the listing.
+        let directory = persistence_unix::open_state_directory_nofollow(parent)?;
+        let entries = persistence_unix::read_dir_entries_via_fd(&directory)?;
+        entries
+            .into_iter()
+            .filter_map(|(file_name, modified)| {
+                let as_string = file_name.to_string_lossy();
+                if !as_string.starts_with(&backup_prefix) {
+                    return None;
+                }
+                Some((parent.join(&file_name), modified))
+            })
+            .collect()
+    };
 
-            let modified = entry
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .unwrap_or(UNIX_EPOCH);
-            Some((entry.path(), modified))
-        })
-        .collect::<Vec<_>>();
+    #[cfg(not(unix))]
+    let mut backups: Vec<(PathBuf, SystemTime)> = {
+        fs::read_dir(parent)
+            .map_err(|e| {
+                EngineError::Internal(format!(
+                    "failed to read signer state directory [{}] for backup retention: {e}",
+                    parent.display()
+                ))
+            })?
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let file_name = entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                if !file_name.starts_with(&backup_prefix) {
+                    return None;
+                }
+
+                let modified = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .unwrap_or(UNIX_EPOCH);
+                Some((entry.path(), modified))
+            })
+            .collect::<Vec<_>>()
+    };
 
     backups.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| right.0.cmp(&left.0)));
 
@@ -735,18 +781,45 @@ pub(crate) fn enforce_corrupted_state_backup_retention(path: &Path) -> Result<()
         return Ok(());
     }
 
-    for backup_path in backup_paths.into_iter().skip(backup_limit) {
-        fs::remove_file(&backup_path).map_err(|e| {
-            EngineError::Internal(format!(
-                "failed to evict old corrupted signer state backup [{}]: {e}",
-                backup_path.display()
-            ))
-        })?;
+    #[cfg(unix)]
+    {
+        // Resolve the eviction name under the no-follow directory fd and
+        // remove via `unlinkat`. Re-resolving each backup's full path
+        // through `fs::remove_file` would let a symlink swap on the
+        // parent directory redirect the unlink at an attacker-controlled
+        // file.
+        let Some(parent) = state_file_parent_directory(path) else {
+            return Ok(());
+        };
+        let directory = persistence_unix::open_state_directory_nofollow(parent)?;
+        let directory_fd = directory.as_raw_fd();
+        for backup_path in backup_paths.into_iter().skip(backup_limit) {
+            let Some(file_name) = backup_path.file_name() else {
+                continue;
+            };
+            persistence_unix::unlinkat_entry(directory_fd, file_name).map_err(|e| {
+                EngineError::Internal(format!(
+                    "failed to evict old corrupted signer state backup [{}]: {e}",
+                    backup_path.display()
+                ))
+            })?;
+        }
+        Ok(())
     }
 
-    Ok(())
+    #[cfg(not(unix))]
+    {
+        for backup_path in backup_paths.into_iter().skip(backup_limit) {
+            fs::remove_file(&backup_path).map_err(|e| {
+                EngineError::Internal(format!(
+                    "failed to evict old corrupted signer state backup [{}]: {e}",
+                    backup_path.display()
+                ))
+            })?;
+        }
+        Ok(())
+    }
 }
-
 pub(crate) fn recover_or_fail_from_corrupted_state_file(
     path: &Path,
     reason: String,
@@ -763,12 +836,20 @@ set {}={} to quarantine the file and continue with clean state",
             let backup_path = corrupted_state_backup_path(path);
             with_state_file_lock_for_load(|store| store.quarantine_state(&backup_path))?;
 
-            eprintln!(
-                "warning: quarantined corrupted signer state file [{}] to [{}]: {}",
-                path.display(),
-                backup_path.display(),
-                reason
-            );
+            // The absolute paths in this warning leak the on-disk
+            // location of the signer state directory. In production the
+            // same profile gate that the FFI error boundary uses
+            // (`development_profile_active`) withholds the line entirely
+            // so an operator staring at `journalctl` does not pick up a
+            // path. Development keeps the line for triage.
+            if development_profile_active() {
+                eprintln!(
+                    "warning: quarantined corrupted signer state file [{}] to [{}]: {}",
+                    path.display(),
+                    backup_path.display(),
+                    reason
+                );
+            }
             enforce_corrupted_state_backup_retention(path)?;
             Ok(EngineState::default())
         }
@@ -2200,5 +2281,234 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             retired_interactive_at_unix: session_state.retired_interactive_at_unix,
             authorized_interactive_aggregate_markers,
         })
+    }
+}
+
+/// Filesystem primitives for the state-file parent directory.
+///
+/// `store.rs` already enforces `openat` + `O_NOFOLLOW` + per-component
+/// identity revalidation for every entry it touches inside the durable
+/// store directory. The state-file persistence path sits one layer up
+/// (its parent directory is the durable store directory) and historically
+/// reached that directory with plain `std::fs::File::open` / `read_dir` /
+/// `remove_file` - all of which re-resolve the path through the
+/// filesystem and would follow a symlink if an attacker could swap the
+/// directory entry for one. This module re-implements the same primitives
+/// store.rs uses (no-follow openat traversal, unlinkat-by-fd, fd-based
+/// readdir) so the persistence helpers inherit the hardening without
+/// store.rs having to expose its private wrappers (those are not
+/// `pub(crate)`). Mirroring rather than reusing keeps the two layers
+/// decoupled; if store.rs later makes its wrappers reusable the
+/// persistence layer can collapse onto them.
+#[cfg(unix)]
+mod persistence_unix {
+    use std::ffi::{CStr, CString, OsStr, OsString};
+    use std::fs;
+    use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::{Component, Path};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use crate::errors::EngineError;
+
+    /// Converts an `OsStr` into a `CString` for `*at()` syscalls. Returns
+    /// `Internal` (matching store.rs) so the persistence layer never has
+    /// to unwrap an error from the syscall wrappers.
+    pub(super) fn os_str_cstring(value: &OsStr, label: &str) -> Result<CString, EngineError> {
+        CString::new(value.as_bytes())
+            .map_err(|_| EngineError::Internal(format!("signer {label} path contains a NUL byte")))
+    }
+
+    /// Opens `path`'s parent directory with `O_DIRECTORY | O_NOFOLLOW`,
+    /// traversing every component without following symlinks. The state
+    /// file's parent is required to be absolute - same precondition as
+    /// `open_absolute_directory_nofollow` in store.rs - because a relative
+    /// traversal would depend on the calling process's `cwd`, which is
+    /// itself attacker-controllable.
+    pub(super) fn open_state_directory_nofollow(parent: &Path) -> Result<fs::File, EngineError> {
+        // Absolute paths traverse from an opened `/`, never following a
+        // symlink at any component. Relative paths (the bare-filename /
+        // "current directory" case `state_file_parent_directory` returns as
+        // `.`) traverse from `AT_FDCWD` instead — same per-component
+        // `O_NOFOLLOW` discipline, just anchored at the process's cwd
+        // rather than the filesystem root, since the caller's cwd is what a
+        // relative state path is defined relative to.
+        let mut owned_directory: Option<fs::File> = if parent.is_absolute() {
+            let root = CString::new("/").expect("root contains no NUL");
+            let root_fd = unsafe {
+                libc::open(
+                    root.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                )
+            };
+            if root_fd < 0 {
+                return Err(EngineError::Internal(format!(
+                    "failed to open filesystem root without following symlinks: {}",
+                    std::io::Error::last_os_error()
+                )));
+            }
+            Some(unsafe { fs::File::from_raw_fd(root_fd) })
+        } else {
+            None
+        };
+
+        for component in parent.components() {
+            let Component::Normal(component) = component else {
+                match component {
+                    Component::RootDir | Component::CurDir => continue,
+                    _ => {
+                        return Err(EngineError::Internal(format!(
+                            "canonical signer state directory [{}] contains a non-normal \
+                             component",
+                            parent.display()
+                        )));
+                    }
+                }
+            };
+            let component = os_str_cstring(component, "directory component")?;
+            let base_fd = owned_directory
+                .as_ref()
+                .map_or(libc::AT_FDCWD, fs::File::as_raw_fd);
+            let next_fd = unsafe {
+                libc::openat(
+                    base_fd,
+                    component.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                )
+            };
+            if next_fd < 0 {
+                return Err(EngineError::Internal(format!(
+                    "failed to traverse canonical signer state directory [{}] without \
+                     following symlinks: {}",
+                    parent.display(),
+                    std::io::Error::last_os_error()
+                )));
+            }
+            owned_directory = Some(unsafe { fs::File::from_raw_fd(next_fd) });
+        }
+
+        match owned_directory {
+            Some(directory) => Ok(directory),
+            None => {
+                // A relative path with no normal components (just "."):
+                // open it directly relative to the process cwd to obtain an
+                // owned fd, still refusing to follow a symlink.
+                let dot = CString::new(".").expect("dot contains no NUL");
+                let fd = unsafe {
+                    libc::openat(
+                        libc::AT_FDCWD,
+                        dot.as_ptr(),
+                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                    )
+                };
+                if fd < 0 {
+                    return Err(EngineError::Internal(format!(
+                        "failed to open signer state directory [{}] without following symlinks: \
+                         {}",
+                        parent.display(),
+                        std::io::Error::last_os_error()
+                    )));
+                }
+                Ok(unsafe { fs::File::from_raw_fd(fd) })
+            }
+        }
+    }
+
+    /// Removes a directory entry by name through `unlinkat` - the path is
+    /// resolved relative to the held directory fd, never re-traversed
+    /// through the filesystem. Mirrors `unlinkat_entry` in store.rs.
+    pub(super) fn unlinkat_entry(directory_fd: RawFd, name: &OsStr) -> Result<(), EngineError> {
+        let name = os_str_cstring(name, "signer state backup")?;
+        if unsafe { libc::unlinkat(directory_fd, name.as_ptr(), 0) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ENOENT) {
+                return Err(EngineError::Internal(format!(
+                    "failed to remove signer state backup: {error}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Lists directory entries by name and modification time without
+    /// resolving the directory through any followable path. The caller
+    /// holds the no-follow directory fd; `fdopendir` consumes a duplicate
+    /// of that fd (closed on `closedir`) and `readdir` populates each
+    /// entry. Modification time is fetched per-entry via `fstatat`, which
+    /// does not require opening it as a file.
+    pub(super) fn read_dir_entries_via_fd(
+        directory: &fs::File,
+    ) -> Result<Vec<(OsString, std::time::SystemTime)>, EngineError> {
+        let directory_fd = directory.as_raw_fd();
+        // `fdopendir` takes ownership of its argument and will close it on
+        // `closedir`; duplicate the fd so the caller's `fs::File` keeps a
+        // live descriptor across the iteration.
+        let dup_fd = unsafe { libc::dup(directory_fd) };
+        if dup_fd < 0 {
+            return Err(EngineError::Internal(format!(
+                "failed to duplicate signer state directory fd for readdir: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        let dir_ptr = unsafe { libc::fdopendir(dup_fd) };
+        if dir_ptr.is_null() {
+            unsafe {
+                libc::close(dup_fd);
+            }
+            return Err(EngineError::Internal(format!(
+                "failed to fdopendir signer state directory: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+
+        let mut entries: Vec<(OsString, std::time::SystemTime)> = Vec::new();
+        loop {
+            // SAFETY: `dir_ptr` is a live DIR* returned by `fdopendir` above.
+            let raw_dirent = unsafe { libc::readdir(dir_ptr) };
+            if raw_dirent.is_null() {
+                break;
+            }
+            // SAFETY: `readdir` returned a non-null pointer to a `dirent`
+            // owned by the DIR*; the pointer is valid until the next
+            // `readdir`/`closedir` call.
+            let dirent = unsafe { &*raw_dirent };
+            // SAFETY: `d_name` is a NUL-terminated C string owned by the
+            // dirent; constructing a `CStr` borrows from it for the
+            // duration of this loop iteration only.
+            let name_cstr = unsafe { CStr::from_ptr(dirent.d_name.as_ptr()) };
+            let name_bytes = name_cstr.to_bytes();
+            // Skip `.` and `..` so the caller cannot accidentally address
+            // them as backups.
+            if name_bytes == b"." || name_bytes == b".." {
+                continue;
+            }
+            let name_osstring = OsStr::from_bytes(name_bytes).to_os_string();
+
+            // `fstatat` against the held directory fd; seconds-granularity
+            // mtime is sufficient for the backup-eviction sort (sub-second
+            // ties fall back to a path tie-breaker).
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+            let stat_result =
+                unsafe { libc::fstatat(directory_fd, dirent.d_name.as_ptr(), &mut stat, 0) };
+            let modified = if stat_result == 0 {
+                let secs = if stat.st_mtime < 0 {
+                    0
+                } else {
+                    stat.st_mtime as u64
+                };
+                UNIX_EPOCH + Duration::from_secs(secs)
+            } else {
+                UNIX_EPOCH
+            };
+
+            entries.push((name_osstring, modified));
+        }
+
+        // SAFETY: `dir_ptr` is the live DIR* from `fdopendir`; `closedir`
+        // releases it AND closes the dup fd it consumed.
+        unsafe {
+            libc::closedir(dir_ptr);
+        }
+        Ok(entries)
     }
 }

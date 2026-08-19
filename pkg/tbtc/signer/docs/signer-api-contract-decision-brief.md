@@ -1,6 +1,7 @@
 # Signer API Contract Decision Brief
 
 Date: February 23, 2026
+Status: Partially adopted — see corrected FFI-surface description above
 
 Purpose: capture the API-contract direction before further implementation work.
 
@@ -30,7 +31,7 @@ interface.
 
 (file: `pkg/frost/signing/native_frost_protocol_frost_native.go`)
 
-### Rewrite plan and `tbtc-signer` use coarse session operations
+### Rewrite plan and `tbtc-signer` actual FFI surface (corrected)
 
 The rewrite plan defines:
 
@@ -42,11 +43,44 @@ The rewrite plan defines:
 
 (plan tracked in `pkg/tbtc/signer/docs/rust-rewrite-bootstrap.md`)
 
-The bootstrap Rust crate already exposes this coarse C ABI surface:
+The actual FFI surface in `pkg/tbtc/signer/src/lib.rs` is HYBRID and does not
+uniformly key on `session_id`:
 
-(file: `pkg/tbtc/signer/src/lib.rs`)
+- DKG stays round-level:
+  - `frost_tbtc_dkg_part1` takes `DkgPart1Request { participant_identifier,
+    max_signers, min_signers }` (no `session_id`).
+  - `frost_tbtc_dkg_part2` takes `DkgPart2Request { secret_package_hex,
+    round1_packages }` (no `session_id`).
+  - `frost_tbtc_dkg_part3` takes `DkgPart3Request { secret_package_hex,
+    round1_packages, round2_packages }` (no `session_id`).
+- Signing-package construction stays round-level:
+  - `frost_tbtc_new_signing_package` takes
+    `NewSigningPackageRequest { message_hex, commitments }` (no `session_id`).
+- Session-keyed (`session_id` is part of the request):
+  - `frost_tbtc_build_taproot_tx` (`BuildTaprootTxRequest`).
+  - `frost_tbtc_refresh_shares` (`RefreshSharesRequest`; symbol retained but
+    fail-closed with `cryptographic_refresh_not_supported` until a
+    multi-round FROST refresh protocol is implemented).
+  - `frost_tbtc_verify_signature_share` (`VerifySignatureShareRequest`).
+  - The hardened interactive signing session ops
+    (`frost_tbtc_interactive_session_open`, `frost_tbtc_interactive_round1`,
+    `frost_tbtc_interactive_round2`, `frost_tbtc_interactive_session_abort`,
+    `frost_tbtc_interactive_aggregate`) - all keyed by
+    `(session_id, attempt_id, member_identifier)` per the frozen Phase 7
+    interactive-session spec.
+- Wire-contract version: the `frost_tbtc_abi_version` export reports
+  `abi_major = 3, abi_minor = 0` (per `TBTC_SIGNER_ABI_MAJOR` /
+  `TBTC_SIGNER_ABI_MINOR` in `lib.rs`). Earlier references in this crate's
+  docs to an `ABI 4.0` value for the same major are stale.
 
-## Design Alternatives
+The "already exposes RunDKG / StartSignRound / FinalizeSignRound" claim in
+the earlier draft of this brief is therefore an oversimplification: the
+round-level DKG and signing-package construction paths are still
+round-level, and only the build-tx / refresh-shares / verify-share /
+interactive-session subset is session-keyed. The recommendation in the
+Recommendation section below still favors the coarse session shape as the
+end-state, but the current surface is a hybrid that needs to be made
+explicit before any further keep-core wiring.
 
 ### Round-Level API Compatibility
 

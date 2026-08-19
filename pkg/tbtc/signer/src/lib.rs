@@ -717,9 +717,9 @@ mod tests {
         }
 
         // The exported DKG group key is a valid BIP-340 x-only public key.
-        // The signing round trip that used to consume it through the removed
-        // stateless FFI ops now lives in the engine tests, which drive the
-        // frost primitives directly and verify a BIP-340 signature end to end.
+        // The full signing round trip is exercised in the engine tests, which
+        // drive the frost primitives directly and verify a BIP-340 signature
+        // end to end. This test only checks the exported group key's format.
         let public_key_bytes = hex::decode(verifying_key).expect("verifying key hex");
         assert_eq!(public_key_bytes.len(), 32);
         XOnlyPublicKey::from_slice(&public_key_bytes).expect("x-only public key");

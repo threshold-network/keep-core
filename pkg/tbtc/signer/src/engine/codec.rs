@@ -1,6 +1,5 @@
 //! Internal helpers; some are only reachable via the FFI surface removed by PR #4198.
 //!
-#![allow(dead_code)]
 
 use super::*;
 
