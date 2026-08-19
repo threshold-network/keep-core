@@ -360,7 +360,9 @@ pub fn verify_blame_proof(
                 session_id: request.session_id.clone(),
             })?;
 
-    let maybe_record = session.audit.0
+    let maybe_record = session
+        .audit
+        .0
         .iter()
         .find(|record| record.from_attempt_number == request.from_attempt_number);
     let (verified, detail, transcript_hash) = if let Some(record) = maybe_record {

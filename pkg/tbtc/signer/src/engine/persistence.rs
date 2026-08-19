@@ -151,10 +151,7 @@ impl std::fmt::Debug for PersistedSessionState {
                 "retired_interactive_at_unix",
                 &self.retired_interactive_at_unix,
             )
-            .field(
-                "policy_snapshot_version",
-                &self.policy_snapshot_version,
-            )
+            .field("policy_snapshot_version", &self.policy_snapshot_version)
             .field(
                 "authorized_interactive_aggregate_markers",
                 &self.authorized_interactive_aggregate_markers,
@@ -438,7 +435,8 @@ fn clear_snapshot_covered_operations(engine_state: &EngineState) {
                 .get(session_id)
                 .is_some_and(|session| {
                     session
-                        .interactive.consumed_attempt_markers
+                        .interactive
+                        .consumed_attempt_markers
                         .contains(consumed_marker)
                 }),
             PersistencePendingOperation::InteractiveAggregate {
@@ -449,7 +447,8 @@ fn clear_snapshot_covered_operations(engine_state: &EngineState) {
                 .get(session_id)
                 .is_some_and(|session| {
                     session
-                        .interactive.aggregated_attempt_markers
+                        .interactive
+                        .aggregated_attempt_markers
                         .contains(aggregated_marker)
                 }),
             PersistencePendingOperation::InteractiveState { session_id } => {
@@ -2062,7 +2061,6 @@ impl TryFrom<PersistedSessionState> for SessionState {
                 // still loads as 0). Round-tripped through this TryFrom - it has no
                 // production reader today but persistence is already wired.
                 policy_snapshot_version: persisted.policy_snapshot_version,
-                ..Default::default()
             },
             signing: LegacySigningSessionState {
                 request_fingerprint: persisted.sign_request_fingerprint,
@@ -2077,7 +2075,6 @@ impl TryFrom<PersistedSessionState> for SessionState {
                 consumed_sign_round_ids,
                 consumed_finalize_round_ids,
                 consumed_finalize_request_fingerprints,
-                ..Default::default()
             },
             interactive: InteractiveSessionState {
                 // Live interactive state never restores: nonces are gone by
@@ -2093,7 +2090,6 @@ impl TryFrom<PersistedSessionState> for SessionState {
                 consumed_attempt_markers: consumed_interactive_attempt_markers,
                 authorized_aggregate_markers: authorized_interactive_aggregate_markers,
                 aggregated_attempt_markers: aggregated_interactive_attempt_markers,
-                ..Default::default()
             },
             audit: AuditTrail(persisted.attempt_transition_records),
             lifecycle: LifecycleState {
@@ -2108,7 +2104,6 @@ impl TryFrom<PersistedSessionState> for SessionState {
                     .max(persisted.refresh_history.len() as u64),
                 refresh_history: persisted.refresh_history,
                 emergency_rekey_event: persisted.emergency_rekey_event,
-                ..Default::default()
             },
             capacity_pins: OperationalState {
                 // Transient: never written into the persisted schema.
@@ -2118,7 +2113,6 @@ impl TryFrom<PersistedSessionState> for SessionState {
                 // Transient: never persisted; no operation can remain in flight
                 // across a restart.
                 aggregate_eviction_pin: Arc::new(()),
-                ..Default::default()
             },
         };
         if session.capacity_pins.retired_interactive_at_unix.is_some()
@@ -2137,7 +2131,8 @@ impl TryFrom<&SessionState> for PersistedSessionState {
 
     fn try_from(session_state: &SessionState) -> Result<Self, Self::Error> {
         let dkg_key_packages = session_state
-            .dkg.key_packages
+            .dkg
+            .key_packages
             .as_ref()
             .map(|key_packages| {
                 key_packages
@@ -2161,7 +2156,8 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             .transpose()?;
 
         let dkg_public_key_package_hex = session_state
-            .dkg.public_key_package
+            .dkg
+            .public_key_package
             .as_ref()
             .map(|public_key_package| {
                 let mut public_key_package_bytes = public_key_package.serialize().map_err(|e| {
@@ -2176,7 +2172,8 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             .transpose()?;
 
         let sign_message_hex = session_state
-            .signing.message_bytes
+            .signing
+            .message_bytes
             .as_ref()
             .map(|sign_message_bytes| Zeroizing::new(hex::encode(sign_message_bytes.as_slice())));
         ensure_consumed_registry_persisted_bound(
@@ -2192,7 +2189,10 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             "consumed_finalize_round_ids",
         )?;
         ensure_consumed_registry_persisted_bound(
-            session_state.signing.consumed_finalize_request_fingerprints.len(),
+            session_state
+                .signing
+                .consumed_finalize_request_fingerprints
+                .len(),
             "consumed_finalize_request_fingerprints",
         )?;
         ensure_consumed_registry_persisted_bound(
@@ -2203,9 +2203,7 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             session_state.interactive.authorized_aggregate_markers.len(),
             "authorized_interactive_aggregate_markers",
         )?;
-        if session_state.audit.0.len()
-            > TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION
-        {
+        if session_state.audit.0.len() > TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION {
             return Err(EngineError::Internal(format!(
                 "attempt_transition_records size [{}] exceeds max [{}]",
                 session_state.audit.0.len(),
@@ -2213,43 +2211,50 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             )));
         }
         let mut consumed_attempt_ids = session_state
-            .signing.consumed_attempt_ids
+            .signing
+            .consumed_attempt_ids
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_attempt_ids.sort_unstable();
         let mut consumed_sign_round_ids = session_state
-            .signing.consumed_sign_round_ids
+            .signing
+            .consumed_sign_round_ids
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_sign_round_ids.sort_unstable();
         let mut consumed_finalize_round_ids = session_state
-            .signing.consumed_finalize_round_ids
+            .signing
+            .consumed_finalize_round_ids
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_finalize_round_ids.sort_unstable();
         let mut consumed_finalize_request_fingerprints = session_state
-            .signing.consumed_finalize_request_fingerprints
+            .signing
+            .consumed_finalize_request_fingerprints
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_finalize_request_fingerprints.sort_unstable();
         let mut consumed_interactive_attempt_markers = session_state
-            .interactive.consumed_attempt_markers
+            .interactive
+            .consumed_attempt_markers
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         consumed_interactive_attempt_markers.sort_unstable();
         let mut aggregated_interactive_attempt_markers = session_state
-            .interactive.aggregated_attempt_markers
+            .interactive
+            .aggregated_attempt_markers
             .iter()
             .cloned()
             .collect::<Vec<_>>();
         aggregated_interactive_attempt_markers.sort_unstable();
         let mut authorized_interactive_aggregate_markers = session_state
-            .interactive.authorized_aggregate_markers
+            .interactive
+            .authorized_aggregate_markers
             .iter()
             .cloned()
             .collect::<Vec<_>>();
@@ -2267,13 +2272,22 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             attempt_transition_records: session_state.audit.0.clone(),
             consumed_attempt_ids,
             consumed_sign_round_ids,
-            finalize_request_fingerprint: session_state.signing.finalize_request_fingerprint.clone(),
+            finalize_request_fingerprint: session_state
+                .signing
+                .finalize_request_fingerprint
+                .clone(),
             signature_result: session_state.signing.signature_result.clone(),
             consumed_finalize_round_ids,
             consumed_finalize_request_fingerprints,
-            build_tx_request_fingerprint: session_state.signing.build_tx_request_fingerprint.clone(),
+            build_tx_request_fingerprint: session_state
+                .signing
+                .build_tx_request_fingerprint
+                .clone(),
             tx_result: session_state.signing.tx_result.clone(),
-            refresh_request_fingerprint: session_state.lifecycle.refresh_request_fingerprint.clone(),
+            refresh_request_fingerprint: session_state
+                .lifecycle
+                .refresh_request_fingerprint
+                .clone(),
             refresh_result: session_state.lifecycle.refresh_result.clone(),
             refresh_history: session_state.lifecycle.refresh_history.clone(),
             refresh_count: session_state.lifecycle.refresh_count,

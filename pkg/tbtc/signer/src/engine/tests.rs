@@ -767,7 +767,8 @@ fn persist_state_for_key_provider_test(session_id: &str) -> Result<(), EngineErr
         .sessions
         .entry(session_id.to_string())
         .or_default()
-        .interactive.bound_key_group = Some("state-key-provider-test".to_string());
+        .interactive
+        .bound_key_group = Some("state-key-provider-test".to_string());
     persist_engine_state_to_storage(&guard).map_err(PersistEngineStateError::into_engine_error)
 }
 
@@ -825,17 +826,16 @@ fn build_taproot_tx_persist_failures_roll_back_or_retry_durably() {
         guard.sessions.insert(
             existing_session.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("existing-wallet-binding".to_string()),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some("existing-wallet-binding".to_string()),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState::default(),
+                audit: AuditTrail::default(),
+            },
         );
     }
     set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
@@ -945,21 +945,20 @@ fn build_taproot_tx_restores_evicted_retirement_on_pre_replace_failure() {
         guard.sessions.insert(
             retired_session.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("build-slot-wallet-key".to_string()),
-            consumed_attempt_markers: HashSet::from([consumed_marker.clone()]),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(1),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some("build-slot-wallet-key".to_string()),
+                    consumed_attempt_markers: HashSet::from([consumed_marker.clone()]),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState {
+                    retired_interactive_at_unix: Some(1),
+                    ..Default::default()
+                },
+                audit: AuditTrail::default(),
+            },
         );
         persist_engine_state_to_storage(&guard).expect("persist full shared session budget");
     }
@@ -979,7 +978,8 @@ fn build_taproot_tx_restores_evicted_retirement_on_pre_replace_failure() {
         assert_eq!(guard.sessions.len(), 2);
         assert!(!guard.sessions.contains_key(newcomer));
         assert!(guard.sessions[retired_session]
-            .interactive.consumed_attempt_markers
+            .interactive
+            .consumed_attempt_markers
             .contains(&consumed_marker));
     }
 
@@ -1021,22 +1021,25 @@ fn build_taproot_tx_capacity_preflight_does_not_consume_policy_rate_token() {
         guard.sessions.insert(
             retired_session.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("build-rate-wallet-key".to_string()),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(1),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some("build-rate-wallet-key".to_string()),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState {
+                    retired_interactive_at_unix: Some(1),
+                    ..Default::default()
+                },
+                audit: AuditTrail::default(),
+            },
         );
-        Arc::clone(&guard.sessions[retired_session].capacity_pins.aggregate_eviction_pin)
+        Arc::clone(
+            &guard.sessions[retired_session]
+                .capacity_pins
+                .aggregate_eviction_pin,
+        )
     };
 
     let request = build_policy_test_request("build-rate-new-active");
@@ -1205,7 +1208,9 @@ fn persist_distributed_dkg_key_package_accumulates_seats_under_one_session() {
 
     let guard = state().expect("state").lock().expect("engine lock");
     let session = guard.sessions.get(&session_id).expect("session exists");
-    let key_packages = session.dkg.key_packages
+    let key_packages = session
+        .dkg
+        .key_packages
         .as_ref()
         .expect("key packages present");
     assert!(
@@ -1264,17 +1269,16 @@ fn persist_distributed_dkg_key_package_rejects_a_bound_signing_session() {
         guard.sessions.insert(
             session_id.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("original-wallet-key-group".to_string()),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some("original-wallet-key-group".to_string()),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState::default(),
+                audit: AuditTrail::default(),
+            },
         );
     }
 
@@ -1327,21 +1331,20 @@ fn persist_distributed_dkg_key_package_pre_replace_failure_restores_retired_slot
         guard.sessions.insert(
             retired_session.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("distributed-dkg-retired-key".to_string()),
-            consumed_attempt_markers: HashSet::from([consumed_marker.clone()]),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(1),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some("distributed-dkg-retired-key".to_string()),
+                    consumed_attempt_markers: HashSet::from([consumed_marker.clone()]),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState {
+                    retired_interactive_at_unix: Some(1),
+                    ..Default::default()
+                },
+                audit: AuditTrail::default(),
+            },
         );
         persist_engine_state_to_storage(&guard).expect("persist full shared session budget");
     }
@@ -1372,7 +1375,8 @@ fn persist_distributed_dkg_key_package_pre_replace_failure_restores_retired_slot
             "failed first persistence must not leave in-memory-only DKG material"
         );
         assert!(guard.sessions[retired_session]
-            .interactive.consumed_attempt_markers
+            .interactive
+            .consumed_attempt_markers
             .contains(&consumed_marker));
         assert_eq!(guard.sessions.len(), 2);
     }
@@ -1387,7 +1391,9 @@ fn persist_distributed_dkg_key_package_pre_replace_failure_restores_retired_slot
         .get(session_id)
         .expect("reloaded DKG session");
     assert_eq!(session.dkg.result.as_ref(), Some(&result));
-    assert!(session.dkg.key_packages
+    assert!(session
+        .dkg
+        .key_packages
         .as_ref()
         .is_some_and(|packages| packages.contains_key(&1)));
     assert_eq!(guard.sessions.len(), 2);
@@ -1427,7 +1433,8 @@ fn distributed_dkg_pre_replace_rollback_preserves_existing_seats() {
     let baseline_key_package = {
         let guard = state().expect("engine state").lock().expect("engine lock");
         guard.sessions[session_id]
-            .dkg.key_packages
+            .dkg
+            .key_packages
             .as_ref()
             .expect("key packages")[&1]
             .serialize()
@@ -1445,7 +1452,9 @@ fn distributed_dkg_pre_replace_rollback_preserves_existing_seats() {
         let session = &guard.sessions[session_id];
         assert_eq!(session.dkg.result.as_ref(), Some(&baseline));
         assert_eq!(
-            session.dkg.key_packages
+            session
+                .dkg
+                .key_packages
                 .as_ref()
                 .expect("restored key packages")[&1]
                 .serialize()
@@ -1463,7 +1472,8 @@ fn distributed_dkg_pre_replace_rollback_preserves_existing_seats() {
     {
         let guard = state().expect("engine state").lock().expect("engine lock");
         let packages = guard.sessions[session_id]
-            .dkg.key_packages
+            .dkg
+            .key_packages
             .as_ref()
             .expect("baseline key packages");
         assert!(packages.contains_key(&1));
@@ -2433,7 +2443,8 @@ fn first_refresh_deadline_survives_restart_and_becomes_overdue() {
             .sessions
             .get_mut(overdue_session_id)
             .expect("overdue wallet session")
-            .dkg.result
+            .dkg
+            .result
             .as_mut()
             .expect("DKG result")
             .created_at_unix = created_at_unix;
@@ -2479,11 +2490,14 @@ fn legacy_synthetic_refresh_metadata_cannot_postpone_cadence_or_claim_continuity
     {
         let mut guard = state().expect("engine state").lock().expect("engine lock");
         let session = guard.sessions.get_mut(session_id).expect("wallet session");
-        session.dkg.result
+        session
+            .dkg
+            .result
             .as_mut()
             .expect("DKG result")
             .created_at_unix = created_at_unix;
-        session.lifecycle.refresh_request_fingerprint = Some("legacy-synthetic-request".to_string());
+        session.lifecycle.refresh_request_fingerprint =
+            Some("legacy-synthetic-request".to_string());
         session.lifecycle.refresh_result = Some(RefreshSharesResult {
             session_id: session_id.to_string(),
             refresh_epoch: 1,
@@ -2541,7 +2555,8 @@ fn unanchored_legacy_refresh_session_is_immediately_overdue_after_restart() {
         let mut guard = state().expect("engine state").lock().expect("engine lock");
         let session = guard.sessions.entry(session_id.to_string()).or_default();
         assert!(session.dkg.result.is_none());
-        session.lifecycle.refresh_request_fingerprint = Some("legacy-refresh-only-request".to_string());
+        session.lifecycle.refresh_request_fingerprint =
+            Some("legacy-refresh-only-request".to_string());
         session.lifecycle.refresh_result = Some(RefreshSharesResult {
             session_id: session_id.to_string(),
             refresh_epoch: 1,
@@ -2891,7 +2906,8 @@ fn emergency_rekey_persist_failure_rolls_back_and_retry_is_durable() {
                 .sessions
                 .get(session_id)
                 .expect("wallet session")
-                .lifecycle.emergency_rekey_event
+                .lifecycle
+                .emergency_rekey_event
                 .is_none(),
             "a failed persist must not strand an in-memory-only kill switch"
         );
@@ -2907,7 +2923,8 @@ fn emergency_rekey_persist_failure_rolls_back_and_retry_is_durable() {
             .sessions
             .get(session_id)
             .expect("reloaded wallet session")
-            .lifecycle.emergency_rekey_event
+            .lifecycle
+            .emergency_rekey_event
             .as_ref()
             .expect("durable emergency rekey event");
         assert_eq!(event.reason, "compromise containment");
@@ -2974,7 +2991,8 @@ fn emergency_rekey_different_reason_retry_repairs_pending_persistence() {
     let guard = state().expect("engine state").lock().expect("engine lock");
     assert_eq!(
         guard.sessions[session_id]
-            .lifecycle.emergency_rekey_event
+            .lifecycle
+            .emergency_rekey_event
             .as_ref()
             .expect("durable rekey event")
             .reason,
@@ -3014,7 +3032,8 @@ fn emergency_rekey_post_replace_state_survives_immediate_process_restart() {
     let guard = state().expect("engine state").lock().expect("engine lock");
     assert_eq!(
         guard.sessions[session_id]
-            .lifecycle.emergency_rekey_event
+            .lifecycle
+            .emergency_rekey_event
             .as_ref()
             .expect("post-replacement event survives restart")
             .reason,
@@ -3242,7 +3261,8 @@ fn lifecycle_post_rename_persist_failures_remain_fail_closed_and_retry_durably()
         let guard = state().expect("engine state").lock().expect("engine lock");
         assert!(
             guard.sessions[rekey_session]
-                .lifecycle.emergency_rekey_event
+                .lifecycle
+                .emergency_rekey_event
                 .is_some(),
             "a replaced state file keeps the in-memory kill switch fail closed"
         );
@@ -3315,7 +3335,8 @@ fn lifecycle_post_rename_persist_failures_remain_fail_closed_and_retry_durably()
     reload_state_from_storage_for_tests();
     let guard = state().expect("engine state").lock().expect("engine lock");
     assert!(guard.sessions[rekey_session]
-        .lifecycle.emergency_rekey_event
+        .lifecycle
+        .emergency_rekey_event
         .is_some());
     assert_eq!(guard.canary_rollout.current_percent, 10);
     assert_eq!(guard.canary_rollout.config_version, 3);
@@ -4669,11 +4690,13 @@ fn persisted_engine_state_compacts_migrated_idle_entries_to_legacy_total_bound()
     assert_eq!(active_session_count(&loaded.sessions), 1);
     assert_eq!(retired_interactive_session_count(&loaded.sessions), 1);
     assert!(loaded.sessions["wallet"]
-        .capacity_pins.retired_interactive_at_unix
+        .capacity_pins
+        .retired_interactive_at_unix
         .is_none());
     assert!(!loaded.sessions.contains_key("aborted-message"));
     assert!(loaded.sessions["consumed-message"]
-        .capacity_pins.retired_interactive_at_unix
+        .capacity_pins
+        .retired_interactive_at_unix
         .is_some());
 
     let encoded = PersistedEngineState::try_from(&loaded).expect("compacted state encodes");
@@ -4764,7 +4787,6 @@ fn persisted_session_state_round_trip_preserves_bound_key_group() {
         lifecycle: LifecycleState::default(),
         capacity_pins: OperationalState::default(),
         audit: AuditTrail::default(),
-        ..Default::default()
     };
     let persisted = PersistedSessionState::try_from(&session).expect("serialize");
     assert_eq!(
@@ -4965,7 +4987,10 @@ fn interactive_open_refuses_to_rebind_a_live_session_to_a_different_key_group() 
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(shared_session).expect("shared session");
-        assert_eq!(session.interactive.bound_key_group.as_deref(), Some(key_group_a));
+        assert_eq!(
+            session.interactive.bound_key_group.as_deref(),
+            Some(key_group_a)
+        );
         assert!(
             session.interactive.interactive_signing.contains_key(&1),
             "wallet A's live member entry must survive B's rejected open"
@@ -5019,7 +5044,9 @@ fn interactive_open_refuses_to_bind_through_another_wallets_dkg_session() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(wallet_a).expect("wallet A session");
         assert_eq!(
-            session.dkg.result
+            session
+                .dkg
+                .result
                 .as_ref()
                 .map(|dkg| dkg.key_group.as_str()),
             Some(key_group_a)
@@ -5155,120 +5182,122 @@ fn per_message_session_retirement_preserves_wallet_routing_and_retry_state() {
     engine_state.sessions.insert(
         "wallet".to_string(),
         SessionState {
-        dkg: DkgSessionState {
-            result: Some(DkgResult {
-                session_id: "wallet".to_string(),
-                key_group: "wallet-key-group".to_string(),
-                participant_count: 3,
-                threshold: 2,
-                created_at_unix: now_unix(),
-            }),
-            ..Default::default()
+            dkg: DkgSessionState {
+                result: Some(DkgResult {
+                    session_id: "wallet".to_string(),
+                    key_group: "wallet-key-group".to_string(),
+                    participant_count: 3,
+                    threshold: 2,
+                    created_at_unix: now_unix(),
+                }),
+                ..Default::default()
+            },
+            signing: LegacySigningSessionState::default(),
+            interactive: InteractiveSessionState::default(),
+            lifecycle: LifecycleState::default(),
+            capacity_pins: OperationalState::default(),
+            audit: AuditTrail::default(),
         },
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState::default(),
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
     );
     engine_state.sessions.insert(
         "open-only".to_string(),
         SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("wallet-key-group".to_string()),
-            ..Default::default()
+            dkg: DkgSessionState::default(),
+            signing: LegacySigningSessionState::default(),
+            interactive: InteractiveSessionState {
+                bound_key_group: Some("wallet-key-group".to_string()),
+                ..Default::default()
+            },
+            lifecycle: LifecycleState::default(),
+            capacity_pins: OperationalState::default(),
+            audit: AuditTrail::default(),
         },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
     );
     engine_state.sessions.insert(
         "consumed".to_string(),
         SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("wallet-key-group".to_string()),
-            consumed_attempt_markers: HashSet::from([interactive_consumed_marker(
-                &"11".repeat(32),
-                1,
-            )]),
-            authorized_aggregate_markers: HashSet::from(["22".repeat(32)]),
-            ..Default::default()
+            dkg: DkgSessionState::default(),
+            signing: LegacySigningSessionState::default(),
+            interactive: InteractiveSessionState {
+                bound_key_group: Some("wallet-key-group".to_string()),
+                consumed_attempt_markers: HashSet::from([interactive_consumed_marker(
+                    &"11".repeat(32),
+                    1,
+                )]),
+                authorized_aggregate_markers: HashSet::from(["22".repeat(32)]),
+                ..Default::default()
+            },
+            lifecycle: LifecycleState::default(),
+            capacity_pins: OperationalState::default(),
+            audit: AuditTrail::default(),
         },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
     );
     engine_state.sessions.insert(
         "completed".to_string(),
         SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("wallet-key-group".to_string()),
-            aggregated_attempt_markers: HashSet::from([format!(
-                "{}@{}@keypath",
-                "33".repeat(32),
-                "44".repeat(32)
-            )]),
-            ..Default::default()
+            dkg: DkgSessionState::default(),
+            signing: LegacySigningSessionState::default(),
+            interactive: InteractiveSessionState {
+                bound_key_group: Some("wallet-key-group".to_string()),
+                aggregated_attempt_markers: HashSet::from([format!(
+                    "{}@{}@keypath",
+                    "33".repeat(32),
+                    "44".repeat(32)
+                )]),
+                ..Default::default()
+            },
+            lifecycle: LifecycleState::default(),
+            capacity_pins: OperationalState::default(),
+            audit: AuditTrail::default(),
         },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
     );
     engine_state.sessions.insert(
         "retry-policy".to_string(),
         SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState {
-            build_tx_request_fingerprint: Some("policy-fingerprint".to_string()),
-            ..Default::default()
+            dkg: DkgSessionState::default(),
+            signing: LegacySigningSessionState {
+                build_tx_request_fingerprint: Some("policy-fingerprint".to_string()),
+                ..Default::default()
+            },
+            interactive: InteractiveSessionState {
+                bound_key_group: Some("wallet-key-group".to_string()),
+                ..Default::default()
+            },
+            lifecycle: LifecycleState::default(),
+            capacity_pins: OperationalState::default(),
+            audit: AuditTrail::default(),
         },
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("wallet-key-group".to_string()),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
     );
 
     assert_eq!(retire_idle_per_message_sessions(&mut engine_state, None), 4);
     assert_eq!(active_session_count(&engine_state.sessions), 1);
     assert_eq!(retired_interactive_session_count(&engine_state.sessions), 4);
     assert!(engine_state.sessions["wallet"]
-        .capacity_pins.retired_interactive_at_unix
+        .capacity_pins
+        .retired_interactive_at_unix
         .is_none());
     assert_eq!(
-        engine_state.sessions["retry-policy"].signing.build_tx_request_fingerprint,
+        engine_state.sessions["retry-policy"]
+            .signing
+            .build_tx_request_fingerprint,
         Some("policy-fingerprint".to_string())
     );
     assert!(engine_state.sessions["consumed"]
-        .interactive.authorized_aggregate_markers
+        .interactive
+        .authorized_aggregate_markers
         .contains(&"22".repeat(32)));
 
     reactivate_retired_per_message_session(&mut engine_state, "retry-policy")
         .expect("retired retry state reactivates");
     assert_eq!(active_session_count(&engine_state.sessions), 2);
     assert!(engine_state.sessions["retry-policy"]
-        .capacity_pins.retired_interactive_at_unix
+        .capacity_pins
+        .retired_interactive_at_unix
         .is_none());
     assert_eq!(
-        engine_state.sessions["retry-policy"].signing.build_tx_request_fingerprint,
+        engine_state.sessions["retry-policy"]
+            .signing
+            .build_tx_request_fingerprint,
         Some("policy-fingerprint".to_string())
     );
 
@@ -5286,24 +5315,23 @@ fn retired_per_message_sessions_share_the_total_bound_and_yield_to_admission() {
         engine_state.sessions.insert(
             session_id.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("wallet-key-group".to_string()),
-            consumed_attempt_markers: HashSet::from([interactive_consumed_marker(
-                    &hash_hex(session_id.as_bytes()),
-                    1,
-                )]),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(retired_at),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some("wallet-key-group".to_string()),
+                    consumed_attempt_markers: HashSet::from([interactive_consumed_marker(
+                        &hash_hex(session_id.as_bytes()),
+                        1,
+                    )]),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState {
+                    retired_interactive_at_unix: Some(retired_at),
+                    ..Default::default()
+                },
+                audit: AuditTrail::default(),
+            },
         );
     }
 
@@ -5352,24 +5380,27 @@ fn session_slot_reservation_preserves_pinned_and_persistence_pending_tombstones(
     engine_state.sessions.insert(
         retired_session.to_string(),
         SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("protected-retired-key".to_string()),
-            aggregated_attempt_markers: HashSet::from([aggregated_marker.clone()]),
-            ..Default::default()
+            dkg: DkgSessionState::default(),
+            signing: LegacySigningSessionState::default(),
+            interactive: InteractiveSessionState {
+                bound_key_group: Some("protected-retired-key".to_string()),
+                aggregated_attempt_markers: HashSet::from([aggregated_marker.clone()]),
+                ..Default::default()
+            },
+            lifecycle: LifecycleState::default(),
+            capacity_pins: OperationalState {
+                retired_interactive_at_unix: Some(1),
+                ..Default::default()
+            },
+            audit: AuditTrail::default(),
         },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(1),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
     );
 
-    let aggregate_pin = Arc::clone(&engine_state.sessions[retired_session].capacity_pins.aggregate_eviction_pin);
+    let aggregate_pin = Arc::clone(
+        &engine_state.sessions[retired_session]
+            .capacity_pins
+            .aggregate_eviction_pin,
+    );
     let pinned_error = match ensure_session_insert_capacity(&mut engine_state, "new-active") {
         Ok(_) => panic!("an in-flight Aggregate pin must block eviction"),
         Err(error) => error,
@@ -5420,30 +5451,31 @@ fn idle_per_message_session_stays_active_while_marker_persistence_is_pending() {
     engine_state.sessions.insert(
         session_id.to_string(),
         SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some("pending-idle-key-group".to_string()),
-            aggregated_attempt_markers: HashSet::from([aggregated_marker]),
-            ..Default::default()
+            dkg: DkgSessionState::default(),
+            signing: LegacySigningSessionState::default(),
+            interactive: InteractiveSessionState {
+                bound_key_group: Some("pending-idle-key-group".to_string()),
+                aggregated_attempt_markers: HashSet::from([aggregated_marker]),
+                ..Default::default()
+            },
+            lifecycle: LifecycleState::default(),
+            capacity_pins: OperationalState::default(),
+            audit: AuditTrail::default(),
         },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
     );
     mark_persistence_pending(pending_operation.clone());
 
     assert_eq!(retire_idle_per_message_sessions(&mut engine_state, None), 0);
     assert!(engine_state.sessions[session_id]
-        .capacity_pins.retired_interactive_at_unix
+        .capacity_pins
+        .retired_interactive_at_unix
         .is_none());
 
     clear_persistence_pending_operation(&pending_operation);
     assert_eq!(retire_idle_per_message_sessions(&mut engine_state, None), 1);
     assert!(engine_state.sessions[session_id]
-        .capacity_pins.retired_interactive_at_unix
+        .capacity_pins
+        .retired_interactive_at_unix
         .is_some());
 }
 
@@ -7586,11 +7618,15 @@ fn interactive_round2_state_key_failure_does_not_burn_attempt() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
-            !session.interactive.consumed_attempt_markers
+            !session
+                .interactive
+                .consumed_attempt_markers
                 .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "a Round2 that failed at the state-key step must not leave a consumption marker"
         );
-        let interactive = session.interactive.interactive_signing
+        let interactive = session
+            .interactive
+            .interactive_signing
             .get(&1)
             .expect("key failure leaves the nonce handle retryable");
         assert!(interactive.round1.is_some(), "Round1 nonces remain live");
@@ -7689,7 +7725,9 @@ fn interactive_session_full_round_trip_aggregates_bip340() {
             "completed Round2 must free the live interactive session state"
         );
         assert!(
-            session.interactive.consumed_attempt_markers
+            session
+                .interactive
+                .consumed_attempt_markers
                 .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "the durable consumption marker must remain after Round2"
         );
@@ -7854,11 +7892,13 @@ fn interactive_signs_across_sessions_by_key_group() {
         assert_eq!(active_session_count(&guard.sessions), 2);
         assert_eq!(retired_interactive_session_count(&guard.sessions), 1);
         assert!(guard.sessions[signing_session]
-            .capacity_pins.retired_interactive_at_unix
+            .capacity_pins
+            .retired_interactive_at_unix
             .is_some());
         assert_eq!(
             guard.sessions[signing_session]
-                .interactive.authorized_aggregate_markers
+                .interactive
+                .authorized_aggregate_markers
                 .len(),
             1
         );
@@ -7913,11 +7953,13 @@ fn interactive_signs_across_sessions_by_key_group() {
         assert!(guard.sessions.contains_key(signing_session));
         assert!(guard.sessions.contains_key(next_session));
         assert!(guard.sessions[signing_session]
-            .capacity_pins.retired_interactive_at_unix
+            .capacity_pins
+            .retired_interactive_at_unix
             .is_some());
         assert_eq!(
             guard.sessions[signing_session]
-                .interactive.authorized_aggregate_markers
+                .interactive
+                .authorized_aggregate_markers
                 .len(),
             1
         );
@@ -7984,7 +8026,10 @@ fn per_message_abort_and_expiry_retire_without_losing_policy_artifacts() {
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = &guard.sessions[aborted_session];
-        assert_eq!(session.interactive.bound_key_group.as_deref(), Some(key_group));
+        assert_eq!(
+            session.interactive.bound_key_group.as_deref(),
+            Some(key_group)
+        );
         assert!(session.capacity_pins.retired_interactive_at_unix.is_some());
         assert!(session.signing.build_tx_request_fingerprint.is_some());
         assert!(session.signing.tx_result.is_some());
@@ -8019,7 +8064,10 @@ fn per_message_abort_and_expiry_retire_without_losing_policy_artifacts() {
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = &guard.sessions[expired_session];
-        assert_eq!(session.interactive.bound_key_group.as_deref(), Some(key_group));
+        assert_eq!(
+            session.interactive.bound_key_group.as_deref(),
+            Some(key_group)
+        );
         assert!(session.capacity_pins.retired_interactive_at_unix.is_some());
         assert!(session.signing.build_tx_request_fingerprint.is_some());
         assert!(session.signing.tx_result.is_some());
@@ -8094,7 +8142,10 @@ fn first_open_persists_per_message_binding_before_restart() {
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = &guard.sessions[signing_session];
-        assert_eq!(session.interactive.bound_key_group.as_deref(), Some(key_group));
+        assert_eq!(
+            session.interactive.bound_key_group.as_deref(),
+            Some(key_group)
+        );
         assert!(session.capacity_pins.retired_interactive_at_unix.is_some());
         assert!(session.interactive.interactive_signing.is_empty());
         assert!(session.signing.build_tx_request_fingerprint.is_some());
@@ -8137,21 +8188,20 @@ fn first_open_binding_persist_failures_are_transactional_and_repairable() {
         guard.sessions.insert(
             retired_session.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some(key_group.to_string()),
-            consumed_attempt_markers: HashSet::from([retired_marker.clone()]),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(1),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some(key_group.to_string()),
+                    consumed_attempt_markers: HashSet::from([retired_marker.clone()]),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState {
+                    retired_interactive_at_unix: Some(1),
+                    ..Default::default()
+                },
+                audit: AuditTrail::default(),
+            },
         );
     }
     build_taproot_tx(build_policy_test_request(post_replace_session))
@@ -8196,7 +8246,8 @@ fn first_open_binding_persist_failures_are_transactional_and_repairable() {
         let guard = state().expect("state").lock().expect("lock");
         assert!(!guard.sessions.contains_key(retired_session));
         assert!(guard.sessions[pre_replace_session]
-            .interactive.interactive_signing
+            .interactive
+            .interactive_signing
             .contains_key(&1));
         assert_eq!(guard.sessions.len(), 3);
     }
@@ -8215,7 +8266,10 @@ fn first_open_binding_persist_failures_are_transactional_and_repairable() {
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = &guard.sessions[post_replace_session];
-        assert_eq!(session.interactive.bound_key_group.as_deref(), Some(key_group));
+        assert_eq!(
+            session.interactive.bound_key_group.as_deref(),
+            Some(key_group)
+        );
         assert!(session.capacity_pins.retired_interactive_at_unix.is_some());
         assert!(session.interactive.interactive_signing.is_empty());
     }
@@ -8232,7 +8286,10 @@ fn first_open_binding_persist_failures_are_transactional_and_repairable() {
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = &guard.sessions[post_replace_session];
-        assert_eq!(session.interactive.bound_key_group.as_deref(), Some(key_group));
+        assert_eq!(
+            session.interactive.bound_key_group.as_deref(),
+            Some(key_group)
+        );
         assert!(session.capacity_pins.retired_interactive_at_unix.is_none());
         assert!(session.interactive.interactive_signing.contains_key(&1));
         assert_eq!(guard.sessions.len(), 3);
@@ -8310,7 +8367,10 @@ fn partial_member_expiry_persists_binding_before_restart() {
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = &guard.sessions[signing_session];
-        assert_eq!(session.interactive.bound_key_group.as_deref(), Some(key_group));
+        assert_eq!(
+            session.interactive.bound_key_group.as_deref(),
+            Some(key_group)
+        );
         assert!(session.capacity_pins.retired_interactive_at_unix.is_none());
         assert!(!session.interactive.interactive_signing.contains_key(&1));
         assert!(session.interactive.interactive_signing.contains_key(&2));
@@ -8325,7 +8385,10 @@ fn partial_member_expiry_persists_binding_before_restart() {
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = &guard.sessions[signing_session];
-        assert_eq!(session.interactive.bound_key_group.as_deref(), Some(key_group));
+        assert_eq!(
+            session.interactive.bound_key_group.as_deref(),
+            Some(key_group)
+        );
         assert!(session.capacity_pins.retired_interactive_at_unix.is_some());
         assert!(session.interactive.interactive_signing.is_empty());
         assert!(session.signing.build_tx_request_fingerprint.is_some());
@@ -8369,20 +8432,19 @@ fn interactive_round2_pre_replace_failure_restores_staged_retirement() {
             guard.sessions.insert(
                 session_id.to_string(),
                 SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some(key_group.to_string()),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(retired_at),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                    dkg: DkgSessionState::default(),
+                    signing: LegacySigningSessionState::default(),
+                    interactive: InteractiveSessionState {
+                        bound_key_group: Some(key_group.to_string()),
+                        ..Default::default()
+                    },
+                    lifecycle: LifecycleState::default(),
+                    capacity_pins: OperationalState {
+                        retired_interactive_at_unix: Some(retired_at),
+                        ..Default::default()
+                    },
+                    audit: AuditTrail::default(),
+                },
             );
         }
         persist_engine_state_to_storage(&guard).expect("persist initial retired tier");
@@ -8463,7 +8525,8 @@ fn interactive_round2_pre_replace_failure_restores_staged_retirement() {
         assert!(!guard.sessions.contains_key("retired-oldest"));
         assert!(guard.sessions.contains_key("retired-newer"));
         assert!(guard.sessions[signing_session]
-            .capacity_pins.retired_interactive_at_unix
+            .capacity_pins
+            .retired_interactive_at_unix
             .is_some());
         assert_eq!(retired_interactive_session_count(&guard.sessions), 2);
     }
@@ -8566,20 +8629,19 @@ fn interactive_aggregate_pins_a_retired_session_while_the_engine_lock_is_release
         guard.sessions.insert(
             filler_session.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some(key_group.to_string()),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(2),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some(key_group.to_string()),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState {
+                    retired_interactive_at_unix: Some(2),
+                    ..Default::default()
+                },
+                audit: AuditTrail::default(),
+            },
         );
         persist_engine_state_to_storage(&guard).expect("persist full retired tier");
     }
@@ -8611,27 +8673,30 @@ fn interactive_aggregate_pins_a_retired_session_while_the_engine_lock_is_release
     {
         let mut guard = state().expect("state").lock().expect("engine lock");
         assert_eq!(
-            Arc::strong_count(&guard.sessions[signing_session].capacity_pins.aggregate_eviction_pin),
+            Arc::strong_count(
+                &guard.sessions[signing_session]
+                    .capacity_pins
+                    .aggregate_eviction_pin
+            ),
             2,
             "the in-flight Aggregate must hold the transient eviction pin"
         );
         guard.sessions.insert(
             newcomer_session.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some(key_group.to_string()),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(3),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some(key_group.to_string()),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState {
+                    retired_interactive_at_unix: Some(3),
+                    ..Default::default()
+                },
+                audit: AuditTrail::default(),
+            },
         );
         let removed = compact_retired_per_message_sessions(&mut guard, Some(newcomer_session));
         assert_eq!(
@@ -8762,43 +8827,42 @@ fn retired_compaction_preserves_pending_marker_sessions_until_snapshot_covers_th
             .sessions
             .get_mut(round2_session)
             .expect("Round2 pending session exists")
-            .capacity_pins.retired_interactive_at_unix = Some(1);
+            .capacity_pins
+            .retired_interactive_at_unix = Some(1);
         guard.sessions.insert(
             aggregate_session.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some(key_group.to_string()),
-            aggregated_attempt_markers: HashSet::from([aggregated_marker.clone()]),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(2),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some(key_group.to_string()),
+                    aggregated_attempt_markers: HashSet::from([aggregated_marker.clone()]),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState {
+                    retired_interactive_at_unix: Some(2),
+                    ..Default::default()
+                },
+                audit: AuditTrail::default(),
+            },
         );
         guard.sessions.insert(
             evictable_session.to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState {
-            bound_key_group: Some(key_group.to_string()),
-            ..Default::default()
-        },
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState {
-            retired_interactive_at_unix: Some(3),
-            ..Default::default()
-        },
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState {
+                    bound_key_group: Some(key_group.to_string()),
+                    ..Default::default()
+                },
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState {
+                    retired_interactive_at_unix: Some(3),
+                    ..Default::default()
+                },
+                audit: AuditTrail::default(),
+            },
         );
     }
     mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
@@ -8852,10 +8916,12 @@ fn retired_compaction_preserves_pending_marker_sessions_until_snapshot_covers_th
     {
         let guard = state().expect("state").lock().expect("engine lock");
         assert!(guard.sessions[round2_session]
-            .interactive.consumed_attempt_markers
+            .interactive
+            .consumed_attempt_markers
             .contains(&consumed_marker));
         assert!(guard.sessions[aggregate_session]
-            .interactive.aggregated_attempt_markers
+            .interactive
+            .aggregated_attempt_markers
             .contains(&aggregated_marker));
     }
     let replay = interactive_round2(round2_request)
@@ -8943,12 +9009,16 @@ fn interactive_multi_seat_two_members_one_process_aggregate_bip340() {
             "member 2's entry stays live - a sibling seat's Round2 must not free it"
         );
         assert!(
-            session.interactive.consumed_attempt_markers
+            session
+                .interactive
+                .consumed_attempt_markers
                 .contains(&interactive_consumed_marker(&opened1.attempt_id, 1)),
             "member 1's consumed marker is written"
         );
         assert!(
-            !session.interactive.consumed_attempt_markers
+            !session
+                .interactive
+                .consumed_attempt_markers
                 .contains(&interactive_consumed_marker(&opened2.attempt_id, 2)),
             "member 2's marker is NOT written by member 1's Round2"
         );
@@ -9107,13 +9177,17 @@ fn interactive_round2_refused_after_aggregate_for_unsigned_sibling() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
-            session.interactive.aggregated_attempt_markers
+            session
+                .interactive
+                .aggregated_attempt_markers
                 .iter()
                 .any(|marker| marker.starts_with(&format!("{}@", opened.attempt_id))),
             "completion marker binds attempt_id to the aggregated message digest"
         );
         assert!(
-            !session.interactive.aggregated_attempt_markers
+            !session
+                .interactive
+                .aggregated_attempt_markers
                 .contains(&opened.attempt_id),
             "the bare (unbound) attempt_id marker is not written"
         );
@@ -9217,7 +9291,10 @@ fn interactive_open_advances_only_the_opening_member_attempt() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert_eq!(
-            session.interactive.interactive_signing[&1].attempt_context.attempt_id, a2_m1.attempt_id,
+            session.interactive.interactive_signing[&1]
+                .attempt_context
+                .attempt_id,
+            a2_m1.attempt_id,
             "seat 1 advanced to attempt 2"
         );
         assert!(
@@ -9225,7 +9302,10 @@ fn interactive_open_advances_only_the_opening_member_attempt() {
             "seat 1's attempt-2 entry starts fresh (old round-1 nonces replaced)"
         );
         assert_eq!(
-            session.interactive.interactive_signing[&2].attempt_context.attempt_id, a1_m1.attempt_id,
+            session.interactive.interactive_signing[&2]
+                .attempt_context
+                .attempt_id,
+            a1_m1.attempt_id,
             "seat 2's attempt-1 entry is untouched by seat 1's advance"
         );
     }
@@ -9273,7 +9353,8 @@ fn interactive_honors_legacy_bare_aggregate_completion_marker() {
             .sessions
             .get_mut(session_id)
             .expect("session")
-            .interactive.aggregated_attempt_markers
+            .interactive
+            .aggregated_attempt_markers
             .insert(opened.attempt_id.clone());
     }
 
@@ -9345,7 +9426,8 @@ fn interactive_round2_completion_marker_binds_taproot_root() {
             .sessions
             .get_mut(session_id)
             .expect("session")
-            .interactive.aggregated_attempt_markers
+            .interactive
+            .aggregated_attempt_markers
             .insert(interactive_aggregated_marker(
                 &opened.attempt_id,
                 &digest,
@@ -9373,7 +9455,8 @@ fn interactive_round2_completion_marker_binds_taproot_root() {
             .sessions
             .get_mut(session_id)
             .expect("session")
-            .interactive.aggregated_attempt_markers
+            .interactive
+            .aggregated_attempt_markers
             .insert(interactive_aggregated_marker(
                 &opened.attempt_id,
                 &digest,
@@ -10016,11 +10099,15 @@ fn interactive_round2_persist_fault_leaves_nonces_live() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
-            !session.interactive.consumed_attempt_markers
+            !session
+                .interactive
+                .consumed_attempt_markers
                 .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "a failed persist must roll the consumption marker back"
         );
-        let interactive = session.interactive.interactive_signing
+        let interactive = session
+            .interactive
+            .interactive_signing
             .get(&1)
             .expect("pre-replacement failure leaves the nonce retryable");
         assert!(interactive.round1.is_some(), "Round1 nonces remain live");
@@ -10054,7 +10141,9 @@ fn interactive_round2_persist_fault_leaves_nonces_live() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
-            session.interactive.consumed_attempt_markers
+            session
+                .interactive
+                .consumed_attempt_markers
                 .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "successful round 2 must leave the durable marker"
         );
@@ -10118,7 +10207,9 @@ fn interactive_round2_post_rename_persist_failure_consumes_attempt_and_retry_flu
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
-        assert!(session.interactive.consumed_attempt_markers
+        assert!(session
+            .interactive
+            .consumed_attempt_markers
             .contains(&consumed_marker));
         assert!(
             !session.interactive.interactive_signing.contains_key(&1),
@@ -10150,9 +10241,13 @@ fn interactive_round2_post_rename_persist_failure_consumes_attempt_and_retry_flu
     {
         let guard = state().expect("state").lock().expect("lock");
         assert!(guard.sessions[session_id]
-            .interactive.consumed_attempt_markers
+            .interactive
+            .consumed_attempt_markers
             .contains(&consumed_marker));
-        assert!(guard.sessions[session_id].interactive.interactive_signing.is_empty());
+        assert!(guard.sessions[session_id]
+            .interactive
+            .interactive_signing
+            .is_empty());
     }
 
     let retry = interactive_round2(round2_request)
@@ -10388,7 +10483,10 @@ fn interactive_abort_persist_failures_are_retryable_before_replace_and_fail_clos
     {
         let guard = state().expect("state").lock().expect("engine lock");
         let session = &guard.sessions[fail_closed_session];
-        assert_eq!(session.interactive.bound_key_group.as_deref(), Some(key_group));
+        assert_eq!(
+            session.interactive.bound_key_group.as_deref(),
+            Some(key_group)
+        );
         assert!(session.capacity_pins.retired_interactive_at_unix.is_some());
         assert!(session.interactive.interactive_signing.is_empty());
     }
@@ -10831,7 +10929,9 @@ fn interactive_heartbeat_capacity_rejection_does_not_consume_wallet_token() {
     ));
     {
         let mut guard = state().expect("state").lock().expect("engine lock");
-        let limiter = &guard.sessions[wallet_session].capacity_pins.heartbeat_rate_limiter;
+        let limiter = &guard.sessions[wallet_session]
+            .capacity_pins
+            .heartbeat_rate_limiter;
         assert_eq!(limiter.last_refill_unix, 0);
         assert_eq!(limiter.token_microunits, 0);
         assert_eq!(limiter.configured_rate_limit_per_minute, 0);
@@ -10842,7 +10942,9 @@ fn interactive_heartbeat_capacity_rejection_does_not_consume_wallet_token() {
         .expect("the capacity-rejected call must leave the wallet's token available");
     {
         let guard = state().expect("state").lock().expect("engine lock");
-        let limiter = &guard.sessions[wallet_session].capacity_pins.heartbeat_rate_limiter;
+        let limiter = &guard.sessions[wallet_session]
+            .capacity_pins
+            .heartbeat_rate_limiter;
         assert_eq!(limiter.configured_rate_limit_per_minute, 1);
         assert_eq!(limiter.token_microunits, 0);
     }
@@ -11114,7 +11216,8 @@ fn interactive_round2_rechecks_stored_heartbeat_intent_before_share_release() {
             .sessions
             .get_mut(signing_session)
             .expect("heartbeat signing session")
-            .interactive.interactive_signing
+            .interactive
+            .interactive_signing
             .get_mut(&1)
             .expect("live heartbeat attempt")
             .signing_intent = Some(heartbeat_signing_intent_for_test(
@@ -11168,7 +11271,8 @@ fn interactive_open_cross_session_respects_wallet_emergency_rekey() {
             .sessions
             .get_mut(wallet_session)
             .expect("wallet session")
-            .lifecycle.emergency_rekey_event = Some(EmergencyRekeyEvent {
+            .lifecycle
+            .emergency_rekey_event = Some(EmergencyRekeyEvent {
             reason: "wallet compromised before Open".to_string(),
             triggered_at_unix: now_unix(),
         });
@@ -11369,7 +11473,9 @@ fn interactive_round2_writes_a_consumed_marker_readable_by_the_previous_schema1_
     simulate_process_restart_for_tests();
     reload_state_from_storage_for_tests();
     let guard = state().expect("state").lock().expect("lock");
-    let markers = &guard.sessions[session_id].interactive.consumed_attempt_markers;
+    let markers = &guard.sessions[session_id]
+        .interactive
+        .consumed_attempt_markers;
     let previous_binary_reports_consumed =
         markers.contains(&previous_schema1_marker) || markers.contains(&opened.attempt_id);
     assert!(
@@ -11537,20 +11643,19 @@ fn interactive_open_rejected_on_session_lifecycle_states() {
         guard.sessions.insert(
             "interactive-lifecycle-rekey".to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState::default(),
-        interactive: InteractiveSessionState::default(),
-        lifecycle: LifecycleState {
-            emergency_rekey_event: Some(EmergencyRekeyEvent {
-                    reason: "test rekey".to_string(),
-                    triggered_at_unix: now_unix(),
-                }),
-            ..Default::default()
-        },
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState::default(),
+                interactive: InteractiveSessionState::default(),
+                lifecycle: LifecycleState {
+                    emergency_rekey_event: Some(EmergencyRekeyEvent {
+                        reason: "test rekey".to_string(),
+                        triggered_at_unix: now_unix(),
+                    }),
+                    ..Default::default()
+                },
+                capacity_pins: OperationalState::default(),
+                audit: AuditTrail::default(),
+            },
         );
     }
     let rekey = open_interactive_for_test(
@@ -11575,17 +11680,16 @@ fn interactive_open_rejected_on_session_lifecycle_states() {
         guard.sessions.insert(
             "interactive-lifecycle-finalized".to_string(),
             SessionState {
-        dkg: DkgSessionState::default(),
-        signing: LegacySigningSessionState {
-            finalize_request_fingerprint: Some("already-finalized".to_string()),
-            ..Default::default()
-        },
-        interactive: InteractiveSessionState::default(),
-        lifecycle: LifecycleState::default(),
-        capacity_pins: OperationalState::default(),
-        audit: AuditTrail::default(),
-        ..Default::default()
-    },
+                dkg: DkgSessionState::default(),
+                signing: LegacySigningSessionState {
+                    finalize_request_fingerprint: Some("already-finalized".to_string()),
+                    ..Default::default()
+                },
+                interactive: InteractiveSessionState::default(),
+                lifecycle: LifecycleState::default(),
+                capacity_pins: OperationalState::default(),
+                audit: AuditTrail::default(),
+            },
         );
     }
     let finalized = open_interactive_for_test(
@@ -11738,7 +11842,9 @@ fn interactive_round2_rechecks_gates_at_share_release() {
         let mut guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get_mut(session_id).expect("session exists");
         assert!(
-            !session.interactive.consumed_attempt_markers
+            !session
+                .interactive
+                .consumed_attempt_markers
                 .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "a gate rejection must not consume the attempt"
         );
@@ -11946,7 +12052,8 @@ fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
                 .sessions
                 .get(signing_session)
                 .expect("signing session exists")
-                .interactive.consumed_attempt_markers
+                .interactive
+                .consumed_attempt_markers
                 .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "a cross-session gate rejection must not consume the attempt"
         );
@@ -11954,7 +12061,8 @@ fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
             .sessions
             .get_mut(wallet_session)
             .expect("wallet session exists")
-            .lifecycle.emergency_rekey_event = None;
+            .lifecycle
+            .emergency_rekey_event = None;
         let signing = guard
             .sessions
             .get_mut(signing_session)
@@ -12113,7 +12221,8 @@ fn trigger_emergency_rekey_on_signing_session_records_on_wallet_session() {
             .sessions
             .get(wallet_session)
             .expect("wallet session")
-            .lifecycle.emergency_rekey_event
+            .lifecycle
+            .emergency_rekey_event
             .is_some(),
         "the wallet session must hold the kill switch"
     );
@@ -12122,7 +12231,8 @@ fn trigger_emergency_rekey_on_signing_session_records_on_wallet_session() {
             .sessions
             .get(signing_session)
             .expect("signing session")
-            .lifecycle.emergency_rekey_event
+            .lifecycle
+            .emergency_rekey_event
             .is_none(),
         "the ephemeral signing session must NOT hold the kill switch"
     );
@@ -12301,7 +12411,8 @@ fn interactive_round2_rejects_quarantined_co_signer_in_package() {
                     .sessions
                     .get(session_id)
                     .expect("session")
-                    .interactive.consumed_attempt_markers
+                    .interactive
+                    .consumed_attempt_markers
                     .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
                 "a quarantine rejection must not consume the attempt"
             );
@@ -12479,7 +12590,8 @@ fn interactive_aggregate_allows_an_elected_coordinator_outside_the_signing_subse
     let guard = state().expect("state").lock().expect("lock");
     assert_eq!(
         guard.sessions[session_id]
-            .interactive.aggregated_attempt_markers
+            .interactive
+            .aggregated_attempt_markers
             .len(),
         1,
         "cross-attempt package replay must not amplify persistent completion state"
@@ -12620,7 +12732,8 @@ fn interactive_aggregate_produces_and_self_verifies_bip340() {
             .sessions
             .get(session_id)
             .expect("session")
-            .dkg.public_key_package
+            .dkg
+            .public_key_package
             .clone()
             .expect("public key package")
     };
@@ -12739,7 +12852,8 @@ fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
         let guard = state().expect("state").lock().expect("lock");
         assert_eq!(
             guard.sessions[session_id]
-                .interactive.aggregated_attempt_markers
+                .interactive
+                .aggregated_attempt_markers
                 .len(),
             1,
             "a replay under a freshly opened canonical id must not consume marker capacity"
@@ -12853,7 +12967,8 @@ fn interactive_aggregate_returns_same_signature_for_same_completed_session() {
             .sessions
             .get(session_id)
             .expect("session")
-            .dkg.public_key_package
+            .dkg
+            .public_key_package
             .clone()
             .expect("public key package")
     };
@@ -13094,7 +13209,9 @@ fn interactive_aggregate_post_rename_persist_failure_finalizes_attempt_and_retry
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
-        assert!(session.interactive.aggregated_attempt_markers
+        assert!(session
+            .interactive
+            .aggregated_attempt_markers
             .contains(&aggregated_marker));
         assert!(
             !session.interactive.interactive_signing.contains_key(&3),
@@ -13126,9 +13243,13 @@ fn interactive_aggregate_post_rename_persist_failure_finalizes_attempt_and_retry
     {
         let guard = state().expect("state").lock().expect("lock");
         assert!(guard.sessions[session_id]
-            .interactive.aggregated_attempt_markers
+            .interactive
+            .aggregated_attempt_markers
             .contains(&aggregated_marker));
-        assert!(guard.sessions[session_id].interactive.interactive_signing.is_empty());
+        assert!(guard.sessions[session_id]
+            .interactive
+            .interactive_signing
+            .is_empty());
     }
 
     let retry = interactive_aggregate(aggregate_request)
@@ -13258,7 +13379,9 @@ fn interactive_aggregate_post_rename_repair_retires_session_and_releases_capacit
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
-        assert!(session.interactive.aggregated_attempt_markers
+        assert!(session
+            .interactive
+            .aggregated_attempt_markers
             .contains(&aggregated_marker));
         assert!(
             !session.interactive.interactive_signing.contains_key(&3),
@@ -13307,7 +13430,9 @@ fn interactive_aggregate_post_rename_repair_retires_session_and_releases_capacit
     {
         let guard = state().expect("state").lock().expect("lock");
         let session = &guard.sessions[session_id];
-        assert!(session.interactive.aggregated_attempt_markers
+        assert!(session
+            .interactive
+            .aggregated_attempt_markers
             .contains(&aggregated_marker));
         assert_eq!(session.interactive.aggregated_attempt_markers.len(), 1);
         assert!(session.interactive.interactive_signing.is_empty());
@@ -13438,7 +13563,11 @@ fn interactive_aggregate_rejects_invalid_share_fail_closed() {
     );
     let guard = state().expect("state").lock().expect("lock");
     assert_eq!(
-        Arc::strong_count(&guard.sessions[session_id].capacity_pins.aggregate_eviction_pin),
+        Arc::strong_count(
+            &guard.sessions[session_id]
+                .capacity_pins
+                .aggregate_eviction_pin
+        ),
         1,
         "an Aggregate crypto error must release its transient eviction pin"
     );

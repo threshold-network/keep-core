@@ -195,7 +195,9 @@ pub fn persist_distributed_dkg_key_package(
     // multi-seat accumulation remains valid below.
     if guard.sessions.iter().any(|(session_id, session)| {
         session_id != &request.session_id
-            && session.dkg.result
+            && session
+                .dkg
+                .result
                 .as_ref()
                 .is_some_and(|dkg| dkg.key_group == key_group)
     }) {
@@ -212,7 +214,9 @@ pub fn persist_distributed_dkg_key_package(
     if guard
         .sessions
         .get(&request.session_id)
-        .is_some_and(|session| session.dkg.result.is_none() && session.interactive.bound_key_group.is_some())
+        .is_some_and(|session| {
+            session.dkg.result.is_none() && session.interactive.bound_key_group.is_some()
+        })
     {
         return Err(EngineError::SessionConflict {
             session_id: request.session_id,
@@ -272,13 +276,17 @@ pub fn persist_distributed_dkg_key_package(
         session.dkg.public_key_package = Some(public_key_package);
     }
 
-    let replaced_key_package = session.dkg.key_packages
+    let replaced_key_package = session
+        .dkg
+        .key_packages
         .get_or_insert_with(BTreeMap::new)
         .insert(request.participant_identifier, key_package);
 
     // Clone the result before the `&guard` persist call so the mutable `session`
     // borrow ends here (mirrors run_dkg's ordering).
-    let result = session.dkg.result
+    let result = session
+        .dkg
+        .result
         .clone()
         .expect("dkg_result was just set for this session");
     if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
@@ -300,7 +308,9 @@ pub fn persist_distributed_dkg_key_package(
                     }
                 }
                 if key_package_map_was_absent
-                    && rollback_session.dkg.key_packages
+                    && rollback_session
+                        .dkg
+                        .key_packages
                         .as_ref()
                         .is_some_and(BTreeMap::is_empty)
                 {

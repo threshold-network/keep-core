@@ -71,9 +71,10 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
 
         if let Some(existing) = &session.signing.build_tx_request_fingerprint {
             if existing == &request_fingerprint {
-                let cached_result = session.signing.tx_result
-                    .clone()
-                    .ok_or_else(|| EngineError::Internal("missing build tx cache".to_string()))?;
+                let cached_result =
+                    session.signing.tx_result.clone().ok_or_else(|| {
+                        EngineError::Internal("missing build tx cache".to_string())
+                    })?;
                 let cached_tx_bytes = hex::decode(&cached_result.tx_hex).map_err(|_| {
                     EngineError::Internal("cached build tx hex is not valid hex".to_string())
                 })?;

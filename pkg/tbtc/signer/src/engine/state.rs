@@ -117,7 +117,8 @@ pub(crate) struct DkgSessionState {
     /// DKG signing-policy firewall compatibility check. Persisted as a u32
     /// counter (serde-defaulted on PersistedSessionState for back-compat);
     /// in-memory value defaults to 0 on a fresh session.
-    #[allow(dead_code)] // DKG signing-policy firewall compatibility check; round-tripped through persistence but has no production reader today (per spec note in docs/specs/frost-signer-sessionstate-grouping.md).
+    #[allow(dead_code)]
+    // DKG signing-policy firewall compatibility check; round-tripped through persistence but has no production reader today (per spec note in docs/specs/frost-signer-sessionstate-grouping.md).
     pub(crate) policy_snapshot_version: u32,
 }
 
@@ -663,7 +664,9 @@ fn compact_retired_per_message_sessions_to_total(
                 {
                     return None;
                 }
-                session.capacity_pins.retired_interactive_at_unix
+                session
+                    .capacity_pins
+                    .retired_interactive_at_unix
                     .map(|retired_at| (retired_at, session_id.clone()))
             })
             .min();
@@ -781,7 +784,8 @@ pub(crate) fn reactivate_retired_per_message_session(
         .sessions
         .get_mut(session_id)
         .expect("retired session existed under the held engine lock")
-        .capacity_pins.retired_interactive_at_unix = None;
+        .capacity_pins
+        .retired_interactive_at_unix = None;
     Ok(())
 }
 

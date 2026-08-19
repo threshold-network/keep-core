@@ -126,7 +126,9 @@ pub(crate) fn can_promote_to_target_percent(current_percent: u8, target_percent:
 }
 
 pub(crate) fn refresh_continuity_reference_key_group(session: &SessionState) -> Option<String> {
-    session.dkg.result
+    session
+        .dkg
+        .result
         .as_ref()
         .map(|result| result.key_group.clone())
 }
@@ -192,7 +194,9 @@ pub fn refresh_cadence_status(
         .unwrap_or_else(|| now.saturating_add(cadence_seconds));
     let overdue = refresh_cadence_is_overdue(now, next_refresh_due_unix);
     let continuity_reference_key_group = refresh_continuity_reference_key_group(session);
-    let emergency_rekey_reason = session.lifecycle.emergency_rekey_event
+    let emergency_rekey_reason = session
+        .lifecycle
+        .emergency_rekey_event
         .as_ref()
         .map(|event| event.reason.clone());
 
@@ -288,10 +292,13 @@ pub fn trigger_emergency_rekey(
     }
     let triggered_at_unix = now_unix();
     let previous_emergency_rekey_event =
-        session.lifecycle.emergency_rekey_event.replace(EmergencyRekeyEvent {
-            reason: reason.to_string(),
-            triggered_at_unix,
-        });
+        session
+            .lifecycle
+            .emergency_rekey_event
+            .replace(EmergencyRekeyEvent {
+                reason: reason.to_string(),
+                triggered_at_unix,
+            });
     let result = TriggerEmergencyRekeyResult {
         session_id: target_session_id.clone(),
         emergency_rekey_required: true,

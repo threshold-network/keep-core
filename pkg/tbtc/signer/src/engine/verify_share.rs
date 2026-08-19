@@ -95,7 +95,9 @@ pub fn verify_signature_share(
         // key_group is this signing session's own DKG (co-located) or the one bound at
         // Open; a missing session/binding/DKG is not the member's fault -> indeterminate.
         let key_group = match guard.sessions.get(&request.session_id) {
-            Some(session) => session.dkg.result
+            Some(session) => session
+                .dkg
+                .result
                 .as_ref()
                 .map(|dkg| dkg.key_group.clone())
                 .or_else(|| session.interactive.bound_key_group.clone()),
