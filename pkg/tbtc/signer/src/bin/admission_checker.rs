@@ -284,11 +284,11 @@ fn now_unix() -> u64 {
 /// on the order of single-digit KiB; a 1 MiB cap is generous for the
 /// legitimate input envelope while preventing a hostile actor from
 /// triggering multi-gigabyte allocations through this surface.
-const MAX_JSON_INPUT_FILE_BYTES: u64 = 1 * 1024 * 1024;
+const MAX_JSON_INPUT_FILE_BYTES: u64 = 1024 * 1024;
 
 fn load_json_file<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> Result<T, String> {
-    let metadata = fs::metadata(path)
-        .map_err(|e| format!("failed to stat file [{}]: {e}", path.display()))?;
+    let metadata =
+        fs::metadata(path).map_err(|e| format!("failed to stat file [{}]: {e}", path.display()))?;
     if metadata.len() > MAX_JSON_INPUT_FILE_BYTES {
         return Err(format!(
             "policy/candidate JSON file [{}] size [{}] bytes exceeds the [{}] byte cap; \
@@ -619,8 +619,7 @@ fn apply_dao_override(
             format!(
                 "override approved_at_unix [{}] predates a sane floor (year 2001); \
                  refusing to apply overrides anchored before the [{}] second epoch",
-                override_payload.approved_at_unix,
-                DAO_OVERRIDE_APPROVED_AT_MIN_UNIX
+                override_payload.approved_at_unix, DAO_OVERRIDE_APPROVED_AT_MIN_UNIX
             ),
         );
         return decision;
@@ -2021,7 +2020,9 @@ mod tests {
         );
         // The replay registry must NOT have been mutated.
         assert!(
-            replay_registry.lookup(&override_artifact.payload_json).is_none(),
+            replay_registry
+                .lookup(&override_artifact.payload_json)
+                .is_none(),
             "rejected override must not be inserted into the replay registry"
         );
     }

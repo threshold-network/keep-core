@@ -223,9 +223,7 @@ where
 /// string (e.g. `ErrorResponse.message`) at `MAX_MESSAGE_ASCII_CHARS`.
 /// Wider cap than `deserialize_bounded_ascii` because error `message`
 /// strings may carry operator-readable detail text.
-pub(crate) fn deserialize_bounded_message_ascii<'de, D>(
-    deserializer: D,
-) -> Result<String, D::Error>
+pub(crate) fn deserialize_bounded_message_ascii<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -287,9 +285,8 @@ where
         type Value = std::collections::BTreeMap<String, String>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str(
-                "a JSON object mapping FROST identifiers to verifying-share hex strings",
-            )
+            formatter
+                .write_str("a JSON object mapping FROST identifiers to verifying-share hex strings")
         }
 
         fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -360,26 +357,14 @@ macro_rules! define_bounded_vec_deserializer {
     };
 }
 
-define_bounded_vec_deserializer!(
-    deserialize_bounded_commitments_vec,
-    NativeFrostCommitment
-);
-define_bounded_vec_deserializer!(
-    deserialize_bounded_round1_packages_vec,
-    DkgRound1Package
-);
-define_bounded_vec_deserializer!(
-    deserialize_bounded_round2_packages_vec,
-    DkgRound2Package
-);
+define_bounded_vec_deserializer!(deserialize_bounded_commitments_vec, NativeFrostCommitment);
+define_bounded_vec_deserializer!(deserialize_bounded_round1_packages_vec, DkgRound1Package);
+define_bounded_vec_deserializer!(deserialize_bounded_round2_packages_vec, DkgRound2Package);
 define_bounded_vec_deserializer!(
     deserialize_bounded_signature_shares_vec,
     NativeFrostSignatureShare
 );
-define_bounded_vec_deserializer!(
-    deserialize_bounded_share_material_vec,
-    ShareMaterial
-);
+define_bounded_vec_deserializer!(deserialize_bounded_share_material_vec, ShareMaterial);
 
 /// serde `deserialize_with` helper for the `policy_allowed_utc_*_hour`
 /// init-config fields: validate `0 <= value <= 23` BEFORE the value
@@ -400,7 +385,6 @@ where
     }
     Ok(value)
 }
-
 
 /// A hex-encoded secret whose owned Rust allocation is wiped on drop and whose
 /// `Debug` representation never exposes its contents. Serde remains transparent
@@ -1659,8 +1643,8 @@ mod tests {
     fn deserialize_bounded_ascii_accepts_at_cap_input() {
         let at_cap = "a".repeat(MAX_ASCII_CODES_CHARS);
         let json = format!("{{\"value\":\"{at_cap}\"}}");
-        let parsed: BoundedAsciiField = serde_json::from_str(&json)
-            .expect("at-cap ascii field must be accepted");
+        let parsed: BoundedAsciiField =
+            serde_json::from_str(&json).expect("at-cap ascii field must be accepted");
         assert_eq!(parsed.value.len(), MAX_ASCII_CODES_CHARS);
     }
 
@@ -1730,8 +1714,8 @@ mod tests {
         let entries: Vec<u16> = (0..MAX_BOUNDED_COLLECTION_LEN as u16).collect();
         let entries_json = serde_json::to_string(&entries).expect("serialize");
         let json = format!("{{\"value\":{entries_json}}}");
-        let parsed: BoundedU16VecField = serde_json::from_str(&json)
-            .expect("at-cap u16 vec must be accepted");
+        let parsed: BoundedU16VecField =
+            serde_json::from_str(&json).expect("at-cap u16 vec must be accepted");
         assert_eq!(parsed.value.len(), MAX_BOUNDED_COLLECTION_LEN);
     }
 
@@ -1756,14 +1740,9 @@ mod tests {
 
     #[test]
     fn deserialize_bounded_verifying_shares_map_rejects_oversized_entry_count() {
-        let entries: std::collections::BTreeMap<String, String> = (0..(MAX_BOUNDED_MAP_ENTRIES + 1)
-            as u16)
-            .map(|idx| {
-                (
-                    format!("id-{idx:03}"),
-                    format!("{:02x}", idx as u8),
-                )
-            })
+        let entries: std::collections::BTreeMap<String, String> = (0
+            ..(MAX_BOUNDED_MAP_ENTRIES + 1) as u16)
+            .map(|idx| (format!("id-{idx:03}"), format!("{:02x}", idx as u8)))
             .collect();
         let entries_json = serde_json::to_string(&entries).expect("serialize");
         let json = format!("{{\"value\":{entries_json}}}");
@@ -1780,17 +1759,12 @@ mod tests {
     fn deserialize_bounded_verifying_shares_map_accepts_at_cap_inputs() {
         let entries: std::collections::BTreeMap<String, String> = (0..MAX_BOUNDED_MAP_ENTRIES
             as u16)
-            .map(|idx| {
-                (
-                    format!("id-{idx:03}"),
-                    format!("{:02x}", idx as u8),
-                )
-            })
+            .map(|idx| (format!("id-{idx:03}"), format!("{:02x}", idx as u8)))
             .collect();
         let entries_json = serde_json::to_string(&entries).expect("serialize");
         let json = format!("{{\"value\":{entries_json}}}");
-        let parsed: BoundedVerifyingSharesMapField = serde_json::from_str(&json)
-            .expect("at-cap map must be accepted");
+        let parsed: BoundedVerifyingSharesMapField =
+            serde_json::from_str(&json).expect("at-cap map must be accepted");
         assert_eq!(parsed.value.len(), MAX_BOUNDED_MAP_ENTRIES);
     }
 
