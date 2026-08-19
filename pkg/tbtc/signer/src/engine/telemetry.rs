@@ -345,6 +345,7 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
         build_taproot_tx_success_total: 0,
         build_taproot_tx_policy_reject_total: 0,
         heartbeat_signing_policy_reject_total: 0,
+        interactive_rate_limit_reject_total: 0,
         finalize_sign_round_calls_total: 0,
         finalize_sign_round_success_total: 0,
         refresh_shares_calls_total: 0,
@@ -406,6 +407,8 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
                 telemetry.build_taproot_tx_policy_reject_total;
             result.heartbeat_signing_policy_reject_total =
                 telemetry.heartbeat_signing_policy_reject_total;
+            result.interactive_rate_limit_reject_total =
+                telemetry.interactive_rate_limit_reject_total;
             result.finalize_sign_round_calls_total = telemetry.finalize_sign_round_calls_total;
             result.finalize_sign_round_success_total = telemetry.finalize_sign_round_success_total;
             result.refresh_shares_calls_total = telemetry.refresh_shares_calls_total;
