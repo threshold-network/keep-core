@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keep-maintainer
+spec:
+  replicas: 1
+  serviceName: keep-maintainer
+  template:
+    spec:
+      containers:
+        - name: keep-maintainer
+          image: keep-maintainer:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 1500m
+              memory: 512M
+          env:
+            - name: ETH_WS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eth-network-mainnet
+                  key: ws-url
+            - name: KEEP_ETHEREUM_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keep-maintainer-eth-account-password
+                  key: keep-maintainer-password
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: keep-maintainer-config
+                  key: log-level
+            - name: GOLOG_LOG_FMT
+              valueFrom:
+                configMapKeyRef:
+                  name: keep-maintainer-config
+                  key: log-format
+            - name: NETWORK
+              valueFrom:
+                configMapKeyRef:
+                  name: keep-maintainer-config
+                  key: network
+            - name: ELECTRUM_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: keep-maintainer-config
+                  key: electrum-api-url
+          command:
+            - keep-client
+            - maintainer
+          args:
+            - --$(NETWORK)
+            - --ethereum.url
+            - $(ETH_WS_URL)
+            - --ethereum.keyFile
+            - /mnt/keep-maintainer/keyfile/keep-maintainer-keyfile
+            - --bitcoin.electrum.url
+            - $(ELECTRUM_API_URL)
+          volumeMounts:
+            - name: eth-account-keyfile
+              mountPath: /mnt/keep-maintainer/keyfile
+      volumes:
+        - name: eth-account-keyfile
+          configMap:
+            name: keep-maintainer-config
+            items:
+              - key: keep-maintainer-keyfile
+                path: keep-maintainer-keyfile

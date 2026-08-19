@@ -12,7 +12,7 @@ below are the original locations under the now-extracted v1 tree (formerly
 - `token-stakedrop/`
 - `solidity-v1/scripts/withdraw-old-rewards.js`
 - `solidity-v1/dashboard/`
-- the `./infrastructure/` tree, with one exception noted below: KEEP-era GKE manifests under `kube/{keep-test,keep-dev,keep-prd,lcl}`, Terraform modules sourcing from the now-defunct `thesis/infrastructure` repository, the `provision-keep-client` initcontainer that consumed `solidity-v1/` contract JSONs (since extracted to `keep-core-v1`), and other private-testnet / Ropsten-era assets
+- the `./infrastructure/` tree, with one exception noted below: KEEP-era GKE manifests under `kube/{keep-test,keep-dev,keep-prd,lcl}`, Terraform modules sourcing from the now-defunct `thesis/infrastructure` repository, the `provision-keep-client` initcontainer that consumed `solidity-v1/` contract JSONs (since extracted to `keep-core-v1`), and other private-testnet / Goerli-era assets
 - `scripts/start_dashboard.sh`
 
 These components were removed because they are no longer part of supported
