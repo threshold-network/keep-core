@@ -61,7 +61,9 @@ pub(crate) enum PolicyRejectStage {
     Admission,
     AutoQuarantine,
     Lifecycle,
-    SigningPolicyFirewall { metric: PolicyRejectMetricKind },
+    SigningPolicyFirewall {
+        metric: PolicyRejectMetricKind,
+    },
     // Defensive branch only. The provenance gate has its own helper
     // (`provenance::reject_provenance_gate`) that does NOT route through
     // `reject_with` -- different protocol, no log, no session_id, no metric.
@@ -131,20 +133,21 @@ fn reject_with(
             );
         }
         PolicyRejectStage::SigningPolicyFirewall { metric } => {
-            record_hardening_telemetry(|telemetry| {
-                match metric {
-                    PolicyRejectMetricKind::BuildTaprootTx => {
-                        telemetry.build_taproot_tx_policy_reject_total =
-                            telemetry.build_taproot_tx_policy_reject_total.saturating_add(1);
-                    }
-                    PolicyRejectMetricKind::Heartbeat => {
-                        telemetry.heartbeat_signing_policy_reject_total =
-                            telemetry.heartbeat_signing_policy_reject_total.saturating_add(1);
-                    }
-                    PolicyRejectMetricKind::InteractiveRateLimit => {
-                        telemetry.interactive_rate_limit_reject_total =
-                            telemetry.interactive_rate_limit_reject_total.saturating_add(1);
-                    }
+            record_hardening_telemetry(|telemetry| match metric {
+                PolicyRejectMetricKind::BuildTaprootTx => {
+                    telemetry.build_taproot_tx_policy_reject_total = telemetry
+                        .build_taproot_tx_policy_reject_total
+                        .saturating_add(1);
+                }
+                PolicyRejectMetricKind::Heartbeat => {
+                    telemetry.heartbeat_signing_policy_reject_total = telemetry
+                        .heartbeat_signing_policy_reject_total
+                        .saturating_add(1);
+                }
+                PolicyRejectMetricKind::InteractiveRateLimit => {
+                    telemetry.interactive_rate_limit_reject_total = telemetry
+                        .interactive_rate_limit_reject_total
+                        .saturating_add(1);
                 }
             });
             log_policy_decision(
@@ -170,30 +173,27 @@ fn reject_with(
             reason_code: reason_code.to_string(),
             detail,
         },
-        PolicyRejectStage::AutoQuarantine => {
-            EngineError::QuarantinePolicyRejected {
-                session_id,
-                reason_code: reason_code.to_string(),
-                detail,
-            }
-        }
+        PolicyRejectStage::AutoQuarantine => EngineError::QuarantinePolicyRejected {
+            session_id,
+            reason_code: reason_code.to_string(),
+            detail,
+        },
         PolicyRejectStage::Lifecycle => EngineError::LifecyclePolicyRejected {
             session_id,
             reason_code: reason_code.to_string(),
             detail,
         },
-        PolicyRejectStage::SigningPolicyFirewall { .. } => {
-            EngineError::SigningPolicyRejected {
-                session_id,
-                reason_code: reason_code.to_string(),
-                detail,
-            }
-        }
+        PolicyRejectStage::SigningPolicyFirewall { .. } => EngineError::SigningPolicyRejected {
+            session_id,
+            reason_code: reason_code.to_string(),
+            detail,
+        },
         PolicyRejectStage::Provenance => EngineError::Internal(
             "policy::reject_with must not be called with PolicyRejectStage::Provenance; \
              see provenance::reject_provenance_gate for the provenance-gate path\
              (no log, no session_id, no metric).\
-             this branch is unreachable in production.".to_string(),
+             this branch is unreachable in production."
+                .to_string(),
         ),
     }
 }
@@ -622,7 +622,12 @@ pub(crate) fn reject_signing_policy(
     reason_code: &str,
     detail: impl Into<String>,
 ) -> Result<(), EngineError> {
-    reject_signing_policy_with_metric(session_id, reason_code, detail, PolicyRejectMetricKind::BuildTaprootTx)
+    reject_signing_policy_with_metric(
+        session_id,
+        reason_code,
+        detail,
+        PolicyRejectMetricKind::BuildTaprootTx,
+    )
 }
 
 fn reject_heartbeat_signing_policy(
@@ -630,7 +635,12 @@ fn reject_heartbeat_signing_policy(
     reason_code: &str,
     detail: impl Into<String>,
 ) -> Result<(), EngineError> {
-    reject_signing_policy_with_metric(session_id, reason_code, detail, PolicyRejectMetricKind::Heartbeat)
+    reject_signing_policy_with_metric(
+        session_id,
+        reason_code,
+        detail,
+        PolicyRejectMetricKind::Heartbeat,
+    )
 }
 
 /// Thin wrapper for the dedicated interactive-rate-limit signing-policy
