@@ -1,14 +1,13 @@
+#[cfg(any(test, feature = "bench-restart-hook"))]
+use super::envelope_io::load_engine_state_from_storage;
 /// Pending-operation registry: marker tracking, snapshot covering, durable
 /// retry on next state-lock acquisition. Also owns the test-only
 /// `reload_state_from_storage_for_benchmarks` hook which clears the registry
 /// before reloading. Moved from `persistence.rs` as part of the C2
 /// persistence-deepening refactor.
-
 use super::*;
 #[cfg(any(test, feature = "bench-restart-hook"))]
 use crate::engine::config::bench_restart_hook_enabled;
-#[cfg(any(test, feature = "bench-restart-hook"))]
-use super::envelope_io::load_engine_state_from_storage;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PersistencePendingOperation {
@@ -40,7 +39,6 @@ pub(crate) enum PersistencePendingOperation {
 
 static PERSISTENCE_PENDING_OPERATIONS: OnceLock<Mutex<Vec<PersistencePendingOperation>>> =
     OnceLock::new();
-
 
 fn persistence_pending_operations() -> &'static Mutex<Vec<PersistencePendingOperation>> {
     PERSISTENCE_PENDING_OPERATIONS.get_or_init(|| Mutex::new(Vec::new()))

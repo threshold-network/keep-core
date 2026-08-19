@@ -2,7 +2,6 @@
 /// plus schema-version validation. Moved from `persistence.rs` as part of the
 /// C2 persistence-deepening refactor (see
 /// `docs/specs/frost-signer-persistence-deepening.md`).
-
 use super::*;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -197,7 +196,6 @@ pub(crate) const PERSISTED_STATE_SCHEMA_VERSION: u16 = 1;
 pub(crate) const PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V2: u16 = 2;
 
 pub(crate) const PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION: u16 = 3;
-
 
 impl TryFrom<PersistedEngineState> for EngineState {
     type Error = EngineError;

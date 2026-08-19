@@ -3,7 +3,6 @@
 /// `CachedStateKeyProvider` decorator. Also owns the subprocess machinery
 /// that runs the command provider's KMS/HSM subprocess. Moved from
 /// `persistence.rs` as part of the C2 persistence-deepening refactor.
-
 use super::*;
 use std::sync::{LazyLock, Mutex};
 
@@ -271,10 +270,8 @@ impl StateKeyProvider for EnvKeyProvider {
                     TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV
                 ))
             })?;
-        let key = decode_state_encryption_key_hex(
-            raw_key_hex,
-            TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV,
-        )?;
+        let key =
+            decode_state_encryption_key_hex(raw_key_hex, TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV)?;
         let key_id = state_key_identifier(&key);
         Ok(StateEncryptionKeyMaterial {
             key,
@@ -351,7 +348,6 @@ pub(crate) struct CachedStateKeyProvider {
 
 static STATE_KEY_CACHE: LazyLock<Mutex<Option<(String, StateEncryptionKeyMaterial)>>> =
     LazyLock::new(|| Mutex::new(None));
-
 
 impl StateKeyProvider for CachedStateKeyProvider {
     fn material(&self) -> Result<StateEncryptionKeyMaterial, EngineError> {

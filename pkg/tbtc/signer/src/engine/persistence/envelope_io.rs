@@ -1,3 +1,5 @@
+use super::key_provider::state_encryption_key_material;
+use super::pending_ops::clear_snapshot_covered_operations;
 /// Envelope I/O: file open, lock acquisition, atomic rename, directory sync,
 /// corrupt-state recovery, backup retention, AEAD encode/decode of the persisted
 /// state envelope. Moved from `persistence.rs` as part of the C2
@@ -7,10 +9,7 @@
 /// from both the load and persist paths (to decrypt the envelope on load and
 /// encrypt on persist), and `pending_ops::clear_snapshot_covered_operations` from
 /// `persist_engine_state_to_storage` on successful snapshot write only.
-
 use super::*;
-use super::key_provider::state_encryption_key_material;
-use super::pending_ops::clear_snapshot_covered_operations;
 
 pub(crate) const TBTC_SIGNER_STATE_ENCRYPTION_ALGORITHM_XCHACHA20POLY1305: &str =
     "xchacha20poly1305";
@@ -27,7 +26,6 @@ pub(crate) const TBTC_SIGNER_STATE_ENVELOPE_AUTH_TAG_BYTES: usize = 16;
 /// file is orders of magnitude smaller than this cap.
 pub(crate) const TBTC_SIGNER_STATE_ENVELOPE_MAX_CIPHERTEXT_BYTES: usize =
     16 * 1024 * 1024 + TBTC_SIGNER_STATE_ENVELOPE_AUTH_TAG_BYTES;
-
 
 #[cfg(test)]
 pub(crate) static PERSIST_FAULT_INJECTION_POINT: OnceLock<
