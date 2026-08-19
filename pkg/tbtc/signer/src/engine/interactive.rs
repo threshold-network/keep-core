@@ -261,8 +261,7 @@ pub(crate) fn interactive_attempt_aggregated(
 // `load_auto_quarantine_config` — that helper is phase-specific and does
 // not run at every entry point, and folding it in would run it before
 // round2's marker-durability flush instead of after.
-pub(crate) fn enter_phase()
--> Result<std::sync::MutexGuard<'static, EngineState>, EngineError> {
+pub(crate) fn enter_phase() -> Result<std::sync::MutexGuard<'static, EngineState>, EngineError> {
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -288,11 +287,11 @@ where
     F: FnOnce() -> bool,
 {
     if predicate() {
-        persist_engine_state_to_storage(guard).map_err(PersistEngineStateError::into_engine_error)?;
+        persist_engine_state_to_storage(guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
     }
     Ok(())
 }
-
 
 pub fn interactive_session_open(
     mut request: InteractiveSessionOpenRequest,
