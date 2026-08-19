@@ -74,6 +74,7 @@ struct AdmissionReason {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AdmissionOverrideArtifact {
     payload_json: String,
     signature_hex: String,
@@ -1799,6 +1800,230 @@ mod tests {
         drop(third);
 
         let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn admission_candidate_deserialization_rejects_unknown_fields() {
+        let valid = serde_json::json!({
+            "operator_id": "operator-1",
+            "provider": "gcp",
+            "region": "us-central1",
+            "custody_class": "kms",
+            "attestation_status": "approved",
+            "patch_sla_expires_at_unix": 2_000_000_000_u64,
+            "incident_response_contact": "oncall@example.org",
+        });
+        let mut typo = valid.clone();
+        if let Some(map) = typo.as_object_mut() {
+            map.remove("operator_id");
+            map.insert("operatorid".to_string(), valid["operator_id"].clone());
+        }
+        let typo_str = typo.to_string();
+
+        let error = serde_json::from_str::<AdmissionCandidate>(&typo_str)
+            .expect_err("a misspelled candidate field must be rejected");
+        assert!(
+            error.to_string().contains("unknown field `operatorid`"),
+            "unexpected parse error: {error}"
+        );
+    }
+
+    #[test]
+    fn admission_candidate_deserialization_accepts_supported_fields() {
+        let candidate_json = serde_json::json!({
+            "operator_id": "operator-1",
+            "provider": "gcp",
+            "region": "us-central1",
+            "custody_class": "kms",
+            "attestation_status": "approved",
+            "patch_sla_expires_at_unix": 2_000_000_000_u64,
+            "incident_response_contact": "oncall@example.org",
+        })
+        .to_string();
+        let candidate = serde_json::from_str::<AdmissionCandidate>(&candidate_json)
+            .expect("the candidate fixture should remain valid");
+        assert_eq!(candidate.operator_id, "operator-1");
+    }
+
+    #[test]
+    fn admission_override_payload_deserialization_rejects_unknown_fields() {
+        let mut payload = serde_json::json!({
+            "override_id": "override-test-1",
+            "operator_id": "operator-1",
+            "decision": "allow",
+            "reason": "emergency governance override",
+            "approved_by": "dao-multisig-1",
+            "approved_at_unix": 1_700_000_000_u64,
+            "expires_at_unix": 1_700_000_600_u64,
+        });
+        payload["unexpected_extra_field_should_fail"] = serde_json::json!("oops");
+        let payload_str = payload.to_string();
+
+        let error = serde_json::from_str::<AdmissionOverridePayload>(&payload_str)
+            .expect_err("an unknown override payload field must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `unexpected_extra_field_should_fail`"),
+            "unexpected parse error: {error}"
+        );
+    }
+
+    #[test]
+    fn admission_override_artifact_deserialization_rejects_unknown_fields() {
+        let mut artifact = serde_json::json!({
+            "payload_json": "{}",
+            "signature_hex": "00",
+        });
+        artifact["unexpected_extra_field_should_fail"] = serde_json::json!("oops");
+        let artifact_str = artifact.to_string();
+
+        let error = serde_json::from_str::<AdmissionOverrideArtifact>(&artifact_str)
+            .expect_err("an unknown override artifact field must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `unexpected_extra_field_should_fail`"),
+            "unexpected parse error: {error}"
+        );
+    }
+
+    #[test]
+    fn load_json_file_rejects_input_above_size_cap() {
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "admission-large-input-test-{}-{}",
+            std::process::id(),
+            now_unix()
+        ));
+        fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+        let path = tmp_dir.join("oversize-candidate.json");
+
+        // Write a JSON file that is larger than the 1 MiB cap. Construct
+        // the JSON so it is a syntactically valid `AdmissionCandidate`
+        // wire-shape but the `incident_response_contact` field carries
+        // the bulk of the bytes. With the cap enforced, `load_json_file`
+        // rejects the file before `fs::read` returns the full buffer.
+        let oversized_contact = "a".repeat((MAX_JSON_INPUT_FILE_BYTES + 1024) as usize);
+        let payload = serde_json::json!({
+            "operator_id": "operator-1",
+            "provider": "aws",
+            "region": "us-east-1",
+            "custody_class": "hsm",
+            "attestation_status": "approved",
+            "patch_sla_expires_at_unix": 2_000_000_000_u64,
+            "incident_response_contact": oversized_contact,
+        });
+        let serialized = payload.to_string();
+        assert!(
+            serialized.len() as u64 > MAX_JSON_INPUT_FILE_BYTES,
+            "test fixture must produce a payload larger than MAX_JSON_INPUT_FILE_BYTES"
+        );
+        fs::write(&path, &serialized).expect("write oversized file");
+
+        let error = load_json_file::<AdmissionCandidate>(&path)
+            .expect_err("oversized JSON file must be rejected");
+        assert!(
+            error.contains("exceeds the") && error.contains("byte cap"),
+            "unexpected error: {error}"
+        );
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn override_replay_registry_rejects_insertion_past_cap() {
+        let mut registry = OverrideReplayRegistry::default();
+        // The cap is 10_000 entries; insert up to and including the cap.
+        for idx in 0..MAX_OVERRIDE_REGISTRY_ENTRIES {
+            registry
+                .insert(
+                    format!("override-{idx:06}"),
+                    format!("operator-{idx}"),
+                    "dao-approver".to_string(),
+                    1_700_000_000,
+                    1_700_003_600,
+                    1_700_000_100,
+                )
+                .expect("filling the cap to the limit must succeed");
+        }
+        // The next insert with a NEW key must fail.
+        let error = registry
+            .insert(
+                "override-overflow".to_string(),
+                "operator-overflow".to_string(),
+                "dao-approver".to_string(),
+                1_700_000_000,
+                1_700_003_600,
+                1_700_000_100,
+            )
+            .expect_err("inserting past the cap with a new key must be rejected");
+        assert!(
+            error.contains("override replay registry is full"),
+            "unexpected error: {error}"
+        );
+        // Re-keying an existing key must still succeed (a refresh, not a
+        // capacity event).
+        registry
+            .insert(
+                "override-000000".to_string(),
+                "operator-refreshed".to_string(),
+                "dao-approver".to_string(),
+                1_700_000_010,
+                1_700_003_700,
+                1_700_000_110,
+            )
+            .expect("re-keying an existing override_id must succeed even at cap");
+    }
+
+    #[test]
+    fn apply_dao_override_rejects_artifact_approved_at_unix_before_year_2001_floor() {
+        let mut policy = baseline_policy();
+        policy.max_operators_per_provider = Some(1);
+        let mut candidate = baseline_candidate();
+        candidate.provider = "aws".to_string();
+        let existing = baseline_existing();
+        let now_unix_seconds = 1_700_000_000u64;
+
+        // Build a signed override anchored at the 1970 epoch (well below
+        // the year-2001 floor). The TTL keeps the override alive in
+        // absolute time, so the floor check is the only thing that
+        // should reject it.
+        let (trust_root_pubkey_hex, override_artifact) = build_signed_override_artifact(
+            &candidate.operator_id,
+            "allow",
+            // 1_000_000_000 is the year-2001 floor; use one less so we
+            // are strictly below it.
+            DAO_OVERRIDE_APPROVED_AT_MIN_UNIX - 1,
+            now_unix_seconds.saturating_add(86_400),
+        );
+        policy.dao_override_trust_root_pubkey_hex = Some(trust_root_pubkey_hex);
+        policy.dao_override_max_ttl_seconds = Some(86_400 * 30);
+
+        let base_decision = evaluate_admission(&policy, &candidate, &existing, now_unix_seconds);
+        let mut replay_registry = OverrideReplayRegistry::default();
+        let override_decision = apply_dao_override(
+            &policy,
+            &candidate,
+            now_unix_seconds,
+            base_decision,
+            Some(&override_artifact),
+            Some(&mut replay_registry),
+        );
+        assert_eq!(override_decision.decision, "reject");
+        assert!(!override_decision.override_applied);
+        assert!(
+            override_decision
+                .reasons
+                .iter()
+                .any(|reason| reason.code == "dao_override_approved_at_predates_floor"),
+            "expected floor-rejection reason: {:?}",
+            override_decision.reasons
+        );
+        // The replay registry must NOT have been mutated.
+        assert!(
+            replay_registry.lookup(&override_artifact.payload_json).is_none(),
+            "rejected override must not be inserted into the replay registry"
+        );
     }
 
     #[test]

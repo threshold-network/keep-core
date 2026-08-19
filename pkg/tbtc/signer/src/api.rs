@@ -187,6 +187,13 @@ pub(crate) const MAX_VERIFYING_SHARE_HEX_CHARS: usize = 256;
 /// in-memory footprint of an adversarial payload.
 pub(crate) const MAX_BOUNDED_COLLECTION_LEN: usize = 256;
 
+/// Hard cap on per-`BTreeMap` entry count for the bounded map fields on
+/// the FFI surface (currently `NativeFrostPublicKeyPackage.verifying_shares`).
+/// Mirrors `MAX_BOUNDED_COLLECTION_LEN` (256); 256 entries is well above any
+/// realistic FROST participant count while capping the worst-case allocation
+/// a hostile host can trigger through the deserializer path.
+pub(crate) const MAX_BOUNDED_MAP_ENTRIES: usize = 256;
+
 /// serde `deserialize_with` helper: cap an ASCII short identifier
 /// string (e.g. `ErrorResponse.code` / `.recovery_class`) at
 /// `MAX_ASCII_CODES_CHARS`. Same wire shape as the hex helpers
@@ -203,6 +210,11 @@ where
             "ascii field exceeds max length [{}] bytes",
             MAX_ASCII_CODES_CHARS
         )));
+    }
+    if !value.is_ascii() {
+        return Err(serde::de::Error::custom(
+            "ascii field contains non-ASCII bytes; expected an ASCII code/recovery_class identifier",
+        ));
     }
     Ok(value)
 }
@@ -223,6 +235,11 @@ where
             "message field exceeds max length [{}] bytes",
             MAX_MESSAGE_ASCII_CHARS
         )));
+    }
+    if !value.is_ascii() {
+        return Err(serde::de::Error::custom(
+            "message field contains non-ASCII bytes; expected ASCII human-readable text",
+        ));
     }
     Ok(value)
 }
@@ -246,26 +263,77 @@ where
     Ok(value)
 }
 
-/// serde `deserialize_with` helper: deserialize a
-/// `BTreeMap<String, String>` AND validate every value's length is
-/// within the per-entry verifying-share hex cap. Keys are short
-/// FROST identifier encodings and not separately bounded.
+/// serde `deserialize_with` helper: deserialize a `BTreeMap<String, String>`
+/// while enforcing BOTH a per-`BTreeMap` entry count cap
+/// (`MAX_BOUNDED_MAP_ENTRIES`) AND a per-value length cap
+/// (`MAX_VERIFYING_SHARE_HEX_CHARS`) BEFORE the BTreeMap is built. Uses a
+/// custom `Visitor` so the cap is checked once each entry is materialized
+/// rather than after the full BTreeMap has been allocated. The per-value cap
+/// is enforced inside `BoundedShareHex::deserialize` so it fires once each
+/// value is materialized, matching the "bounds enforced BEFORE the unbounded
+/// operation they protect" standard the other bounded helpers in this PR use.
+/// Without the entry count cap, a hostile host could ship a map with billions
+/// of short-string entries and the BTreeMap would allocate them before the
+/// per-value check ran.
 pub(crate) fn deserialize_bounded_verifying_shares_map<'de, D>(
     deserializer: D,
 ) -> Result<std::collections::BTreeMap<String, String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let value = std::collections::BTreeMap::<String, String>::deserialize(deserializer)?;
-    for (key, share_hex) in &value {
-        if share_hex.len() > MAX_VERIFYING_SHARE_HEX_CHARS {
+    struct VerifyingSharesMapVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for VerifyingSharesMapVisitor {
+        type Value = std::collections::BTreeMap<String, String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str(
+                "a JSON object mapping FROST identifiers to verifying-share hex strings",
+            )
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let mut result = std::collections::BTreeMap::new();
+            while let Some((key, value)) = map.next_entry::<String, BoundedShareHex>()? {
+                if result.len() >= MAX_BOUNDED_MAP_ENTRIES {
+                    return Err(serde::de::Error::custom(format!(
+                        "verifying_shares map exceeds max entries [{}]",
+                        MAX_BOUNDED_MAP_ENTRIES
+                    )));
+                }
+                result.insert(key, value.0);
+            }
+            Ok(result)
+        }
+    }
+
+    deserializer.deserialize_map(VerifyingSharesMapVisitor)
+}
+
+/// Private wrapper that enforces the per-value `MAX_VERIFYING_SHARE_HEX_CHARS`
+/// cap during deserialization. Used by `deserialize_bounded_verifying_shares_map`
+/// as the entry-value type of `MapAccess::next_entry` so the per-value length
+/// check fires once each value is materialized, before the value is handed to
+/// the BTreeMap.
+struct BoundedShareHex(String);
+
+impl<'de> serde::Deserialize<'de> for BoundedShareHex {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value.len() > MAX_VERIFYING_SHARE_HEX_CHARS {
             return Err(serde::de::Error::custom(format!(
-                "verifying_shares[{key}] exceeds max length [{}] hex chars",
+                "verifying_shares value exceeds max length [{}] hex chars",
                 MAX_VERIFYING_SHARE_HEX_CHARS
             )));
         }
+        Ok(BoundedShareHex(value))
     }
-    Ok(value)
 }
 
 /// Macro for generating per-element-type bounded `Vec` deserializers.
@@ -1528,5 +1596,220 @@ mod tests {
                 "Debug output did not mark DKG secret material as redacted: {rendered_value}"
             );
         }
+    }
+
+    // -- Bounded deserializer regression tests -----------------------------
+    //
+    // Each test asserts that an over-cap input is rejected and a near-cap
+    // input is accepted, so a future edit that silently widens a cap or
+    // drops a `deserialize_with` attribute fails this suite. The bounded
+    // deserializer helpers are `deserialize_with` attributes, not plain
+    // string deserializers, so each test wraps them in a test-only struct
+    // whose field carries the helper.
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct BoundedAsciiField {
+        #[serde(deserialize_with = "deserialize_bounded_ascii")]
+        value: String,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct BoundedMessageAsciiField {
+        #[serde(deserialize_with = "deserialize_bounded_message_ascii")]
+        value: String,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct BoundedU16VecField {
+        #[serde(deserialize_with = "deserialize_bounded_u16_vec")]
+        value: Vec<u16>,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct BoundedRound1PackagesVecField {
+        #[serde(deserialize_with = "deserialize_bounded_round1_packages_vec")]
+        value: Vec<DkgRound1Package>,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct BoundedVerifyingSharesMapField {
+        #[serde(deserialize_with = "deserialize_bounded_verifying_shares_map")]
+        value: std::collections::BTreeMap<String, String>,
+    }
+
+    #[test]
+    fn deserialize_bounded_ascii_rejects_oversized_input() {
+        let over_cap = "a".repeat(MAX_ASCII_CODES_CHARS + 1);
+        let json = format!("{{\"value\":\"{over_cap}\"}}");
+        let error = serde_json::from_str::<BoundedAsciiField>(&json)
+            .expect_err("over-cap ascii field must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("ascii field exceeds max length"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn deserialize_bounded_ascii_accepts_at_cap_input() {
+        let at_cap = "a".repeat(MAX_ASCII_CODES_CHARS);
+        let json = format!("{{\"value\":\"{at_cap}\"}}");
+        let parsed: BoundedAsciiField = serde_json::from_str(&json)
+            .expect("at-cap ascii field must be accepted");
+        assert_eq!(parsed.value.len(), MAX_ASCII_CODES_CHARS);
+    }
+
+    #[test]
+    fn deserialize_bounded_ascii_rejects_non_ascii_input() {
+        // JSON escape "\u00e9" is the UTF-8 sequence for é (two bytes),
+        // which is not ASCII. The bounded helper must reject it.
+        let json = "{\"value\":\"code\\u00e9\"}";
+        let error = serde_json::from_str::<BoundedAsciiField>(json)
+            .expect_err("non-ASCII bytes must be rejected on an ASCII-bounded field");
+        let message = error.to_string();
+        assert!(
+            message.contains("non-ASCII"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn deserialize_bounded_message_ascii_rejects_oversized_input() {
+        let over_cap = "m".repeat(MAX_MESSAGE_ASCII_CHARS + 1);
+        let json = format!("{{\"value\":\"{over_cap}\"}}");
+        let error = serde_json::from_str::<BoundedMessageAsciiField>(&json)
+            .expect_err("over-cap message field must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("message field exceeds max length"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn deserialize_bounded_message_ascii_rejects_non_ascii_input() {
+        let json = "{\"value\":\"detailed error \\u00e9\"}";
+        let error = serde_json::from_str::<BoundedMessageAsciiField>(json)
+            .expect_err("non-ASCII bytes must be rejected on an ASCII-bounded message field");
+        let message = error.to_string();
+        assert!(
+            message.contains("non-ASCII"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn deserialize_bounded_ascii_through_error_response_rejects_non_ascii_code() {
+        let json = "{\"code\":\"not_ascii\\u00e9\",\"message\":\"all-ASCII\",\"recovery_class\":\"recoverable\"}";
+        let error = serde_json::from_str::<ErrorResponse>(json)
+            .expect_err("ErrorResponse.code must reject non-ASCII bytes");
+        assert!(error.to_string().contains("non-ASCII"));
+    }
+
+    #[test]
+    fn deserialize_bounded_u16_vec_rejects_oversized_input() {
+        let entries: Vec<u16> = (0..(MAX_BOUNDED_COLLECTION_LEN + 1) as u16).collect();
+        let entries_json = serde_json::to_string(&entries).expect("serialize");
+        let json = format!("{{\"value\":{entries_json}}}");
+        let error = serde_json::from_str::<BoundedU16VecField>(&json)
+            .expect_err("over-cap u16 vec must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("vector field exceeds max length"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn deserialize_bounded_u16_vec_accepts_at_cap_input() {
+        let entries: Vec<u16> = (0..MAX_BOUNDED_COLLECTION_LEN as u16).collect();
+        let entries_json = serde_json::to_string(&entries).expect("serialize");
+        let json = format!("{{\"value\":{entries_json}}}");
+        let parsed: BoundedU16VecField = serde_json::from_str(&json)
+            .expect("at-cap u16 vec must be accepted");
+        assert_eq!(parsed.value.len(), MAX_BOUNDED_COLLECTION_LEN);
+    }
+
+    #[test]
+    fn deserialize_bounded_verifying_shares_map_rejects_oversized_value() {
+        let mut entries: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        entries.insert(
+            "01".to_string(),
+            "a".repeat(MAX_VERIFYING_SHARE_HEX_CHARS + 1),
+        );
+        let entries_json = serde_json::to_string(&entries).expect("serialize");
+        let json = format!("{{\"value\":{entries_json}}}");
+        let error = serde_json::from_str::<BoundedVerifyingSharesMapField>(&json)
+            .expect_err("map value over per-value cap must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("verifying_shares value exceeds max length"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn deserialize_bounded_verifying_shares_map_rejects_oversized_entry_count() {
+        let entries: std::collections::BTreeMap<String, String> = (0..(MAX_BOUNDED_MAP_ENTRIES + 1)
+            as u16)
+            .map(|idx| {
+                (
+                    format!("id-{idx:03}"),
+                    format!("{:02x}", idx as u8),
+                )
+            })
+            .collect();
+        let entries_json = serde_json::to_string(&entries).expect("serialize");
+        let json = format!("{{\"value\":{entries_json}}}");
+        let error = serde_json::from_str::<BoundedVerifyingSharesMapField>(&json)
+            .expect_err("map over entry-count cap must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("verifying_shares map exceeds max entries"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn deserialize_bounded_verifying_shares_map_accepts_at_cap_inputs() {
+        let entries: std::collections::BTreeMap<String, String> = (0..MAX_BOUNDED_MAP_ENTRIES
+            as u16)
+            .map(|idx| {
+                (
+                    format!("id-{idx:03}"),
+                    format!("{:02x}", idx as u8),
+                )
+            })
+            .collect();
+        let entries_json = serde_json::to_string(&entries).expect("serialize");
+        let json = format!("{{\"value\":{entries_json}}}");
+        let parsed: BoundedVerifyingSharesMapField = serde_json::from_str(&json)
+            .expect("at-cap map must be accepted");
+        assert_eq!(parsed.value.len(), MAX_BOUNDED_MAP_ENTRIES);
+    }
+
+    #[test]
+    fn deserialize_bounded_round1_packages_vec_rejects_oversized_input() {
+        let entries: Vec<DkgRound1Package> = (0..(MAX_BOUNDED_COLLECTION_LEN + 1) as u16)
+            .map(|idx| DkgRound1Package {
+                identifier: format!("id-{idx}"),
+                package_hex: "aa".to_string(),
+            })
+            .collect();
+        let entries_json = serde_json::to_string(&entries).expect("serialize");
+        let json = format!("{{\"value\":{entries_json}}}");
+        let error = serde_json::from_str::<BoundedRound1PackagesVecField>(&json)
+            .expect_err("over-cap round1 packages vec must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("vector field exceeds max length"),
+            "unexpected error message: {message}"
+        );
     }
 }

@@ -10,11 +10,6 @@ pub fn dkg_part1(request: DkgPart1Request) -> Result<DkgPart1Result, EngineError
             "DKGPart1: max_signers is zero".to_string(),
         ));
     }
-    if request.min_signers == 0 {
-        return Err(EngineError::Validation(
-            "DKGPart1: min_signers is zero".to_string(),
-        ));
-    }
     if request.min_signers < 2 {
         return Err(EngineError::Validation(
             "DKGPart1: min_signers must be at least 2".to_string(),
