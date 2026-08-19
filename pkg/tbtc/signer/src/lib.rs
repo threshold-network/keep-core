@@ -132,11 +132,6 @@ ffi_request_response!(frost_tbtc_new_signing_package, NewSigningPackageRequest, 
 
 ffi_request_response!(frost_tbtc_verify_signature_share, crate::api::VerifySignatureShareRequest, engine::verify_signature_share);
 
-// Phase 7.1 hardened interactive signing session (frozen spec
-// docs/phase-7-interactive-session-spec-freeze.md). Additive ABI: the
-// Go host adopts these in Phase 7.3; nothing breaks until it calls
-// them. Secret nonces never cross this boundary in either direction.
-
 ffi_request_response!(frost_tbtc_interactive_session_open, InteractiveSessionOpenRequest, engine::interactive_session_open);
 
 ffi_request_response!(frost_tbtc_interactive_round1, InteractiveRound1Request, engine::interactive_round1);
@@ -150,6 +145,11 @@ ffi_request_response!(frost_tbtc_interactive_aggregate, InteractiveAggregateRequ
 ffi_request_response!(frost_tbtc_derive_interactive_attempt_context, DeriveInteractiveAttemptContextRequest, engine::derive_interactive_attempt_context);
 
 ffi_request_response!(frost_tbtc_build_taproot_tx, BuildTaprootTxRequest, engine::build_taproot_tx);
+// Reserved response shape for a future cryptographic share-refresh protocol.
+// Today this entry fails closed: engine::refresh_shares returns
+// EngineError::CryptographicRefreshNotSupported and the FFI returns status 1.
+// The macro wrapper is the right shape; only the engine function and the
+// request/response types need to change when a real refresh protocol lands.
 
 ffi_request_response!(frost_tbtc_refresh_shares, RefreshSharesRequest, engine::refresh_shares);
 

@@ -217,7 +217,7 @@ The existing `ffi::tests` module exercises `parse_request` end-to-end and the `T
 - The 26 mechanical entries become 1-line macro invocations.
 - The 3 outliers (`frost_tbtc_version`, `frost_tbtc_abi_version`, `frost_tbtc_free_buffer`) hand-write their bodies with one-liner comments.
 - The C header (`include/frost_tbtc.h`) gains the safety narrative for each entry.
-- `cargo test --lib --package frost-signer` passes.
+- `cargo test --lib --package tbtc-signer` passes.
 - The chaos suite (`scripts/run_phase5_chaos_suite.sh`) passes.
 - The `TBTC_SIGNER_ABI_*` constants are not bumped.
 - Each macro's expansion is byte-equivalent to the current hand-written body for its shape: the 23 `ffi_request_response!` entries keep the six-line parse/call/serialize body; the 1 `ffi_no_request!` and 2 `ffi_no_request_infallible!` entries keep their respective shorter bodies.
