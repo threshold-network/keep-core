@@ -282,7 +282,6 @@ pub(crate) fn enter_phase()
 // the phase, matching the existing lock model.
 pub(crate) fn flush_pending_marker<F>(
     guard: &std::sync::MutexGuard<'static, EngineState>,
-    session_id: &str,
     predicate: F,
 ) -> Result<(), EngineError>
 where
@@ -916,7 +915,7 @@ pub fn interactive_round2(
     // An earlier marker write may have replaced the state file but failed its
     // directory sync. Flush that fail-closed marker before consulting the replay
     // gate; after a successful write, the marker below rejects the retry.
-    flush_pending_marker(&guard, &request.session_id, || {
+    flush_pending_marker(&guard, || {
         interactive_round2_persistence_pending(&request.session_id, &consumed_marker)
     })?;
 
@@ -1299,13 +1298,13 @@ pub fn interactive_aggregate(
         taproot_merkle_root.as_ref(),
     )?;
 
-    let mut guard = enter_phase()?;
+    let guard = enter_phase()?;
     // Sweep first so a failure while repairing any prior completion marker can
     // never postpone destruction of newly expired nonce handles.
     // A prior completion-marker write may have replaced the state file but failed
     // its directory sync. Re-persist that fail-closed marker before the completed
     // attempt check so a retry repairs durability and is then rejected normally.
-    flush_pending_marker(&guard, &request.session_id, || {
+    flush_pending_marker(&guard, || {
         interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker)
     })?;
     // Resolve the group's public key package (the verifying shares used
