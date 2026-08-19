@@ -11,8 +11,8 @@ tags: [frost-signer, architecture, deepening, phase-7-1]
 
 The `pkg/tbtc/signer/src/engine/interactive.rs` module exposes five `pub fn` phase handlers — `interactive_session_open`, `interactive_round1`, `interactive_round2`, `interactive_aggregate`, `interactive_session_abort` — each shaped as a monolith of 80 to 510 lines that interleaves:
 
-- **Lock-prologue**: `state()?.lock().map_err(...)?` + `sweep_expired_interactive_state_durably(&mut guard)?` (2 statements, byte-identical, repeated at all 5 phase-entry sites: interactive.rs:321, 789, 881, 1273, 1649; the string `"engine lock poisoned"` also appears once more at interactive.rs:1456, but that is a nested lock acquisition inside `interactive_aggregate`'s body, not a 6th phase-entry prologue).
-- **Auto-quarantine config load**: `load_auto_quarantine_config()?` is phase-specific, not part of the shared prologue — only `open` (interactive.rs:324, immediately after the lock+sweep) and `round2` (interactive.rs:894, several lines AFTER the marker-durability flush below) call it; `round1`, `aggregate`, and `abort` never call it. The two call sites are not even at the same relative position, so this cannot be folded into a single `enter_phase()` step without reordering round2's marker-durability flush behind a fallible config parse — see "Out-of-scope changes."
+- **Lock-prologue**: prior to this consolidation, `state()?.lock().map_err(...)?` + `sweep_expired_interactive_state_durably(&mut guard)?` (2 statements, byte-identical, repeated at all 5 phase-entry sites: interactive.rs:321, 789, 881, 1273, 1647; the string `"engine lock poisoned"` also appears once more at interactive.rs:1456, but that is a nested lock acquisition inside `interactive_aggregate`'s body, not a 6th phase-entry prologue). After consolidation, those 2-statement prologues collapse to a single `let [mut] guard = enter_phase()?;` call at interactive.rs:359, 824, 913, 1301, 1671; the nested `"engine lock poisoned"` string moves to interactive.rs:1482.
+- **Auto-quarantine config load**: `load_auto_quarantine_config()?` is phase-specific, not part of the shared prologue — only `open` (interactive.rs:361, immediately after the consolidated `enter_phase()?` call) and `round2` (interactive.rs:924, several lines AFTER the marker-durability flush below) call it; `round1`, `aggregate`, and `abort` never call it. The two call sites are not even at the same relative position, so this cannot be folded into a single `enter_phase()` step without reordering round2's marker-durability flush behind a fallible config parse — see "Out-of-scope changes."
 - **Marker-durability dance**: re-persist if an earlier marker write failed its directory sync, then write the new marker (3 lines, repeated 3 times across open / round2 / aggregate).
 - **Per-phase business logic**: the actual session lookup, validation, signing-package deserialization, share release, or aggregation.
 
@@ -34,7 +34,7 @@ pub fn interactive_aggregate(...)            // unchanged signature
 pub fn interactive_session_abort(...)        // unchanged signature
 
 pub(crate) fn enter_phase() -> Result<MutexGuard<EngineState>, EngineError>
-pub(crate) fn flush_pending_marker(guard, session_id, predicate) -> Result<(), EngineError>
+pub(crate) fn flush_pending_marker(guard, predicate) -> Result<(), EngineError>
 ```
 
 `enter_phase` consolidates only the lock-acquisition + sweep — the 2-statement shape that is byte-identical across all 5 phase-entry sites. `flush_pending_marker` consolidates the re-persist-on-pending-marker step. Both are `pub(crate)` so the test suite can exercise them in isolation; both are private to the FFI surface. `load_auto_quarantine_config()?` is deliberately NOT folded into `enter_phase` — see "Out-of-scope changes" for why. The five `pub fn` phase handlers continue to own all phase-specific logic, including their own `load_auto_quarantine_config()?` calls where they exist today.
@@ -68,7 +68,7 @@ pub(crate) fn enter_phase() -> Result<std::sync::MutexGuard<'static, EngineState
 }
 ```
 
-`enter_phase` deliberately does NOT also call `load_auto_quarantine_config()?`. The two current call sites are not at the same relative position: `open` (interactive.rs:324) calls it immediately after the lock+sweep, but `round2` (interactive.rs:894) calls it AFTER the marker-durability flush (the re-persist that repairs a prior fail-closed marker write). Folding config-loading into `enter_phase` would run it before the marker-durability flush at round2 — reordering a security-relevant durability repair behind a fallible config parse, so a misconfigured `TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV`/allowlist env var could skip a fail-closed marker repair it doesn't skip today. `round1`, `aggregate`, and `abort` never call `load_auto_quarantine_config` today; keeping the call out of `enter_phase` also means none of them gains a new `?` error exit for a config concern they don't depend on. `abort` in particular is the fail-closed cleanup path and must not gain a new way to fail on quarantine-config env misconfiguration.
+`enter_phase` deliberately does NOT also call `load_auto_quarantine_config()?`. The two current call sites are not at the same relative position: `open` (interactive.rs:361) calls it immediately after the consolidated `enter_phase()?` call, but `round2` (interactive.rs:924) calls it AFTER the marker-durability flush (the re-persist that repairs a prior fail-closed marker write). Folding config-loading into `enter_phase` would run it before the marker-durability flush at round2 — reordering a security-relevant durability repair behind a fallible config parse, so a misconfigured `TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV`/allowlist env var could skip a fail-closed marker repair it doesn't skip today. `round1`, `aggregate`, and `abort` never call `load_auto_quarantine_config` to…
 
 Each phase keeps its own `load_auto_quarantine_config()?` call at its current position: `open` right after `enter_phase()`, `round2` right after its `flush_pending_marker(...)` call.
 
@@ -79,7 +79,6 @@ The function returns the guard. Callers retain full access to the guarded engine
 ```rust
 pub(crate) fn flush_pending_marker<F>(
     guard: &MutexGuard<'static, EngineState>,
-    session_id: &str,
     predicate: F,
 ) -> Result<(), EngineError>
 where
@@ -110,7 +109,7 @@ fn phase_handler(request) -> Result<Response, EngineError> {
 }
 ```
 
-The marker-durability variant of the pattern (used in round2 and aggregate) adds a `flush_pending_marker(&guard, session_id, || { ...pending predicate... })?;` step before the new marker write.
+The marker-durability variant of the pattern (used in round2 and aggregate) adds a `flush_pending_marker(&guard, || { ...pending predicate... })?;` step before the new marker write.
 
 ### Validation prologue
 
@@ -118,7 +117,7 @@ The input-validation prologue (validate_session_id, validate_attempt_id, hex dec
 
 ### Latency tracking
 
-The `HardeningOperationLatencyGuard::success_only(...)` is used in round1, round2, and aggregate (interactive.rs:778, 858, 1230). It stays at the top of each phase, not in `enter_phase`. Adding it to `enter_phase` would mean the open and abort phases also pay the latency-tracking cost for what is currently a no-op there.
+The `HardeningOperationLatencyGuard::success_only(...)` is used in round1, round2, and aggregate (interactive.rs:815, 892, 1260). It stays at the top of each phase, not in `enter_phase`. Adding it to `enter_phase` would mean the open and abort phases also pay the latency-tracking cost for what is currently a no-op there.
 
 ### Helper visibility rationale
 
@@ -151,7 +150,7 @@ The new helpers get unit tests at the `engine::tests::enter_phase_*` and `engine
 
 ### Prior art
 
-The existing `engine::tests::interactive_round2_persist_fault_leaves_nonces_live` test (tests.rs:9847) already exercises the marker-durability dance by injecting a `PersistFaultInjectionPoint`. The new `flush_pending_marker` helper can be tested by reusing the same fault-injection seam.
+The existing `engine::tests::interactive_round2_persist_fault_leaves_nonces_live` test (tests.rs:9713) already exercises the marker-durability dance by injecting a `PersistFaultInjectionPoint`. The new `flush_pending_marker` helper can be tested by reusing the same fault-injection seam.
 
 ### Definition of Done
 
