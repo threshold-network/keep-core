@@ -2057,10 +2057,10 @@ impl TryFrom<PersistedSessionState> for SessionState {
                 key_packages: dkg_key_packages,
                 public_key_package: dkg_public_key_package,
                 result: persisted.dkg_result,
-                // Persisted schema does not carry this field; reset to 0 on
-                // every load (matches the absence of any production reader
-                // today). A future spec that wires this into persistence
-                // will replace the literal here.
+                // Persisted schema carries this field as a u32 counter (serde-defaulted
+                // on PersistedSessionState so state written before the field existed
+                // still loads as 0). Round-tripped through this TryFrom - it has no
+                // production reader today but persistence is already wired.
                 policy_snapshot_version: persisted.policy_snapshot_version,
                 ..Default::default()
             },

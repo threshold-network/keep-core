@@ -4780,6 +4780,77 @@ fn persisted_session_state_round_trip_preserves_bound_key_group() {
 }
 
 #[test]
+fn persisted_session_state_rejects_retired_interactive_on_non_per_message_session() {
+    // Cross-field retirement invariant: a persisted retired interactive session
+    // must satisfy per_message_interactive_session() - i.e. be bound to a wallet
+    // key group AND carry no DKG material. A retired entry on a non-per-message
+    // session (e.g. one that owns a dkg_result, or that has no bound_key_group)
+    // would corrupt the load path because the engine treats retired entries as
+    // "idle per-message tombstones that have already released the wallet DKG
+    // slot". The TryFrom<PersistedSessionState> impl enforces this check at the
+    // end of the conversion; this test pins the invariant so a future migration
+    // cannot silently drop or invert it. See docs/specs/frost-signer-sessionstate-
+    // grouping.md "Risks" - this exact check is the highest-risk seam in the
+    // SessionState grouping split, and is the only invariant in the new code
+    // that spans three of the six substructures at once.
+    let mut persisted = persisted_session_state_fixture();
+    // Some(1) is positive (Some(0) is its own dedicated rejection earlier in the
+    // TryFrom body) and obviously synthetic. No bound_key_group means the
+    // session is not per-message-interactive, so the invariant must fire.
+    persisted.retired_interactive_at_unix = Some(1);
+    persisted.bound_key_group = None;
+
+    let err = match SessionState::try_from(persisted) {
+        Ok(_) => panic!(
+            "expected decode rejection: a retired interactive session without a \
+             per-message role must not round-trip back into SessionState"
+        ),
+        Err(err) => err,
+    };
+    expect_internal_error_contains(
+        err,
+        "persisted retired interactive session must have the per-message role",
+    );
+}
+
+// Pins the OperationalState::retired_interactive_at_unix round-trip end-to-end.
+// Of the three OperationalState fields, only this one persists: the two siblings
+// (heartbeat_rate_limiter, aggregate_eviction_pin) are deliberately transient
+// and reset on restart. The grouping split makes an easy mistake - wholesale-
+// defaulting OperationalState in either TryFrom direction - that would silently
+// drop the timestamp on every restart and break idle-session admission. The
+// cross-field invariant above requires the session to be per-message-interactive
+// for the retired timestamp to survive, so this SessionState carries a
+// bound_key_group.
+#[test]
+fn persisted_session_state_round_trip_preserves_capacity_pins_retired_interactive_at_unix() {
+    let retired_at: u64 = 1_700_000_000;
+    let session = SessionState {
+        interactive: InteractiveSessionState {
+            bound_key_group: Some("wallet-key-group".to_string()),
+            ..Default::default()
+        },
+        capacity_pins: OperationalState {
+            retired_interactive_at_unix: Some(retired_at),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let persisted = PersistedSessionState::try_from(&session).expect("serialize");
+    assert_eq!(
+        persisted.retired_interactive_at_unix,
+        Some(retired_at),
+        "retired_interactive_at_unix must serialize into PersistedSessionState"
+    );
+    let restored = SessionState::try_from(persisted).expect("deserialize");
+    assert_eq!(
+        restored.capacity_pins.retired_interactive_at_unix,
+        Some(retired_at),
+        "retired_interactive_at_unix must round-trip through persistence"
+    );
+}
+
+#[test]
 fn interactive_open_cross_session_respects_the_session_cap() {
     // A fresh RoastSessionID per message must not let Open grow the session registry
     // past TBTC_SIGNER_MAX_SESSIONS: otherwise the cross-session path could build an
