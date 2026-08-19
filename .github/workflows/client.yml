@@ -376,7 +376,7 @@ jobs:
 
   client-bench:
     needs: [client-build-test-publish]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -424,10 +424,12 @@ jobs:
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260813145340-fd4a688df892
 
       # Benchmark regression gate: >12% slower than main's last `go-bench`
-      # artifact. Baseline measured at PR #4256 (2026-08-19).
+      # artifact. Baseline measured at PR #4256 (2026-08-19). This job only
+      # runs on manual `workflow_dispatch` - no automatic push/PR trigger.
       # GAP: benchmarks added in this PR have no main-side baseline, so
       # benchstat silently skips them on first run; they only become
-      # gated after shipping to main and the next push downloads them.
+      # gated after shipping to main and someone manually dispatches this
+      # workflow again on main to record a baseline artifact.
       # No automated baseline-record mechanism exists in this workflow.
       - name: Compare benchmarks
         if: steps.download-prev.outcome == 'success' && hashFiles('bench-prev/**') != ''
