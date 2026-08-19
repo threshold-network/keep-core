@@ -344,7 +344,6 @@ func TestMetricsInitialization(t *testing.T) {
 
 	// Test gauges
 	gauges := []string{
-		MetricCPUUtilization,
 		MetricMemoryUsageMB,
 		MetricGoroutineCount,
 		MetricCPULoadPercent,

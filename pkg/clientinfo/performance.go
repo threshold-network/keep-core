@@ -308,7 +308,6 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricIncomingMessageQueueSize,
 		MetricMessageHandlerQueueSize,
 		MetricSigningAttemptsPerOperation,
-		MetricCPUUtilization,
 		MetricMemoryUsageMB,
 		MetricGoroutineCount,
 		MetricCPULoadPercent,
@@ -353,9 +352,12 @@ func (pm *PerformanceMetrics) IncrementCounter(name string, value float64) {
 	c, ok := pm.counters[name]
 	if !ok {
 		// Counter not pre-registered. Pre-registration is enforced by
-		// registerCounterMetrics() and tested by the *_CountersRegistered
-		// tests. Silently ignoring the increment is the original behavior
-		// of this slow path; review the registration list if a counter
+		// registerAllMetrics() and tested by the *_CountersRegistered
+		// tests. The original slow path lazily added the counter to
+		// pm.counters on first increment but never called
+		// ObserveApplicationSource, so the value lived in memory but
+		// never reached /metrics; the current code silently ignores
+		// the increment. Review the registration list if a counter
 		// appears here unexpectedly.
 		return
 	}
@@ -434,11 +436,6 @@ func (pm *PerformanceMetrics) observeSystemMetrics(ctx context.Context) {
 	ticker := time.NewTicker(60 * time.Second) // Update every 60 seconds
 	defer ticker.Stop()
 
-	var lastMemStats runtime.MemStats
-	var lastUpdateTime time.Time
-	runtime.ReadMemStats(&lastMemStats)
-	lastUpdateTime = time.Now()
-
 	for {
 		select {
 		case <-ticker.C:
@@ -455,72 +452,12 @@ func (pm *PerformanceMetrics) observeSystemMetrics(ctx context.Context) {
 			memoryUsageMB := float64(memStats.Sys) / (1024 * 1024) // Total memory in megabytes
 			pm.SetGauge(MetricMemoryUsageMB, memoryUsageMB)
 
-			// Calculate CPU utilization using a more realistic heuristic
-			now := time.Now()
-			elapsed := now.Sub(lastUpdateTime)
-			if elapsed > 0 {
-				cpuUtilization := pm.calculateCPUUtilizationHeuristic(memStats, lastMemStats, elapsed)
-				pm.SetGauge(MetricCPUUtilization, cpuUtilization)
-
-				lastMemStats = memStats
-				lastUpdateTime = now
-			}
-
 			// Update OS-level machine stats
 			pm.updateMachineStats()
 		case <-ctx.Done():
 			return
 		}
 	}
-}
-
-// calculateCPUUtilizationHeuristic calculates CPU utilization using a heuristic
-// based on goroutine count and GC activity. This provides a reasonable approximation.
-// Note: For accurate CPU metrics, consider using OS-level process CPU time.
-func (pm *PerformanceMetrics) calculateCPUUtilizationHeuristic(
-	currentMemStats runtime.MemStats,
-	lastMemStats runtime.MemStats,
-	elapsed time.Duration,
-) float64 {
-	numCPU := float64(runtime.NumCPU())
-	activeGoroutines := float64(runtime.NumGoroutine())
-
-	// Calculate GC rate (GCs per second)
-	gcDelta := float64(currentMemStats.NumGC - lastMemStats.NumGC)
-	gcRate := gcDelta / elapsed.Seconds()
-
-	// Normalize goroutines: if we have more goroutines than CPU cores,
-	// we're likely using more CPU, but use a conservative multiplier
-	// Formula: (goroutines / CPU cores) * 10%, capped at 40%
-	goroutineContribution := (activeGoroutines / numCPU) * 10.0
-	if goroutineContribution > 40.0 {
-		goroutineContribution = 40.0
-	}
-
-	// GC contribution: frequent GCs indicate CPU work, but use conservative multiplier
-	// Formula: GC rate * 1%, capped at 20%
-	gcContribution := gcRate * 1.0
-	if gcContribution > 20.0 {
-		gcContribution = 20.0
-	}
-
-	// Total CPU utilization estimate
-	cpuUtilization := goroutineContribution + gcContribution
-
-	// Add a small base load if there are active goroutines
-	if cpuUtilization < 1.0 && activeGoroutines > 0 {
-		cpuUtilization = 1.0 // Minimum 1% if there are active goroutines
-	}
-
-	// Cap CPU utilization at 100%
-	if cpuUtilization > 100.0 {
-		cpuUtilization = 100.0
-	}
-	if cpuUtilization < 0.0 {
-		cpuUtilization = 0.0
-	}
-
-	return cpuUtilization
 }
 
 // updateMachineStats collects and updates OS-level machine statistics
@@ -553,25 +490,6 @@ func (pm *PerformanceMetrics) updateMachineStats() {
 		}
 	}
 }
-
-// NoOpPerformanceMetrics is a no-op implementation of PerformanceMetricsRecorder
-// that can be used when metrics are disabled.
-type NoOpPerformanceMetrics struct{}
-
-// IncrementCounter is a no-op.
-func (n *NoOpPerformanceMetrics) IncrementCounter(name string, value float64) {}
-
-// RecordDuration is a no-op.
-func (n *NoOpPerformanceMetrics) RecordDuration(name string, duration time.Duration) {}
-
-// SetGauge is a no-op.
-func (n *NoOpPerformanceMetrics) SetGauge(name string, value float64) {}
-
-// GetCounterValue always returns 0.
-func (n *NoOpPerformanceMetrics) GetCounterValue(name string) float64 { return 0 }
-
-// GetGaugeValue always returns 0.
-func (n *NoOpPerformanceMetrics) GetGaugeValue(name string) float64 { return 0 }
 
 // GetCounterValue returns the current value of a counter.
 func (pm *PerformanceMetrics) GetCounterValue(name string) float64 {
@@ -701,7 +619,6 @@ const (
 	MetricWalletDispatcherRejectedTotal = "wallet_dispatcher_rejected_total"
 
 	// System Metrics
-	MetricCPUUtilization         = "cpu_utilization_percent"
 	MetricMemoryUsageMB          = "memory_usage_mb"
 	MetricGoroutineCount         = "goroutine_count"
 	MetricCPULoadPercent         = "cpu_load_percent"

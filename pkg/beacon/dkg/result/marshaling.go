@@ -1,4 +1,4 @@
-// marshaling.go: protobuf (un)marshalling for the public types in this package.
+// marshaling.go: protobuf (un)marshaling for the public types in this package.
 package result
 
 import (

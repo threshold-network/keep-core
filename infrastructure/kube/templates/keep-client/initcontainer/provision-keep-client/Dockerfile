@@ -14,8 +14,10 @@ COPY ./KeepRandomBeaconOperator.json /tmp/KeepRandomBeaconOperator.json
 
 COPY ./keep-client-config-template.toml /tmp/keep-client-config-template.toml
 
-# Regression detector for high-severity dep vulns. Non-fatal: package.json
-# overrides are the authoritative fix.
+# Regression detector for high-severity dep vulns. ADVISORY ONLY: `|| true`
+# is intentional pending a documented allowlist (14 high / 3 critical
+# web3-transitive advisories today); infrastructure/** is paths-ignored in
+# CI (.github/workflows/client.yml), so this gate cannot regress a build.
 RUN npm audit --omit=dev --audit-level=high || true
 COPY ./provision-keep-client.js /tmp/provision-keep-client.js
 

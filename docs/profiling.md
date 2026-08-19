@@ -3,25 +3,34 @@
 ## Overview
 
 The keep-core binary exposes Go runtime profiling endpoints via the
-`clientinfo` HTTP server when `EnablePprof: true` is set in configuration.
-Profiles are served at `/debug/pprof/` on the same port as metrics and
-diagnostics (`ClientInfo.Port`).
+`clientinfo` HTTP server. The `/debug/pprof/...` endpoints are gated by
+`EnablePprof` in configuration: they are only registered when
+`EnablePprof: true` is set explicitly under `[ClientInfo]`, and are
+not served otherwise. Profiles are served at `/debug/pprof/` on the
+same port as metrics and diagnostics (`ClientInfo.Port`).
 
 ## Security Warning
 
-The clientinfo HTTP server binds to all interfaces (`0.0.0.0`). **Never
-enable pprof on a production node that is reachable from untrusted networks.**
-CPU profiles, heap dumps, and goroutine traces can expose sensitive runtime
-state.
+The clientinfo HTTP server binds to all interfaces (`0.0.0.0`). The
+`EnablePprof` flag is the only thing that prevents the `/debug/pprof/`
+endpoints from being reachable on that port: **leave `EnablePprof`
+unset or `false` on any node whose `ClientInfo.Port` is reachable
+beyond a trusted network.** Leaving the flag at its default (off) is
+the secure posture; flipping it on a node exposed to untrusted
+networks exposes CPU profiles, heap dumps, and goroutine traces that
+can leak sensitive runtime state.
 
-Safe access patterns:
+Safe access patterns when profiling is genuinely needed:
 - Run on a private/firewalled network
 - Use an SSH tunnel: `ssh -L 9601:localhost:9601 node-host`
 - Restrict at the network layer (security group, firewall rule)
+- Profile briefly (e.g. `-seconds=` on the CPU profile endpoint) and
+  set `EnablePprof: false` again when finished
 
 ## Enabling Profiling
 
-In your config file (TOML example):
+Profiling is disabled by default. To enable it, set `EnablePprof: true`
+in your config (TOML example):
 
 ```toml
 [ClientInfo]
@@ -30,6 +39,8 @@ In your config file (TOML example):
 ```
 
 Or pass via environment / flag if your deployment uses those overrides.
+Set `EnablePprof` back to `false` (or remove it) as soon as you are
+finished profiling so the endpoints stop being served.
 
 ## Standard Commands
 
@@ -71,6 +82,11 @@ go tool pprof http://localhost:9601/debug/pprof/mutex
 ## Benchmark + Profile Workflow
 
 To identify hot paths found by benchmarks:
+
+Note: `-bench=` accepts a Go regular expression that substring-matches
+benchmark names; the patterns below intentionally match every
+size-suffixed variant of the named benchmark (e.g.
+`BenchmarkGetRecentWindows_100Windows`, `BenchmarkComputeSignatureHashes_5Inputs`).
 
 ```sh
 # Run benchmark and write CPU profile
@@ -130,6 +146,4 @@ Install `benchstat`: `go install golang.org/x/perf/cmd/benchstat@latest`
   window. It is safe to run against a live node for short durations.
 - Heap and goroutine profiles are sampled snapshots; a single sample may
   miss transient allocations. Take multiple profiles under load.
-- pprof registers on `http.DefaultServeMux`. If `EnablePprof: false`, the
-  handlers are still compiled in but no log message is emitted and they will
-  not be documented in operator runbooks as intentionally exposed.
+

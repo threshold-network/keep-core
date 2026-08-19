@@ -2,7 +2,6 @@
 package ethereum
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math/big"
 	"sort"
@@ -11,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-
 	"github.com/keep-network/keep-core/pkg/chain"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -363,14 +361,7 @@ func buildMovedFundsKey(
 	movingFundsTxHash bitcoin.Hash,
 	movingFundsTxOutpointIndex uint32,
 ) *big.Int {
-	indexBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(indexBytes, movingFundsTxOutpointIndex)
-
-	movedFundsKey := crypto.Keccak256Hash(
-		append(movingFundsTxHash[:], indexBytes...),
-	)
-
-	return movedFundsKey.Big()
+	return buildTxOutpointKey(movingFundsTxHash, movingFundsTxOutpointIndex)
 }
 
 func (tc *TbtcChain) ValidateMovingFundsProposal(

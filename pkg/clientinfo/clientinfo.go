@@ -2,9 +2,8 @@ package clientinfo
 
 import (
 	"context"
-	_ "net/http/pprof" // #nosec G108 -- registers /debug/pprof/* on DefaultServeMux at
-	// init; EnablePprof only controls the startup log message and does not
-	// gate registration. See docs/profiling.md.
+	"net/http"
+	"net/http/pprof"
 	"time"
 
 	"github.com/ipfs/go-log"
@@ -48,10 +47,29 @@ func Initialize(
 	registry := &Registry{clientinfo.NewRegistry(), ctx}
 
 	if cfg.EnablePprof {
+		// Register the pprof handlers on http.DefaultServeMux, which is the
+		// mux that keep-common's EnableServer hands to the http.Server.
+		// Registering them explicitly here avoids the side-effecting blank
+		// import of net/http/pprof, which would otherwise register
+		// /debug/pprof/* unconditionally on DefaultServeMux regardless of
+		// this flag.
+		registerPprofHandlers()
 		logger.Infof("pprof profiling endpoints enabled at /debug/pprof/")
 	}
 
 	registry.EnableServer(cfg.Port)
 
 	return registry, true
+}
+
+// registerPprofHandlers registers the standard net/http/pprof handlers on
+// http.DefaultServeMux. It is invoked explicitly from Initialize when
+// EnablePprof is true, in place of the blank import of net/http/pprof that
+// would otherwise register the endpoints at init time.
+func registerPprofHandlers() {
+	http.HandleFunc("/debug/pprof/", pprof.Index)
+	http.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	http.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	http.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	http.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }

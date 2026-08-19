@@ -502,6 +502,23 @@ func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
 	}
 }
 
+// The _64Keys benchmarks below (BenchmarkMarshalEphemeralPublicKeyMessage_64Keys
+// and BenchmarkUnmarshalEphemeralPublicKeyMessage_64Keys) measure marshal and
+// unmarshal cost on a 64-member beacon group (63 peer keys per message) as
+// the gjkr package stands today. Unmarshal currently parses every peer key
+// eagerly through ephemeral.UnmarshalPublicKey (each call wraps
+// btcec.ParsePubKey and dominates the work), so these numbers reflect that
+// eager-parsing cost.
+//
+// pkg/tecdsa/dkg and pkg/tecdsa/signing received a
+// deferred-ephemeral-key-parsing optimization in this release cycle that
+// turns the per-message cost from O(N^2) over the group into O(1) at
+// unmarshal plus O(1) per key on demand. Porting that optimization to gjkr
+// is intentionally out of scope here and is tracked as a follow-up
+// improvement. The _64Keys benchmarks are kept as a pre-optimization
+// baseline so reviewers do not mistake the suffix or the surrounding
+// comments for evidence that gjkr already has the optimization.
+
 // BenchmarkMarshalEphemeralPublicKeyMessage_64Keys benchmarks marshaling with
 // the beacon group size (64 members = 63 peer keys per message).
 func BenchmarkMarshalEphemeralPublicKeyMessage_64Keys(b *testing.B) {

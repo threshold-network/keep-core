@@ -2,14 +2,12 @@
 package ethereum
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math/big"
 	"sort"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 
@@ -220,14 +218,7 @@ func buildDepositKey(
 	fundingTxHash bitcoin.Hash,
 	fundingOutputIndex uint32,
 ) *big.Int {
-	fundingOutputIndexBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(fundingOutputIndexBytes, fundingOutputIndex)
-
-	depositKey := crypto.Keccak256Hash(
-		append(fundingTxHash[:], fundingOutputIndexBytes...),
-	)
-
-	return depositKey.Big()
+	return buildTxOutpointKey(fundingTxHash, fundingOutputIndex)
 }
 
 func convertDepositSweepProposalToAbiType(

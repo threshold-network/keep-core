@@ -21,7 +21,6 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
-	"github.com/btcsuite/btcd/blockchain"
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -30,27 +29,6 @@ import (
 )
 
 var logger = log.Logger("keep-maintainer-spv")
-
-// The maximum number of block headers allowed in a single SPV proof. Bounds
-// the forward walk over headers when computing required confirmations
-// (relevant on testnet4 where long runs of minimum-difficulty blocks occur).
-//
-// 144 is one day's worth of blocks at Bitcoin's ~10-minute target spacing. In a
-// normal epoch every header contributes the full epoch difficulty, so a proof
-// needs only a handful of headers (txProofDifficultyFactor headers, typically
-// 6); the bound leaves ample margin. It exists solely to cap the walk against a
-// pathological run of leading minimum-difficulty (DIFF1) headers. Note the
-// proof window is anchored at a fixed start block and does not slide, so a run
-// of leading DIFF1 headers longer than this bound makes the transaction
-// permanently unprovable rather than merely delayed (see proofSkipReason).
-const maxProofHeaders = 144
-
-// minDifficultyTarget is the Bitcoin minimum-difficulty target, decoded from
-// compact bits 0x1d00ffff. It mirrors the Bridge's
-// BitcoinTx.MIN_DIFFICULTY_TARGET and is used to detect testnet4 BIP94
-// minimum-difficulty (DIFF1) headers by exact target equality, matching the
-// on-chain skip predicate.
-var minDifficultyTarget = blockchain.CompactToBig(0x1d00ffff)
 
 // proofSkipReason explains why an SPV proof cannot be assembled for a
 // transaction in the current cycle. It lets callers log and record metrics with
@@ -68,10 +46,11 @@ const (
 	// the relay advances.
 	proofSkipOutsideRelayRange
 	// proofSkipExceededMaxHeaders means no decisive header was found and not
-	// enough difficulty accumulated within maxProofHeaders. Because the proof
-	// window is anchored at a fixed start block, a run of leading
-	// minimum-difficulty (DIFF1) headers longer than the bound is permanently
-	// unprovable rather than merely delayed, hence it is signalled separately.
+	// enough difficulty accumulated within the configured MaxProofHeaders
+	// bound. Because the proof window is anchored at a fixed start block, a
+	// run of leading minimum-difficulty (DIFF1) headers longer than the bound
+	// is permanently unprovable rather than merely delayed, hence it is
+	// signalled separately.
 	proofSkipExceededMaxHeaders
 )
 
@@ -261,6 +240,7 @@ func (sm *spvMaintainer) proveTransactions(
 			sm.btcChain,
 			sm.spvChain,
 			sm.btcDiffChain,
+			sm.config.MaxProofHeaders,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to get proof info: [%v]", err)
@@ -286,15 +266,16 @@ func (sm *spvMaintainer) proveTransactions(
 			continue
 		case proofSkipExceededMaxHeaders:
 			// No decisive header was found and not enough difficulty
-			// accumulated within maxProofHeaders. Unlike the range skip above,
-			// this transaction may be permanently unprovable if it is buried
-			// under a run of minimum-difficulty blocks longer than the bound.
+			// accumulated within the configured MaxProofHeaders bound. Unlike
+			// the range skip above, this transaction may be permanently
+			// unprovable if it is buried under a run of minimum-difficulty
+			// blocks longer than the bound.
 			logger.Errorf(
 				"skipped proving transaction [%s]; could not find a decisive "+
 					"header or accumulate enough difficulty within [%d] "+
 					"headers; the transaction may be permanently unprovable",
 				transactionHashStr,
-				maxProofHeaders,
+				sm.config.MaxProofHeaders,
 			)
 			if recorder := getMetricsRecorder(); recorder != nil {
 				recorder.IncrementCounter(
@@ -401,6 +382,7 @@ func getProofInfo(
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
+	maxProofHeaders uint,
 ) (
 	uint, uint, proofSkipReason, error,
 ) {
@@ -498,7 +480,7 @@ func getProofInfo(
 			// target == MIN_DIFFICULTY_TARGET predicate. Their work is still
 			// added to observedDiff above.
 			if skipMinDifficulty &&
-				header.Target().Cmp(minDifficultyTarget) == 0 {
+				header.Target().Cmp(btcdiff.LightRelayMinDifficultyTarget) == 0 {
 				continue
 			}
 

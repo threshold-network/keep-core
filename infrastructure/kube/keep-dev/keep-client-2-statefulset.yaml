@@ -39,6 +39,8 @@ spec:
         type: beacon
         id: '2'
     spec:
+      securityContext:
+        fsGroup: 1000 # node user (UID 1000) read/write access to volumes.
       volumes:
       - name: keep-client-config
         persistentVolumeClaim:

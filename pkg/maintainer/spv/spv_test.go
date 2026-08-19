@@ -10,6 +10,7 @@ import (
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/maintainer/btcdiff"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -148,8 +149,9 @@ func TestGetProofInfo(t *testing.T) {
 			expectedAccumulatedConfirmations: 0,
 			expectedRequiredConfirmations:    0,
 		},
-		// A run of minimum-difficulty headers longer than maxProofHeaders
+		// A run of minimum-difficulty headers longer than DefaultMaxProofHeaders
 		// never reaches a decisive header.
+
 		"minimum difficulty run exceeds header bound": {
 			transactionConfirmations: 150,
 			currentEpochDifficulty:   diff(32),
@@ -225,41 +227,42 @@ func TestGetProofInfo(t *testing.T) {
 		},
 		// The decisive header sits exactly at the header bound: 143 leading
 		// DIFF1 headers (skipped for binding but contributing 1 each) followed
-		// by the decisive header at position maxProofHeaders. Required total is
-		// 6*16=96; 143*1 + 16 = 159 >= 96 -> exactly 144 headers, at the bound.
+		// by the decisive header at position DefaultMaxProofHeaders. Required
+		// total is 6*16=96; 143*1 + 16 = 159 >= 96 -> exactly 144 headers, at
+		// the bound.
 		"decisive header exactly at header bound is proven": {
-			transactionConfirmations: maxProofHeaders,
+			transactionConfirmations: DefaultMaxProofHeaders,
 			currentEpochDifficulty:   diff(16),
 			previousEpochDifficulty:  diff(32),
 			headerDifficultyAt: func(h uint) *big.Int {
-				if h < proofStart+maxProofHeaders-1 {
+				if h < proofStart+DefaultMaxProofHeaders-1 {
 					return diff(1)
 				}
 				return diff(16)
 			},
 			headersFrom: proofStart,
-			headersTo:   proofStart + maxProofHeaders - 1,
+			headersTo:   proofStart + DefaultMaxProofHeaders - 1,
 
 			expectedSkipReason:               proofSkipNone,
-			expectedAccumulatedConfirmations: maxProofHeaders,
-			expectedRequiredConfirmations:    maxProofHeaders,
+			expectedAccumulatedConfirmations: DefaultMaxProofHeaders,
+			expectedRequiredConfirmations:    DefaultMaxProofHeaders,
 		},
-		// The decisive header sits one past the header bound: maxProofHeaders
+		// The decisive header sits one past the header bound: DefaultMaxProofHeaders
 		// leading DIFF1 headers exhaust the walk before the decisive header at
-		// position maxProofHeaders+1 is ever examined. This is the off-by-one
+		// position DefaultMaxProofHeaders+1 is ever examined. This is the off-by-one
 		// companion to the case above and must be signalled as exceeded.
 		"decisive header just past header bound is skipped": {
-			transactionConfirmations: maxProofHeaders + 1,
+			transactionConfirmations: DefaultMaxProofHeaders + 1,
 			currentEpochDifficulty:   diff(16),
 			previousEpochDifficulty:  diff(32),
 			headerDifficultyAt: func(h uint) *big.Int {
-				if h < proofStart+maxProofHeaders {
+				if h < proofStart+DefaultMaxProofHeaders {
 					return diff(1)
 				}
 				return diff(16)
 			},
 			headersFrom: proofStart,
-			headersTo:   proofStart + maxProofHeaders,
+			headersTo:   proofStart + DefaultMaxProofHeaders,
 
 			expectedSkipReason:               proofSkipExceededMaxHeaders,
 			expectedAccumulatedConfirmations: 0,
@@ -326,6 +329,7 @@ func TestGetProofInfo(t *testing.T) {
 					btcChain,
 					localChain,
 					localChain,
+					DefaultMaxProofHeaders,
 				)
 			if err != nil {
 				t.Fatal(err)
@@ -374,7 +378,7 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 	// A target of 3/4 * maxTarget: Difficulty() floors to 1, but the target is
 	// strictly below the minimum-difficulty target. BigToCompact truncates
 	// toward zero, so the encoded target can never round up to maxTarget.
-	nonMinTarget := new(big.Int).Mul(minDifficultyTarget, big.NewInt(3))
+	nonMinTarget := new(big.Int).Mul(btcdiff.LightRelayMinDifficultyTarget, big.NewInt(3))
 	nonMinTarget.Div(nonMinTarget, big.NewInt(4))
 	decisiveHeader := &bitcoin.BlockHeader{
 		Bits: blockchain.BigToCompact(nonMinTarget),
@@ -387,7 +391,7 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 			decisiveHeader.Difficulty(),
 		)
 	}
-	if decisiveHeader.Target().Cmp(minDifficultyTarget) == 0 {
+	if decisiveHeader.Target().Cmp(btcdiff.LightRelayMinDifficultyTarget) == 0 {
 		t.Fatal(
 			"test header target must differ from the minimum-difficulty target",
 		)
@@ -428,6 +432,7 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 		btcChain,
 		localChain,
 		localChain,
+		DefaultMaxProofHeaders,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -542,6 +547,7 @@ func TestProveTransactions(t *testing.T) {
 			defer SetMetricsRecorder(nil)
 
 			sm := &spvMaintainer{
+				config:       Config{MaxProofHeaders: DefaultMaxProofHeaders},
 				spvChain:     localChain,
 				btcDiffChain: localChain,
 				btcChain:     btcChain,

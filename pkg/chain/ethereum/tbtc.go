@@ -1,7 +1,19 @@
-// tbtc.go: TbtcChain adapter construction and shared state. See tbtc_*.go for per-concern implementations.
+// tbtc.go: TbtcChain adapter construction and shared state. See tbtc_*.go for
+// per-concern implementations (tbtc_deposit.go, tbtc_dkg.go, tbtc_moving_funds.go,
+// tbtc_redemption.go, tbtc_wallet.go, tbtc_sortition.go, tbtc_inactivity.go).
+//
+// These files were split out of a single monolithic tbtc.go with no rename
+// markers git can detect (each file is a fresh addition, not a tracked move),
+// so a plain `git revert` of the split commit cannot be applied cleanly on
+// top of any later commit that also touches this package: it would re-delete
+// the per-concern files and reintroduce the old tbtc.go, silently dropping
+// whatever those later commits changed. Reconstructing the pre-split state
+// requires a manual merge, not a mechanical revert.
 package ethereum
 
 import (
+	"crypto/ecdsa"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -10,10 +22,13 @@ import (
 	"github.com/keep-network/keep-common/pkg/cache"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	ecdsacontract "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/contract"
 	tbtccontract "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
+	"github.com/keep-network/keep-core/pkg/internal/byteutils"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -259,6 +274,39 @@ func newTbtcChain(
 		ecdsaDkgValidatorAddress: ecdsaDkgValidatorAddress,
 		sweptDepositsCache:       cache.NewGenericTimeCache[*tbtc.DepositChainRequest](sweptDepositsCachePeriod),
 	}, nil
+}
+
+// convertPubKeyToChainFormat takes X and Y coordinates of a signer's public key
+// and concatenates it to a 64-byte long array. If any of coordinates is shorter
+// than 32-byte it is preceded with zeros.
+func convertPubKeyToChainFormat(publicKey *ecdsa.PublicKey) ([64]byte, error) {
+	var serialized [64]byte
+
+	x, err := byteutils.LeftPadTo32Bytes(publicKey.X.Bytes())
+	if err != nil {
+		return serialized, err
+	}
+
+	y, err := byteutils.LeftPadTo32Bytes(publicKey.Y.Bytes())
+	if err != nil {
+		return serialized, err
+	}
+
+	serializedBytes := append(x, y...)
+
+	copy(serialized[:], serializedBytes)
+
+	return serialized, nil
+}
+
+// buildTxOutpointKey computes keccak256(txHash || uint32BE(outputIndex)) and
+// returns it as a *big.Int. Used by both the deposit and moved-funds request
+// lookup paths; the contract-side mapping is identical for both.
+func buildTxOutpointKey(txHash bitcoin.Hash, outputIndex uint32) *big.Int {
+	indexBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(indexBytes, outputIndex)
+
+	return crypto.Keccak256Hash(append(txHash[:], indexBytes...)).Big()
 }
 
 func (tc *TbtcChain) TxProofDifficultyFactor() (*big.Int, error) {

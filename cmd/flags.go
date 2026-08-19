@@ -310,6 +310,33 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		tbtc.DefaultKeyGenerationConcurrency,
 		"tECDSA key generation concurrency.",
 	)
+
+	cmd.Flags().IntVar(
+		&cfg.Tbtc.WalletTxSatPerVByteFloor,
+		"tbtc.walletTxSatPerVByteFloor",
+		tbtc.DefaultWalletTxSatPerVByteFloor,
+		"Minimum fee rate (sat/vByte) applied to wallet Bitcoin transactions "+
+			"(deposit sweeps, redemptions, moving funds, moved funds sweeps). "+
+			"Applies to both the leader-side floor in tbtcpg and the "+
+			"follower-side soft check; 0 means use the default.",
+	)
+
+	cmd.Flags().IntVar(
+		&cfg.Tbtc.WalletTxFeeBufferNumerator,
+		"tbtc.walletTxFeeBufferNumerator",
+		tbtc.DefaultWalletTxFeeBufferNumerator,
+		"Safety-buffer numerator applied over the per-vByte fee rate. "+
+			"The buffered rate is ceil(rawRate * Numerator / Denominator). "+
+			"0 means use the default.",
+	)
+
+	cmd.Flags().IntVar(
+		&cfg.Tbtc.WalletTxFeeBufferDenominator,
+		"tbtc.walletTxFeeBufferDenominator",
+		tbtc.DefaultWalletTxFeeBufferDenominator,
+		"Safety-buffer denominator applied over the per-vByte fee rate. "+
+			"0 means use the default.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.
@@ -372,6 +399,15 @@ func initMaintainerFlags(command *cobra.Command, cfg *config.Config) {
 		spv.DefaultIdleBackOffTime,
 		"The wait time which should be applied when there are no more "+
 			"transaction proofs to submit.",
+	)
+	command.Flags().UintVar(
+		&cfg.Maintainer.Spv.MaxProofHeaders,
+		"spv.maxProofHeaders",
+		spv.DefaultMaxProofHeaders,
+		"The maximum number of block headers allowed when assembling an SPV "+
+			"proof. Bounds the forward walk over headers and so the number of "+
+			"consecutive leading minimum-difficulty (DIFF1) headers a proof "+
+			"can absorb before it becomes unprovable.",
 	)
 }
 

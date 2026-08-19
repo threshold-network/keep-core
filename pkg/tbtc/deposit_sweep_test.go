@@ -371,7 +371,13 @@ func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 	// Compute the exact safe-minimum fee for a proposal with no deposits
 	// using the same estimator call the soft check itself performs
 	// (deposit_sweep.go), so the boundary between "below" and "at/above" the
-	// floor is derived rather than hardcoded.
+	// floor is derived rather than hardcoded. The floor is the buffered
+	// minimum that warnIfProposedWalletTxFeeBelowBufferedFloor
+	// (proposal_fee_check.go) recomputes from the bare sweep floor using the
+	// WalletTxFeeBufferNumerator / WalletTxFeeBufferDenominator mirrors (the
+	// 25% safety buffer that tbtcpg.applyWalletTxFeeFloor also reapplies on
+	// the leader side). Keeping the formula here in sync with the helper is
+	// exactly the property this test exercises.
 	sweepTxSize, err := bitcoin.NewTransactionSizeEstimator().
 		AddPublicKeyHashInputs(1, true).
 		AddScriptHashInputs(0, DepositScriptByteSize, true).
@@ -380,22 +386,24 @@ func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	minSweepTxFee := big.NewInt(int64(MinSweepTxSatPerVByteFee) * sweepTxSize)
+	bufferedRate := (MinWalletTxSatPerVByteFee*WalletTxFeeBufferNumerator +
+		WalletTxFeeBufferDenominator - 1) / WalletTxFeeBufferDenominator
+	minBufferedSweepTxFee := big.NewInt(int64(bufferedRate) * sweepTxSize)
 
 	scenarios := map[string]struct {
 		fee        *big.Int
 		expectWarn bool
 	}{
-		"fee below the safe minimum": {
-			fee:        new(big.Int).Sub(minSweepTxFee, big.NewInt(1)),
+		"fee below the safe buffered minimum": {
+			fee:        new(big.Int).Sub(minBufferedSweepTxFee, big.NewInt(1)),
 			expectWarn: true,
 		},
-		"fee at the safe minimum": {
-			fee:        minSweepTxFee,
+		"fee at the safe buffered minimum": {
+			fee:        minBufferedSweepTxFee,
 			expectWarn: false,
 		},
-		"fee above the safe minimum": {
-			fee:        new(big.Int).Add(minSweepTxFee, big.NewInt(1000)),
+		"fee above the safe buffered minimum": {
+			fee:        new(big.Int).Add(minBufferedSweepTxFee, big.NewInt(1000)),
 			expectWarn: false,
 		},
 		// A nil SweepTxFee cannot occur on the real production path (see the

@@ -85,10 +85,22 @@ func (skgm *symmetricKeyGeneratingMember) generateSymmetricKeys(
 			ephemeralPubKeyMessage.ephemeralPublicKeys[skgm.id],
 		)
 		if err != nil {
-			return fmt.Errorf(
-				"could not unmarshal ephemeral public key from member [%v]: [%w]",
-				otherMember, err,
+			// A single member's malformed key must not abort this member's
+			// entire round. Before the deferred-parse optimization, an
+			// unparseable key failed message unmarshaling at the network
+			// layer, so the whole message was dropped and the sender was
+			// simply treated as absent. Preserve that behavior here: skip
+			// the sender and mark it inactive instead of returning a fatal
+			// error that aborts this member's async state.
+			skgm.logger.Warnf(
+				"[member:%v] could not unmarshal ephemeral public key "+
+					"from member [%v]: [%v]; marking member as inactive",
+				skgm.id,
+				otherMember,
+				err,
 			)
+			skgm.group.MarkMemberAsInactive(otherMember)
+			continue
 		}
 
 		// Create symmetric key for the current group member and the other

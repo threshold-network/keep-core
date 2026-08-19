@@ -16,7 +16,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 	ecdsaabi "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/abi"
 	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
-	"github.com/keep-network/keep-core/pkg/internal/byteutils"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -87,8 +86,19 @@ func (tc *TbtcChain) OnDKGResultSubmitted(
 	) {
 		tbtcResult, err := convertDkgResultFromAbiType(result)
 		if err != nil {
+			// Surface the raw event payload alongside the conversion
+			// error so the bad event is recoverable from logs instead
+			// of being silently discarded (the conversion failure
+			// drops the event before the handler ever sees it).
 			logger.Errorf(
-				"unexpected DKG result in DKGResultSubmitted event: [%v]",
+				"unexpected DKG result in DKGResultSubmitted event "+
+					"resultHash=[0x%x] seed=[%v] blockNumber=[%d] "+
+					"submitterMemberIndex=[%v] signingMembersIndices=[%v]: [%v]",
+				resultHash,
+				seed,
+				blockNumber,
+				result.SubmitterMemberIndex,
+				result.SigningMembersIndices,
 				err,
 			)
 			return
@@ -166,6 +176,13 @@ func convertDkgResultToAbiType(
 	}
 }
 
+// validateMemberIndex guards a *big.Int member index against both an
+// upper bound and a non-positive value. The non-positive check
+// (`chainMemberIndex.Sign() <= 0`) is a behavior change introduced
+// during the #4191 file split (the upper-bound check predated the
+// split). On-chain indices are 1-based and uint64, so the new check
+// is unreachable for valid events; it exists to surface a malformed
+// event as an error instead of producing a zero `group.MemberIndex`.
 func validateMemberIndex(chainMemberIndex *big.Int) error {
 	maxMemberIndex := big.NewInt(group.MaxMemberIndex)
 	if chainMemberIndex.Sign() <= 0 || chainMemberIndex.Cmp(maxMemberIndex) > 0 {
@@ -345,29 +362,6 @@ func convertSignaturesToChainFormat(
 	return membersIndexes, signaturesSlice, nil
 }
 
-// convertPubKeyToChainFormat takes X and Y coordinates of a signer's public key
-// and concatenates it to a 64-byte long array. If any of coordinates is shorter
-// than 32-byte it is preceded with zeros.
-func convertPubKeyToChainFormat(publicKey *ecdsa.PublicKey) ([64]byte, error) {
-	var serialized [64]byte
-
-	x, err := byteutils.LeftPadTo32Bytes(publicKey.X.Bytes())
-	if err != nil {
-		return serialized, err
-	}
-
-	y, err := byteutils.LeftPadTo32Bytes(publicKey.Y.Bytes())
-	if err != nil {
-		return serialized, err
-	}
-
-	serializedBytes := append(x, y...)
-
-	copy(serialized[:], serializedBytes)
-
-	return serialized, nil
-}
-
 func (tc *TbtcChain) GetDKGState() (tbtc.DKGState, error) {
 	walletCreationState, err := tc.walletRegistry.GetWalletCreationState()
 	if err != nil {
@@ -493,6 +487,13 @@ func (tc *TbtcChain) IsDKGResultValid(
 //
 // TODO: Find a better way to get the validity flag. This would require changes
 // in the contracts binding generator.
+//
+// The nil-pointer, non-struct-element, and zero-field-count guards below are
+// an intentional improvement added during the #4191 file split; they did not
+// exist in the pre-split monolithic tbtc.go. They are strict supersets of the
+// original behavior (the original code would panic on these inputs) and have
+// no equivalent caller contract that relied on the panic, so callers that
+// pass well-formed ABI outcomes see no change.
 func parseDkgResultValidationOutcome(
 	outcome interface{},
 ) (bool, error) {

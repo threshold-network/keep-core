@@ -193,6 +193,8 @@ jobs:
           path: coverage/coverage.out
           if-no-files-found: warn
 
+      # Coverage gate: 14% minimum total. Baseline measured at PR #4256
+      # (2026-08-19); no automated baseline-update mechanism exists.
       - name: Check coverage gate
         run: |
           docker run --rm \
@@ -400,7 +402,7 @@ jobs:
 
       - name: Download previous benchmark results
         id: download-prev
-        uses: dawidd6/action-download-artifact@v6
+        uses: dawidd6/action-download-artifact@bf251b5aa9c2f7eeb574a96ee720e24f801b7c11 # v6
         continue-on-error: true
         with:
           name: go-bench
@@ -421,6 +423,12 @@ jobs:
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260813145340-fd4a688df892
 
+      # Benchmark regression gate: >12% slower than main's last `go-bench`
+      # artifact. Baseline measured at PR #4256 (2026-08-19).
+      # GAP: benchmarks added in this PR have no main-side baseline, so
+      # benchstat silently skips them on first run; they only become
+      # gated after shipping to main and the next push downloads them.
+      # No automated baseline-record mechanism exists in this workflow.
       - name: Compare benchmarks
         if: steps.download-prev.outcome == 'success' && hashFiles('bench-prev/**') != ''
         run: |

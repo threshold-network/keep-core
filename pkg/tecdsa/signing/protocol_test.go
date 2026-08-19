@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -295,39 +294,49 @@ func TestGenerateSymmetricKeys_CorruptEphemeralPublicKeyBytes(t *testing.T) {
 
 		err := member.generateSymmetricKeys(receivedMessages)
 
+		// A corrupt key from one member must never abort another member's
+		// entire round: the sender is skipped instead.
+		if err != nil {
+			t.Errorf("[member:%v] unexpected error: %v", member.id, err)
+		}
+
+		expectedKeysCount := groupSize - 1
 		if member.id == victimMemberID {
-			expectedErrPrefix := fmt.Sprintf(
-				"could not unmarshal ephemeral public key from member [%v]:",
-				misbehavingMemberID,
-			)
-			if err == nil {
+			// The victim skips the misbehaving sender, so it stores one
+			// fewer symmetric key than everyone else.
+			expectedKeysCount--
+
+			if _, ok := member.symmetricKeys[misbehavingMemberID]; ok {
 				t.Errorf(
-					"[member:%v] expected error, got nil",
+					"[member:%v] expected no symmetric key stored for "+
+						"misbehaving member [%v]",
 					member.id,
+					misbehavingMemberID,
 				)
-			} else if !strings.HasPrefix(err.Error(), expectedErrPrefix) {
-				t.Errorf(
-					"[member:%v] unexpected error\nexpected prefix: %v\nactual:          %v",
-					member.id,
-					expectedErrPrefix,
-					err.Error(),
-				)
-			} else if !errors.Is(err, ephemeral.ErrInvalidPublicKey) {
-				// The deferred (use-time) unmarshal must keep wrapping
-				// ephemeral.ErrInvalidPublicKey via %w so retry-policy code
-				// upstream can classify this failure with errors.Is instead
-				// of matching on the message string.
-				t.Errorf(
-					"[member:%v] expected error chain to contain ephemeral.ErrInvalidPublicKey, got: %v",
-					member.id,
-					err,
-				)
-			}
-		} else {
-			if err != nil {
-				t.Errorf("[member:%v] unexpected error: %v", member.id, err)
 			}
 		}
+
+		testutils.AssertIntsEqual(
+			t,
+			fmt.Sprintf("number of stored symmetric keys for member [%v]", member.id),
+			expectedKeysCount,
+			len(member.symmetricKeys),
+		)
+	}
+
+	// All members in this test share a single *group.Group instance (see
+	// initializeEphemeralKeyPairGeneratingMembersGroup), so the effect of
+	// the victim marking the misbehaving member inactive is visible from
+	// any member's reference to it.
+	if !reflect.DeepEqual(
+		[]group.MemberIndex{misbehavingMemberID},
+		members[0].group.InactiveMemberIndexes(),
+	) {
+		t.Errorf(
+			"expected member [%v] to be marked inactive, got inactive members: %v",
+			misbehavingMemberID,
+			members[0].group.InactiveMemberIndexes(),
+		)
 	}
 }
 
