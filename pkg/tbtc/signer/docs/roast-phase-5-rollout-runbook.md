@@ -229,8 +229,14 @@ notes this coupling between signer-library upgrades and config changes).
    `frost_tbtc_promote_canary` (declared in
    `pkg/tbtc/signer/src/lib.rs` extern block, used via the Go bridge)
    after both:
-   - `frost_tbtc_canary_rollout_status` reports
-     `last_evidence_at_unix > stage_entry_at_unix + 600s`, AND
+   - `frost_tbtc_canary_rollout_status` returns a
+     `CanaryRolloutStatusResult`
+     (`pkg/tbtc/signer/src/api.rs:909-919`) where
+     `promotion_gate_passed == true` AND `gate_failures` is empty AND
+     `now() - last_action_unix >= 600s` (operator-side dwell: at
+     least 600s of evidence must have accumulated since the canary
+     last took a rollout action, since the struct exposes the last
+     action timestamp but no per-evidence-window timestamps), AND
    - `last_updated_unix` from `frost_tbtc_hardening_metrics`
      (`pkg/tbtc/signer/src/engine/telemetry.rs:332-500`,
      `SignerHardeningMetricsResult`) is within the canary
@@ -535,6 +541,32 @@ detection signals; if the page reason is unclear, go to step 0 first.
 
 **Step 0 — Confirm correlation (5 minutes max).** If the page did
 not arrive because of a known config push, gather first:
+- **Concrete discriminator (do this first, under 1 minute; needs ONE
+  surviving signer host — prefer the canary or a node that is still
+  serving signing traffic).** Call
+  `frost_tbtc_canary_rollout_status` on that host and read
+  `config_version` (a `u64`) from the returned
+  `CanaryRolloutStatusResult`
+  (`pkg/tbtc/signer/src/api.rs:909-919`). This is the same
+  monotonic `u64` that `PromoteCanaryResult.config_version`
+  (`pkg/tbtc/signer/src/api.rs:888`) and
+  `RollbackCanaryResult.config_version`
+  (`pkg/tbtc/signer/src/api.rs:902`) report and that the install
+  path advances on every successful init-time config install. Compare
+  the on-host value against the `config_version` recorded in the
+  change ticket for the install that produced the currently-deployed
+  config (the same value `InitSignerConfigResult` reports via
+  `config_fingerprint` to anchor the install audit on). If
+  `config_version` is UNCHANGED from the change-ticket value AND the
+  rollout tool's audit log shows no push entry timestamped inside
+  the incident window, then NO config push has reached the fleet
+  via this signer — STOP, treat this as a regular outage, hand off
+  to the regular on-call path, and do NOT run steps 1-6 (the
+  staged-rollout SOP does not apply). If `config_version` HAS
+  advanced (or the rollout tool's audit log does contain a push
+  entry inside the window whose `config_version` matches what the
+  FFI call now reports), the bad push is the lead suspect — continue
+  with the correlation evidence below to confirm.
 - Host logs from three dead nodes (systemd journal for the signer
   unit, or `kubectl logs` for the container).
 - `journalctl -u tbtc-signer --since '15 minutes ago'` should show a
