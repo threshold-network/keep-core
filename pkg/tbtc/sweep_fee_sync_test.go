@@ -13,12 +13,12 @@ import (
 // DepositScriptByteSize as the leader-side estimator, so a drift would
 // produce a sweep tx estimate that disagrees with what the leader built.
 //
-// The minimum-floor and buffer-ratio constants are NOT mirrored: they
+// The minimum-floor and buffer-percent constants are NOT mirrored: they
 // live as canonical exported vars in pkg/tbtc (MinWalletTxSatPerVByteFee,
-// WalletTxFeeBufferNumerator, WalletTxFeeBufferDenominator), which
-// pkg/tbtcpg reads directly via tbtc.X. The operator-tunable runtime
-// policy has a single source of truth, so a drift here would be a build
-// error rather than a silent inconsistency.
+// WalletTxFeeBufferPercent), which pkg/tbtcpg reads directly via
+// tbtc.X. The operator-tunable runtime policy has a single source of
+// truth, so a drift here would be a build error rather than a silent
+// inconsistency.
 //
 // This test lives in the external tbtc_test package precisely because
 // that package can import both pkg/tbtc and pkg/tbtcpg without forming

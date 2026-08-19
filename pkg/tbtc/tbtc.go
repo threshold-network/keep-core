@@ -88,28 +88,27 @@ const (
 	// far below the Bridge's maximum fee. See
 	// threshold-network/keep-core#4171.
 	DefaultWalletTxSatPerVByteFloor = 5
-	// DefaultWalletTxFeeBufferNumerator / DefaultWalletTxFeeBufferDenominator
-	// are the default safety-buffer ratio applied over the per-vByte fee
-	// rate. The defaults 5 / 4 give a 25% buffer.
-	DefaultWalletTxFeeBufferNumerator   = 5
-	DefaultWalletTxFeeBufferDenominator = 4
+	// DefaultWalletTxFeeBufferPercent is the default safety-buffer
+	// percentage applied over the per-vByte fee rate.
+	DefaultWalletTxFeeBufferPercent = 25
 )
 
 var DefaultKeyGenerationConcurrency = runtime.GOMAXPROCS(0)
 
-// MinWalletTxSatPerVByteFee, WalletTxFeeBufferNumerator, and
-// WalletTxFeeBufferDenominator are the canonical runtime policy applied
-// to every wallet Bitcoin transaction: both the leader-side floor
-// application in tbtcpg.applyWalletTxFeeFloor and the follower-side
-// soft check in tbtc.warnIfProposedWalletTxFeeBelowBufferedFloor read
-// from these vars, so a single source of truth is enforced - tuning one
-// side automatically tunes the other.
+// MinWalletTxSatPerVByteFee and WalletTxFeeBufferPercent are the
+// canonical runtime policy applied to every wallet Bitcoin transaction:
+// both the leader-side floor application in
+// tbtcpg.applyWalletTxFeeFloor and the follower-side soft check in
+// tbtc.warnIfProposedWalletTxFeeBelowBufferedFloor read from these
+// vars, so a single source of truth is enforced - tuning one side
+// automatically tunes the other.
 //
 // They are vars (not consts) so operators can tune them via Config /
 // Viper flags at startup, and so tests can override them via t.Cleanup.
 // Initialize applies the Config values if non-zero; otherwise the
-// DefaultWalletTx* constants above are kept. They must all be positive;
-// the helpers return an error if a runtime value is non-positive.
+// DefaultWalletTx* constants above are kept. MinWalletTxSatPerVByteFee
+// must be positive and WalletTxFeeBufferPercent must be non-negative;
+// the helpers return an error if a runtime value violates this.
 //
 // A fee oracle can return an unusably low estimate (down to the
 // 1 sat/vByte relay floor enforced by the Electrum client) in an
@@ -127,9 +126,8 @@ var DefaultKeyGenerationConcurrency = runtime.GOMAXPROCS(0)
 // floor relaxed toward the live estimate, keeping only a small
 // relay-propagation minimum.
 var (
-	MinWalletTxSatPerVByteFee    int64 = DefaultWalletTxSatPerVByteFloor
-	WalletTxFeeBufferNumerator   int64 = DefaultWalletTxFeeBufferNumerator
-	WalletTxFeeBufferDenominator int64 = DefaultWalletTxFeeBufferDenominator
+	MinWalletTxSatPerVByteFee int64 = DefaultWalletTxSatPerVByteFloor
+	WalletTxFeeBufferPercent  int64 = DefaultWalletTxFeeBufferPercent
 )
 
 // Config carries the config for tBTC protocol.
@@ -149,16 +147,12 @@ type Config struct {
 	// DefaultWalletTxSatPerVByteFloor. Maps to the
 	// tbtc.walletTxSatPerVByteFloor flag / viper key.
 	WalletTxSatPerVByteFloor int
-	// WalletTxFeeBufferNumerator is the safety-buffer numerator applied
+	// WalletTxFeeBufferPercent is the safety-buffer percentage applied
 	// over the per-vByte fee rate. The buffered rate is
-	// ceil(rawRate * Numerator / Denominator). Zero means use
-	// DefaultWalletTxFeeBufferNumerator. Maps to the
-	// tbtc.walletTxFeeBufferNumerator flag / viper key.
-	WalletTxFeeBufferNumerator int
-	// WalletTxFeeBufferDenominator is the safety-buffer denominator. Zero
-	// means use DefaultWalletTxFeeBufferDenominator. Maps to the
-	// tbtc.walletTxFeeBufferDenominator flag / viper key.
-	WalletTxFeeBufferDenominator int
+	// ceil(rawRate * (100 + Percent) / 100). Zero means use
+	// DefaultWalletTxFeeBufferPercent. Maps to the
+	// tbtc.walletTxFeeBufferPercent flag / viper key.
+	WalletTxFeeBufferPercent int
 }
 
 // applyWalletTxFeePolicy applies the operator-tunable wallet-tx fee-floor
@@ -169,11 +163,8 @@ func applyWalletTxFeePolicy(config Config) {
 	if config.WalletTxSatPerVByteFloor > 0 {
 		MinWalletTxSatPerVByteFee = int64(config.WalletTxSatPerVByteFloor)
 	}
-	if config.WalletTxFeeBufferNumerator > 0 {
-		WalletTxFeeBufferNumerator = int64(config.WalletTxFeeBufferNumerator)
-	}
-	if config.WalletTxFeeBufferDenominator > 0 {
-		WalletTxFeeBufferDenominator = int64(config.WalletTxFeeBufferDenominator)
+	if config.WalletTxFeeBufferPercent > 0 {
+		WalletTxFeeBufferPercent = int64(config.WalletTxFeeBufferPercent)
 	}
 }
 

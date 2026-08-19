@@ -322,19 +322,11 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 	)
 
 	cmd.Flags().IntVar(
-		&cfg.Tbtc.WalletTxFeeBufferNumerator,
-		"tbtc.walletTxFeeBufferNumerator",
-		tbtc.DefaultWalletTxFeeBufferNumerator,
-		"Safety-buffer numerator applied over the per-vByte fee rate. "+
-			"The buffered rate is ceil(rawRate * Numerator / Denominator). "+
-			"0 means use the default.",
-	)
-
-	cmd.Flags().IntVar(
-		&cfg.Tbtc.WalletTxFeeBufferDenominator,
-		"tbtc.walletTxFeeBufferDenominator",
-		tbtc.DefaultWalletTxFeeBufferDenominator,
-		"Safety-buffer denominator applied over the per-vByte fee rate. "+
+		&cfg.Tbtc.WalletTxFeeBufferPercent,
+		"tbtc.walletTxFeeBufferPercent",
+		tbtc.DefaultWalletTxFeeBufferPercent,
+		"Safety-buffer percentage applied over the per-vByte fee rate "+
+			"(bufferedRate = ceil(rawRate * (100+Percent) / 100)); "+
 			"0 means use the default.",
 	)
 }

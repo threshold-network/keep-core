@@ -16,13 +16,13 @@ import (
 // here because a leader proposing exactly-at-floor would otherwise slip
 // past a bare-floor check and undersell the tx.
 //
-// The floor and the buffer ratio are read from the canonical package
-// vars MinWalletTxSatPerVByteFee / WalletTxFeeBufferNumerator /
-// WalletTxFeeBufferDenominator (declared in tbtc.go), which Initialize
-// populates from Config. tbtcpg.applyWalletTxFeeFloor reads the same
-// vars, so a single source of truth is enforced - tuning the policy
-// from the operator side automatically tunes both the leader-side
-// floor application and the follower-side soft check.
+// The floor and the buffer percentage are read from the canonical
+// package vars MinWalletTxSatPerVByteFee / WalletTxFeeBufferPercent
+// (declared in tbtc.go), which Initialize populates from Config.
+// tbtcpg.applyWalletTxFeeFloor reads the same vars, so a single source
+// of truth is enforced - tuning the policy from the operator side
+// automatically tunes both the leader-side floor application and the
+// follower-side soft check.
 //
 // The threshold is computed with arbitrary-precision big.Int arithmetic
 // (the proposed fee is already *big.Int, so this avoids both an int64
@@ -67,7 +67,7 @@ func warnIfProposedWalletTxFeeBelowBufferedFloor(
 	if satPerVByteFloor <= 0 || txVsize <= 0 {
 		return
 	}
-	if WalletTxFeeBufferNumerator <= 0 || WalletTxFeeBufferDenominator <= 0 {
+	if WalletTxFeeBufferPercent < 0 {
 		return
 	}
 
@@ -79,11 +79,11 @@ func warnIfProposedWalletTxFeeBelowBufferedFloor(
 	// implausible inputs; here the threshold simply ends up large enough
 	// that no realistic proposed fee trips the warning.
 	satPerVByte := big.NewInt(satPerVByteFloor)
-	numerator := big.NewInt(WalletTxFeeBufferNumerator)
-	denominator := big.NewInt(WalletTxFeeBufferDenominator)
-	delta := new(big.Int).Sub(denominator, big.NewInt(1))
+	numerator := big.NewInt(100 + WalletTxFeeBufferPercent)
+	denominator := big.NewInt(100)
+	delta := big.NewInt(99)
 
-	// bufferedRate = ceil(satPerVByteFloor * Numerator / Denominator).
+	// bufferedRate = ceil(satPerVByteFloor * (100+Percent) / 100).
 	bufferedRate := new(big.Int).Mul(satPerVByte, numerator)
 	bufferedRate.Add(bufferedRate, delta)
 	bufferedRate.Quo(bufferedRate, denominator)
@@ -104,18 +104,18 @@ func warnIfProposedWalletTxFeeBelowBufferedFloor(
 		logger.Warnf(
 			"%s proposal has no tx fee set; expected at least the safe "+
 				"buffered minimum [%v] ([%v] buffered sat/vByte = [%d] "+
-				"bare floor * [%d]/[%d] buffer * [%d] vByte)",
+				"bare floor * %d%% buffer * [%d] vByte)",
 			actionLabel,
 			minBufferedFee,
 			bufferedRate,
 			satPerVByteFloor,
-			WalletTxFeeBufferNumerator, WalletTxFeeBufferDenominator,
+			WalletTxFeeBufferPercent,
 			txVsize,
 		)
 	case proposedFee.Cmp(minBufferedFee) < 0:
 		logger.Warnf(
 			"proposed %s tx fee [%v] is below the safe buffered minimum "+
-				"[%v] ([%v] buffered sat/vByte = [%d] bare floor * [%d]/[%d] "+
+				"[%v] ([%v] buffered sat/vByte = [%d] bare floor * %d%% "+
 				"buffer * [%d] vByte); the leader may be underpricing the "+
 				"tx, which risks it getting stuck in the mempool and "+
 				"jamming the wallet",
@@ -124,7 +124,7 @@ func warnIfProposedWalletTxFeeBelowBufferedFloor(
 			minBufferedFee,
 			bufferedRate,
 			satPerVByteFloor,
-			WalletTxFeeBufferNumerator, WalletTxFeeBufferDenominator,
+			WalletTxFeeBufferPercent,
 			txVsize,
 		)
 	}

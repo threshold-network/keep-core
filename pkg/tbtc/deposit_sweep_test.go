@@ -374,7 +374,7 @@ func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 	// floor is derived rather than hardcoded. The floor is the buffered
 	// minimum that warnIfProposedWalletTxFeeBelowBufferedFloor
 	// (proposal_fee_check.go) recomputes from the bare sweep floor using the
-	// WalletTxFeeBufferNumerator / WalletTxFeeBufferDenominator mirrors (the
+	// WalletTxFeeBufferPercent mirror (the
 	// 25% safety buffer that tbtcpg.applyWalletTxFeeFloor also reapplies on
 	// the leader side). Keeping the formula here in sync with the helper is
 	// exactly the property this test exercises.
@@ -386,8 +386,8 @@ func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bufferedRate := (MinWalletTxSatPerVByteFee*WalletTxFeeBufferNumerator +
-		WalletTxFeeBufferDenominator - 1) / WalletTxFeeBufferDenominator
+	bufferedRate := (MinWalletTxSatPerVByteFee*(100+WalletTxFeeBufferPercent) +
+		99) / 100
 	minBufferedSweepTxFee := big.NewInt(int64(bufferedRate) * sweepTxSize)
 
 	scenarios := map[string]struct {

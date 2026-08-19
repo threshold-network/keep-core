@@ -9,18 +9,16 @@ import (
 )
 
 // withWalletTxFeePolicy saves the current wallet-tx fee-floor policy
-// (floor, buffer ratio) and registers a t.Cleanup that restores it.
+// (floor, buffer percent) and registers a t.Cleanup that restores it.
 // Tests overriding the canonical pkg/tbtc vars MUST use this helper so
 // later tests in the same package see the production defaults.
 func withWalletTxFeePolicy(t *testing.T) {
 	t.Helper()
 	originalFloor := tbtc.MinWalletTxSatPerVByteFee
-	originalNum := tbtc.WalletTxFeeBufferNumerator
-	originalDen := tbtc.WalletTxFeeBufferDenominator
+	originalPercent := tbtc.WalletTxFeeBufferPercent
 	t.Cleanup(func() {
 		tbtc.MinWalletTxSatPerVByteFee = originalFloor
-		tbtc.WalletTxFeeBufferNumerator = originalNum
-		tbtc.WalletTxFeeBufferDenominator = originalDen
+		tbtc.WalletTxFeeBufferPercent = originalPercent
 	})
 }
 
@@ -130,18 +128,16 @@ func TestApplyWalletTxFeeFloor(t *testing.T) {
 }
 
 // TestApplyWalletTxFeeFloor_BufferOverride verifies that the safety buffer
-// is driven by the canonical pkg/tbtc WalletTxFeeBufferNumerator /
-// WalletTxFeeBufferDenominator vars, not hardcoded constants. A test that
-// overrides the vars MUST restore them via t.Cleanup so other tests see
-// the production defaults.
+// is driven by the canonical pkg/tbtc WalletTxFeeBufferPercent var, not
+// a hardcoded constant. A test that overrides the var MUST restore it
+// via t.Cleanup so other tests see the production defaults.
 func TestApplyWalletTxFeeFloor_BufferOverride(t *testing.T) {
 	const vsize = 200
 	withWalletTxFeePolicy(t)
 
-	// 50% buffer (Numerator=3, Denominator=2). At rate 20 sat/vByte the
-	// buffered rate becomes ceil(20 * 3 / 2) = 30 sat/vByte, total 6000.
-	tbtc.WalletTxFeeBufferNumerator = 3
-	tbtc.WalletTxFeeBufferDenominator = 2
+	// 50% buffer. At rate 20 sat/vByte the buffered rate becomes
+	// ceil(20 * 150 / 100) = 30 sat/vByte, total 6000.
+	tbtc.WalletTxFeeBufferPercent = 50
 
 	fee, err := applyWalletTxFeeFloor(
 		4000, // rate 20 sat/vByte
@@ -158,11 +154,10 @@ func TestApplyWalletTxFeeFloor_BufferOverride(t *testing.T) {
 		)
 	}
 
-	// Disable the buffer (Numerator=1, Denominator=1). The buffered rate
-	// equals the raw rate, so a 20 sat/vByte estimate stays at 20
-	// sat/vByte (above the floor), total 4000.
-	tbtc.WalletTxFeeBufferNumerator = 1
-	tbtc.WalletTxFeeBufferDenominator = 1
+	// Disable the buffer (Percent=0). The buffered rate equals the raw
+	// rate, so a 20 sat/vByte estimate stays at 20 sat/vByte (above the
+	// floor), total 4000.
+	tbtc.WalletTxFeeBufferPercent = 0
 
 	fee, err = applyWalletTxFeeFloor(
 		4000,
@@ -179,38 +174,39 @@ func TestApplyWalletTxFeeFloor_BufferOverride(t *testing.T) {
 		)
 	}
 
-	// Non-positive buffer values are rejected so the helper cannot
-	// divide by zero or apply a non-positive buffer.
-	tbtc.WalletTxFeeBufferNumerator = 0
-	tbtc.WalletTxFeeBufferDenominator = 4
+	// Negative buffer values are rejected so the helper cannot apply a
+	// sub-floor buffer (a percent below 0 would make the multiplier
+	// less than 1x, undermining the safety margin).
+	tbtc.WalletTxFeeBufferPercent = -1
 	_, err = applyWalletTxFeeFloor(4000, vsize, 100000)
 	if err == nil {
-		t.Fatalf("expected an error for Numerator=0")
+		t.Fatalf("expected an error for Percent=-1")
 	}
-	if !strings.Contains(err.Error(), "invalid wallet tx fee buffer ratio") {
+	if !strings.Contains(err.Error(), "invalid wallet tx fee buffer percent") {
 		t.Fatalf(
-			"expected error containing [invalid wallet tx fee buffer ratio]; got [%v]",
+			"expected error containing [invalid wallet tx fee buffer percent]; got [%v]",
 			err,
 		)
 	}
 }
 
 // TestApplyWalletTxFeeFloor_OverflowGuard verifies that the helper rejects
-// configurations whose internal multiplications (rate * Numerator, rate *
-// txVsize, floor * txVsize) would overflow int64. The overflow guards are
-// checked-arithmetic and are the hard guarantee; the input-cap
-// (maxWalletTxVsize / maxWalletTxEstimatedFee) is defense-in-depth that
-// can never be reached for sane operator-tuned values, so this test
-// exercises the checked-arithmetic path explicitly.
+// configurations whose internal multiplications (rate * bufferNumerator,
+// rate * txVsize, floor * txVsize) would overflow int64. The overflow
+// guards are checked-arithmetic and are the hard guarantee; the
+// input-cap (maxWalletTxVsize / maxWalletTxEstimatedFee) is
+// defense-in-depth that can never be reached for sane operator-tuned
+// values, so this test exercises the checked-arithmetic path
+// explicitly.
 func TestApplyWalletTxFeeFloor_OverflowGuard(t *testing.T) {
 	const vsize = 200
 	withWalletTxFeePolicy(t)
 
-	// Buffer Numerator close to MaxInt64: rate * Numerator overflows
-	// for any non-trivial rate. The helper rejects this rather than
-	// silently wrapping around into the buffer math.
-	tbtc.WalletTxFeeBufferNumerator = math.MaxInt64
-	tbtc.WalletTxFeeBufferDenominator = 1
+	// Buffer percent set so the derived numerator (100+Percent) is
+	// close to MaxInt64: rate * numerator overflows for any
+	// non-trivial rate. The helper rejects this rather than silently
+	// wrapping around into the buffer math.
+	tbtc.WalletTxFeeBufferPercent = math.MaxInt64 - 100
 
 	_, err := applyWalletTxFeeFloor(
 		4000, // rate 20 sat/vByte
@@ -218,7 +214,7 @@ func TestApplyWalletTxFeeFloor_OverflowGuard(t *testing.T) {
 		100000,
 	)
 	if err == nil {
-		t.Fatalf("expected overflow error for Numerator=MaxInt64")
+		t.Fatalf("expected overflow error for Percent=MaxInt64-100")
 	}
 	if !strings.Contains(err.Error(), "would overflow when applied with buffer") {
 		t.Fatalf(
@@ -228,8 +224,7 @@ func TestApplyWalletTxFeeFloor_OverflowGuard(t *testing.T) {
 	}
 
 	// Restore sane buffer.
-	tbtc.WalletTxFeeBufferNumerator = 5
-	tbtc.WalletTxFeeBufferDenominator = 4
+	tbtc.WalletTxFeeBufferPercent = tbtc.DefaultWalletTxFeeBufferPercent
 
 	// Floor so high that floor * txVsize would overflow int64. With
 	// estimatedFee=0 the raw rate is 0, but the floor forces rate to

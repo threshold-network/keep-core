@@ -233,19 +233,12 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: 7,
 		defaultValue:          tbtc.DefaultWalletTxSatPerVByteFloor,
 	},
-	"tbtc.walletTxFeeBufferNumerator": {
-		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.WalletTxFeeBufferNumerator },
-		flagName:              "--tbtc.walletTxFeeBufferNumerator",
-		flagValue:             "3",
-		expectedValueFromFlag: 3,
-		defaultValue:          tbtc.DefaultWalletTxFeeBufferNumerator,
-	},
-	"tbtc.walletTxFeeBufferDenominator": {
-		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.WalletTxFeeBufferDenominator },
-		flagName:              "--tbtc.walletTxFeeBufferDenominator",
-		flagValue:             "2",
-		expectedValueFromFlag: 2,
-		defaultValue:          tbtc.DefaultWalletTxFeeBufferDenominator,
+	"tbtc.walletTxFeeBufferPercent": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.WalletTxFeeBufferPercent },
+		flagName:              "--tbtc.walletTxFeeBufferPercent",
+		flagValue:             "30",
+		expectedValueFromFlag: 30,
+		defaultValue:          tbtc.DefaultWalletTxFeeBufferPercent,
 	},
 	"maintainer.bitcoinDifficulty": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Maintainer.BitcoinDifficulty.Enabled },

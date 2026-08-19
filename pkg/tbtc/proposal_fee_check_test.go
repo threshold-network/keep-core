@@ -42,18 +42,15 @@ func TestWarnIfProposedWalletTxFeeBelowBufferedFloor(t *testing.T) {
 
 	expectedBufferedRate := new(big.Int).Mul(
 		big.NewInt(MinWalletTxSatPerVByteFee),
-		big.NewInt(WalletTxFeeBufferNumerator),
+		big.NewInt(100+WalletTxFeeBufferPercent),
 	)
 	expectedBufferedRate.Add(
 		expectedBufferedRate,
-		new(big.Int).Sub(
-			big.NewInt(WalletTxFeeBufferDenominator),
-			big.NewInt(1),
-		),
+		big.NewInt(99),
 	)
 	expectedBufferedRate.Quo(
 		expectedBufferedRate,
-		big.NewInt(WalletTxFeeBufferDenominator),
+		big.NewInt(100),
 	)
 	expectedMinBufferedFee := new(big.Int).Mul(
 		expectedBufferedRate,
@@ -121,23 +118,20 @@ func TestWarnIfProposedWalletTxFeeBelowBufferedFloor_OverflowBoundary(t *testing
 	const vsize = 200
 
 	originalFloor := MinWalletTxSatPerVByteFee
-	originalNum := WalletTxFeeBufferNumerator
-	originalDen := WalletTxFeeBufferDenominator
+	originalPercent := WalletTxFeeBufferPercent
 	t.Cleanup(func() {
 		MinWalletTxSatPerVByteFee = originalFloor
-		WalletTxFeeBufferNumerator = originalNum
-		WalletTxFeeBufferDenominator = originalDen
+		WalletTxFeeBufferPercent = originalPercent
 	})
 
-	// Numerator = MaxInt64, Denominator = 1: a 1x "buffer" but with the
-	// numerator set to MaxInt64 so rate * Numerator would overflow int64
-	// in naive math. The big.Int path should compute a threshold of
-	// satPerVByteFloor * MaxInt64 sat/vByte * vsize vByte = 5 * MaxInt64
-	// * 200 total, which no int64 fee can ever reach, so no warn fires
-	// for a normal fee.
+	// Percent set so numerator (100+Percent) is MaxInt64, so
+	// rate * numerator would overflow int64 in naive math. The big.Int
+	// path should compute a threshold of satPerVByteFloor * MaxInt64
+	// sat/vByte / 100 * vsize vByte = 5 * MaxInt64 / 100 * 200 total,
+	// which no int64 fee can ever reach, so every realistic proposal
+	// trips the warning.
 	MinWalletTxSatPerVByteFee = 5
-	WalletTxFeeBufferNumerator = math.MaxInt64
-	WalletTxFeeBufferDenominator = 1
+	WalletTxFeeBufferPercent = math.MaxInt64 - 100
 
 	logger := &capturingFeeCheckLogger{}
 	warnIfProposedWalletTxFeeBelowBufferedFloor(

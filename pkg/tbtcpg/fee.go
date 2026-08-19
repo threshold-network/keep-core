@@ -33,10 +33,9 @@ const (
 // applyWalletTxFeeFloor raises a raw oracle fee estimate to a safe value for a
 // non-RBF wallet transaction. It:
 //   - applies a safety buffer (default 25%, controlled by
-//     tbtc.WalletTxFeeBufferNumerator / tbtc.WalletTxFeeBufferDenominator)
-//     over the per-vByte fee rate so there is margin during the
-//     estimate-to-broadcast delay and the fee stays adaptive under
-//     congestion,
+//     tbtc.WalletTxFeeBufferPercent) over the per-vByte fee rate so
+//     there is margin during the estimate-to-broadcast delay and the
+//     fee stays adaptive under congestion,
 //   - enforces a floor of tbtc.MinWalletTxSatPerVByteFee sat/vByte, and
 //   - bounds the result by maxTotalFee (the Bridge maximum total fee for
 //     the transaction).
@@ -52,14 +51,15 @@ const (
 // error rather than silently overflowing. The buffer multiplication
 // and the final totalFee multiplication additionally have
 // checked-arithmetic overflow guards so an operator-tuned
-// tbtc.WalletTxFeeBufferNumerator / tbtc.MinWalletTxSatPerVByteFee
+// tbtc.WalletTxFeeBufferPercent / tbtc.MinWalletTxSatPerVByteFee
 // cannot bypass the bound by exceeding the int64 limit on its own.
 //
-// The policy values (the floor and the buffer ratio) live in pkg/tbtc
-// as exported vars so the leader-side floor application (here) and the
-// follower-side soft check (pkg/tbtc.warnIfProposedWalletTxFeeBelowBufferedFloor,
-// used by every wallet-tx proposal validator) consume a single source
-// of truth. Operator tuning one side automatically tunes the other.
+// The policy values (the floor and the buffer percentage) live in
+// pkg/tbtc as exported vars so the leader-side floor application
+// (here) and the follower-side soft check
+// (pkg/tbtc.warnIfProposedWalletTxFeeBelowBufferedFloor, used by every
+// wallet-tx proposal validator) consume a single source of truth.
+// Operator tuning one side automatically tunes the other.
 //
 // The buffer is applied to the truncated per-vByte rate
 // (estimatedFee / txVsize). This is lossless only because EstimateFee
@@ -112,12 +112,14 @@ func applyWalletTxFeeFloor(
 			tbtc.MinWalletTxSatPerVByteFee,
 		)
 	}
-	if tbtc.WalletTxFeeBufferNumerator <= 0 || tbtc.WalletTxFeeBufferDenominator <= 0 {
+	if tbtc.WalletTxFeeBufferPercent < 0 {
 		return 0, fmt.Errorf(
-			"invalid wallet tx fee buffer ratio [%d]/[%d]; both must be positive",
-			tbtc.WalletTxFeeBufferNumerator, tbtc.WalletTxFeeBufferDenominator,
+			"invalid wallet tx fee buffer percent [%d]; must be non-negative",
+			tbtc.WalletTxFeeBufferPercent,
 		)
 	}
+	bufferNumerator := 100 + tbtc.WalletTxFeeBufferPercent
+	const bufferDenominator = 100
 
 	// Checked-arithmetic guard: floor * txVsize must fit in int64 to
 	// display correctly in the error message below and to keep the int64
@@ -143,27 +145,28 @@ func applyWalletTxFeeFloor(
 	// Checked-arithmetic guard for the buffer multiplication. Inputs
 	// are also bounded (maxWalletTxVsize / maxWalletTxEstimatedFee), so
 	// this is defense in depth: even if an operator tunes
-	// tbtc.WalletTxFeeBufferNumerator to a huge value, we reject rate
-	// values whose product with the Numerator (plus Denominator-1 for
-	// the ceiling) cannot fit in int64. rate == 0 never overflows.
+	// tbtc.WalletTxFeeBufferPercent to a huge value, we reject rate
+	// values whose product with bufferNumerator (plus
+	// bufferDenominator-1 for the ceiling) cannot fit in int64. rate ==
+	// 0 never overflows.
 	if rate > 0 {
-		maxRateForBuffer := (math.MaxInt64 - (tbtc.WalletTxFeeBufferDenominator - 1)) /
-			tbtc.WalletTxFeeBufferNumerator
+		maxRateForBuffer := (math.MaxInt64 - (bufferDenominator - 1)) /
+			bufferNumerator
 		if rate > maxRateForBuffer {
 			return 0, fmt.Errorf(
 				"implausible per-vByte rate [%d] would overflow when "+
-					"applied with buffer [%d]/[%d]; expected at most [%d]",
+					"applied with buffer percent [%d]; expected at most [%d]",
 				rate,
-				tbtc.WalletTxFeeBufferNumerator, tbtc.WalletTxFeeBufferDenominator,
+				tbtc.WalletTxFeeBufferPercent,
 				maxRateForBuffer,
 			)
 		}
 	}
-	// ceil(rate * Numerator / Denominator). Both rate and Numerator are
-	// positive (or rate is zero), so the multiplication cannot overflow;
-	// see the input-bounds check and the rate-vs-Numerator check above.
-	rate = (rate*tbtc.WalletTxFeeBufferNumerator + tbtc.WalletTxFeeBufferDenominator - 1) /
-		tbtc.WalletTxFeeBufferDenominator
+	// ceil(rate * (100+Percent) / 100). Both rate and bufferNumerator
+	// are positive (or rate is zero), so the multiplication cannot
+	// overflow; see the input-bounds check and the rate-vs-Numerator
+	// check above.
+	rate = (rate*bufferNumerator + bufferDenominator - 1) / bufferDenominator
 	if rate < tbtc.MinWalletTxSatPerVByteFee {
 		rate = tbtc.MinWalletTxSatPerVByteFee
 	}
