@@ -9,6 +9,7 @@ on:
       - dev
     paths-ignore:
       - "docs/**"
+      - "infrastructure/**"
       - "scripts/**"
       - "solidity/**"
   pull_request:
@@ -43,7 +44,7 @@ jobs:
         with:
           filters: |
             path-filter:
-              - './!((docs|scripts|solidity)/**)'
+              - './!((docs|infrastructure|scripts|solidity)/**)'
 
   electrum-integration-detect-changes:
     runs-on: ubuntu-latest

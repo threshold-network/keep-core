@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tbtc-v2-minter
+  labels:
+    type: minter
+    id: "0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      type: minter
+      id: "0"
+  serviceName: tbtc-v2-minter-0
+  volumeClaimTemplates:
+    - metadata:
+        name: tbtc-v2-maintainer-data
+      spec:
+        storageClassName: tbtc-v2-maintainer-storage
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Mi
+  template:
+    metadata:
+      labels:
+        type: minter
+        id: "0"
+    spec:
+      volumes:
+        - name: tbtc-v2-maintainer-data
+          persistentVolumeClaim:
+            claimName: tbtc-v2-maintainer-data
+        - name: eth-account-keyfile
+          configMap:
+            name: tbtc-v2-maintainer-eth-accounts-info
+            items:
+              - key: tbtc-v2-minter-0-keyfile
+                path: tbtc-v2-minter-0-keyfile
+      containers:
+        - name: maintainer
+          image: us-docker.pkg.dev/keep-test-f3e0/public/tbtc-mg:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256M
+          env:
+            - name: LOG_TYPE
+              value: json
+            - name: ETHEREUM_KEY_FILE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tbtc-v2-maintainer-eth-accounts-password
+                  key: tbtc-v2-minter-0-password
+            - name: ETHEREUM_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eth-network-sepolia
+                  key: http-url
+            - name: ELECTRUM_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: electrum-api-testnet
+                  key: electrumx-url-wss
+          volumeMounts:
+            - name: tbtc-v2-maintainer-data
+              mountPath: /mnt/maintainer
+            - name: eth-account-keyfile
+              mountPath: /mnt/maintainer/config
+          args:
+            - --ethereum-key-file
+            - /mnt/maintainer/config/tbtc-v2-minter-0-keyfile
+            - --ethereum-url
+            - $(ETHEREUM_API_URL)
+            - --electrum-url
+            - $(ELECTRUM_API_URL)
+            - minter
+          # TODO: Add initContainers to register the address as minter

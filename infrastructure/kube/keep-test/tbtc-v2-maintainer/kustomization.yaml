@@ -1,0 +1,30 @@
+resources:
+  - storage-class.yaml
+  - minter-statefulset.yaml
+  - guardian-statefulset.yaml
+
+namespace: default
+
+commonLabels:
+  app: tbtc-v2-maintainer
+  network: sepolia
+
+configMapGenerator:
+  - name: tbtc-v2-maintainer-eth-accounts-info
+    files:
+      - config/tbtc-v2-minter-0-keyfile
+      - config/tbtc-v2-guardian-0-keyfile
+  - name: electrum-api-testnet
+    literals:
+      - electrumx-url-wss=wss://electrum.testnet.boar.network:443/QxbJgaSLUHqrgAa9BW7bDpnGPxrlhnCa
+
+secretGenerator:
+  - name: tbtc-v2-maintainer-eth-accounts-password
+    files:
+      - .secret/tbtc-v2-minter-0-password
+      - .secret/tbtc-v2-guardian-0-password
+
+generatorOptions:
+  disableNameSuffixHash: true
+  annotations:
+    note: generated
