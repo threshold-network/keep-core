@@ -27,8 +27,7 @@ macro_rules! ffi_request_response {
             request_len: usize,
         ) -> crate::ffi::TbtcSignerResult {
             crate::ffi::ffi_entry(|| {
-                let request: $request =
-                    crate::ffi::parse_request(request_ptr, request_len)?;
+                let request: $request = crate::ffi::parse_request(request_ptr, request_len)?;
                 let response = $engine_fn(request)?;
                 crate::ffi::serialize_response(&response)
             })
@@ -58,9 +57,7 @@ macro_rules! ffi_no_request_infallible {
     ($symbol:ident, $engine_fn:path) => {
         #[no_mangle]
         pub extern "C" fn $symbol() -> crate::ffi::TbtcSignerResult {
-            crate::ffi::ffi_entry(|| {
-                crate::ffi::serialize_response(&$engine_fn())
-            })
+            crate::ffi::ffi_entry(|| crate::ffi::serialize_response(&$engine_fn()))
         }
     };
 }

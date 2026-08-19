@@ -16,10 +16,7 @@ use api::{
     RollbackCanaryRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
     VerifyBlameProofRequest,
 };
-use ffi::{
-    ffi_entry, free_buffer, serialize_response, success_from_string,
-    TbtcSignerResult,
-};
+use ffi::{ffi_entry, free_buffer, serialize_response, success_from_string, TbtcSignerResult};
 
 pub use ffi::TbtcBuffer;
 
@@ -82,29 +79,71 @@ pub extern "C" fn frost_tbtc_abi_version() -> TbtcSignerResult {
     })
 }
 
-ffi_request_response!(frost_tbtc_init_signer_config, InitSignerConfigRequest, engine::init_signer_config);
+ffi_request_response!(
+    frost_tbtc_init_signer_config,
+    InitSignerConfigRequest,
+    engine::init_signer_config
+);
 
-ffi_no_request_infallible!(frost_tbtc_roast_liveness_policy, engine::roast_liveness_policy);
+ffi_no_request_infallible!(
+    frost_tbtc_roast_liveness_policy,
+    engine::roast_liveness_policy
+);
 
 ffi_no_request_infallible!(frost_tbtc_hardening_metrics, engine::hardening_metrics);
 
-ffi_request_response!(frost_tbtc_roast_transcript_audit, TranscriptAuditRequest, engine::roast_transcript_audit);
+ffi_request_response!(
+    frost_tbtc_roast_transcript_audit,
+    TranscriptAuditRequest,
+    engine::roast_transcript_audit
+);
 
-ffi_request_response!(frost_tbtc_verify_blame_proof, VerifyBlameProofRequest, engine::verify_blame_proof);
+ffi_request_response!(
+    frost_tbtc_verify_blame_proof,
+    VerifyBlameProofRequest,
+    engine::verify_blame_proof
+);
 
-ffi_request_response!(frost_tbtc_quarantine_status, QuarantineStatusRequest, engine::quarantine_status);
+ffi_request_response!(
+    frost_tbtc_quarantine_status,
+    QuarantineStatusRequest,
+    engine::quarantine_status
+);
 
-ffi_request_response!(frost_tbtc_refresh_cadence_status, RefreshCadenceStatusRequest, engine::refresh_cadence_status);
+ffi_request_response!(
+    frost_tbtc_refresh_cadence_status,
+    RefreshCadenceStatusRequest,
+    engine::refresh_cadence_status
+);
 
-ffi_request_response!(frost_tbtc_trigger_emergency_rekey, TriggerEmergencyRekeyRequest, engine::trigger_emergency_rekey);
+ffi_request_response!(
+    frost_tbtc_trigger_emergency_rekey,
+    TriggerEmergencyRekeyRequest,
+    engine::trigger_emergency_rekey
+);
 
-ffi_request_response!(frost_tbtc_run_differential_fuzzing, DifferentialFuzzRequest, engine::run_differential_fuzzing);
+ffi_request_response!(
+    frost_tbtc_run_differential_fuzzing,
+    DifferentialFuzzRequest,
+    engine::run_differential_fuzzing
+);
 
-ffi_no_request!(frost_tbtc_canary_rollout_status, engine::canary_rollout_status);
+ffi_no_request!(
+    frost_tbtc_canary_rollout_status,
+    engine::canary_rollout_status
+);
 
-ffi_request_response!(frost_tbtc_promote_canary, PromoteCanaryRequest, engine::promote_canary);
+ffi_request_response!(
+    frost_tbtc_promote_canary,
+    PromoteCanaryRequest,
+    engine::promote_canary
+);
 
-ffi_request_response!(frost_tbtc_rollback_canary, RollbackCanaryRequest, engine::rollback_canary);
+ffi_request_response!(
+    frost_tbtc_rollback_canary,
+    RollbackCanaryRequest,
+    engine::rollback_canary
+);
 
 #[cfg(any(test, feature = "bench-restart-hook"))]
 #[doc(hidden)]
@@ -126,32 +165,76 @@ ffi_request_response!(frost_tbtc_dkg_part2, DkgPart2Request, engine::dkg_part2);
 
 ffi_request_response!(frost_tbtc_dkg_part3, DkgPart3Request, engine::dkg_part3);
 
-ffi_request_response!(frost_tbtc_persist_distributed_dkg_key_package, PersistDistributedDkgKeyPackageRequest, engine::persist_distributed_dkg_key_package);
+ffi_request_response!(
+    frost_tbtc_persist_distributed_dkg_key_package,
+    PersistDistributedDkgKeyPackageRequest,
+    engine::persist_distributed_dkg_key_package
+);
 
-ffi_request_response!(frost_tbtc_new_signing_package, NewSigningPackageRequest, engine::new_signing_package);
+ffi_request_response!(
+    frost_tbtc_new_signing_package,
+    NewSigningPackageRequest,
+    engine::new_signing_package
+);
 
-ffi_request_response!(frost_tbtc_verify_signature_share, crate::api::VerifySignatureShareRequest, engine::verify_signature_share);
+ffi_request_response!(
+    frost_tbtc_verify_signature_share,
+    crate::api::VerifySignatureShareRequest,
+    engine::verify_signature_share
+);
 
-ffi_request_response!(frost_tbtc_interactive_session_open, InteractiveSessionOpenRequest, engine::interactive_session_open);
+ffi_request_response!(
+    frost_tbtc_interactive_session_open,
+    InteractiveSessionOpenRequest,
+    engine::interactive_session_open
+);
 
-ffi_request_response!(frost_tbtc_interactive_round1, InteractiveRound1Request, engine::interactive_round1);
+ffi_request_response!(
+    frost_tbtc_interactive_round1,
+    InteractiveRound1Request,
+    engine::interactive_round1
+);
 
-ffi_request_response!(frost_tbtc_interactive_round2, InteractiveRound2Request, engine::interactive_round2);
+ffi_request_response!(
+    frost_tbtc_interactive_round2,
+    InteractiveRound2Request,
+    engine::interactive_round2
+);
 
-ffi_request_response!(frost_tbtc_interactive_session_abort, InteractiveSessionAbortRequest, engine::interactive_session_abort);
+ffi_request_response!(
+    frost_tbtc_interactive_session_abort,
+    InteractiveSessionAbortRequest,
+    engine::interactive_session_abort
+);
 
-ffi_request_response!(frost_tbtc_interactive_aggregate, InteractiveAggregateRequest, engine::interactive_aggregate);
+ffi_request_response!(
+    frost_tbtc_interactive_aggregate,
+    InteractiveAggregateRequest,
+    engine::interactive_aggregate
+);
 
-ffi_request_response!(frost_tbtc_derive_interactive_attempt_context, DeriveInteractiveAttemptContextRequest, engine::derive_interactive_attempt_context);
+ffi_request_response!(
+    frost_tbtc_derive_interactive_attempt_context,
+    DeriveInteractiveAttemptContextRequest,
+    engine::derive_interactive_attempt_context
+);
 
-ffi_request_response!(frost_tbtc_build_taproot_tx, BuildTaprootTxRequest, engine::build_taproot_tx);
+ffi_request_response!(
+    frost_tbtc_build_taproot_tx,
+    BuildTaprootTxRequest,
+    engine::build_taproot_tx
+);
 // Reserved response shape for a future cryptographic share-refresh protocol.
 // Today this entry fails closed: engine::refresh_shares returns
 // EngineError::CryptographicRefreshNotSupported and the FFI returns status 1.
 // The macro wrapper is the right shape; only the engine function and the
 // request/response types need to change when a real refresh protocol lands.
 
-ffi_request_response!(frost_tbtc_refresh_shares, RefreshSharesRequest, engine::refresh_shares);
+ffi_request_response!(
+    frost_tbtc_refresh_shares,
+    RefreshSharesRequest,
+    engine::refresh_shares
+);
 
 #[cfg(test)]
 mod tests {
