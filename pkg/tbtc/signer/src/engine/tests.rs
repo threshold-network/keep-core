@@ -615,8 +615,6 @@ fn clear_state_storage_policy_overrides() {
     std::env::remove_var(TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV);
     std::env::remove_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV);
     std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV);
-    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV);
-    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV);
     std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_DAO_ALLOWLIST_IDENTIFIERS_ENV);
     std::env::remove_var(TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV);
     std::env::remove_var(TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV);
@@ -708,6 +706,13 @@ fn cleanup_test_state_artifacts(path: &Path) {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(state_lock_file_path(path));
     let _ = std::fs::remove_file(path.with_extension(format!("tmp-{}", std::process::id())));
+    let generation_sidecar_path = state_generation_sidecar_path(path);
+    let _ = std::fs::remove_file(&generation_sidecar_path);
+    let _ = std::fs::remove_file(format!(
+        "{}.tmp-{}",
+        generation_sidecar_path.display(),
+        std::process::id()
+    ));
 
     if let Ok(backups) = sorted_corrupted_state_backups(path) {
         for backup in backups {
@@ -1603,8 +1608,6 @@ fn persist_distributed_dkg_key_package_rejects_quarantined_participant() {
 
     std::env::set_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV, "true");
     std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV, "2");
-    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV, "1");
-    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV, "2");
 
     // Operator 3, a member of the group below (members 1,2,3), is auto-quarantined.
     {
@@ -4457,7 +4460,7 @@ proptest! {
         };
         let key_material =
             state_encryption_key_material().expect("state encryption key material");
-        let encoded = encode_encrypted_state_envelope(&persisted, &key_material)
+        let encoded = encode_encrypted_state_envelope(&persisted, &key_material, 1)
             .expect("state envelope encode");
         let envelope: PersistedEncryptedEngineStateEnvelope =
             serde_json::from_slice(encoded.as_ref()).expect("state envelope decode");
@@ -4710,7 +4713,7 @@ fn persisted_engine_state_compacts_migrated_idle_entries_to_legacy_total_bound()
     // not merely compact its in-memory copy, so an immediate rollback can read it.
     let key_material = state_encryption_key_material().expect("test state key");
     let oversized_envelope =
-        encode_encrypted_state_envelope(&persisted, &key_material).expect("oversized envelope");
+        encode_encrypted_state_envelope(&persisted, &key_material, 1).expect("oversized envelope");
     std::fs::write(&state_path, oversized_envelope.as_slice())
         .expect("write intermediate oversized state");
     let reloaded = load_engine_state_from_storage().expect("load compacts and rewrites state");
@@ -4726,6 +4729,106 @@ fn persisted_engine_state_compacts_migrated_idle_entries_to_legacy_total_bound()
         }
     };
     assert_eq!(rewritten.sessions.len(), 2);
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn load_engine_state_rejects_replayed_older_backup_by_generation() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("generation_anti_replay");
+    reset_for_tests();
+
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard
+            .sessions
+            .insert("session-a".to_string(), SessionState::default());
+        persist_engine_state_to_storage(&guard).expect("persist generation 1");
+    }
+    let stale_backup_bytes = std::fs::read(&state_path).expect("read generation 1 envelope");
+
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard
+            .sessions
+            .insert("session-b".to_string(), SessionState::default());
+        persist_engine_state_to_storage(&guard).expect("persist generation 2");
+    }
+    // A normal reload of the CURRENT file must still succeed and catch the
+    // sidecar mark up to the file's own generation.
+    let reloaded = load_engine_state_from_storage().expect("reload current generation");
+    assert_eq!(reloaded.sessions.len(), 2);
+
+    // Simulate an operator (or backup agent) restoring an older, validly
+    // encrypted snapshot over the live state file. Nothing about the file
+    // itself is corrupt -- it decrypts and validates fine -- but its bound
+    // generation is behind what this state path has already recorded.
+    std::fs::write(&state_path, &stale_backup_bytes).expect("restore stale backup over live file");
+
+    let err = match load_engine_state_from_storage() {
+        Ok(_) => panic!("a replayed older backup must be rejected"),
+        Err(err) => err,
+    };
+    let err_message = err.to_string();
+    assert!(
+        err_message.contains("older than the last recorded generation"),
+        "unexpected error: {err_message}"
+    );
+    // The stale file itself is left alone -- this is a refusal to load, not a
+    // corruption-recovery/quarantine action.
+    assert!(state_path.exists());
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn load_engine_state_distinguishes_session_over_limit_from_corruption() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("session_over_limit_not_corruption");
+    reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "5");
+
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        for name in ["session-a", "session-b", "session-c"] {
+            guard
+                .sessions
+                .insert(name.to_string(), SessionState::default());
+        }
+        persist_engine_state_to_storage(&guard).expect("persist 3 active sessions");
+    }
+
+    // An operator lowers the limit below the live ACTIVE (non-retired, so
+    // uncompactable) session count -- a configuration regression, not disk
+    // corruption. Configure the destructive remedy so this test would catch a
+    // regression back to routing through it.
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+    std::env::set_var(
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_QUARANTINE_AND_RESET,
+    );
+
+    let err = match load_engine_state_from_storage() {
+        Ok(_) => panic!("an over-limit active session registry must not silently load"),
+        Err(err) => err,
+    };
+    let err_message = err.to_string();
+    assert!(
+        err_message.contains("configuration regression, not file corruption"),
+        "unexpected error: {err_message}"
+    );
+    assert!(err_message.contains(TBTC_SIGNER_MAX_SESSIONS_ENV));
+    // Must NOT have been quarantined-and-reset: the file is untouched and no
+    // DKG/session material was destroyed.
+    assert!(state_path.exists());
+    let bytes_after = std::fs::read(&state_path).expect("state file remains readable");
+    assert!(!bytes_after.is_empty());
 
     std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
     reset_for_tests();
@@ -6455,6 +6558,7 @@ fn legacy_v2_encrypted_state_rewrites_with_current_key_id() {
         nonce: hex::encode(nonce_bytes),
         ciphertext: hex::encode(&ciphertext_and_tag),
         authentication_tag: hex::encode(&authentication_tag),
+        state_generation: None,
     };
     ciphertext_and_tag.zeroize();
     authentication_tag.zeroize();
@@ -11829,8 +11933,6 @@ fn interactive_open_rejected_for_quarantined_member_honors_dao_allowlist() {
 
     std::env::set_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV, "true");
     std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV, "2");
-    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV, "1");
-    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV, "2");
 
     // Member 1 is auto-quarantined.
     {
@@ -11843,6 +11945,7 @@ fn interactive_open_rejected_for_quarantined_member_honors_dao_allowlist() {
     let included = [1u16, 2];
 
     let outcome = (|| -> Result<(), EngineError> {
+        let enforcements_before = hardening_metrics().auto_quarantine_enforcements_total;
         let quarantined = open_interactive_for_test(
             "interactive-quarantine",
             key_group,
@@ -11857,6 +11960,11 @@ fn interactive_open_rejected_for_quarantined_member_honors_dao_allowlist() {
             matches!(quarantined, EngineError::QuarantinePolicyRejected { ref reason_code, .. }
                 if reason_code == "operator_auto_quarantined"),
             "unexpected error: {quarantined:?}"
+        );
+        assert_eq!(
+            hardening_metrics().auto_quarantine_enforcements_total,
+            enforcements_before + 1,
+            "a real enforcement rejection must be counted"
         );
 
         // A DAO allowlist override restores the member's ability to sign.
@@ -11879,8 +11987,6 @@ fn interactive_open_rejected_for_quarantined_member_honors_dao_allowlist() {
 
     std::env::remove_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV);
     std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV);
-    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV);
-    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV);
     std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_DAO_ALLOWLIST_IDENTIFIERS_ENV);
 
     outcome.expect("quarantine gate lifecycle");
@@ -12466,8 +12572,6 @@ fn interactive_round2_rejects_quarantined_co_signer_in_package() {
 
     std::env::set_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV, "true");
     std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV, "2");
-    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV, "1");
-    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV, "2");
 
     let outcome = (|| -> Result<(), EngineError> {
         // This member (1) opens and runs round 1 while no one is
@@ -12537,8 +12641,6 @@ fn interactive_round2_rejects_quarantined_co_signer_in_package() {
 
     std::env::remove_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV);
     std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV);
-    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV);
-    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV);
     outcome.expect("round2 co-signer quarantine lifecycle");
 }
 
