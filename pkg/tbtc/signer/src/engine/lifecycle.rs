@@ -172,6 +172,30 @@ pub(crate) fn refresh_cadence_is_overdue(now_unix: u64, due_unix: u64) -> bool {
     due_unix == 0 || now_unix > due_unix
 }
 
+/// Returns any emergency-rekey event on the signing session or its resolved
+/// wallet session. The signing session takes precedence because an event can be
+/// triggered there after BuildTaprootTx and before Open. The resolved wallet
+/// level gate is then checked so a halted wallet blocks any new signing flow.
+pub(crate) fn get_any_emergency_rekey_event<'a>(
+    guard: &'a EngineState,
+    session_id: &str,
+    session: &'a SessionState,
+) -> Option<&'a EmergencyRekeyEvent> {
+    if let Some(rekey_event) = session.lifecycle.emergency_rekey_event.as_ref() {
+        return Some(rekey_event);
+    }
+
+    if let Some(key_group) = session.dkg.result.as_ref().map(|dkg| &dkg.key_group) {
+        if let Some(wallet_session_id) = resolve_wallet_session_id(guard, session_id, key_group) {
+            if let Some(wallet_session) = guard.sessions.get(&wallet_session_id) {
+                return wallet_session.lifecycle.emergency_rekey_event.as_ref();
+            }
+        }
+    }
+
+    None
+}
+
 pub fn refresh_cadence_status(
     request: RefreshCadenceStatusRequest,
 ) -> Result<RefreshCadenceStatusResult, EngineError> {
@@ -562,6 +586,11 @@ pub fn rollback_canary(
     Ok(result)
 }
 
+/// Reports whether quarantine-set enforcement is armed for `operator_identifier`,
+/// its externally-tracked fault score (this build never increments fault scores
+/// itself -- see `AuditTrail`/`operator_fault_scores` doc notes), and whether it
+/// is currently enforced-quarantined. `fault_score`/`quarantine_threshold` remain
+/// informational until an automatic fault-accrual writer exists.
 pub fn quarantine_status(
     request: QuarantineStatusRequest,
 ) -> Result<QuarantineStatusResult, EngineError> {
@@ -592,7 +621,7 @@ pub fn quarantine_status(
 
     Ok(QuarantineStatusResult {
         operator_identifier: request.operator_identifier,
-        auto_quarantine_enabled: auto_quarantine_config.is_some(),
+        quarantine_enforcement_armed: auto_quarantine_config.is_some(),
         fault_score,
         quarantine_threshold: auto_quarantine_config
             .as_ref()

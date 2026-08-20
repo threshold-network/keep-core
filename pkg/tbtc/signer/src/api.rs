@@ -944,7 +944,13 @@ pub struct QuarantineStatusRequest {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct QuarantineStatusResult {
     pub operator_identifier: u16,
-    pub auto_quarantine_enabled: bool,
+    /// True when quarantine-set enforcement is armed (`TBTC_SIGNER_ENABLE_AUTO_QUARANTINE=true`):
+    /// members present in the persisted quarantine set are rejected. This build has no
+    /// automatic fault-accrual writer -- the quarantine set is populated externally
+    /// (operator tooling / persisted-state migration), not by in-process detection of
+    /// coordinator timeouts or invalid share proofs. Name kept close to the env var for
+    /// operator familiarity; it reports enforcement being armed, not automatic accrual.
+    pub quarantine_enforcement_armed: bool,
     pub fault_score: u64,
     pub quarantine_threshold: u64,
     pub quarantined: bool,
@@ -1207,9 +1213,6 @@ pub struct SignerHardeningMetricsResult {
     pub roast_transcript_audit_success_total: u64,
     pub verify_blame_proof_calls_total: u64,
     pub verify_blame_proof_success_total: u64,
-    pub attempt_transition_total: u64,
-    pub coordinator_failover_total: u64,
-    pub auto_quarantine_fault_events_total: u64,
     pub auto_quarantine_enforcements_total: u64,
     pub quarantined_operator_count: u64,
     pub refresh_cadence_overdue_sessions: u64,
@@ -1298,8 +1301,6 @@ pub struct InitSignerConfigRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allow_bootstrap: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_roast_strict: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_bench_restart_hook: Option<bool>,
@@ -1381,10 +1382,6 @@ pub struct InitSignerConfigRequest {
     pub enable_auto_quarantine: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_quarantine_fault_threshold: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_quarantine_timeout_penalty: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_quarantine_invalid_share_penalty: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_quarantine_dao_allowlist_identifiers: Option<Vec<u16>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

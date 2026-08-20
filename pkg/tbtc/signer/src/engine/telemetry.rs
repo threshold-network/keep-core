@@ -150,9 +150,6 @@ pub(crate) struct HardeningTelemetryState {
     pub(crate) roast_transcript_audit_success_total: u64,
     pub(crate) verify_blame_proof_calls_total: u64,
     pub(crate) verify_blame_proof_success_total: u64,
-    pub(crate) attempt_transition_total: u64,
-    pub(crate) coordinator_failover_total: u64,
-    pub(crate) auto_quarantine_fault_events_total: u64,
     pub(crate) auto_quarantine_enforcements_total: u64,
     pub(crate) differential_fuzz_runs_total: u64,
     pub(crate) differential_fuzz_critical_divergence_total: u64,
@@ -354,9 +351,6 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
         roast_transcript_audit_success_total: 0,
         verify_blame_proof_calls_total: 0,
         verify_blame_proof_success_total: 0,
-        attempt_transition_total: 0,
-        coordinator_failover_total: 0,
-        auto_quarantine_fault_events_total: 0,
         auto_quarantine_enforcements_total: 0,
         quarantined_operator_count: 0,
         refresh_cadence_overdue_sessions: 0,
@@ -419,10 +413,6 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
                 telemetry.roast_transcript_audit_success_total;
             result.verify_blame_proof_calls_total = telemetry.verify_blame_proof_calls_total;
             result.verify_blame_proof_success_total = telemetry.verify_blame_proof_success_total;
-            result.attempt_transition_total = telemetry.attempt_transition_total;
-            result.coordinator_failover_total = telemetry.coordinator_failover_total;
-            result.auto_quarantine_fault_events_total =
-                telemetry.auto_quarantine_fault_events_total;
             result.auto_quarantine_enforcements_total =
                 telemetry.auto_quarantine_enforcements_total;
             result.differential_fuzz_runs_total = telemetry.differential_fuzz_runs_total;

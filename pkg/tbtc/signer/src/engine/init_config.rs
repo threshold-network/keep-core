@@ -214,11 +214,6 @@ pub(crate) fn config_values_from_request(
 
     insert_bool(
         &mut values,
-        TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV,
-        request.allow_bootstrap,
-    );
-    insert_bool(
-        &mut values,
         TBTC_SIGNER_ENABLE_ROAST_STRICT_ENV,
         request.enable_roast_strict,
     );
@@ -335,16 +330,6 @@ pub(crate) fn config_values_from_request(
         &mut values,
         TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV,
         request.auto_quarantine_fault_threshold,
-    );
-    insert_u64(
-        &mut values,
-        TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV,
-        request.auto_quarantine_timeout_penalty,
-    );
-    insert_u64(
-        &mut values,
-        TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV,
-        request.auto_quarantine_invalid_share_penalty,
     );
     insert_u64(
         &mut values,

@@ -464,6 +464,14 @@ pub(crate) fn canonical_attempt_context(attempt_context: &AttemptContext) -> Att
     canonical.expect("attempt context canonicalization preserves value")
 }
 
+/// Rejects any listed member present in the persisted quarantine set (unless
+/// DAO-allowlisted). Gated by `auto_quarantine_config` (Some only when
+/// `TBTC_SIGNER_ENABLE_AUTO_QUARANTINE=true`) -- this enforces a quarantine set,
+/// it does not compute one: this build has no in-process detector for
+/// coordinator-timeout or invalid-share-proof events, so
+/// `quarantined_operator_identifiers` only ever gains members via external/manual
+/// population of persisted state. The check below is real and load-bearing
+/// whenever that set is non-empty.
 pub(crate) fn enforce_not_quarantined_identifiers(
     session_id: &str,
     member_identifiers: &[u16],
@@ -482,6 +490,11 @@ pub(crate) fn enforce_not_quarantined_identifiers(
             continue;
         }
         if quarantined_operator_identifiers.contains(member_identifier) {
+            record_hardening_telemetry(|telemetry| {
+                telemetry.auto_quarantine_enforcements_total = telemetry
+                    .auto_quarantine_enforcements_total
+                    .saturating_add(1);
+            });
             return reject_quarantine_policy(
                 session_id,
                 "operator_auto_quarantined",

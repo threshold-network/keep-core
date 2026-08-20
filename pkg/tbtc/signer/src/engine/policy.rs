@@ -225,6 +225,12 @@ pub(crate) struct SigningPolicyFirewallConfig {
     pub(crate) rate_limit_per_minute: u64,
 }
 
+/// Config for enforcing a persisted, externally-populated quarantine set. This
+/// build has no in-process writer for `operator_fault_scores` or
+/// `quarantined_operator_identifiers` -- coordinator-timeout / invalid-share-proof
+/// detection is not wired to fault accrual yet. `fault_threshold` and
+/// `dao_allowlist_identifiers` gate enforcement of whatever the set already
+/// contains (via persisted-state migration/tooling), not an automatic pipeline.
 #[derive(Clone, Debug)]
 pub(crate) struct AutoQuarantineConfig {
     pub(crate) fault_threshold: u64,
@@ -245,6 +251,15 @@ pub(crate) fn provenance_gate_enforced() -> bool {
         .unwrap_or(false)
 }
 
+/// Unlike `provenance_gate_enforced`/`signing_policy_firewall_enforced`, this does
+/// NOT force-enable under `signer_profile_is_production()`. Its defaults
+/// (`min_participants=2`, `min_threshold=2`) are already structurally enforced by
+/// DKG regardless of this flag; the flag only adds the operator-configured
+/// required/allowlist identifier checks on top. Force-enabling would silently
+/// require ops to set allowlist/required-identifier env before any DKG could
+/// admit new participants in production, which is a deployment foot-gun this
+/// gate deliberately avoids -- `warn_disabled_policy_gates()` surfaces the
+/// disabled state loudly on every boot instead.
 pub(crate) fn admission_policy_enforced() -> bool {
     signer_env_var(TBTC_SIGNER_ENFORCE_ADMISSION_POLICY_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
@@ -542,6 +557,10 @@ pub(crate) fn heartbeat_rate_limit_per_minute() -> Result<u64, EngineError> {
     Ok(rate_limit_per_minute)
 }
 
+/// True when quarantine-SET ENFORCEMENT is armed. Despite the env var's "auto"
+/// name, nothing in this build automatically adds operators to the quarantine
+/// set -- see `AutoQuarantineConfig` doc. Enforcement of an externally-populated
+/// set is real and load-bearing when this returns true.
 pub(crate) fn auto_quarantine_enabled() -> bool {
     signer_env_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))

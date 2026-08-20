@@ -58,7 +58,9 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
     }
 
     if let Some(session) = guard.sessions.get(&request.session_id) {
-        if let Some(emergency_rekey_event) = session.lifecycle.emergency_rekey_event.as_ref() {
+        if let Some(emergency_rekey_event) =
+            get_any_emergency_rekey_event(&guard, &request.session_id, session)
+        {
             return reject_lifecycle_policy(
                 &request.session_id,
                 "emergency_rekey_required",
