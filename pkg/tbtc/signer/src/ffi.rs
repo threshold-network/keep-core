@@ -318,4 +318,56 @@ mod tests {
         );
         free_buffer(result.buffer.ptr, result.buffer.len);
     }
+
+    // Regression guard for the C6 FFI-macro refactor. The three outliers
+    // (`frost_tbtc_version`, `frost_tbtc_abi_version`, `frost_tbtc_free_buffer`)
+    // must stay hand-written: the spec deliberately excludes them from the
+    // `ffi_request_response!` / `ffi_no_request!` / `ffi_no_request_infallible!`
+    // macros because each has a distinct shape (success-only probe, inline
+    // `FrostTbtcAbiVersionResult` construction, and a `void`-returning free
+    // helper respectively). An accidental future refactor that routes any of
+    // them through a macro must fail this test. The check is source-text
+    // rather than runtime because the contract being guarded is "the source
+    // still looks like the spec said it should".
+    #[test]
+    fn outliers_are_hand_written() {
+        let source = include_str!("lib.rs");
+
+        for symbol in [
+            "frost_tbtc_version",
+            "frost_tbtc_abi_version",
+            "frost_tbtc_free_buffer",
+        ] {
+            // (1) The symbol must NOT be invoked via any of the three FFI macros.
+            // Each invocation has the form `<macro>!(<symbol>, ...)` or
+            // `<macro>!(<symbol>)`; either is captured by the `<macro>!(<symbol>`
+            // prefix check.
+            for macro_invocation in [
+                "ffi_request_response!",
+                "ffi_no_request!",
+                "ffi_no_request_infallible!",
+            ] {
+                let bad_pattern = format!("{}({}", macro_invocation, symbol);
+                assert!(
+                    !source.contains(&bad_pattern),
+                    "outlier {symbol} must remain hand-written, but source contains `{bad_pattern}`",
+                );
+            }
+
+            // (2) The function definition must be present and have an adjacent
+            // `// Outlier:` explanatory comment. The window covers the
+            // preceding text back through the `#[no_mangle]` attribute (which
+            // always sits between the comment block and the `fn` line).
+            let fn_signature = format!("fn {symbol}");
+            let fn_offset = source
+                .find(&fn_signature)
+                .unwrap_or_else(|| panic!("{symbol} not found in lib.rs source"));
+            let window_start = fn_offset.saturating_sub(400);
+            let preceding = &source[window_start..fn_offset];
+            assert!(
+                preceding.contains("// Outlier"),
+                "outlier {symbol} must have a `// Outlier:` explanatory comment above its definition",
+            );
+        }
+    }
 }
