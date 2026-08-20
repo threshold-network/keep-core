@@ -1,0 +1,10 @@
+{
+  "_comment": "Admission candidate = the incoming operator entry being evaluated against the active policy. Each field maps 1:1 to the AdmissionCandidate struct in pkg/tbtc/signer/src/bin/admission_checker.rs (consumed via #[serde(deny_unknown_fields)] is not set on this struct, so this leading _comment is silently ignored at deserialize time). incident_response_contact is optional and validated only when the policy has require_incident_response_contact=true.",
+  "operator_id": "operator-gcp-us-central1-1",
+  "provider": "gcp",
+  "region": "us-central1",
+  "custody_class": "kms",
+  "attestation_status": "approved",
+  "patch_sla_expires_at_unix": 2000000000,
+  "incident_response_contact": "oncall@example.org"
+}

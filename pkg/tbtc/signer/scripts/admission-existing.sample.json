@@ -1,0 +1,12 @@
+[
+  {
+    "operator_id": "operator-aws-us-east-1-1",
+    "provider": "aws",
+    "region": "us-east-1"
+  },
+  {
+    "operator_id": "operator-gcp-europe-west1-1",
+    "provider": "gcp",
+    "region": "europe-west1"
+  }
+]
