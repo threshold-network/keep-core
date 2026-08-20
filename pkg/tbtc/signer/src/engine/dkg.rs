@@ -176,6 +176,57 @@ pub fn persist_distributed_dkg_key_package(
         )));
     }
 
+    // The checks above only trust THIS participant's own verifying share; nothing
+    // yet verifies that the OTHER members' verifying shares in the submitted
+    // public key package actually belong to the same DKG output. Interpolating
+    // the full verifying-shares map at x=0 and comparing to the declared group
+    // verifying key catches any single inconsistent point: the unique
+    // interpolating polynomial through points that genuinely lie on a common
+    // lower-degree polynomial reduces to that polynomial regardless of how many
+    // extra (consistent) points are folded in, so a poisoned or mismatched share
+    // from any other member changes the reconstructed key with overwhelming
+    // probability.
+    let identifiers: BTreeSet<frost::Identifier> = public_key_package
+        .verifying_shares()
+        .keys()
+        .copied()
+        .collect();
+    let mut reconstructed_verifying_key =
+        <<frost::Secp256K1Sha256TR as frost::Ciphersuite>::Group as frost::Group>::identity();
+    for (identifier, verifying_share) in public_key_package.verifying_shares() {
+        let lagrange_coefficient = frost_core::compute_lagrange_coefficient::<
+            frost::Secp256K1Sha256TR,
+        >(&identifiers, None, *identifier)
+        .map_err(|e| {
+            EngineError::Internal(format!("{OP}: failed to compute Lagrange coefficient: {e}"))
+        })?;
+        reconstructed_verifying_key += verifying_share.to_element() * lagrange_coefficient;
+    }
+    let reconstructed_verifying_key_bytes =
+        <<frost::Secp256K1Sha256TR as frost::Ciphersuite>::Group as frost::Group>::serialize(
+            &reconstructed_verifying_key,
+        )
+        .map_err(|e| {
+            EngineError::Internal(format!(
+                "{OP}: failed to serialize reconstructed verifying key: {e}"
+            ))
+        })?;
+    let declared_verifying_key_bytes =
+        public_key_package
+            .verifying_key()
+            .serialize()
+            .map_err(|e| {
+                EngineError::Internal(format!(
+                    "{OP}: failed to serialize declared verifying key: {e}"
+                ))
+            })?;
+    if reconstructed_verifying_key_bytes[..] != declared_verifying_key_bytes[..] {
+        return Err(EngineError::Validation(format!(
+            "{OP}: submitted public key package's verifying shares do not Lagrange-interpolate \
+             to its declared group verifying key"
+        )));
+    }
+
     let key_group = public_key_package
         .verifying_key()
         .serialize()
