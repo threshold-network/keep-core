@@ -289,6 +289,20 @@ concurrent attempts never share nonce material. What it does NOT
 prescribe: concurrent-attempt scheduling policy or cross-attempt
 share reuse (forbidden by construction — one handle, one attempt).
 
+**EXECUTED (2026-08-20):** bounded `n-t+1` concurrent attempts per session
+shipped ahead of the "fast-follow, own mini-spec" plan below, as part of the
+same session-layer work (`interactive.rs`, tagged `Phase 7.6` throughout).
+The per-session interactive state became an attempt-scoped nested map
+(`attempt_id -> member_identifier -> state`); the cap is computed by
+`concurrent_attempt_cap_for_dkg(participant_count, threshold)` as
+`n - t + 1`; exceeding it rejects the new attempt with reason code
+`concurrent_attempt_cap_exceeded`. This note stands in for the standalone
+7.6 mini-spec the phasing plan called for below — the scheduling policy this
+section deliberately left open (concurrent-attempt scheduling policy,
+cross-attempt share reuse) remains exactly as reserved above: none was
+added, and cross-attempt share reuse is still forbidden by construction
+(one handle, one attempt).
+
 ## 9. Phasing (PR-sized, in order)
 
 * **7.0** — this spec freeze (+ #4007 sidecar scoping addendum:
@@ -314,7 +328,9 @@ share reuse (forbidden by construction — one handle, one attempt).
   readiness-manifest flip with attached evidence. (The manifest's
   FrostUniFFIV1-migration verification is an independent flip
   condition — 7.5's testnet evidence alone does not satisfy it.)
-* **7.6** — bounded concurrency (fast-follow, own mini-spec).
+* **7.6** — bounded concurrency: EXECUTED (2026-08-20) as part of the
+  session-layer work rather than its own follow-on PR; see the EXECUTED
+  note under section 8 above (no separate mini-spec was authored).
 
 ## 10. Open questions this freeze forced (DECIDED 2026-06-12)
 

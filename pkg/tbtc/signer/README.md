@@ -5,11 +5,13 @@ in `docs/rust-rewrite-bootstrap.md`.
 
 ## Current scope
 
-- Exposes a C ABI (`libfrost_tbtc`) with coarse operations keyed by `session_id`:
-  - `RunDKG`
-  - `StartSignRound`
-  - `FinalizeSignRound`
-  - `BuildTaprootTx`
+- Exposes a C ABI (`libfrost_tbtc`) for real distributed FROST DKG and
+  interactive (member-custodied nonce) signing, keyed by `session_id`:
+  - `DkgPart1` / `DkgPart2` / `DkgPart3` / `PersistDistributedDkgKeyPackage`
+    (the earlier coarse, dealer-style one-shot `RunDKG` / `StartSignRound` /
+    `FinalizeSignRound` surface was removed with the ABI 4.0 bump; see
+    `docs/rust-rewrite-bootstrap.md`)
+  - `NewSigningPackage` / `BuildTaprootTx`
   - `RefreshShares` (symbol retained in ABI 4.0, but fail-closed with
     `cryptographic_refresh_not_supported` until a multi-round FROST refresh
     protocol is implemented; metadata from the retired synthetic stub cannot
@@ -21,6 +23,8 @@ in `docs/rust-rewrite-bootstrap.md`.
   - `InteractiveRound2`
   - `InteractiveSessionAbort`
   - `InteractiveAggregate`
+  - `VerifySignatureShare`
+  - `DeriveInteractiveAttemptContext`
 
   Round-1 nonces live only in engine memory and never persist; the engine
   enforces a per-node live-session cap and an inactivity TTL, and the open
@@ -33,8 +37,16 @@ in `docs/rust-rewrite-bootstrap.md`.
 - Exposes transcript-accountability and blame-proof helpers via:
   - `RoastTranscriptAudit`
   - `VerifyBlameProof`
-- Exposes auto-quarantine status via:
-  - `QuarantineStatus`
+
+  Both read persisted per-session attempt-transition records. This build has
+  no in-process detector for coordinator-timeout or invalid-share-proof
+  events: records are populated externally (operator tooling / persisted-
+  state migration), not automatically -- mirrors quarantine enforcement
+  below.
+- Exposes quarantine-enforcement status via:
+  - `QuarantineStatus` (enforces a persisted, externally-populated
+    quarantine set; see "Transcript accountability / quarantine config"
+    below for what is and is not automatic in this build)
 - Exposes refresh cadence + emergency rekey controls via:
   - `RefreshCadenceStatus`
   - `TriggerEmergencyRekey`
@@ -47,11 +59,6 @@ in `docs/rust-rewrite-bootstrap.md`.
   file-backed state persistence.
 - Uses deterministic JSON request/response envelopes across the FFI boundary.
 - Provides explicit, typed error codes for retry-safe orchestration.
-- Keeps bootstrap synthetic finalize behavior fail-closed by default; enable it
-  explicitly with `TBTC_SIGNER_ALLOW_BOOTSTRAP=true` in non-production profiles
-  only.
-- Rejects bootstrap dealer DKG when `TBTC_SIGNER_PROFILE=production`; production
-  requires distributed DKG wiring before this path can be enabled.
 
 ## Not yet implemented
 
@@ -200,11 +207,10 @@ by the following environment variables:
   - signer state file path. Required when `TBTC_SIGNER_PROFILE=production`;
     non-production profiles default to a temp-dir state file if omitted.
 - `TBTC_SIGNER_PROFILE`:
-  - when set to `production`, provider `env` is rejected fail-closed,
-    `TBTC_SIGNER_STATE_PATH` is required, bootstrap dealer DKG is rejected, and
-    `TBTC_SIGNER_ALLOW_BOOTSTRAP` cannot enable synthetic finalize payloads.
-    The production profile also forces ROAST strict attempt-context enforcement
-    even if `TBTC_SIGNER_ENABLE_ROAST_STRICT` is unset or false.
+  - when set to `production`, provider `env` is rejected fail-closed and
+    `TBTC_SIGNER_STATE_PATH` is required. The production profile also
+    forces ROAST strict attempt-context enforcement even if
+    `TBTC_SIGNER_ENABLE_ROAST_STRICT` is unset or false.
 
 Set these environment variables before the first FFI call in the process. The
 engine state handle is initialized once per process from the settled
@@ -511,16 +517,20 @@ against `pkg/tbtc/signer/test/vectors/roast-attempt-context-v1.json`.
     firewall enabled and restrict `TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES`
     to the intended output classes, such as `p2tr`.
 - Transcript accountability / quarantine config:
-  - `TBTC_SIGNER_ENABLE_AUTO_QUARANTINE`
+  - `TBTC_SIGNER_ENABLE_AUTO_QUARANTINE` arms enforcement of the persisted
+    quarantine set below (`QuarantineStatus.quarantine_enforcement_armed`).
+    This build has no in-process detector for coordinator-timeout or
+    invalid-share-proof events: the quarantine set and attempt-transition
+    records are populated externally (operator tooling / persisted-state
+    migration), not automatically.
   - `TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD`
-  - `TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY`
-  - `TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY`
   - `TBTC_SIGNER_AUTO_QUARANTINE_DAO_ALLOWLIST_IDENTIFIERS`
   - `RoastTranscriptAudit` returns persisted attempt-transition records (hash +
     exclusion evidence) for a session.
   - `VerifyBlameProof` validates a claimed excluded operator/reason against the
     persisted transcript record for the requested attempt.
-  - `QuarantineStatus` reports current score/quarantine state for an operator.
+  - `QuarantineStatus` reports enforcement-armed state, externally-tracked
+    fault score, and quarantine state for an operator.
 - Refresh cadence / emergency rekey:
   - `TBTC_SIGNER_REFRESH_CADENCE_SECONDS` (valid range: `60..=2592000`,
     default `86400`)
@@ -567,19 +577,6 @@ against `pkg/tbtc/signer/test/vectors/roast-attempt-context-v1.json`.
     (provenance/admission/signing enforcement gates require explicit `=true`
     env vars). In a production profile the provenance gate and the
     signing-policy firewall are force-enabled regardless.
-- `StartSignRound.attempt_transition_evidence.exclusion_evidence` schema:
-  - `reason`: `coordinator_timeout` or `invalid_share_proof`
-  - `excluded_member_identifiers`: members excluded from the next attempt
-  - `invalid_share_proof_fingerprint`: required only for
-    `invalid_share_proof`, omitted for `coordinator_timeout`
-- `StartSignRound` response telemetry:
-  - `attempt_transition_telemetry` is included when attempt advancement is
-    authorized, with:
-    - from/to attempt numbers
-    - from/to coordinator identifiers
-    - transition reason
-    - excluded member identifiers
-    - `coordinator_rotated` flag
 - Representative error codes:
   - `provenance_gate_rejected`: provenance/min-version gate rejected request.
   - `admission_policy_rejected`: DKG admission policy rejected request.
@@ -587,23 +584,14 @@ against `pkg/tbtc/signer/test/vectors/roast-attempt-context-v1.json`.
   - `lifecycle_policy_rejected`: refresh/canary lifecycle policy rejected
     request.
   - `session_conflict`: same session retried with a different payload.
-  - `session_finalized`: `StartSignRound` called after successful finalize on
-    that session.
-  - `synthetic_contribution_rejected`: synthetic finalize payload used while
-    bootstrap mode is disabled.
 - Call `frost_tbtc_free_buffer` for every returned buffer.
 
 ## Canary promotion runbook
 
-- (a) Confirm prerequisite env vars: `TBTC_SIGNER_CANARY_PERCENT`,
-  `TBTC_SIGNER_CANARY_MIN_SAMPLES_PER_OP` (default 100),
-  `TBTC_SIGNER_CANARY_PROMOTE_GATE_SLO_P99_MS` (default 1500ms).
-- (b) Query `CanaryRolloutStatus` to read current stage and accumulated
-  sample counts.
-- (c) Confirm `CanaryRolloutStatus.lastEvidenceAtUnix >
-  stage_entry_at_unix + 600s` (cooldown).
-- (d) Call `PromoteCanary(next_stage_percent)` to advance
-  10% -> 50% -> 100%.
-- (e) Note: evidence counters reset after each `PromoteCanary` call.
-
-See `docs/roast-phase-5-security-rollout-gates.md` for the full gate logic.
+See "Differential safety + canary controls" above for the real SLO gate env
+vars (`TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND1_P95_MS` and siblings,
+`TBTC_SIGNER_CANARY_MIN_SAMPLES`, `TBTC_SIGNER_CANARY_MIN_POLICY_SAMPLES`,
+`TBTC_SIGNER_CANARY_MAX_SAMPLE_AGE_SECONDS`) and
+`docs/roast-phase-5-security-rollout-gates.md` for the full gate logic. Query
+`CanaryRolloutStatus` for current stage and evidence, then call
+`PromoteCanary`/`RollbackCanary`.
