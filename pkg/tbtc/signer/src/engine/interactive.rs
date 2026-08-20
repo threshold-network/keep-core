@@ -896,7 +896,7 @@ pub fn interactive_session_open(
             message_bytes: Zeroizing::new(message_bytes),
             taproot_merkle_root,
             signing_intent: request.signing_intent,
-            key_package: Zeroizing::new(key_package),
+            key_package: Box::new(Zeroizing::new(key_package)),
             last_activity_at: interactive_now(),
             round1: None,
         },
@@ -990,7 +990,7 @@ pub fn interactive_round1(
     let commitments_hex = hex::encode(commitment_bytes);
 
     interactive.round1 = Some(InteractiveRound1State {
-        nonces,
+        nonces: Box::new(Zeroizing::new(nonces)),
         commitments_hex: commitments_hex.clone(),
     });
     interactive.last_activity_at = interactive_now();

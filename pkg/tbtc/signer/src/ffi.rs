@@ -27,6 +27,11 @@ const STATUS_OK: i32 = 0;
 const STATUS_ERROR: i32 = 1;
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 
+/// Generous upper bound for DKG packages to avoid re-allocation. In practice,
+/// for 100 participants, the package is ~350KB. This should be plenty to
+/// avoid re-allocation in sane configurations.
+const DKG_RESPONSE_CAPACITY: usize = 1024 * 1024; // 1 MiB
+
 pub fn success_from_serialized(payload: Vec<u8>) -> TbtcSignerResult {
     TbtcSignerResult {
         status_code: STATUS_OK,
@@ -47,6 +52,35 @@ pub fn parse_request<T: DeserializeOwned>(ptr: *const u8, len: usize) -> Result<
 pub fn serialize_response<T: serde::Serialize>(response: &T) -> Result<Vec<u8>, EngineError> {
     serde_json::to_vec(response)
         .map_err(|e| EngineError::Internal(format!("failed to encode response: {e}")))
+}
+
+/// Serializes a response that may contain secret material.
+///
+/// Uses a pre-sized vector with `serde_json::to_writer` instead of
+/// `serde_json::to_vec` to avoid the growth-triggered intermediate
+/// reallocations `to_vec` performs internally, each of which would leave an
+/// un-zeroized copy of the (partial) secret-bearing JSON in freed heap.
+///
+/// The capacity is a generous upper bound (see `DKG_RESPONSE_CAPACITY`) to
+/// make reallocation unlikely under realistic DKG participant counts; a
+/// pathological input that still exceeds it can still trigger one, so this
+/// mitigates the realistic case rather than eliminating the class outright.
+/// `Zeroizing` is not used here (its API has no safe way to hand back the
+/// buffer without zeroizing it, which the success path needs to do): on the
+/// error path the partial buffer is explicitly wiped before returning; on
+/// success, ownership passes to `to_ffi_buffer`, which already wipes its own
+/// source buffer after copying into the exact-sized boxed slice it returns.
+pub fn serialize_secret_response<T: serde::Serialize>(
+    response: &T,
+) -> Result<Vec<u8>, EngineError> {
+    let mut buf = Vec::with_capacity(DKG_RESPONSE_CAPACITY);
+    if let Err(e) = serde_json::to_writer(&mut buf, response) {
+        buf.zeroize();
+        return Err(EngineError::Internal(format!(
+            "failed to encode response: {e}"
+        )));
+    }
+    Ok(buf)
 }
 
 // Install a panic hook that redacts the panic payload outside the development

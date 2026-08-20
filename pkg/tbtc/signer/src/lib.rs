@@ -5,7 +5,9 @@ mod ffi;
 mod ffi_macros;
 mod go_math_rand;
 
-use crate::ffi_macros::{ffi_no_request, ffi_no_request_infallible, ffi_request_response};
+use crate::ffi_macros::{
+    ffi_no_request, ffi_no_request_infallible, ffi_request_response, ffi_request_secret_response,
+};
 use api::{
     BuildTaprootTxRequest, DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest,
     DkgPart1Request, DkgPart2Request, DkgPart3Request, FrostTbtcAbiVersionResult,
@@ -161,9 +163,9 @@ pub extern "C" fn frost_tbtc_free_buffer(ptr: *mut u8, len: usize) {
 
 ffi_request_response!(frost_tbtc_dkg_part1, DkgPart1Request, engine::dkg_part1);
 
-ffi_request_response!(frost_tbtc_dkg_part2, DkgPart2Request, engine::dkg_part2);
+ffi_request_secret_response!(frost_tbtc_dkg_part2, DkgPart2Request, engine::dkg_part2);
 
-ffi_request_response!(frost_tbtc_dkg_part3, DkgPart3Request, engine::dkg_part3);
+ffi_request_secret_response!(frost_tbtc_dkg_part3, DkgPart3Request, engine::dkg_part3);
 
 ffi_request_response!(
     frost_tbtc_persist_distributed_dkg_key_package,
@@ -691,7 +693,7 @@ mod tests {
         let result: QuarantineStatusResult =
             serde_json::from_slice(&payload).expect("quarantine status payload decode");
         assert_eq!(result.operator_identifier, 1);
-        assert!(!result.auto_quarantine_enabled);
+        assert!(!result.quarantine_enforcement_armed);
         assert_eq!(result.fault_score, 0);
         assert_eq!(result.quarantine_threshold, 0);
         assert!(!result.quarantined);
