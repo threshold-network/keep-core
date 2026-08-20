@@ -92,13 +92,12 @@ fn maybe_hold_interactive_aggregate_after_unlock_for_tests() {
     }
 }
 
-// Multi-seat: a session's interactive consumed-nonce markers are keyed per
-// (attempt_id, member_identifier), so independent local seats can each consume
-// their own nonces for the same attempt without colliding. The marker is written
-// BEFORE a share leaves the engine (consumption-before-release). Legacy bare
-// attempt_id markers (written by the pre-multi-seat single-member engine, and
-// possibly reloaded from durable state) are honored FAIL-CLOSED on read: a bare
-// marker means the attempt is consumed for every member.
+// Multi-seat marker keying: `m{member_identifier}@{attempt_id}` lets each local
+// seat consume its own nonces for the same attempt without colliding. Markers
+// are written BEFORE a share leaves the engine (consumption-before-release).
+// Legacy bare `attempt_id` markers (pre-multi-seat or durable-state carryover)
+// are honored FAIL-CLOSED: a bare marker means the attempt is consumed for
+// every member.
 pub(crate) fn interactive_consumed_marker(attempt_id: &str, member_identifier: u16) -> String {
     // Keep the schema-1 wire representation understood by the immediately
     // previous signer. A binary rollback must continue to see the attempt as
@@ -2021,18 +2020,11 @@ pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningSta
 // time anything touches the engine after expiry. Expiry has abort
 // semantics - the durable consumption markers are untouched.
 /// Resolve the session that holds the DKG key material for `key_group`.
-///
-/// Interactive signing runs under a fresh RoastSessionID per message, but a wallet's
-/// DKG key material is a WALLET-level asset that lives under the session its DKG
-/// completed in. This returns that wallet session so any per-signing session can reach
-/// the material by key_group:
-///  - prefer `session_id` itself if it already holds this wallet's DKG output (the
-///    co-located case: DKG and signing share one session, as in the coarse path and
-///    the single-session tests);
-///  - otherwise find the session whose completed DKG produced `key_group`.
-///
-/// Returns None when no completed DKG for `key_group` exists (i.e. no wallet key), which
-/// callers map to DkgNotReady.
+/// Returns the session that owns the wallet DKG producing `key_group`. The
+/// request's own `session_id` is preferred when it already holds that DKG (the
+/// co-located case: DKG and signing share one session); otherwise the wallet
+/// session whose completed DKG produced `key_group` is returned. `None` means
+/// no wallet DKG exists for `key_group`; callers map that to `DkgNotReady`.
 pub(crate) fn resolve_wallet_session_id(
     engine_state: &EngineState,
     session_id: &str,
@@ -2163,11 +2155,11 @@ pub(crate) fn interactive_session_ttl_seconds() -> u64 {
 fn interactive_open_request_fingerprint(
     request: &InteractiveSessionOpenRequest,
 ) -> Result<String, EngineError> {
-    // The serialized request transiently holds the signing inputs
-    // (message_hex and the rest of the request) in plaintext; wipe the
-    // buffer once the fingerprint digest is taken. No key material is
-    // carried in the request - it is resolved from DKG state - so only
-    // the request inputs are exposed here.
+    // Hashes the request payload. No key material is included (the request
+    // does not carry it; it is resolved from DKG state), so the fingerprint
+    // only commits to the signing inputs. The serialized buffer is zeroized
+    // after the digest is taken because it transiently holds those inputs
+    // in plaintext.
     let mut canonical = serde_json::to_vec(request).map_err(|e| {
         EngineError::Internal(format!(
             "failed to serialize InteractiveSessionOpen request for fingerprint: {e}"

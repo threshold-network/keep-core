@@ -6798,6 +6798,11 @@ fn reset_for_tests_clears_installed_signer_config() {
 
 #[test]
 fn init_signer_config_request_rejects_unknown_fields() {
+    // The misspelled field name below is intentional: the request type is
+    // `#[serde(deny_unknown_fields)]`, so a non-existent key must fail the
+    // parse. A correctly-spelled `policy_max_output_count` would either be
+    // accepted (if the field exists) or fail for the wrong reason, defeating
+    // the test.
     let parsed: Result<InitSignerConfigRequest, _> =
         serde_json::from_str(r#"{"polciy_max_output_count": 1}"#);
     assert!(parsed.is_err(), "typo'd field names must fail the parse");
