@@ -14847,3 +14847,97 @@ fn interactive_cap_does_not_double_count_member_vacating_own_attempt_scope() {
         );
     }
 }
+
+// -- DKGPart1 input validation regression tests ----------------------------
+//
+// The validation hardening PR added `min_signers >= 2` to `frost_ops::dkg_part1`
+// before any downstream use of the input. These tests pin that branch so a
+// future edit that drops or weakens the cap cannot silently regress it.
+
+#[test]
+fn dkg_part1_rejects_min_signers_below_two() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let request = DkgPart1Request {
+        participant_identifier: participant_identifier_to_frost_identifier(1)
+            .map(frost_identifier_to_go_string)
+            .expect("u16::1 to frost identifier"),
+        max_signers: 3,
+        min_signers: 1,
+    };
+
+    let err = dkg_part1(request).expect_err("min_signers < 2 must be rejected");
+    let EngineError::Validation(detail) = err else {
+        panic!("unexpected error variant: {err:?}");
+    };
+    assert!(
+        detail.contains("min_signers must be at least 2"),
+        "unexpected rejection detail: {detail}"
+    );
+}
+
+#[test]
+fn dkg_part1_rejects_min_signers_zero() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let request = DkgPart1Request {
+        participant_identifier: participant_identifier_to_frost_identifier(1)
+            .map(frost_identifier_to_go_string)
+            .expect("u16::1 to frost identifier"),
+        max_signers: 3,
+        min_signers: 0,
+    };
+
+    let err = dkg_part1(request).expect_err("min_signers = 0 must be rejected");
+    let EngineError::Validation(detail) = err else {
+        panic!("unexpected error variant: {err:?}");
+    };
+    assert!(
+        detail.contains("min_signers must be at least 2"),
+        "unexpected rejection detail: {detail}"
+    );
+}
+
+#[test]
+fn dkg_part1_rejects_min_signers_greater_than_max_signers() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let request = DkgPart1Request {
+        participant_identifier: participant_identifier_to_frost_identifier(1)
+            .map(frost_identifier_to_go_string)
+            .expect("u16::1 to frost identifier"),
+        max_signers: 3,
+        min_signers: 4,
+    };
+
+    let err = dkg_part1(request).expect_err("min_signers > max_signers must be rejected");
+    let EngineError::Validation(detail) = err else {
+        panic!("unexpected error variant: {err:?}");
+    };
+    assert!(
+        detail.contains("min_signers exceeds max_signers"),
+        "unexpected rejection detail: {detail}"
+    );
+}
+
+#[test]
+fn dkg_part1_accepts_min_signers_at_threshold() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let expected_identifier = participant_identifier_to_frost_identifier(1)
+        .map(frost_identifier_to_go_string)
+        .expect("u16::1 to frost identifier");
+    let request = DkgPart1Request {
+        participant_identifier: expected_identifier.clone(),
+        max_signers: 3,
+        min_signers: 2,
+    };
+
+    let result = dkg_part1(request).expect("min_signers = 2 must be accepted");
+    assert!(!result.secret_package_hex.expose_secret().is_empty());
+    assert_eq!(result.package.identifier, expected_identifier);
+}
