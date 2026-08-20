@@ -32,6 +32,13 @@ TbtcSignerResult frost_tbtc_run_differential_fuzzing(const uint8_t* request_ptr,
 TbtcSignerResult frost_tbtc_canary_rollout_status(void);
 TbtcSignerResult frost_tbtc_promote_canary(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_rollback_canary(const uint8_t* request_ptr, size_t request_len);
+/*
+ * Caller-owned buffer release: any `TbtcBuffer.buffer` returned by another
+ * entry on this header is owned by the caller. The caller MUST release it
+ * exactly once via `frost_tbtc_free_buffer` with the original (ptr, len)
+ * pair. Misuse (double-free, sized mismatch, non-heap pointer) is
+ * undefined behavior.
+ */
 void frost_tbtc_free_buffer(uint8_t* ptr, size_t len);
 
 TbtcSignerResult frost_tbtc_dkg_part1(const uint8_t* request_ptr, size_t request_len);
@@ -42,6 +49,8 @@ TbtcSignerResult frost_tbtc_persist_distributed_dkg_key_package(const uint8_t* r
 TbtcSignerResult frost_tbtc_new_signing_package(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_build_taproot_tx(const uint8_t* request_ptr, size_t request_len);
 /*
+ * Reserved response shape for a future cryptographic share-refresh protocol.
+ *
  * Reserved ABI: fails closed with terminal error code
  * `cryptographic_refresh_not_supported` until a multi-round, zero-constant
  * FROST refresh protocol is implemented.
@@ -55,7 +64,10 @@ TbtcSignerResult frost_tbtc_refresh_shares(const uint8_t* request_ptr, size_t re
  * header accepts or returns secret nonce material.
  */
 /*
- * Phase 7.1 hardened interactive signing session.
+ * Phase 7.1 hardened interactive signing session (frozen spec
+ * docs/phase-7-interactive-session-spec-freeze.md). Additive ABI: the
+ * Go host adopts these in Phase 7.3; nothing breaks until it calls
+ * them. Secret nonces never cross this boundary in either direction.
  *
  * Secret nonces NEVER cross this boundary in either direction: the engine
  * generates, holds, consumes, and zeroizes them internally, keyed by

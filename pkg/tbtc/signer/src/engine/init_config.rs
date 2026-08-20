@@ -184,7 +184,7 @@ fn validate_candidate_config() -> Result<(), EngineError> {
     // The key-provider settings must be structurally usable too (production
     // forbids the env provider; the command provider requires a command).
     // Resolved WITHOUT reading the secret or executing the key command.
-    resolve_state_key_provider_plan()?;
+    resolve_state_key_provider()?;
     // Production forces the provenance gate, so a production config without
     // a complete, verifiable attestation set is unusable for every protected
     // operation - reject it at init. The gate self-gates (no-op when not

@@ -109,41 +109,45 @@ impl Drop for InteractiveSigningState {
 }
 
 #[derive(Default)]
-pub(crate) struct SessionState {
-    pub(crate) dkg_request_fingerprint: Option<String>,
-    pub(crate) dkg_key_packages: Option<BTreeMap<u16, frost::keys::KeyPackage>>,
-    pub(crate) dkg_public_key_package: Option<frost::keys::PublicKeyPackage>,
-    pub(crate) dkg_result: Option<DkgResult>,
-    pub(crate) sign_request_fingerprint: Option<String>,
-    pub(crate) sign_message_bytes: Option<SecretBytes>,
+pub(crate) struct DkgSessionState {
+    pub(crate) request_fingerprint: Option<String>,
+    pub(crate) key_packages: Option<BTreeMap<u16, frost::keys::KeyPackage>>,
+    pub(crate) public_key_package: Option<frost::keys::PublicKeyPackage>,
+    pub(crate) result: Option<DkgResult>,
+    /// DKG signing-policy firewall compatibility check. Persisted as a u32
+    /// counter (serde-defaulted on PersistedSessionState for back-compat);
+    /// in-memory value defaults to 0 on a fresh session.
+    #[allow(dead_code)]
+    // DKG signing-policy firewall compatibility check; round-tripped through persistence but has no production reader today (per spec note in docs/specs/frost-signer-sessionstate-grouping.md).
+    pub(crate) policy_snapshot_version: u32,
+}
+
+#[derive(Default)]
+pub(crate) struct LegacySigningSessionState {
+    pub(crate) request_fingerprint: Option<String>,
+    pub(crate) message_bytes: Option<SecretBytes>,
     pub(crate) round_state: Option<RoundState>,
     pub(crate) active_attempt_context: Option<AttemptContext>,
-    pub(crate) attempt_transition_records: Vec<TranscriptAuditRecord>,
-    pub(crate) consumed_attempt_ids: HashSet<String>,
-    pub(crate) consumed_sign_round_ids: HashSet<String>,
     pub(crate) finalize_request_fingerprint: Option<String>,
     pub(crate) signature_result: Option<SignatureResult>,
-    pub(crate) consumed_finalize_round_ids: HashSet<String>,
-    pub(crate) consumed_finalize_request_fingerprints: HashSet<String>,
     pub(crate) build_tx_request_fingerprint: Option<String>,
     pub(crate) tx_result: Option<TransactionResult>,
-    pub(crate) refresh_request_fingerprint: Option<String>,
-    pub(crate) refresh_result: Option<RefreshSharesResult>,
-    pub(crate) refresh_history: Vec<RefreshHistoryRecord>,
-    /// Legacy count written by the retired synthetic refresh implementation.
-    /// Retained only so existing pre-release state remains decodable; lifecycle
-    /// status deliberately treats it as non-authoritative.
-    pub(crate) refresh_count: u64,
-    pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
-    /// Transient per-wallet budget for accepted heartbeat Opens. Like the
-    /// process-global BuildTaprootTx limiter, this operational throttle resets on
-    /// restart and is never written into the encrypted session state.
-    pub(crate) heartbeat_rate_limiter: PolicyRateLimiterState,
-    // Multi-seat: a process-global engine may hold several LOCAL members (seats)
-    // signing the same session concurrently, each on its own attempt timeline.
-    // Keyed by member_identifier; each entry is independent (own attempt, nonces,
-    // replace/round2/expiry). Was Option (one member per session).
-    pub(crate) interactive_signing: BTreeMap<u16, InteractiveSigningState>,
+    pub(crate) consumed_attempt_ids: HashSet<String>,
+    pub(crate) consumed_sign_round_ids: HashSet<String>,
+    pub(crate) consumed_finalize_round_ids: HashSet<String>,
+    pub(crate) consumed_finalize_request_fingerprints: HashSet<String>,
+}
+
+#[derive(Default)]
+pub(crate) struct InteractiveSessionState {
+    // Phase 7.6: attempt-scoped concurrent attempts (per spec section 8). The outer
+    // key is `attempt_id`; the inner key is `member_identifier`. Each member's
+    // nonce state is bound to (attempt_id, member_identifier) so two concurrent
+    // attempts on the same session can never share nonce material (frozen spec
+    // section 8: "one handle, one attempt"). The outer scope's size is the
+    // concurrent attempt count (capped at n-t+1 below); the inner scope's
+    // membership per attempt is the per-member live-entry count.
+    pub(crate) interactive_signing: BTreeMap<String, BTreeMap<u16, InteractiveSigningState>>,
     // The key_group this per-signing session signs for, set at InteractiveSessionOpen.
     // Interactive signing runs under a fresh RoastSessionID per message, so a wallet's
     // DKG material lives under a DIFFERENT (wallet/DKG) session; this binds the signing
@@ -152,32 +156,56 @@ pub(crate) struct SessionState {
     // after restart using only public material, and the full-lifetime role binding
     // prevents this per-signing session from later becoming an unrelated DKG owner.
     pub(crate) bound_key_group: Option<String>,
-    // Idle per-message entries use the unoccupied portion of the shared persisted
-    // session budget. The full entry is retained temporarily so delayed
-    // Aggregate/verify-share calls and an outer retry's BuildTaprootTx policy
-    // artifact keep working. Old retired entries are evicted FIFO-by-time when a
-    // new active session needs their slot.
+    pub(crate) consumed_attempt_markers: HashSet<String>,
+    pub(crate) authorized_aggregate_markers: HashSet<String>,
+    pub(crate) aggregated_attempt_markers: HashSet<String>,
+}
+
+#[derive(Default)]
+pub(crate) struct AuditTrail(pub(crate) Vec<TranscriptAuditRecord>);
+
+#[derive(Default)]
+pub(crate) struct LifecycleState {
+    pub(crate) refresh_request_fingerprint: Option<String>,
+    pub(crate) refresh_result: Option<RefreshSharesResult>,
+    pub(crate) refresh_history: Vec<RefreshHistoryRecord>,
+    /// Legacy count written by the retired synthetic refresh implementation.
+    /// Retained only so existing pre-release state remains decodable; lifecycle
+    /// status deliberately treats it as non-authoritative.
+    pub(crate) refresh_count: u64,
+    pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
+}
+
+/// Operational capacity pins. Mixed persistence: `retired_interactive_at_unix`
+/// round-trips through both `TryFrom` impls; `heartbeat_rate_limiter` and
+/// `aggregate_eviction_pin` are transient (never serialized).
+#[derive(Default)]
+pub(crate) struct OperationalState {
+    /// Transient per-wallet budget for accepted heartbeat Opens. Like the
+    /// process-global BuildTaprootTx limiter, this operational throttle resets
+    /// on restart and is never written into the encrypted session state.
+    pub(crate) heartbeat_rate_limiter: PolicyRateLimiterState,
+    // Idle per-message entries use the unoccupied portion of the shared
+    // persisted session budget. The full entry is retained temporarily so
+    // delayed Aggregate/verify-share calls and an outer retry's BuildTaprootTx
+    // policy artifact keep working. Old retired entries are evicted FIFO-by-time
+    // when a new active session needs their slot.
     pub(crate) retired_interactive_at_unix: Option<u64>,
     // Transient refcount pin for Aggregate's unlocked cryptographic section.
     // The session owns one reference; an in-flight Aggregate clones it while
     // holding the engine lock, and compaction skips any session with a clone.
     // Never persisted: no operation can remain in flight across a restart.
     pub(crate) aggregate_eviction_pin: Arc<()>,
-    pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
-    // Fixed-size SHA-256 bindings. Round2 writes an exact
-    // (attempt_id, signing package, taproot root) authorization; successful
-    // Aggregate replaces it with a package/root completion identity so the
-    // same attempt-less FROST package cannot fill completion storage under
-    // fresh canonical attempt ids. Both survive restart.
-    pub(crate) authorized_interactive_aggregate_markers: HashSet<String>,
-    // Phase 7.2b InteractiveAggregate completion markers: an attempt whose
-    // aggregate signature has been produced is recorded here so a repeat
-    // InteractiveAggregate is rejected (re-aggregation is not a recovery path;
-    // a lost signature is recovered with a fresh attempt). Durable like the
-    // consumed markers (markers-only durability) and bounded the same way; not
-    // security-load-bearing (the aggregate is deterministic over public data),
-    // but the frozen Phase 7 spec marks the session complete.
-    pub(crate) aggregated_interactive_attempt_markers: HashSet<String>,
+}
+
+#[derive(Default)]
+pub(crate) struct SessionState {
+    pub(crate) dkg: DkgSessionState,
+    pub(crate) signing: LegacySigningSessionState,
+    pub(crate) interactive: InteractiveSessionState,
+    pub(crate) audit: AuditTrail,
+    pub(crate) lifecycle: LifecycleState,
+    pub(crate) capacity_pins: OperationalState,
 }
 
 #[derive(Default)]
@@ -518,7 +546,7 @@ pub(crate) fn ensure_consumed_registry_persisted_bound(
 pub(crate) fn active_session_count(sessions: &HashMap<String, SessionState>) -> usize {
     sessions
         .values()
-        .filter(|session| session.retired_interactive_at_unix.is_none())
+        .filter(|session| session.capacity_pins.retired_interactive_at_unix.is_none())
         .count()
 }
 
@@ -526,7 +554,7 @@ pub(crate) fn active_session_count(sessions: &HashMap<String, SessionState>) -> 
 pub(crate) fn retired_interactive_session_count(sessions: &HashMap<String, SessionState>) -> usize {
     sessions
         .values()
-        .filter(|session| session.retired_interactive_at_unix.is_some())
+        .filter(|session| session.capacity_pins.retired_interactive_at_unix.is_some())
         .count()
 }
 
@@ -550,65 +578,27 @@ pub(crate) fn ensure_session_registry_persisted_bound(
 // field forces an explicit retirement-safety decision here.
 pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
     let SessionState {
-        dkg_request_fingerprint,
-        dkg_key_packages,
-        dkg_public_key_package,
-        dkg_result,
-        sign_request_fingerprint,
-        sign_message_bytes,
-        round_state,
-        active_attempt_context,
-        attempt_transition_records,
-        consumed_attempt_ids,
-        consumed_sign_round_ids,
-        finalize_request_fingerprint,
-        signature_result,
-        consumed_finalize_round_ids,
-        consumed_finalize_request_fingerprints,
-        build_tx_request_fingerprint,
-        tx_result,
-        refresh_request_fingerprint,
-        refresh_result,
-        refresh_history,
-        refresh_count,
-        emergency_rekey_event,
-        heartbeat_rate_limiter,
-        interactive_signing,
-        bound_key_group,
-        retired_interactive_at_unix,
-        aggregate_eviction_pin,
-        consumed_interactive_attempt_markers,
-        authorized_interactive_aggregate_markers,
-        aggregated_interactive_attempt_markers,
+        dkg:
+            DkgSessionState {
+                request_fingerprint: dkg_request_fingerprint,
+                key_packages: dkg_key_packages,
+                public_key_package: dkg_public_key_package,
+                result: dkg_result,
+                policy_snapshot_version: _,
+            },
+        interactive:
+            InteractiveSessionState {
+                interactive_signing: _interactive_signing,
+                bound_key_group,
+                consumed_attempt_markers: _,
+                authorized_aggregate_markers: _,
+                aggregated_attempt_markers: _,
+            },
+        audit: _,
+        lifecycle: _,
+        capacity_pins: _,
+        signing: _,
     } = session;
-
-    let _ = (
-        sign_request_fingerprint,
-        sign_message_bytes,
-        round_state,
-        active_attempt_context,
-        attempt_transition_records,
-        consumed_attempt_ids,
-        consumed_sign_round_ids,
-        finalize_request_fingerprint,
-        signature_result,
-        consumed_finalize_round_ids,
-        consumed_finalize_request_fingerprints,
-        build_tx_request_fingerprint,
-        tx_result,
-        refresh_request_fingerprint,
-        refresh_result,
-        refresh_history,
-        refresh_count,
-        emergency_rekey_event,
-        heartbeat_rate_limiter,
-        interactive_signing,
-        retired_interactive_at_unix,
-        aggregate_eviction_pin,
-        consumed_interactive_attempt_markers,
-        authorized_interactive_aggregate_markers,
-        aggregated_interactive_attempt_markers,
-    );
 
     bound_key_group.is_some()
         && dkg_request_fingerprint.is_none()
@@ -629,22 +619,29 @@ pub(crate) fn retire_idle_per_message_session_ids(
     protected_session_id: Option<&str>,
 ) -> Vec<String> {
     let retired_at = now_unix().max(1);
+    // Clone once per retire cycle. The same in-memory snapshot is reused by
+    // the compaction step below; cloning it a second time under the same
+    // PERSISTENCE_PENDING_OPERATIONS mutex would re-allocate the full set
+    // (size scales with max_sessions_limit, default 1024) for every retire
+    // call inside the persist path.
     let pending_session_ids = persistence_pending_session_ids();
     let mut newly_retired = Vec::new();
     for (session_id, session) in &mut engine_state.sessions {
         if !pending_session_ids.contains(session_id)
-            && session.retired_interactive_at_unix.is_none()
-            && session.interactive_signing.is_empty()
+            && session.capacity_pins.retired_interactive_at_unix.is_none()
+            && session.interactive.interactive_signing.is_empty()
             && per_message_interactive_session(session)
         {
-            session.retired_interactive_at_unix = Some(retired_at);
+            session.capacity_pins.retired_interactive_at_unix = Some(retired_at);
             newly_retired.push(session_id.clone());
         }
     }
 
-    drop(compact_retired_per_message_sessions(
+    drop(compact_retired_per_message_sessions_to_total(
         engine_state,
+        max_sessions_limit(),
         protected_session_id,
+        Some(&pending_session_ids),
     ));
     newly_retired.retain(|session_id| engine_state.sessions.contains_key(session_id));
     newly_retired
@@ -658,6 +655,7 @@ pub(crate) fn compact_retired_per_message_sessions(
         engine_state,
         max_sessions_limit(),
         protected_session_id,
+        None,
     )
 }
 
@@ -665,13 +663,34 @@ fn compact_retired_per_message_sessions_to_total(
     engine_state: &mut EngineState,
     max_total_sessions: usize,
     protected_session_id: Option<&str>,
+    pending_session_ids: Option<&HashSet<String>>,
 ) -> Vec<(String, SessionState)> {
     // A post-replacement persistence failure leaves the replacement snapshot's
     // marker in memory and records a process-local repair operation. Evicting
     // that session before a later successful snapshot would persist the
     // marker's absence and then clear the repair record. Protect every
     // session-scoped pending operation until a successful snapshot covers it.
-    let pending_session_ids = persistence_pending_session_ids();
+    //
+    // Callers that already hold a snapshot of the pending-session set (e.g.
+    // `retire_idle_per_message_session_ids`, which uses the same set for the
+    // retire pass above) pass it through `pending_session_ids` to avoid
+    // taking the PERSISTENCE_PENDING_OPERATIONS mutex a second time and
+    // re-cloning the full set inside a single persist cycle. This is safe
+    // only because every caller holds the engine-state mutex for the whole
+    // window from the snapshot to this use: `mark_persistence_pending` /
+    // `clear_persistence_pending_operation` cannot run concurrently and
+    // stale the snapshot mid-cycle. A future call site that takes the
+    // snapshot outside the engine-state lock (or across an await/drop of
+    // the guard) must not reuse this parameter — it must pass `None` so a
+    // fresh snapshot is taken under the lock instead.
+    let pending_session_ids_owned;
+    let pending_session_ids = match pending_session_ids {
+        Some(ids) => ids,
+        None => {
+            pending_session_ids_owned = persistence_pending_session_ids();
+            &pending_session_ids_owned
+        }
+    };
     let mut removed = Vec::new();
     // Schema version 1 readers predating retirement enforce this same bound on
     // the TOTAL map. Retired tombstones therefore consume only the portion of
@@ -684,11 +703,12 @@ fn compact_retired_per_message_sessions_to_total(
             .filter_map(|(session_id, session)| {
                 if protected_session_id == Some(session_id.as_str())
                     || pending_session_ids.contains(session_id)
-                    || Arc::strong_count(&session.aggregate_eviction_pin) > 1
+                    || Arc::strong_count(&session.capacity_pins.aggregate_eviction_pin) > 1
                 {
                     return None;
                 }
                 session
+                    .capacity_pins
                     .retired_interactive_at_unix
                     .map(|retired_at| (retired_at, session_id.clone()))
             })
@@ -721,9 +741,9 @@ pub(crate) fn restore_compacted_retired_sessions(
 fn has_evictable_retired_session(engine_state: &EngineState) -> bool {
     let pending_session_ids = persistence_pending_session_ids();
     engine_state.sessions.iter().any(|(session_id, session)| {
-        session.retired_interactive_at_unix.is_some()
+        session.capacity_pins.retired_interactive_at_unix.is_some()
             && !pending_session_ids.contains(session_id)
-            && Arc::strong_count(&session.aggregate_eviction_pin) == 1
+            && Arc::strong_count(&session.capacity_pins.aggregate_eviction_pin) == 1
     })
 }
 
@@ -760,7 +780,7 @@ pub(crate) fn ensure_interactive_session_admission_capacity(
 ) -> Result<(), EngineError> {
     let existing_session = engine_state.sessions.get(session_id);
     let needs_active_slot = existing_session
-        .map(|session| session.retired_interactive_at_unix.is_some())
+        .map(|session| session.capacity_pins.retired_interactive_at_unix.is_some())
         .unwrap_or(true);
     if !needs_active_slot {
         return Ok(());
@@ -789,7 +809,7 @@ pub(crate) fn reactivate_retired_per_message_session(
     let is_retired = engine_state
         .sessions
         .get(session_id)
-        .is_some_and(|session| session.retired_interactive_at_unix.is_some());
+        .is_some_and(|session| session.capacity_pins.retired_interactive_at_unix.is_some());
     if !is_retired {
         return Ok(());
     }
@@ -807,6 +827,7 @@ pub(crate) fn reactivate_retired_per_message_session(
         .sessions
         .get_mut(session_id)
         .expect("retired session existed under the held engine lock")
+        .capacity_pins
         .retired_interactive_at_unix = None;
     Ok(())
 }
@@ -827,6 +848,7 @@ pub(crate) fn ensure_session_insert_capacity(
     let compacted = compact_retired_per_message_sessions_to_total(
         engine_state,
         max_sessions.saturating_sub(1),
+        None,
         None,
     );
     if engine_state.sessions.len() >= max_sessions {
@@ -859,4 +881,71 @@ pub(crate) fn ensure_consumed_registry_insert_capacity(
     }
 
     Ok(())
+}
+
+// Phase 7.6: per-session concurrent-attempt helpers. The interactive state is
+// now an attempt-scoped nested map (attempt_id -> member_identifier -> state).
+// The functions below keep the cap semantics and the per-session totals in one
+// place so the Open/Round1/Round2/Aggregate/Abort paths read identically.
+
+/// Count of distinct (member, session) entries currently live. A member
+/// advancing to a newer attempt reuses its own slot, so this stays constant
+/// across the advance. The global `max_live_interactive_sessions_limit` cap
+/// counts this, not the per-attempt cardinality.
+pub(crate) fn interactive_session_live_member_count(session: &SessionState) -> usize {
+    let mut distinct_members = BTreeSet::new();
+    for members in session.interactive.interactive_signing.values() {
+        for member_identifier in members.keys() {
+            distinct_members.insert(*member_identifier);
+        }
+    }
+    distinct_members.len()
+}
+
+/// Per-session attempt cap: `n - t + 1` where `n` is the wallet's DKG
+/// participant count and `t` is the threshold. Returns `None` when the cap
+/// cannot be computed (no DKG material or impossible values); callers map
+/// that to the existing capacity/invalid-config path so an unverifiable group
+/// configuration never silently skips the cap.
+pub(crate) fn concurrent_attempt_cap_for_dkg(
+    participant_count: u16,
+    threshold: u16,
+) -> Option<usize> {
+    if participant_count == 0 || threshold == 0 || participant_count < threshold {
+        return None;
+    }
+    Some(usize::from(participant_count) - usize::from(threshold) + 1)
+}
+
+/// Removes an interactive entry at `(attempt_id, member_identifier)` and
+/// returns the removed state for zeroization. Returns `None` if the entry does
+/// not exist. The outer attempt scope is dropped when its last member is
+/// removed, so the per-session attempt count tracks the outer map's size.
+pub(crate) fn remove_interactive_entry(
+    session: &mut SessionState,
+    attempt_id: &str,
+    member_identifier: u16,
+) -> Option<InteractiveSigningState> {
+    let members = session
+        .interactive
+        .interactive_signing
+        .get_mut(attempt_id)?;
+    let removed = members.remove(&member_identifier);
+    if members.is_empty() {
+        session.interactive.interactive_signing.remove(attempt_id);
+    }
+    removed
+}
+
+/// Total (member, session) entries across all sessions. Used by the global
+/// `max_live_interactive_sessions_limit` cap so a fresh member on a session
+/// where the existing member is advancing to a newer attempt does not double
+/// count.
+pub(crate) fn engine_live_interactive_member_count(
+    sessions: &HashMap<String, SessionState>,
+) -> usize {
+    sessions
+        .values()
+        .map(interactive_session_live_member_count)
+        .sum()
 }

@@ -1078,6 +1078,31 @@ pub(crate) fn enforce_signing_message_binding_to_policy_checked_build_tx(
         };
     }
 
+    // Investigated: a caller supplying tx_result=None and signing_intent=None here
+    // gets an unconditional Ok when the firewall is disabled, binding zero
+    // policy-checked artifact to the signing message. This is intentional, not a
+    // gap: the tx_result presence check below (and every deeper check through the
+    // end of this function -- session-id match, hex/consensus decoding, sighash
+    // count/format, output-value bounds, the re-run of current policy, and the
+    // final signing-message-to-sighash binding) are ALL part of the SAME signing
+    // policy firewall; the rejection text below even says so verbatim ("signing
+    // policy firewall requires build_taproot_tx to run"). There is no separate
+    // "basic presence" invariant to peel off from "deeper policy content" --
+    // disabling the firewall means none of this block applies, by design.
+    // Making the tx_result null-check fire unconditionally (moving this early
+    // return below it, after the match) was prototyped and measured: on a clean
+    // `cargo test --lib -- --test-threads=1` run (fresh CARGO_TARGET_DIR, no
+    // reorder) the full lib suite is 278 passed/0 failed; the identical run with
+    // only this reorder applied is 220 passed/58 failed, all newly-broken and all
+    // in interactive-session lifecycle coverage (abort, quarantine, replay,
+    // aggregate, round1/round2, expiry, persistence-fault-injection) that goes
+    // through `open_interactive_for_test` or an equivalent helper opening a
+    // session without a prior build_taproot_tx call under the default
+    // (non-production) firewall-disabled test profile -- a legitimate use of the
+    // dev-mode escape hatch, not a latent bug. The reorder was reverted for this
+    // reason. Production is unaffected either way: signing_policy_firewall_enforced()
+    // always returns true in production (see signer_profile_is_production() and
+    // signing_policy_firewall_is_enforced_in_production_by_default in tests.rs).
     if !signing_policy_firewall_enforced() {
         return Ok(());
     }

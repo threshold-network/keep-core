@@ -485,7 +485,7 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
             result.emergency_rekey_sessions_total = engine_state
                 .sessions
                 .values()
-                .filter(|session| session.emergency_rekey_event.is_some())
+                .filter(|session| session.lifecycle.emergency_rekey_event.is_some())
                 .count() as u64;
             let now = now_unix();
             let cadence_seconds = refresh_cadence_seconds();

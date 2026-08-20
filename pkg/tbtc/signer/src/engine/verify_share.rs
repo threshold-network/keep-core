@@ -96,10 +96,11 @@ pub fn verify_signature_share(
         // Open; a missing session/binding/DKG is not the member's fault -> indeterminate.
         let key_group = match guard.sessions.get(&request.session_id) {
             Some(session) => session
-                .dkg_result
+                .dkg
+                .result
                 .as_ref()
                 .map(|dkg| dkg.key_group.clone())
-                .or_else(|| session.bound_key_group.clone()),
+                .or_else(|| session.interactive.bound_key_group.clone()),
             None => None,
         };
         let key_group = match key_group {
@@ -114,7 +115,7 @@ pub fn verify_signature_share(
         match guard
             .sessions
             .get(&wallet_session_id)
-            .and_then(|session| session.dkg_public_key_package.as_ref())
+            .and_then(|session| session.dkg.public_key_package.as_ref())
         {
             Some(package) => package.clone(),
             None => return Ok(verdict(ShareVerificationVerdict::Indeterminate)),

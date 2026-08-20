@@ -58,7 +58,7 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
     }
 
     if let Some(session) = guard.sessions.get(&request.session_id) {
-        if let Some(emergency_rekey_event) = session.emergency_rekey_event.as_ref() {
+        if let Some(emergency_rekey_event) = session.lifecycle.emergency_rekey_event.as_ref() {
             return reject_lifecycle_policy(
                 &request.session_id,
                 "emergency_rekey_required",
@@ -69,12 +69,12 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
             );
         }
 
-        if let Some(existing) = &session.build_tx_request_fingerprint {
+        if let Some(existing) = &session.signing.build_tx_request_fingerprint {
             if existing == &request_fingerprint {
-                let cached_result = session
-                    .tx_result
-                    .clone()
-                    .ok_or_else(|| EngineError::Internal("missing build tx cache".to_string()))?;
+                let cached_result =
+                    session.signing.tx_result.clone().ok_or_else(|| {
+                        EngineError::Internal("missing build tx cache".to_string())
+                    })?;
                 let cached_tx_bytes = hex::decode(&cached_result.tx_hex).map_err(|_| {
                     EngineError::Internal("cached build tx hex is not valid hex".to_string())
                 })?;
@@ -288,16 +288,16 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
     let accepted_request_fingerprint = request_fingerprint.clone();
     let previous_build_state = guard.sessions.get(&build_session_id).map(|session| {
         (
-            session.build_tx_request_fingerprint.clone(),
-            session.tx_result.clone(),
+            session.signing.build_tx_request_fingerprint.clone(),
+            session.signing.tx_result.clone(),
         )
     });
     let session = guard
         .sessions
         .entry(build_session_id.clone())
         .or_insert_with(SessionState::default);
-    session.build_tx_request_fingerprint = Some(request_fingerprint);
-    session.tx_result = Some(result.clone());
+    session.signing.build_tx_request_fingerprint = Some(request_fingerprint);
+    session.signing.tx_result = Some(result.clone());
     if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
         let state_file_replaced = persist_error.state_file_replaced();
         let persist_error = persist_error.into_engine_error();
@@ -312,8 +312,8 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
                     "build transaction session [{build_session_id}] disappeared while rolling back a failed persist: {persist_error}"
                 ))
             })?;
-            session.build_tx_request_fingerprint = previous_fingerprint;
-            session.tx_result = previous_result;
+            session.signing.build_tx_request_fingerprint = previous_fingerprint;
+            session.signing.tx_result = previous_result;
         } else {
             guard.sessions.remove(&build_session_id);
         }

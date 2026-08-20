@@ -92,13 +92,12 @@ fn maybe_hold_interactive_aggregate_after_unlock_for_tests() {
     }
 }
 
-// Multi-seat: a session's interactive consumed-nonce markers are keyed per
-// (attempt_id, member_identifier), so independent local seats can each consume
-// their own nonces for the same attempt without colliding. The marker is written
-// BEFORE a share leaves the engine (consumption-before-release). Legacy bare
-// attempt_id markers (written by the pre-multi-seat single-member engine, and
-// possibly reloaded from durable state) are honored FAIL-CLOSED on read: a bare
-// marker means the attempt is consumed for every member.
+// Multi-seat marker keying: `m{member_identifier}@{attempt_id}` lets each local
+// seat consume its own nonces for the same attempt without colliding. Markers
+// are written BEFORE a share leaves the engine (consumption-before-release).
+// Legacy bare `attempt_id` markers (pre-multi-seat or durable-state carryover)
+// are honored FAIL-CLOSED: a bare marker means the attempt is consumed for
+// every member.
 pub(crate) fn interactive_consumed_marker(attempt_id: &str, member_identifier: u16) -> String {
     // Keep the schema-1 wire representation understood by the immediately
     // previous signer. A binary rollback must continue to see the attempt as
@@ -182,17 +181,27 @@ pub(crate) fn interactive_aggregate_package_completion_marker(
 // common message/threshold/included-subset shape, while the package-completion
 // marker above prevents cross-attempt reuse of that otherwise attempt-less
 // FROST package. An omitted non-coordinator never receives this fallback.
+//
+// Iterates EVERY concurrent attempt on this session (attempt-scoped nested map,
+// per spec section 8): authorization is recorded per attempt, not per session,
+// so concurrent attempts can each authorize their own Round2.
 fn interactive_aggregate_has_live_authorization(
     session: &SessionState,
     attempt_id: &str,
     signing_package: &frost::SigningPackage,
     taproot_merkle_root: Option<&[u8; 32]>,
 ) -> Result<bool, EngineError> {
-    for interactive in session.interactive_signing.values().filter(|interactive| {
-        interactive.attempt_context.attempt_id == attempt_id
-            && interactive.taproot_merkle_root.as_ref() == taproot_merkle_root
-            && interactive.round1.is_some()
-    }) {
+    for interactive in session
+        .interactive
+        .interactive_signing
+        .values()
+        .flat_map(|members| members.values())
+        .filter(|interactive| {
+            interactive.attempt_context.attempt_id == attempt_id
+                && interactive.taproot_merkle_root.as_ref() == taproot_merkle_root
+                && interactive.round1.is_some()
+        })
+    {
         match verify_round2_signing_package(interactive, signing_package) {
             Ok(()) => return Ok(true),
             Err(error @ EngineError::Internal(_)) => return Err(error),
@@ -252,6 +261,45 @@ pub(crate) fn interactive_attempt_aggregated(
         message_digest_hex,
         taproot_merkle_root,
     )) || markers.contains(attempt_id)
+}
+// Phase-entry helper: take the engine-state lock and run the
+// interactive-state sweep. Every `pub fn` phase handler
+// (interactive_session_open, round1, round2, aggregate, abort) calls this as
+// the very first step, so a future change to the lock-prologue (e.g. an
+// additional sweep) is one diff line, not five. Deliberately does NOT call
+// `load_auto_quarantine_config` — that helper is phase-specific and does
+// not run at every entry point, and folding it in would run it before
+// round2's marker-durability flush instead of after.
+pub(crate) fn enter_phase() -> Result<std::sync::MutexGuard<'static, EngineState>, EngineError> {
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    sweep_expired_interactive_state_durably(&mut guard)?;
+    Ok(guard)
+}
+
+// Marker-durability helper: when an earlier phase write replaced the state
+// file but failed its directory sync, the fail-closed marker the call was
+// about to install is preserved in memory but not on disk. Re-persist the
+// guard now so the retry that follows succeeds (or is rejected by the
+// marker just installed) instead of leaking a second share. The predicate
+// is the phase-specific check for the phase's own pending marker. The
+// helper takes the guard by reference because `persist_engine_state_to_storage`
+// borrows the same state — `std::sync::Mutex` is not reentrant, so a real
+// second acquisition would deadlock. The guard is held for the duration of
+// the phase, matching the existing lock model.
+pub(crate) fn flush_pending_marker<F>(
+    guard: &std::sync::MutexGuard<'static, EngineState>,
+    predicate: F,
+) -> Result<(), EngineError>
+where
+    F: FnOnce() -> bool,
+{
+    if predicate() {
+        persist_engine_state_to_storage(guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
+    }
+    Ok(())
 }
 
 pub fn interactive_session_open(
@@ -316,10 +364,7 @@ pub fn interactive_session_open(
     let request_fingerprint = interactive_open_request_fingerprint(&request)?;
     let attempt_id = request.attempt_context.attempt_id.clone();
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state_durably(&mut guard)?;
+    let mut guard = enter_phase()?;
 
     let auto_quarantine_config = load_auto_quarantine_config()?;
 
@@ -346,7 +391,7 @@ pub fn interactive_session_open(
                 session_id: request.session_id.clone(),
             },
         )?;
-    let (key_package, canonical_included_participants) =
+    let (key_package, canonical_included_participants, dkg_participant_count, dkg_threshold) =
         {
             let session = guard.sessions.get(&wallet_session_id).ok_or_else(|| {
                 EngineError::SessionNotFound {
@@ -354,7 +399,8 @@ pub fn interactive_session_open(
                 }
             })?;
             let dkg = session
-                .dkg_result
+                .dkg
+                .result
                 .as_ref()
                 .ok_or_else(|| EngineError::DkgNotReady {
                     session_id: request.session_id.clone(),
@@ -370,7 +416,7 @@ pub fn interactive_session_open(
                     request.threshold, dkg.threshold
                 )));
             }
-            let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+            let dkg_key_packages = session.dkg.key_packages.as_ref().ok_or_else(|| {
                 EngineError::Internal("missing DKG key package cache".to_string())
             })?;
             // The public key package carries a verifying share for EVERY DKG
@@ -379,7 +425,7 @@ pub fn interactive_session_open(
             // single entry), so the included-participants membership check below must
             // use the public package, not dkg_key_packages.
             let dkg_public_key_package =
-                session.dkg_public_key_package.as_ref().ok_or_else(|| {
+                session.dkg.public_key_package.as_ref().ok_or_else(|| {
                     EngineError::Internal("missing DKG public key package".to_string())
                 })?;
             let key_package = dkg_key_packages
@@ -406,13 +452,15 @@ pub fn interactive_session_open(
                 guard
                     .sessions
                     .get(&request.session_id)
-                    .and_then(|signing_session| signing_session.emergency_rekey_event.as_ref()),
-                session.emergency_rekey_event.as_ref(),
-                session.finalize_request_fingerprint.is_some(),
+                    .and_then(|signing_session| {
+                        signing_session.lifecycle.emergency_rekey_event.as_ref()
+                    }),
+                session.lifecycle.emergency_rekey_event.as_ref(),
+                session.signing.finalize_request_fingerprint.is_some(),
                 guard
                     .sessions
                     .get(&request.session_id)
-                    .and_then(|signing_session| signing_session.tx_result.as_ref()),
+                    .and_then(|signing_session| signing_session.signing.tx_result.as_ref()),
                 taproot_merkle_root.as_ref(),
                 request.signing_intent.as_ref(),
                 &guard.quarantined_operator_identifiers,
@@ -462,12 +510,24 @@ pub fn interactive_session_open(
                     )));
                 }
             }
-            (key_package, canonical_included_participants)
+            (
+                key_package,
+                canonical_included_participants,
+                dkg.participant_count,
+                dkg.threshold,
+            )
         };
 
     // Disposition over the (now-confirmed) existing session: consumed
     // marker, idempotent/conflicting reopen of this exact attempt, and
     // the live attempt (id + number) for the replacement decision.
+    //
+    // Phase 7.6: the per-session interactive state is now an attempt-scoped
+    // nested map (attempt_id -> member_identifier -> state). A member's live
+    // entry lives under exactly one attempt (the one they last opened), so
+    // `live` is found by scanning the inner scopes. The per-session attempt
+    // count is the outer map's size (per spec section 8: "bounded n-t+1
+    // concurrent attempts per session").
     let member_identifier = request.member_identifier;
     let (already_consumed, matching_attempt_idempotent, live_attempt) =
         match guard.sessions.get(&request.session_id) {
@@ -475,17 +535,25 @@ pub fn interactive_session_open(
                 // Per-member consumed check: this member's composite marker, or a legacy
                 // bare attempt_id marker (fail-closed for the whole attempt).
                 let already_consumed = interactive_attempt_consumed(
-                    &session.consumed_interactive_attempt_markers,
+                    &session.interactive.consumed_attempt_markers,
                     &attempt_id,
                     member_identifier,
                 );
                 // Disposition is scoped to THIS member's live entry; sibling seats are
-                // independent and on their own attempt timelines.
-                let live = session.interactive_signing.get(&member_identifier);
+                // independent and on their own attempt timelines. A member has at most
+                // one entry across the attempt scopes (their currently-open attempt).
+                let live = session
+                    .interactive
+                    .interactive_signing
+                    .values()
+                    .flat_map(|members| members.iter())
+                    .find(|(_, interactive)| interactive.member_identifier == member_identifier);
                 let matching_attempt_idempotent = live
-                    .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
-                    .map(|interactive| interactive.open_request_fingerprint == request_fingerprint);
-                let live_attempt = live.map(|interactive| {
+                    .filter(|(_, interactive)| interactive.attempt_context.attempt_id == attempt_id)
+                    .map(|(_, interactive)| {
+                        interactive.open_request_fingerprint == request_fingerprint
+                    });
+                let live_attempt = live.map(|(_, interactive)| {
                     (
                         interactive.attempt_context.attempt_id.clone(),
                         interactive.attempt_context.attempt_number,
@@ -508,11 +576,18 @@ pub fn interactive_session_open(
 
     match matching_attempt_idempotent {
         Some(true) => {
-            let interactive = guard
+            // Idempotent re-open touches the SAME (attempt_id, member_identifier) entry
+            // the request carries - locate it by attempt_id first, then by member, to
+            // support the nested attempt-scoped map (per spec section 8).
+            let session = guard
                 .sessions
                 .get_mut(&request.session_id)
-                .expect("idempotent Open session exists")
+                .expect("idempotent Open session exists");
+            let interactive = session
+                .interactive
                 .interactive_signing
+                .get_mut(&attempt_id)
+                .expect("idempotent Open attempt scope exists")
                 .get_mut(&member_identifier)
                 .expect("idempotent Open member exists");
             interactive.last_activity_at = interactive_now();
@@ -529,7 +604,6 @@ pub fn interactive_session_open(
         }
         None => {}
     }
-
     // A DIFFERENT live attempt FOR THIS MEMBER is replaced ONLY by a strictly
     // newer attempt: this seat's retry loop advanced. A stale/delayed open for an
     // older or equal attempt must not roll this member back and wipe its newer
@@ -558,18 +632,66 @@ pub fn interactive_session_open(
         }
     }
 
-    // Capacity counts every live interactive session. When replacing,
+    // Phase 7.6: per-session attempt cap (spec section 8). The cap is `n - t + 1`,
+    // where `n` is the wallet's DKG `participant_count` and `t` is the threshold.
+    let new_attempt_taken = !guard
+        .sessions
+        .get(&request.session_id)
+        .is_some_and(|session| {
+            session
+                .interactive
+                .interactive_signing
+                .contains_key(&attempt_id)
+        });
+    if new_attempt_taken {
+        // Count projected post-install attempts: current attempts excluding any
+        // scope this member would vacate entirely (so advancing members don't
+        // count against the cap twice).
+        let current_attempts = guard
+            .sessions
+            .get(&request.session_id)
+            .map(|session| {
+                session
+                    .interactive
+                    .interactive_signing
+                    .iter()
+                    .filter(|(aid, members)| {
+                        aid.as_str() != attempt_id
+                            && !(members.len() == 1 && members.contains_key(&member_identifier))
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        let cap = concurrent_attempt_cap_for_dkg(dkg_participant_count, dkg_threshold).ok_or_else(
+            || {
+                EngineError::Internal(format!(
+                    "cannot compute per-session concurrent-attempt cap from DKG \
+                     participant_count [{}] and threshold [{}] for session [{}]",
+                    dkg_participant_count, dkg_threshold, request.session_id
+                ))
+            },
+        )?;
+        if current_attempts >= cap {
+            return Err(EngineError::SigningPolicyRejected {
+                session_id: request.session_id.clone(),
+                reason_code: "concurrent_attempt_cap_exceeded".to_string(),
+                detail: format!(
+                    "session [{}] cannot open new attempt [{attempt_id}]: current \
+                     concurrent-attempt count [{current_attempts}] is at the per-session \
+                     cap of [{cap}] (n={}, t={}, n-t+1={cap}).",
+                    request.session_id, dkg_participant_count, dkg_threshold,
+                ),
+            });
+        }
+    }
+
     // this session already holds one of those slots, so the cap does
     // not apply; when not replacing, a new slot is being taken.
     // Capacity bounds resident nonce/key exposure, so it counts every live member
     // ENTRY across all sessions. Replacing this member's own entry takes no new
     // slot; a new member (even in an existing session) takes one.
     if !replacing {
-        let live_interactive_members: usize = guard
-            .sessions
-            .values()
-            .map(|session| session.interactive_signing.len())
-            .sum();
+        let live_interactive_members = engine_live_interactive_member_count(&guard.sessions);
         if live_interactive_members >= max_live_interactive_sessions_limit() {
             return Err(EngineError::Internal(format!(
                 "live interactive member count [{live_interactive_members}] reached max [{}]; \
@@ -581,6 +703,7 @@ pub fn interactive_session_open(
     }
 
     // A per-signing session is keyed by RoastSessionID (message/root/start-block), NOT
+
     // by key_group, so two DIFFERENT wallets signing the same digest at the same block
     // on a node that holds members of both could collide on one session id. A session
     // belongs to exactly ONE wallet key for its lifetime: reject an Open whose key_group
@@ -594,10 +717,11 @@ pub fn interactive_session_open(
     // and sign B's share against A's material, bypassing B's rekey/finalization gates).
     if let Some(existing) = guard.sessions.get(&request.session_id) {
         let established = existing
-            .dkg_result
+            .dkg
+            .result
             .as_ref()
             .map(|dkg| dkg.key_group.as_str())
-            .or(existing.bound_key_group.as_deref());
+            .or(existing.interactive.bound_key_group.as_deref());
         if let Some(established) = established {
             if established != request.key_group {
                 return Err(EngineError::SessionConflict {
@@ -620,7 +744,9 @@ pub fn interactive_session_open(
     // additional write here; a previously bound per-message session likewise
     // reuses its durable identity.
     let persists_new_per_message_binding = match guard.sessions.get(&request.session_id) {
-        Some(session) => session.dkg_result.is_none() && session.bound_key_group.is_none(),
+        Some(session) => {
+            session.dkg.result.is_none() && session.interactive.bound_key_group.is_none()
+        }
         None => true,
     };
     let resolved_binding_state_key = if persists_new_per_message_binding {
@@ -644,10 +770,10 @@ pub fn interactive_session_open(
                 session_id: wallet_session_id.clone(),
             }
         })?;
-        let previous = wallet_session.heartbeat_rate_limiter.clone();
+        let previous = wallet_session.capacity_pins.heartbeat_rate_limiter.clone();
         enforce_heartbeat_rate_limit(
             &request.session_id,
-            &mut wallet_session.heartbeat_rate_limiter,
+            &mut wallet_session.capacity_pins.heartbeat_rate_limiter,
         )?;
         Some(previous)
     } else {
@@ -663,8 +789,8 @@ pub fn interactive_session_open(
         .get(&request.session_id)
         .map(|session| {
             (
-                session.bound_key_group.clone(),
-                session.retired_interactive_at_unix,
+                session.interactive.bound_key_group.clone(),
+                session.capacity_pins.retired_interactive_at_unix,
             )
         })
         .unwrap_or((None, None));
@@ -679,7 +805,7 @@ pub fn interactive_session_open(
             .or_insert_with(SessionState::default);
         // Bind this signing session to the wallet key it signs for, so Round2 and
         // Aggregate resolve the same wallet material by key_group.
-        session.bound_key_group = Some(request.key_group.clone());
+        session.interactive.bound_key_group = Some(request.key_group.clone());
     }
 
     if let Some(resolved_state_key) = resolved_binding_state_key.as_ref() {
@@ -694,6 +820,7 @@ pub fn interactive_session_open(
                     .sessions
                     .get_mut(&wallet_session_id)
                     .expect("wallet session existed while rolling back Open")
+                    .capacity_pins
                     .heartbeat_rate_limiter = previous;
             }
 
@@ -702,10 +829,10 @@ pub fn interactive_session_open(
                     .sessions
                     .get_mut(&request.session_id)
                     .expect("Open session existed after state-file replacement");
-                if session.interactive_signing.is_empty()
+                if session.interactive.interactive_signing.is_empty()
                     && per_message_interactive_session(session)
                 {
-                    session.retired_interactive_at_unix = Some(now_unix().max(1));
+                    session.capacity_pins.retired_interactive_at_unix = Some(now_unix().max(1));
                 }
                 mark_persistence_pending(PersistencePendingOperation::InteractiveState {
                     session_id: request.session_id.clone(),
@@ -716,8 +843,8 @@ pub fn interactive_session_open(
                         .sessions
                         .get_mut(&request.session_id)
                         .expect("Open session existed while rolling back binding");
-                    session.bound_key_group = previous_bound_key_group;
-                    session.retired_interactive_at_unix = previous_retired_at;
+                    session.interactive.bound_key_group = previous_bound_key_group;
+                    session.capacity_pins.retired_interactive_at_unix = previous_retired_at;
                 } else {
                     guard.sessions.remove(&request.session_id);
                 }
@@ -732,12 +859,33 @@ pub fn interactive_session_open(
         .get_mut(&request.session_id)
         .expect("Open session existed after binding persistence");
     // Replace only THIS member's prior entry (zeroizing its old nonces); sibling
-    // seats' entries are untouched.
-    if let Some(mut replaced) = session.interactive_signing.remove(&member_identifier) {
-        zeroize_interactive_round1(&mut replaced);
+    // seats' entries on the same and other attempts are untouched. Phase 7.6:
+    // the attempt scope is keyed by attempt_id, so we first remove the member
+    // from whichever attempt scope holds them (handles a same-member advance to
+    // a different attempt) and then insert into the requested attempt's scope.
+    // The outer scope is dropped by the helper when its last member leaves.
+    // Phase 7.6: remove the member from any prior attempt scope, zeroize its
+    // old nonces, then drop the scope if it becomes empty (so the outer map
+    // only holds non-empty scopes).
+    let mut emptied_attempt_ids = Vec::new();
+    for (attempt_id, members) in session.interactive.interactive_signing.iter_mut() {
+        if let Some(mut replaced) = members.remove(&member_identifier) {
+            zeroize_interactive_round1(&mut replaced);
+            if members.is_empty() {
+                emptied_attempt_ids.push(attempt_id.clone());
+            }
+        }
     }
-
-    session.interactive_signing.insert(
+    for attempt_id in emptied_attempt_ids {
+        session.interactive.interactive_signing.remove(&attempt_id);
+    }
+    // Insert into the requested attempt's scope (creating it if needed).
+    let new_members = session
+        .interactive
+        .interactive_signing
+        .entry(attempt_id.clone())
+        .or_default();
+    new_members.insert(
         member_identifier,
         InteractiveSigningState {
             open_request_fingerprint: request_fingerprint,
@@ -752,6 +900,18 @@ pub fn interactive_session_open(
             last_activity_at: interactive_now(),
             round1: None,
         },
+    );
+    // Spec section 8 invariant, now structurally enforced by the attempt-scoped
+    // nested map: each member's entry sits under exactly one attempt and holds
+    // its own nonce pair, so two concurrent attempts on the same session can
+    // never share nonce material. The outer map's keys are distinct attempt_ids.
+    // The cap is checked above; this assert confirms the install did not
+    // somehow exceed it (e.g. through a future change that bypasses the gate).
+    let cap_after_install =
+        concurrent_attempt_cap_for_dkg(dkg_participant_count, dkg_threshold).unwrap_or(usize::MAX);
+    debug_assert!(
+        session.interactive.interactive_signing.len() <= cap_after_install,
+        "concurrent attempt count exceeded the per-session n-t+1 cap after install"
     );
 
     record_hardening_telemetry(|telemetry| {
@@ -784,10 +944,7 @@ pub fn interactive_round1(
     // attempt_id; the wire form may differ in casing.
     let attempt_id = canonical_attempt_id(&request.attempt_id);
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state_durably(&mut guard)?;
+    let mut guard = enter_phase()?;
 
     let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
         EngineError::SessionNotFound {
@@ -796,7 +953,7 @@ pub fn interactive_round1(
     })?;
 
     if interactive_attempt_consumed(
-        &session.consumed_interactive_attempt_markers,
+        &session.interactive.consumed_attempt_markers,
         &attempt_id,
         request.member_identifier,
     ) {
@@ -876,18 +1033,14 @@ pub fn interactive_round2(
     let attempt_id = canonical_attempt_id(&request.attempt_id);
     let consumed_marker = interactive_consumed_marker(&attempt_id, request.member_identifier);
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state_durably(&mut guard)?;
+    let mut guard = enter_phase()?;
 
     // An earlier marker write may have replaced the state file but failed its
     // directory sync. Flush that fail-closed marker before consulting the replay
     // gate; after a successful write, the marker below rejects the retry.
-    if interactive_round2_persistence_pending(&request.session_id, &consumed_marker) {
-        persist_engine_state_to_storage(&guard)
-            .map_err(PersistEngineStateError::into_engine_error)?;
-    }
+    flush_pending_marker(&guard, || {
+        interactive_round2_persistence_pending(&request.session_id, &consumed_marker)
+    })?;
 
     // Quarantine inputs must be read before the session is borrowed
     // mutably from the same guard below.
@@ -904,18 +1057,19 @@ pub fn interactive_round2(
         .get(&request.session_id)
         .map(|session| {
             (
-                session.tx_result.clone(),
-                session.emergency_rekey_event.clone(),
+                session.signing.tx_result.clone(),
+                session.lifecycle.emergency_rekey_event.clone(),
             )
         })
         .unwrap_or((None, None));
     let (wallet_emergency_rekey, wallet_finalized) = {
         let bound_key_group = guard.sessions.get(&request.session_id).and_then(|session| {
             session
-                .dkg_result
+                .dkg
+                .result
                 .as_ref()
                 .map(|dkg| dkg.key_group.clone())
-                .or_else(|| session.bound_key_group.clone())
+                .or_else(|| session.interactive.bound_key_group.clone())
         });
         match bound_key_group
             .and_then(|key_group| {
@@ -924,8 +1078,8 @@ pub fn interactive_round2(
             .and_then(|wallet_session_id| guard.sessions.get(&wallet_session_id))
         {
             Some(wallet) => (
-                wallet.emergency_rekey_event.clone(),
-                wallet.finalize_request_fingerprint.is_some(),
+                wallet.lifecycle.emergency_rekey_event.clone(),
+                wallet.signing.finalize_request_fingerprint.is_some(),
             ),
             None => (None, false),
         }
@@ -938,7 +1092,7 @@ pub fn interactive_round2(
     })?;
 
     if interactive_attempt_consumed(
-        &session.consumed_interactive_attempt_markers,
+        &session.interactive.consumed_attempt_markers,
         &attempt_id,
         request.member_identifier,
     ) {
@@ -957,26 +1111,29 @@ pub fn interactive_round2(
     // member's live Round2. It fires only for a genuine same-message completion; the
     // member's entry for that finalized attempt is then dead, so free it (zeroizing
     // its nonces) rather than holding a live-member slot until the TTL sweep.
+    // Phase 7.6: this member's live entry sits under the requested attempt_id in
+    // the attempt-scoped nested map. The completion marker is attempt-scoped
+    // already - same matching logic as before, just one level deeper.
     let member_attempt_finalization = session
+        .interactive
         .interactive_signing
-        .get(&request.member_identifier)
-        .filter(|entry| entry.attempt_context.attempt_id == attempt_id)
+        .get(&attempt_id)
+        .and_then(|members| members.get(&request.member_identifier))
         .map(|entry| (hash_hex(&entry.message_bytes), entry.taproot_merkle_root));
     let attempt_finalized =
         member_attempt_finalization
             .as_ref()
             .is_some_and(|(digest, taproot_merkle_root)| {
                 interactive_attempt_aggregated(
-                    &session.aggregated_interactive_attempt_markers,
+                    &session.interactive.aggregated_attempt_markers,
                     &attempt_id,
                     digest,
                     taproot_merkle_root.as_ref(),
                 )
             });
     if attempt_finalized {
-        if let Some(mut removed) = session
-            .interactive_signing
-            .remove(&request.member_identifier)
+        if let Some(mut removed) =
+            remove_interactive_entry(session, &attempt_id, request.member_identifier)
         {
             zeroize_interactive_round1(&mut removed);
         }
@@ -989,7 +1146,7 @@ pub fn interactive_round2(
     // Per-member consumed marker (composite): independent seats consume their own
     // nonces for the same attempt without colliding.
     ensure_consumed_registry_insert_capacity(
-        &session.consumed_interactive_attempt_markers,
+        &session.interactive.consumed_attempt_markers,
         &consumed_marker,
         "consumed_interactive_attempt_markers",
         &request.session_id,
@@ -1004,9 +1161,10 @@ pub fn interactive_round2(
     // attempt exists - there is no share to release in that case, and
     // interactive_state_for_attempt_mut produces the canonical error.
     if let Some(interactive) = session
+        .interactive
         .interactive_signing
-        .get(&request.member_identifier)
-        .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
+        .get(&attempt_id)
+        .and_then(|members| members.get(&request.member_identifier))
     {
         let bound_message_hex = hex::encode(interactive.message_bytes.as_slice());
         // Fast-path lifecycle/firewall and this node's own quarantine.
@@ -1067,7 +1225,7 @@ pub fn interactive_round2(
         interactive.taproot_merkle_root.as_ref(),
     )?;
     ensure_consumed_registry_insert_capacity(
-        &session.authorized_interactive_aggregate_markers,
+        &session.interactive.authorized_aggregate_markers,
         &aggregate_authorization_marker,
         "authorized_interactive_aggregate_markers",
         &request.session_id,
@@ -1095,7 +1253,10 @@ pub fn interactive_round2(
             // validated request still leaves this nonce handle retryable, so
             // measure its inactivity from failure completion, not command start.
             session
+                .interactive
                 .interactive_signing
+                .get_mut(&attempt_id)
+                .expect("validated Round2 attempt scope exists")
                 .get_mut(&request.member_identifier)
                 .expect("validated Round2 interactive state remains retryable")
                 .last_activity_at = interactive_now();
@@ -1103,15 +1264,21 @@ pub fn interactive_round2(
         }
     };
     session
-        .consumed_interactive_attempt_markers
+        .interactive
+        .consumed_attempt_markers
         .insert(consumed_marker.clone());
     session
-        .authorized_interactive_aggregate_markers
+        .interactive
+        .authorized_aggregate_markers
         .insert(aggregate_authorization_marker.clone());
-    let retires_session =
-        session.interactive_signing.len() == 1 && per_message_interactive_session(session);
+    // The retire check is the total (member, session) count (not the per-attempt
+    // count): a per-message session whose last member on ANY attempt just consumed
+    // is fully idle and can be retired. With the nested map this is the number of
+    // distinct members across all attempts.
+    let retires_session = interactive_session_live_member_count(session) == 1
+        && per_message_interactive_session(session);
     let compacted_retired_sessions = if retires_session {
-        session.retired_interactive_at_unix = Some(now_unix().max(1));
+        session.capacity_pins.retired_interactive_at_unix = Some(now_unix().max(1));
         compact_retired_per_message_sessions(&mut guard, Some(&request.session_id))
     } else {
         Vec::new()
@@ -1130,27 +1297,31 @@ pub fn interactive_round2(
                 session_id: request.session_id.clone(),
                 consumed_marker: consumed_marker.clone(),
             });
-            if let Some(mut removed) = session
-                .interactive_signing
-                .remove(&request.member_identifier)
+            if let Some(mut removed) =
+                remove_interactive_entry(session, &attempt_id, request.member_identifier)
             {
                 zeroize_interactive_round1(&mut removed);
             }
         } else {
             session
-                .consumed_interactive_attempt_markers
+                .interactive
+                .consumed_attempt_markers
                 .remove(&consumed_marker);
             session
-                .authorized_interactive_aggregate_markers
+                .interactive
+                .authorized_aggregate_markers
                 .remove(&aggregate_authorization_marker);
             if retires_session {
-                session.retired_interactive_at_unix = None;
+                session.capacity_pins.retired_interactive_at_unix = None;
             }
             // A pre-replacement failure deliberately leaves the nonce handle
             // retryable. Persistence may itself be slow, so restart inactivity
             // at failure completion before releasing the engine lock.
             session
+                .interactive
                 .interactive_signing
+                .get_mut(&attempt_id)
+                .expect("validated Round2 attempt scope exists")
                 .get_mut(&request.member_identifier)
                 .expect("pre-replacement Round2 failure leaves interactive state")
                 .last_activity_at = interactive_now();
@@ -1164,7 +1335,10 @@ pub fn interactive_round2(
         .get_mut(&request.session_id)
         .expect("session existed under the held engine lock");
     let interactive = session
+        .interactive
         .interactive_signing
+        .get_mut(&attempt_id)
+        .expect("attempt scope exists under the held engine lock")
         .get_mut(&request.member_identifier)
         .expect("interactive state existed under the held engine lock");
 
@@ -1194,9 +1368,7 @@ pub fn interactive_round2(
     // stay live. Done on both the success and share-computation-failure paths: the
     // attempt is consumed for this member either way, and the durable marker
     // carries all further replay protection.
-    session
-        .interactive_signing
-        .remove(&request.member_identifier);
+    remove_interactive_entry(session, &attempt_id, request.member_identifier);
 
     let signature_share = signature_share_result
         .map_err(|e| EngineError::Internal(format!("failed to create signature share: {e}")))?;
@@ -1268,19 +1440,15 @@ pub fn interactive_aggregate(
         taproot_merkle_root.as_ref(),
     )?;
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    let guard = enter_phase()?;
     // Sweep first so a failure while repairing any prior completion marker can
     // never postpone destruction of newly expired nonce handles.
-    sweep_expired_interactive_state_durably(&mut guard)?;
     // A prior completion-marker write may have replaced the state file but failed
     // its directory sync. Re-persist that fail-closed marker before the completed
     // attempt check so a retry repairs durability and is then rejected normally.
-    if interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker) {
-        persist_engine_state_to_storage(&guard)
-            .map_err(PersistEngineStateError::into_engine_error)?;
-    }
+    flush_pending_marker(&guard, || {
+        interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker)
+    })?;
     // Resolve the group's public key package (the verifying shares used
     // to check each contribution) from the session's own DKG state, not
     // the request - consistent with the no-secret-on-the-FFI discipline
@@ -1299,7 +1467,7 @@ pub fn interactive_aggregate(
             // lost signature is recovered with a fresh attempt), and the marker is
             // durable so a completed attempt stays rejected across a restart.
             if interactive_attempt_aggregated(
-                &session.aggregated_interactive_attempt_markers,
+                &session.interactive.aggregated_attempt_markers,
                 &attempt_id,
                 &aggregated_message_digest,
                 taproot_merkle_root.as_ref(),
@@ -1310,7 +1478,8 @@ pub fn interactive_aggregate(
                 });
             }
             let authorized = session
-                .authorized_interactive_aggregate_markers
+                .interactive
+                .authorized_aggregate_markers
                 .contains(&aggregate_authorization_marker)
                 || interactive_aggregate_has_live_authorization(
                     session,
@@ -1325,7 +1494,8 @@ pub fn interactive_aggregate(
                 )));
             }
             if session
-                .authorized_interactive_aggregate_markers
+                .interactive
+                .authorized_aggregate_markers
                 .contains(&aggregate_package_completion_marker)
             {
                 return Err(EngineError::Validation(format!(
@@ -1336,14 +1506,18 @@ pub fn interactive_aggregate(
             // The wallet key this signing session serves: its own DKG (co-located) or
             // the key_group bound at Open (distinct per-signing RoastSessionID).
             let key_group = session
-                .dkg_result
+                .dkg
+                .result
                 .as_ref()
                 .map(|dkg| dkg.key_group.clone())
-                .or_else(|| session.bound_key_group.clone())
+                .or_else(|| session.interactive.bound_key_group.clone())
                 .ok_or_else(|| EngineError::DkgNotReady {
                     session_id: request.session_id.clone(),
                 })?;
-            (key_group, Arc::clone(&session.aggregate_eviction_pin))
+            (
+                key_group,
+                Arc::clone(&session.capacity_pins.aggregate_eviction_pin),
+            )
         };
         // The group's public key package (the verifying shares used to check each
         // contribution) is a WALLET-level asset resolved by key_group, so a per-signing
@@ -1361,7 +1535,8 @@ pub fn interactive_aggregate(
                     session_id: wallet_session_id.clone(),
                 })?;
         let public_key_package = session
-            .dkg_public_key_package
+            .dkg
+            .public_key_package
             .as_ref()
             .ok_or_else(|| {
                 EngineError::Internal("missing DKG public key package cache".to_string())
@@ -1463,7 +1638,7 @@ pub fn interactive_aggregate(
     // this attempt first; if the marker is now present, reject this call's
     // re-aggregation - the winner already produced the attempt's signature.
     if interactive_attempt_aggregated(
-        &session.aggregated_interactive_attempt_markers,
+        &session.interactive.aggregated_attempt_markers,
         &attempt_id,
         &aggregated_message_digest,
         taproot_merkle_root.as_ref(),
@@ -1474,7 +1649,8 @@ pub fn interactive_aggregate(
         });
     }
     let authorized = session
-        .authorized_interactive_aggregate_markers
+        .interactive
+        .authorized_aggregate_markers
         .contains(&aggregate_authorization_marker)
         || interactive_aggregate_has_live_authorization(
             session,
@@ -1489,7 +1665,8 @@ pub fn interactive_aggregate(
         )));
     }
     if session
-        .authorized_interactive_aggregate_markers
+        .interactive
+        .authorized_aggregate_markers
         .contains(&aggregate_package_completion_marker)
     {
         return Err(EngineError::Validation(format!(
@@ -1498,7 +1675,7 @@ pub fn interactive_aggregate(
         )));
     }
     ensure_consumed_registry_insert_capacity(
-        &session.aggregated_interactive_attempt_markers,
+        &session.interactive.aggregated_attempt_markers,
         &aggregated_marker,
         "aggregated_interactive_attempt_markers",
         &request.session_id,
@@ -1508,11 +1685,12 @@ pub fn interactive_aggregate(
     // coordinator omitted from the signing subset has no Round2 authorization
     // to replace and therefore consumes one normal bounded slot.
     let replaces_aggregate_authorization = session
-        .authorized_interactive_aggregate_markers
+        .interactive
+        .authorized_aggregate_markers
         .contains(&aggregate_authorization_marker);
     if !replaces_aggregate_authorization {
         ensure_consumed_registry_insert_capacity(
-            &session.authorized_interactive_aggregate_markers,
+            &session.interactive.authorized_aggregate_markers,
             &aggregate_package_completion_marker,
             "authorized_interactive_aggregate_markers",
             &request.session_id,
@@ -1528,13 +1706,16 @@ pub fn interactive_aggregate(
     // marker written) rather than escaping the rollback below via `?`.
     let resolved_state_key = state_encryption_key_material()?;
     session
-        .aggregated_interactive_attempt_markers
+        .interactive
+        .aggregated_attempt_markers
         .insert(aggregated_marker.clone());
     let removed_aggregate_authorization = session
-        .authorized_interactive_aggregate_markers
+        .interactive
+        .authorized_aggregate_markers
         .remove(&aggregate_authorization_marker);
     session
-        .authorized_interactive_aggregate_markers
+        .interactive
+        .authorized_aggregate_markers
         .insert(aggregate_package_completion_marker.clone());
     if let Err(persist_error) =
         persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
@@ -1559,8 +1740,10 @@ pub fn interactive_aggregate(
             // operation protects the tombstone and any later successful full-state
             // snapshot (the exact retry or an unrelated writer) durably covers both
             // the completion marker and retirement before clearing pending.
-            if session.interactive_signing.is_empty() && per_message_interactive_session(session) {
-                session.retired_interactive_at_unix = Some(now_unix().max(1));
+            if session.interactive.interactive_signing.is_empty()
+                && per_message_interactive_session(session)
+            {
+                session.capacity_pins.retired_interactive_at_unix = Some(now_unix().max(1));
             }
             mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
                 session_id: request.session_id.clone(),
@@ -1568,14 +1751,17 @@ pub fn interactive_aggregate(
             });
         } else {
             session
-                .aggregated_interactive_attempt_markers
+                .interactive
+                .aggregated_attempt_markers
                 .remove(&aggregated_marker);
             session
-                .authorized_interactive_aggregate_markers
+                .interactive
+                .authorized_aggregate_markers
                 .remove(&aggregate_package_completion_marker);
             if removed_aggregate_authorization {
                 session
-                    .authorized_interactive_aggregate_markers
+                    .interactive
+                    .authorized_aggregate_markers
                     .insert(aggregate_authorization_marker.clone());
             }
         }
@@ -1642,35 +1828,36 @@ pub fn interactive_session_abort(
     // canonical form the live state is keyed on.
     let attempt_id_filter = request.attempt_id.as_deref().map(canonical_attempt_id);
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    let mut guard = enter_phase()?;
     // Abort takes the lock like every other entry point, so it sweeps
     // expired interactive state too: the TTL guarantee (nonces gone
     // within the TTL of inactivity) must hold even when the only
     // post-expiry traffic is aborts for other sessions. The durable helper also
     // repairs a prior post-rename Abort snapshot before an idempotent retry can
     // return `aborted: false` without writing.
-    sweep_expired_interactive_state_durably(&mut guard)?;
 
-    let members_to_abort = match guard.sessions.get(&request.session_id) {
-        Some(session) => {
-            // Abort has no member parameter, so it is session-level over the map:
-            // select every member entry matching the optional attempt filter.
-            // Keep the nonce-bearing entries live until the durable retirement
-            // snapshot has replaced the state file, so a pre-replacement failure
-            // remains cleanly retryable.
-            session
-                .interactive_signing
-                .iter()
-                .filter(|(_, interactive)| {
-                    attempt_id_filter.is_none()
-                        || attempt_id_filter.as_deref()
-                            == Some(interactive.attempt_context.attempt_id.as_str())
-                })
-                .map(|(member, _)| *member)
-                .collect::<Vec<_>>()
-        }
+    // Phase 7.6: Abort iterate-the-attempt-scopes. Each matching (attempt_id,
+    // member_identifier) pair is collected; the persistent filter is matched
+    // against the outer key, so aborting "all attempts" (no filter) is the
+    // natural flatten over every member.
+    let members_to_abort: Vec<(String, u16)> = match guard.sessions.get(&request.session_id) {
+        Some(session) => session
+            .interactive
+            .interactive_signing
+            .iter()
+            .flat_map(|(attempt_id, members)| {
+                if attempt_id_filter.is_none()
+                    || attempt_id_filter.as_deref() == Some(attempt_id.as_str())
+                {
+                    members
+                        .keys()
+                        .map(|member| (attempt_id.clone(), *member))
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect(),
         None => Vec::new(),
     };
 
@@ -1689,11 +1876,15 @@ pub fn interactive_session_abort(
             .sessions
             .get_mut(&request.session_id)
             .expect("selected abort session existed under the held engine lock");
-        let retires_session = members_to_abort.len() == session.interactive_signing.len()
+        // Retiring requires the abort to remove every live entry across every
+        // attempt scope, not every attempt count. The (member, session) view is
+        // what sessions retire on.
+        let retires_session = members_to_abort.len()
+            == interactive_session_live_member_count(session)
             && per_message_interactive_session(session);
-        let previous_retired_at = session.retired_interactive_at_unix;
+        let previous_retired_at = session.capacity_pins.retired_interactive_at_unix;
         if retires_session {
-            session.retired_interactive_at_unix = Some(now_unix().max(1));
+            session.capacity_pins.retired_interactive_at_unix = Some(now_unix().max(1));
         }
         (retires_session, previous_retired_at)
     };
@@ -1715,8 +1906,8 @@ pub fn interactive_session_abort(
                 .sessions
                 .get_mut(&request.session_id)
                 .expect("abort session existed after state-file replacement");
-            for member in &members_to_abort {
-                if let Some(mut removed) = session.interactive_signing.remove(member) {
+            for (attempt_id, member) in &members_to_abort {
+                if let Some(mut removed) = remove_interactive_entry(session, attempt_id, *member) {
                     zeroize_interactive_round1(&mut removed);
                 }
             }
@@ -1729,6 +1920,7 @@ pub fn interactive_session_abort(
                     .sessions
                     .get_mut(&request.session_id)
                     .expect("abort session existed while rolling back retirement")
+                    .capacity_pins
                     .retired_interactive_at_unix = previous_retired_at;
             }
             restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
@@ -1740,13 +1932,11 @@ pub fn interactive_session_abort(
         .sessions
         .get_mut(&request.session_id)
         .expect("abort session existed after durable retirement");
-    for member in &members_to_abort {
-        if let Some(mut removed) = session.interactive_signing.remove(member) {
+    for (attempt_id, member) in &members_to_abort {
+        if let Some(mut removed) = remove_interactive_entry(session, attempt_id, *member) {
             zeroize_interactive_round1(&mut removed);
         }
     }
-
-    // Only count a success when live interactive state was actually
     // aborted. A no-op call (no session, or an attempt_id filter that
     // matched nothing) returns aborted == false and must not inflate the
     // success counter - the calls_total counter at the top already
@@ -1763,23 +1953,59 @@ pub fn interactive_session_abort(
     })
 }
 
-// Looks up the live interactive state and pins the
-// (attempt_id, member_identifier) binding every round call must carry.
 fn interactive_state_for_attempt_mut<'session>(
     session: &'session mut SessionState,
     session_id: &str,
     attempt_id: &str,
     member_identifier: u16,
 ) -> Result<&'session mut InteractiveSigningState, EngineError> {
-    let interactive = session
+    // Phase 7.6: navigate the nested map by attempt_id first, then by member.
+    // A missing attempt_id scope is ambiguous on its own: the member may
+    // never have opened here, or may have opened and since moved to a
+    // newer attempt (Open replaces a member's prior scope entry). Callers
+    // need to distinguish "nothing is happening for this member" from
+    // "your attempt was superseded", so a miss falls back to scanning the
+    // other live attempt scopes for this member before reporting absence.
+    if !session
+        .interactive
         .interactive_signing
-        .get_mut(&member_identifier)
-        .ok_or_else(|| EngineError::SessionNotFound {
+        .contains_key(attempt_id)
+    {
+        let superseding_attempt_id = session
+            .interactive
+            .interactive_signing
+            .iter()
+            .find(|(_, members)| members.contains_key(&member_identifier))
+            .map(|(other_attempt_id, _)| other_attempt_id.clone());
+        return Err(match superseding_attempt_id {
+            Some(current_attempt_id) => EngineError::Validation(format!(
+                "attempt_id [{attempt_id}] does not match member [{member_identifier}]'s \
+                 live interactive attempt [{current_attempt_id}]"
+            )),
+            None => EngineError::SessionNotFound {
+                session_id: format!(
+                    "{session_id} (no live interactive attempt [{attempt_id}] for member {member_identifier})"
+                ),
+            },
+        });
+    }
+    let members = session
+        .interactive
+        .interactive_signing
+        .get_mut(attempt_id)
+        .expect("attempt scope presence just checked above");
+    let interactive = members.get_mut(&member_identifier).ok_or_else(|| {
+        EngineError::SessionNotFound {
             session_id: format!(
-                "{session_id} (no live interactive attempt for member {member_identifier})"
+                "{session_id} (no live interactive entry for member {member_identifier} on attempt [{attempt_id}])"
             ),
-        })?;
+        }
+    })?;
 
+    // The attempt_id in the request now matches the outer key by construction,
+    // but the inner entry's attempt_context is still the round call's
+    // consistency check (a stale entry from a prior scope that survived
+    // would also surface here).
     if interactive.attempt_context.attempt_id != attempt_id {
         return Err(EngineError::Validation(format!(
             "attempt_id [{attempt_id}] does not match member [{member_identifier}]'s \
@@ -1990,21 +2216,27 @@ fn remove_finalized_interactive_members(
     message_digest: &str,
     taproot_merkle_root: Option<&[u8; 32]>,
 ) {
+    // Phase 7.6: iterate the nested map. The aggregate finalizes EXACTLY one
+    // attempt, so we look at that attempt's member map and match the FULL
+    // finalized identity (attempt_id + message + root) per member. A mismatched
+    // aggregate must not destroy a differently-messaged attempt's live nonces.
     let finalized_members: Vec<u16> = session
+        .interactive
         .interactive_signing
-        .iter()
-        .filter(|(_, entry)| {
-            // Match the FULL finalized identity (attempt_id + message + root), not
-            // just (attempt_id, root): a mismatched aggregate must not destroy the
-            // live nonce state of a differently-messaged attempt.
-            entry.attempt_context.attempt_id == attempt_id
-                && hash_hex(&entry.message_bytes) == message_digest
-                && entry.taproot_merkle_root.as_ref() == taproot_merkle_root
+        .get(attempt_id)
+        .map(|members| {
+            members
+                .iter()
+                .filter(|(_, entry)| {
+                    hash_hex(&entry.message_bytes) == message_digest
+                        && entry.taproot_merkle_root.as_ref() == taproot_merkle_root
+                })
+                .map(|(member, _)| *member)
+                .collect()
         })
-        .map(|(member, _)| *member)
-        .collect();
+        .unwrap_or_default();
     for member in finalized_members {
-        if let Some(mut removed) = session.interactive_signing.remove(&member) {
+        if let Some(mut removed) = remove_interactive_entry(session, attempt_id, member) {
             zeroize_interactive_round1(&mut removed);
         }
     }
@@ -2021,18 +2253,11 @@ pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningSta
 // time anything touches the engine after expiry. Expiry has abort
 // semantics - the durable consumption markers are untouched.
 /// Resolve the session that holds the DKG key material for `key_group`.
-///
-/// Interactive signing runs under a fresh RoastSessionID per message, but a wallet's
-/// DKG key material is a WALLET-level asset that lives under the session its DKG
-/// completed in. This returns that wallet session so any per-signing session can reach
-/// the material by key_group:
-///  - prefer `session_id` itself if it already holds this wallet's DKG output (the
-///    co-located case: DKG and signing share one session, as in the coarse path and
-///    the single-session tests);
-///  - otherwise find the session whose completed DKG produced `key_group`.
-///
-/// Returns None when no completed DKG for `key_group` exists (i.e. no wallet key), which
-/// callers map to DkgNotReady.
+/// Returns the session that owns the wallet DKG producing `key_group`. The
+/// request's own `session_id` is preferred when it already holds that DKG (the
+/// co-located case: DKG and signing share one session); otherwise the wallet
+/// session whose completed DKG produced `key_group` is returned. `None` means
+/// no wallet DKG exists for `key_group`; callers map that to `DkgNotReady`.
 pub(crate) fn resolve_wallet_session_id(
     engine_state: &EngineState,
     session_id: &str,
@@ -2041,7 +2266,8 @@ pub(crate) fn resolve_wallet_session_id(
     // Prefer the request's own session (the co-located DKG+signing case).
     if let Some(session) = engine_state.sessions.get(session_id) {
         if session
-            .dkg_result
+            .dkg
+            .result
             .as_ref()
             .is_some_and(|dkg| dkg.key_group == key_group)
         {
@@ -2054,7 +2280,8 @@ pub(crate) fn resolve_wallet_session_id(
         .iter()
         .find(|(_, session)| {
             session
-                .dkg_result
+                .dkg
+                .result
                 .as_ref()
                 .is_some_and(|dkg| dkg.key_group == key_group)
         })
@@ -2070,22 +2297,30 @@ pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) ->
     // each live attempt's nonces; retirement below retains its bounded policy
     // and replay state until active admission needs the shared slot.
     for (session_id, session) in &mut engine_state.sessions {
-        // Per-member expiry: each seat's entry expires independently by its own
-        // last successful activity; non-expired sibling seats in the same session
-        // survive. Rejected traffic cannot keep nonce state resident.
-        let expired_members: Vec<u16> = session
+        // Phase 7.6: per-member expiry across the attempt-scoped nested map.
+        // Each seat's entry expires independently by its own last successful
+        // activity; non-expired sibling seats in the same session AND on
+        // different attempts survive. Rejected traffic cannot keep nonce state
+        // resident.
+        let expired: Vec<(String, u16)> = session
+            .interactive
             .interactive_signing
             .iter()
-            .filter(|(_, interactive)| {
-                now.saturating_duration_since(interactive.last_activity_at) > ttl
+            .flat_map(|(attempt_id, members)| {
+                members
+                    .iter()
+                    .filter(|(_, interactive)| {
+                        now.saturating_duration_since(interactive.last_activity_at) > ttl
+                    })
+                    .map(|(member, _)| (attempt_id.clone(), *member))
+                    .collect::<Vec<_>>()
             })
-            .map(|(member, _)| *member)
             .collect();
-        if !expired_members.is_empty() {
+        if !expired.is_empty() {
             changed_session_ids.insert(session_id.clone());
         }
-        for member in &expired_members {
-            if let Some(mut removed) = session.interactive_signing.remove(member) {
+        for (attempt_id, member) in &expired {
+            if let Some(mut removed) = remove_interactive_entry(session, attempt_id, *member) {
                 zeroize_interactive_round1(&mut removed);
             }
         }
@@ -2163,11 +2398,11 @@ pub(crate) fn interactive_session_ttl_seconds() -> u64 {
 fn interactive_open_request_fingerprint(
     request: &InteractiveSessionOpenRequest,
 ) -> Result<String, EngineError> {
-    // The serialized request transiently holds the signing inputs
-    // (message_hex and the rest of the request) in plaintext; wipe the
-    // buffer once the fingerprint digest is taken. No key material is
-    // carried in the request - it is resolved from DKG state - so only
-    // the request inputs are exposed here.
+    // Hashes the request payload. No key material is included (the request
+    // does not carry it; it is resolved from DKG state), so the fingerprint
+    // only commits to the signing inputs. The serialized buffer is zeroized
+    // after the digest is taken because it transiently holds those inputs
+    // in plaintext.
     let mut canonical = serde_json::to_vec(request).map_err(|e| {
         EngineError::Internal(format!(
             "failed to serialize InteractiveSessionOpen request for fingerprint: {e}"

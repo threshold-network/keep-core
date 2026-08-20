@@ -127,7 +127,8 @@ pub(crate) fn can_promote_to_target_percent(current_percent: u8, target_percent:
 
 pub(crate) fn refresh_continuity_reference_key_group(session: &SessionState) -> Option<String> {
     session
-        .dkg_result
+        .dkg
+        .result
         .as_ref()
         .map(|result| result.key_group.clone())
 }
@@ -138,10 +139,10 @@ pub(crate) fn refresh_continuity_reference_key_group(session: &SessionState) -> 
 /// these fields are retained only for persisted-schema compatibility and must
 /// never establish cadence or continuity.
 pub(crate) fn legacy_synthetic_refresh_artifacts_present(session: &SessionState) -> bool {
-    session.refresh_request_fingerprint.is_some()
-        || session.refresh_result.is_some()
-        || !session.refresh_history.is_empty()
-        || session.refresh_count != 0
+    session.lifecycle.refresh_request_fingerprint.is_some()
+        || session.lifecycle.refresh_result.is_some()
+        || !session.lifecycle.refresh_history.is_empty()
+        || session.lifecycle.refresh_count != 0
 }
 
 pub(crate) fn refresh_history_continuity_preserved(session: &SessionState) -> bool {
@@ -152,7 +153,7 @@ pub(crate) fn refresh_cadence_due_unix(
     session: &SessionState,
     cadence_seconds: u64,
 ) -> Option<u64> {
-    if let Some(dkg_result) = session.dkg_result.as_ref() {
+    if let Some(dkg_result) = session.dkg.result.as_ref() {
         return Some(dkg_result.created_at_unix.saturating_add(cadence_seconds));
     }
 
@@ -194,6 +195,7 @@ pub fn refresh_cadence_status(
     let overdue = refresh_cadence_is_overdue(now, next_refresh_due_unix);
     let continuity_reference_key_group = refresh_continuity_reference_key_group(session);
     let emergency_rekey_reason = session
+        .lifecycle
         .emergency_rekey_event
         .as_ref()
         .map(|event| event.reason.clone());
@@ -209,7 +211,7 @@ pub fn refresh_cadence_status(
         overdue,
         continuity_preserved: refresh_history_continuity_preserved(session),
         continuity_reference_key_group,
-        emergency_rekey_required: session.emergency_rekey_event.is_some(),
+        emergency_rekey_required: session.lifecycle.emergency_rekey_event.is_some(),
         emergency_rekey_reason,
     })
 }
@@ -252,10 +254,10 @@ pub fn trigger_emergency_rekey(
         .sessions
         .get(&request.session_id)
         .and_then(|session| {
-            if session.dkg_result.is_some() {
+            if session.dkg.result.is_some() {
                 None
             } else {
-                session.bound_key_group.clone()
+                session.interactive.bound_key_group.clone()
             }
         })
         .and_then(|key_group| resolve_wallet_session_id(&guard, &request.session_id, &key_group))
@@ -283,17 +285,20 @@ pub fn trigger_emergency_rekey(
             .ok_or_else(|| EngineError::SessionNotFound {
                 session_id: request.session_id.clone(),
             })?;
-    if session.emergency_rekey_event.is_some() {
+    if session.lifecycle.emergency_rekey_event.is_some() {
         return Err(EngineError::Validation(format!(
             "emergency rekey already triggered for session [{target_session_id}]; event is immutable"
         )));
     }
     let triggered_at_unix = now_unix();
     let previous_emergency_rekey_event =
-        session.emergency_rekey_event.replace(EmergencyRekeyEvent {
-            reason: reason.to_string(),
-            triggered_at_unix,
-        });
+        session
+            .lifecycle
+            .emergency_rekey_event
+            .replace(EmergencyRekeyEvent {
+                reason: reason.to_string(),
+                triggered_at_unix,
+            });
     let result = TriggerEmergencyRekeyResult {
         session_id: target_session_id.clone(),
         emergency_rekey_required: true,
@@ -314,7 +319,7 @@ pub fn trigger_emergency_rekey(
                     "emergency rekey session [{target_session_id}] disappeared while rolling back a failed persist: {persist_error}"
                 ))
             })?;
-            rollback_session.emergency_rekey_event = previous_emergency_rekey_event;
+            rollback_session.lifecycle.emergency_rekey_event = previous_emergency_rekey_event;
         }
         return Err(persist_error);
     }

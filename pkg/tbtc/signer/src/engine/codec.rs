@@ -86,6 +86,9 @@ pub(crate) fn aggregate_candidate_culprits(error: &frost::Error) -> Vec<u16> {
 /// two to be zero and reads the trailing two big-endian. Returns None for an
 /// identifier that does not fit a u16.
 pub(crate) fn frost_identifier_to_u16(identifier: frost::Identifier) -> Option<u16> {
+    // FROST serializes the identifier as a fixed-width scalar; we read a u16
+    // from the trailing 2 bytes, so an identifier with fewer than 2 bytes
+    // has nothing to extract.
     let bytes = identifier.serialize();
     let split = bytes.len().checked_sub(2)?;
     if bytes[..split].iter().any(|&b| b != 0) {
