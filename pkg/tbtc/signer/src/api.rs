@@ -1197,6 +1197,8 @@ pub struct SignerHardeningMetricsResult {
     pub build_taproot_tx_policy_reject_total: u64,
     #[serde(default)]
     pub heartbeat_signing_policy_reject_total: u64,
+    #[serde(default)]
+    pub interactive_rate_limit_reject_total: u64,
     pub finalize_sign_round_calls_total: u64,
     pub finalize_sign_round_success_total: u64,
     pub refresh_shares_calls_total: u64,

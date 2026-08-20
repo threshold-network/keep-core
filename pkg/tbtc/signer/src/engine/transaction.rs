@@ -59,14 +59,14 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
 
     if let Some(session) = guard.sessions.get(&request.session_id) {
         if let Some(emergency_rekey_event) = session.lifecycle.emergency_rekey_event.as_ref() {
-            return Err(EngineError::LifecyclePolicyRejected {
-                session_id: request.session_id.clone(),
-                reason_code: "emergency_rekey_required".to_string(),
-                detail: format!(
+            return reject_lifecycle_policy(
+                &request.session_id,
+                "emergency_rekey_required",
+                format!(
                     "build_taproot_tx blocked: emergency rekey required since [{}]: {}",
                     emergency_rekey_event.triggered_at_unix, emergency_rekey_event.reason
                 ),
-            });
+            );
         }
 
         if let Some(existing) = &session.signing.build_tx_request_fingerprint {

@@ -35,6 +35,169 @@ pub(crate) const BUILD_TX_RATE_LIMIT_TOKEN_SCALE: u128 = 1_000_000;
 
 pub(crate) const BUILD_TX_RATE_LIMIT_SECONDS_PER_MINUTE: u128 = 60;
 
+/// The metric family incremented when a signing-policy-firewall rejection is
+/// counted. Lives next to its callers so each thin wrapper is one line and
+/// an `interactive_rate_limit_reject_total` is recorded for the
+/// dedicated interactive-rate-limit stage (the interactive rate limit has
+/// its own metric field because it is enforced on InteractiveSessionOpen
+/// and InteractiveRound1, which have no relation to the
+/// build_taproot_tx heartbeat-shaped signing flow).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyRejectMetricKind {
+    BuildTaprootTx,
+    Heartbeat,
+    InteractiveRateLimit,
+}
+
+/// Tag carried by `reject_with` to dispatch the per-stage metric update,
+/// log line, and `EngineError` variant. The signing-policy-firewall stage
+/// carries the metric kind so the same dispatch routes the three sibling
+/// counters via one funnel; the other stages map 1:1 to one metric each.
+/// `Provenance` is intentionally absent from this funnel -- `reject_provenance_gate`
+/// in `provenance.rs` has a different protocol (no log, no session_id, no
+/// metric) and is folded by no one.
+#[derive(Clone, Copy)]
+pub(crate) enum PolicyRejectStage {
+    Admission,
+    AutoQuarantine,
+    Lifecycle,
+    SigningPolicyFirewall {
+        metric: PolicyRejectMetricKind,
+    },
+    // Defensive branch only. The provenance gate has its own helper
+    // (`provenance::reject_provenance_gate`) that does NOT route through
+    // `reject_with` -- different protocol, no log, no session_id, no metric.
+    // The variant lives here so the enum is total and a future move of that
+    // helper into this funnel is a single reassignment, not an enum change.
+    #[allow(dead_code)]
+    Provenance,
+}
+
+/// Single dispatch point for every policy rejection. Every public reject_*
+/// helper is a thin wrapper that calls this and wraps the result in
+/// `Err(...)`. Returning the bare `EngineError` (not a `Result`) avoids a
+/// fictitious success branch whose `Ok` variant would never be constructed;
+/// the unified `Err(reject_with(...))` shape lets the generic
+/// `reject_lifecycle_policy<T>` unify across `T = ()` and `T = TransactionResult`
+/// without a `?` and dead-code fan-out.
+///
+/// Stage -> metric field map:
+///
+/// * `Admission` -> `run_dkg_admission_reject_total`
+/// * `AutoQuarantine` -> (no metric; logs only, by current design)
+/// * `Lifecycle` -> (no metric; logs only, by current design)
+/// * `SigningPolicyFirewall { metric: BuildTaprootTx }` -> `build_taproot_tx_policy_reject_total`
+/// * `SigningPolicyFirewall { metric: Heartbeat }` -> `heartbeat_signing_policy_reject_total`
+/// * `SigningPolicyFirewall { metric: InteractiveRateLimit }` -> `interactive_rate_limit_reject_total`
+/// * `Provenance` -> not routed here (see module note above).
+///
+/// CRITICAL: never rewrite as `Err(reject_with(...)?)`. The `?` would
+/// short-circuit on the helper's own `Err`, leaving the outer `Err(...)`
+/// unreachable -- the specific type bug this funnel exists to remove.
+fn reject_with(
+    stage: PolicyRejectStage,
+    session_id: Option<&str>,
+    reason_code: &str,
+    detail: impl Into<String>,
+) -> EngineError {
+    let detail = detail.into();
+    let session_id_owned = session_id.map(str::to_string);
+
+    match stage {
+        PolicyRejectStage::Admission => {
+            record_hardening_telemetry(|telemetry| {
+                telemetry.run_dkg_admission_reject_total =
+                    telemetry.run_dkg_admission_reject_total.saturating_add(1);
+            });
+            log_policy_decision(
+                "admission_policy",
+                session_id_owned.as_deref().unwrap_or(""),
+                "reject",
+                reason_code,
+            );
+        }
+        PolicyRejectStage::AutoQuarantine => {
+            log_policy_decision(
+                "auto_quarantine",
+                session_id_owned.as_deref().unwrap_or(""),
+                "reject",
+                reason_code,
+            );
+        }
+        PolicyRejectStage::Lifecycle => {
+            log_policy_decision(
+                "lifecycle_policy",
+                session_id_owned.as_deref().unwrap_or(""),
+                "reject",
+                reason_code,
+            );
+        }
+        PolicyRejectStage::SigningPolicyFirewall { metric } => {
+            record_hardening_telemetry(|telemetry| match metric {
+                PolicyRejectMetricKind::BuildTaprootTx => {
+                    telemetry.build_taproot_tx_policy_reject_total = telemetry
+                        .build_taproot_tx_policy_reject_total
+                        .saturating_add(1);
+                }
+                PolicyRejectMetricKind::Heartbeat => {
+                    telemetry.heartbeat_signing_policy_reject_total = telemetry
+                        .heartbeat_signing_policy_reject_total
+                        .saturating_add(1);
+                }
+                PolicyRejectMetricKind::InteractiveRateLimit => {
+                    telemetry.interactive_rate_limit_reject_total = telemetry
+                        .interactive_rate_limit_reject_total
+                        .saturating_add(1);
+                }
+            });
+            log_policy_decision(
+                "signing_policy_firewall",
+                session_id_owned.as_deref().unwrap_or(""),
+                "reject",
+                reason_code,
+            );
+        }
+        PolicyRejectStage::Provenance => {
+            // Not routed through reject_with; reject_provenance_gate lives in
+            // provenance.rs and has its own protocol. Defensive branch:
+            // the stage variant exists so the enum is total, but the only
+            // production site that constructs `Provenance` is currently
+            // none.
+        }
+    }
+
+    let session_id = session_id_owned.unwrap_or_default();
+    match stage {
+        PolicyRejectStage::Admission => EngineError::AdmissionPolicyRejected {
+            session_id,
+            reason_code: reason_code.to_string(),
+            detail,
+        },
+        PolicyRejectStage::AutoQuarantine => EngineError::QuarantinePolicyRejected {
+            session_id,
+            reason_code: reason_code.to_string(),
+            detail,
+        },
+        PolicyRejectStage::Lifecycle => EngineError::LifecyclePolicyRejected {
+            session_id,
+            reason_code: reason_code.to_string(),
+            detail,
+        },
+        PolicyRejectStage::SigningPolicyFirewall { .. } => EngineError::SigningPolicyRejected {
+            session_id,
+            reason_code: reason_code.to_string(),
+            detail,
+        },
+        PolicyRejectStage::Provenance => EngineError::Internal(
+            "policy::reject_with must not be called with PolicyRejectStage::Provenance; \
+             see provenance::reject_provenance_gate for the provenance-gate path\
+             (no log, no session_id, no metric).\
+             this branch is unreachable in production."
+                .to_string(),
+        ),
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct PolicyRateLimiterState {
     pub(crate) last_refill_unix: u64,
@@ -192,17 +355,12 @@ pub(crate) fn reject_admission_policy(
     reason_code: &str,
     detail: impl Into<String>,
 ) -> Result<(), EngineError> {
-    let detail = detail.into();
-    record_hardening_telemetry(|telemetry| {
-        telemetry.run_dkg_admission_reject_total =
-            telemetry.run_dkg_admission_reject_total.saturating_add(1);
-    });
-    log_policy_decision("admission_policy", session_id, "reject", reason_code);
-    Err(EngineError::AdmissionPolicyRejected {
-        session_id: session_id.to_string(),
-        reason_code: reason_code.to_string(),
+    Err(reject_with(
+        PolicyRejectStage::Admission,
+        Some(session_id),
+        reason_code,
         detail,
-    })
+    ))
 }
 
 /// Admission checks over the raw participant primitives, used by the
@@ -421,13 +579,12 @@ pub(crate) fn reject_quarantine_policy(
     reason_code: &str,
     detail: impl Into<String>,
 ) -> Result<(), EngineError> {
-    let detail = detail.into();
-    log_policy_decision("auto_quarantine", session_id, "reject", reason_code);
-    Err(EngineError::QuarantinePolicyRejected {
-        session_id: session_id.to_string(),
-        reason_code: reason_code.to_string(),
+    Err(reject_with(
+        PolicyRejectStage::AutoQuarantine,
+        Some(session_id),
+        reason_code,
         detail,
-    })
+    ))
 }
 
 pub(crate) fn reject_lifecycle_policy<T>(
@@ -435,39 +592,29 @@ pub(crate) fn reject_lifecycle_policy<T>(
     reason_code: &str,
     detail: impl Into<String>,
 ) -> Result<T, EngineError> {
-    let detail = detail.into();
-    log_policy_decision("lifecycle_policy", session_id, "reject", reason_code);
-    Err(EngineError::LifecyclePolicyRejected {
-        session_id: session_id.to_string(),
-        reason_code: reason_code.to_string(),
+    // `reject_with` always returns Err -- the Ok branch is never reachable.
+    // The generic T unifies across every caller (including the build_taproot_tx
+    // site that needs T = TransactionResult) without a ?-then-dead-code fan-out.
+    Err(reject_with(
+        PolicyRejectStage::Lifecycle,
+        Some(session_id),
+        reason_code,
         detail,
-    })
+    ))
 }
 
 fn reject_signing_policy_with_metric(
     session_id: &str,
     reason_code: &str,
     detail: impl Into<String>,
-    heartbeat: bool,
+    kind: PolicyRejectMetricKind,
 ) -> Result<(), EngineError> {
-    let detail = detail.into();
-    record_hardening_telemetry(|telemetry| {
-        if heartbeat {
-            telemetry.heartbeat_signing_policy_reject_total = telemetry
-                .heartbeat_signing_policy_reject_total
-                .saturating_add(1);
-        } else {
-            telemetry.build_taproot_tx_policy_reject_total = telemetry
-                .build_taproot_tx_policy_reject_total
-                .saturating_add(1);
-        }
-    });
-    log_policy_decision("signing_policy_firewall", session_id, "reject", reason_code);
-    Err(EngineError::SigningPolicyRejected {
-        session_id: session_id.to_string(),
-        reason_code: reason_code.to_string(),
+    Err(reject_with(
+        PolicyRejectStage::SigningPolicyFirewall { metric: kind },
+        Some(session_id),
+        reason_code,
         detail,
-    })
+    ))
 }
 
 pub(crate) fn reject_signing_policy(
@@ -475,7 +622,12 @@ pub(crate) fn reject_signing_policy(
     reason_code: &str,
     detail: impl Into<String>,
 ) -> Result<(), EngineError> {
-    reject_signing_policy_with_metric(session_id, reason_code, detail, false)
+    reject_signing_policy_with_metric(
+        session_id,
+        reason_code,
+        detail,
+        PolicyRejectMetricKind::BuildTaprootTx,
+    )
 }
 
 fn reject_heartbeat_signing_policy(
@@ -483,7 +635,40 @@ fn reject_heartbeat_signing_policy(
     reason_code: &str,
     detail: impl Into<String>,
 ) -> Result<(), EngineError> {
-    reject_signing_policy_with_metric(session_id, reason_code, detail, true)
+    reject_signing_policy_with_metric(
+        session_id,
+        reason_code,
+        detail,
+        PolicyRejectMetricKind::Heartbeat,
+    )
+}
+
+/// Thin wrapper for the dedicated interactive-rate-limit signing-policy
+/// rejection. Counted as `interactive_rate_limit_reject_total` (separate
+/// from `build_taproot_tx_policy_reject_total` and
+/// `heartbeat_signing_policy_reject_total`), which the
+/// interactive-rate-limit enforcement path on InteractiveSessionOpen and
+/// InteractiveRound1 records when the per-(attempt_context, key_group,
+/// member) limit is exceeded.
+///
+/// No production caller constructs this helper yet (the rate-limit
+/// enforcement path itself is rolled out by a parallel candidate and
+/// the spec author's integration notes reserve this entry point here so
+/// the rollout and the funnel land on the same name without an
+/// intervening rename). The allow silences the linter without hiding
+/// intent.
+#[allow(dead_code)]
+fn reject_interactive_rate_limit_signing_policy(
+    session_id: &str,
+    reason_code: &str,
+    detail: impl Into<String>,
+) -> Result<(), EngineError> {
+    reject_signing_policy_with_metric(
+        session_id,
+        reason_code,
+        detail,
+        PolicyRejectMetricKind::InteractiveRateLimit,
+    )
 }
 
 pub(crate) fn current_utc_hour() -> u8 {

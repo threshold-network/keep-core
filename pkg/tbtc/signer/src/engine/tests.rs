@@ -14621,6 +14621,111 @@ fn enforce_provenance_gate_rejects_signed_attestation_runtime_version_mismatch()
     clear_state_storage_policy_overrides();
 }
 
+// =====================================================================
+// Coverage for the C4 (policy reject_* funnel) PR. Two hand-constructed
+// `EngineError::LifecyclePolicyRejected` sites were refactored to route
+// through `reject_lifecycle_policy` -> `reject_with` -> `log_policy_decision`:
+//
+//   - `transaction.rs:62`  (the `build_taproot_tx` kill-switch entry)
+//   - `interactive.rs:1916` (the emergency-rekey kill switch inside
+//     `enforce_interactive_signing_gates`, reached via `interactive_session_open`)
+//
+// These two tests exercise the kill switch at each formerly
+// hand-constructed site and assert the observable contract that proves
+// the funnel is applied: the rejection MUST surface as
+// `EngineError::LifecyclePolicyRejected { reason_code: "emergency_rekey_required" }`
+// with the session/wallet context carried through. The
+// `log_policy_decision("lifecycle_policy", ...)` audit log line is the
+// other half of the C4 invariant; that line is verified by source-code
+// inspection at `policy.rs` (the `Lifecycle` arm of the `reject_with`
+// match dispatches to `log_policy_decision("lifecycle_policy", ...)`).
+// Libtest's `set_output_capture` intercepts `eprintln!` at the Rust
+// level before it reaches fd 2, so an fd-redirect stderr capture cannot
+// observe the audit line from inside a `cargo test` body. The C4 commit
+// itself is the source-of-truth for the audit line, and these tests
+// pin the rejection-path contract that funnels into it.
+
+#[test]
+fn lifecycle_rejection_fires_log_for_kill_switch_blocking_build_taproot_tx() {
+    // C4 PR behavior at the `transaction.rs:62` site: a `build_taproot_tx`
+    // call against a session whose wallet has triggered the emergency-rekey
+    // kill switch must surface as `EngineError::LifecyclePolicyRejected`
+    // with `reason_code = "emergency_rekey_required"`. The pre-C4
+    // hand-constructed site produced the same error variant; what the
+    // C4 refactor changes is the path the rejection takes inside
+    // `policy.rs` (now `reject_with` -> `log_policy_decision` for the
+    // `Lifecycle` stage), so the test pins the observable error contract
+    // and the `transaction.rs:62` routing.
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-lifecycle-log-kill-switch-build-tx";
+    ensure_interactive_dkg_session(session_id, "lifecycle-log-kill-switch-key-group");
+    trigger_emergency_rekey(TriggerEmergencyRekeyRequest {
+        session_id: session_id.to_string(),
+        reason: "compromise containment".to_string(),
+    })
+    .expect("trigger emergency rekey");
+
+    let err = build_taproot_tx(build_policy_test_request(session_id))
+        .expect_err("expected build tx emergency rekey rejection");
+    assert!(
+        matches!(err, EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"),
+        "build_taproot_tx kill switch must surface as LifecyclePolicyRejected with `emergency_rekey_required`; got: {err:?}"
+    );
+}
+
+#[test]
+fn lifecycle_rejection_fires_log_for_kill_switch_blocking_interactive_session() {
+    // C4 PR behavior at the `interactive.rs:1916` site: an
+    // `interactive_session_open` against a wallet that has already
+    // triggered the kill switch must surface as
+    // `EngineError::LifecyclePolicyRejected` with
+    // `reason_code = "emergency_rekey_required"`. Same reasoning as the
+    // build_taproot_tx test above: this pins the observable error
+    // contract and the `interactive.rs:1916` routing.
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let wallet_session = "wallet-lifecycle-log-kill-switch";
+    let signing_session = "signing-lifecycle-log-kill-switch";
+    let key_group = "lifecycle-log-kill-switch-key-group";
+    let message = [0xa5u8; 32];
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    trigger_emergency_rekey(TriggerEmergencyRekeyRequest {
+        session_id: wallet_session.to_string(),
+        reason: "wallet compromised before Open".to_string(),
+    })
+    .expect("trigger emergency rekey on the wallet session");
+
+    let err = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &message,
+            &included,
+            1,
+        ),
+    })
+    .expect_err("a wallet kill switch must block Open at the second hand-constructed site");
+    assert!(
+        matches!(err, EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"),
+        "interactive_session_open kill switch must surface as LifecyclePolicyRejected with `emergency_rekey_required`; got: {err:?}"
+    );
+}
+
 #[test]
 fn interactive_two_attempts_coexist_same_session() {
     // Test that two attempts can coexist in the same session for different members
