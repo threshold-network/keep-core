@@ -56,19 +56,18 @@ pub fn serialize_response<T: serde::Serialize>(response: &T) -> Result<Vec<u8>, 
 fn install_redacting_panic_hook() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
-        // Wrap the hook in a single-use mechanism so the install-set_hook
-        // branch can drop it into the closure, and the failure branch can
-        // retrieve it back to restore the global state.
-        let default_hook_cell: std::sync::Mutex<Option<_>> =
-            std::sync::Mutex::new(Some(std::panic::take_hook()));
+        // Keep the captured hook in shared storage while constructing and
+        // installing the replacement. If either operation panics, the failure
+        // path can still take the original hook back and restore it.
+        let default_hook_cell = std::sync::Arc::new(std::sync::Mutex::new(None));
+        *default_hook_cell.lock().expect("poisoned") = Some(std::panic::take_hook());
+        let installed_hook_cell = std::sync::Arc::clone(&default_hook_cell);
         // set_hook can panic during Box::new under allocator pressure. If it
         // does, restore the previously-installed hook so the process still has
         // SOME panic handler (the default hook we captured is still in memory).
         // Otherwise a partial install leaves the Once poisoned (no further
         // installs) AND no panic hook at all (the default was take_hook'd).
         let install = catch_unwind(AssertUnwindSafe(|| {
-            let mut guard = default_hook_cell.lock().expect("poisoned");
-            let default_hook = guard.take().expect("default_hook available");
             std::panic::set_hook(Box::new(move |info| {
                 let development_profile =
                     crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
@@ -79,7 +78,11 @@ fn install_redacting_panic_hook() {
                         })
                         .unwrap_or(false);
                 if development_profile {
-                    default_hook(info);
+                    if let Some(default_hook) =
+                        installed_hook_cell.lock().expect("poisoned").as_ref()
+                    {
+                        default_hook(info);
+                    }
                 } else if let Some(location) = info.location() {
                     eprintln!(
                         "panic at {}:{} (payload redacted)",
@@ -314,5 +317,57 @@ mod tests {
             "development must preserve the panic payload: {message}"
         );
         free_buffer(result.buffer.ptr, result.buffer.len);
+    }
+
+    // Regression guard for the C6 FFI-macro refactor. The three outliers
+    // (`frost_tbtc_version`, `frost_tbtc_abi_version`, `frost_tbtc_free_buffer`)
+    // must stay hand-written: the spec deliberately excludes them from the
+    // `ffi_request_response!` / `ffi_no_request!` / `ffi_no_request_infallible!`
+    // macros because each has a distinct shape (success-only probe, inline
+    // `FrostTbtcAbiVersionResult` construction, and a `void`-returning free
+    // helper respectively). An accidental future refactor that routes any of
+    // them through a macro must fail this test. The check is source-text
+    // rather than runtime because the contract being guarded is "the source
+    // still looks like the spec said it should".
+    #[test]
+    fn outliers_are_hand_written() {
+        let source = include_str!("lib.rs");
+
+        for symbol in [
+            "frost_tbtc_version",
+            "frost_tbtc_abi_version",
+            "frost_tbtc_free_buffer",
+        ] {
+            // (1) The symbol must NOT be invoked via any of the three FFI macros.
+            // Each invocation has the form `<macro>!(<symbol>, ...)` or
+            // `<macro>!(<symbol>)`; either is captured by the `<macro>!(<symbol>`
+            // prefix check.
+            for macro_invocation in [
+                "ffi_request_response!",
+                "ffi_no_request!",
+                "ffi_no_request_infallible!",
+            ] {
+                let bad_pattern = format!("{}({}", macro_invocation, symbol);
+                assert!(
+                    !source.contains(&bad_pattern),
+                    "outlier {symbol} must remain hand-written, but source contains `{bad_pattern}`",
+                );
+            }
+
+            // (2) The function definition must be present and have an adjacent
+            // `// Outlier:` explanatory comment. The window covers the
+            // preceding text back through the `#[no_mangle]` attribute (which
+            // always sits between the comment block and the `fn` line).
+            let fn_signature = format!("fn {symbol}");
+            let fn_offset = source
+                .find(&fn_signature)
+                .unwrap_or_else(|| panic!("{symbol} not found in lib.rs source"));
+            let window_start = fn_offset.saturating_sub(400);
+            let preceding = &source[window_start..fn_offset];
+            assert!(
+                preceding.contains("// Outlier"),
+                "outlier {symbol} must have a `// Outlier:` explanatory comment above its definition",
+            );
+        }
     }
 }

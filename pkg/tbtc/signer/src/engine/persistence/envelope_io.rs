@@ -473,8 +473,11 @@ pub(crate) fn decode_encrypted_state_envelope(
     ciphertext.zeroize();
     nonce_bytes.zeroize();
     let plaintext = Zeroizing::new(decrypted);
-    serde_json::from_slice(&plaintext)
-        .map_err(|e| EngineError::Internal(format!("failed to decode decrypted signer state: {e}")))
+    serde_json::from_slice(&plaintext).map_err(|_| {
+        EngineError::Internal(
+            "failed to deserialize persisted state after successful AEAD decryption".to_string(),
+        )
+    })
 }
 
 fn legacy_plaintext_state_permitted() -> bool {

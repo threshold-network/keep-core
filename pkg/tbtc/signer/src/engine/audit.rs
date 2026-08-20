@@ -117,6 +117,19 @@ fn reference_bip341_key_spend_sighash_default(
     sig_msg.extend_from_slice(&sequences_hasher.finalize());
     sig_msg.extend_from_slice(&outputs_hasher.finalize());
     sig_msg.push(0x00); // ext_flag=0, annex_present=0.
+                        // BIP-341 specifies the input index as a 4-byte little-endian integer. This
+                        // matches rust-bitcoin's actual encoding: the production path's
+                        // `SighashCache::taproot_encode_signing_data_to` serializes `input_index`
+                        // via `(input_index as u32).consensus_encode(writer)` (bitcoin-0.32.8
+                        // src/crypto/sighash.rs:660), and `consensus_encode` for `u32` is
+                        // implemented through the `emit_u32` write extension, which writes
+                        // `v.to_le_bytes()` (bitcoin-0.32.8 src/consensus/encode.rs:246).
+                        // The differential fuzzer's reference leg therefore uses the same byte
+                        // order as the production `SighashCache` path. Note: the existing
+                        // differential fuzz corpus only exercises `input_index == 0` (single-input
+                        // txs), so the test cannot on its own detect a byte-order disagreement
+                        // here -- the LE choice is anchored on the rust-bitcoin source above, not
+                        // on the fuzz test passing.
     sig_msg.extend_from_slice(&(input_index as u32).to_le_bytes());
 
     let tag_hash = Sha256::digest(b"TapSighash");
@@ -340,8 +353,7 @@ pub fn verify_blame_proof(
         && reason != ROAST_EXCLUSION_REASON_INVALID_SHARE_PROOF
     {
         return Err(EngineError::Validation(format!(
-            "reason [{}] is unsupported",
-            request.reason
+            "reason [{reason}] is unsupported"
         )));
     }
 
@@ -365,12 +377,13 @@ pub fn verify_blame_proof(
         .iter()
         .find(|record| record.from_attempt_number == request.from_attempt_number);
     let (verified, detail, transcript_hash) = if let Some(record) = maybe_record {
-        if record.reason != reason {
+        let recorded_reason = record.reason.trim().to_ascii_lowercase();
+        if recorded_reason != reason {
             (
                 false,
                 format!(
                     "reason mismatch: requested [{}], recorded [{}]",
-                    reason, record.reason
+                    reason, recorded_reason
                 ),
                 Some(record.transcript_hash.clone()),
             )
@@ -429,4 +442,154 @@ pub fn verify_blame_proof(
         transcript_hash,
         detail,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{TranscriptAuditRecord, VerifyBlameProofRequest};
+
+    // The verify_blame_proof reason-mismatch branch in this module normalizes
+    // both the request reason and the persisted record reason (trim + ASCII
+    // lowercase) before comparing them, and only logs the normalized values.
+    //
+    // Two sub-cases exercise the normalization:
+    //   (a) request reason " coordinator_timeout " vs recorded reason
+    //       "COORDINATOR_TIMEOUT" -> after normalization both become
+    //       "coordinator_timeout" and the blame proof verifies (no mismatch
+    //       rejection is triggered for what is semantically the same reason).
+    //   (b) request reason "coordinator_timeout" vs recorded reason
+    //       "INVALID_SHARE_PROOF" -> the normalized values still differ, so
+    //       the mismatch branch fires; the detail string must surface the
+    //       normalized (lower-case, no surrounding whitespace) values rather
+    //       than the raw un-normalized input.
+    #[test]
+    fn verify_blame_proof_normalizes_reason_for_match_and_mismatch_paths() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+        let session_id = "audit-normalize-session";
+        let from_attempt_number: u32 = 1;
+        let to_attempt_number: u32 = 2;
+        let excluded_operator: u16 = 7;
+
+        // Seed the session with two records covering both branches:
+        // - record #1: recorded reason "COORDINATOR_TIMEOUT" (uppercase). Used
+        //   by the match path test (request carries leading/trailing
+        //   whitespace + mixed case -> both normalize to "coordinator_timeout").
+        // - record #2: recorded reason "INVALID_SHARE_PROOF" (uppercase).
+        //   Used by the mismatch path test against a different valid reason.
+        let record_match = TranscriptAuditRecord {
+            from_attempt_number,
+            to_attempt_number,
+            from_attempt_id: "aa".repeat(32),
+            to_attempt_id: "bb".repeat(32),
+            previous_round_id: "cc".repeat(32),
+            previous_sign_request_fingerprint: "dd".repeat(32),
+            from_coordinator_identifier: 1,
+            to_coordinator_identifier: 2,
+            reason: "COORDINATOR_TIMEOUT".to_string(),
+            excluded_member_identifiers: vec![excluded_operator],
+            invalid_share_proof_fingerprint: None,
+            transcript_hash: "ee".repeat(32),
+            recorded_at_unix: 1_700_000_000,
+        };
+        let record_mismatch = TranscriptAuditRecord {
+            from_attempt_number: 2,
+            to_attempt_number: 3,
+            from_attempt_id: "11".repeat(32),
+            to_attempt_id: "22".repeat(32),
+            previous_round_id: "33".repeat(32),
+            previous_sign_request_fingerprint: "44".repeat(32),
+            from_coordinator_identifier: 1,
+            to_coordinator_identifier: 2,
+            reason: "INVALID_SHARE_PROOF".to_string(),
+            excluded_member_identifiers: vec![excluded_operator],
+            invalid_share_proof_fingerprint: None,
+            transcript_hash: "55".repeat(32),
+            recorded_at_unix: 1_700_000_001,
+        };
+
+        {
+            let mut guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard.sessions.entry(session_id.to_string()).or_default();
+            session.attempt_transition_records =
+                vec![record_match.clone(), record_mismatch.clone()];
+        }
+
+        // (a) Match path: request reason is whitespace-padded and lower-case,
+        // recorded reason is upper-case. Both normalize to
+        // "coordinator_timeout" so the match path is taken and the proof
+        // verifies successfully.
+        let match_request = VerifyBlameProofRequest {
+            session_id: session_id.to_string(),
+            from_attempt_number,
+            accused_member_identifier: excluded_operator,
+            reason: " coordinator_timeout ".to_string(),
+            invalid_share_proof_fingerprint: None,
+        };
+        let match_result = verify_blame_proof(match_request).expect("match path must succeed");
+        assert!(
+            match_result.verified,
+            "normalization must treat \" coordinator_timeout \" and \"COORDINATOR_TIMEOUT\" as the same reason; got detail: {:?}",
+            match_result.detail,
+        );
+        assert_eq!(match_result.reason, "coordinator_timeout");
+        assert!(
+            !match_result.detail.contains("reason mismatch"),
+            "match path must not surface a reason-mismatch message; got {:?}",
+            match_result.detail,
+        );
+        assert_eq!(
+            match_result.transcript_hash.as_deref(),
+            Some(record_match.transcript_hash.as_str()),
+        );
+
+        // (b) Mismatch path: request reason is a different valid reason than
+        // the recorded one. The recorded reason is upper-case "INVALID_SHARE_PROOF"
+        // and the request reason is the already-normalized "coordinator_timeout";
+        // both are valid values so the request is admitted by the validation
+        // gate and the mismatch branch fires.
+        let mismatch_request = VerifyBlameProofRequest {
+            session_id: session_id.to_string(),
+            from_attempt_number: 2,
+            accused_member_identifier: excluded_operator,
+            reason: "coordinator_timeout".to_string(),
+            invalid_share_proof_fingerprint: None,
+        };
+        let mismatch_result = verify_blame_proof(mismatch_request)
+            .expect("mismatch path must surface a structured result, not an error");
+        assert!(
+            !mismatch_result.verified,
+            "different normalized reasons must not verify",
+        );
+        assert_eq!(mismatch_result.reason, "coordinator_timeout");
+        assert_eq!(
+            mismatch_result.transcript_hash.as_deref(),
+            Some(record_mismatch.transcript_hash.as_str()),
+        );
+
+        // The detail string must contain the normalized recorded reason
+        // (lower-case, no surrounding whitespace) and MUST NOT leak the
+        // raw un-normalized casing or whitespace the caller/persistor
+        // originally supplied.
+        assert!(
+            mismatch_result
+                .detail
+                .contains("recorded [invalid_share_proof]"),
+            "detail must surface the normalized recorded reason; got {:?}",
+            mismatch_result.detail,
+        );
+        assert!(
+            !mismatch_result.detail.contains("INVALID_SHARE_PROOF"),
+            "detail must not leak the raw un-normalized recorded reason; got {:?}",
+            mismatch_result.detail,
+        );
+        assert!(
+            mismatch_result
+                .detail
+                .contains("requested [coordinator_timeout]"),
+            "detail must surface the normalized requested reason; got {:?}",
+            mismatch_result.detail,
+        );
+    }
 }
