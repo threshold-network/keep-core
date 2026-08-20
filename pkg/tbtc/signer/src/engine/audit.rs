@@ -312,7 +312,7 @@ pub fn roast_transcript_audit(
             .ok_or_else(|| EngineError::SessionNotFound {
                 session_id: request.session_id.clone(),
             })?;
-    let records = session.attempt_transition_records.clone();
+    let records = session.audit.0.clone();
 
     let result = TranscriptAuditResult {
         session_id: request.session_id,
@@ -373,7 +373,8 @@ pub fn verify_blame_proof(
             })?;
 
     let maybe_record = session
-        .attempt_transition_records
+        .audit
+        .0
         .iter()
         .find(|record| record.from_attempt_number == request.from_attempt_number);
     let (verified, detail, transcript_hash) = if let Some(record) = maybe_record {
@@ -512,8 +513,7 @@ mod tests {
         {
             let mut guard = state().expect("engine state").lock().expect("engine lock");
             let session = guard.sessions.entry(session_id.to_string()).or_default();
-            session.attempt_transition_records =
-                vec![record_match.clone(), record_mismatch.clone()];
+            session.audit.0 = vec![record_match.clone(), record_mismatch.clone()];
         }
 
         // (a) Match path: request reason is whitespace-padded and lower-case,

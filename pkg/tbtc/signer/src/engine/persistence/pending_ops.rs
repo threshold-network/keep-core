@@ -169,7 +169,8 @@ pub(crate) fn clear_snapshot_covered_operations(engine_state: &EngineState) {
                 .get(session_id)
                 .is_some_and(|session| {
                     session
-                        .consumed_interactive_attempt_markers
+                        .interactive
+                        .consumed_attempt_markers
                         .contains(consumed_marker)
                 }),
             PersistencePendingOperation::InteractiveAggregate {
@@ -180,7 +181,8 @@ pub(crate) fn clear_snapshot_covered_operations(engine_state: &EngineState) {
                 .get(session_id)
                 .is_some_and(|session| {
                     session
-                        .aggregated_interactive_attempt_markers
+                        .interactive
+                        .aggregated_attempt_markers
                         .contains(aggregated_marker)
                 }),
             PersistencePendingOperation::InteractiveState { session_id } => {

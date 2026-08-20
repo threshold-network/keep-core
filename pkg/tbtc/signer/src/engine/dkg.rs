@@ -196,7 +196,8 @@ pub fn persist_distributed_dkg_key_package(
     if guard.sessions.iter().any(|(session_id, session)| {
         session_id != &request.session_id
             && session
-                .dkg_result
+                .dkg
+                .result
                 .as_ref()
                 .is_some_and(|dkg| dkg.key_group == key_group)
     }) {
@@ -213,7 +214,9 @@ pub fn persist_distributed_dkg_key_package(
     if guard
         .sessions
         .get(&request.session_id)
-        .is_some_and(|session| session.dkg_result.is_none() && session.bound_key_group.is_some())
+        .is_some_and(|session| {
+            session.dkg.result.is_none() && session.interactive.bound_key_group.is_some()
+        })
     {
         return Err(EngineError::SessionConflict {
             session_id: request.session_id,
@@ -231,15 +234,15 @@ pub fn persist_distributed_dkg_key_package(
         .sessions
         .entry(dkg_session_id.clone())
         .or_insert_with(SessionState::default);
-    let previous_dkg_result = session.dkg_result.clone();
-    let previous_dkg_public_key_package = session.dkg_public_key_package.clone();
-    let key_package_map_was_absent = session.dkg_key_packages.is_none();
+    let previous_dkg_result = session.dkg.result.clone();
+    let previous_dkg_public_key_package = session.dkg.public_key_package.clone();
+    let key_package_map_was_absent = session.dkg.key_packages.is_none();
 
     // A session may already hold a DKG result: this seat re-persisting (idempotent)
     // or, for a MULTI-SEAT operator, a sibling seat of the SAME distributed DKG.
     // Same key group -> accumulate this seat's key package into the session; a
     // different key group for the same session is a conflict.
-    if let Some(existing) = &session.dkg_result {
+    if let Some(existing) = &session.dkg.result {
         if existing.key_group != key_group {
             return Err(EngineError::SessionConflict {
                 session_id: request.session_id,
@@ -257,31 +260,33 @@ pub fn persist_distributed_dkg_key_package(
                 "{OP}: threshold/participant_count does not match the stored DKG for this session"
             )));
         }
-        if session.dkg_public_key_package.as_ref() != Some(&public_key_package) {
+        if session.dkg.public_key_package.as_ref() != Some(&public_key_package) {
             return Err(EngineError::Validation(format!(
                 "{OP}: public key package does not match the stored DKG for this session"
             )));
         }
     } else {
-        session.dkg_result = Some(DkgResult {
+        session.dkg.result = Some(DkgResult {
             session_id: request.session_id.clone(),
             key_group,
             participant_count: request.participant_count,
             threshold: request.threshold,
             created_at_unix: now_unix(),
         });
-        session.dkg_public_key_package = Some(public_key_package);
+        session.dkg.public_key_package = Some(public_key_package);
     }
 
     let replaced_key_package = session
-        .dkg_key_packages
+        .dkg
+        .key_packages
         .get_or_insert_with(BTreeMap::new)
         .insert(request.participant_identifier, key_package);
 
     // Clone the result before the `&guard` persist call so the mutable `session`
     // borrow ends here (mirrors run_dkg's ordering).
     let result = session
-        .dkg_result
+        .dkg
+        .result
         .clone()
         .expect("dkg_result was just set for this session");
     if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
@@ -294,9 +299,9 @@ pub fn persist_distributed_dkg_key_package(
                         "distributed DKG session [{dkg_session_id}] disappeared while rolling back a failed persist: {persist_error}"
                     ))
                 })?;
-                rollback_session.dkg_result = previous_dkg_result;
-                rollback_session.dkg_public_key_package = previous_dkg_public_key_package;
-                if let Some(key_packages) = rollback_session.dkg_key_packages.as_mut() {
+                rollback_session.dkg.result = previous_dkg_result;
+                rollback_session.dkg.public_key_package = previous_dkg_public_key_package;
+                if let Some(key_packages) = rollback_session.dkg.key_packages.as_mut() {
                     key_packages.remove(&request.participant_identifier);
                     if let Some(previous_key_package) = replaced_key_package {
                         key_packages.insert(request.participant_identifier, previous_key_package);
@@ -304,11 +309,12 @@ pub fn persist_distributed_dkg_key_package(
                 }
                 if key_package_map_was_absent
                     && rollback_session
-                        .dkg_key_packages
+                        .dkg
+                        .key_packages
                         .as_ref()
                         .is_some_and(BTreeMap::is_empty)
                 {
-                    rollback_session.dkg_key_packages = None;
+                    rollback_session.dkg.key_packages = None;
                 }
             } else {
                 guard.sessions.remove(&dkg_session_id);
