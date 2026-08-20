@@ -2,6 +2,16 @@
 
 Date: 2026-02-23
 
+> **Scope note.** This document captures an *earlier* bootstrap milestone of
+> the `tbtc-signer` Rust rewrite: the coarse
+> `frost_tbtc_run_dkg` / `frost_tbtc_start_sign_round` /
+> `frost_tbtc_finalize_sign_round` operations it lists no longer exist in the
+> crate's FFI surface (the crate now ships fine-grained `DkgPart1/2/3` plus
+> the interactive `SessionOpen`/`Round1`/`Round2`/`Abort`/`Aggregate` family).
+> The historical narrative below is preserved as-is. For the *current* FFI
+> surface, see `pkg/tbtc/signer/README.md` ("Current scope" / "Not yet
+> implemented") and `pkg/tbtc/signer/include/frost_tbtc.h`.
+
 This document tracks the initial code bootstrap for the `tbtc-signer` Rust
 rewrite architecture.
 

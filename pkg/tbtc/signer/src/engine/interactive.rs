@@ -92,13 +92,12 @@ fn maybe_hold_interactive_aggregate_after_unlock_for_tests() {
     }
 }
 
-// Multi-seat: a session's interactive consumed-nonce markers are keyed per
-// (attempt_id, member_identifier), so independent local seats can each consume
-// their own nonces for the same attempt without colliding. The marker is written
-// BEFORE a share leaves the engine (consumption-before-release). Legacy bare
-// attempt_id markers (written by the pre-multi-seat single-member engine, and
-// possibly reloaded from durable state) are honored FAIL-CLOSED on read: a bare
-// marker means the attempt is consumed for every member.
+// Multi-seat marker keying: `m{member_identifier}@{attempt_id}` lets each local
+// seat consume its own nonces for the same attempt without colliding. Markers
+// are written BEFORE a share leaves the engine (consumption-before-release).
+// Legacy bare `attempt_id` markers (pre-multi-seat or durable-state carryover)
+// are honored FAIL-CLOSED: a bare marker means the attempt is consumed for
+// every member.
 pub(crate) fn interactive_consumed_marker(attempt_id: &str, member_identifier: u16) -> String {
     // Keep the schema-1 wire representation understood by the immediately
     // previous signer. A binary rollback must continue to see the attempt as
@@ -262,6 +261,45 @@ pub(crate) fn interactive_attempt_aggregated(
         taproot_merkle_root,
     )) || markers.contains(attempt_id)
 }
+// Phase-entry helper: take the engine-state lock and run the
+// interactive-state sweep. Every `pub fn` phase handler
+// (interactive_session_open, round1, round2, aggregate, abort) calls this as
+// the very first step, so a future change to the lock-prologue (e.g. an
+// additional sweep) is one diff line, not five. Deliberately does NOT call
+// `load_auto_quarantine_config` — that helper is phase-specific and does
+// not run at every entry point, and folding it in would run it before
+// round2's marker-durability flush instead of after.
+pub(crate) fn enter_phase() -> Result<std::sync::MutexGuard<'static, EngineState>, EngineError> {
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    sweep_expired_interactive_state_durably(&mut guard)?;
+    Ok(guard)
+}
+
+// Marker-durability helper: when an earlier phase write replaced the state
+// file but failed its directory sync, the fail-closed marker the call was
+// about to install is preserved in memory but not on disk. Re-persist the
+// guard now so the retry that follows succeeds (or is rejected by the
+// marker just installed) instead of leaking a second share. The predicate
+// is the phase-specific check for the phase's own pending marker. The
+// helper takes the guard by reference because `persist_engine_state_to_storage`
+// borrows the same state — `std::sync::Mutex` is not reentrant, so a real
+// second acquisition would deadlock. The guard is held for the duration of
+// the phase, matching the existing lock model.
+pub(crate) fn flush_pending_marker<F>(
+    guard: &std::sync::MutexGuard<'static, EngineState>,
+    predicate: F,
+) -> Result<(), EngineError>
+where
+    F: FnOnce() -> bool,
+{
+    if predicate() {
+        persist_engine_state_to_storage(guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
+    }
+    Ok(())
+}
 
 pub fn interactive_session_open(
     mut request: InteractiveSessionOpenRequest,
@@ -325,10 +363,7 @@ pub fn interactive_session_open(
     let request_fingerprint = interactive_open_request_fingerprint(&request)?;
     let attempt_id = request.attempt_context.attempt_id.clone();
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state_durably(&mut guard)?;
+    let mut guard = enter_phase()?;
 
     let auto_quarantine_config = load_auto_quarantine_config()?;
 
@@ -892,10 +927,7 @@ pub fn interactive_round1(
     // attempt_id; the wire form may differ in casing.
     let attempt_id = canonical_attempt_id(&request.attempt_id);
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state_durably(&mut guard)?;
+    let mut guard = enter_phase()?;
 
     let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
         EngineError::SessionNotFound {
@@ -984,18 +1016,14 @@ pub fn interactive_round2(
     let attempt_id = canonical_attempt_id(&request.attempt_id);
     let consumed_marker = interactive_consumed_marker(&attempt_id, request.member_identifier);
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state_durably(&mut guard)?;
+    let mut guard = enter_phase()?;
 
     // An earlier marker write may have replaced the state file but failed its
     // directory sync. Flush that fail-closed marker before consulting the replay
     // gate; after a successful write, the marker below rejects the retry.
-    if interactive_round2_persistence_pending(&request.session_id, &consumed_marker) {
-        persist_engine_state_to_storage(&guard)
-            .map_err(PersistEngineStateError::into_engine_error)?;
-    }
+    flush_pending_marker(&guard, || {
+        interactive_round2_persistence_pending(&request.session_id, &consumed_marker)
+    })?;
 
     // Quarantine inputs must be read before the session is borrowed
     // mutably from the same guard below.
@@ -1385,19 +1413,15 @@ pub fn interactive_aggregate(
         taproot_merkle_root.as_ref(),
     )?;
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    let guard = enter_phase()?;
     // Sweep first so a failure while repairing any prior completion marker can
     // never postpone destruction of newly expired nonce handles.
-    sweep_expired_interactive_state_durably(&mut guard)?;
     // A prior completion-marker write may have replaced the state file but failed
     // its directory sync. Re-persist that fail-closed marker before the completed
     // attempt check so a retry repairs durability and is then rejected normally.
-    if interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker) {
-        persist_engine_state_to_storage(&guard)
-            .map_err(PersistEngineStateError::into_engine_error)?;
-    }
+    flush_pending_marker(&guard, || {
+        interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker)
+    })?;
     // Resolve the group's public key package (the verifying shares used
     // to check each contribution) from the session's own DKG state, not
     // the request - consistent with the no-secret-on-the-FFI discipline
@@ -1759,16 +1783,13 @@ pub fn interactive_session_abort(
     // canonical form the live state is keyed on.
     let attempt_id_filter = request.attempt_id.as_deref().map(canonical_attempt_id);
 
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    let mut guard = enter_phase()?;
     // Abort takes the lock like every other entry point, so it sweeps
     // expired interactive state too: the TTL guarantee (nonces gone
     // within the TTL of inactivity) must hold even when the only
     // post-expiry traffic is aborts for other sessions. The durable helper also
     // repairs a prior post-rename Abort snapshot before an idempotent retry can
     // return `aborted: false` without writing.
-    sweep_expired_interactive_state_durably(&mut guard)?;
 
     // Phase 7.6: Abort iterate-the-attempt-scopes. Each matching (attempt_id,
     // member_identifier) pair is collected; the persistent filter is matched
@@ -2178,18 +2199,11 @@ pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningSta
 // time anything touches the engine after expiry. Expiry has abort
 // semantics - the durable consumption markers are untouched.
 /// Resolve the session that holds the DKG key material for `key_group`.
-///
-/// Interactive signing runs under a fresh RoastSessionID per message, but a wallet's
-/// DKG key material is a WALLET-level asset that lives under the session its DKG
-/// completed in. This returns that wallet session so any per-signing session can reach
-/// the material by key_group:
-///  - prefer `session_id` itself if it already holds this wallet's DKG output (the
-///    co-located case: DKG and signing share one session, as in the coarse path and
-///    the single-session tests);
-///  - otherwise find the session whose completed DKG produced `key_group`.
-///
-/// Returns None when no completed DKG for `key_group` exists (i.e. no wallet key), which
-/// callers map to DkgNotReady.
+/// Returns the session that owns the wallet DKG producing `key_group`. The
+/// request's own `session_id` is preferred when it already holds that DKG (the
+/// co-located case: DKG and signing share one session); otherwise the wallet
+/// session whose completed DKG produced `key_group` is returned. `None` means
+/// no wallet DKG exists for `key_group`; callers map that to `DkgNotReady`.
 pub(crate) fn resolve_wallet_session_id(
     engine_state: &EngineState,
     session_id: &str,
@@ -2327,11 +2341,11 @@ pub(crate) fn interactive_session_ttl_seconds() -> u64 {
 fn interactive_open_request_fingerprint(
     request: &InteractiveSessionOpenRequest,
 ) -> Result<String, EngineError> {
-    // The serialized request transiently holds the signing inputs
-    // (message_hex and the rest of the request) in plaintext; wipe the
-    // buffer once the fingerprint digest is taken. No key material is
-    // carried in the request - it is resolved from DKG state - so only
-    // the request inputs are exposed here.
+    // Hashes the request payload. No key material is included (the request
+    // does not carry it; it is resolved from DKG state), so the fingerprint
+    // only commits to the signing inputs. The serialized buffer is zeroized
+    // after the digest is taken because it transiently holds those inputs
+    // in plaintext.
     let mut canonical = serde_json::to_vec(request).map_err(|e| {
         EngineError::Internal(format!(
             "failed to serialize InteractiveSessionOpen request for fingerprint: {e}"
