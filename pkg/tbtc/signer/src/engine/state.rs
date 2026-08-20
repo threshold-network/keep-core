@@ -70,7 +70,7 @@ pub(crate) struct InteractiveSigningState {
     /// Round2 share can be released, so the host must open and validate a fresh
     /// intent rather than relying on a durable generic-message allowlist.
     pub(crate) signing_intent: Option<InteractiveSigningIntent>,
-    pub(crate) key_package: Zeroizing<frost::keys::KeyPackage>,
+    pub(crate) key_package: Box<Zeroizing<frost::keys::KeyPackage>>,
     /// Monotonic time of the last successful activity for this member's live
     /// attempt. Exact Open and Round1 retries refresh it, as does a validated
     /// Round2 whose retry-preserving durability work fails. Rejected traffic
@@ -86,7 +86,7 @@ pub(crate) struct InteractiveSigningState {
 // the backstop for paths that drop the struct without going through
 // one of those.
 pub(crate) struct InteractiveRound1State {
-    pub(crate) nonces: frost::round1::SigningNonces,
+    pub(crate) nonces: Box<Zeroizing<frost::round1::SigningNonces>>,
     pub(crate) commitments_hex: String,
 }
 
@@ -287,6 +287,18 @@ pub(crate) struct StateFileLock {
 }
 
 impl StateFileLock {
+    // Open the state-file lock with restrictive permissions and protection against
+    // symlink attacks. The lock file is at a predictable path in a shared
+    // temp directory when running under `profile: development`, so it must not be
+    // possible for another user to pre-create it as a symlink to a sensitive
+    // file that this process would then truncate or write to.
+    //
+    // - `mode(0o600)` ensures only the current user can read/write the lock.
+    // - `O_NOFOLLOW` ensures the open call fails if the path is a symlink.
+    //
+    // `O_EXCL` is NOT used: lock re-acquisition across process restarts is a
+    // normal and expected path; this process may need to open a lock file that
+    // already exists (and `flock` is the actual cross-process lock gate).
     pub(crate) fn acquire(state_path: &Path) -> Result<Self, EngineError> {
         let lock_path = state_lock_file_path(state_path);
         if let Some(parent) = lock_path.parent() {
@@ -298,18 +310,25 @@ impl StateFileLock {
             })?;
         }
 
-        let mut lock_file = fs::OpenOptions::new()
+        let mut open_options = fs::OpenOptions::new();
+        open_options
             .create(true)
             .truncate(false)
             .read(true)
-            .write(true)
-            .open(&lock_path)
-            .map_err(|e| {
-                EngineError::Internal(format!(
-                    "failed to open signer state lock file [{}]: {e}",
-                    lock_path.display()
-                ))
-            })?;
+            .write(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            open_options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+
+        let mut lock_file = open_options.open(&lock_path).map_err(|e| {
+            EngineError::Internal(format!(
+                "failed to open signer state lock file [{}]: {e}",
+                lock_path.display()
+            ))
+        })?;
 
         #[cfg(unix)]
         {
@@ -478,6 +497,20 @@ pub(crate) fn state_lock_file_path(state_path: &Path) -> PathBuf {
         parent.join(&lock_filename)
     } else {
         PathBuf::from(lock_filename)
+    }
+}
+
+pub(crate) fn state_generation_sidecar_path(state_path: &Path) -> PathBuf {
+    let state_filename = state_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| TBTC_SIGNER_DEFAULT_STATE_FILENAME.to_string());
+    let generation_filename = format!("{state_filename}{TBTC_SIGNER_STATE_GENERATION_SUFFIX}");
+
+    if let Some(parent) = state_path.parent() {
+        parent.join(&generation_filename)
+    } else {
+        PathBuf::from(generation_filename)
     }
 }
 

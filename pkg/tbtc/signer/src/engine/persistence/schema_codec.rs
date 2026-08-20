@@ -186,12 +186,20 @@ pub(crate) struct PersistedEncryptedEngineStateEnvelope {
     pub(crate) nonce: String,
     pub(crate) ciphertext: String,
     pub(crate) authentication_tag: String,
+    /// Monotonic per-state-path counter bound into the AAD (schema version
+    /// `PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION` only). Absent on the
+    /// pre-generation `_V3` format. Checked against a sidecar high-water-mark
+    /// file on load to refuse a replayed/restored older backup -- see
+    /// `state_generation_sidecar_path` and its readers in `envelope_io.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) state_generation: Option<u64>,
 }
 
 pub(crate) enum PersistedStateStorageFormat {
     EncryptedEnvelope {
         persisted: PersistedEngineState,
         should_rewrite: bool,
+        state_generation: Option<u64>,
     },
     LegacyPlaintext(PersistedEngineState),
 }
@@ -200,7 +208,13 @@ pub(crate) const PERSISTED_STATE_SCHEMA_VERSION: u16 = 1;
 
 pub(crate) const PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V2: u16 = 2;
 
-pub(crate) const PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION: u16 = 3;
+/// Pre-generation envelope format: AAD-bound but with no `state_generation`
+/// field, so it carries no anti-rollback protection. Still decodable (its
+/// exact original AAD shape is reproduced) so existing deployments upgrade in
+/// place on next load instead of hard-failing.
+pub(crate) const PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V3: u16 = 3;
+
+pub(crate) const PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION: u16 = 4;
 
 impl TryFrom<PersistedEngineState> for EngineState {
     type Error = EngineError;

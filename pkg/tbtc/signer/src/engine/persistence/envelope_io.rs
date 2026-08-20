@@ -251,12 +251,107 @@ pub(crate) fn push_aad_field(aad: &mut Vec<u8>, label: &[u8], value: &[u8]) {
     aad.extend_from_slice(value);
 }
 
+/// Reads the monotonic generation high-water mark tracked OUTSIDE the state
+/// file (see `state_generation_sidecar_path`), returning `0` if the sidecar
+/// is absent (first run for this state path, or an upgrade from a
+/// pre-generation envelope). Residual limitation, matching the "sibling
+/// counter file" tier the finding accepts: an attacker with write access to
+/// BOTH the state file AND this sidecar can delete the sidecar to reset the
+/// mark before restoring an old backup. That is a strictly larger write
+/// footprint than the accidental/ops-mistake stale-restore case this guards
+/// against; closing it fully would need an external KMS-backed counter.
+pub(crate) fn read_state_generation_high_water_mark(
+    generation_sidecar_path: &Path,
+) -> Result<u64, EngineError> {
+    match fs::read_to_string(generation_sidecar_path) {
+        Ok(contents) => contents.trim().parse::<u64>().map_err(|_| {
+            EngineError::Internal(format!(
+                "signer state generation sidecar file [{}] contains non-numeric content; \
+                 refusing to guess an anti-rollback high-water mark",
+                generation_sidecar_path.display()
+            ))
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(EngineError::Internal(format!(
+            "failed to read signer state generation sidecar file [{}]: {error}",
+            generation_sidecar_path.display()
+        ))),
+    }
+}
+
+/// Durably records `generation` as the new high-water mark: write-temp,
+/// fsync, atomic rename, fsync parent directory -- the same durability
+/// discipline `persist_engine_state_to_storage_with_key` uses for the state
+/// file itself.
+pub(crate) fn write_state_generation_high_water_mark(
+    generation_sidecar_path: &Path,
+    generation: u64,
+) -> Result<(), EngineError> {
+    let temp_path = PathBuf::from(format!(
+        "{}.tmp-{}",
+        generation_sidecar_path.display(),
+        std::process::id()
+    ));
+    let write_result = (|| -> Result<(), EngineError> {
+        if let Some(parent) = state_file_parent_directory(generation_sidecar_path) {
+            fs::create_dir_all(parent).map_err(|e| {
+                EngineError::Internal(format!(
+                    "failed to create signer state directory [{}]: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+        {
+            let mut temp_file = {
+                let mut options = fs::OpenOptions::new();
+                options.create(true).truncate(true).write(true);
+                #[cfg(unix)]
+                options.mode(0o600);
+                options.open(&temp_path).map_err(|e| {
+                    EngineError::Internal(format!(
+                        "failed to open signer state generation temp file [{}]: {e}",
+                        temp_path.display()
+                    ))
+                })?
+            };
+            temp_file
+                .write_all(generation.to_string().as_bytes())
+                .map_err(|e| {
+                    EngineError::Internal(format!(
+                        "failed to write signer state generation temp file [{}]: {e}",
+                        temp_path.display()
+                    ))
+                })?;
+            temp_file.sync_all().map_err(|e| {
+                EngineError::Internal(format!(
+                    "failed to sync signer state generation temp file [{}]: {e}",
+                    temp_path.display()
+                ))
+            })?;
+        }
+        fs::rename(&temp_path, generation_sidecar_path).map_err(|e| {
+            EngineError::Internal(format!(
+                "failed to move signer state generation temp file [{}] to [{}]: {e}",
+                temp_path.display(),
+                generation_sidecar_path.display()
+            ))
+        })?;
+        sync_state_file_parent_directory(generation_sidecar_path)?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
 pub(crate) fn encrypted_state_envelope_aad(
     schema_version: u16,
     encryption_algorithm: &str,
     key_provider: &str,
     key_id: &str,
     nonce: &str,
+    state_generation: Option<u64>,
 ) -> Vec<u8> {
     let mut aad = Vec::new();
     push_aad_field(&mut aad, b"schema_version", &schema_version.to_be_bytes());
@@ -268,12 +363,22 @@ pub(crate) fn encrypted_state_envelope_aad(
     push_aad_field(&mut aad, b"key_provider", key_provider.as_bytes());
     push_aad_field(&mut aad, b"key_id", key_id.as_bytes());
     push_aad_field(&mut aad, b"nonce", nonce.as_bytes());
+    // Binding a monotonic per-state-path generation counter here (schema
+    // `PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION` only) means a stale-but-
+    // validly-encrypted backup carries an OLDER generation baked into its
+    // ciphertext; `load_engine_state_from_storage` refuses to load a
+    // generation below the sidecar high-water mark. Legacy `_V3` envelopes
+    // pass `None` here to reproduce their original (generation-less) AAD.
+    if let Some(generation) = state_generation {
+        push_aad_field(&mut aad, b"state_generation", &generation.to_be_bytes());
+    }
     aad
 }
 
 pub(crate) fn encode_encrypted_state_envelope(
     persisted: &PersistedEngineState,
     key_material: &StateEncryptionKeyMaterial,
+    state_generation: u64,
 ) -> Result<Zeroizing<Vec<u8>>, EngineError> {
     let mut plaintext = Zeroizing::new(
         serde_json::to_vec(persisted)
@@ -297,6 +402,7 @@ pub(crate) fn encode_encrypted_state_envelope(
         &key_provider,
         &key_id,
         &nonce_hex,
+        Some(state_generation),
     );
 
     let mut ciphertext_and_tag = cipher
@@ -329,6 +435,7 @@ pub(crate) fn encode_encrypted_state_envelope(
         nonce: nonce_hex,
         ciphertext: hex::encode(&ciphertext_and_tag),
         authentication_tag: hex::encode(&authentication_tag),
+        state_generation: Some(state_generation),
     };
     ciphertext_and_tag.zeroize();
     authentication_tag.zeroize();
@@ -345,11 +452,13 @@ pub(crate) fn decode_encrypted_state_envelope(
     mut envelope: PersistedEncryptedEngineStateEnvelope,
 ) -> Result<PersistedEngineState, EngineError> {
     if envelope.schema_version != PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION
+        && envelope.schema_version != PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V3
         && envelope.schema_version != PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V2
     {
         return Err(EngineError::Internal(format!(
-            "unsupported encrypted signer state schema version: expected [{}] or [{}], got [{}]",
+            "unsupported encrypted signer state schema version: expected [{}], [{}], or [{}], got [{}]",
             PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION,
+            PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V3,
             PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V2,
             envelope.schema_version
         )));
@@ -360,6 +469,12 @@ pub(crate) fn decode_encrypted_state_envelope(
             envelope.encryption_algorithm
         )));
     }
+    // Current schema binds `state_generation` into the AAD (`None` here would
+    // reproduce the wrong AAD and fail decryption, which is the desired
+    // anti-rollback effect if that field was stripped). The `_V3` legacy
+    // schema never had the field, so its AAD is reproduced with `None`
+    // unconditionally regardless of what `envelope.state_generation` holds
+    // (always `None` for a genuine `_V3` file, since the field did not exist).
     let envelope_aad = if envelope.schema_version == PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION {
         Some(encrypted_state_envelope_aad(
             envelope.schema_version,
@@ -367,6 +482,16 @@ pub(crate) fn decode_encrypted_state_envelope(
             &envelope.key_provider,
             &envelope.key_id,
             &envelope.nonce,
+            envelope.state_generation,
+        ))
+    } else if envelope.schema_version == PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION_V3 {
+        Some(encrypted_state_envelope_aad(
+            envelope.schema_version,
+            &envelope.encryption_algorithm,
+            &envelope.key_provider,
+            &envelope.key_id,
+            &envelope.nonce,
+            None,
         ))
     } else {
         None
@@ -494,10 +619,17 @@ pub(crate) fn decode_persisted_state_storage_format(
     if let Ok(envelope) = serde_json::from_slice::<PersistedEncryptedEngineStateEnvelope>(bytes) {
         let should_rewrite = envelope.schema_version != PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION
             || envelope.key_id == TBTC_SIGNER_STATE_KEY_ID_LEGACY_ENV_HEX;
+        let state_generation = if envelope.schema_version == PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION
+        {
+            envelope.state_generation
+        } else {
+            None
+        };
         let persisted = decode_encrypted_state_envelope(envelope)?;
         return Ok(PersistedStateStorageFormat::EncryptedEnvelope {
             persisted,
             should_rewrite,
+            state_generation,
         });
     }
 
@@ -553,12 +685,17 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
 
     let decoded_format = decode_persisted_state_storage_format(&bytes);
     bytes.zeroize();
-    let (persisted, should_rewrite_state): (PersistedEngineState, bool) = match decoded_format {
+    let (persisted, should_rewrite_state, state_generation): (
+        PersistedEngineState,
+        bool,
+        Option<u64>,
+    ) = match decoded_format {
         Ok(PersistedStateStorageFormat::EncryptedEnvelope {
             persisted,
             should_rewrite,
-        }) => (persisted, should_rewrite),
-        Ok(PersistedStateStorageFormat::LegacyPlaintext(persisted)) => (persisted, true),
+            state_generation,
+        }) => (persisted, should_rewrite, state_generation),
+        Ok(PersistedStateStorageFormat::LegacyPlaintext(persisted)) => (persisted, true, None),
         Err(e) => {
             return recover_or_fail_from_corrupted_state_file(
                 &path,
@@ -575,10 +712,34 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
     // the old oversized envelope must also be replaced immediately; otherwise
     // an emergency rollback before the next ordinary write still fails the
     // previous reader's total-count validation.
-    let session_registry_requires_rewrite = persisted.sessions.len() > max_sessions_limit();
+    let persisted_session_count = persisted.sessions.len();
+    let session_registry_requires_rewrite = persisted_session_count > max_sessions_limit();
     let (engine_state, recovered_from_corruption): (EngineState, bool) = match persisted.try_into()
     {
         Ok(engine_state) => (engine_state, false),
+        Err(error) if session_registry_requires_rewrite => {
+            // The persisted session registry is larger than the CURRENTLY configured
+            // TBTC_SIGNER_MAX_SESSIONS -- most likely an operator lowered the limit
+            // below the live active-session count, not file corruption. The
+            // conversion above can only compact RETIRED excess; too few retired
+            // sessions under the new cap fails its validation. Routing that through
+            // `recover_or_fail_from_corrupted_state_file` would misclassify a config
+            // regression as corruption, and its only advertised remedy
+            // (`quarantine_and_reset`) destroys DKG key material that was never
+            // actually corrupt. Name the real cause and fail closed instead.
+            return Err(EngineError::Internal(format!(
+                "signer state file [{}] has {persisted_session_count} persisted session(s), \
+                 which exceeds the configured {} limit; this is a configuration regression, \
+                 not file corruption ({error}). Raise {} back to its previous value (or \
+                 higher) to load this state. Do NOT set {}={} to work around this: it \
+                 destroys DKG key material that is not actually corrupt.",
+                path.display(),
+                TBTC_SIGNER_MAX_SESSIONS_ENV,
+                TBTC_SIGNER_MAX_SESSIONS_ENV,
+                TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
+                TBTC_SIGNER_STATE_CORRUPTION_POLICY_QUARANTINE_AND_RESET
+            )));
+        }
         Err(error) => (
             recover_or_fail_from_corrupted_state_file(
                 &path,
@@ -590,6 +751,35 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
             true,
         ),
     };
+
+    // Refuse a validly-decrypted-and-authenticated envelope whose bound
+    // generation is OLDER than the last one this state path has ever loaded:
+    // that is exactly what restoring a stale backup over the live file looks
+    // like (no key needed for the attacker -- just filesystem write access to
+    // the state path, e.g. a compromised backup agent or an ops mistake).
+    // Only enforced for the current schema (legacy `_V3`/plaintext formats
+    // carry no generation and are about to be rewritten with one below
+    // anyway). Skipped when this load itself recovered from corruption: that
+    // path already resets to `EngineState::default()` and starts a fresh
+    // generation lineage on its next persist.
+    if let (Some(loaded_generation), false) = (state_generation, recovered_from_corruption) {
+        let generation_sidecar_path = state_generation_sidecar_path(&path);
+        let recorded_high_water_mark =
+            read_state_generation_high_water_mark(&generation_sidecar_path)?;
+        if loaded_generation < recorded_high_water_mark {
+            return Err(EngineError::Internal(format!(
+                "signer state file [{}] has generation [{loaded_generation}], older than the \
+                 last recorded generation [{recorded_high_water_mark}] in [{}]; refusing to \
+                 load what looks like a restored/rolled-back backup. If this is an intentional \
+                 operator-directed rollback, delete the generation sidecar file first.",
+                path.display(),
+                generation_sidecar_path.display()
+            )));
+        }
+        if loaded_generation > recorded_high_water_mark {
+            write_state_generation_high_water_mark(&generation_sidecar_path, loaded_generation)?;
+        }
+    }
 
     // Quarantine-and-reset intentionally renames the corrupt file away. Do not
     // recreate it as a migrated clean state during the same load; the next real
@@ -684,10 +874,19 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
 ) -> Result<(), PersistEngineStateError> {
     let path =
         active_state_file_path().map_err(PersistEngineStateError::before_state_file_replacement)?;
+    let generation_sidecar_path = state_generation_sidecar_path(&path);
+    let new_generation = read_state_generation_high_water_mark(&generation_sidecar_path)
+        .map_err(PersistEngineStateError::before_state_file_replacement)?
+        .checked_add(1)
+        .ok_or_else(|| {
+            PersistEngineStateError::before_state_file_replacement(EngineError::Internal(
+                "signer state generation counter overflowed u64".to_string(),
+            ))
+        })?;
     let persisted: PersistedEngineState = engine_state
         .try_into()
         .map_err(PersistEngineStateError::before_state_file_replacement)?;
-    let mut bytes = encode_encrypted_state_envelope(&persisted, key_material)
+    let mut bytes = encode_encrypted_state_envelope(&persisted, key_material, new_generation)
         .map_err(PersistEngineStateError::before_state_file_replacement)?;
     drop(persisted);
     let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
@@ -741,6 +940,7 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
         maybe_inject_persist_fault(PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync)?;
 
         sync_state_file_parent_directory(&path)?;
+        write_state_generation_high_water_mark(&generation_sidecar_path, new_generation)?;
 
         Ok(())
     })();
