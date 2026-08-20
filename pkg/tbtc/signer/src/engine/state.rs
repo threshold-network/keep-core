@@ -139,11 +139,14 @@ pub(crate) struct SessionState {
     /// process-global BuildTaprootTx limiter, this operational throttle resets on
     /// restart and is never written into the encrypted session state.
     pub(crate) heartbeat_rate_limiter: PolicyRateLimiterState,
-    // Multi-seat: a process-global engine may hold several LOCAL members (seats)
-    // signing the same session concurrently, each on its own attempt timeline.
-    // Keyed by member_identifier; each entry is independent (own attempt, nonces,
-    // replace/round2/expiry). Was Option (one member per session).
-    pub(crate) interactive_signing: BTreeMap<u16, InteractiveSigningState>,
+    // Phase 7.6: attempt-scoped concurrent attempts (per spec section 8). The outer
+    // key is `attempt_id`; the inner key is `member_identifier`. Each member's
+    // nonce state is bound to (attempt_id, member_identifier) so two concurrent
+    // attempts on the same session can never share nonce material (frozen spec
+    // section 8: "one handle, one attempt"). The outer scope's size is the
+    // concurrent attempt count (capped at n-t+1 below); the inner scope's
+    // membership per attempt is the per-member live-entry count.
+    pub(crate) interactive_signing: BTreeMap<String, BTreeMap<u16, InteractiveSigningState>>,
     // The key_group this per-signing session signs for, set at InteractiveSessionOpen.
     // Interactive signing runs under a fresh RoastSessionID per message, so a wallet's
     // DKG material lives under a DIFFERENT (wallet/DKG) session; this binds the signing
@@ -889,4 +892,68 @@ pub(crate) fn ensure_consumed_registry_insert_capacity(
     }
 
     Ok(())
+}
+
+// Phase 7.6: per-session concurrent-attempt helpers. The interactive state is
+// now an attempt-scoped nested map (attempt_id -> member_identifier -> state).
+// The functions below keep the cap semantics and the per-session totals in one
+// place so the Open/Round1/Round2/Aggregate/Abort paths read identically.
+
+/// Count of distinct (member, session) entries currently live. A member
+/// advancing to a newer attempt reuses its own slot, so this stays constant
+/// across the advance. The global `max_live_interactive_sessions_limit` cap
+/// counts this, not the per-attempt cardinality.
+pub(crate) fn interactive_session_live_member_count(session: &SessionState) -> usize {
+    let mut distinct_members = BTreeSet::new();
+    for members in session.interactive_signing.values() {
+        for member_identifier in members.keys() {
+            distinct_members.insert(*member_identifier);
+        }
+    }
+    distinct_members.len()
+}
+
+/// Per-session attempt cap: `n - t + 1` where `n` is the wallet's DKG
+/// participant count and `t` is the threshold. Returns `None` when the cap
+/// cannot be computed (no DKG material or impossible values); callers map
+/// that to the existing capacity/invalid-config path so an unverifiable group
+/// configuration never silently skips the cap.
+pub(crate) fn concurrent_attempt_cap_for_dkg(
+    participant_count: u16,
+    threshold: u16,
+) -> Option<usize> {
+    if participant_count == 0 || threshold == 0 || participant_count < threshold {
+        return None;
+    }
+    Some(usize::from(participant_count) - usize::from(threshold) + 1)
+}
+
+/// Removes an interactive entry at `(attempt_id, member_identifier)` and
+/// returns the removed state for zeroization. Returns `None` if the entry does
+/// not exist. The outer attempt scope is dropped when its last member is
+/// removed, so the per-session attempt count tracks the outer map's size.
+pub(crate) fn remove_interactive_entry(
+    session: &mut SessionState,
+    attempt_id: &str,
+    member_identifier: u16,
+) -> Option<InteractiveSigningState> {
+    let members = session.interactive_signing.get_mut(attempt_id)?;
+    let removed = members.remove(&member_identifier);
+    if members.is_empty() {
+        session.interactive_signing.remove(attempt_id);
+    }
+    removed
+}
+
+/// Total (member, session) entries across all sessions. Used by the global
+/// `max_live_interactive_sessions_limit` cap so a fresh member on a session
+/// where the existing member is advancing to a newer attempt does not double
+/// count.
+pub(crate) fn engine_live_interactive_member_count(
+    sessions: &HashMap<String, SessionState>,
+) -> usize {
+    sessions
+        .values()
+        .map(interactive_session_live_member_count)
+        .sum()
 }
