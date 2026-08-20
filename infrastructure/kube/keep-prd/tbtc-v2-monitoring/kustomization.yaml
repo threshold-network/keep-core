@@ -1,0 +1,25 @@
+bases:
+  - ../../templates/tbtc-v2-monitoring
+
+images:
+  - name: tbtc-v2-monitoring
+    newName: gcr.io/keep-prd-210b/tbtc-v2-monitoring
+    newTag: latest
+
+configMapGenerator:
+  - name: tbtc-v2-monitoring-config
+    literals:
+      - environment=mainnet
+      - large-deposit-threshold-sat=10000000000 # 100 BTC
+      - large-redemption-threshold-sat=10000000000 # 100 BTC
+
+secretGenerator:
+  - name: tbtc-v2-monitoring-config
+    envs:
+      - .env.secret
+
+generatorOptions:
+  disableNameSuffixHash: true
+  annotations:
+    note: generated
+

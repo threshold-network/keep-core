@@ -1,0 +1,33 @@
+resources:
+  - ../../templates/keep-maintainer
+
+namespace: default
+
+commonLabels:
+  app: keep-maintainer
+  type: all
+  network: mainnet
+
+images:
+  - name: keep-maintainer
+    newName: keepnetwork/keep-client
+    newTag: v2.1.0
+
+configMapGenerator:
+  - name: keep-maintainer-config
+    behavior: merge
+    literals:
+      - network=mainnet
+      - electrum-api-url=ws://electrumx.bitcoin:8080
+    files:
+      - .secret/keep-maintainer-keyfile
+
+secretGenerator:
+  - name: keep-maintainer-eth-account-password
+    files:
+      - .secret/keep-maintainer-password
+
+generatorOptions:
+  disableNameSuffixHash: true
+  annotations:
+    note: generated

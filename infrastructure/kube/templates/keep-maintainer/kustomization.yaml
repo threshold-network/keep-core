@@ -1,0 +1,17 @@
+resources:
+  - maintainer-statefulset.yaml
+
+commonLabels:
+  app: keep-maintainer
+  type: all
+
+configMapGenerator:
+  - name: keep-maintainer-config
+    literals:
+      - log-level=info
+      - log-format=json
+
+generatorOptions:
+  disableNameSuffixHash: true
+  annotations:
+    note: generated
