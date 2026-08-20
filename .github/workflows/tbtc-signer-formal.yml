@@ -59,25 +59,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check RustSec advisories
-        # Blocking gate: a newly-published advisory against any locked
-        # dependency fails the build. Accepted/unfixable advisories are
-        # recorded with rationale in pkg/tbtc/signer/deny.toml.
+      - name: Run cargo-deny audit
+        # Blocking gate: a newly-published advisory, non-allowlisted license,
+        # git/path dependency, banned crate, or yanked crate fails the build.
+        # Accepted/unfixable findings are recorded with rationale in
+        # pkg/tbtc/signer/deny.toml.
         uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
         with:
           manifest-path: pkg/tbtc/signer/Cargo.toml
-          command: check advisories
-
-      - name: Check banned and multiply-versioned crates
-        # Blocking gate: complements `check advisories`. Catches (a) wildcards
-        # and explicit bans declared in deny.toml's [bans] section (e.g. the
-        # openssl -> rustls redirect), and (b) duplicate crate versions that
-        # indicate a Cargo.lock drift we have not reviewed. The corresponding
-        # configuration lives in pkg/tbtc/signer/deny.toml.
-        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
-        with:
-          manifest-path: pkg/tbtc/signer/Cargo.toml
-          command: check bans
+          command: check all
 
   signer-formal-invariants:
     name: Signer formal invariants

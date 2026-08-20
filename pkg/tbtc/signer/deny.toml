@@ -18,14 +18,16 @@
 #                      rustls-native-certs / rustls-webpki.
 #   * [sources]     -- crates.io only; no git/path deps by default (avoids
 #                      unreviewed upstream re-pointing).
-# Note: yanked-crate detection is intentionally NOT enabled here (no
-# [yanked] section). The gap is tracked separately: build.sh already pins
-# `cargo build --release --locked`, which refuses to resolve a yanked
-# version at lockfile-mismatch time. Adding `[yanked]` would only catch
-# advisories that already trigger the lockfile build, so the additional
-# signal is marginal -- tracked in a follow-up rather than enforced here.
+# Note on yanked crates: `yanked = "deny"` is set under `[advisories]` so
+# that `cargo deny check advisories` (part of the `check all` CI gate)
+# will fail the build if a locked dependency has been yanked. This is the
+# canonical cargo-deny mechanism for blocking yanked crates. The presence
+# of `--locked` on other `cargo` commands in CI is unrelated; `--locked`
+# only prevents the lockfile from changing, it does not re-check yank
+# status.
 
 [advisories]
+yanked = "deny"
 ignore = [
   # atomic-polyfill is unmaintained (informational advisory, not a security
   # vulnerability). It is pulled in transitively via
