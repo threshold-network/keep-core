@@ -56,19 +56,18 @@ pub fn serialize_response<T: serde::Serialize>(response: &T) -> Result<Vec<u8>, 
 fn install_redacting_panic_hook() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
-        // Wrap the hook in a single-use mechanism so the install-set_hook
-        // branch can drop it into the closure, and the failure branch can
-        // retrieve it back to restore the global state.
-        let default_hook_cell: std::sync::Mutex<Option<_>> =
-            std::sync::Mutex::new(Some(std::panic::take_hook()));
+        // Keep the captured hook in shared storage while constructing and
+        // installing the replacement. If either operation panics, the failure
+        // path can still take the original hook back and restore it.
+        let default_hook_cell = std::sync::Arc::new(std::sync::Mutex::new(None));
+        *default_hook_cell.lock().expect("poisoned") = Some(std::panic::take_hook());
+        let installed_hook_cell = std::sync::Arc::clone(&default_hook_cell);
         // set_hook can panic during Box::new under allocator pressure. If it
         // does, restore the previously-installed hook so the process still has
         // SOME panic handler (the default hook we captured is still in memory).
         // Otherwise a partial install leaves the Once poisoned (no further
         // installs) AND no panic hook at all (the default was take_hook'd).
         let install = catch_unwind(AssertUnwindSafe(|| {
-            let mut guard = default_hook_cell.lock().expect("poisoned");
-            let default_hook = guard.take().expect("default_hook available");
             std::panic::set_hook(Box::new(move |info| {
                 let development_profile =
                     crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
@@ -79,7 +78,11 @@ fn install_redacting_panic_hook() {
                         })
                         .unwrap_or(false);
                 if development_profile {
-                    default_hook(info);
+                    if let Some(default_hook) =
+                        installed_hook_cell.lock().expect("poisoned").as_ref()
+                    {
+                        default_hook(info);
+                    }
                 } else if let Some(location) = info.location() {
                     eprintln!(
                         "panic at {}:{} (payload redacted)",
