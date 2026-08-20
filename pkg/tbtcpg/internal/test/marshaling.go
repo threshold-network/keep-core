@@ -170,10 +170,7 @@ func (dsp *depositSweepProposal) convert() (
 		copy(walletPublicKeyHash[:], hexToSlice(dsp.WalletPublicKeyHash))
 	}
 
-	result.DepositsKeys = make([]struct {
-		FundingTxHash      bitcoin.Hash
-		FundingOutputIndex uint32
-	}, len(dsp.DepositsKeys))
+	result.DepositsKeys = make([]tbtc.DepositKey, len(dsp.DepositsKeys))
 	for i, depositKey := range dsp.DepositsKeys {
 		fundingTxHash, err := bitcoin.NewHashFromString(depositKey.FundingTxHash, bitcoin.ReversedByteOrder)
 		if err != nil {
@@ -274,6 +271,8 @@ func (psts *ProposeSweepTestScenario) UnmarshalJSON(data []byte) error {
 
 	// Unmarshal expected error
 	if len(unmarshaled.ExpectedErr) > 0 {
+		// fmt.Errorf requires a constant format string; ExpectedErr is a
+		// plain string so use errors.New to avoid formatting interpretation.
 		psts.ExpectedErr = errors.New(unmarshaled.ExpectedErr)
 	}
 

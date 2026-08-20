@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
 // SubmitDepositSweepProof prepares deposit sweep proof for the given
@@ -26,7 +27,7 @@ func SubmitDepositSweepProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		getGlobalMetricsRecorder(),
+		getMetricsRecorder(),
 	)
 }
 
@@ -42,12 +43,12 @@ func submitDepositSweepProof(
 ) error {
 	// Record proof submission attempt
 	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_total", 1)
+		metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsTotal, 1)
 	}
 
 	if requiredConfirmations == 0 {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"provided required confirmations count must be greater than 0",
@@ -61,7 +62,7 @@ func submitDepositSweepProof(
 	)
 	if err != nil {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"failed to assemble transaction spv proof: [%v]",
@@ -76,7 +77,7 @@ func submitDepositSweepProof(
 	)
 	if err != nil {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"error while parsing transaction inputs: [%v]",
@@ -91,7 +92,7 @@ func submitDepositSweepProof(
 		vault,
 	); err != nil {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"failed to submit deposit sweep proof with reimbursement: [%v]",
@@ -101,7 +102,7 @@ func submitDepositSweepProof(
 
 	// Record successful proof submission
 	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_success_total", 1)
+		metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal, 1)
 	}
 
 	return nil
@@ -118,17 +119,12 @@ func parseDepositSweepTransactionInputs(
 	common.Address,
 	error,
 ) {
-	// Represents the main UTXO of the deposit sweep transaction. Nil if there
-	// was no main UTXO.
 	var mainUTXO *bitcoin.UnspentTransactionOutput = nil
 
-	// Stores the vault address of the deposits. Each deposit should have the
-	// same value of vault. The zero-filled value indicates there was no vault
-	// value set for the deposits.
+	// Each deposit must have the same vault value. The zero-filled value
+	// indicates there was no vault set for the deposits.
 	var vault = common.Address{}
 
-	// This flag checks if at least one deposit input has been found during
-	// deposit processing.
 	var depositAlreadyProcessed = false
 
 	// Perform a sanity check: a deposit sweep transaction must have exactly one

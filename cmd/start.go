@@ -231,7 +231,7 @@ func initializeClientInfo(
 	signing chain.Signing,
 	blockCounter chain.BlockCounter,
 ) *clientinfo.Registry {
-	registry, isConfigured := clientinfo.Initialize(ctx, config.ClientInfo.Port)
+	registry, isConfigured := clientinfo.Initialize(ctx, config.ClientInfo)
 	if !isConfigured {
 		logger.Infof("client info endpoint not configured")
 		return nil

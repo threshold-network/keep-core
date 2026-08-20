@@ -37,15 +37,12 @@ type PerformanceMetrics struct {
 	registry *Registry
 	cancel   context.CancelFunc
 
-	// Counters track cumulative counts of events
 	countersMutex sync.RWMutex
 	counters      map[string]*counter
 
-	// Histograms track distributions of values (like durations)
 	histogramsMutex sync.RWMutex
 	histograms      map[string]*histogram
 
-	// Gauges track current values (like queue sizes)
 	gaugesMutex sync.RWMutex
 	gauges      map[string]*gauge
 }
@@ -102,13 +99,34 @@ func (pm *PerformanceMetrics) Stop() {
 // registerAllMetrics registers all performance metrics with 0 values
 // so they appear in the /metrics endpoint even before operations occur.
 func (pm *PerformanceMetrics) registerAllMetrics() {
-	// Register all counter metrics with 0 initial value
+	// ----- counter metrics -----
 	counters := []string{
+		// ----- DKG counters -----
 		MetricDKGJoinedTotal,
 		MetricDKGFailedTotal,
 		MetricDKGValidationTotal,
 		MetricDKGChallengesSubmittedTotal,
 		MetricDKGApprovalsSubmittedTotal,
+
+		// ----- wallet action counters -----
+		MetricWalletActionsTotal,
+		MetricWalletActionSuccessTotal,
+		MetricWalletActionFailedTotal,
+		MetricWalletHeartbeatFailuresTotal,
+		MetricStuckWalletTransactionsTotal,
+		MetricUnmonitoredWalletTransactionsTotal,
+
+		// ----- SPV proof-skip counters -----
+		MetricRedemptionProofSubmissionsTotal,
+		MetricRedemptionProofSubmissionsSuccessTotal,
+		MetricRedemptionProofSubmissionsFailedTotal,
+		MetricDepositSweepProofSubmissionsTotal,
+		MetricDepositSweepProofSubmissionsSuccessTotal,
+		MetricDepositSweepProofSubmissionsFailedTotal,
+		MetricSpvProofSkippedOutsideRelayRangeTotal,
+		MetricSpvProofSkippedExceededMaxHeadersTotal,
+
+		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
 		MetricSigningSuccessTotal,
 		MetricSigningFailedTotal,
@@ -116,15 +134,6 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricRedemptionExecutionsTotal,
 		MetricRedemptionExecutionsSuccessTotal,
 		MetricRedemptionExecutionsFailedTotal,
-		MetricRedemptionProofSubmissionsTotal,
-		MetricRedemptionProofSubmissionsSuccessTotal,
-		MetricRedemptionProofSubmissionsFailedTotal,
-		MetricWalletActionsTotal,
-		MetricWalletActionSuccessTotal,
-		MetricWalletActionFailedTotal,
-		MetricWalletHeartbeatFailuresTotal,
-		MetricStuckWalletTransactionsTotal,
-		MetricUnmonitoredWalletTransactionsTotal,
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
@@ -149,14 +158,12 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		counters = append(counters, NetworkJoinFailureMetricName(reason))
 	}
 
-	// First, initialize all counters in the map
 	pm.countersMutex.Lock()
 	for _, name := range counters {
 		pm.counters[name] = &counter{value: 0}
 	}
 	pm.countersMutex.Unlock()
 
-	// Then, register observers (this prevents concurrent map read/write)
 	for _, name := range counters {
 		metricName := name // Capture for closure
 		pm.registry.ObserveApplicationSource(
@@ -177,7 +184,7 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// Register per-action type wallet metrics
+	// ----- wallet action metrics -----
 	// For each action type, register: total, success_total, failed_total, duration_seconds
 	for _, actionType := range GetAllWalletActionTypes() {
 		actionCounters := []string{
@@ -238,8 +245,8 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// Register all duration/histogram metrics with 0 initial values
-	// Note: These use the actual metric names as used in the codebase
+	// ----- histogram metrics -----
+	// These use the actual metric names as used in the codebase.
 	durationMetrics := []string{
 		MetricDKGDurationSeconds,
 		MetricSigningDurationSeconds,
@@ -251,7 +258,6 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricNetworkHandshakeDurationSeconds,
 	}
 
-	// First, initialize all histograms in the map
 	pm.histogramsMutex.Lock()
 	for _, name := range durationMetrics {
 		pm.histograms[name] = &histogram{
@@ -260,7 +266,6 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	}
 	pm.histogramsMutex.Unlock()
 
-	// Then, register observers (this prevents concurrent map read/write)
 	for _, name := range durationMetrics {
 		metricName := name
 		sources := map[string]Source{
@@ -297,13 +302,12 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		pm.registry.ObserveApplicationSource("performance", sources)
 	}
 
-	// Register all gauge metrics with 0 initial value
+	// ----- gauge metrics -----
 	gauges := []string{
 		MetricWalletDispatcherActiveActions,
 		MetricIncomingMessageQueueSize,
 		MetricMessageHandlerQueueSize,
 		MetricSigningAttemptsPerOperation,
-		MetricCPUUtilization,
 		MetricMemoryUsageMB,
 		MetricGoroutineCount,
 		MetricCPULoadPercent,
@@ -311,14 +315,12 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricSwapUtilizationPercent,
 	}
 
-	// First, initialize all gauges in the map
 	pm.gaugesMutex.Lock()
 	for _, name := range gauges {
 		pm.gauges[name] = &gauge{value: 0}
 	}
 	pm.gaugesMutex.Unlock()
 
-	// Then, register observers (this prevents concurrent map read/write)
 	for _, name := range gauges {
 		metricName := name // Capture for closure
 		pm.registry.ObserveApplicationSource(
@@ -338,7 +340,6 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 			},
 		)
 	}
-
 }
 
 // IncrementCounter increments a counter metric by the given value.
@@ -346,33 +347,24 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 // only updates the counter value without re-registering observers.
 func (pm *PerformanceMetrics) IncrementCounter(name string, value float64) {
 	pm.countersMutex.RLock()
-	c, exists := pm.counters[name]
-	pm.countersMutex.RUnlock()
+	defer pm.countersMutex.RUnlock()
 
-	// Fast path: if counter exists, just increment it
-	if exists {
-		c.mutex.Lock()
-		c.value += value
-		c.mutex.Unlock()
+	c, ok := pm.counters[name]
+	if !ok {
+		// Counter not pre-registered. Pre-registration is enforced by
+		// registerAllMetrics() and tested by the *_CountersRegistered
+		// tests. The original slow path lazily added the counter to
+		// pm.counters on first increment but never called
+		// ObserveApplicationSource, so the value lived in memory but
+		// never reached /metrics; the current code silently ignores
+		// the increment. Review the registration list if a counter
+		// appears here unexpectedly.
 		return
 	}
 
-	// Slow path: counter doesn't exist, need to create it
-	// Upgrade to write lock and check/create
-	pm.countersMutex.Lock()
-	c, exists = pm.counters[name]
-	if !exists {
-		c = &counter{value: value}
-		pm.counters[name] = c
-		pm.countersMutex.Unlock()
-		return
-	}
-	pm.countersMutex.Unlock()
-
-	// Counter was created by another goroutine after our first check
 	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	c.value += value
-	c.mutex.Unlock()
 }
 
 // RecordDuration records a duration value in a histogram.
@@ -380,18 +372,22 @@ func (pm *PerformanceMetrics) IncrementCounter(name string, value float64) {
 // Observers are already registered in registerAllMetrics, so this method
 // only updates the histogram without re-registering observers.
 func (pm *PerformanceMetrics) RecordDuration(name string, duration time.Duration) {
-	pm.histogramsMutex.Lock()
-	h, exists := pm.histograms[name]
-	if !exists {
-		h = &histogram{
-			buckets: make(map[float64]float64),
-		}
-		pm.histograms[name] = h
+	pm.histogramsMutex.RLock()
+	h, ok := pm.histograms[name]
+	pm.histogramsMutex.RUnlock()
+
+	if !ok {
+		// Histogram not pre-registered. Pre-registration is enforced by
+		// registerAllMetrics() and tested by the *_CountersRegistered
+		// tests. Silently ignoring the duration is the original behavior
+		// of this slow path; review the registration list if a histogram
+		// appears here unexpectedly.
+		return
 	}
-	pm.histogramsMutex.Unlock()
 
 	seconds := duration.Seconds()
 	h.mutex.Lock()
+	defer h.mutex.Unlock()
 	// Simple histogram: increment bucket counts
 	// Buckets: 0.001, 0.01, 0.1, 1, 10, 60, 300, 600, +Inf (overflow)
 	buckets := []float64{0.001, 0.01, 0.1, 1, 10, 60, 300, 600}
@@ -410,38 +406,35 @@ func (pm *PerformanceMetrics) RecordDuration(name string, duration time.Duration
 	// Also track total count and sum for average calculation
 	h.buckets[histogramCountKey]++ // count
 	h.buckets[histogramSumKey] += seconds
-	h.mutex.Unlock()
 }
 
 // SetGauge sets a gauge metric to the given value.
 // Observers are already registered in registerAllMetrics, so this method
 // only updates the gauge value without re-registering observers.
 func (pm *PerformanceMetrics) SetGauge(name string, value float64) {
-	pm.gaugesMutex.Lock()
-	g, exists := pm.gauges[name]
-	if !exists {
-		g = &gauge{value: value}
-		pm.gauges[name] = g
-		pm.gaugesMutex.Unlock()
+	pm.gaugesMutex.RLock()
+	g, ok := pm.gauges[name]
+	pm.gaugesMutex.RUnlock()
+
+	if !ok {
+		// Gauge not pre-registered. Pre-registration is enforced by
+		// registerAllMetrics() and tested by the *_CountersRegistered
+		// tests. Silently ignoring the value is the original behavior
+		// of this slow path; review the registration list if a gauge
+		// appears here unexpectedly.
 		return
 	}
-	pm.gaugesMutex.Unlock()
 
 	g.mutex.Lock()
+	defer g.mutex.Unlock()
 	g.value = value
-	g.mutex.Unlock()
 }
 
 // observeSystemMetrics periodically collects and updates system metrics
 // including CPU utilization, memory usage, and goroutine count.
 func (pm *PerformanceMetrics) observeSystemMetrics(ctx context.Context) {
-	ticker := time.NewTicker(60 * time.Second) // Update every 10 seconds
+	ticker := time.NewTicker(60 * time.Second) // Update every 60 seconds
 	defer ticker.Stop()
-
-	var lastMemStats runtime.MemStats
-	var lastUpdateTime time.Time
-	runtime.ReadMemStats(&lastMemStats)
-	lastUpdateTime = time.Now()
 
 	for {
 		select {
@@ -459,72 +452,12 @@ func (pm *PerformanceMetrics) observeSystemMetrics(ctx context.Context) {
 			memoryUsageMB := float64(memStats.Sys) / (1024 * 1024) // Total memory in megabytes
 			pm.SetGauge(MetricMemoryUsageMB, memoryUsageMB)
 
-			// Calculate CPU utilization using a more realistic heuristic
-			now := time.Now()
-			elapsed := now.Sub(lastUpdateTime)
-			if elapsed > 0 {
-				cpuUtilization := pm.calculateCPUUtilizationHeuristic(memStats, lastMemStats, elapsed)
-				pm.SetGauge(MetricCPUUtilization, cpuUtilization)
-
-				lastMemStats = memStats
-				lastUpdateTime = now
-			}
-
 			// Update OS-level machine stats
 			pm.updateMachineStats()
 		case <-ctx.Done():
 			return
 		}
 	}
-}
-
-// calculateCPUUtilizationHeuristic calculates CPU utilization using a heuristic
-// based on goroutine count and GC activity. This provides a reasonable approximation.
-// Note: For accurate CPU metrics, consider using OS-level process CPU time.
-func (pm *PerformanceMetrics) calculateCPUUtilizationHeuristic(
-	currentMemStats runtime.MemStats,
-	lastMemStats runtime.MemStats,
-	elapsed time.Duration,
-) float64 {
-	numCPU := float64(runtime.NumCPU())
-	activeGoroutines := float64(runtime.NumGoroutine())
-
-	// Calculate GC rate (GCs per second)
-	gcDelta := float64(currentMemStats.NumGC - lastMemStats.NumGC)
-	gcRate := gcDelta / elapsed.Seconds()
-
-	// Normalize goroutines: if we have more goroutines than CPU cores,
-	// we're likely using more CPU, but use a conservative multiplier
-	// Formula: (goroutines / CPU cores) * 10%, capped at 40%
-	goroutineContribution := (activeGoroutines / numCPU) * 10.0
-	if goroutineContribution > 40.0 {
-		goroutineContribution = 40.0
-	}
-
-	// GC contribution: frequent GCs indicate CPU work, but use conservative multiplier
-	// Formula: GC rate * 1%, capped at 20%
-	gcContribution := gcRate * 1.0
-	if gcContribution > 20.0 {
-		gcContribution = 20.0
-	}
-
-	// Total CPU utilization estimate
-	cpuUtilization := goroutineContribution + gcContribution
-
-	// Add a small base load if there are active goroutines
-	if cpuUtilization < 1.0 && activeGoroutines > 0 {
-		cpuUtilization = 1.0 // Minimum 1% if there are active goroutines
-	}
-
-	// Cap CPU utilization at 100%
-	if cpuUtilization > 100.0 {
-		cpuUtilization = 100.0
-	}
-	if cpuUtilization < 0.0 {
-		cpuUtilization = 0.0
-	}
-
-	return cpuUtilization
 }
 
 // updateMachineStats collects and updates OS-level machine statistics
@@ -557,25 +490,6 @@ func (pm *PerformanceMetrics) updateMachineStats() {
 		}
 	}
 }
-
-// NoOpPerformanceMetrics is a no-op implementation of PerformanceMetricsRecorder
-// that can be used when metrics are disabled.
-type NoOpPerformanceMetrics struct{}
-
-// IncrementCounter is a no-op.
-func (n *NoOpPerformanceMetrics) IncrementCounter(name string, value float64) {}
-
-// RecordDuration is a no-op.
-func (n *NoOpPerformanceMetrics) RecordDuration(name string, duration time.Duration) {}
-
-// SetGauge is a no-op.
-func (n *NoOpPerformanceMetrics) SetGauge(name string, value float64) {}
-
-// GetCounterValue always returns 0.
-func (n *NoOpPerformanceMetrics) GetCounterValue(name string) float64 { return 0 }
-
-// GetGaugeValue always returns 0.
-func (n *NoOpPerformanceMetrics) GetGaugeValue(name string) float64 { return 0 }
 
 // GetCounterValue returns the current value of a counter.
 func (pm *PerformanceMetrics) GetCounterValue(name string) float64 {
@@ -636,6 +550,21 @@ const (
 	MetricRedemptionProofSubmissionsSuccessTotal = "redemption_proof_submissions_success_total"
 	MetricRedemptionProofSubmissionsFailedTotal  = "redemption_proof_submissions_failed_total"
 
+	// Deposit Sweep Proof Submission Metrics (SPV maintainer)
+	MetricDepositSweepProofSubmissionsTotal        = "deposit_sweep_proof_submissions_total"
+	MetricDepositSweepProofSubmissionsSuccessTotal = "deposit_sweep_proof_submissions_success_total"
+	MetricDepositSweepProofSubmissionsFailedTotal  = "deposit_sweep_proof_submissions_failed_total"
+
+	// SPV Proof Skip Metrics (SPV maintainer)
+	// MetricSpvProofSkippedOutsideRelayRangeTotal counts the number of
+	// transactions whose SPV proofs were skipped because no relay range
+	// contained the transaction.
+	MetricSpvProofSkippedOutsideRelayRangeTotal = "spv_proof_skipped_outside_relay_range_total"
+	// MetricSpvProofSkippedExceededMaxHeadersTotal counts the number of
+	// transactions whose SPV proofs were skipped because the chain header
+	// count exceeded the configured maximum.
+	MetricSpvProofSkippedExceededMaxHeadersTotal = "spv_proof_skipped_exceeded_max_headers_total"
+
 	// Wallet Action Metrics (aggregate)
 	MetricWalletActionsTotal                 = "wallet_actions_total"
 	MetricWalletActionSuccessTotal           = "wallet_action_success_total"
@@ -690,7 +619,6 @@ const (
 	MetricWalletDispatcherRejectedTotal = "wallet_dispatcher_rejected_total"
 
 	// System Metrics
-	MetricCPUUtilization         = "cpu_utilization_percent"
 	MetricMemoryUsageMB          = "memory_usage_mb"
 	MetricGoroutineCount         = "goroutine_count"
 	MetricCPULoadPercent         = "cpu_load_percent"
