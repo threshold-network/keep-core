@@ -20,7 +20,7 @@ authoritative Decision block (including the re-open triggers) lives in
 | File | Role |
 |---|---|
 | `feature-spec.md` | **Canonical entry.** Reverse-engineered spec of the reservation feature as the PR stack actually implements it: two-phase settlement machine, data model, caps/fees, wallet-lifecycle integration, governance surface, deployment runbook, review-findings table, cross-cutting invariants, consolidated open questions (§15), gap analysis (§16), FROST interaction (§17). |
-| `pr-review-followups.md` | Commit-pinned review artifact (multi-lens reviews of #1088/@#1102). Follow-up items that need a design decision or a new mechanism, each ending in a "verify, don't assume" action aimed at a later PR. Evidence log that `feature-spec.md` §15/§16 point to. |
+| `pr-review-followups.md` | Commit-pinned review artifact (multi-lens reviews of #1088/#1102). Follow-up items that need a design decision or a new mechanism, each ending in a "verify, don't assume" action aimed at a later PR. Evidence log that `feature-spec.md` §15/§16 point to. |
 
 ### Planning
 | File | Role |
