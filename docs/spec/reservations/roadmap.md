@@ -523,13 +523,33 @@ count are the only two that are contract-verified):
   anchors, and the source slot is only released at settlement (`:819`) — an
   in-flight hop holds two.
 
-So B's pinning fix is **conditional on fresh Live wallet supply outpacing
-reservation creation**, whereas A+'s is unconditional because dissolution
-frees slots. If wallet creation stalls, B has no rotation target and every
-anchored wallet is pinned again — the §1.5 cliff returns as a capacity
-problem instead of a timer. At design-partner scale (§1.3) that is
-acceptable; at production scale it is not, so B is explicitly a
-launch-posture design that m2 must replace.
+So B's pinning fix is **conditional on free slots existing somewhere**, where
+total slots are `walletCount x maxReservationsPerWallet`, whereas A+'s is
+unconditional because dissolution recycles slots.
+
+That condition is a governance dial, not a supply race. `maxReservationsPerWallet`
+is validated only for the parameters around it — `updateReservationParameters`
+bounds the fee, min amount, term, renewal window and action timeout, but
+places **no bound on the count cap** (`Reservation.sol:1239-1281`) — and it is
+stored live rather than snapshotted per position (`:1281`, read at `:824`), so
+raising it takes effect for existing wallets immediately. Moving the m1 launch
+value of 1 to the documented default of 10 (feature-spec §10) multiplies
+capacity tenfold with zero new wallets.
+
+The real asymmetry is therefore **depleting versus renewing**, not bounded
+versus unbounded:
+
+- **A+**: slots recycle on every close, so capacity is self-renewing and
+  needs no attention.
+- **B**: slots are consumed monotonically. The knob multiplies the budget but
+  never refills it, and turning it up concentrates permanent pinning on
+  individual wallets — which is exactly what §1.4 set the cap to 1 to bound.
+
+So B trades a self-healing property for a managed one: an occupancy metric to
+watch, two dials to turn, and an accepted rise in per-wallet pinning
+concentration each time. At design-partner volumes (§1.3) the budget never
+depletes and the duty is theoretical; at production volumes it does, which is
+why B is explicitly a launch-posture design that m2 must replace.
 
 Re-anchor cannot itself be cut: a wallet holding anchors cannot begin closing
 until its reservation count reaches zero (§7 guards), so with no re-anchor
@@ -559,25 +579,34 @@ stays, which is exactly the §7 item 6 harvest.
 | 0+ | harvest only (§7 item 6) | 9,206 (-4) | fixed unconditionally | present, mandatory | concurrent | freed on close |
 | A | cut redemption + renewal | 6,171 / 5,435 | cliff at eligibility | present, mandatory | concurrent | freed on close |
 | A+ | A + unbounded re-anchor | 6,171 / 5,435 | fixed unconditionally | present, mandatory | concurrent | freed on close |
-| B | A+ and drop dissolution | 5,261 / 4,525 | fixed **only while fresh wallets exist** | **removed** | cumulative-ever | never freed |
+| B | A+ and drop dissolution | 5,261 / 4,525 | fixed **while free slots remain** | **removed** | cumulative-ever | never freed; budget = `walletCount x cap` |
 
 (Second figure is the no-router case. Rungs 0+ and A+ cost nothing in lines —
 they delete a `require` — so they are free relative to the rung below.)
 
-**A+ is the rung worth naming.** It closes the pinning cliff for the price of
+**A+ is the free rung.** It closes the pinning cliff for the price of
 deleting a `require`, and because dissolution survives, positions still close,
 so both caps stay concurrent and slots keep recycling. Everything from rung 0
-to A+ is either free or a pure omission.
+to A+ is either free or a pure omission, so A+ dominates 0, 0+ and A outright.
+It does **not** dominate B — B is a further real trade, below.
 
-**The A+ -> B step is the only real trade, and it has two axes, not one.** It
-buys removal of the §0.6 slashing vector and the mandatory keep-core
-dissolution duty. It pays with (a) cumulative-ever cap sizing and (b) a
-pinning guarantee that degrades from unconditional to conditional on Live
-wallet supply, since with `maxReservationsPerWallet = 1` every reservation
-permanently consumes a wallet and re-anchor needs a target holding zero.
-Axis (b) is the harder one: it converts a bounded timer risk into an
-unbounded capacity risk, and capacity is the thing governance cannot fix by
-raising a parameter.
+**The A+ -> B step is the only real trade, and it has two axes.** It buys
+removal of the §0.6 slashing vector and the mandatory keep-core dissolution
+duty — the latter sitting on the serial pre-audit path (§5 item 1), so this is
+a schedule saving and not only a code saving. It pays with (a) cumulative-ever
+cap sizing and (b) a pinning guarantee that degrades from self-renewing to
+governance-managed, since slots are consumed monotonically.
+
+Axis (b) is smaller than it first appears: total slots are
+`walletCount x maxReservationsPerWallet`, the count cap carries no validation
+bound and applies live to existing wallets, and the m1 launch value of 1 sits
+a factor of ten below the documented default. So the ceiling is raisable on
+demand. What survives is a duty rather than a risk — occupancy has to be
+watched, and each raise concentrates more permanent pinning per wallet, which
+is the blast radius §1.4 set the cap to 1 to bound. The decision is a scale
+question: at design-partner volumes the budget never depletes, and B is then
+the better design; at production volumes it does, and dissolution has to come
+back regardless.
 
 ### The cost side of a rewrite
 
