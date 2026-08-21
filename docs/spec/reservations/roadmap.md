@@ -156,22 +156,26 @@ the m1 `__gap` delta — agents re-add the previously-cut code.
 as retained reference); FROST/Schnorr re-anchor settlement patch (tracks
 §17, lands when FROST activates).
 
-## 3. Open decisions to confirm before this roadmap is authoritative
+## 3. Decisions confirmed (interactive walk, 2026-08-21)
 
-1. **Shape A (cut #1092 + #1096, keep dissolution) vs Shape B (keep #1092,
-   defer dissolution).** This roadmap recommends A; B is only for a team
-   that rejects a non-extendable hard term. **Shape A-without-dissolution
-   is not offered** — it produces permanently stuck past-grace positions
-   (verified: redemption reverts past grace at #1091:617/733/1081, and
-   nothing else releases a pinning anchor).
-2. **Is the whole-only exit gap (cutting #1096) acceptable for the first
-   release?** (recommended: yes, given the latency/surface objective; flag
-   it in release notes so partial-liquidity users know).
-3. Under Shape A, **pin the hard term + grace values** in the frozen-spec
-   sign-off ledger — they are user-facing deadlines with no extension, not
-   internal tuning knobs.
-4. Confirm the **one-audit-per-milestone** model (vs. deferring all
-   features behind one assembled audit) — this roadmap assumes the former.
+1. **Shape A** — cut `#1092` (renewal/expiry/rotation-window) + `#1096`
+   (partial redemption), **keep dissolution**. v1 = create → redeem
+   (whole, pre-grace) → re-anchor → dissolve (post-grace). Expiry is a
+   hard, non-extendable term/grace. **Shape A-without-dissolution is not
+   offered** (permanently stuck past-grace positions; verified
+   #1091:617/733/1081).
+2. **Whole-only exit gap accepted for m1.** Partial-liquidity holders
+   redeem-all then re-deposit/re-accept (acceptance fees, new term, lost
+   anchor age) until m2's #1096 lands. Flag in m1 release notes.
+3. **One audit per milestone** — m1 audit against the reduced assembly
+   (fastest first release, the stated objective); m2 gets a delta re-audit.
+   Higher total audit cost accepted.
+4. **Branch stays local** — `docs/reservations-spec` not pushed, no PR
+   (pending a separate request).
+
+**Carried chore (Shape A follow-through):** pin the hard `termSeconds` +
+`gracePeriod` values in the frozen-spec sign-off ledger — they are
+user-facing deadlines with no extension, not internal tuning knobs.
 
 ---
 
