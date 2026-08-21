@@ -57,8 +57,9 @@ position past its eligibility date would have no unpin path at all.
 | keep-core production Go | ~1,400-1,900 | same | ~1,100-1,400 | same |
 
 **A+ -> B saves 910 production Solidity (-15%), ~2,500 lines including tests,
-and ~300-500 production Go.** The router question is a bigger swing than
-dissolution, and it is cheap to resolve.
+and ~300-500 production Go.** The router question is the cheaper of the two
+to resolve — a compiler run rather than a protocol decision — but it is the
+smaller swing (736 / ~2,000).
 
 ## 4. A+ — pros and cons
 
@@ -140,9 +141,16 @@ integration and their storage — the exact material A+ removed — plus `#1096`
 
 Two consequences:
 
-- **Cumulative mass is unchanged.** 6,171 + 3,731 = 9,902 production lines,
-  identical to the stacked path's 9,206 + 696. The rewrite reallocates the
-  audit between milestones rather than reducing the total.
+- **Cumulative mass is unchanged — by assumption.** 6,171 + 3,731 = 9,902
+  production lines, identical to the stacked path's 9,206 + 696. That
+  equality is arithmetic, not measurement: m2's restore figure is taken as
+  exactly the 3,035 lines A+ removed, i.e. **the re-added redemption and
+  renewal are assumed to be written at stacked density**, not at the leaner
+  keep-factor density applied to everything A+ retained. Held to the same
+  discipline the retained files got (~0.7), the restore is nearer ~2,100 and
+  the cumulative total nearer ~9,000 — a real but modest saving. Either way
+  the rewrite mainly reallocates the audit between milestones rather than
+  reducing it.
 - **m2 stops being cheap.** Under the stacked plan m2 writes **zero** new
   Solidity — `#1096` is an open PR with its 3,259 lines already written
   (`roadmap.md` §5.1) — so the only new work is ~600-1,100 lines of keep-core
@@ -153,6 +161,59 @@ Two consequences:
 So the rewrite's -33% m1 audit is financed by a ~5.4x larger m2 audit and a
 second body of Solidity to write. That is the same conclusion §6 reaches from
 the volume side, arrived at from the code side.
+
+## 5.2 Launching B with no router
+
+Attractive on paper — 4,525 production lines, -51% against the stacked m1,
+the smallest surface on the ladder. Four drawbacks, the first of which may
+settle it outright.
+
+**1. It probably does not fit, and this is arithmetic rather than opinion.**
+The measured figures (`feature-spec.md` §2) are: EIP-170 limit 24,576 B;
+`Bridge` after the router refactor 22,403 B at `runs=100`, leaving **2,173 B
+of margin**; `ReservationRouter` **4,245 B** for its 24 entry points.
+Inlining the surface puts `Bridge` at ~26,648 B — over by ~2,072 B — so the
+surface has to shrink by **49%** to fit. B removes 5 of the 24 entry points
+(`requestReservedRedemption`, `notifyReservedRedemptionVeto`,
+`extendReservation`, `requestReservationDissolution`,
+`walletPendingDissolution`) and simplifies `submitReservationProof`. Even a
+generous 40% bytecode reduction lands ~374 B over; a proportional 21%
+reduction lands ~1,188 B over. Estimate, not measurement — but the prior is
+"does not fit", and the pre-fix inline attempt was already 71 B over with the
+optimizer turned down.
+
+**2. It removes the extension budget precisely where it is guaranteed to be
+needed.** B is by construction a launch posture that m2 must replace (§5), and
+§5.1 shows m2 has to add ~3,035 production lines of whole redemption, renewal
+and veto integration plus `#1096`'s partial redemption — ten-plus new entry
+points. With no router there is nowhere to put them. B-no-router therefore
+**defers** the router rather than deleting it, the same shape as its capacity
+loan.
+
+**3. Introducing the router later costs a `Bridge` implementation upgrade.**
+The fallback dispatcher and the one-time `setReservationRouter` live in
+`Bridge.sol` (`:2114-2148`). Shipping without them makes m2's router a
+proxy-admin ceremony. **Cheap mitigation:** ship the fallback and the setter
+in m1 with the router address left unset — `fallback` then reverts
+`"Unknown function"` harmlessly, and the option costs a few hundred bytes.
+Worth doing even if the surface does fit.
+
+**4. B is the variant least able to afford no headroom.** It carries a
+standing slot-occupancy duty and no dissolution path, so the plausible hotfix
+is exactly the kind that needs new bytecode — a governance force-close to
+unpin a wallet, say. With the router there is ~20 kB free for it; without,
+there is none. Note the limit of this argument: the router buys **space, not
+ceremony** — invariant 4 means replacing router code is a `Bridge`
+implementation upgrade either way.
+
+A fifth, softer point: the router question is compiler-decidable and
+reversible, while B is a protocol decision. Bundling them means a compiler
+surprise re-opens the launch shape.
+
+**Verdict: take B with the router if B is taken at all.** The router is the
+smaller swing (736 lines against dissolution's 910), it is what makes m2
+reachable without a re-architecture, and B is the rung most likely to need
+room to move.
 
 ## 6. How to choose
 

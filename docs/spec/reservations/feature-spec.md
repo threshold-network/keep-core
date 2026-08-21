@@ -1192,7 +1192,6 @@ The deployment runbook is detailed and its scripts (`95_deploy_reservation_vault
   a procedural reminder in docs, not contract-enforced. The vault-re-pointing
   invariant **is** contract-enforced (§15, `Reservation.sol:1267-1274`).
 
-
 ---
 
 ## 17. FROST/Schnorr migration interaction (forward-looking, non-blocking)
