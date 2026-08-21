@@ -518,6 +518,44 @@ Re-anchor cannot itself be cut: a wallet holding anchors cannot begin closing
 until its reservation count reaches zero (§7 guards), so with no re-anchor
 and no dissolution, every anchored wallet is pinned for the whole term.
 
+### The variants are a ladder, not a menu
+
+A and B are not alternatives: **B is A plus two further changes**, so its
+numbers already include A's cuts. The two further changes are also ordered
+rather than independent, which creates a useful intermediate rung.
+
+**Unbounding re-anchor is a prerequisite for dropping dissolution, not a
+companion to it.** In a create-only m1 the only paths that close a position
+are `settleDissolution` (`ReservationProofs.sol:1140-1142`) and
+`strandReservation`, which requires the wallet to be `Terminated`; the
+remaining close sites (`:715`, `:836`) sit inside
+`submitReservedRedemptionProof` and are unreachable (§0.2). Dropping
+dissolution while keeping re-anchor's `< dissolutionEligibleAt` gate
+therefore leaves a position past its eligibility date with **no unpin path at
+all** — strictly worse than the stacked design, where dissolution eventually
+opens. The converse is not true: re-anchor can be unbounded while dissolution
+stays, which is exactly the §7 item 6 harvest.
+
+| Rung | Change | Production Solidity | §1.5 pinning | §0.6 slashing vector | Cap semantics |
+|---|---|---|---|---|---|
+| 0 | m1 as stacked | 9,206 | cliff at eligibility | present, keep-core duty mandatory | concurrent |
+| 0+ | harvest only (§7 item 6) | 9,206 (-4) | fixed | present, mandatory | concurrent |
+| A | cut redemption + renewal | 6,171 / 5,435 | cliff at eligibility | present, mandatory | concurrent |
+| A+ | A + unbounded re-anchor | 6,171 / 5,435 | fixed | present, mandatory | concurrent |
+| B | A+ and drop dissolution | 5,261 / 4,525 | fixed | **removed** | cumulative-ever |
+
+(Second figure is the no-router case. Rungs 0+ and A+ cost nothing in lines —
+they delete a `require` — so they are free relative to the rung below.)
+
+**A+ is the rung worth naming.** It closes the pinning cliff for the price of
+deleting a `require`, and because dissolution survives, positions still close
+and the cap stays concurrent rather than cumulative-ever. Only the step from
+A+ to B trades that away, and that step is the one that buys removal of the
+§0.6 slashing vector and the mandatory keep-core duty. So the genuine
+decision is not "A or B" but **whether removing the slashing vector is worth
+a cumulative-ever cap** — every other difference between them is free or
+strictly ordered.
+
 ### The cost side of a rewrite
 
 None of this is free, and the comparison is not like-for-like:
