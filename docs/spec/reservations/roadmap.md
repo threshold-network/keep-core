@@ -540,8 +540,13 @@ loses on time-to-first-release, because it trades reviewed code for
 unreviewed code without shortening the keep-core path. It is justified only
 if audited mass is the dominant objective *and* re-review is genuinely cheap.
 The one element worth harvesting regardless of that decision is **variant B's
-unbounded re-anchor**, which removes a slashing vector and a pinning cliff
-from the stacked design too — see §7 item 6.
+unbounded re-anchor**, which closes §1.5's pinning cliff in the stacked
+design too — see §7 item 6. Note the limit of that harvest: it fixes the
+pinning cliff **only**. It does not touch §0.6, because dissolution's
+reachability and the timeout-slashing path are independent of re-anchor's
+gate, so keep-core dissolution stays mandatory in the stacked design. The
+slashing vector disappears only in variant B, where the dissolution entry
+point does not exist.
 
 ## 6. Decisions confirmed
 
@@ -582,11 +587,19 @@ from the stacked design too — see §7 item 6.
    surface objective? The alternative (intra-PR surgery per §0.1) costs more
    and risks hand-reverting reviewed expiry semantics.
 6. **Harvest variant B's unbounded re-anchor into the stacked design?** (§5.2)
-   Removing re-anchor's `< dissolutionEligibleAt` gate (`Reservation.sol:785-788`)
-   would close §1.5's pinning cliff and reduce §0.6's dissolution duty from
-   *mandatory* to *desirable*, without a rewrite. It is a small edit to
-   `#1091`, but it changes reviewed logic in a merged-and-folded PR, so it
-   needs a deliberate yes/no rather than a drive-by patch.
+   Removing re-anchor's `< dissolutionEligibleAt` gate
+   (`Reservation.sol:785-788`) would close §1.5's pinning cliff without a
+   rewrite. **It does not affect §0.6:** dissolution stays permissionless and
+   `notifyReservationActionTimeout` still slashes on non-execution, so
+   keep-core dissolution remains mandatory either way. Re-anchor also cannot
+   preempt a pending dissolution — it requires `state == Active` (:781) — and
+   rotating an eligible position merely moves the execution duty to the
+   target wallet, since dissolution reads the current custodian
+   (`:904`, gated by `state == Active` and `>= dissolutionEligibleAt` at
+   `:895-901`). So this is a pinning fix, not a scope reduction. It is a
+   small edit to `#1091`, but it changes reviewed logic in a
+   merged-and-folded PR, so it needs a deliberate yes/no rather than a
+   drive-by patch.
 7. **Is deployed-and-audited mass the dominant objective, or time-to-first-
    release?** (§5.2) A from-scratch essentials rewrite cuts production
    Solidity 33-51% but discards 9,206 reviewed lines plus 15,896 test lines
