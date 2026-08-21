@@ -1,15 +1,21 @@
 # UTXO Reservations Feature — Reverse-Engineered Spec
 
 Status: DRAFT — reverse-engineered from 9 open/draft PRs, none merged as of
-2026-08-19. Parameter values below are provisional (owner-set 2026-08-09,
-"to be revisited before launch"); nothing is final until governance sign-off.
+2026-08-19; **1 of 9 (#1102) merged 2026-08-21** (into `feat/utxo-reservation-core`,
+the #1088 branch — see §15). Parameter values below are provisional
+(owner-set 2026-08-09, "to be revisited before launch"); nothing is final
+until governance sign-off.
 
 ## Sources
 
-All PRs are OPEN/DRAFT, authored by mswilkison, forming one stacked feature
+All PRs are authored by mswilkison, forming one stacked feature
 chain implementing a new "UTXO reservation" system for tBTC redemptions:
 segregated custody with in-kind (same-coin) redemption, as an alternative to
-the existing pooled/shared-UTXO redemption model.
+the existing pooled/shared-UTXO redemption model. **8 of the 9 remain
+OPEN/DRAFT; `#1102` merged 2026-08-21** into `feat/utxo-reservation-core`
+(the head branch of the stack root `#1088`), folding its 30-review-findings
+fix into the stack's base — see merge plan `epic-merge-plan.md` §0.1 for the
+verified live inventory.
 
 ### keep-core (wallet/signer side, Go)
 
@@ -161,8 +167,13 @@ originating deposit / anchor UTXO). Key fields (accreted across #1088→#1096):
   retry credit; binds a retry to the exact amount/shape (whole vs partial)
   of that source generation
 - `address owner`, anchor UTXO reference, per-wallet enumeration bookkeeping
-  (`walletReservations`, swap-remove maintained — single canonical name), reverse anchor lookup
-  (`reservationsByAnchorUtxo`, plural, matching source)
+  (count `walletReservationsCount` plus, on the #1094 line, a swap-remove
+  key list `walletReservationKeys`/`walletReservationKeyIndex`), reverse
+  anchor lookup `reservationsByAnchorUtxo` (UTXO key → reservation key,
+  declared on the #1094 line and used by `strandReservation` — **#1102
+  removed it from the merged base, so its re-introduction on #1094's line
+  is an open reconciliation when the upper stack rebases over the #1102
+  fold**)
 
 ### 3.2 Action generation (`ReservationAction`, added in #1091)
 
@@ -201,10 +212,25 @@ Every Bitcoin-side action against a position is an explicit, nonce-keyed
 
 `BridgeState.Storage` is **append-only**: every new field decrements
 `__gap` by exactly the slots added; mappings append freely; nothing is
-reordered. `__gap` went 48 → 42 (#1088) → 41 → 39 (#1091) → 36 → 32 (#1094),
-consistent with this discipline. The same discipline applies to the
-upgradeable `RedemptionWatchtower` (reservation-generation keys reuse
-existing veto mappings — no new storage prefix).
+reordered. Measured per branch (2026-08-21), `__gap` reaches 41 by **two
+independent routes that then collide**:
+
+- **core branch**: 48 → 42 (#1088) → **41 (#1102, merged 2026-08-21)**.
+- **descendant chain** (each branch cut from the pre-#1102 core at 42, so
+  these are pre-rebase values): 42 → **41 (#1090 router)** → 39
+  (#1091 settlement, #1092 renewal) → 37 (#1093 backing) → 34
+  (#1094 guards, #1095 release) → 33 (#1096 partial-redemption).
+
+Both #1102 (on core) and #1090 (on its own branch) decrement 42 → 41 by
+different additions. After #1090 (and the stack above it) rebases over the
+#1102 fold, the two decrements compete for the same slot budget — the
+append-only discipline must be re-verified against the combined diff, not
+each PR's own parity test (this is the concrete storage-layout item the
+#1090 rebase in §3 step 2 of `epic-merge-plan.md` must resolve, and part of
+the §5 audit's 'append-only end-to-end across all 8 PRs' check). The same
+discipline applies to the upgradeable `RedemptionWatchtower`
+(reservation-generation keys reuse existing veto mappings — no new storage
+prefix).
 
 ---
 
@@ -541,8 +567,10 @@ time (never at proof time):
   is the evidence hook for a future governance compensation module
   (interface deliberately not yet stubbed in storage).
 - **L-01 — monitoring surface**: per-wallet reservation enumeration
-  (`walletReservations`, swap-remove maintained), reverse anchor lookup
-  (`reservationsByAnchorUtxo`), per-wallet count/amount getters, pending-
+  (`walletReservationsCount` + the #1094-line `walletReservationKeys`
+  swap-remove list), reverse anchor lookup (`reservationsByAnchorUtxo` —
+  #1094-line only; removed from the merged base by #1102, reconcile on
+  rebase), per-wallet count/amount getters, pending-
   deposit getters.
 - **Wallet closing guard**: a wallet holding reservation anchors (or
   pending reservation actions) cannot *begin* closing — moving-funds
@@ -932,7 +960,11 @@ gap the runbook's keep-core follow-up section calls out.
   build) per the Decision in `exit/README.md`.
 - **keep-core is two redesign generations behind** the current tbtc-v2
   design (§13) — landing keep-core support is explicitly gated on the
-  tbtc-v2 ABI publishing, itself gated on #1088-#1096 merging. Verified
+  tbtc-v2 ABI publishing, itself gated on #1088-#1096 merging. The required
+  second keep-core PR is **still not open as of 2026-08-21** (verified in
+  the merge-plan inventory: `#4238` is the only keep-core PR targeting
+  `reservations-epic`), so keep-core support is a hard hold, not a pending
+  review. Verified
   directly: `pkg/tbtc/gen/pb/` on the keep-core PR branch has no
   reservation message types (JSON marshaling only, as the PR's own TODOs
   say), and the six new `TbtcChain` Ethereum-binding methods are stubs
@@ -953,10 +985,10 @@ gap the runbook's keep-core follow-up section calls out.
   (followups item 7). Governance must pick among four levers (relational
   `require` / per-position fraction of `mintedAmount` / proportional dust
   floor / leave unbounded with monitoring — *`ReservationDissolved` exposes
-  realized fee loss per dissolution only on the #1102+ line; the #1091+
-  event carries no fee fields, so the monitor would need the fee-bearing
-  variant*). Decision deferred to the #1093 backing
-  review.
+  realized fee loss per dissolution on the `#1102` line now (merged 2026-08-21
+  into `feat/utxo-reservation-core`); the `#1091+` event carries no fee
+  fields, so a monitor on the merged base has the fee-bearing variant*). Decision
+  deferred to the #1093 backing review.
 - **Stranding reachability from all three termination paths: verify,
   don't assume.** H-06's fix requires wallet `Terminated`, which the
   moving-funds / moved-funds-sweep / fraud-challenge-defeat timeout paths
@@ -997,9 +1029,33 @@ gap the runbook's keep-core follow-up section calls out.
   resolved." No external/third-party audit has been engaged yet — the
   closed findings are from internal adversarial self-review rounds only.
 - **Stack branches are behind their bases.** `gh pr view` on #1094 and
-  #1096 reports `Merge state: BEHIND` (checked 2026-08-19) — normal for
+  #1096 reported `Merge state: BEHIND` (checked 2026-08-19) — normal for
   active stacked work, but real rebase/conflict risk sits between here and
-  a mergeable stack.
+  a mergeable stack. That risk has since materialized: **#1090 is
+  CONFLICTING with its base as of 2026-08-21**, a mechanical result of
+  `#1102` merging into `feat/utxo-reservation-core` (the branch #1090 is cut
+  from) — `feat/utxo-reservation-router` needs a rebase over the `#1102`
+  fold before the stack can merge (§3 step 2 of `epic-merge-plan.md`).
+- **`__gap` reaches 41 by two independent decrements — rebase must
+  reconcile the slot budget (§3.4).** Measured 2026-08-21: the core branch
+  hit 41 via #1102 (42 → 41, merged), while the descendant chain's own
+  #1090 router also decrements 42 → 41 on its branch (then → 39 settlement/
+  renewal → 37 backing → 34 guards/release → 33 partial-redemption,
+  pre-rebase). Two different additions both landing on 41 means the two
+  decrements compete for the same slot budget when #1090+ rebase over the
+  #1102 fold — the combined storage-layout parity must be re-run against
+  the rebased whole, not trusted to each PR's own single-increment parity
+  test. This is the concrete storage item in §3 step 2 of
+  `epic-merge-plan.md` and belongs on the §5 audit checklist.
+- **`reservationsByAnchorUtxo` is #1094-line only, removed from the merged
+  base by #1102 — reconcile on rebase.** The reverse-anchor lookup (UTXO
+  key → reservation key, used by `strandReservation`) exists on
+  `feat/utxo-reservation-guards` but was deleted from `feat/utxo-reservation-core`
+  by the #1102 merge (which moved anchor consumption to `spentMainUTXOs`).
+  #1094's declaration must be confirmed compatible with the #1102 base when
+  the upper stack rebases — verify stranding still resolves anchors, or the
+  mapping is re-introduced on the base. Cross-referenced from §3.1 and §12
+  L-01.
 - **Positive, verified counterpoint**: CI is currently green on both
   stack tips — `contracts-build-and-test` and `contracts-slither` pass on
   tbtc-v2 #1096, and the full Go suite (`client-build-test-publish`,
@@ -1045,8 +1101,11 @@ gap the runbook's keep-core follow-up section calls out.
     that is nowhere quantified. Estimate termination hazard per wallet-year
     from Bridge event history (a computation finishable now, no new build)
     rather than relying on Tier 0's near-zero realized-stranding sample.
-- All 9 PRs are still **DRAFT / REVIEW_REQUIRED**, none merged; the stack
-  order is meaningful (each depends on its parent's storage/state
+- All 9 PRs started as **DRAFT / REVIEW_REQUIRED, none merged**; that is
+  now down to **8 of 9 remaining draft** — `#1102` merged 2026-08-21 into
+  the stack root's own branch (`feat/utxo-reservation-core`), so its 30
+  fixes sit on #1088's tip rather than as a separate live PR. The
+  stack order is meaningful (each depends on its parent's storage/state
   invariants) and should land in the git-stack order given in §Sources.
 - **FROST/Schnorr migration compatibility** (forward-looking, non-blocking today — no
   FROST wallet exists yet): re-anchoring a reservation to a future FROST wallet already
@@ -1057,7 +1116,7 @@ gap the runbook's keep-core follow-up section calls out.
 
 ---
 
-## 16. Completeness assessment (gap analysis, 2026-08-19)
+## 16. Completeness assessment (gap analysis, 2026-08-19; state refreshed 2026-08-21)
 
 **Verdict: not code-complete.** The design is thorough and the Solidity
 side is heavily implemented and tested, but three concrete blockers stand
@@ -1065,7 +1124,10 @@ between this and a shippable feature:
 
 1. **The tbtc-v2 stack hasn't merged.** 8 draft PRs, meaningful stack
    order, branches already drifting behind their bases (BEHIND merge
-   state on #1094/#1096).
+   state on #1094/#1096; **#1090 now CONFLICTING** as of 2026-08-21 after
+   `#1102` — itself the one merged PR, into the stack root's branch —
+   landed in its base). The stack still lands as one unit per the
+   deploy-inert-then-activate constraint (§11).
 2. **No external audit gate passed.** The runbook's own pre-audit
    checklist (§11) is unchecked end to end. What's closed so far are
    internal adversarial review-round findings (§12), not a third-party
@@ -1077,7 +1139,8 @@ between this and a shippable feature:
    that's actually landing in #1091-#1096. Ethereum bindings are stubbed
    with errors, there is no protobuf marshaling (JSON placeholder only),
    no coordination-executor wiring, and no integration tests. A **second,
-   currently-unwritten keep-core PR** is required before any wallet node
+   currently-unwritten keep-core PR** (still not open as of 2026-08-21 and
+   gated on the tbtc-v2 ABI) is required before any wallet node
    can act as custodian under this design — this isn't a follow-up detail,
    it's the entire client-side implementation of the two-phase protocol.
 

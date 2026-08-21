@@ -230,7 +230,11 @@ Per spec §16, no external audit has happened. Before requesting one:
       clean (already true per CI), fork dry-run of the full activation
       sequence (not yet done), storage-layout diff reviewed as
       append-only end-to-end across all 8 PRs combined (each PR's own
-      parity test only checks its own increment).
+      parity test only checks its own increment). **Run against the
+      rebased whole**: `__gap` reaches 41 by two independent decrements
+      (#1102 on the core branch, #1090's own router step), so the combined
+      append-only diff after the #1090 rebase over the #1102 fold is the
+      actual gate (spec §3.4, §15).
 - [ ] Engage the external auditor against `reservations-epic`, not against
       individual PR branches — the audit needs the fully-assembled feature.
 
