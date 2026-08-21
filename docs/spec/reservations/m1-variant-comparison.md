@@ -346,6 +346,58 @@ successor router inherits them, deferred selectors absent from m1's router but
 their storage present, and the m2 sequence written into the release runbook
 now while the reasoning is fresh.
 
+## 5.5 If A+ ships: the holes to close
+
+A+ is the recommended path (§6), so it needs its own checklist. Most items
+are shared with B — only the first is A+-specific, and it is the one that can
+slash honest operators if it slips.
+
+**Launch-blocking**
+
+1. **keep-core dissolution wired before the first position's
+   `dissolutionEligibleAt`.** A+-specific and the sharpest item.
+   `requestReservationDissolution` has no `msg.sender` check
+   (`Reservation.sol:887-890`) and its router wrapper has no modifier
+   (`ReservationRouter.sol:302-304`), so **any passer-by can open a
+   dissolution against an honest wallet** once a position passes eligibility.
+   If no executor submits the proof within `reservationActionTimeout`,
+   `notifyReservationActionTimeout` slashes the wallet operators — the natspec
+   is explicit that `walletMembersIDs` is "only consulted for redemption and
+   dissolution timeouts (the slashing path)" (`:965-967`). So the term length
+   is not only a promise clock; it is the deadline by which the dissolution
+   executor must be in production. This is the §0.6 duty, and it is
+   dischargeable — but only by shipping client code, not by a contract
+   parameter.
+2. **Redemption kept unreachable behind an owner-settable flag** (shared;
+   `roadmap.md` §0.2/§2.2). `ReservationVault.sol` ships `redeemReservation`
+   and `retryRedeemReservation`, and **has no redemption pause** — its
+   `pauseRenewals`/`blockRenewal` pair (`:409`, `:424`) covers renewals only.
+   Add a `redemptionsEnabled` flag defaulting to false, mirroring the existing
+   guardian pattern, so m2 is a governance transaction rather than a vault
+   redeploy. §2.2 records why the redeploy alternative is hazardous: the vault
+   is a plain `Ownable`, not proxy-upgradeable, and swapping it strands
+   deposits revealed to the old vault but not yet accepted.
+3. **`reservationsByAnchorUtxo` reconciliation** (shared; `roadmap.md` §4
+   items 2-3). `#1091` writes the mapping (`ReservationProofs.sol:465`),
+   `#1094` writes it again for stranding, and `#1102` removed it from the
+   merged base in favour of `spentMainUTXOs`. Two write sites, one removal —
+   fix together or stranding breaks, and stranding is the fallback the whole
+   loss story rests on (`exit/README.md`).
+4. **Storage-complete at m1** (shared, §5.4 item 3). §11 forbids a live
+   `ReservationAction` from spanning a layout change, so every field m2 will
+   read must exist unread at m1.
+
+**Operational** — the same list as §5.4 minus the free-slot and occupancy
+monitors, since dissolution recycles slots, plus one addition: the
+**dissolution executor** joins acceptance and re-anchor as a third action type
+on the same coordination executor. That is incremental work on a component
+that must exist regardless, which is precisely why §6 prefers this duty over
+B's cliff.
+
+**What A+ does not need:** the global active-position cap (§5.4 item 1) is
+not load-bearing here, because positions close and both caps stay concurrent.
+The cap-dial runbook and position-age report also fall away.
+
 ## 6. How to choose
 
 Earlier drafts framed this as a volume question. §5.3 supersedes that:
