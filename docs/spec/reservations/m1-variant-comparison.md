@@ -106,7 +106,8 @@ smaller swing (736 / ~2,000).
 - **Nothing closes a position except wallet termination.** Wallet slots are
   never freed and the global amount cap becomes cumulative-ever rather than
   concurrent.
-- **Pinning fix is conditional on free slots**, where total slots are
+- **Pinning fix is conditional on free slots** — and §5.3 traces where that
+  condition ends. Total slots are
   `walletCount x maxReservationsPerWallet`. Re-anchor requires
   `targetCount <= maxReservationsPerWallet` (`Reservation.sol:820-827`), so a
   hop needs a Live target holding zero anchors, and the source slot is
@@ -240,17 +241,141 @@ back, so skipping it in m1 buys ~736 lines against a re-architecture later.
 The router is also the smaller of the two swings (736 lines against
 dissolution's 910), and B is the rung most likely to need room to move.
 
+## 5.3 The B endgame, verified
+
+§5's cost list called B's pinning fix "conditional on free slots". Tracing the
+chain to its terminal state makes it sharper: the condition does not merely
+degrade, it **resolves into slashing and stranding**. Every step is
+source-verified on `feat/utxo-reservation-guards`.
+
+1. In B nothing closes a position except stranding. `settleDissolution` is
+   gone, `ReservationProofs.sol:715`/`:836` are the redemption path
+   (unreachable, §0.2), and `strandReservation` requires the wallet to be
+   `Terminated`.
+2. Occupancy is therefore **monotonic**, tending to
+   `liveWalletsCount x maxReservationsPerWallet`.
+3. At full occupancy re-anchor reverts: it needs a Live target holding a free
+   slot (`targetCount <= maxReservationsPerWallet`, `Reservation.sol:820-827`).
+4. An anchored wallet then cannot retire. `beginWalletClosing` requires
+   `walletReservationsCount == 0` — "Wallet still custodies reservations"
+   (`Wallets.sol:675-677`, repeated at `:707-709`).
+5. Its MovingFunds clock expires and `notifyWalletMovingFundsTimeout`
+   **seizes operator stake** (`ecdsaWalletRegistry.seize` with
+   `movingFundsTimeoutSlashingAmount`) and terminates the wallet
+   (`Wallets.sol:493-523`).
+6. Termination makes `notifyReservationStranded` available, converting the
+   depositor's segregated in-kind claim into an ordinary pooled claim.
+
+So B's capacity limit terminates in **honest operators slashed and depositors
+stranded** — the same harm class as the §0.6 vector B was chosen to remove,
+arriving through a different door. One difference decides the variant choice:
+§0.6 is a **liveness duty**, dischargeable by wiring keep-core correctly; this
+is a **capacity limit**, dischargeable by no amount of client-side diligence.
+And it is reached by arithmetic, not by an attacker.
+
+**The condition that makes B defensible** — the amount cap must bind before
+the slot cap ever does:
+
+```
+reservationMaxTotalAmount / reservationMinAmount  <<  liveWalletsCount x maxReservationsPerWallet
+       (max positions the amount cap permits)              (total slots)
+```
+
+At design-partner scale (§1.3: tiny `reservationMaxTotalAmount`, cap = 1) this
+holds with wide margin. It fails **silently** if the amount cap is later
+raised without slots growing to match — nothing on-chain relates the two
+today.
+
+## 5.4 If B ships anyway: the holes to close
+
+**Security, contract-level**
+
+1. **Global active-position cap, enforced at acceptance.** The strongest
+   single addition, because it converts the silent cliff into a revert.
+   `BridgeState.Storage` has `liveWalletsCount` (`:253`),
+   `reservationTotalAmount` (`:378`) and per-wallet counts, but **no global
+   position counter** — so add `activeReservationsCount` plus a governance
+   `maxActiveReservations`, set conservatively below the slot floor, and
+   require it at acceptance. Roughly 20 lines and one parameter; makes §5.3's
+   endgame unreachable by construction rather than by monitoring.
+2. **Do not add a bookkeeping-only force-close.** Already analysed and
+   rejected (`roadmap.md` §0.4): applied to a Live wallet it orphans the
+   anchor UTXO outside `mainUtxo` with no authorising spend path while the
+   owner keeps their claim, *creating* an `anchorAmount` shortfall instead of
+   recognising one. Stranding is sound only because a `Terminated` wallet's
+   BTC is already presumed lost. Stated explicitly so it is not re-proposed
+   as the hotfix when the cliff approaches.
+3. **Storage-complete now, behaviour-minimal now** (§2.1). Every field the
+   full feature will ever need — redemption settlements, veto delay, retry
+   credit, renewal window, `dissolutionEligibleAt` — must exist in
+   `BridgeState.Storage` at m1 even though m1 reads none of them, because §11
+   forbids a live `ReservationAction` from ever spanning a layout change.
+   This is the single thing that makes m2 an upgrade rather than a migration.
+4. **Relate the two caps in governance.** Nothing today prevents raising
+   `reservationMaxTotalAmount` past slot capacity. Either add the relational
+   check or emit both sides in `ReservationParametersUpdated` and make it a
+   runbook gate — but do not leave §5.3's condition purely tribal.
+
+**Operational**
+
+1. **Re-anchor executor on `WalletMovingFunds`.** In B this is the *only*
+   unpin, so executor failure ends in slashing rather than delay. Needs
+   alerting, not just logging.
+2. **Free-slot monitor** — count Live wallets with
+   `walletReservationsCount < maxReservationsPerWallet`. This is the leading
+   indicator of §5.3; alert when the target pool falls below a floor.
+3. **Occupancy monitor** — `activeReservationsCount` against
+   `liveWalletsCount x cap`, alerting well before saturation.
+4. **Action-timeout watch** — pending acceptances and re-anchors approaching
+   `reservationActionTimeout`, since expiry slashes.
+5. **Stranding watcher** on `Terminated` wallets, to release capacity.
+6. **Stale reserved-deposit cleanup** (`notifyStaleReservedDeposit`).
+7. **Cap-dial runbook** — pre-agreed trigger, executor and the accepted
+   blast-radius consequence of each raise, decided before launch rather than
+   under pressure.
+8. **Position-age report.** Nothing closes in B, so age is the only proxy for
+   accumulating permanent liability.
+
+**Making m2 easier**
+
+Note what is *not* available: replacing router code is a `Bridge`
+implementation upgrade by design (invariant 4), so no m1 choice avoids that
+ceremony. What m1 can do is ensure the ceremony is a code swap and nothing
+more — storage complete (item 3), the four router invariant tests pinned so a
+successor router inherits them, deferred selectors absent from m1's router but
+their storage present, and the m2 sequence written into the release runbook
+now while the reasoning is fresh.
+
 ## 6. How to choose
 
-This is a volume question, not a code-size question.
+Earlier drafts framed this as a volume question. §5.3 supersedes that:
+B's terminal state is reached by arithmetic, so the question is whether an
+on-chain bound keeps the system away from it.
 
 | Condition | Choice | Reason |
 |---|---|---|
-| Design-partner scale holds (deploy-inert, tiny amount cap, cap = 1, a handful of positions) | **B** | The slot budget never depletes, the operational duty is theoretical, and B removes both a slashing vector and critical-path work |
-| Any realistic chance of m1 volume | **A+** | B's capacity is a loan, and dissolution returns in m2 regardless, so it would be paid for twice |
+| Default | **A+** | Keeps dissolution — the only sound unpin for a *live* wallet. B's substitutes are a governance dial and a promise |
+| B, only with §5.4 item 1 shipped | acceptable | A global active-position cap below the slot floor makes §5.3 unreachable by construction |
+| B without that cap | **reject** | The endgame is honest operators slashed and depositors stranded, and monitoring cannot prevent it — only notice it |
+
+**Recommendation: implement A+.** Not a confirmed decision — the call is the
+team's — but the argument is one-sided enough to state plainly:
+
+- B's saving is 910 production Solidity lines and ~300-500 Go. §5.4 item 1
+  spends ~20 of those lines plus a governance parameter just to make B safe,
+  and §5.4's operational list is longer than A+'s.
+- A+'s cost is the §0.6 permissionless-dissolution slashing vector, which is a
+  **liveness duty on an executor that must exist anyway** for acceptance and
+  re-anchor. Adding a third action type to a working executor is incremental;
+  it is not a new class of work.
+- B's cost is a capacity limit whose terminal state is slashing and stranding,
+  and no client-side diligence discharges it.
+- A+ therefore trades a dischargeable duty for an undischargeable hazard —
+  the wrong direction.
 
 A+ dominates rungs 0, 0+ and A outright — every step up to it is free or a
-pure omission. It does **not** dominate B.
+pure omission. Against B it is a judgement, and the judgement is that a
+dischargeable duty beats a structural cliff.
 
 ---
 
@@ -273,5 +398,15 @@ branch-tagged because the expiry and guard models differ across the stack:
   `notifyReservationStranded` (:1363-1378), router wrapper
   (`ReservationRouter.sol:302-304`), position-closing sites
   (`ReservationProofs.sol:715, :836, :1140-1142`).
+- `feat/utxo-reservation-guards`, wallet lifecycle and storage (§5.3/§5.4):
+  `beginWalletClosing` requiring a zero reservation count
+  (`Wallets.sol:675-677`, repeated at `:707-709`),
+  `notifyWalletMovingFundsTimeout` seizing operator stake and terminating
+  (`:493-523`), and the absence of a global position counter beside
+  `liveWalletsCount` (`BridgeState.sol:253`) and `reservationTotalAmount`
+  (`:378`).
+- `#1090`-era bytecode measurements (§5.2) are quoted from `feature-spec.md`
+  §2, not re-measured here; `ReservationRouter.sol` inheriting
+  `Governable, Initializable` was confirmed against source.
 
 A comparison for decision, not a commitment of dates or scope.

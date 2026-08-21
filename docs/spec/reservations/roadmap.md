@@ -604,20 +604,27 @@ a schedule saving and not only a code saving. It pays with (a) cumulative-ever
 cap sizing and (b) a pinning guarantee that degrades from self-renewing to
 governance-managed, since slots are consumed monotonically.
 
-Axis (b) is smaller than it first appears: total slots are
-`walletCount x maxReservationsPerWallet`, the count cap carries no validation
-bound and applies live to existing wallets, and the m1 launch value of 1 sits
-a factor of ten below the documented default. So the ceiling is raisable on
-demand. What survives is a duty rather than a risk — occupancy has to be
-watched, and each raise concentrates more permanent pinning per wallet, which
-is the blast radius §1.4 set the cap to 1 to bound. The decision is a scale
-question: at design-partner volumes the budget never depletes, and B is then
-the better design; at production volumes it does, and dissolution has to come
-back regardless.
+Axis (b) looked smaller than it is. The ceiling is raisable on demand — total
+slots are `walletCount x maxReservationsPerWallet`, the count cap carries no
+validation bound and applies live to existing wallets, and the m1 launch value
+of 1 sits a factor of ten below the documented default. But raising it only
+defers, because occupancy is monotonic when nothing closes, and
+`m1-variant-comparison.md` §5.3 traces the terminal state: at saturation
+re-anchor has no target, `beginWalletClosing` cannot pass its zero-count
+requirement (`Wallets.sol:675-677`), the MovingFunds clock expires, and
+`notifyWalletMovingFundsTimeout` seizes operator stake and terminates the
+wallet (`:493-523`) — after which the depositor's position strands. Honest
+operators slashed, depositors stranded, reached by arithmetic rather than by
+an attacker.
 
-`m1-variant-comparison.md` carries this as a flat side-by-side — shared
-feature set, the single difference, line counts and pros/cons — for readers
-who need the choice rather than the derivation.
+That reframes the trade. §0.6's vector is a **liveness duty**, dischargeable
+by wiring keep-core; B's cliff is a **capacity limit**, dischargeable only by
+an on-chain bound. B is therefore acceptable only with a global
+active-position cap held below the slot floor (`m1-variant-comparison.md` §5.4
+item 1, ~20 lines plus a parameter, since no global position counter exists
+today beside `liveWalletsCount`). **Recommendation: implement A+**; the full
+argument, the B hardening list and the operational duties are in
+`m1-variant-comparison.md` §5.3-§6.
 
 ### The cost side of a rewrite
 
