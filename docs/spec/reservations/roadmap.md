@@ -60,7 +60,7 @@ Verified on both #1091 and #1093 branches:
 | Redemption (`requestReservedRedemption`) | `msg.sender == self.reservationVault` (#1091 :584, #1093 :614) | **No** — m1 vault exposes no entry point |
 | Renewal (`extendReservation`) | `msg.sender == self.reservationVault` (#1091 :1064, #1093 :1133) | **No** — same |
 | Re-anchor (`requestReservationReanchor`) | permissionless while source is `MovingFunds`; `privileged` required while `Live` (:718-757) | **Yes** — and this is desirable (§1.5) |
-| Dissolution (`requestReservationDissolution`) | permissionless, post-eligibility only (:824, :880) | **No** for ~12 months — self-gating by term |
+| Dissolution (`requestReservationDissolution`) | permissionless, post-eligibility only (:824, :880; router :302 has no modifier) | **Yes, on a timer** — deferred ~12 months by the term, then permanently open; must be wired (§0.6) |
 | Action timeout | permissionless (:911) | **Yes** — required cleanup |
 | Redemption veto | `msg.sender == self.redemptionWatchtower` (:1017) | Vacuous — no redemptions exist |
 | Stranding | wallet `Terminated` + Active, no time gate (#1094 :1363-1378) | **Yes** — capacity valve |
@@ -115,6 +115,31 @@ writes `owner`, `mintedAmount`, `acceptedAt`, `walletPubKeyHash`,
 §0.1). So storage-completeness is **already satisfied** — it is an invariant
 to *preserve* under any re-scope, not a gap to close (§2.1).
 
+### 0.6 Dissolution is permissionless — leaving it unwired arms a slashing vector
+
+`requestReservationDissolution(uint256)` is `external` with **no modifier**
+on the router (`ReservationRouter.sol:302-304`) and no `msg.sender` check in
+the library (`Reservation.sol:887-890`, `feat/utxo-reservation-guards`) —
+unlike redemption (:634) and renewal (:1153), which are vault-gated. Anyone
+can request a dissolution once `block.timestamp >= dissolutionEligibleAt`.
+
+It follows that dissolution **cannot be made unreachable by a minimal
+vault**, so it is not deferrable the way redemption and renewal are. Worse,
+leaving the keep-core side unwired is not dormancy but a live hazard: if the
+wallet does not produce the dissolution Bitcoin transaction before
+`reservationActionTimeout`, anyone calls `notifyReservationActionTimeout`
+and **the wallet's operators are slashed**. The contract says so directly:
+"redemption and dissolution timeouts slash the wallet operators exactly like
+a pooled redemption timeout", with `walletMembersIDs` "only consulted for
+redemption and dissolution timeouts (the slashing path)"
+(`Reservation.sol:961-975`).
+
+So an m1 that ships without keep-core dissolution support hands any
+passer-by a **permissionless slashing vector against honest wallets**, armed
+automatically the moment the first position passes its dissolution
+eligibility date. The term length is therefore not only a promise clock
+(§1.4) — it is the deadline by which keep-core dissolution must exist.
+
 ## 1. Milestone 1 — create-only rails
 
 ### 1.1 Ships (whole PRs, no intra-PR surgery)
@@ -129,7 +154,9 @@ designated-wallet binding, stranding · `#1095` docs and frozen params.
 - **`#1096` partial redemption** — the only clean PR omission in the stack.
 - **Redemption and renewal *reachability*** — code ships (§0.1) but the m1
   vault exposes no entry point (§0.2), so neither is callable.
-- **Dissolution reachability** — self-gates for ~12 months via the term.
+- **Dissolution** — deferred by the term, not gated: it opens
+  permissionlessly at `dissolutionEligibleAt` and must be wired in keep-core
+  before then (§0.6).
 
 ### 1.3 Launch posture (decided)
 
@@ -145,7 +172,7 @@ exists until governance flips the switch.
 
 | Parameter | m1 value | Note |
 |---|---|---|
-| `reservationTermSeconds` | **12 months** | The promise clock (below) |
+| `reservationTermSeconds` | **12 months** | The promise clock — and the §0.6 slashing deadline (below) |
 | `reservationDissolutionDelay` | generous | Sets `dissolutionEligibleAt = expiresAt + delay`; snapshotted per term granted (:180-184) |
 | `reservationRenewalWindowSeconds` | `> 0 && < term` | **Cannot be zero** (:1232-1236); unreachable anyway since renewal is vault-gated |
 | `reservationMaxTotalAmount` | tiny | Bounds pooled-liquidity exposure (§0.3) |
@@ -204,27 +231,38 @@ reservation_vault.ts:12-17` is a plain `deployments.deploy` with constructor
 args and no proxy option. Immutables are baked into bytecode, so a proxy
 cannot be retrofitted without refactoring the contract.
 
-So enabling redemption means **replacing** the vault, which requires
-re-pointing the Bridge's `reservationVault` — exactly what
-`feature-spec.md` §15 flags as hazardous while any reserved deposit could
-still settle late. Concretely, a swap orphans deposits revealed to the old
-vault but not yet accepted (`pendingReservedDeposits > 0`), because
-reveal-time classification is permanent. A swap therefore requires draining
-`pendingReservedDeposits` to zero (each one accepted or cleared via
-`notifyStaleReservedDeposit`) plus letting in-flight actions settle or time
-out — a longer quiesce than the action timeout alone.
+So enabling redemption means **replacing** the vault and re-pointing the
+Bridge's `reservationVault`. That re-point is **contract-enforced, not
+merely discouraged**: `updateReservationParameters` reverts a vault change
+unless `reservationTotalAmount == 0` **and** `pendingReservedDeposits == 0`
+(`Reservation.sol:1267-1274` on `feat/utxo-reservation-guards`). Nothing is
+silently orphaned — the transaction simply fails. (An earlier draft of this
+section claimed a swap orphans revealed-but-unaccepted deposits; that is
+wrong, and `feature-spec.md` §15 has been corrected to record the guard as
+enforced.)
+
+The consequence is worse than orphaning would be, because it is a
+**liveness** constraint: the swap is impossible until *every* position has
+closed and *every* revealed deposit has been accepted or marked stale. In a
+create-only m1 the only position-closing paths are permissionless
+dissolution after `dissolutionEligibleAt` (§0.6) and stranding of a
+`Terminated` wallet. With a 12-month term (§1.4), the m2 swap therefore
+cannot happen until roughly a year after the *last* position was accepted —
+and each new acceptance pushes that date out. A vault swap is effectively
+unavailable for as long as the product is being used.
 
 **Recommended m1 vault design (avoids the swap entirely):** ship the m1
 vault **with** the redemption entry point present but disabled by an
 owner-settable flag, so m2 is a single governance transaction
-(`setRedemptionsEnabled(true)`) rather than a deploy-plus-re-point with a
-drain window. This keeps create-only behaviour (unreachable while the flag
+(`setRedemptionsEnabled(true)`) rather than a swap that the guard blocks
+indefinitely. This keeps create-only behaviour (unreachable while the flag
 is false) and is the same principle already accepted for the Bridge-side
 redemption code (§0.2/§1.2). Costs: the vault's redemption plumbing is
 deployed and audited in m1, and the flag becomes a governance-safety item
-(accidental enable). Given the vault cannot be upgraded, this trade is
-strongly favourable — the alternative pays a hazardous swap for the same
-outcome.
+(accidental enable). Given the vault cannot be upgraded *and* the swap is
+gated on total quiescence, this is no longer a convenience — **without the
+flag, m2's in-kind redemption promise has no reachable delivery path while
+positions keep being created.**
 
 ### 2.3 The Bitcoin side is the only true one-way door
 
@@ -278,18 +316,25 @@ partial (Bridge change, its own audit delta).
 7. **`#1096` — retarget only**, after step 7.
 8. **keep-core `#4238` — re-scope.** It models the single-phase whole-
    redemption design and predates the two-phase machine. For m1 it needs
-   acceptance and re-anchor as nonce-carrying proposals; redemption and
-   dissolution proposals can stay unwired.
+   acceptance and re-anchor as nonce-carrying proposals, **plus dissolution
+   — which is *not* optional.** Dissolution is permissionless (§0.6), so it
+   cannot be gated off by a minimal vault, and an unwired dissolution path
+   lets anyone slash honest wallets on timeout. Only the redemption proposal
+   can stay unwired in m1, because redemption is vault-gated.
 
 ## 5. Implementation gaps for m1 (high level)
 
-1. **keep-core two-phase client** — acceptance and re-anchor only, with
-   nonce-carrying proposals, executor duties, and regenerated ABI bindings.
-   This is the critical path (`feature-spec.md` §16 item 3).
+1. **keep-core two-phase client** — acceptance, re-anchor, **and
+   dissolution**, with nonce-carrying proposals, executor duties, and
+   regenerated ABI bindings. Dissolution is mandatory per §0.6, and it is
+   also the only position-closing path in m1, so it gates both wallet safety
+   and §2.2's quiescence. This is the critical path (`feature-spec.md` §16
+   item 3).
 2. **m1 `ReservationVault`** — exposes the acceptance/credit path, plus the
    redemption entry point **disabled behind an owner-settable flag** per
-   §2.2's recommended design (the vault cannot be upgraded, so the flag is
-   what keeps m2 from needing a hazardous redeploy-and-re-point). Renewal
+   §2.2's recommended design (the vault cannot be upgraded, and a swap is
+   blocked by the guard until every position closes, so the flag is what
+   gives m2 a reachable delivery path). Renewal
    gets no entry point at all.
 3. **Anchor-index reconciliation** across `#1091`/`#1094` (§4 items 2-3).
 4. **Parameter and activation wiring** — §1.4 values, the deploy-inert
@@ -298,11 +343,15 @@ partial (Bridge change, its own audit delta).
    `WalletMovingFunds`, since §1.5's unpinning depends on it being performed.
    Without this the pinning risk returns in practice.
 6. **Monitoring** — anchored wallets (pinning watch), earliest
-   `dissolutionEligibleAt` (promise clock), pooled-liquidity exposure vs cap.
+   `dissolutionEligibleAt` (**both the promise clock and the date the §0.6
+   slashing vector arms**), pending dissolution actions approaching timeout,
+   pooled-liquidity exposure vs cap.
 7. **Tests** — acceptance happy path; timeout and stale-deposit cleanup; cap
-   enforcement; a storage-completeness assertion (§2.1); and a
-   **reachability test** proving redemption and renewal revert for every
-   caller other than the vault.
+   enforcement; a storage-completeness assertion (§2.1); a **reachability
+   test** proving redemption and renewal revert for every caller other than
+   the vault; and a **dissolution-timeout test** proving the wallet is
+   slashed when a permissionless dissolution goes unexecuted (§0.6) — the
+   test that justifies wiring it.
 
 ## 6. Decisions confirmed
 
@@ -315,9 +364,13 @@ partial (Bridge change, its own audit delta).
 4. **Deploy inert, then activate for design partners**,
    `maxReservationsPerWallet = 1` (§1.3).
 5. **Term 12 months**, with `reservationDissolutionDelay` as the buffer and
-   a non-zero renewal window forced by the validator (§1.4).
-6. **One audit per milestone.**
-7. **Branch stays local** — `docs/reservations-spec` not pushed.
+   a non-zero renewal window forced by the validator (§1.4). The term also
+   dates the deadline for keep-core dissolution support (§0.6).
+6. **keep-core dissolution ships in m1** — not deferrable, because
+   dissolution is permissionless and an unwired path is a slashing vector
+   against honest wallets (§0.6).
+7. **One audit per milestone.**
+8. **Branch stays local** — `docs/reservations-spec` not pushed.
 
 ## 7. Open questions for review
 
@@ -355,4 +408,9 @@ write (:465); `feat/utxo-reservation-backing` (#1093) —
 gates (:766, :880), parameter set (:308-314, :1212-1218), mandatory renewal
 window (:1232-1236), vault gates (:614, :1133);
 `feat/utxo-reservation-guards` (#1094) — `notifyReservationStranded`
-(:1363-1378). A scope decomposition for decision, not a commitment of dates.
+(:1363-1378), permissionless dissolution (:887-890) and its router wrapper
+(`ReservationRouter.sol:302-304`, no modifier), the dissolution-timeout
+slashing contract (:961-975), and the vault-migration guard (:1267-1274);
+`ReservationVault.sol:79-142` plus `deploy/95_deploy_reservation_vault.ts`
+for non-upgradeability and the governance activation sequence. A scope
+decomposition for decision, not a commitment of dates.

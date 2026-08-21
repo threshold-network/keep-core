@@ -185,3 +185,32 @@ addition on top (validation ground for those executor duties and the
 liveness→`Stranded` path), and it is what moves the §3 totals: ~13-18
 weeks → **~15-20 weeks**. Revisit both if Tier 0's real stranding-
 frequency data later justifies reopening the exit decision.
+
+## 6. Effect of the create-only milestone split (2026-08-21)
+
+`roadmap.md` splits delivery into a create-only m1 and a later m2. The
+numbers above are **unchanged** by that split, for reasons worth stating
+because the intuitive expectation is a reduction:
+
+- **The Solidity surface does not shrink.** Only `#1096` is deferred; the
+  rest of the stack ships, because `#1092`'s expiry model is structural to
+  `#1093`+ rather than additive (`roadmap.md` §0.1). Create-only comes from
+  an m1 vault that exposes no redemption or renewal entry point, not from
+  omitting PRs. So the audited contract surface is 7 of 8 PRs either way.
+- **The keep-core rework does not shrink either.** Dissolution cannot be
+  deferred: it is permissionless, so an unwired dissolution path lets anyone
+  slash honest wallets on timeout (`roadmap.md` §0.6). m1 therefore needs
+  acceptance, re-anchor **and** dissolution — only the redemption proposal
+  drops out, which is the smallest of the four.
+- **What the split does buy is a later deadline, not less work.** The
+  in-kind redemption promise moves from "before launch" to "before the
+  earliest `dissolutionEligibleAt`", roughly 12 months out under §1.4's
+  term. That converts a launch blocker into a dated commitment, which is a
+  scheduling win rather than an effort saving.
+- **One risk the split adds:** the m1 vault must ship redemption behind a
+  flag, because `ReservationVault` is not upgradeable and re-pointing it is
+  blocked until every position closes (`roadmap.md` §2.2). That is a small
+  addition to the m1 vault's own audit surface, not a new phase.
+
+**Net: no change to §3's ~15-20 weeks.** The split changes *when* in-kind
+redemption must exist, not how much must be built and audited before launch.

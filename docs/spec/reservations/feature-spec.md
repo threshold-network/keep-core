@@ -951,9 +951,24 @@ gap the runbook's keep-core follow-up section calls out.
   contract scope.
 - **`updateFees` governance-delay wrapper** and a per-position
   initiation-fee snapshot are tracked follow-ups, not yet implemented.
-- **Governance-set relationship gaps not enforced on-chain**: keep
-  `reservedRedemptionVetoDelay < redemptionTimeout`; avoid re-pointing
-  `reservationVault` while any reserved deposit could still settle late.
+- **Governance-set relationship gap not enforced on-chain**: keep
+  `reservedRedemptionVetoDelay < redemptionTimeout` (no relational check
+  exists in `updateReservationParameters`).
+- **Vault re-pointing is contract-enforced, and the vault is not
+  upgradeable** (verified 2026-08-21). `updateReservationParameters` reverts
+  a `reservationVault` change unless `reservationTotalAmount == 0` **and**
+  `pendingReservedDeposits == 0` (`Reservation.sol:1267-1274` on
+  `feat/utxo-reservation-guards`), so a re-point cannot silently orphan
+  positions or revealed deposits — it simply reverts. But
+  `ReservationVault` is a plain `Ownable` contract with four `immutable`
+  constructor args and no `Initializable`
+  (`contracts/vault/ReservationVault.sol:79-142`; deployed by a bare
+  `deployments.deploy`, `deploy/95_deploy_reservation_vault.ts:12-17`), so
+  changing vault behaviour requires a **redeploy plus a re-point that is
+  blocked until every position closes and every revealed deposit is
+  accepted or marked stale**. Any staged rollout that plans to change vault
+  behaviour later should instead ship the behaviour switchable inside the m1
+  vault — see `roadmap.md` §2.2.
 - **Governance compensation module for `Stranded` positions** is stubbed
   only as an event (`ReservationStranded`), no storage/interface yet —
   designed in `stranding-compensation-proposal.md` (Tiers 0-1, the decided
@@ -1173,9 +1188,9 @@ The deployment runbook is detailed and its scripts (`95_deploy_reservation_vault
 - FROST/Schnorr forward-compatibility patch (§17) is not yet applied — harmless today
   (no FROST wallet exists to re-anchor to), but should land before any reservation is
   ever re-anchored toward a FROST-signed wallet.
-- Two governance-operational invariants (`vetoDelay < redemptionTimeout`,
-  no vault re-pointing with late-settling deposits pending) are procedural
-  reminders in docs, not contract-enforced.
+- One governance-operational invariant (`vetoDelay < redemptionTimeout`) is
+  a procedural reminder in docs, not contract-enforced. The vault-re-pointing
+  invariant **is** contract-enforced (§15, `Reservation.sol:1267-1274`).
 
 
 ---
