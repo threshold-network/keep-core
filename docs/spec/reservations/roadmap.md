@@ -385,6 +385,7 @@ is the requested unit and the ratios are informative.
 | Solidity tests | 15,896 | 2,441 | 6.5 : 1 |
 | Deploy scripts | 432 | 0 | — |
 | Docs in-repo | 1,340 | 108 | — |
+| Other (ABI JSON, config, lockfiles) | 167 | 14 | — |
 | **Total additions** | **27,041** | **3,259** | **8.3 : 1** |
 
 keep-core `#4238` adds 919 production Go + 914 test Go, but models the
@@ -444,6 +445,104 @@ reaching m1 costs ~2.9-4.2k. The carve-out buys a later deadline, not less
 code (`timeline-estimate.md` §6), and it leaves 445 lines deployed but
 unreachable to buy that deferral.
 
+## 5.2 What an essentials-only rewrite would cost (2026-08-21)
+
+Asked: if m1 were written from scratch with nothing but essentials, how much
+smaller would it be? Estimated per file from §5.1's measurements, with an
+explicit keep-factor per file rather than a blended ratio.
+
+**Answer: a third to a half smaller, not an order of magnitude** — and the
+reason is the useful part.
+
+### Why the ceiling is low
+
+Redemption and renewal are only **445 of 2,146** function code lines (21%)
+in the four reservation contracts. The mass is the **anchor lifecycle** —
+two-phase request/proof plumbing, SPV output validation, per-wallet
+enumeration, action records and timeout unwinding — and every one of those is
+required to create a single reservation. `settleAcceptance` (94),
+`unwindPendingAction` (58), `submitReservationProof` (45),
+`prepareReservationForSettlement` (42) are not redemption features; they are
+what "create" costs.
+
+### Variant A — essentials-only rewrite
+
+Cut redemption and renewal entirely, along with the files that exist only to
+serve them (`RedemptionWatchtower.sol` +415 veto integration,
+`Redemption.sol` +109 pooled-path hooks), the storage they need
+(`reservedRedemptionSettlements`, veto delay, retry credit, renewal window)
+and their natspec and tests.
+
+| | Production Solidity | + tests (1.7-1.9x) |
+|---|---|---|
+| m1 as stacked | 9,206 | ~24,900-26,700 |
+| Variant A | **6,171** (-33%) | ~16,700-17,900 |
+| Variant A, no router | **5,435** (-41%) | ~14,700-15,800 |
+
+The router line is the single largest swing. `ReservationRouter.sol` (+1,051,
+plus ~2,400 test lines in `#1090`) exists only because the full external
+surface breaks Bridge's EIP-170 bytecode limit. An essentials-only surface
+has roughly 11 entry points instead of 24, so it **may fit in `Bridge`
+directly** — worth an hour with the compiler before assuming either way,
+because it decides ~3,400 lines.
+
+### Variant B — also drop dissolution, make re-anchor unbounded
+
+The deeper cut is available only when writing from scratch, because it
+changes the protocol rather than omitting a PR. Drop dissolution from m1
+(~310 function lines, ~910 shipped) and remove re-anchor's
+`< dissolutionEligibleAt` gate (§1.5) so wallet rotation never expires.
+
+| | Production Solidity | + tests |
+|---|---|---|
+| Variant B | **5,261** (-43%) | ~14,200-15,300 |
+| Variant B, no router | **4,525** (-51%) | ~12,200-13,100 |
+
+What B buys beyond the lines is worth more than the lines:
+
+- **The §0.6 slashing vector disappears.** No dissolution entry point means
+  no permissionless request that slashes a wallet on timeout.
+- **The mandatory keep-core duty disappears with it** (~300-500 Go lines),
+  leaving acceptance and re-anchor — and re-anchor is the one the wallet
+  lifecycle needs anyway.
+- **§1.5's pinning cliff disappears.** An unbounded re-anchor means a wallet
+  can always rotate its anchors out, at any position age.
+
+What B costs: `reservationTotalAmount` never decrements, so the cap must be
+sized for cumulative-ever rather than concurrent usage, and it is raised by
+governance when it fills. At design-partner scale (§1.3) that is acceptable;
+at production scale it is not, so B is explicitly a launch-posture design
+that m2 must replace.
+
+Re-anchor cannot itself be cut: a wallet holding anchors cannot begin closing
+until its reservation count reaches zero (§7 guards), so with no re-anchor
+and no dissolution, every anchored wallet is pinned for the whole term.
+
+### The cost side of a rewrite
+
+None of this is free, and the comparison is not like-for-like:
+
+- **9,206 lines already exist, reviewed.** They carry 15,896 test lines, a
+  finding catalog (`feature-spec.md` §12), 30 findings folded from `#1102`,
+  and Mediums found in adversarial re-review. A rewrite discards that and
+  re-incurs the review and hardening cycle on new, unreviewed code.
+- **The critical path barely moves.** keep-core is unwritten either way
+  (§5.1); variant A leaves it unchanged and variant B trims ~300-500 Go
+  lines. Since keep-core is the schedule driver
+  (`feature-spec.md` §16 item 3), a Solidity rewrite mostly removes work
+  that was **not** on the critical path.
+- **Audit saving is real but second-order.** Roughly 40% less production
+  Solidity is a genuine audit reduction — the strongest argument for a
+  rewrite, and the only objective on which it clearly wins.
+
+**Verdict:** a rewrite wins on deployed-and-audited mass (-33% to -51%) and
+loses on time-to-first-release, because it trades reviewed code for
+unreviewed code without shortening the keep-core path. It is justified only
+if audited mass is the dominant objective *and* re-review is genuinely cheap.
+The one element worth harvesting regardless of that decision is **variant B's
+unbounded re-anchor**, which removes a slashing vector and a pinning cliff
+from the stacked design too — see §7 item 6.
+
 ## 6. Decisions confirmed
 
 1. **Create-only m1** — users create only; redemption and renewal exist
@@ -482,6 +581,17 @@ unreachable to buy that deferral.
 5. Does deploying unreachable-but-audited redemption code count against the
    surface objective? The alternative (intra-PR surgery per §0.1) costs more
    and risks hand-reverting reviewed expiry semantics.
+6. **Harvest variant B's unbounded re-anchor into the stacked design?** (§5.2)
+   Removing re-anchor's `< dissolutionEligibleAt` gate (`Reservation.sol:785-788`)
+   would close §1.5's pinning cliff and reduce §0.6's dissolution duty from
+   *mandatory* to *desirable*, without a rewrite. It is a small edit to
+   `#1091`, but it changes reviewed logic in a merged-and-folded PR, so it
+   needs a deliberate yes/no rather than a drive-by patch.
+7. **Is deployed-and-audited mass the dominant objective, or time-to-first-
+   release?** (§5.2) A from-scratch essentials rewrite cuts production
+   Solidity 33-51% but discards 9,206 reviewed lines plus 15,896 test lines
+   and does not shorten the keep-core critical path. The two objectives point
+   opposite ways; only one can be optimised.
 
 ---
 
