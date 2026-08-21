@@ -186,18 +186,35 @@ and their only exit was always the pool. 12 months is roughly double a
 realistic m2 date. The clock is unextendable in m1 (renewal unreachable), so
 publish the derived date with the frozen parameters.
 
-### 1.5 Wallet pinning is solved, not accepted (revised)
+### 1.5 Wallet pinning is solved *during the term*, and only by dissolution after it (revised twice)
 
-The earlier decision accepted pinning because no unpin mechanism would
-ship. That premise is now false: **`#1091` ships, so re-anchor ships, and it
-is permissionless while the source wallet is `MovingFunds`** (:718-757) —
+The original decision accepted pinning because no unpin mechanism would
+ship. That premise is false: **`#1091` ships, so re-anchor ships, and it is
+permissionless while the source wallet is `MovingFunds`** (:718-757) —
 exactly the retiring-wallet case. A wallet needing to retire can have its
 anchors re-anchored to a Live wallet by anyone, dropping its reservation
 count so closing can complete.
 
-Residual conditions, not risks:
-- Re-anchor needs the keep-core executor to sign and prove the hop (§4), so
-  the *client* must implement re-anchor even though it is not user-facing.
+**But re-anchor expires with the term.** It requires
+`block.timestamp < reservation.dissolutionEligibleAt`
+(`Reservation.sol:785-788`, `feat/utxo-reservation-guards`). Past
+eligibility every movement path is closed except one: redemption and
+renewal are vault-gated and unreachable in m1 (§0.2), re-anchor reverts, and
+stranding needs the wallet `Terminated`. **Dissolution is the only unpin
+left** — the permissionless path of §0.6.
+
+So the two revisions compose into one rule: pinning is solved *inside* the
+term by re-anchor and *after* it by dissolution, and m1 must ship both
+client-side. If dissolution is unwired (§0.6), a position that passes its
+eligibility date pins its custodying wallet **permanently** — wallet closing
+requires the reservation count to reach zero, and no path can then decrement
+it. That is the same hazard the original decision accepted, merely deferred
+by the term length, which is why §0.6 treats keep-core dissolution as
+mandatory rather than a nice-to-have.
+
+Residual conditions:
+- Both hops need the keep-core executor to sign and prove (§4/§5): re-anchor
+  during the term, dissolution after it.
 - While `Live`, re-anchor requires `privileged` — governance-driven rotation
   only. Acceptable at design-partner scale.
 
@@ -353,14 +370,90 @@ partial (Bridge change, its own audit delta).
    slashed when a permissionless dissolution goes unexecuted (§0.6) — the
    test that justifies wiring it.
 
+## 5.1 Code mass: m1 vs m2, measured (2026-08-21)
+
+Measured from the PR diffs (`gh api .../pulls/N/files`, additions only) and
+function-level classification of the four reservation contracts at the m1 tip
+(`feat/utxo-reservation-guards`). LoC is a weak proxy for audit cost, but it
+is the requested unit and the ratios are informative.
+
+### Shipped code, by milestone
+
+| Bucket | m1 (`#1088`-`#1095`, 7 PRs) | m2 (`#1096`) | Ratio |
+|---|---|---|---|
+| Production Solidity | **9,206** | **696** | 13 : 1 |
+| Solidity tests | 15,896 | 2,441 | 6.5 : 1 |
+| Deploy scripts | 432 | 0 | — |
+| Docs in-repo | 1,340 | 108 | — |
+| **Total additions** | **27,041** | **3,259** | **8.3 : 1** |
+
+keep-core `#4238` adds 919 production Go + 914 test Go, but models the
+pre-two-phase design (§4 item 8), so it is a starting point rather than
+shippable m1 content.
+
+Test-to-production ratio on the m1 stack is 1.73:1 — the Solidity is heavily
+tested, consistent with `feature-spec.md` §16's "thorough" verdict.
+
+### What the carve-out actually costs
+
+**m1 audits 93% of the feature's production Solidity** (9,206 of 9,902).
+Deferring `#1096` removes 696 production lines — about 7%. The carve-out is
+achieved by *gating* rather than removing code (§0.2), so almost nothing
+leaves the audit surface.
+
+Unreachable-but-deployed logic in m1, by function body (code lines, comments
+excluded):
+
+| Path | Functions | Code lines |
+|---|---|---|
+| Redemption | `requestReservedRedemption` (102), `submitReservedRedemptionProof` (88), `redeemReservation` (38), `retryRedeemReservation` (33), `notifyReservedRedemptionVeto` (31), `resolveLateRedemptionAgainstPending` (23), router wrappers (21) | **336** |
+| Renewal | `extendReservation` (49+11), `extendCustody` (29), renewal pause/block/guardian (20) | **109** |
+| **Dead weight total** | | **445** |
+| Reachable in m1 | acceptance, re-anchor, dissolution, stranding, timeout, caps, params, getters | 1,701 |
+
+So m1 carries **445 code lines it cannot execute — 4.8% of its production
+Solidity.** That is the true price of the carve-out, and it is small.
+
+### Effort to prepare m1 for release
+
+Nearly all of it is keep-core Go, not Solidity:
+
+| Item | Est. LoC | Basis |
+|---|---|---|
+| keep-core two-phase rework (acceptance + re-anchor + **dissolution**) | ~1,400-1,900 prod Go, ~1,000-1,500 test Go | `#4238`'s 919+914 largely rewritten; 3 of 4 action types, nonce-carrying, 6 stubbed `TbtcChain` methods implemented |
+| Redemption pause flag on the vault | ~30 prod, ~80 test | Mirrors the shipped `renewalsPaused`/`pauseRenewals` pattern (`ReservationVault.sol:381,409`) |
+| Anchor-index reconciliation (`#1091` :465 vs `#1094`) | ~20-60 prod, ~100 test | §4 items 2-3 |
+| m1-specific tests (reachability, storage-completeness, dissolution-timeout slashing) | ~200-400 test | §5 item 7 |
+| Params, deploy and activation wiring | ~100-200 | §1.3/§1.4 |
+| `#1090` rebase | ~0 net | Conflict resolution, no new logic |
+| **Total** | **~2,900-4,200** | ~85% keep-core Go |
+
+### Effort to upgrade m1 to m2
+
+| Item | LoC | Note |
+|---|---|---|
+| `#1096` partial redemption | 3,259 | **Already written** — an open PR, not new work |
+| Enable redemption | ~1 tx | `unpauseRedemptions()` under the recommended design; otherwise a blocked vault swap (§2.2) |
+| keep-core redemption proposal + partial assembler | ~300-600 prod Go, ~300-500 test Go | The one genuinely new build |
+| **New code to write** | **~600-1,100** | Everything else exists |
+
+**Headline:** m1 is ~8x m2 in shipped lines (27.0k vs 3.3k), but the
+asymmetry inverts for *remaining* work — m2's Solidity is already written,
+so upgrading costs ~0.6-1.1k new lines plus a second audit engagement, while
+reaching m1 costs ~2.9-4.2k. The carve-out buys a later deadline, not less
+code (`timeline-estimate.md` §6), and it leaves 445 lines deployed but
+unreachable to buy that deferral.
+
 ## 6. Decisions confirmed
 
 1. **Create-only m1** — users create only; redemption and renewal exist
    on-chain but are unreachable (§0.2).
 2. **Stack ships intact, only `#1096` deferred** — supersedes the earlier
    "cut #1092 and #1096" decision, which §0.1 shows is not buildable.
-3. **Wallet pinning solved by re-anchor** — supersedes the earlier "accept
-   pinning" decision (§1.5).
+3. **Wallet pinning solved by re-anchor during the term and dissolution
+   after it** — supersedes both the earlier "accept pinning" decision and
+   the interim "re-anchor solves it" claim, since re-anchor reverts at
+   `dissolutionEligibleAt` (§1.5).
 4. **Deploy inert, then activate for design partners**,
    `maxReservationsPerWallet = 1` (§1.3).
 5. **Term 12 months**, with `reservationDissolutionDelay` as the buffer and
