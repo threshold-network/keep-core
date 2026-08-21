@@ -296,7 +296,7 @@ cut, and per §0.2 no cut is needed to reach create-only behavior.
 | Step | PR | Action | Gate before advancing |
 |---|---|---|---|
 | 1 | `#1088` | Merge (already carries `#1102`'s 30-finding fold) | Storage layout final; classification permanence tested |
-| 2 | `#1090` | **Rebase over the `#1102` fold** — currently CONFLICTING | Router parity, selector disjointness, no standalone authority |
+| 2 | `#1090` | **Rebase over the `#1102` fold** — currently CONFLICTING | Router parity, selector disjointness, no standalone authority, one-time setter (all four per `ReservationRouter` natspec) |
 | 3 | `#1091` | Rebase; **reconcile `reservationsByAnchorUtxo`** (§4) | Two-phase machine; acceptance writes all fields (§2.1) |
 | 4 | `#1092` | Rebase — required by §0.1, reachability closed by the vault | `dissolutionEligibleAt` snapshot semantics; window `< term` |
 | 5 | `#1093` | Rebase | Backing invariant claim ≡ anchor; caps enforced |

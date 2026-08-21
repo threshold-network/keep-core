@@ -26,7 +26,7 @@ actually in contention.
 | 7 | Stranding (`notifyReservationStranded` / `strandReservation`, requires wallet `Terminated`) | Dead-wallet capacity release |
 | 8 | Caps + governance parameters (`updateReservationParameters`) | The only safety valve at launch |
 | 9 | Wallet-lifecycle guards, full storage layout | §11's no-live-action-migration rule (`feature-spec.md` §3.4) |
-| 10 | Router, **only if** EIP-170 requires it | ~736 prod / ~3,400 with tests; decided by the compiler, not by argument |
+| 10 | Router, **only if** EIP-170 requires it | Deleting it saves ~736 prod / ~2,000 with tests off either variant; the stacked router is 1,051 prod / ~3,400 with tests. Decided by the compiler, not by argument |
 
 **Absent from both** (deferred to m2): in-kind redemption whole and partial,
 renewal / `extendCustody`, redemption veto and watchtower integration, retry
