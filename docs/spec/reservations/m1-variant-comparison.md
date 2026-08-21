@@ -305,12 +305,20 @@ today.
    recognising one. Stranding is sound only because a `Terminated` wallet's
    BTC is already presumed lost. Stated explicitly so it is not re-proposed
    as the hotfix when the cliff approaches.
-3. **Storage-complete now, behaviour-minimal now** (§2.1). Every field the
-   full feature will ever need — redemption settlements, veto delay, retry
-   credit, renewal window, `dissolutionEligibleAt` — must exist in
-   `BridgeState.Storage` at m1 even though m1 reads none of them, because §11
-   forbids a live `ReservationAction` from ever spanning a layout change.
-   This is the single thing that makes m2 an upgrade rather than a migration.
+3. **Storage-complete now, behaviour-minimal now** (§2.1) — and *written*,
+   not merely declared. Every field the full feature will need must exist in
+   `BridgeState.Storage` at m1, because §11 forbids a live
+   `ReservationAction` from spanning a layout change. B has a concrete trap
+   here: acceptance writes
+   `dissolutionEligibleAt = expiresAt + reservationDissolutionDelay`
+   (`ReservationProofs.sol:537-539`), and B's only reader of that field was
+   re-anchor's `< dissolutionEligibleAt` gate, which B deletes. An
+   essentials-only rewrite would therefore drop the write as dead — after
+   which m2's dissolution has **no eligibility date for any m1-era position**,
+   and the snapshot semantics that make governance changes non-retroactive
+   (`:180-184`) cannot be reconstructed. Keep writing every deferred path's
+   fields at m1 even with no reader. This is what makes m2 an upgrade rather
+   than a migration.
 4. **Relate the two caps in governance.** Nothing today prevents raising
    `reservationMaxTotalAmount` past slot capacity. Either add the relational
    check or emit both sides in `ReservationParametersUpdated` and make it a
