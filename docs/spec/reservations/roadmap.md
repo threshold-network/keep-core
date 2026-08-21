@@ -505,14 +505,31 @@ What B buys beyond the lines is worth more than the lines:
 - **The mandatory keep-core duty disappears with it** (~300-500 Go lines),
   leaving acceptance and re-anchor — and re-anchor is the one the wallet
   lifecycle needs anyway.
-- **§1.5's pinning cliff disappears.** An unbounded re-anchor means a wallet
-  can always rotate its anchors out, at any position age.
+- **§1.5's pinning cliff disappears as a timer.** An unbounded re-anchor lets
+  a wallet rotate its anchors out at any position age — but only into a Live
+  wallet with a free slot, which is a weaker guarantee than it sounds (below).
 
-What B costs: `reservationTotalAmount` never decrements, so the cap must be
-sized for cumulative-ever rather than concurrent usage, and it is raised by
-governance when it fills. At design-partner scale (§1.3) that is acceptable;
-at production scale it is not, so B is explicitly a launch-posture design
-that m2 must replace.
+What B costs is sharper than a cap resize. Nothing closes a position except
+wallet termination, so **both** on-chain-enforced caps become cumulative-ever
+rather than concurrent (feature-spec §10: the global amount and the per-wallet
+count are the only two that are contract-verified):
+
+- `reservationTotalAmount` never decrements, so the global amount cap must be
+  sized for lifetime usage and raised by governance when it fills.
+- More binding: with the decided `maxReservationsPerWallet = 1` (§1.3, §1.4),
+  each live reservation **permanently occupies one wallet**. Re-anchor
+  requires `targetCount <= maxReservationsPerWallet`
+  (`Reservation.sol:820-827`), so a hop needs a Live target holding zero
+  anchors, and the source slot is only released at settlement (`:819`) — an
+  in-flight hop holds two.
+
+So B's pinning fix is **conditional on fresh Live wallet supply outpacing
+reservation creation**, whereas A+'s is unconditional because dissolution
+frees slots. If wallet creation stalls, B has no rotation target and every
+anchored wallet is pinned again — the §1.5 cliff returns as a capacity
+problem instead of a timer. At design-partner scale (§1.3) that is
+acceptable; at production scale it is not, so B is explicitly a
+launch-posture design that m2 must replace.
 
 Re-anchor cannot itself be cut: a wallet holding anchors cannot begin closing
 until its reservation count reaches zero (§7 guards), so with no re-anchor
@@ -536,25 +553,31 @@ all** — strictly worse than the stacked design, where dissolution eventually
 opens. The converse is not true: re-anchor can be unbounded while dissolution
 stays, which is exactly the §7 item 6 harvest.
 
-| Rung | Change | Production Solidity | §1.5 pinning | §0.6 slashing vector | Cap semantics |
-|---|---|---|---|---|---|
-| 0 | m1 as stacked | 9,206 | cliff at eligibility | present, keep-core duty mandatory | concurrent |
-| 0+ | harvest only (§7 item 6) | 9,206 (-4) | fixed | present, mandatory | concurrent |
-| A | cut redemption + renewal | 6,171 / 5,435 | cliff at eligibility | present, mandatory | concurrent |
-| A+ | A + unbounded re-anchor | 6,171 / 5,435 | fixed | present, mandatory | concurrent |
-| B | A+ and drop dissolution | 5,261 / 4,525 | fixed | **removed** | cumulative-ever |
+| Rung | Change | Production Solidity | §1.5 pinning | §0.6 slashing vector | Amount cap | Wallet slots |
+|---|---|---|---|---|---|---|
+| 0 | m1 as stacked | 9,206 | cliff at eligibility | present, keep-core duty mandatory | concurrent | freed on close |
+| 0+ | harvest only (§7 item 6) | 9,206 (-4) | fixed unconditionally | present, mandatory | concurrent | freed on close |
+| A | cut redemption + renewal | 6,171 / 5,435 | cliff at eligibility | present, mandatory | concurrent | freed on close |
+| A+ | A + unbounded re-anchor | 6,171 / 5,435 | fixed unconditionally | present, mandatory | concurrent | freed on close |
+| B | A+ and drop dissolution | 5,261 / 4,525 | fixed **only while fresh wallets exist** | **removed** | cumulative-ever | never freed |
 
 (Second figure is the no-router case. Rungs 0+ and A+ cost nothing in lines —
 they delete a `require` — so they are free relative to the rung below.)
 
 **A+ is the rung worth naming.** It closes the pinning cliff for the price of
-deleting a `require`, and because dissolution survives, positions still close
-and the cap stays concurrent rather than cumulative-ever. Only the step from
-A+ to B trades that away, and that step is the one that buys removal of the
-§0.6 slashing vector and the mandatory keep-core duty. So the genuine
-decision is not "A or B" but **whether removing the slashing vector is worth
-a cumulative-ever cap** — every other difference between them is free or
-strictly ordered.
+deleting a `require`, and because dissolution survives, positions still close,
+so both caps stay concurrent and slots keep recycling. Everything from rung 0
+to A+ is either free or a pure omission.
+
+**The A+ -> B step is the only real trade, and it has two axes, not one.** It
+buys removal of the §0.6 slashing vector and the mandatory keep-core
+dissolution duty. It pays with (a) cumulative-ever cap sizing and (b) a
+pinning guarantee that degrades from unconditional to conditional on Live
+wallet supply, since with `maxReservationsPerWallet = 1` every reservation
+permanently consumes a wallet and re-anchor needs a target holding zero.
+Axis (b) is the harder one: it converts a bounded timer risk into an
+unbounded capacity risk, and capacity is the thing governance cannot fix by
+raising a parameter.
 
 ### The cost side of a rewrite
 
