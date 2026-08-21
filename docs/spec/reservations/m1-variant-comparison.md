@@ -165,30 +165,53 @@ the volume side, arrived at from the code side.
 ## 5.2 Launching B with no router
 
 Attractive on paper — 4,525 production lines, -51% against the stacked m1,
-the smallest surface on the ladder. Four drawbacks, the first of which may
-settle it outright.
+the smallest surface on the ladder. Four drawbacks; the second is the one
+that actually bites.
 
-**1. It probably does not fit, and this is arithmetic rather than opinion.**
-The measured figures (`feature-spec.md` §2) are: EIP-170 limit 24,576 B;
-`Bridge` after the router refactor 22,403 B at `runs=100`, leaving **2,173 B
-of margin**; `ReservationRouter` **4,245 B** for its 24 entry points.
-Inlining the surface puts `Bridge` at ~26,648 B — over by ~2,072 B — so the
-surface has to shrink by **49%** to fit. B removes 5 of the 24 entry points
-(`requestReservedRedemption`, `notifyReservedRedemptionVeto`,
+**1. Whether it fits is undetermined — one compiler run settles it.** Do not
+price the inline cost at the router's standalone size. `feature-spec.md` §2
+reports three measurements, and two of them bracket the answer by
+subtraction:
+
+| Measurement | Bytes |
+|---|---|
+| EIP-170 limit | 24,576 |
+| `Bridge` with the surface inline, pre-`#1090` | 24,647 (over by **71**) |
+| `Bridge` after moving it out (`runs=100`) | 22,403 (margin **2,173**) |
+| **Inline cost of the surface, by subtraction** | **~2,244** |
+| `ReservationRouter` standalone | 4,245 |
+
+The surface costs `Bridge` ~2,244 B inline, **not** 4,245 B. The router is
+larger standalone because it carries its own selector dispatcher plus a second
+copy of boilerplate `Bridge` already has — both declare
+`Governable, Initializable`, and §2 invariant 2 explicitly exempts "Governable
+members shared by both" from the shadowing test. The bracket is
+self-consistent: 2,244 against 2,173 of margin is over by exactly the 71 B
+that was measured pre-`#1090`.
+
+So the gap to close is **71 B, not 2,072 B**, and dropping 5 of 24 entry
+points (`requestReservedRedemption`, `notifyReservedRedemptionVeto`,
 `extendReservation`, `requestReservationDissolution`,
-`walletPendingDissolution`) and simplifies `submitReservationProof`. Even a
-generous 40% bytecode reduction lands ~374 B over; a proportional 21%
-reduction lands ~1,188 B over. Estimate, not measurement — but the prior is
-"does not fit", and the pre-fix inline attempt was already 71 B over with the
-optimizer turned down.
+`walletPendingDissolution`) plus simplifying `submitReservationProof` clears
+71 B comfortably — one external wrapper with calldata decoding exceeds that
+alone.
+
+The genuine unknown is growth: all three figures are `#1090`-era, and
+`#1091`-`#1096` each added entry points and logic, so today's inline cost sits
+somewhere between 2,244 B and 4,245 B and is unmeasured. Verdict:
+**undetermined, and cheap to determine** — compile B's surface into `Bridge`
+at `runs=100` and read the size. This is not a reason to reject
+B-no-router on the evidence available.
 
 **2. It removes the extension budget precisely where it is guaranteed to be
 needed.** B is by construction a launch posture that m2 must replace (§5), and
 §5.1 shows m2 has to add ~3,035 production lines of whole redemption, renewal
 and veto integration plus `#1096`'s partial redemption — ten-plus new entry
-points. With no router there is nowhere to put them. B-no-router therefore
-**defers** the router rather than deleting it, the same shape as its capacity
-loan.
+points. With no router there is nowhere to put them. Note this argument does
+**not** depend on drawback 1's open question: even if B's reduced surface fits
+`Bridge` today, m2's additions are larger than the surface B removed, so they
+cannot. B-no-router therefore **defers** the router rather than deleting it,
+the same shape as its capacity loan.
 
 **3. Introducing the router later costs a `Bridge` implementation upgrade.**
 The fallback dispatcher and the one-time `setReservationRouter` live in
@@ -210,10 +233,12 @@ A fifth, softer point: the router question is compiler-decidable and
 reversible, while B is a protocol decision. Bundling them means a compiler
 surprise re-opens the launch shape.
 
-**Verdict: take B with the router if B is taken at all.** The router is the
-smaller swing (736 lines against dissolution's 910), it is what makes m2
-reachable without a re-architecture, and B is the rung most likely to need
-room to move.
+**Verdict: take B with the router if B is taken at all** — but on drawback 2,
+not on drawback 1. Whether m1's reduced surface fits `Bridge` is unmeasured
+and may well be fine; what is not fine is that m2 provably needs the router
+back, so skipping it in m1 buys ~736 lines against a re-architecture later.
+The router is also the smaller of the two swings (736 lines against
+dissolution's 910), and B is the rung most likely to need room to move.
 
 ## 6. How to choose
 
