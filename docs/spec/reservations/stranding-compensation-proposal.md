@@ -1,7 +1,7 @@
 # Reservation Stranding Loss Absorption - Design Sketch
 
 Status: **SUPERSEDED IN PART.** This document is "Space A" (the network bears the shortfall) in
-`reservations-shortfall-design-space.md`, which **rejects Space A as the answer to solvency** on
+`shortfall-design-space.md`, which **rejects Space A as the answer to solvency** on
 funding invariance: every slashing amount in tBTC is a flat `uint96` T quantity with no BTC term
 (max seizure 10,000 T against 50 BTC of exposure, roughly 0.006%), and the cheapest stranding
 attack, going dark, triggers no seizure at all - `notifyOperatorInactivity` only calls
@@ -17,7 +17,7 @@ else. The §4 buyback remains a sound *rail* for discretionary governance spendi
 not a solvency mechanism.
 
 Original framing follows. Fills the gap the spec flags as "no stranding-compensation mechanism
-beyond an event stub" (`reservations-feature-spec.md` §7 H-06, §15, §16). Companion to
+beyond an event stub" (`feature-spec.md` §7 H-06, §15, §16). Companion to
 `exit/proposal.md`, which addresses the same failure from the other side.
 
 Named "loss absorption" rather than "compensation" deliberately - §2 explains why the

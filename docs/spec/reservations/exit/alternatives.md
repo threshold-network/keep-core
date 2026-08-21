@@ -3,7 +3,7 @@
 Status: investigation result. Companion to `proposal.md` (Mechanism 1, the retained
 escrow-gated committee reference - deferred per the Decision in `README.md`),
 `addendum.md` (mechanisms 1-4 and
-their rejections), and `../reservations-stranding-compensation-proposal.md` (the loss-absorption
+their rejections), and `../stranding-compensation-proposal.md` (the loss-absorption
 baseline).
 
 This document reports a parallel investigation into whether any design beats the committee
@@ -455,7 +455,7 @@ Three coherent packages, each paying a different price:
    every trust problem in option 1 disappears.
 3. **Liquid claim, no committee, compensation and/or bonding.** Pay by giving up R2 literalism,
    accepting deterrence and insurance in place of enforcement. This is the
-   `../reservations-stranding-compensation-proposal.md` path, and note it preserves the watchtower,
+   `../stranding-compensation-proposal.md` path, and note it preserves the watchtower,
    because there is no alternative exit path to bypass it.
 4. **Mechanism 6: ad hoc single bonded co-signer - raised by adversarial review, and it does not
    survive its own construction.** The proposal was: after SPV-provable wallet death, *reactively*

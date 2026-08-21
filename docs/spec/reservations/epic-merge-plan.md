@@ -2,7 +2,7 @@
 
 Status: ACTIVE — branch/retarget setup executed 2026-08-19. Review and merge
 phases below are not yet started. Companion doc:
-`reservations-feature-spec.md` (the reverse-engineered spec and
+`feature-spec.md` (the reverse-engineered spec and
 gap analysis this plan assumes).
 
 ## 0. What was just set up (done, 2026-08-19)

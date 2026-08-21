@@ -5,8 +5,8 @@ already exists and already ships, and under the Decision in `README.md` (2026-08
 **accepted** fallback — the emergency-exit family (`proposal.md`, `alternatives.md`,
 `addendum.md`) explored replacing it but is deferred for lack of evidence, so `Stranded` stands.
 Companion to `README.md` (where `Stranded` sits in
-the comparison), `../reservations-feature-spec.md` §7 H-06 (the two-paragraph original spec), and
-`../reservations-stranding-compensation-proposal.md` (the compensation module this feature
+the comparison), `../feature-spec.md` §7 H-06 (the two-paragraph original spec), and
+`../stranding-compensation-proposal.md` (the compensation module this feature
 deliberately does not build).
 
 ## 1. Plain explanation
@@ -94,7 +94,7 @@ guard cannot: a wallet that never got the chance to wind down honestly.
 93:   course of wallet lifecycle. `moveFunds` transitions it `Live → MovingFunds`.
 3. **The escape hatch exists.** While W1 is in `MovingFunds`, Alice's reservation *can* be
    re-anchored to any Live wallet with capacity (`requestReservationReanchor` is explicitly
-   allowed for `MovingFunds` source wallets, `../reservations-feature-spec.md` §4.3). If the
+   allowed for `MovingFunds` source wallets, `../feature-spec.md` §4.3). If the
 97:   keep-core executor or Alice initiates this, the anchor migrates cleanly to a healthy wallet
 98:   and Alice keeps her in-kind claim — stranding is avoided entirely.
 99:4. **W1's operators go quiet** — infrastructure trouble, an upgrade gone wrong, insufficient
@@ -131,7 +131,7 @@ guard cannot: a wallet that never got the chance to wind down honestly.
 130:
 131:### 3.1 Monitoring watch-list gap (fixed here)
 132:
-133:`../reservations-feature-spec.md`'s executor-monitoring bullet lists `pendingReservedDeposits`,
+133:`../feature-spec.md`'s executor-monitoring bullet lists `pendingReservedDeposits`,
 134:`inKindFeeDebtSat`, dissolution-eligible positions, and per-wallet reserved amount/count — it does
 135:not mention watching for terminated wallets that still custody un-stranded reservations. Every
 136:other permissionless housekeeping call in this feature (dissolution, action timeout, marking a

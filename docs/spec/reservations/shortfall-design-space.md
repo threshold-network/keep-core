@@ -1,8 +1,8 @@
 # Reservation Shortfall - Design Space
 
 Status: DRAFT analysis. Not scoped in any of the 9 reservation PRs. Companion to
-`reservations-feature-spec.md` (what the PRs build),
-`reservations-stranding-compensation-proposal.md` (Space A, now rejected here), and
+`feature-spec.md` (what the PRs build),
+`stranding-compensation-proposal.md` (Space A, now rejected here), and
 `exit/proposal.md` (recovery under wallet failure, unaffected).
 
 Records two agent retractions, in §2 and §4.2. Both are noted where they land so the rejected
@@ -131,7 +131,7 @@ Fungible tBTC survives, so the product and the tax argument survive.
 
 **This requires an accounting change upstream of everything else in this section.** Today
 `anchorAmount` and `mintedAmount` are not independent fields; every proof, whole or partial,
-drops both by the same `redeemAmount` (`reservations-feature-spec.md` L325-327), which only stays
+drops both by the same `redeemAmount` (`feature-spec.md` L325-327), which only stays
 consistent if they started equal. Space C's premise is that they start unequal - `anchorAmount =
 20`, `mintedAmount = 14` - a state the current contracts have no representation for. Both
 redemption paths would need `anchorAmount` and `mintedAmount` to move by different amounts on the
@@ -209,7 +209,7 @@ minted), which is a real disposal and needs the `k` premium haircut of §4.5.
 
 **Route 2, take the assessment from the anchor, was claimed to reuse existing machinery. It does
 not.** `requestPartialReservedRedemption` (#1096) is the wrong shape for what Route 2 needs, on
-the points checked against `reservations-feature-spec.md` §4.2:
+the points checked against `feature-spec.md` §4.2:
 
 - Its remainder **stays in the same reservation** - "output 1 re-anchors the remainder to the
   custodying wallet ... position stays `Active` on the new remainder outpoint" (L321-327). Route 2
@@ -368,7 +368,7 @@ Does not fix:
 - **Settlement route is resolved, not open (§4.4).** Route 1 (raise the tBTC owed) is the
   decision; Route 2 (take the assessment from the anchor) needed a reserved-to-pooled BTC
   transfer that #1096 does not provide and that the segregation invariant
-  (`reservations-feature-spec.md` L818-820: "a reserved deposit is never swept into the pooled
+  (`feature-spec.md` L818-820: "a reserved deposit is never swept into the pooled
   main UTXO") explicitly forbids. Route 1's residual cost is the assessed holder's market
   acquisition and the `k` haircut of §4.5, a market friction rather than an invariant break, and
   is the correct tradeoff to accept.

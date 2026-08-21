@@ -5,7 +5,7 @@ Status: DESIGN REFERENCE, deferred - Mechanism 1 is not built. Per the Decision 
 to rebuild from if evidence ever reopens the question. Rejected
 alternatives, revision history, the full mechanism comparison, and secondary edge-case flows
 live in `addendum.md` — this document keeps only the
-mechanism that actually works. Companion to `../reservations-feature-spec.md`.
+mechanism that actually works. Companion to `../feature-spec.md`.
 
 Alternative designs live in `alternatives.md`, along with a
 closure argument showing why a live party at exercise time is forced rather than chosen. Read it
@@ -382,7 +382,7 @@ program.
 Weigh that against what it competes with. The status quo is `Stranded`: a socialized loss and an
 event stub, with zero new machinery. The obvious cheaper alternative is the compensation module
 the spec already owes (`§7`, `§15`, `§16`), sketched in
-`../reservations-stranding-compensation-proposal.md`.
+`../stranding-compensation-proposal.md`.
 
 **That sketch does not support treating compensation as a substitute for this proposal, and an
 earlier draft of this section wrongly implied it did.** Working the numbers showed the two address
@@ -613,5 +613,5 @@ Additional edge-case flows (`Stranded` comparison, committee unavailable, disarm
 addendum `§B`.
 
 Not scoped for the current mainnet launch — forward-looking, non-blocking, same framing as the
-FROST interaction analysis. Not yet folded into `../reservations-feature-spec.md`.
+FROST interaction analysis. Not yet folded into `../feature-spec.md`.
 

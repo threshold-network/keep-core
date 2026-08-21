@@ -4,7 +4,7 @@ Source: adversarial multi-lens review of `feat/utxo-reservation-core`
 (commit `3d4335d7`) in a standalone `tbtc-v2` checkout — this is the tip of
 **tbtc-v2 PR #1088** ("Core reservation data model, `ReservationVault`,
 original single-phase mechanics"), the bottom of the 8-PR reservation stack
-tracked in `reservations-epic-merge-plan.md`.
+tracked in `epic-merge-plan.md`.
 
 This file intentionally omits the review's "can fix immediately" items
 (deploy-script ownership transfer, a missing zero-address check, a missing
@@ -13,7 +13,7 @@ contained, PR-local fixes, not epic-level follow-ups. Only items needing a
 new mechanism or a design decision are listed here.
 
 **Every item below was cross-referenced against the H-/M-/C- issue catalog
-already in `reservations-feature-spec.md` §"tracking table"
+already in `feature-spec.md` §"tracking table"
 (lines ~704-730).** That catalog was written from a review of the *later*
 PRs in the stack, not from this review — the matches below are the
 orchestrator's correlation between two independent reviews of the same
@@ -287,7 +287,7 @@ cosmetic and structural:
 the constant. Bounding the re-anchor term alone leaves that residue, so a
 ratio guarantee has to cover both fees, not just the grinding one.
 
-**Not the same shortfall as `reservations-shortfall-design-space.md`.** That
+**Not the same shortfall as `shortfall-design-space.md`.** That
 document analyses the wallet-death case (anchor BTC inaccessible, `mintedAmount`
 still outstanding) and its Space A/B/C framing turns on who pays when a wallet
 dies. This item is the fee-loss shortfall on the *healthy* path: a reservation

@@ -1,7 +1,7 @@
 # UTXO Reservations — Testing & Hardening Plan (pre-audit)
 
-Status: DRAFT. Companion to `reservations-feature-spec.md` and
-`reservations-epic-merge-plan.md`. Grounded in a direct inspection of both
+Status: DRAFT. Companion to `feature-spec.md` and
+`epic-merge-plan.md`. Grounded in a direct inspection of both
 repos' current tooling (2026-08-19), not assumptions.
 
 ## 0. Direct answers
@@ -213,7 +213,7 @@ Checked out at `feat/utxo-reservation-wallet-support`.
 
 Tier 1 items should land *inside* the existing tbtc-v2 stack PRs or as a
 follow-up PR merged into `reservations-epic` before the stack merges to
-`main` (§3 of `reservations-epic-merge-plan.md`) — they're cheap enough
+`main` (§3 of `epic-merge-plan.md`) — they're cheap enough
 that there's no reason to let them slip past the audit gate. Tier 2 items
 are the concrete content of the runbook's "fork dry-run" checklist item
 (§5 of the merge plan) and should be treated as already-required, not

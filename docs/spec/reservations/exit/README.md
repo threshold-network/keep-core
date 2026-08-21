@@ -2,8 +2,8 @@
 
 Status: DESIGN REFERENCE, deferred - not scoped in any of the 9 reservation PRs, not planned.
 The decision and its re-open conditions are below. Companion to
-`../reservations-feature-spec.md` (what the PRs actually build) and
-`../reservations-stranding-compensation-proposal.md` (the loss-absorption question this family
+`../feature-spec.md` (what the PRs actually build) and
+`../stranding-compensation-proposal.md` (the loss-absorption question this family
 deliberately does not answer).
 
 ## Decision (2026-08-21): not built - `Stranded` remains the fallback
@@ -31,7 +31,7 @@ mechanism spec, and the open questions are the starting point, and the one quest
 shape (committee staffing) is already answered in `proposal.md` §5.1.
 
 **Immediate consequence:** the compensation module
-(`../reservations-stranding-compensation-proposal.md`) becomes the only buildable piece of the
+(`../stranding-compensation-proposal.md`) becomes the only buildable piece of the
 broader loss story - Tiers 0-1 (liability accounting, fee restitution) - and doubles as the
 evidence-gathering instrument, since Tier 0 *produces* the stranding-frequency number this
 decision says is missing. The recommendation below stands unchanged: build Tiers 0-1, hold this
@@ -146,7 +146,7 @@ cheapest answer is the **Threshold Council Safe appointing and rotating a distin
    delivers the **specific in-kind guarantee** the product is actually selling. Skipping this
    family is only safe if depositors would accept fungible tBTC at par when custody fails - if the
    1-to-1 lineage promise is real, the complexity here is what makes it real.
-4. **Recommendation: build compensation Tiers 0-1 first** (`../reservations-stranding-compensation-proposal.md`
+4. **Recommendation: build compensation Tiers 0-1 first** (`../stranding-compensation-proposal.md`
    §10 - liability accounting and fee restitution, both cheap and useful regardless of what
    happens here). Tier 0 produces the stranding-frequency evidence that is the actual decisive
    input for whether this family is worth building at all, and at what cost tier.

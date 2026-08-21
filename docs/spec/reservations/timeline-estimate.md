@@ -2,9 +2,9 @@
 
 Status: `[INFERENCE]` throughout — reasoned estimate, not a number the team
 has published or committed to. Baseline assumes one engineer with heavy
-agent leverage (see `reservations-feature-spec.md` §16 and the original
+agent leverage (see `feature-spec.md` §16 and the original
 completion-estimate discussion for the pre-testing baseline). Testing scope
-is `reservations-testing-plan.md`.
+is `testing-plan.md`.
 
 ## 1. Baseline (before folding in testing recommendations)
 

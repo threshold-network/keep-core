@@ -897,7 +897,7 @@ gap the runbook's keep-core follow-up section calls out.
 - **Re-anchor fee grinding: capped, but the cap is unbounded as a ratio.**
   Resolved at the source in #1088: `maxCumulativeReanchorFee`
   (governance-set), per-reservation `cumulativeReanchorFee` tracking, and a
-  re-anchor dust floor (`reservations-pr-review-followups.md` item 5 — also
+  re-anchor dust floor (`pr-review-followups.md` item 5 — also
   claimed by #1093's H-04 backing fix; confirm the two caps are compatible,
   not stacked). What remains open is the *bound itself*: backing left after
   maximal grinding is a constant `reservationTxMaxFee + 1 -
@@ -1016,7 +1016,7 @@ The deployment runbook is detailed and its scripts (`95_deploy_reservation_vault
   item 7).
 - Three residuals from the #1088/#1102 follow-up reviews remain open-by-
   assumption and are consolidated in §15, each with its verify-action and
-  commit pins in `reservations-pr-review-followups.md`:
+  commit pins in `pr-review-followups.md`:
   stranding reachability from all three termination paths (item 1);
   re-anchor/dissolution proof-submission gating after the split (item 3);
   vault-rotation liveness vs a single blocking owner (item 2).

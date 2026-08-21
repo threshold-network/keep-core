@@ -103,7 +103,7 @@ exists structurally (FROST proved the builder pattern is extensible), but reserv
 would need a scheme-aware branch calling the Taproot path for a FROST-targeted re-anchor/dissolution,
 which is genuine, non-trivial new work, not a two-line change. Given keep-core's reservation PR
 (`#4238`) is already a generation behind the two-phase Solidity design (per
-`reservations-feature-spec.md` §16) and has zero coordination-executor wiring, this FROST-awareness work
+`feature-spec.md` §16) and has zero coordination-executor wiring, this FROST-awareness work
 naturally lands as part of — not before — the already-identified "second, currently-unwritten keep-core
 PR" that implements the two-phase protocol client-side.
 
@@ -129,7 +129,7 @@ but not a blocking architectural conflict.** Both PRs individually claim (and CI
 storage-layout parity tests) to be storage-append-only. Landing both requires a real rebase with manual
 conflict resolution on these three files, followed by **a combined storage-layout parity test run
 against the merged result** — neither branch's own test covers the other's slots. This is exactly the
-kind of gap the reservations testing plan (`reservations-testing-plan.md` §3 Tier 1) already flags for
+kind of gap the reservations testing plan (`testing-plan.md` §3 Tier 1) already flags for
 Foundry invariant coverage; extend that recommendation to explicitly include a post-merge combined
 storage-layout check once both features are ready to land together.
 
@@ -163,7 +163,7 @@ outputs/ narrative reports' "5-22 months, one program" framing is superseded by 
   + deposit inflow to FROST) plus a **mandatory but undated backstop**: any individual ECDSA wallet
   whose heartbeat fails arms an automatic, non-extendable 365-day `MovingFunds` clock, independent of
   whether the governance backstop date has been set yet.
-- **Reservations' own timeline** (`reservations-timeline-estimate.md`): ~13-18 weeks (~3.25-4.5 months)
+- **Reservations' own timeline** (`timeline-estimate.md`): ~13-18 weeks (~3.25-4.5 months)
   to mainnet-ready, dominated by its own audit engagement, not FROST's.
 
 **These two timelines do not force sequencing on each other.** Reservations can launch and operate on
@@ -195,7 +195,7 @@ gantt
 
 ## 6. Recommended operational steps to add to the reservations plan
 
-None of these block reservations' current launch plan (`reservations-epic-merge-plan.md`). They are
+None of these block reservations' current launch plan (`epic-merge-plan.md`). They are
 follow-up items to track once FROST Program A activates:
 
 1. **Track FROST Program A's activation milestone**, not its whole timeline — that's the point at which
@@ -210,7 +210,7 @@ follow-up items to track once FROST Program A activates:
    + Schnorr signing branch) as part of the already-planned "second keep-core PR" for the two-phase
    protocol, not as separate scope creep.
 4. **Add a combined storage-layout parity test** covering both branches' final merged state (§3) —
-   extend `reservations-testing-plan.md`'s Tier 1 Foundry recommendation to explicitly include this once
+   extend `testing-plan.md`'s Tier 1 Foundry recommendation to explicitly include this once
    both features are close to landing together.
 5. **Monitor wallet heartbeat health for any wallet carrying live reservations** (§5) — this is the one
    genuinely time-sensitive operational coupling. A reservation anchored to a wallet whose heartbeat
