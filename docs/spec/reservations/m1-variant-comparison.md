@@ -26,7 +26,7 @@ actually in contention.
 | 7 | Stranding (`notifyReservationStranded` / `strandReservation`, requires wallet `Terminated`) | Dead-wallet capacity release |
 | 8 | Caps + governance parameters (`updateReservationParameters`) | The only safety valve at launch |
 | 9 | Wallet-lifecycle guards, full storage layout | §11's no-live-action-migration rule (`feature-spec.md` §3.4) |
-| 10 | Router, **only if** EIP-170 requires it | Deleting it saves ~736 prod / ~2,000 with tests off either variant; the stacked router is 1,051 prod / ~3,400 with tests. Decided by the compiler, not by argument |
+| 10 | Router, **only if** EIP-170 requires it | Deleting it saves ~736 prod / ~2,000 with tests off either variant — a smaller swing than the dissolution choice below (910 / ~2,500). The stacked router file is 1,051 prod / ~3,400 with tests; a rewritten one is leaner. Decided by the compiler, not by argument |
 
 **Absent from both** (deferred to m2): in-kind redemption whole and partial,
 renewal / `extendCustody`, redemption veto and watchtower integration, retry
@@ -121,6 +121,38 @@ dissolution, and it is cheap to resolve.
 - **m2 must build dissolution from scratch** — unlike redemption, where
   `#1096` is already written (`roadmap.md` §5.1).
 - Does not scale past design-partner volumes.
+
+## 5.1 What m2 costs after a rewrite
+
+A rewrite does not only shrink m1; it **moves mass into m2**, because the
+redemption and renewal code A+ and B cut is code the stacked plan already has
+written and reviewed. Taking A+ with router as the m1:
+
+| | Production Solidity | + tests (1.7-1.9x) | m1 : m2 |
+|---|---|---|---|
+| m1 (A+ with router) | 6,171 | ~16,700-17,900 | — |
+| m2 after A+ | **3,731** | ~10,100-10,800 | **1.65 : 1** |
+| *(stacked plan for contrast)* | *m1 9,206 / m2 696* | *27,041 / 3,259* | *13.2 : 1* |
+
+m2's 3,731 is 3,035 lines of whole redemption, renewal, watchtower veto
+integration and their storage — the exact material A+ removed — plus `#1096`'s
+696 lines of partial redemption.
+
+Two consequences:
+
+- **Cumulative mass is unchanged.** 6,171 + 3,731 = 9,902 production lines,
+  identical to the stacked path's 9,206 + 696. The rewrite reallocates the
+  audit between milestones rather than reducing the total.
+- **m2 stops being cheap.** Under the stacked plan m2 writes **zero** new
+  Solidity — `#1096` is an open PR with its 3,259 lines already written
+  (`roadmap.md` §5.1) — so the only new work is ~600-1,100 lines of keep-core
+  Go. After a rewrite, m2 must write ~3,035 production lines of Solidity from
+  scratch, with `#1096`'s work only partly adaptable since it targets the
+  stacked structure.
+
+So the rewrite's -33% m1 audit is financed by a ~5.4x larger m2 audit and a
+second body of Solidity to write. That is the same conclusion §6 reaches from
+the volume side, arrived at from the code side.
 
 ## 6. How to choose
 

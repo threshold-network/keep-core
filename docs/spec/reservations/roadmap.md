@@ -479,12 +479,19 @@ and their natspec and tests.
 | Variant A | **6,171** (-33%) | ~16,700-17,900 |
 | Variant A, no router | **5,435** (-41%) | ~14,700-15,800 |
 
-The router line is the single largest swing. `ReservationRouter.sol` (+1,051,
-plus ~2,400 test lines in `#1090`) exists only because the full external
-surface breaks Bridge's EIP-170 bytecode limit. An essentials-only surface
-has roughly 11 entry points instead of 24, so it **may fit in `Bridge`
-directly** — worth an hour with the compiler before assuming either way,
-because it decides ~3,400 lines.
+The router is the largest **single-file** swing in this estimate.
+`ReservationRouter.sol` ships 1,051 production lines plus ~2,400 test lines
+in `#1090`, and exists only because the full external surface breaks Bridge's
+EIP-170 bytecode limit. An essentials-only surface has roughly 11 entry
+points instead of 24, so it **may fit in `Bridge` directly** — worth an hour
+with the compiler before assuming either way.
+
+On a like-for-like basis, though, it is **not** the largest decision in this
+section. Measured as within-variant deltas, deleting the router saves 736
+production lines (~2,000 with tests), while the A+ -> B dissolution drop saves
+910 (~2,500). Dissolution is the bigger swing on both axes; the 1,051/~3,400
+figures above are the file's *stacked* mass, not the saving a rewrite
+realises, because the rewritten router is itself leaner.
 
 ### Variant B — also drop dissolution, make re-anchor unbounded
 
