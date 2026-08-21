@@ -5,21 +5,21 @@ phases below are not yet started. Companion doc:
 `feature-spec.md` (the reverse-engineered spec and
 gap analysis this plan assumes).
 
-## 0. What was just set up (done, 2026-08-19)
+## Superseded by milestone-1 decision (2026-08-21)
 
-- Created `reservations-epic` in both repos, cut from `main` at the time:
-  - `threshold-network/tbtc-v2`: `502cd3982b5b2dc3ff0e1e6085a24502f78cfe26`
-  - `threshold-network/keep-core`: `a7ac8989b662d51d8a94fa28f1ac226058d5d6cc`
-- **tbtc-v2**: the 8 reservation PRs are tracked as a native GitHub Stack
-  (stack `#1101`, `github.com/threshold-network/tbtc-v2/stacks/1101`). Only
-  the stack's bottom PR needed retargeting — GitHub stacks treat every PR in
-  the chain as targeting the stack's trunk for checks/reviews/CODEOWNERS
-  regardless of which sibling branch it literally points at, so retargeting
-  the root moves the whole stack:
-  - `#1088` (root) base: `main` -> `reservations-epic`
-  - `#1090`-`#1096` bases: unchanged (`feat/utxo-reservation-*` /
-    `docs/utxo-reservation-release` sibling branches) — GitHub evaluates
-    their checks/reviews against `reservations-epic` now automatically.
+As of 2026-08-21, milestone 1 is defined as **variant B**, an essentials-only rewrite of the reservation feature (see `roadmap.md` §1). Therefore, this document's original purpose — sequencing the review and merge of the eight tbtc-v2 PRs as a delivery plan for m1 — is superseded.
+
+**What survives:**  
+The per-PR review findings, the invariant lists, the conflict/rebase state, and the dependency reasoning remain valid. The rewrite extracts from these PRs, so knowing which parts were reviewed and which are known-broken is essential.
+
+**What does not survive:**  
+- The merge order as a delivery mechanism (the eight PRs are no longer merged sequentially to form m1).  
+- The combined-parity audit item (since m1 is a rewrite, the combined parity of the original eight PRs is not the target).  
+- Any step whose sole purpose was landing all eight PRs onto a shared tip (the rewrite does not use these PRs as a delivery vehicle).
+
+This document is now an **extraction and reference order**: it lists the PRs in dependency order to guide what to extract and what to verify during the rewrite. Sections that still assume a merge-and-ship sequence are annotated inline.
+
+## 0. What was just set up (done, 2026-08-19)
   - Mechanically this required the `gh-stack` extension (`gh extension
     install github/gh-stack`), because plain `gh pr edit --base` is blocked
     ("Cannot change the base branch because the pull request is part of a
@@ -101,9 +101,12 @@ before `#4238` alone is treated as feature-complete.
 review and merge sequence below covers all 8 tbtc-v2 PRs. The create-only
 milestone-1 cut merges steps 1-7 (`#1088` through `#1095`) and **defers
 `#1096` to m2** — it is the only clean PR omission in the stack, because
+(**Correction, 2026-08-21**: As m1 is variant B per `roadmap.md` §1 — an essentials-only rewrite — #1096 is no longer the \"one clean PR omission\"; it is simply one of several unwritten m2 features, so its special status in the merge narrative is gone.)
+
 `#1092`'s expiry model is structural to `#1093`+ (`roadmap.md` §0.1).
 Create-only behaviour comes from the m1 vault exposing no redemption or
 renewal entry point, not from omitting PRs (`roadmap.md` §0.2).
+(**Correction, 2026-08-21**: As of this date, m1 is variant B per `roadmap.md` §1 — an essentials-only rewrite. The above milestone scope and merge sequence are superseded; they remain as reference for extraction but do not describe the m1 delivery path.)
 
 **Excluded as false positives (verified, not reservation work):**
 - tbtc-v2: `#911` (non-fungible, closed), `#971` (FROST Taproot, base
@@ -122,7 +125,6 @@ See `feature-spec.md` §0/§14 for the reverse-engineered source-of-truth this
 inventory is reconciled against.
 
 ## 1. Why an epic branch (rationale, for reviewers who ask)
-
 - The design has a **hard deployment-sequencing constraint** (spec §11):
   the full storage layout (all 8 tbtc-v2 PRs) must land as one coordinated
   release — no live `ReservationAction` record may ever exist on an
@@ -191,7 +193,7 @@ interactions that only show up across the whole feature. This is the
 external-audit-equivalent gate the runbook itself hasn't passed yet (spec
 §16) — do not treat individually-approved PRs as equivalent to this.
 
-## 4. keep-core (`#4238`) — do not review this PR alone as "done"
+(**Correction, 2026-08-21**: As m1 is variant B per `roadmap.md` §1 — an essentials-only rewrite — this review plan's merge gates and sequencing are superseded. The review focus and dependency reasoning remain valid for extraction, but the gates no longer describe a path to m1 merge. This section remains as reference for what needs to be verified during the rewrite.)
 
 Per the spec's gap analysis (§16), `#4238` implements the **original
 single-phase design**. Two options, pick one explicitly before spending
@@ -219,8 +221,9 @@ Either way: **`#4238` alone must never merge to `main` believing it's
 feature-complete.** Add a checklist item to whichever PR does the
 epic-branch -> `main` merge (§6) confirming the two-phase keep-core rework
 exists and is included.
+(**Correction, 2026-08-21**: As m1 is variant B per `roadmap.md` §1 — an essentials-only rewrite — the two-phase keep-core rework discussed here is not part of m1. The decision of whether to review #4238 now or later for two-phase features is superseded; #4238 as-is represents the original single-phase design which is not shipped in m1 B. This section remains as reference for understanding the keep-core PR's intent.)
 
-## 5. Audit gate (blocking, not yet started)
+(**Correction, 2026-08-21**: As m1 is variant B per `roadmap.md` §1 — an essentials-only rewrite — this audit gate and its checklist are superseded. The audit for m1 B will target the rewritten code, and the checklist items may require adjustment. This section remains as reference for the original plan's audit preparation.)
 
 Per spec §16, no external audit has happened. Before requesting one:
 - [ ] All 8 tbtc-v2 PRs individually approved (§3) and merged into
@@ -246,7 +249,7 @@ Per spec §16, no external audit has happened. Before requesting one:
 - [ ] Engage the external auditor against `reservations-epic`, not against
       individual PR branches — the audit needs the fully-assembled feature.
 
-## 6. Landing `reservations-epic` into `main`
+(**Correction, 2026-08-21**: As m1 is variant B per `roadmap.md` §1 — an essentials-only rewrite — the landing procedure described here is not for m1 B. The epic branch may still be used as an integration base for the rewrite, but the steps and gates are superseded. This section remains as reference for the original landing process.)
 
 Do this only after §3 (tbtc-v2 stack merged into `reservations-epic`), §4
 resolved (keep-core two-phase rework exists), and §5 (audit) passed.

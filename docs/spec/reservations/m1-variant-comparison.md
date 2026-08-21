@@ -417,7 +417,33 @@ B's cliff.
 not load-bearing here, because positions close and both caps stay concurrent.
 The cap-dial runbook and position-age report also fall away.
 
-## 6. How to choose
+## 6. How to choose — and what was chosen
+
+**Decision, 2026-08-21: m1 is variant B with a minimal router.** The analysis
+below recommended A+ and is retained unchanged, per this set's convention of
+keeping reversed reasoning visible. Read it as the case that was weighed and
+the risk register that comes with the choice, not as a live dispute.
+
+What the decision commits the build to, all of it derived from the §5.3-§5.4
+analysis below and specified in `m1-b-implementation.md`:
+
+- The §5.4 items stop being conditional. The global active-position cap in
+  particular moves from "if B ships" to a **launch gate** — the row below that
+  says *reject B without that cap* still holds and is now the gating
+  condition, not an argument against the variant.
+- §5.5 item 2 turns out to bind harder under B than under A+: because B's
+  positions close only by stranding, the vault-swap gate
+  (`reservationTotalAmount == 0`) is unreachable while the product is in use,
+  so the m1 vault must ship its **full** entry-point surface behind pause
+  flags or those paths are closed rather than deferred (`roadmap.md` §0.7).
+- The `dissolutionEligibleAt` write trap (§5.4 item 3) becomes a concrete
+  build instruction, since B removes the field's only reader.
+
+The one asymmetry the decision accepts knowingly: A+'s cost was a
+dischargeable liveness duty, B's is a capacity limit no client-side diligence
+discharges. §4.1 of `m1-b-implementation.md` is what bounds it.
+
+### 6.1 The analysis that was weighed (recommended A+)
 
 Earlier drafts framed this as a volume question. §5.3 supersedes that:
 B's terminal state is reached by arithmetic, so the question is whether an

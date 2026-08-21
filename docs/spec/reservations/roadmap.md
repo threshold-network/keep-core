@@ -57,18 +57,39 @@ Verified on both #1091 and #1093 branches:
 | Path | Gate | Reachable in m1? |
 |---|---|---|
 | Acceptance (`requestReservationAcceptance`) | permissionless (:401) | **Yes** — this is the product |
-| Redemption (`requestReservedRedemption`) | `msg.sender == self.reservationVault` (#1091 :584, #1093 :614) | **No** — m1 vault exposes no entry point |
-| Renewal (`extendReservation`) | `msg.sender == self.reservationVault` (#1091 :1064, #1093 :1133) | **No** — same |
+| Redemption (`requestReservedRedemption`) | `msg.sender == self.reservationVault` (#1091 :584, #1093 :614) | Set by the vault, not by Bridge: the *shipped* vault calls it from `redeemReservation` (`ReservationVault.sol:293`) with **no pause**, so it is callable as-shipped. m1's vault must add the flag (§0.7) |
+| Renewal (`extendReservation`) | `msg.sender == self.reservationVault` (#1091 :1064, #1093 :1133) | **No** as shipped — `extendCustody` (`:367`) is gated by `renewalsPaused`, constructor-`true` (`:222`) |
 | Re-anchor (`requestReservationReanchor`) | permissionless while source is `MovingFunds`; `privileged` required while `Live` (:718-757) | **Yes** — and this is desirable (§1.5) |
 | Dissolution (`requestReservationDissolution`) | permissionless, post-eligibility only (:824, :880; router :302 has no modifier) | **Yes, on a timer** — deferred ~12 months by the term, then permanently open; must be wired (§0.6) |
 | Action timeout | permissionless (:911) | **Yes** — required cleanup |
 | Redemption veto | `msg.sender == self.redemptionWatchtower` (:1017) | Vacuous — no redemptions exist |
 | Stranding | wallet `Terminated` + Active, no time gate (#1094 :1363-1378) | **Yes** — capacity valve |
 
-Because redemption and renewal are **vault-gated**, a minimal m1 vault that
-exposes neither makes both unreachable **without touching Bridge code**.
-This is the cheapest possible scope control, and it makes m2 a *vault-side*
-change (§3).
+**Under the B decision (§1) three of these rows describe the reference stack
+rather than m1.** Redemption, renewal and dissolution Bridge code is not
+deployed-and-gated in B, it is **absent**, so their gates are moot until m2
+writes them. Two knock-on effects worth stating outright:
+
+- **§0.6's slashing vector does not exist in m1 B.** With no
+  `requestReservationDissolution`, nothing can be opened against an honest
+  wallet and left to time out. This was B's headline benefit and it holds.
+- **Nothing in m1 B reads `expiresAt` or `dissolutionEligibleAt`.** Every
+  consumer is cut or deleted: redemption's `<= expiresAt + gracePeriod`,
+  renewal, dissolution's `>= dissolutionEligibleAt`, and re-anchor's
+  `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the
+  custody term is **not enforced by any on-chain gate in m1** — it is a
+  commitment recorded in storage for m2 to honour, which is exactly why the
+  write must survive the rewrite (§0.7 item 3).
+
+Because redemption and renewal are **vault-gated**, the m1 control surface is
+the vault rather than Bridge code. There are two ways to use that and only one
+is reversible: **omitting** an entry point makes the path unreachable but
+closes it permanently (§0.7), whereas **shipping it behind a
+constructor-default pause flag** makes it unreachable now and reachable in m2
+by one owner transaction. Take the flag — and scope it to initiation only,
+never to settlement or accounting (`m1-b-implementation.md` §3). Note the
+shipped vault does this for renewal but not redemption, so redemption's flag
+is m1 work.
 
 **But "vault-side" is not automatically cheap, and the shipped vault already
 shows the cheap version.** `ReservationVault` is plain `Ownable`, not
@@ -162,23 +183,87 @@ automatically the moment the first position passes its dissolution
 eligibility date. The term length is therefore not only a promise clock
 (§1.4) — it is the deadline by which keep-core dissolution must exist.
 
-## 1. Milestone 1 — create-only rails
+### 0.7 The two layers upgrade differently — and B closes one of them
 
-### 1.1 Ships (whole PRs, no intra-PR surgery)
+This governs what "minimal" may safely mean, so it is the fact the m1 scope
+turns on.
 
-`#1088` (+`#1102` fold) routing and permanent reveal-time classification ·
-`#1090` router · `#1091` settlement machine · `#1092` renewal/expiry model
-(**required** by §0.1) · `#1093` backing, fees, caps · `#1094` guards,
-designated-wallet binding, stranding · `#1095` docs and frozen params.
+| Layer | Replaceable by | Cost | Minimise in m1? |
+|---|---|---|---|
+| `ReservationRouter` (Bridge code via `delegatecall`) | Bridge implementation upgrade — `setReservationRouter` is once-only (`BridgeState.sol:1018-1021`), so replacing router code *is* a proxy-admin ceremony (invariant 4, §2) | The ceremony m2 needs anyway for its ~4,641 lines | **Yes — safe** |
+| `ReservationVault` (plain `Ownable`, immutables in bytecode, §2.2) | Deploying v2 and re-pointing `Bridge.reservationVault`, which `updateReservationParameters` gates on `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1267-1274`) | Total quiescence | **No — cannot be undone** |
 
-### 1.2 Deferred
+**In B the vault gate is unreachable while the product is in use.**
+`reservationTotalAmount` decrements only when a position closes, and B's close
+sites are stranding alone: redemption's (`ReservationProofs.sol:715`, `:836`)
+and dissolution's (`:1140-1142`) are both cut, leaving
+`strandReservation` and `strandLateSettlementIfTargetWalletClosed`, which
+require the custodying wallet to be `Terminated`. So reaching
+`reservationTotalAmount == 0` in B means **every wallet holding a reservation
+has been terminated** — the §5.3 endgame, not a maintenance window.
 
-- **`#1096` partial redemption** — the only clean PR omission in the stack.
-- **Redemption and renewal *reachability*** — code ships (§0.1) but the m1
-  vault exposes no entry point (§0.2), so neither is callable.
-- **Dissolution** — deferred by the term, not gated: it opens
-  permissionlessly at `dissolutionEligibleAt` and must be wired in keep-core
-  before then (§0.6).
+Three consequences, and they point in opposite directions:
+
+1. **Minimising the router is free.** Its code was always going to be replaced
+   by a Bridge upgrade, so a cut entry point costs no extra ceremony later.
+2. **Minimising the vault is irreversible.** Any path whose vault entry point
+   m1 omits cannot be reached in m2 by a governance transaction. The fallback
+   is a Bridge upgrade that re-plumbs the caller gate — so §0.2's "m2 is a
+   *vault-side* change" is **false under B**.
+3. **Storage must still be written, not just declared.** Acceptance sets
+   `dissolutionEligibleAt = expiresAt + reservationDissolutionDelay`
+   (`ReservationProofs.sol:537-539`) and B deletes its only reader
+   (re-anchor's gate). Drop the write as dead code and m2's dissolution has no
+   eligibility date for any m1-era position, with the non-retroactive snapshot
+   semantics (`:180-184`) unreconstructable.
+
+The shipped vault already demonstrates the pattern the gate requires, and
+applies it unevenly: `extendCustody` (`ReservationVault.sol:367`) is guarded by
+`renewalsPaused`, set `true` in the constructor (`:222`) with `unpauseRenewals`
+`onlyOwner` (`:415-418`), whereas `redeemReservation` (`:293`),
+`retryRedeemReservation` (`:469`) and the in-kind fee pair (`:529`, `:568`)
+have **no pause at all**. m1 must add the redemption-side flag by copying
+renewal's pattern within the same file.
+
+## 1. Milestone 1 — create-only rails, variant B
+
+**Decided 2026-08-21: m1 is variant B with a minimal router.** This supersedes
+the earlier whole-PR plan below and `m1-variant-comparison.md` §6's
+recommendation of A+; the argument against is retained there and the residual
+risks it names are now **launch gates**, not tradeoffs
+(`m1-b-implementation.md`).
+
+### 1.1 Shape: a rewrite, not a PR selection
+
+B is an essentials-only rewrite (`m1-variant-comparison.md` §5.2), so the
+eight-PR stack becomes **reference material rather than the delivery
+vehicle**. Consequences to absorb elsewhere: `epic-merge-plan.md`'s sequence
+becomes an extraction order, and `timeline-estimate.md` priced the stacked
+path plus rework, so its numerator changes.
+
+What m1 implements: routing and permanent reveal-time classification ·
+a minimal `ReservationRouter` (§1.6) · two-phase acceptance with
+designated-wallet binding · mint and the `mintedAmount == anchorAmount`
+backing invariant · **unbounded** re-anchor · action timeout and unwind ·
+stale-deposit cleanup · stranding · caps, governance parameters and the new
+global position cap · the **complete** storage layout.
+
+### 1.2 Not implemented in m1
+
+- **Dissolution** — B's defining cut. Its storage stays and is still written
+  (§0.7), and this is the decision that makes §1.5's pinning permanent.
+- **In-kind redemption, whole and partial** (`#1096` included), **renewal**,
+  redemption veto, retry credit, late settlement.
+- **Bridge-side code for all of the above is simply absent** — not
+  deployed-and-dead as in the whole-PR plan. m2 writes it (~4,641 production
+  lines, `m1-variant-comparison.md` §5.1).
+
+**Vault-side is the opposite and is a launch gate.** The two layers upgrade
+differently (§0.7): router code is replaceable by a Bridge implementation
+upgrade, but `ReservationVault` is effectively immutable once positions exist,
+and in B they never all close. So the m1 **vault must ship the full entry-point
+surface behind pause flags**, even though m1 calls none of it. Omitting a
+vault entry point in B does not defer that path — it closes it.
 
 ### 1.3 Launch posture (decided)
 

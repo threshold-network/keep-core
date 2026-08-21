@@ -6,11 +6,19 @@ PR stack, not an authoritative protocol spec that the team has published —
 parameter values, findings and schedules here are provisional until
 governance sign-off and the external audit (see `feature-spec.md` §10, §15).
 
-**Decision anchor (2026-08-21):** the existing **`Stranded`** fallback is the
+**Decision anchor (2026-08-21):** the existing `Stranded` fallback is the
 accepted outcome for a terminated wallet's reservations; the emergency-exit
 mechanism is **not built** and retained only as design reference. The
 authoritative Decision block (including the re-open triggers) lives in
 `exit/README.md`. Every doc in this folder is subordinate to that decision.
+
+**Scope decision (2026-08-21):** milestone 1 is **variant B with a minimal
+router** — create, custody and re-anchor only, no dissolution, built as an
+essentials-only rewrite rather than by merging the eight-PR stack.
+`m1-b-implementation.md` is the buildable form; `roadmap.md` §1 is the
+authoritative scope statement and §0.7 the upgradeability rule it turns on.
+`m1-variant-comparison.md` recommended A+ and is retained unchanged as the
+argument that was weighed plus the risk register the choice carries.
 
 ---
 
@@ -25,8 +33,9 @@ authoritative Decision block (including the re-open triggers) lives in
 ### Planning
 | File | Role |
 |---|---|
-| `roadmap.md` | **Scope decision.** Milestone-based decomposition for a create-only first release: what ships in m1, what defers to m2, optimal merge order, suggested edits to existing PRs, and the m1 implementation gaps. Source-verified and branch-tagged; §0 records two earlier decisions it reversed. |
-| `m1-variant-comparison.md` | **Decision support.** Flat side-by-side of the two m1 designs in contention (A+ and B): shared feature set, the single difference (dissolution), measured line counts, EIP-170 arithmetic for a router-less launch, and §5.3's verified B endgame — saturation leads to seized operator stake and stranded depositors. §5.4 lists what B must ship to be safe; §6 **recommends A+**. Derivation lives in `roadmap.md` §5.2. |
+| `roadmap.md` | **Scope decision.** Milestone decomposition for a create-only first release: §0 the source-verified facts it turns on (§0.7 = the two-layer upgradeability rule), §1 the **decided m1 = variant B** scope, what defers to m2, PR edits and implementation gaps. §0 also records the earlier decisions it reversed. |
+| `m1-variant-comparison.md` | **The argument that was weighed.** Side-by-side of A+ and B: shared feature set, the single difference (dissolution), measured line counts, EIP-170 arithmetic by subtraction, and §5.3's verified B endgame — saturation leads to seized operator stake and stranded depositors. §5.4/§5.5 are the per-variant hole lists. §6 records that B was chosen and retains the A+ recommendation unchanged as the risk register that comes with it. |
+| `m1-b-implementation.md` | **Build scope for the decided variant.** Minimal router surface (20 of 24 entry points, with what was cut and why), the vault's full-surface requirement and the initiation-only pause rule, the four launch gates, operational duties, and what m2 must then build. |
 | `timeline-estimate.md` | Schedule: phases, baseline + testing fold-in, testnet round (added 2026-08-21), and the §5 rewrite after the Stranded-decision review. |
 | `testing-plan.md` | Test & hardening plan: pre-audit vs during-audit tooling (Foundry invariants, TLA+, multi-signer sim, fork e2e, Certora, etc.), effort, critical-path impact. |
 | `epic-merge-plan.md` | Sequencing the 8-PR tbtc-v2 stack plus standalone keep-core #4238 to mergeable/audit-ready state. |

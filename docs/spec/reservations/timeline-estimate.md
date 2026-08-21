@@ -10,7 +10,7 @@ is `testing-plan.md`.
 
 | Phase | Estimate | Compresses with agents? |
 |---|---|---|
-| Engineering to code-complete (stack merge, stranding-compensation module **Tiers 0-1**, fee-grinding fix, keep-core two-phase rework **incl. the two executor duties from the Stranded-decision review** — re-anchor-on-rotation and stranding-cleanup, integration tests, findings/reference docs, fork dry-run). The emergency-exit build is **out of scope** per the 2026-08-21 decision (§5). | ~33-49 engineer-days serialized -> ~4-6 weeks calendar with parallel agent workstreams | Yes |
+| Engineering to code-complete (stack merge — **superseded, see §7: B is a rewrite, not a merge**, stranding-compensation module **Tiers 0-1**, fee-grinding fix, keep-core two-phase rework **incl. the two executor duties from the Stranded-decision review** — re-anchor-on-rotation and stranding-cleanup, integration tests, findings/reference docs, fork dry-run). The emergency-exit build is **out of scope** per the 2026-08-21 decision (§5). | ~33-49 engineer-days serialized -> ~4-6 weeks calendar with parallel agent workstreams | Yes |
 | External audit engagement + fix/re-review cycle | ~4-8 weeks calendar | No — vendor calendar |
 | Governance sign-off (2 unset params + launch approval) | ~1-3 weeks, overlaps with audit | No — DAO/Council calendar |
 | **Total (baseline)** | **~10-14 weeks (2.5-3.5 months)** *(Engineering ~4-6 + Audit ~4-8 = ~8-14 alone; the extra ~2 weeks at the low end is a non-overlapping admin/handoff buffer, made explicit in §3 after the 2026-08-21 review — not a separate governance delay, since governance is stated to overlap audit)* | |
@@ -197,11 +197,17 @@ because the intuitive expectation is a reduction:
   `#1093`+ rather than additive (`roadmap.md` §0.1). Create-only comes from
   an m1 vault that exposes no redemption or renewal entry point, not from
   omitting PRs. So the audited contract surface is 7 of 8 PRs either way.
+  **Reversed by the B decision — see §7.** B is a rewrite, so the m1 surface
+  drops to 5,261 lines (-43%), and the vault must *ship* its entry points
+  behind flags rather than omit them (`roadmap.md` §0.7).
 - **The keep-core rework does not shrink either.** Dissolution cannot be
   deferred: it is permissionless, so an unwired dissolution path lets anyone
   slash honest wallets on timeout (`roadmap.md` §0.6). m1 therefore needs
   acceptance, re-anchor **and** dissolution — only the redemption proposal
   drops out, which is the smallest of the four.
+  **Also reversed — see §7.** B cuts dissolution from the contracts entirely,
+  so §0.6's vector does not exist in m1 and keep-core needs acceptance and
+  re-anchor only. This is B's one genuine saving, ~300-500 production Go.
 - **What the split does buy is a later deadline, not less work.** The
   in-kind redemption promise moves from "before launch" to "before the
   earliest `dissolutionEligibleAt`", roughly 12 months out under §1.4's
@@ -214,3 +220,14 @@ because the intuitive expectation is a reduction:
 
 **Net: no change to §3's ~15-20 weeks.** The split changes *when* in-kind
 redemption must exist, not how much must be built and audited before launch.
+
+## 7. Effect of the variant B decision (2026-08-21)
+
+The milestone 1 plan was officially changed on 2026-08-21 from the stacked whole-PR path (eight PRs merged sequentially) to variant B: an essentials-only rewrite of m1. This document's baseline (§1) and prior revisions (§5-§6) still describe the stacked plan; this section records the delta introduced by the B decision, following the doc's convention of retaining superseded analysis and marking it as such.
+
+- **m1 engineering effort**: shifted from "review + merge + rework" of the stacked PRs to writing 5,261 production Solidity lines fresh, extracting logic from the already-reviewed PRs. Extraction from reviewed code is cheaper per line than greenfield but more expensive than a simple merge; net direction uncertain without precise calibration [direction only].  
+- **Audit shape**: the stacked plan concentrated ~9,206 production lines in m1 with a near-zero m2 delta (13.2:1 ratio), implying one large audit engagement plus trivial m2 cleanup. Variant B splits the audited surface into two comparable chunks: 5,261 lines in m1 and ~4,641 lines in m2 (1.13:1 ratio). Vendor audit calendar windows do not compress, so this change replaces one large audit with two sequential audits of similar magnitude, increasing calendar duration. The effect is dominant and pushes total program duration up despite m1's smaller absolute size.  
+- **keep-core engineering**: m1 B requires ~1,100-1,400 production Go lines (same rough scale as the stacked plan's m1 keep-core rework). m2 after B must add two action types (Redemption and Dissolution) rather than one; the keep-core two-phase client remains the critical path item, so m2 effort increases critical-path load [direction only].  
+- **New m1 launch gates**: scope absent from both earlier plans includes (a) a global active-position cap enforced at acceptance, (b) the m1 vault shipping its complete entry-point surface behind pause flags, (c) `reservationsByAnchorUtxo` reconciliation, and (d) writing `dissolutionEligibleAt` at acceptance despite having no reader. Each is small individually but additive; net direction up [direction only].  
+
+No precise day counts are assigned above where inputs only support a direction; where the contract provides line counts or ratios, those figures are cited directly.
