@@ -293,35 +293,47 @@ and their only exit was always the pool. 12 months is roughly double a
 realistic m2 date. The clock is unextendable in m1 (renewal unreachable), so
 publish the derived date with the frozen parameters.
 
-### 1.5 Wallet pinning is solved *during the term*, and only by dissolution after it (revised twice)
+### 1.5 Wallet pinning under B: re-anchor is the only unpin, and it is unbounded (revised three times)
 
-The original decision accepted pinning because no unpin mechanism would
-ship. That premise is false: **`#1091` ships, so re-anchor ships, and it is
-permissionless while the source wallet is `MovingFunds`** (:718-757) —
-exactly the retiring-wallet case. A wallet needing to retire can have its
-anchors re-anchored to a Live wallet by anyone, dropping its reservation
-count so closing can complete.
+**Revised 2026-08-21 by the B decision.** The prior conclusion — pinning
+solved *inside* the term by re-anchor and *after* it by dissolution — assumed
+dissolution ships. B removes it, so the rule is now simpler and the residual
+risk is larger.
 
-**But re-anchor expires with the term.** It requires
-`block.timestamp < reservation.dissolutionEligibleAt`
-(`Reservation.sol:785-788`, `feat/utxo-reservation-guards`). Past
-eligibility every movement path is closed except one: redemption and
-renewal are vault-gated and unreachable in m1 (§0.2), re-anchor reverts, and
-stranding needs the wallet `Terminated`. **Dissolution is the only unpin
-left** — the permissionless path of §0.6.
+The history matters because two premises were falsified in turn. The original
+decision accepted pinning because no unpin would ship; that was false, since
+re-anchor is permissionless while the source wallet is `MovingFunds`
+(`:718-757`) — exactly the retiring-wallet case. The interim conclusion was
+that re-anchor alone solved it; that was also false on the stacked design,
+because re-anchor required
+`block.timestamp < reservation.dissolutionEligibleAt` (`:785-788`), so past
+eligibility every path closed except dissolution.
 
-So the two revisions compose into one rule: pinning is solved *inside* the
-term by re-anchor and *after* it by dissolution, and m1 must ship both
-client-side. If dissolution is unwired (§0.6), a position that passes its
-eligibility date pins its custodying wallet **permanently** — wallet closing
-requires the reservation count to reach zero, and no path can then decrement
-it. That is the same hazard the original decision accepted, merely deferred
-by the term length, which is why §0.6 treats keep-core dissolution as
-mandatory rather than a nice-to-have.
+**B resolves this by deleting the gate.** Re-anchor becomes unbounded, so it
+works at any position age, and that is precisely what makes dropping
+dissolution sound rather than reckless — a position past eligibility still has
+a movement path. `m1-variant-comparison.md` §2 records the ordering
+constraint: the two changes are a package, and shipping the cut without the
+unbounding would leave positions with no unpin at all.
+
+What B accepts in exchange:
+
+- **Re-anchor needs a free slot,** so pinning relief is now conditional on
+  target-wallet supply rather than on a date. `activeReservationsCount` and
+  its cap exist to keep that condition true
+  (`m1-b-implementation.md` §4.1); saturation is the failure mode
+  (`m1-variant-comparison.md` §5.3).
+- **There is no owner-side exit at any age.** Redemption and renewal are
+  vault-gated and flag-paused, dissolution does not exist, and stranding needs
+  the wallet `Terminated`. A position ends only when its custodying wallet
+  dies.
+- **Re-anchor is the sole keep-core execution duty for position movement,**
+  which is B's saving — but it also removes the redundancy the two-path design
+  had. Executor failure has no fallback.
 
 Residual conditions:
-- Both hops need the keep-core executor to sign and prove (§4/§5): re-anchor
-  during the term, dissolution after it.
+- Re-anchor needs the keep-core executor to sign and prove (§4/§5). This is
+  now the only such duty, so it carries the whole pinning guarantee.
 - While `Live`, re-anchor requires `privileged` — governance-driven rotation
   only. Acceptable at design-partner scale.
 
@@ -765,61 +777,99 @@ point does not exist.
 
 ## 6. Decisions confirmed
 
-1. **Create-only m1** — users create only; redemption and renewal exist
-   on-chain but are unreachable (§0.2).
-2. **Stack ships intact, only `#1096` deferred** — supersedes the earlier
-   "cut #1092 and #1096" decision, which §0.1 shows is not buildable.
-3. **Wallet pinning solved by re-anchor during the term and dissolution
-   after it** — supersedes both the earlier "accept pinning" decision and
-   the interim "re-anchor solves it" claim, since re-anchor reverts at
-   `dissolutionEligibleAt` (§1.5).
-4. **Deploy inert, then activate for design partners**,
+Reordered 2026-08-21 by the variant B decision. Items the decision reversed
+are kept with their reversal marked, per this set's convention.
+
+1. **m1 is variant B with a minimal router** (§1) — create, custody and
+   re-anchor only; **no dissolution**; built as an essentials-only rewrite.
+   `m1-b-implementation.md` is the build scope.
+2. **Create-only m1** — users create only. *Restated under B:* redemption and
+   renewal do not "exist on-chain but unreachable" as in the stacked plan;
+   their **Bridge code is absent** and m2 writes it. Only their *vault* entry
+   points ship, behind pause flags (§0.7).
+3. **The vault ships its full entry-point surface behind flags** (§0.7,
+   `m1-b-implementation.md` §3) — because re-pointing the vault needs
+   quiescence B cannot reach, an omitted vault path is closed, not deferred.
+   Flags gate **initiation only**, never settlement or accounting.
+4. **A global active-position cap is a launch gate**, not an option
+   (`m1-b-implementation.md` §4.1) — without it B's saturation ends in seized
+   operator stake and stranded depositors.
+5. **Deploy inert, then activate for design partners**,
    `maxReservationsPerWallet = 1` (§1.3).
-5. **Term 12 months**, with `reservationDissolutionDelay` as the buffer and
-   a non-zero renewal window forced by the validator (§1.4). The term also
-   dates the deadline for keep-core dissolution support (§0.6).
-6. **keep-core dissolution ships in m1** — not deferrable, because
-   dissolution is permissionless and an unwired path is a slashing vector
-   against honest wallets (§0.6).
-7. **One audit per milestone.**
+6. **Term 12 months**, with `reservationDissolutionDelay` as the buffer and a
+   non-zero renewal window forced by the validator (§1.4). *Under B the term
+   has no on-chain consumer* (§0.2) — it is a commitment held in storage, so
+   the `dissolutionEligibleAt` write must survive the rewrite
+   (`m1-b-implementation.md` §4.4).
+7. **One audit per milestone** — but note B makes the two milestones
+   comparable in size, 1.13 : 1, so this is two similar engagements rather
+   than one large and one trivial (`timeline-estimate.md` §7).
 8. **Branch stays local** — `docs/reservations-spec` not pushed.
+
+### Reversed by the B decision
+
+- ~~**Stack ships intact, only `#1096` deferred.**~~ B is a rewrite, so the
+  eight-PR stack is reference material (§1.1). `#1096` is no longer a special
+  case; it is one of several unwritten m2 features.
+- ~~**Wallet pinning solved by re-anchor during the term and dissolution
+  after it.**~~ B removes dissolution, so **nothing** relieves pinning after
+  the term except wallet termination. Re-anchor is unbounded to compensate
+  (its `< dissolutionEligibleAt` gate is deleted), which is what makes the cut
+  sound at all, but a position past eligibility now has no owner-side exit.
+  This is the accepted residual risk (§4 above bounds it).
+- ~~**keep-core dissolution ships in m1, not deferrable.**~~ Its premise was
+  that an unwired permissionless dissolution is a slashing vector; B removes
+  the entry point entirely, so there is nothing to wire and no vector (§0.2).
+  keep-core m1 needs **acceptance and re-anchor only** — B's one genuine
+  saving, ~300-500 production Go.
 
 ## 7. Open questions for review
 
+Pruned 2026-08-21: items 2, 5, 6 and 7 were settled by the variant B decision
+and are recorded as resolved rather than deleted.
+
+### Still open
+
 1. Is a rails release with **no reachable in-kind exit** acceptable in front
    of design partners, given the promise rests on an m2 governance action?
-2. **Approve the flag-gated vault design?** (§2.2) — `ReservationVault` is
-   confirmed non-upgradeable (plain `Ownable`, `immutable` constructor
-   args), so m2 either flips an owner-settable `redemptionsEnabled` flag on
-   the m1 vault, or redeploys and re-points `reservationVault` after
-   draining `pendingReservedDeposits` to zero. The flag is recommended; it
-   trades a small m1 audit addition for eliminating the swap hazard.
-3. Concrete cap value for `reservationMaxTotalAmount`.
-4. Should reservation-eligible **wallets be allowlisted** at activation?
-   Depositors pick the designated wallet at reveal, so any Live wallet can
-   be selected; an allowlist adds surface no current PR has.
-5. Does deploying unreachable-but-audited redemption code count against the
-   surface objective? The alternative (intra-PR surgery per §0.1) costs more
-   and risks hand-reverting reviewed expiry semantics.
-6. **Harvest variant B's unbounded re-anchor into the stacked design?** (§5.2)
-   Removing re-anchor's `< dissolutionEligibleAt` gate
-   (`Reservation.sol:785-788`) would close §1.5's pinning cliff without a
-   rewrite. **It does not affect §0.6:** dissolution stays permissionless and
-   `notifyReservationActionTimeout` still slashes on non-execution, so
-   keep-core dissolution remains mandatory either way. Re-anchor also cannot
-   preempt a pending dissolution — it requires `state == Active` (:781) — and
-   rotating an eligible position merely moves the execution duty to the
-   target wallet, since dissolution reads the current custodian
-   (`:904`, gated by `state == Active` and `>= dissolutionEligibleAt` at
-   `:895-901`). So this is a pinning fix, not a scope reduction. It is a
-   small edit to `#1091`, but it changes reviewed logic in a
-   merged-and-folded PR, so it needs a deliberate yes/no rather than a
-   drive-by patch.
-7. **Is deployed-and-audited mass the dominant objective, or time-to-first-
-   release?** (§5.2) A from-scratch essentials rewrite cuts production
-   Solidity 33-51% but discards 9,206 reviewed lines plus 15,896 test lines
-   and does not shorten the keep-core critical path. The two objectives point
-   opposite ways; only one can be optimised.
+   B sharpens this: there is no dissolution either, so a position has **no
+   owner-side exit at any age** in m1 (§6, reversed item 2).
+2. Concrete cap values — `reservationMaxTotalAmount`, and now also
+   `maxActiveReservations` (`m1-b-implementation.md` §4.1), which must sit
+   below `liveWalletsCount x maxReservationsPerWallet` with margin.
+3. Should reservation-eligible **wallets be allowlisted** at activation?
+   Depositors pick the designated wallet at reveal, so any Live wallet can be
+   selected; an allowlist adds surface no current PR has. B raises the stakes:
+   every accepted position permanently occupies a wallet slot until that
+   wallet is terminated.
+4. **Does m2 restore re-anchor's `< dissolutionEligibleAt` gate?** New,
+   created by the decision. B deletes it to make re-anchor unbounded; when
+   dissolution returns, leaving it out means a position can be rotated
+   indefinitely past its eligibility date (`m1-b-implementation.md` §6).
+
+### Settled by the B decision
+
+- **Flag-gated vault design — approved and now mandatory,** not merely
+  recommended (§0.7, §6 item 3). Under B the redeploy alternative is not a
+  hazard to weigh but an unreachable path, since draining
+  `reservationTotalAmount` to zero requires terminating every custodying
+  wallet. Scope correction from the original wording: the flag covers
+  `redeemReservation` and `retryRedeemReservation` only — never
+  `financeInKindFee` or `repayInKindFeeDebt`, which sit on the settlement path
+  (`m1-b-implementation.md` §3).
+- **Does deploying unreachable-but-audited redemption code count against the
+  surface objective?** Moot. B does not deploy it at all; the Bridge-side code
+  is absent, so there is no unreachable mass to justify.
+- **Harvest variant B's unbounded re-anchor into the stacked design?**
+  Superseded — B is the design now, so the unbounded re-anchor ships as part
+  of it rather than as a patch to `#1091`. The analysis that it cannot preempt
+  a pending dissolution (`state == Active`, `:781`) still holds and is why the
+  cut is sound.
+- **Deployed-and-audited mass, or time-to-first-release?** Answered: mass.
+  The decision takes the 43% m1 reduction and accepts the consequence that
+  total program duration rises, because the milestones become comparable in
+  size (1.13 : 1) and vendor audit windows do not compress
+  (`timeline-estimate.md` §7).
 
 ---
 

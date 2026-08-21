@@ -4,6 +4,14 @@ Status: DRAFT. Companion to `feature-spec.md` and
 `epic-merge-plan.md`. Grounded in a direct inspection of both
 repos' current tooling (2026-08-19), not assumptions.
 
+**Superseded in part, 2026-08-21.** m1 is now variant B, an essentially-only
+rewrite with **no dissolution** (`roadmap.md` §1). The tooling survey (§1-§2)
+and the recommendation tiers (§3) stand, but two things below are stale
+wherever they appear: any lifecycle sequence ending in `dissolve`, and the
+assumption that tests land inside the eight stack PRs. §4 carries the
+corrected routing and the invariants B's launch gates add. Read §4 before
+executing §3.
+
 ## 0. Direct answers
 
 - **Fuzzers for tbtc-v2 contracts: yes, add them.** Zero fuzzing exists
@@ -211,11 +219,44 @@ Checked out at `feat/utxo-reservation-wallet-support`.
 
 ## 4. Sequencing relative to the merge/audit plan
 
-Tier 1 items should land *inside* the existing tbtc-v2 stack PRs or as a
-follow-up PR merged into `reservations-epic` before the stack merges to
-`main` (§3 of `epic-merge-plan.md`) — they're cheap enough
-that there's no reason to let them slip past the audit gate. Tier 2 items
-are the concrete content of the runbook's "fork dry-run" checklist item
-(§5 of the merge plan) and should be treated as already-required, not
-optional. Tier 3 can run concurrently with the external audit engagement
-so it doesn't add calendar time on the critical path.
+**Reframed 2026-08-21 by the variant B decision** (`roadmap.md` §1). The
+original routing below assumed Tier 1 tests would land inside the eight
+tbtc-v2 stack PRs. m1 is now an essentials-only rewrite, so those PRs are
+reference material and there is no stack merge to land tests inside
+(`epic-merge-plan.md`, superseding note).
+
+### Current routing
+
+- **Tier 1 lands in the rewrite itself**, written alongside the m1 contracts
+  rather than retrofitted into PRs. This is strictly better placement: the
+  invariants exist before the code they constrain, and the fixtures are
+  written once against the surface that actually ships.
+- **Tier 2** remains the concrete content of the runbook's "fork dry-run"
+  checklist item and is still already-required rather than optional.
+- **Tier 3** still runs concurrently with the external audit so it adds no
+  critical-path calendar time.
+
+### What B changes about the test content
+
+Scope corrections, not new tiers:
+
+- **Drop dissolution from every lifecycle walkthrough.** §0, Tier 1 item 1
+  and Tier 2 item 7 all end their sequence at `dissolve`, and Tier 1 item 8's
+  TLA+ model includes dissolution transitions. B has no dissolution path, so
+  the m1 lifecycle is reserve → accept → settle → re-anchor → strand. Model
+  dissolution when m2 restores it.
+- **The "no double-settle/double-mint across re-anchor + dissolution paths"
+  invariant** loses one of its two paths. Re-anchor is the only settling
+  action in m1 B, which makes the invariant narrower but not less important —
+  re-anchor is also B's only unpin.
+- **Add the invariants B's launch gates imply**
+  (`m1-b-implementation.md` §4): `activeReservationsCount` never exceeds
+  `maxActiveReservations`; the cap itself stays below
+  `liveWalletsCount x maxReservationsPerWallet`; acceptance always writes
+  `dissolutionEligibleAt` even though nothing reads it; and no pause flag can
+  block a settlement-path call, which is the property that keeps a confirmed
+  Bitcoin spend settleable (`ReservationVault.sol:524-528`).
+- **Add a slot-exhaustion test.** B's characteristic failure is saturation, so
+  drive occupancy to the cap and assert that acceptance reverts *before*
+  re-anchor loses its last target — the whole point of §4.1's gate is that the
+  cliff becomes a revert rather than a slashing event.
