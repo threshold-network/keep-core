@@ -42,10 +42,76 @@ gap analysis this plan assumes).
   add any).
 - **`#1102`** (`fix: #1088 review follow-ups`, based on `feat/utxo-reservation-core`,
   addressing 30 findings from #1088's review per `pr-review-followups.md`) is **not**
-  included in the `gh stack link` command above and is not part of stack `#1101`. Its
-  findings already appear on #1088's tip, but confirm whether it needs its own retarget
-  to `reservations-epic` or folds into the #1088 review step (§3) before treating the
-  review surface as complete.
+  included in the `gh stack link` command above and is not part of stack `#1101`. **It was
+  merged on 2026-08-21** (`3566e059`) into `feat/utxo-reservation-core` — which is the
+  head branch of `#1088`. Its merged state needs no retarget: because `#1088`'s stack-
+  base evaluation runs against `reservations-epic` (per `gh-stack` semantics in §0), the
+  fold is complete and the review surface is `#1088`'s tip. Confirm nothing in #1102 got
+  rebased away when it merged before treating the review surface as complete.
+
+## 0.1 Full reservation-PR inventory (verified 2026-08-21)
+
+Complete re-sweep of both repos (`gh search prs` across `utxo`, `UTXO`,
+`reserve`, `Reservation`, `reservation`; `gh pr list` by base/head branch and
+by open state) against `reservations-epic`. This is the exhaustive set —
+everything else that matches those terms is a false positive (list in the
+"excluded" block below).
+
+**tbtc-v2 — the 8-PR stack (stack `#1101`, bases verified 2026-08-21):**
+
+| # | Title | Base branch | Head branch | State |
+|---|---|---|---|---|
+| 1088 | draft: UTXO reservations — segregated custody with in-kind redemption | `reservations-epic` | `feat/utxo-reservation-core` | OPEN / MERGEABLE, draft |
+| 1090 | delegatecall reservation router (EIP-170) + RFC 13 | `feat/utxo-reservation-core` | `feat/utxo-reservation-router` | OPEN / **CONFLICTING** |
+| 1091 | two-phase authorize-then-prove reservation settlement | `feat/utxo-reservation-router` | `feat/utxo-reservation-settlement` | OPEN |
+| 1092 | bounded permissionless renewal and strict expiry semantics | `feat/utxo-reservation-settlement` | `feat/utxo-reservation-renewal` | OPEN / MERGEABLE |
+| 1093 | claim-equals-anchor backing model with financed in-kind fees | `feat/utxo-reservation-renewal` | `feat/utxo-reservation-backing` | OPEN / MERGEABLE |
+| 1094 | reveal-side wallet binding, pending-deposit guard, stranding and monitoring | `feat/utxo-reservation-backing` | `feat/utxo-reservation-guards` | OPEN / MERGEABLE |
+| 1095 | docs+test: reservation release completeness (M-09) | `feat/utxo-reservation-guards` | `docs/utxo-reservation-release` | OPEN / MERGEABLE |
+| 1096 | partial reserved redemption (1-in-2-out split) | `docs/utxo-reservation-release` | `feat/utxo-reservation-partial-redemption` | OPEN / MERGEABLE |
+
+The stack's root `#1088` targets `reservations-epic`; every sibling PR is
+base-chained to the prior one, and per `gh-stack` semantics all checks review
+against `reservations-epic`. **`#1090` is CONFLICTING** with its base
+(`feat/utxo-reservation-core`) as of 2026-08-21 — expected, because `#1102`
+merged into that base branch after `#1090` was cut; the router branch needs a
+rebase over the `#1102` fold before it can merge (§3 step 2 gate).
+
+**tbtc-v2 — folded follow-up:**
+
+| # | Title | Base branch | Head branch | State |
+|---|---|---|---|---|
+| 1102 | fix(reservation): address multi-agent review findings on #1088 | `feat/utxo-reservation-core` | `fix/utxo-reservation-review-followups` | **MERGED 2026-08-21** (`3566e059`) |
+
+Not part of stack `#1101` by `gh-stack` linking, but merged into the root's
+own branch, so its 30 findings are folded into `#1088`'s tip (§0 note, §3 note).
+
+**keep-core — the standalone counterpart:**
+
+| # | Title | Base branch | Head branch | State |
+|---|---|---|---|---|
+| 4238 | draft: UTXO reservation wallet-side foundations | `reservations-epic` | `feat/utxo-reservation-wallet-support` | OPEN, draft |
+
+Retargeted directly to `reservations-epic` (§0). Per §4 it implements the
+original single-phase design; the two-phase/partial-redemption keep-core
+rework is **not yet an open PR** — it must be created on `reservations-epic`
+before `#4238` alone is treated as feature-complete.
+
+**Excluded as false positives (verified, not reservation work):**
+- tbtc-v2: `#911` (non-fungible, closed), `#971` (FROST Taproot, base
+  `frost-upgrade`), `#1003` (Trail of Bits covenant remediation, base
+  `feat/psbt-covenant-bridge-port`), `#1036` (viem SDK migration), `#1043`-
+  `#1051` / `#1082` (watchtower improvements, closed/merged), pre-2026
+  historical `utxo` PRs (deposit/redemption pipeline, unrelated).
+- keep-core: `#3866` (FROST/ROAST Go node), `#4169` (CovenantSigner EIP-712
+  approvals — its `REDEEM`/`RENEW` are covenant PSBT actions, not
+  `ReservationAction`s; the reservation action enum has no `RENEW`
+  (`None|Acceptance|Redemption|Reanchor|Dissolution`)), `#4199` / `#4226`
+  (FROST signer state-anchor / anchor-integrity on FROST scaffold branches),
+  `#4243` (P2TR script derivation, FROST).
+
+See `feature-spec.md` §0/§14 for the reverse-engineered source-of-truth this
+inventory is reconciled against.
 
 ## 1. Why an epic branch (rationale, for reviewers who ask)
 
@@ -93,8 +159,8 @@ force reviewers to look at PRs in order.
 | Step | PR | Review focus | Gate before moving on |
 |---|---|---|---|
 | 1 | #1088 | Core reservation data model, `ReservationVault`, original single-phase mechanics (superseded by later PRs but still the storage foundation) | Approved + CI green |
-| 2 | #1090 | Router delegatecall correctness: storage parity, selector disjointness, no-standalone-authority — these are the three invariants that make the EIP-170 workaround safe, verify the tests actually assert them, not just describe them | Approved + CI green |
-| 3 | #1091 | The two-phase state machine itself — this is the highest-value review target (closes C-01, H-01/02/03/05/07, M-01/02/03). Confirm snapshot-at-request is exhaustive (no field read live at proof time that should've been snapshotted) | Approved + CI green |
+| 2 | #1090 | Router delegatecall correctness: storage parity, selector disjointness, no-standalone-authority — these are the three invariants that make the EIP-170 workaround safe, verify the tests actually assert them, not just describe them. **Currently CONFLICTING** (2026-08-21): rebase `feat/utxo-reservation-router` over the `#1102` fold in its base first | Approved + CI green |
+| 3 | #1091 | The two-phase state machine itself — this is the highest-value review target (closes C-01, H-01/02/03/05/07, M-01/02/03). Confirm snapshot-at-request is exhaustive (no field read live at proof time that should've been snapshotted). Note it sits directly **on #1090** (base = #1090's head branch `feat/utxo-reservation-router`), so its own diff still reflects the unresolved router rebase below it until #1090 merges | Approved + CI green |
 | 4 | #1092 | Renewal window arithmetic (`window < term` non-stacking proof), dissolution-eligibility snapshotting | Approved + CI green |
 | 5 | #1093 | Backing invariant (claim == anchor across every action), in-kind fee debt accounting | Approved + CI green |
 | 6 | #1094 | Guards: designated-wallet binding, pending-deposit/vault-migration guard, stranding | Approved + CI green |
@@ -102,10 +168,12 @@ force reviewers to look at PRs in order.
 | 8 | #1096 | Partial redemption — newest, most likely to have interaction bugs with retry-credit/late-settlement logic from #1091. Give this the second-highest scrutiny after #1091 | Approved + CI green |
 
 **Note on `#1102`:** not in this table (it is not part of stack `#1101`) — its 30
-findings against #1088 are already reflected on #1088's tip per
-`pr-review-followups.md`; step 1's review of #1088 should confirm they are compatible
+findings against #1088 were merged into `feat/utxo-reservation-core` on 2026-08-21
+(`3566e059`), and because that is #1088's head branch they now sit **on #1088's tip**
+per `pr-review-followups.md`; step 1's review of #1088 should confirm they are compatible
 with, not stacked on top of, what #1093's H-04 backing rework later touches (see
-`feature-spec.md` §15).
+`feature-spec.md` §15). The rebase of #1090 over this fold is the first concrete
+reconciliation needed before the stack can start merging (§0.1, step 2 above).
 
 **Cross-cutting review pass (after all 8 individually approved, before any
 merge):** re-read the full diff top-to-bottom as one unit (`git diff
@@ -133,6 +201,11 @@ review time on it:
   follow-up PR merging first (or landing in the same epic-branch merge).
   Only choose this if the team wants the Go types/enums locked in early to
   unblock other work that depends on them.
+
+**As of 2026-08-21 the two-phase rework is not yet an open PR** (verified in
+the §0.1 inventory: `#4238` is the only keep-core PR targeting
+`reservations-epic`). Option A therefore means the rework PR simply doesn't
+exist to review yet — a hard hold, not a soft one.
 
 Either way: **`#4238` alone must never merge to `main` believing it's
 feature-complete.** Add a checklist item to whichever PR does the
@@ -190,6 +263,11 @@ resolved (keep-core two-phase rework exists), and §5 (audit) passed.
 - [ ] Decide on `reservations-epic` branch protection (§2) — currently
       unprotected in both repos.
 - [ ] Start bottom-up review of the tbtc-v2 stack at `#1088` (§3).
+- [ ] Rebase `feat/utxo-reservation-router` (#1090) over the `#1102` fold —
+      it is the only CONFLICTING PR (2026-08-21) and blocks steps 2-3 of
+      the §3 review.
+- [ ] Verify the `#1102` merge (`3566e059`) is fully present on #1088's tip
+      (nothing rebased away in the fold) before reviewing `#1088`.
 - [ ] Assign someone to write the missing
       `docs/utxo-reservation-review-findings.md` (§5) — this is on the
       critical path to the audit gate and nobody currently owns it.
