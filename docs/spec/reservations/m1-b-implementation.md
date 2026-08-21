@@ -1,4 +1,4 @@
-# m1 Variant B — Implementation Scope
+# m1 variant B — Implementation Scope
 
 Status: DRAFT — decided 2026-08-21.
 
@@ -23,7 +23,7 @@ replaceable; the same reasoning forbids minimising the vault (`roadmap.md`
 |---|---|---|
 | Nature | Bridge code reached by `delegatecall` | Separate contract, plain `Ownable` |
 | Replacing it costs | A Bridge implementation upgrade, which m2 needs anyway | Deploying v2 and re-pointing `Bridge.reservationVault` |
-| Gate on replacement | Proxy-admin ceremony | `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1267-1274`) |
+| Gate on replacement | Proxy-admin ceremony | `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1263-1274`) |
 | Reachable in B? | Yes | **No** — in B positions close only by stranding, so quiescence means every custodying wallet has been terminated |
 | m1 posture | **Minimise** | **Ship complete, behaviour disabled** |
 
@@ -45,7 +45,7 @@ The stacked router has 24 entry points. B removes 5 and adds 1, for **20**.
 | `submitReservationProof` | `:322` | Proof dispatcher, simplified: acceptance and re-anchor only |
 | `notifyReservationActionTimeout` | `:351` | Required cleanup; also the slashing path |
 | `notifyStaleReservedDeposit` | `:450` | Releases un-accepted revealed deposits |
-| `notifyReservationStranded` | `:461` | B's only position-closing path |
+| `notifyReservationStranded` | `:461` | B's only position-closing *entry point* (the second closing site is inside acceptance/re-anchor settlement) |
 | `updateReservationParameters` | `:421` | Governance; also the vault re-point |
 | `updateReservationCaps` | `:476` | Governance; the only safety valve at launch |
 
@@ -148,7 +148,7 @@ wallet slot, so occupancy is monotonic toward
 `liveWalletsCount x maxReservationsPerWallet`; at saturation re-anchor has no
 target (`Reservation.sol:820-827`), an anchored wallet cannot retire because
 `beginWalletClosing` requires a zero reservation count
-(`Wallets.sol:675-677`, repeated `:707-709`), its MovingFunds clock expires,
+(`Wallets.sol:674-677`, repeated `:707-709`), its MovingFunds clock expires,
 and `notifyWalletMovingFundsTimeout` seizes operator stake and terminates the
 wallet (`:493-523`).
 
@@ -197,7 +197,7 @@ The general rule: **storage-complete means written, not merely declared.**
 
 **The deeper reason this matters: in m1 B the custody term has no on-chain
 consumer at all.** Every reader of `expiresAt` and `dissolutionEligibleAt` is
-cut or deleted — redemption's `<= expiresAt + gracePeriod`, renewal,
+cut or deleted — redemption's `< expiresAt` (`Reservation.sol:666-669`, strict), renewal,
 dissolution's `>= dissolutionEligibleAt`, and re-anchor's
 `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the term
 is not enforced by anything in m1; it is a **commitment held in storage for m2
@@ -206,7 +206,7 @@ silent repudiation of it rather than a code-size optimisation.
 
 ### 4.5 Storage layout complete
 
-§11's rule is that no live `ReservationAction` may ever span a layout change,
+`feature-spec.md` §11's rule is that no live `ReservationAction` may ever span a layout change,
 so every field m2 will read must exist at m1 — redemption settlements, veto
 delay, retry credit, renewal window, `dissolutionEligibleAt`,
 `walletPendingDissolution`. This is what makes m2 an upgrade rather than a
@@ -265,12 +265,17 @@ Derived 2026-08-21 from the variant B decision, `roadmap.md` §0.7/§1 and
 `feat/utxo-reservation-guards` unless noted: router surface
 (`ReservationRouter.sol:242-643`), vault surface
 (`ReservationVault.sol:222-568`), vault re-point gate
-(`Reservation.sol:1267-1274`), re-anchor target cap (`:820-827`), re-anchor
+(`Reservation.sol:1263-1274`), re-anchor target cap (`:820-827`), re-anchor
 eligibility gate (`:785-788`), acceptance's `dissolutionEligibleAt` write
 (`ReservationProofs.sol:537-539`), wallet closing preconditions
-(`Wallets.sol:675-677`, `:707-709`), MovingFunds timeout slashing (`:493-523`),
+(`Wallets.sol:674-677`, `:707-709`), MovingFunds timeout slashing (`:493-523`),
 storage fields (`BridgeState.sol:253`, `:378`), once-only router setter
 (`:1018-1021`). Bytecode figures are `#1090`-era, quoted from `feature-spec.md`
 §2 and not re-measured.
+
+**Baseline caveat (2026-08-21).** The subtraction assumes `#1090` moved out
+only the reservation surface. If it also refactored unrelated `Bridge` code, the
+surface's inline cost is smaller and the 71 B gap is not the real one
+(`feature-spec.md` §2).
 
 A scope decision, not a commitment of dates.

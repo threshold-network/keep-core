@@ -1,6 +1,9 @@
 # ReservationVault Surface Inventory
 
 **Contract:** `contracts/vault/ReservationVault.sol` (662 lines)
+
+*"Established fact N" refers to the numbered m1/m2 assignment rules in
+`../milestone-inventory.md` §1.2.*
 **Declaration:** `contract ReservationVault is IVault, IReservationFeeFinancer, Ownable` (line 57)
 **No `IReservationVault` interface exists.** The vault exposes its full public ABI directly. The only dedicated reservation interface is `IReservationFeeFinancer.sol` (the `financeInKindFee` hook). `IVault.sol` supplies `receiveBalanceIncrease` (and inherits `receiveBalanceApproval` from `IReceiveBalanceApproval`).
 
@@ -11,7 +14,7 @@
 
 **m1/m2 key:**
 - `yes` = present and active.
-- `flagged` = present but initiation-disabled behind a pause flag (the milestone-1 rule: ship every entry point, disable only initiation).
+- `flagged` = present but initiation-disabled behind a pause flag (established fact 1 in `../milestone-inventory.md` §1.2: ship every entry point, disable only initiation).
 - `no` = omitted in that milestone.
 
 **PR origin:** determinable PR numbers from the stated range (`#1088`, `#1090`-`#1096`, `#1102`); `?` where not determinable from source alone.
@@ -31,7 +34,7 @@
 |`unblockRenewal` L432 `onlyOwner`|ReservationVault.sol:432|?|entry-point|yes|yes|Per-reservation restorative setter; accounting-path|
 |`setRenewalGuardian` L440 `onlyOwner`|ReservationVault.sol:440|?|entry-point|yes|yes|Replaces the guardian; accounting-path; zero address is deliberate|
 |`retryRedeemReservation` L469 external|ReservationVault.sol:469|?|entry-point|yes|yes|Owner re-requests redemption from Bank balance after wallet-fault timeout; settlement-path, fee already collected so no re-charge|
-|`financeInKindFee` L529 `external override` (Bridge-only)|ReservationVault.sol:529|?|entry-point|yes|yes|Bridge calls during re-anchor and dissolution settlement; settlement-path, must never revert; LIVE in m1 because re-anchor is a milestone-1 essential|
+|`financeInKindFee` L529 `external override` (Bridge-only)|ReservationVault.sol:529|?|entry-point|yes|yes|Bridge calls during re-anchor and dissolution settlement; settlement-path, must never revert; LIVE in m1 because re-anchor is a m1 essential|
 |`repayInKindFeeDebt` L568 external (permissionless)|ReservationVault.sol:568|?|entry-point|yes|yes|Anyone burns TBTC to reduce recorded in-kind fee debt; settlement-path adjunct; permissionless|
 |`updateFeeReserveTarget` L599 `onlyOwner`|ReservationVault.sol:599|?|entry-point|yes|yes|Governance sets the fee reserve target; accounting-path; required activation step per deploy script|
 |`sweepFees` L613 `onlyOwner`|ReservationVault.sol:613|?|entry-point|yes|yes|Owner sweeps fee revenue above the reserve target; accounting-path|
@@ -53,13 +56,13 @@
 >
 > L526-528: "If the reserve cannot cover the full amount, the shortfall is recorded as `inKindFeeDebtSat` and the call still succeeds: a confirmed Bitcoin spend must never fail to settle because of the reserve level."
 
-Code evidence: L530 `require(msg.sender == address(bridge), "Caller is not the Bridge")`. The only access check is caller identity; there is no pause check, no reserve-level check that reverts. If the reserve cannot cover, L551-556 records the shortfall as debt rather than reverting. This is the settlement invariant the milestone-1 rule protects.
+Code evidence: L530 `require(msg.sender == address(bridge), "Caller is not the Bridge")`. The only access check is caller identity; there is no pause check, no reserve-level check that reverts. If the reserve cannot cover, L551-556 records the shortfall as debt rather than reverting. This is the settlement invariant established fact 2 protects.
 
 The `IReservationFeeFinancer` interface natspec (IReservationFeeFinancer.sol:25-30) reinforces this:
 
 > "If the reserve cannot cover the full amount, the shortfall is recorded as public debt and the call still succeeds -- a confirmed Bitcoin spend must never fail to settle because of the reserve level."
 
-The Bridge calls this from `submitReservationReanchorProof` (ReservationProofs.sol:874) and `submitReservationDissolutionProof` (ReservationProofs.sol:995). Re-anchor is a milestone-1 essential (custody wallet rotation), so `financeInKindFee` is LIVE in m1.
+The Bridge calls this from `submitReservationReanchorProof` (ReservationProofs.sol:874) and `submitReservationDissolutionProof` (ReservationProofs.sol:995). Re-anchor is a m1 essential (custody wallet rotation), so `financeInKindFee` is LIVE in m1.
 
 **`redeemReservation` (L293)** and **`retryRedeemReservation` (L469)** — redemption settlement.
 
@@ -75,7 +78,7 @@ These are user-initiated, not Bridge-settled, so they may revert on caller error
 
 **`receiveBalanceIncrease` (L234):** this is where initiation happens. The Bridge proves an anchor, credits the Bank, the Bank calls this vault, and the vault mints gross TBTC and charges the initiation fee. Natspec L226-228: "Called by the Bank when the Bridge proves a reservation's anchor transaction and credits the gross anchored amount." The initiation fee is charged here (L254: `uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS`).
 
-In variant B, the initiation path is gated not by a vault-internal pause flag but by the Bridge's vault-trust status: deposits revealed with an untrusted vault address are not routed as reservations. The deploy script comment (L95:6-9) confirms: "Vault trust is the safe activation boundary." However, the milestone-1 rule says to disable initiation behind a pause flag. The vault has no `initiationPaused` flag; the existing `renewalsPaused` does NOT cover `receiveBalanceIncrease`. See Open Questions.
+In variant B, the initiation path is gated not by a vault-internal pause flag but by the Bridge's vault-trust status: deposits revealed with an untrusted vault address are not routed as reservations. The deploy script comment (L95:6-9) confirms: "Vault trust is the safe activation boundary." However, established fact 1 requires initiation disabled behind a pause flag. The vault has no `initiationPaused` flag; the existing `renewalsPaused` does NOT cover `receiveBalanceIncrease`. See Open Questions.
 
 **`extendCustody` (L367):** renewal/initiation of a new custody term. Already gated by `renewalsPaused` (L388) and `renewalBlocked` (L389). This is the existing model for how a pause flag gates an initiation-path function.
 
@@ -153,7 +156,7 @@ The pattern is: restrictive actions (pause, block) are immediate and guardian-or
 |`extensionFeeBps` storage L80|ReservationVault.sol:80|?|storage|flagged|yes|Extension fee in bps; charged in `extendCustody`; gated by `renewalsPaused`, so dormant when paused|
 |`redemptionFeeBps` storage L85|ReservationVault.sol:85|?|storage|yes|yes|Redemption fee in bps; charged in `redeemReservation`; live if redemption is not paused (DECISION NEEDED on m1 redemption pause)|
 |`updateFeeReserveTarget` L599 `onlyOwner`|ReservationVault.sol:599|?|entry-point|yes|yes|Sets the reserve target; accounting-path; required activation step|
-|`financeInKindFee` L529 (Bridge-only)|ReservationVault.sol:529|?|entry-point|yes|yes|Burns TBTC from reserve to cover miner fee; records shortfall as debt; LIVE in m1 because re-anchor is a milestone-1 essential|
+|`financeInKindFee` L529 (Bridge-only)|ReservationVault.sol:529|?|entry-point|yes|yes|Burns TBTC from reserve to cover miner fee; records shortfall as debt; LIVE in m1 because re-anchor is a m1 essential|
 |`repayInKindFeeDebt` L568 (permissionless)|ReservationVault.sol:568|?|entry-point|yes|yes|Anyone repays in-kind fee debt by burning TBTC; settlement-path adjunct; permissionless|
 |`sweepFees` L613 `onlyOwner`|ReservationVault.sol:613|?|entry-point|yes|yes|Owner sweeps fee revenue above `feeReserveTarget` to treasury; accounting-path|
 |`updateFees` L629 `onlyOwner`|ReservationVault.sol:629|?|entry-point|yes|yes|Governance updates all three fee parameters; accounting-path|
@@ -173,7 +176,7 @@ The pattern is: restrictive actions (pause, block) are immediate and guardian-or
 
 ### What is LIVE in m1 vs dormant
 
-The milestone-1 rule states: re-anchor charges an in-kind miner fee. Therefore:
+Under variant B, re-anchor charges an in-kind miner fee. Therefore:
 - **LIVE in m1:** `financeInKindFee` (re-anchor path), `inKindFeeDebtSat` (debt accrual), `repayInKindFeeDebt` (debt repayment), `feeReserveTarget` (reserve target), `updateFeeReserveTarget` (setter), `sweepFees` (sweep), `updateFees` (fee schedule).
 - **Dormant in m1 if initiation is disabled:** `initiationFeeBps` accrual (no anchors being proved means no `receiveBalanceIncrease` calls), `extensionFeeBps` accrual (renewals paused).
 - **Dissolution fee financing is m2 only:** the dissolution path (ReservationProofs.sol:995) is omitted in m1.
@@ -236,7 +239,7 @@ if (reservationVault != self.reservationVault) {
 2. `self.reservationTotalAmount == 0` (zero active reservations) (L1264-1266).
 3. `self.pendingReservedDeposits == 0` (zero pending reserved deposits) (L1267-1270).
 
-**Implication for milestone 1:** In variant B, positions close only when their custodying wallet is terminated (dissolution), and dissolution is omitted in m1. Therefore `reservationTotalAmount` cannot reach zero through normal lifecycle during m1, which means the vault address cannot be re-pointed while the product is in use. This is the structural reason the milestone-1 rule requires shipping every vault entry point in m1: an entry point omitted from the deployed bytecode cannot be added later without replacing the vault, and the vault cannot be replaced without total quiescence.
+**Implication for milestone 1:** In variant B, positions close only when their custodying wallet is terminated (**stranding**, not dissolution — `notifyReservationStranded` requires `WalletState.Terminated` at `Reservation.sol:1374-1378`, while `requestReservationDissolution` has no such gate), and stranding never drives `reservationTotalAmount` to zero in normal operation. Therefore `reservationTotalAmount` cannot reach zero through normal lifecycle during m1, which means the vault address cannot be re-pointed while the product is in use. This is the structural reason established fact 1 requires shipping every vault entry point in m1: an entry point omitted from the deployed bytecode cannot be added later without replacing the vault, and the vault cannot be replaced without total quiescence.
 
 ---
 
@@ -332,7 +335,7 @@ This script deploys `MaintainerProxyV2` (for SPV proof submission). Its closing 
 |Item|Source|PR|Kind|m1|m2|Note|
 |---|---|---|---|---|---|---|
 |Gross-mint invariant|ReservationVault.sol:248-249|?|invariant|yes|yes|Total TBTC minted against a reservation always equals the sats earmarked on-chain; fee is an explicit transfer, never netted (natspec L45-47, L248-249)|
-|Settlement-never-reverts invariant|ReservationVault.sol:526-528|?|invariant|yes|yes|A confirmed Bitcoin spend must never fail to settle because of the reserve level; shortfall recorded as debt (financeInKindFee natspec)|
+|Settlement-never-reverts invariant|ReservationVault.sol:524-528|?|invariant|yes|yes|A confirmed Bitcoin spend must never fail to settle because of the reserve level; shortfall recorded as debt (financeInKindFee natspec)|
 |Pause-is-monotonic invariant|ReservationVault.sol:87-91, L100-105|?|invariant|yes|yes|Pause/block never shortens an already-paid term and never moves funds; only owner can relax|
 |Re-point-quiescence invariant|Reservation.sol:1264-1270|?|invariant|yes|yes|Vault address can change only when reservationTotalAmount==0 and pendingReservedDeposits==0|
 |Claim-equals-anchor invariant|ReservationProofs.sol:866-872|?|invariant|yes|yes|Re-anchor writes mintedAmount down to newAnchorAmount so the claim surrendered at redemption always equals the sats on-chain|
@@ -341,9 +344,9 @@ This script deploys `MaintainerProxyV2` (for SPV proof submission). Its closing 
 
 ## Open questions
 
-1. **DECISION NEEDED: How is initiation disabled in m1?** The vault has no `initiationPaused` flag. The existing `renewalsPaused` flag gates `extendCustody` only, NOT `receiveBalanceIncrease`. The deploy script says "Vault trust is the safe activation boundary" and that `unpauseRenewals` is "not a global pause for reserved deposit reveals." Three options: (a) add a new `initiationPaused` flag following the renewal pause pattern, with a `require(!initiationPaused)` guard in `receiveBalanceIncrease`; (b) rely solely on Bridge vault-trust status (`setVaultStatus`) to gate initiation, shipping no vault-internal flag; (c) overload `renewalsPaused` to also guard `receiveBalanceIncrease`. The milestone-1 rule says "disable INITIATION behind a pause flag," which implies option (a), but the existing code and deploy comments point to option (b). Which is intended?
+1. **DECISION NEEDED: How is initiation disabled in m1?** The vault has no `initiationPaused` flag. The existing `renewalsPaused` flag gates `extendCustody` only, NOT `receiveBalanceIncrease`. The deploy script says "Vault trust is the safe activation boundary" and that `unpauseRenewals` is "not a global pause for reserved deposit reveals." Three options: (a) add a new `initiationPaused` flag following the renewal pause pattern, with a `require(!initiationPaused)` guard in `receiveBalanceIncrease`; (b) rely solely on Bridge vault-trust status (`setVaultStatus`) to gate initiation, shipping no vault-internal flag; (c) overload `renewalsPaused` to also guard `receiveBalanceIncrease`. Established fact 1 says "disable INITIATION behind a pause flag," which implies option (a), but the existing code and deploy comments point to option (b). Which is intended?
 
-2. **DECISION NEEDED: Is redemption paused in m1?** The milestone-1 rule says milestone 2 restores redemption. The existing `renewalsPaused` does NOT cover `redeemReservation` or `retryRedeemReservation`. If redemption must be disabled in m1, a new `redemptionsPaused` flag (copying the renewal pattern) is needed, with guards in both redemption entry points. But the rule also says "never gate settlement or accounting," and redemption is arguably settlement-adjacent. Is redemption considered initiation-path (pausable) or settlement-path (never pausable) for m1 purposes? The `redeemReservation` function reverts on caller errors (fee bound, ownership), so it is not a pure must-never-revert settlement function like `financeInKindFee`, but the Bitcoin spend has not yet occurred when it is called (it initiates the redemption request). Clarification needed: should m1 ship `redeemReservation` active, flagged behind a pause, or omitted?
+2. **DECISION NEEDED: Is redemption paused in m1?** Under variant B, milestone 2 restores redemption. The existing `renewalsPaused` does NOT cover `redeemReservation` or `retryRedeemReservation`. If redemption must be disabled in m1, a new `redemptionsPaused` flag (copying the renewal pattern) is needed, with guards in both redemption entry points. But the rule also says "never gate settlement or accounting," and redemption is arguably settlement-adjacent. Is redemption considered initiation-path (pausable) or settlement-path (never pausable) for m1 purposes? The `redeemReservation` function reverts on caller errors (fee bound, ownership), so it is not a pure must-never-revert settlement function like `financeInKindFee`, but the Bitcoin spend has not yet occurred when it is called (it initiates the redemption request). Clarification needed: should m1 ship `redeemReservation` active, flagged behind a pause, or omitted?
 
 3. **DECISION NEEDED: Is `retryRedeemReservation` needed in m1?** It only exists because a fee-paid redemption timed out through the wallet's fault. If `redeemReservation` is disabled in m1, `retryRedeemReservation` has no precursor and is dead code. But the rule says ship every entry point. Should it ship flagged (present but unreachable) or active?
 

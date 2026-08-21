@@ -8,6 +8,11 @@ not inferred from either project's own docs, since **the FROST corpus explicitly
 out and has never analyzed this interaction**, and the reservations spec never mentions FROST. This
 document is the first analysis of the actual intersection.
 
+**Scope note (2026-08-21):** milestone 1 is variant B — creation, custody and
+re-anchoring only. Lifecycle references below (renew, partial-redeem, dissolve)
+describe the full feature, i.e. the m2 target. Re-anchor, the migration path
+this analysis turns on, *is* in m1, so the conclusions are unaffected.
+
 ## 0. Direct answer
 
 **Reservations do not need to expire, and do not need to preemptively migrate on a deadline.**
@@ -196,7 +201,7 @@ gantt
 
 ## 6. Recommended operational steps to add to the reservations plan
 
-None of these block reservations' current launch plan (`epic-merge-plan.md`). They are
+None of these block reservations' current launch plan (`pr-strategy.md`; scope in `roadmap.md` §1). They are
 follow-up items to track once FROST Program A activates:
 
 1. **Track FROST Program A's activation milestone**, not its whole timeline — that's the point at which

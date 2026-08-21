@@ -20,7 +20,7 @@ Every item the m1 rewrite must ship, declare, or build is listed below with its 
 
 3. Router code is Bridge code reached by `delegatecall`, replaceable by a Bridge implementation upgrade m2 needs anyway, so router entry points may be omitted freely. m1 keeps 20 of 24. (router.md section 1; m1-b-implementation.md section 1)
 
-4. `WalletProposalValidator` is non-upgradeable as well, making it a third layer with its own rules distinct from router and vault. (touchpoints.md; `WalletProposalValidator.sol:31`)
+4. `WalletProposalValidator` is non-upgradeable as well, making it a third layer with its own rules distinct from router and vault. (touchpoints.md; `WalletProposalValidator.sol:33-34`)
 
 5. Storage rule, in its sharp form: a field written by an m1-reachable path must keep being written; a field written only by an m2-exclusive path need only be declared. Enum variants must keep their numeric positions, so all three enums are extracted verbatim including m2-only variants. (data-model.md section 1, section 3)
 
@@ -29,6 +29,27 @@ Every item the m1 rewrite must ship, declare, or build is listed below with its 
 ### 1.3 Provenance caveat
 
 All fragment line numbers come from the `feat/utxo-reservation-guards` tip (PR #1094), which predates the `#1102` fold (commit `3566e059`). The fold added +685 -190 across 10 production files, `Reservation.sol` most of all (+342 -95). The guards tip does NOT contain `#1102`'s 30 review fixes. Every line number cited from the fragments is a pre-fix line number. The parameter validation block in particular should be re-read post-fold before implementation. (pr-map.md section 3)
+
+**The fold's risk is not only stale line numbers — it also hides whole fields
+from this ledger (added 2026-08-21).** Section 2.1 was built from the guards tip,
+so three fields the `#1102` fold introduced are absent from it entirely.
+Verified on `origin/feat/utxo-reservation-core`, which carries the fold:
+
+| Field | Where | Kind | Why it matters |
+|---|---|---|---|
+| `ReservationRequest.cumulativeReanchorFee` | `Reservation.sol:142` | position field | **The load-bearing one.** Rule 5 and `m1-b-implementation.md` section 4.5 both require every field m2 will read to exist at m1. A position field missing from the m1 layout cannot be added in m2 without exactly the live-state migration section 4.5 forbids |
+| `BridgeState.Storage.maxCumulativeReanchorFee` | `BridgeState.sol:417` | governance parameter | The cap bounding re-anchor fee grinding; enforced at `Reservation.sol:1111-1113` (`cumulativeReanchorFee += fee`, then `<= maxCumulativeReanchorFee`) |
+| `BridgeState.Storage.reservationDissolutionTxMaxFee` | `BridgeState.sol:396` | governance parameter | Second fee term in the residual-backing formula `pr-review-followups.md` item 7 derives |
+
+Two consequences. First, `updateReservationParameters` takes more arguments on
+the core line than the nine visible on guards (`Reservation.sol:248` and `:253`
+are two of the extra ones), so an m1 signature copied from guards is already
+incomplete. Second, and more seriously, **until section 2.1 is re-derived from a
+rebased tip the storage layout behind section 4.5's launch gate is not verified
+complete** — the gate can pass against an incomplete inventory. Re-read
+`Reservation.sol` and `BridgeState.sol` post-fold and add these three rows before
+treating section 4.5 as satisfied. (`pr-review-followups.md` items 5 and 7;
+decision D-24 covers the rebase that makes this checkable.)
 
 PR attribution caveat: attributions to #1088/#1090 through #1094 are derived from PR titles plus explicit file-and-line attributions in `roadmap.md` and `m1-variant-comparison.md`. Items from `inventory/vault.md` carry `?`-qualified PR confidence because the source files contain no PR references. (proofs.md PR-to-branch map; vault.md PR origin note)
 
@@ -153,7 +174,7 @@ Adjacent pre-existing fields the feature depends on: `liveWalletsCount` (`Bridge
 | Validates wallet `Live` | `Reservation.sol:477-481` | #1091 | yes | no | |
 | Validates `amount >= minAmount + txMaxFee` | `Reservation.sol:483-487` | #1091 | yes | no | Makes proof-time fee bound sufficient |
 | Validates signing window | `Reservation.sol:493-531` | #1091/#1094 | yes | no | vs `DEPOSIT_MIN_AGE`, timeout margin, refund deadline |
-| Cap: single-reservation `reservationMaxSingleAmount` | `Reservation.sol:533-537` | #1102 | yes | no | |
+| Cap: single-reservation `reservationMaxSingleAmount` | `Reservation.sol:533-537` | #1093 | yes | no | |
 | Reserves `reservationTotalAmount` | `Reservation.sol:541-546` | #1091 | yes | no | initiation-path |
 | Reserves `walletReservationsCount` | `Reservation.sol:548-553` | #1091 | yes | no | initiation-path |
 | Reserves `walletReservationsAmount` | `Reservation.sol:555-562` | #1093 | yes | no | initiation-path |
@@ -242,7 +263,7 @@ Adjacent pre-existing fields the feature depends on: `liveWalletsCount` (`Bridge
 |---|---|---|---|---|---|
 | Late: `walletReservationsCount[new] += 1` | `:812` | #1091 | yes | no | No cap check |
 | Late: `walletReservationsAmount[new] += anchorAmount` | `:813-814` | #1093 | yes | no | |
-| Late: unwind newer pending generation, `restoreRetryCredit = true` | `:818-822` | #1091/#1093 | yes | yes | `true` arg only matters for pending Redemption; inert in m1. See D-13 |
+| Late: unwind newer pending generation, `restoreRetryCredit = true` | `:818-822` | #1091/#1093 | yes | yes | `true` arg only matters for pending Redemption; inert in m1. See D-11 |
 | Late: `emit ReservationLateSettled` | `:825-829` | #1091 | yes | no | |
 | `walletReservationsCount[source] -= 1` | `:836` | #1091 | yes | no | Not a close. Net-zero move. See section 6 correction |
 | `walletReservationsAmount[source] -= anchorAmount` | `:837-839` | #1093 | yes | no | |
@@ -274,10 +295,10 @@ Adjacent pre-existing fields the feature depends on: `liveWalletsCount` (`Bridge
 | Redemption arm: `state = Active`, retry credit, slash, refund | `Reservation.sol:1007-1022` | #1091 | no | yes | Unreachable in m1. See D-1, D-5 |
 | Dissolution arm: slash, terminate | `Reservation.sol:1035-1053` | #1094 | no | yes | Unreachable in m1 |
 | `emit ReservationActionTimedOut` | `Reservation.sol:1057-1061` | #1091 | yes | no | |
-| `beginWalletClosing` requires `walletReservationsCount == 0` | `Wallets.sol:674-676`, `:706-709` | #1094 | yes | no | The pin. Blocks orderly retirement |
+| `beginWalletClosing` requires `walletReservationsCount == 0` | `Wallets.sol:674-677`, `:706-709` | #1094 | yes | no | The pin. Blocks orderly retirement |
 | Same guard in `moveFunds` | `Wallets.sol:627-630` | #1094 | yes | no | |
 | Same guard in `notifyWalletFundsMoved` | `Wallets.sol:437-441` | #1094 | yes | no | |
-| `notifyWalletMovingFundsTimeout` -> slash + terminate | `Wallets.sol:493-523` | pre-existing | yes | no | The only slashing path reachable in m1, fed indirectly |
+| `notifyWalletMovingFundsTimeout` -> slash + terminate | `Wallets.sol:493-516` | pre-existing | yes | no | The only slashing path reachable in m1, fed indirectly |
 
 #### Stranding (proofs.md section 6)
 
@@ -379,11 +400,11 @@ Adjacent pre-existing fields the feature depends on: `liveWalletsCount` (`Bridge
 | Item | Source | PR | m1 | m2 | Note |
 |---|---|---|---|---|---|
 | `requestReservationAcceptance` | `ReservationRouter.sol:242` | #1091 | yes | yes | The product's entry gate |
-| `requestReservationReanchor` | `:286` | #1091 | yes | yes | Variant B's only unpin path; load-bearing |
+| `requestReservationReanchor` | `:286` | #1091 | yes | yes | variant B's only unpin path; load-bearing |
 | `submitReservationProof` | `:322` | #1091 | yes | yes | Only `onlySpvMaintainer` entry; m1 dispatches acceptance and re-anchor only |
 | `notifyReservationActionTimeout` | `:351` | #1091 | yes | yes | Required cleanup, and the slashing path |
 | `notifyStaleReservedDeposit` | `:450` | #1094 | yes | yes | Releases un-accepted revealed deposits |
-| `notifyReservationStranded` | `:461` | #1094 | yes | yes | Variant B's only position-closing path |
+| `notifyReservationStranded` | `:461` | #1094 | yes | yes | variant B's only position-closing *entry point* (the second closing site is inside acceptance/re-anchor settlement) |
 | `updateReservationParameters` | `:421` | #1088 | yes | yes | `onlyGovernance`; also carries the vault re-point |
 | `updateReservationCaps` | `:476` | #1093 | yes | yes | `onlyGovernance`; the only safety valve at launch |
 
@@ -408,7 +429,7 @@ Adjacent pre-existing fields the feature depends on: `liveWalletsCount` (`Bridge
 | Item | Source | PR | m1 | m2 | Note |
 |---|---|---|---|---|---|
 | `requestReservedRedemption` | `:262` | #1091 | no | yes | Redemption deferred |
-| `requestReservationDissolution` | `:302` | #1091 | no | yes | Variant B's defining cut; permissionless, no modifier |
+| `requestReservationDissolution` | `:302` | #1091 | no | yes | variant B's defining cut; permissionless, no modifier |
 | `notifyReservedRedemptionVeto` | `:366` | #1091 | no | yes | Veto is vacuous with no redemptions |
 | `extendReservation` | `:382` | #1092 | no | yes | Renewal deferred |
 | `walletPendingDissolution` | `:600` | #1091 | no | yes | Dissolution view |
@@ -438,15 +459,15 @@ All four tests are extractable as-is. (router.md section 2)
 
 | Item | Source | PR | m1 | m2 | Note |
 |---|---|---|---|---|---|
-| `receiveBalanceIncrease` | `ReservationVault.sol:234` | ? | flagged | yes | `onlyBank`; initiation-path. See D-17 |
-| `redeemReservation` | `:293` | ? | flagged | yes | Initiation only; needs `redemptionsPaused` flag. See D-18 |
+| `receiveBalanceIncrease` | `ReservationVault.sol:234` | ? | flagged | yes | `onlyBank`; initiation-path. See D-12 |
+| `redeemReservation` | `:293` | ? | flagged | yes | Initiation only; needs `redemptionsPaused` flag. See D-13 |
 | `extendCustody` | `:367` | ? | flagged | yes | Gated by `renewalsPaused` and `renewalBlocked` (`:388-389`); already correct |
 | `pauseRenewals` | `:409` | ? | yes | yes | `onlyGuardianOrOwner`; accounting-path |
 | `unpauseRenewals` | `:415` | ? | yes | yes | `onlyOwner`; accounting-path |
 | `blockRenewal` | `:424` | ? | yes | yes | `onlyGuardianOrOwner`; accounting-path |
 | `unblockRenewal` | `:432` | ? | yes | yes | `onlyOwner`; accounting-path |
 | `setRenewalGuardian` | `:440` | ? | yes | yes | `onlyOwner`; accounting-path |
-| `retryRedeemReservation` | `:469` | ? | flagged | yes | Initiation only; needs `redemptionsPaused`. See D-18, D-19 |
+| `retryRedeemReservation` | `:469` | ? | flagged | yes | Initiation only; needs `redemptionsPaused`. See D-13 |
 | `financeInKindFee` | `:529` | ? | yes | yes | Bridge-only; settlement-path; must NOT be gated. LIVE in m1 via re-anchor |
 | `repayInKindFeeDebt` | `:568` | ? | yes | yes | Permissionless; settlement-path adjunct |
 | `updateFeeReserveTarget` | `:599` | ? | yes | yes | `onlyOwner`; accounting-path; required activation step |
@@ -508,8 +529,8 @@ All four tests are extractable as-is. (router.md section 2)
 | `notifyWalletMovingFundsBelowDust`: calls `beginWalletClosing` | `Wallets.sol:478-489` | #1094 | yes | yes | `beginWalletClosing` reverts if `walletReservationsCount != 0` |
 | `notifyWalletMovingFundsTimeout`: NO reservation check | `Wallets.sol:498-516` | #1094 | yes | yes | Critical m1 failure mode. Calls `seize` then `terminateWallet` unconditionally |
 | `moveFunds`: reservation count check | `Wallets.sol:627-629` | #1094 | yes | yes | `mainUtxoHash == 0 && walletReservationsCount == 0` to skip MovingFunds |
-| `beginWalletClosing`: reservation count precondition | `Wallets.sol:674-676` | #1094 | yes | yes | `require(walletReservationsCount == 0)` |
-| `finalizeWalletClosing`: reservation count precondition | `Wallets.sol:706-708` | #1094 | yes | yes | `require(walletReservationsCount == 0)` |
+| `beginWalletClosing`: reservation count precondition | `Wallets.sol:674-677` | #1094 | yes | yes | `require(walletReservationsCount == 0)` |
+| `finalizeWalletClosing`: reservation count precondition | `Wallets.sol:706-709` | #1094 | yes | yes | `require(walletReservationsCount == 0)` |
 | `terminateWallet` | `Wallets.sol:733-757` | pre-existing | yes | yes | No reservation cleanup; stranding handles that separately |
 
 #### MovingFunds.sol
@@ -540,9 +561,9 @@ Pooled redemption path (`Redemption.requestRedemption` at `:528`) has NO direct 
 | `REDEMPTION_REQUEST_MIN_AGE` constant | `:179` | pre-existing | yes | yes | 600 seconds. Used by `validateReservedRedemptionProposal` at `:1135` |
 | `REDEMPTION_REQUEST_TIMEOUT_SAFETY_MARGIN` constant | `:198-199` | pre-existing | yes | yes | 2 hours. Used by all four reservation proposal validators |
 | `ReservationAnchorProposal` struct | `:918-927` | #1091 | yes | yes | Acceptance anchor proposal validation helper |
-| `ReservedRedemptionProposal` struct | `:930-939` | #1091 | no | yes | m2 only. Non-upgradeable contract. See D-20 |
+| `ReservedRedemptionProposal` struct | `:930-939` | #1091 | no | yes | m2 only. Non-upgradeable contract. See D-17 |
 | `ReservationReanchorProposal` struct | `:943-954` | #1091 | yes | yes | Re-anchor proposal validation helper |
-| `ReservationDissolutionProposal` struct | `:958-966` | #1091 | no | yes | m2 only. Non-upgradeable contract. See D-20 |
+| `ReservationDissolutionProposal` struct | `:958-966` | #1091 | no | yes | m2 only. Non-upgradeable contract. See D-17 |
 | `requirePendingAction` helper | `:975-989` | #1091 | yes | yes | Fetches action generation via `IReservationBridge`. Used by all four validators |
 | `requireWalletLiveOrMovingFunds` helper | `:1291-1300` | #1094 | yes | yes | Used by anchor, redemption, dissolution validators. NOT by re-anchor |
 | `validateDepositSweepProposal`: reserved deposit exclusion | `:312-315` | #1094 | yes | yes | `require(!bridge.isReservedDeposit(depositKeyUint))` |
@@ -692,13 +713,13 @@ carries no storage-layout constraint and has different rules. Diffstat against
 | `computeReservationRedeemerOutputScriptHash` | `:557` | #4238 | yes | yes | Shared helper |
 | `assembleReservedRedemptionTransaction` | `:449` | #4238 | no | yes | |
 | `assembleReservationDissolutionTransaction` | `:628` | #4238 | no | yes | |
-| `GetReservation` | `chain.go:432` | #4238 | yes | yes | Bound in `ethereum/tbtc.go` |
+| `GetReservation` | `chain.go:432` | #4238 | yes | yes | Interface method present; `ethereum/tbtc.go` implementation is an **error stub** (`:2415-2499`) pending ABI regeneration - m1 must implement |
 | `GetReservationAction(key, nonce)` | `chain.go:437-440` | #4238 | yes | yes | **A two-phase construct**; see C-8 |
 | `ReservationParameters` | `chain.go:444` | #4238 | yes | yes | |
-| `ValidateReservationAnchorProposal` | `chain.go:449` | #4238 | yes | yes | Bound |
-| `ValidateReservationReanchorProposal` | `chain.go:469` | #4238 | yes | yes | Bound |
-| `ValidateReservedRedemptionProposal` | `chain.go` | #4238 | no | yes | Bound |
-| `ValidateReservationDissolutionProposal` | `chain.go:477` | #4238 | no | yes | Bound |
+| `ValidateReservationAnchorProposal` | `chain.go:449` | #4238 | yes | yes | Interface method present; `ethereum/tbtc.go` implementation is an **error stub** - m1 must implement |
+| `ValidateReservationReanchorProposal` | `chain.go:469` | #4238 | yes | yes | Interface method present; `ethereum/tbtc.go` implementation is an **error stub** - m1 must implement |
+| `ValidateReservedRedemptionProposal` | `chain.go` | #4238 | no | yes | Interface method present; `ethereum/tbtc.go` implementation is an **error stub** - m1 must implement |
+| `ValidateReservationDissolutionProposal` | `chain.go:477` | #4238 | no | yes | Interface method present; `ethereum/tbtc.go` implementation is an **error stub** - m1 must implement |
 | `ActionReservationAnchor` (6), `ActionReservationReanchor` (8) | `wallet.go` | #4238 | yes | yes | Plus string and metrics names |
 | `ActionReservedRedemption` (7), `ActionReservationDissolution` (9) | `wallet.go` | #4238 | declare only | yes | **Positional wire decoding** (`case 7:`, `case 9:`), so they cannot be renumbered |
 | Reservation proposal-generator task | absent | - | **build new** | yes | `pkg/tbtcpg` has a task per wallet action and **no reservation task**; zero reservation mentions in the package |
@@ -789,7 +810,7 @@ Fields and enum variants m1 carries for layout reasons only. Their only writer i
 | `ActionType.Dissolution` | `:109` | Never constructed in m1 | Same layout hazard |
 | `ActionState.Vetoed` | `:132` | `notifyReservedRedemptionVeto` (`:1107`), m2 only | Veto is redemption-only. Keep numeric position for m2 |
 
-### 4.2 ReservationAction struct fields (data-model.md section 6; proofs.md D-1)
+### 4.2 ReservationAction struct fields (data-model.md section 6; proofs.md PD-1)
 
 | Field | Source | Only writer | Only reader | Why declare-only |
 |---|---|---|---|---|
@@ -809,7 +830,7 @@ These fields must be declared AND their m1 readers must be kept, even though m1 
 | `redeemer` | `:219` | `requestReservedRedemption` (`:717`, m2) | `notifyReservationActionTimeout` (`:1022`): `self.bank.transferBalance(action.redeemer, action.amount)` | Refund target. Also 4 sites in `Redemption.sol` (m2) |
 | `usedRetryCredit` | `:237` | `requestReservedRedemption` (m2) | `unwindPendingAction` (`ReservationProofs.sol:1262-1270`) reads `pendingAction.usedRetryCredit` | Shared helper must be extracted intact |
 
-### 4.4 BridgeState and per-wallet fields (data-model.md; proofs.md D-5)
+### 4.4 BridgeState and per-wallet fields (data-model.md; proofs.md PD-5)
 
 | Field | Source | Only writer | Why declare-only |
 |---|---|---|---|
@@ -823,12 +844,12 @@ The opposite trap: where an essentials-only rewrite would drop a write as dead c
 
 | Field | Written at | Why it looks dead in m1 | Why dropping it is a silent repudiation |
 |---|---|---|---|
-| `expiresAt` | `ReservationProofs.sol:533` (acceptance) | Every m1 reader is deleted: redemption's `<= expiresAt + gracePeriod` (`:667`, deleted), renewal's reads (`:1165`, `:1195`, deleted). No on-chain consumer in m1 | m2's redemption gates on `block.timestamp < expiresAt` (`:666-670`, strict, #1093). Without the m1 write, m2's redemption has no expiry date for any m1-era position. The term is a commitment held in storage for m2 to honour, enforced by nothing in m1 |
+| `expiresAt` | `ReservationProofs.sol:533` (acceptance) | Every m1 reader is deleted: redemption's strict `block.timestamp < expiresAt` (`Reservation.sol:666-669`, deleted), renewal's reads (`Reservation.sol:1165`, `:1195`, deleted). No on-chain consumer in m1 | m2's redemption gates on `block.timestamp < expiresAt` (`Reservation.sol:666-669`, strict, #1093). Without the m1 write, m2's redemption has no expiry date for any m1-era position. The term is a commitment held in storage for m2 to honour, enforced by nothing in m1 |
 | `dissolutionEligibleAt` | `ReservationProofs.sol:537-539` (acceptance) | Every m1 reader is deleted: re-anchor's `< dissolutionEligibleAt` gate (`Reservation.sol:786`, deleted by rule 4 to make re-anchor unbounded), dissolution's `>= dissolutionEligibleAt` (`:900`, m2), renewal (`:1196`, m2) | m2's dissolution needs it as the eligibility date. Computed as `expiresAt + reservationDissolutionDelay`, snapshotted once at acceptance and never recomputed. Without it, the snapshot semantics that keep governance changes non-retroactive (`:180-184`) cannot be reconstructed. Dropping the write means m2 has no eligibility date for any m1-era position |
 
 ### 5.2 The deeper reason (m1-b-implementation.md section 4.4; roadmap.md section 0.2)
 
-In m1 variant B the custody term has no on-chain consumer at all. Every reader of `expiresAt` and `dissolutionEligibleAt` is cut or deleted: redemption's `<= expiresAt + gracePeriod`, renewal, dissolution's `>= dissolutionEligibleAt`, and re-anchor's `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the term is not enforced by anything in m1; it is a commitment held in storage for m2 to honour. The storage IS the promise, which makes dropping the write a silent repudiation of it rather than a code-size optimisation.
+In m1 variant B the custody term has no on-chain consumer at all. Every reader of `expiresAt` and `dissolutionEligibleAt` is cut or deleted: redemption's strict `< expiresAt`, renewal, dissolution's `>= dissolutionEligibleAt`, and re-anchor's `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the term is not enforced by anything in m1; it is a commitment held in storage for m2 to honour. The storage IS the promise, which makes dropping the write a silent repudiation of it rather than a code-size optimisation.
 
 ### 5.3 Other m1-reachable writes m2 depends on (proofs.md; data-model.md)
 
@@ -854,14 +875,14 @@ The fragments found several current claims to be wrong. Each is collected below 
 | **What the source says** | `reservationsByAnchorUtxo` does NOT exist on `#1088`'s branch at all. It is introduced by `#1091`. Therefore `#1102`, which merged into `#1088`'s branch, cannot have removed it - there was nothing there to remove. `spentMainUTXOs` is a pre-existing Bridge registry (6 mentions in `Reservation.sol` on `#1088`'s branch, writes at `:1454` and `:1510`), not a replacement introduced by `#1102`. The two are not competing designs: `spentMainUTXOs` is the Bridge's honestly-spent-outpoint registry that reservations write into, and `reservationsByAnchorUtxo` is a reverse index from anchor outpoint to reservation key that `#1091` adds. (pr-map.md section 4) |
 | **Corrected statement** | `reservationsByAnchorUtxo` is introduced by `#1091` and has two write sites (`#1091` at `ReservationProofs.sol:541-543` and `#1094`'s stranding write at `Reservation.sol:1462-1472`). Both must be carried because stranding is variant B's only position-closing path. `#1102` did not remove it. `spentMainUTXOs` is a pre-existing Bridge registry, not a replacement. There is no removal to reconcile, only two write sites. |
 
-### C-2: `ReservationProofs.sol:836` citation in `m1-variant-comparison.md` (proofs.md section 4.2)
+### C-2: `ReservationProofs.sol:836` cited as a close site in three places (proofs.md section 4.2)
 
 | | |
 |---|---|
 | **Claim** | `ReservationProofs.sol:715`/`:836` are "the redemption path (unreachable)". |
-| **Doc and line** | `m1-variant-comparison.md:251-253` (section 5.3, step 1) |
+| **Doc and line** | Three locations, all corrected 2026-08-21: `m1-variant-comparison.md:251-259` (section 5.3, step 1); `roadmap.md` section 0.7 (the "B's close sites are stranding alone" paragraph); `roadmap.md` section 6 (the "remaining close sites" paragraph). The first was found by proofs.md PD-12; the two `roadmap.md` occurrences were missed by that pass and found in the 2026-08-21 contradiction review. `roadmap.md` section 0.7 is the more dangerous of the three, because `m1-b-implementation.md` section 1 and this document's section 1.2 both defer to it for the close-site list. |
 | **What the source says** | Guards `:836` is `self.walletReservationsCount[reservation.walletPubKeyHash] -= 1;` inside `submitReservationReanchorProof`, not a redemption site. It IS reachable in m1 (re-anchor settlement, proofs.md section 4.3-W1). It is not a close: it pairs with the target-wallet `+= 1` taken at request time (`Reservation.sol:827`), so global occupancy is unchanged and the position stays `Active` (`:871`). `:715` IS the redemption close site and IS unreachable in variant B. (proofs.md section 4.2) |
-| **Corrected statement** | `ReservationProofs.sol:715` is the redemption close site (unreachable in variant B). `ReservationProofs.sol:836` is the re-anchor source-wallet count decrement, which IS reachable in m1 but is a net-zero capacity move, not a close. The doc's conclusion (occupancy is monotonic in B) survives the correction, because a net-zero move does not free a slot. |
+| **Corrected statement** | `ReservationProofs.sol:715` is the redemption close site (unreachable in variant B). `ReservationProofs.sol:836` is the re-anchor source-wallet count decrement inside `submitReservationReanchorProof` (`:743`), which IS reachable in m1 and must NOT be cut. It pairs with the target-wallet `+= 1` taken at request time (`Reservation.sol:820-827`), so it is a transfer between wallets, not a close: global occupancy is unchanged and the position stays `Active` (`:871`). It is also load-bearing for wallet retirement — it is the write that lets a re-anchored-away wallet's `walletReservationsCount` fall to zero, the precondition for `beginWalletClosing` (`Wallets.sol:674-677`) and for the below-dust exit in `roadmap.md` section 0.8. Cutting it would leave the source slot occupied forever, making occupancy monotonic even with re-anchor working. The conclusion each doc drew (occupancy is monotonic in B) survives, because a net-zero move does not free a slot. |
 
 ### C-3: The reach of the `#1102` fold (pr-map.md section 3; m1-b-implementation.md provenance)
 
@@ -887,16 +908,16 @@ The fragments found several current claims to be wrong. Each is collected below 
 |---|---|
 | **Claim** | An earlier draft of `roadmap.md` section 2.2 claimed a vault swap orphans revealed-but-unaccepted deposits. |
 | **Doc and line** | `roadmap.md` section 2.2 (corrected in place); `feature-spec.md` section 15 (corrected per roadmap) |
-| **What the source says** | The guard is contract-enforced, not merely discouraged: `updateReservationParameters` reverts a vault change unless `reservationTotalAmount == 0` AND `pendingReservedDeposits == 0` (`Reservation.sol:1267-1274`). Nothing is silently orphaned; the transaction simply fails. The consequence is worse than orphaning: it is a liveness constraint making the swap impossible until every position has closed and every revealed deposit has been accepted or marked stale. (roadmap.md section 2.2) |
+| **What the source says** | The guard is contract-enforced, not merely discouraged: `updateReservationParameters` reverts a vault change unless `reservationTotalAmount == 0` AND `pendingReservedDeposits == 0` (`Reservation.sol:1263-1274`). Nothing is silently orphaned; the transaction simply fails. The consequence is worse than orphaning: it is a liveness constraint making the swap impossible until every position has closed and every revealed deposit has been accepted or marked stale. (roadmap.md section 2.2) |
 | **Corrected statement** | A vault swap is not possible while the product is in use. The guard reverts rather than orphaning. `feature-spec.md` section 15 has been corrected to record the guard as enforced. |
 
-### C-6: `feature-spec.md` section 1067-1069 `#1102` convergence claim (proofs.md D-8)
+### C-6: `feature-spec.md` section 1067-1069 `#1102` convergence claim (proofs.md PD-8)
 
 | | |
 |---|---|
-| **Claim** | `feature-spec.md:1067-1069` records that `#1102` "moved anchor consumption to `spentMainUTXOs`" on `feat/utxo-reservation-core`, and that a reverse index used by `strandReservation` "exists on `feat/utxo-reservation-guards` but was deleted from `feat/utxo-reservation-core` by the `#1102` merge." |
+| **Claim** | *(historical — already corrected in place in `feature-spec.md` §15 on 2026-08-21; this row is retained only because D-15 still turns on the unverified `#1102` `spentMainUTXOs` shape)* `feature-spec.md:1067-1069` recorded that `#1102` "moved anchor consumption to `spentMainUTXOs`" on `feat/utxo-reservation-core`, and that a reverse index used by `strandReservation` "exists on `feat/utxo-reservation-guards` but was deleted from `feat/utxo-reservation-core` by the `#1102` merge." |
 | **Doc and line** | `feature-spec.md:1067-1069` |
-| **What the source says** | Only the guards and partial trees are available locally, so the exact shape of the `#1102` core-line implementation is `UNVERIFIED`. The two lineages have not been reconciled. `spentMainUTXOs` is pre-existing on `#1088`'s branch (6 mentions in `Reservation.sol`). The reverse index `reservationsByAnchorUtxo` is introduced by `#1091`, not removed by `#1102`. (proofs.md D-8; pr-map.md section 4) |
+| **What the source says** | Only the guards and partial trees are available locally, so the exact shape of the `#1102` core-line implementation is `UNVERIFIED`. The two lineages have not been reconciled. `spentMainUTXOs` is pre-existing on `#1088`'s branch (6 mentions in `Reservation.sol`). The reverse index `reservationsByAnchorUtxo` is introduced by `#1091`, not removed by `#1102`. (proofs.md PD-8; pr-map.md section 4) |
 | **Corrected statement** | The `#1102` lineage is `UNVERIFIED` against the guards tip. `spentMainUTXOs` is pre-existing, not introduced by `#1102`. The reverse index is introduced by `#1091`. Which lineage the m1 rewrite takes as its base is an open decision. See D-15. |
 
 ### C-7: `roadmap.md` section 5 dissolution-is-mandatory claim (roadmap.md section 5, reversed; section 4.4)
@@ -926,7 +947,7 @@ Every `DECISION NEEDED` from every fragment, deduplicated and numbered so other 
 **D-1. Keep or delete the unreachable refund branch in the timeout path?**
 Question: Does m1 keep the unreachable redemption refund branch at `Reservation.sol:1009-1022` (which reads `action.feePaid`, `action.redeemer`, and writes `reservation.retryCredit`), or delete it and re-add in m2?
 Recommendation: Keep. Fields stay either way; this is Bridge code so it is replaceable. Keeping costs a few lines and keeps the diff to m2 smaller. Stripping the retry-credit and redeemer handling from `unwindPendingAction` makes the helper diverge from what m2 needs and breaks the "m2 is an upgrade, not a migration" property.
-Source: data-model.md section 2, open question 1; proofs.md D-5, D-10, D-11.
+Source: data-model.md section 2, open question 1; proofs.md PD-5, PD-10, PD-11.
 Status: blocking. `unwindPendingAction` is a shared helper m1 must extract intact.
 
 **D-2. Do the four unvalidated cap parameters get relational validation in m1?**
@@ -944,49 +965,49 @@ Status: blocking. Dropping the validation would allow misconfiguring the system 
 **D-4. Do action-record fields for deferred action types need to be written in m1?**
 Question: `ReservationAction.isPartial` (partial `Reservation.sol:263`) and `retryCreditSourceNonce` (`:268`) are only ever written on the redemption request path (m2). Does rule 1 (storage-complete means written, not merely declared) bind per-generation action-record fields, or only the long-lived `ReservationRequest` position record?
 Recommendation: Declare only. No m1 code path can write them, and no m1-created action record (Acceptance or Reanchor) is ever read for them. `resolveLateAgainstPending` reads `isPartial` only after confirming `actionType == Redemption`. Rule 1 should be interpreted as binding the position record, not transient action records.
-Source: proofs.md D-1.
+Source: proofs.md PD-1.
 Status: blocking. Must settle the rule 1 scope before extraction begins.
 
 **D-5. Must m1 declare and write `retryCredit` and `reservationRetryCreditActionNonce`?**
 Question: `reservation.retryCredit` (`Reservation.sol:180`) is a position field, so rule 1 points at m1. But its only mint sites are the redemption timeout arm (`:1009-1012`, m2) and `unwindPendingAction`'s Redemption branch (`:1263-1264`, m2). Its only consumer is the redemption request path (m2). A declared-but-never-written field is a rule-1 violation as stated; a write with no m1 semantics is worse. `reservationRetryCreditActionNonce` (partial `BridgeState.sol:461`) is the same shape.
 Recommendation: Declare both. Do not write them in m1. The timeout path that writes `retryCredit = true` is only reached for Redemption actions, which cannot exist in m1. The field exists in the layout for m2. Interpret rule 1 as requiring declaration for position fields whose only writer is m2-exclusive, not requiring a synthetic m1 write.
-Source: proofs.md D-2; data-model.md section 2, section 4.
+Source: proofs.md PD-2; data-model.md section 2, section 4.
 Status: blocking. Same rule-1-scope question as D-4.
 
 **D-6. Should m1 emit `ReservationAccepted` with `expiresAt` unchanged?**
 Question: The `ReservationAccepted` event (`ReservationProofs.sol:551-559`) carries `expiresAt`. In m1, nothing enforces the expiry. Should m1 emit it unchanged, knowing off-chain consumers will read it as an enforced deadline that m1 does not enforce?
 Recommendation: Emit it unchanged. The value is correct (it is written to storage at `:533`) and m2 will enforce it. Changing the event would break ABI compatibility. Off-chain monitoring should document that m1 does not enforce the term on-chain.
-Source: proofs.md D-6; m1-b-implementation.md section 4.4.
+Source: proofs.md PD-6; m1-b-implementation.md section 4.4.
 Status: blocking. Event ABI must be stable across milestones.
 
 **D-7. Does m1 keep the four-member `ProofType` enum or shrink it?**
 Question: `enum ProofType { Acceptance, Redemption, Reanchor, Dissolution }` (`ReservationProofs.sol:117-122`) is ABI-encoded as `uint8` by the router (`ReservationRouter.sol:323`). m1 has no Redemption or Dissolution handler. Keep the four-member enum with two arms reverting, or shrink to `{Acceptance, Reanchor}` and renumber?
 Recommendation: Keep the four-member enum verbatim. Renumbering silently changes the meaning of `proofType == 1` for any client built against m1, and the dispatcher's `else` fallthrough (`:169`) means an out-of-range value would be routed rather than rejected. This is the same layout hazard as the other enums (rule 5).
-Source: proofs.md D-7; data-model.md section 3.
+Source: proofs.md PD-7; data-model.md section 3.
 Status: blocking. ABI stability across the milestone boundary.
 
 **D-8. Does `closeReservation` ship in m1?**
 Question: `closeReservation` (`Reservation.sol:1490-1506`) is shared between two m2 actions only (redemption at `:715`, dissolution at `:1142`). Rule 5 says a helper shared between m1 and m2 is m1 work, but does not cover a helper shared exclusively between deferred actions. Shipping it in m1 leaves dead code; omitting it makes the m2 diff touch `Reservation.sol` again. Same question for `Reservation.notifyReservedRedemptionVeto` and the `Vetoed` enum member.
 Recommendation: Ship it. The function is small (16 lines), and omitting it means m2 must re-add a function to a file m1 has already rewritten. The `Vetoed` enum variant must be declared regardless (rule 5). `notifyReservedRedemptionVeto` is Bridge code (replaceable), so it may be omitted and re-added in m2 without cost.
-Source: proofs.md D-3.
+Source: proofs.md PD-3.
 Status: blocking. Affects the m1 code surface.
 
 **D-9. Is governance-only rotation the intended m1 unpin path?**
 Question: Rule 4 deletes the `block.timestamp < dissolutionEligibleAt` gate (`Reservation.sol:785-788`) so re-anchor is unbounded in time. But it does NOT touch the wallet-state gate (`:790-806`): a re-anchor still requires the source wallet to be `MovingFunds`, or `Live` with `privileged == true` (governance). So in m1 a position on a healthy `Live` wallet is unpinnable only by a governance transaction. Is governance-only rotation the intended m1 unpin path, or should rule 4 also relax the source-wallet gate?
 Recommendation: Keep the wallet-state gate. Governance-only rotation is acceptable at design-partner scale. Relaxing it would allow any caller to rotate positions off healthy wallets, which is a security change beyond the m1 scope. The spec should document that m1 unpin of a `Live` wallet requires governance.
-Source: proofs.md D-4; m1-b-implementation.md section 1.5.
+Source: proofs.md PD-4; m1-b-implementation.md section 1.5.
 Status: blocking. Defines m1's operational model.
 
 **D-10. Does m1 ship the full four-branch `unwindPendingAction` or only the m1 branches?**
 Question: Rule 5 makes `unwindPendingAction` (`:1243`) m1 work because m1 reaches it from late acceptance (`:490`) and late re-anchor (`:821`). But two of its four branches are unreachable in m1: Redemption (`:1261-1272`, refunds escrow) and Dissolution (`:1282-1292`, releases the wallet lock). Ship all four, or only Acceptance and Reanchor?
 Recommendation: Ship all four branches. Shipping all four requires D-1, D-4, and D-5 to be answered first (the Redemption branch writes `retryCredit` and reads `redeemer`/`usedRetryCredit`; the Dissolution branch writes `walletPendingDissolution`). Keeping the full body preserves the "m2 is an upgrade" property and avoids a signature change.
-Source: proofs.md D-10, D-11.
+Source: proofs.md PD-10, PD-11.
 Status: blocking. Depends on D-1, D-4, D-5.
 
 **D-11. Does m1 keep the `restoreRetryCredit` parameter in `unwindPendingAction`?**
 Question: `:821` passes `true` for `restoreRetryCredit`. That argument is consumed only inside the Redemption branch (`:1262`), so in m1 it is provably inert. Does m1 keep the parameter at all?
 Recommendation: Keep the parameter. Dropping it makes the m2 restoration (partial `:1448-1453`, which passes `action.isPartial`) a signature change rather than an argument change.
-Source: proofs.md D-11.
+Source: proofs.md PD-11.
 Status: blocking. Signature stability for m2.
 
 **D-12. How is initiation disabled in m1?**
@@ -1004,13 +1025,13 @@ Status: blocking. Required for m1 launch posture.
 **D-14. `requireCurrentSourceAnchor`: keep the guards helper or take `#1096`'s fold?**
 Question: Guards keeps a standalone `requireCurrentSourceAnchor` (`:308-313`) called at three sites (`:665`, `:778`, `:955`), each after `prepareReservationForSettlement`. `#1096` deletes the helper and folds the check into `prepareReservationForSettlement` (partial `:270-273`), changing its signature. Which shape does m1 take?
 Recommendation: Take the guards shape (standalone helper). m1 extracts from the guards tip. Taking the `#1096` shape means m1 ships a signature that only `#1096` motivates, and the revert-string ordering visible to clients changes. m2's `#1096` rebase must redo the fold, but that is an m2 task.
-Source: proofs.md D-9.
+Source: proofs.md PD-9.
 Status: blocking. Affects the m1 code surface and m2 rebase effort.
 
 **D-15. Which `spentMainUTXOs` lineage does the m1 rewrite take?**
 Question: `consumeAnchor` writes `spentMainUTXOs[anchorUtxoKey] = true` (`:1356`). `feature-spec.md:1067-1069` records that `#1102` "moved anchor consumption to `spentMainUTXOs`" on `feat/utxo-reservation-core`. Only the guards and partial trees are available locally, so the exact shape of the `#1102` core-line implementation is `UNVERIFIED`. Which lineage is the m1 rewrite's base?
 Recommendation: Extract from the guards tip (which has `spentMainUTXOs` writes at `:1356` and the reverse index at `:541-543`). Reconcile against `#1090`'s tip post-`#1102` before implementation. The two are not competing: `spentMainUTXOs` is the Bridge registry, `reservationsByAnchorUtxo` is the reverse index.
-Source: proofs.md D-8; pr-map.md section 4; correction C-1, C-6.
+Source: proofs.md PD-8; pr-map.md section 4; correction C-1, C-6.
 Status: blocking. Must settle before extraction begins.
 
 **D-16. Does `reservationByAnchorUtxo` the view stay in m1 while the reverse index has two unreconciled write sites?**
@@ -1071,9 +1092,13 @@ Status: deferrable. Affects extraction logistics.
 
 **D-25. Is `#4238` edited, superseded, or closed?**
 Question: C-8 shows most of `#4238` is directly reusable (types, enums, proposals with nonces, assemblers, chain reads and validators) and that the m1 client is largely additive rather than corrective. That argues for building on it rather than closing it.
-Recommendation: Build on it. `pr-strategy.md` section 8 currently treats it as superseded design and recommends superseding the PR; that framing predates C-8 and should be revisited against it.
-Source: keep-core.md open question 2; conflicts with pr-strategy.md section 8.
-Status: **blocking** for the keep-core PR plan, not for the Solidity surface.
+Recommendation: Build on it.
+Source: keep-core.md open question 2.
+Status: **resolved 2026-08-21.** `pr-strategy.md` §8 previously treated `#4238`
+as superseded design and recommended superseding the PR, a framing that predated
+C-8. That section now recommends building on it, so the two documents agree and
+this decision no longer blocks the keep-core PR plan. The remaining work is
+additive: supply the executor `#4238` does not contain.
 
 **D-26. Rebuild the keep-core effort estimate bottom-up?**
 Question: The 1,400-1,900 production Go figure in `roadmap.md` section 5.1 was derived assuming rework of a single-phase client. The work is instead a new executor plus new write plumbing on top of a reusable type layer.
@@ -1101,8 +1126,17 @@ Synthesized 2026-08-21 from seven verified inventory fragments under `inventory/
 - `inventory/pr-map.md` - measured per-PR diffstat, branch drift, the `#1102` fold reach, extraction hazards
 - `inventory/keep-core.md` - PR #4238's Go surface, and the executor it does not contain
 
-Context files (read only, not edited): `docs/spec/reservations/roadmap.md` and `docs/spec/reservations/m1-b-implementation.md`.
-
 All fragment line numbers come from the `feat/utxo-reservation-guards` tip (PR #1094), which predates the `#1102` fold (commit `3566e059`). See section 1.3 and correction C-3.
+
+**Fragment decision-ID namespace.** `inventory/proofs.md` numbered its own
+twelve decisions before this register renumbered them, and nine of the twelve
+changed number. Its labels are therefore `PD-N`, with a concordance table at
+the top of that fragment. A bare `D-N` anywhere in this set means *this*
+register. One fragment decision, `inventory/proofs.md` PD-12, never reached this register:
+it reported that `m1-variant-comparison.md` cited `ReservationProofs.sol:715`
+and `:836` as the unreachable redemption path when `:836` is the re-anchor
+source-wallet count decrement and is reachable in m1. Corrected at
+`m1-variant-comparison.md:251-259` on 2026-08-21; the section's conclusion was
+unaffected, only its evidence.
 
 `UNVERIFIED` markers carried forward: the `#1102` core-line `spentMainUTXOs` implementation shape (D-15, C-6); the EIP-170 margin at the current tip (router.md section 4); all vault.md PR attributions (marked `?`).

@@ -151,7 +151,7 @@ Ranked by how expensive it is to get wrong.
    `anchorAmount`.
 4. **The reverse anchor index has two write sites** (`#1091`
    `ReservationProofs.sol:465` region and `#1094`'s stranding write). Both must
-   be carried, because stranding is variant B's only position-closing path.
+   be carried, because stranding is variant B's only position-closing *entry point*.
 5. **`#1092`'s expiry model is structural, not additive.** Its `window < term`
    arithmetic and dissolution-eligibility snapshotting are depended on by
    `#1093`+, so `#1092` cannot be skipped even though renewal is deferred; the
@@ -171,7 +171,7 @@ Ranked by how expensive it is to get wrong.
 | #1095 | Docs and one test line | **Reference only** - no production code |
 | #1096 | Partial reserved redemption (1-in-2-out) | **Skip** - redemption is m2 in whole and in part |
 | #1102 | 30 review fixes on `#1088` | **Extract, mandatory** - and note it is absent above `#1091` |
-| keep-core #4238 | Wallet-side foundations, single-phase | **Rewrite** - written against the superseded single-phase design |
+| keep-core #4238 | Wallet-side two-phase type layer, no executor (C-8) | **Build on it** (D-25) - the type layer is reusable; m1 supplies the executor it lacks. Corrected 2026-08-21: this cell previously said "Rewrite - written against the superseded single-phase design", which C-8 refutes and which contradicted this row's own description cell |
 
 ## Open questions
 

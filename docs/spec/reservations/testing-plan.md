@@ -1,10 +1,10 @@
 # UTXO Reservations — Testing & Hardening Plan (pre-audit)
 
-Status: DRAFT. Companion to `feature-spec.md` and
-`epic-merge-plan.md`. Grounded in a direct inspection of both
+Status: DRAFT. Companion to `feature-spec.md` and `pr-strategy.md`
+(the live delivery plan; `epic-merge-plan.md` is the superseded stack record). Grounded in a direct inspection of both
 repos' current tooling (2026-08-19), not assumptions.
 
-**Superseded in part, 2026-08-21.** m1 is now variant B, an essentially-only
+**Superseded in part, 2026-08-21.** m1 is now variant B, an essentials-only
 rewrite with **no dissolution** (`roadmap.md` §1). The tooling survey (§1-§2)
 and the recommendation tiers (§3) stand, but two things below are stale
 wherever they appear: any lifecycle sequence ending in `dissolve`, and the
@@ -148,17 +148,16 @@ Checked out at `feat/utxo-reservation-wallet-support`.
    (`pkg/tbtc`, `pkg/chain/ethereum`, `pkg/bitcoin`) — currently absent
    repo-wide. Reservation coordination is concurrent (goroutine dispatch
    per wallet action, same pattern as existing heartbeat/redemption
-   dispatch). Free to add, catches races cheaply, should happen before
-   the coordination wiring lands, not after.
+   dispatch). It is free to add and catches races cheaply.
+   Add `-race` **before** the coordination wiring lands, not after.
 3. **Finish keep-core's own test bar, don't treat it as new tooling**:
    extend `node_test.go`/`coordination_test.go` with the same coverage
    every other action type already has —
    `TestNode_HandleReservationProposal_*` (uncontrolled wallet, wallet
    busy, dispatches action), `TestProcessCoordinationResult_ReservationRoutesToHandler`,
-   inclusion in `TestCoordinationExecutor_GetActionsChecklist`. This isn't
-   optional hardening, it's the same convention the codebase already
-   holds every other wallet action to — its absence is a completeness gap,
-   not a stylistic choice.
+   inclusion in `TestCoordinationExecutor_GetActionsChecklist`. Every other wallet action
+   already has these tests. Their absence for reservations is a completeness
+   gap, not optional hardening.
 4. **Extend the existing fuzz-marshaling pattern** — once reservation
    protobuf types exist, add
    `TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationProposal`
@@ -241,7 +240,7 @@ reference material and there is no stack merge to land tests inside
 Scope corrections, not new tiers:
 
 - **Drop dissolution from every lifecycle walkthrough.** §0, Tier 1 item 1
-  and Tier 2 item 7 all end their sequence at `dissolve`, and Tier 1 item 8's
+  and Tier 2 item 7 all end their sequence at `dissolve`, and Tier 2 item 8's
   TLA+ model includes dissolution transitions. B has no dissolution path, so
   the m1 lifecycle is reserve -> accept -> settle -> re-anchor -> strand. Model
   dissolution when m2 restores it.

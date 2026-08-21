@@ -9,7 +9,7 @@
 
 Supporting files read for the request side, timeout, slashing and the close/strand helpers (these do **not** live in `ReservationProofs.sol`): `Reservation.sol` (guards 1507 ln, partial 1662 ln), `ReservationRouter.sol`, `BridgeState.sol`, `Wallets.sol`, `vault/ReservationVault.sol`.
 
-**PR-to-branch map**, verified from `docs/spec/reservations/feature-spec.md:30-38` and `epic-merge-plan.md:64-71`, cross-checked against `.git/packed-refs:77-83`:
+**PR-to-branch map**, verified from `../feature-spec.md:30-38` and `../epic-merge-plan.md:64-71`, cross-checked against `.git/packed-refs:77-83`:
 
 | PR | Branch | Title |
 |---|---|---|
@@ -23,9 +23,36 @@ Supporting files read for the request side, timeout, slashing and the close/stra
 | #1095 | `docs/utxo-reservation-release` | docs + tests |
 | #1096 | `feat/utxo-reservation-partial-redemption` | partial reserved redemption |
 
+**Decision-ID namespace.** The `PD-N` numbers below are **local to this
+fragment** and are NOT the canonical register in `../milestone-inventory.md`
+section 7, which renumbered them during synthesis. Nine of the twelve changed
+number, so citing a bare `D-N` across the two documents resolves to the wrong
+decision. Concordance:
+
+| this fragment | canonical register |
+|---|---|
+| PD-1 | D-4 |
+| PD-2 | D-5 |
+| PD-3 | D-8 |
+| PD-4 | D-9 |
+| PD-5 | D-1 |
+| PD-6 | D-6 |
+| PD-7 | D-7 |
+| PD-8 | D-15 |
+| PD-9 | D-14 |
+| PD-10 | D-1, D-10 |
+| PD-11 | D-1, D-10, D-11 |
+| PD-12 | resolved 2026-08-21, no register entry |
+
+PD-12 never reached the register. It said `m1-variant-comparison.md` cited
+`ReservationProofs.sol:715`/`:836` as "the redemption path (unreachable)" when
+`:836` is the re-anchor source-wallet count decrement, reachable in m1. That
+citation was corrected at `m1-variant-comparison.md:251-259`. Cite the register
+for everything else.
+
 **Column conventions.** `m1` = the item is in the variant-B m1 rewrite. `m2` = m2 must add or modify this item. Both `yes` means m1 ships it and m2 changes it. `flagged` means a `DECISION NEEDED` applies. Unqualified `File.sol:N` citations are the **guards** tree; partial-tree citations are prefixed `partial `.
 
-**PR attribution caveat.** Only two snapshots exist locally and `gh` is unavailable. The guards-to-partial delta (§8) is measured exactly and its `#1096` attributions are verified. Attributions to #1088/#1090-#1094 are derived from PR titles (`feature-spec.md:30-38`) plus explicit file-and-line attributions in `roadmap.md:886-894` and `m1-variant-comparison.md:486-501`; each such row carries `?`-qualified confidence in the Note where the evidence is title-level only.
+**PR attribution caveat.** Only two *Solidity* snapshots were read as working trees (the guards tip and the partial-redemption tip; keep-core `#4238` is the third, non-Solidity one) and `gh` is unavailable. All ten branch refs are fetched, so any is readable via `git show`, but per-PR attribution below was not re-derived per branch. The guards-to-partial delta (§8) is measured exactly and its `#1096` attributions are verified. Attributions to #1088/#1090-#1094 are derived from PR titles (`feature-spec.md:30-38`) plus explicit file-and-line attributions in `roadmap.md:886-894` and `m1-variant-comparison.md:486-501`; each such row carries `?`-qualified confidence in the Note where the evidence is title-level only.
 
 ---
 
@@ -36,7 +63,7 @@ Ten changes, all verified by reading both files end to end.
 | Item | Source | PR | Kind | m1 | m2 | Note |
 |---|---|---|---|---|---|---|
 | `event ReservationPartiallyRedeemed` | partial `ReservationProofs.sol:87-93` | #1096 | event | no | yes | New event; no guards counterpart. |
-| `prepareReservationForSettlement` gains `action` param | partial `:262-267` vs `:254-258` | #1096 | internal | yes | yes | Signature change. m1 must pick one shape; see D-9. |
+| `prepareReservationForSettlement` gains `action` param | partial `:262-267` vs `:254-258` | #1096 | internal | yes | yes | Signature change. m1 must pick one shape; see PD-9. |
 | Source-anchor check folded into `prepareReservationForSettlement` | partial `:270-273` | #1096 | invariant | yes | no | Absorbs the guards helper below. |
 | `requireCurrentSourceAnchor` helper **deleted** | guards `:308-313`; 3 call sites `:665`, `:778`, `:955` | #1096 | internal | flagged | flagged | Deleted in partial. Shared m1+m2 helper (rule 5). |
 | `anchorUtxoKey` reuses the computed hash | partial `:288` vs guards `:275-282` | #1096 | internal | yes | no | Pure de-duplication, same value. |
@@ -48,10 +75,10 @@ Ten changes, all verified by reading both files end to end.
 | `resolveLateRedemptionAgainstPending` renamed `resolveLateAgainstPending` | guards `:1206` -> partial `:1407` | #1096 | internal | no | yes | New params `redeemerValue`, `effectiveRedeemAmount`. |
 | Late-match predicate tightened | partial `:1434-1439` vs guards `:1222-1228` | #1096 | invariant | no | yes | Adds `isPartial ==` and `amount ==` equality. |
 | `unwindPendingAction` restore now passes `action.isPartial` | partial `:1448-1453` vs guards `:1231` | #1096 | internal | no | yes | Guards hardcodes `false`. |
-| `unwindPendingAction` writes retry-credit source nonce | partial `:1487-1491` vs guards `:1263-1264` | #1096 | storage-write | flagged | yes | See D-2. |
-| `ReservationAction.isPartial` | partial `Reservation.sol:263` | #1096 | storage-write | flagged | yes | See D-1. |
-| `ReservationAction.retryCreditSourceNonce` | partial `Reservation.sol:268` | #1096 | storage-write | flagged | yes | See D-1. |
-| `BridgeState.Storage.reservationRetryCreditActionNonce` | partial `BridgeState.sol:461` | #1096 | storage-write | flagged | yes | See D-2. |
+| `unwindPendingAction` writes retry-credit source nonce | partial `:1487-1491` vs guards `:1263-1264` | #1096 | storage-write | flagged | yes | See PD-2. |
+| `ReservationAction.isPartial` | partial `Reservation.sol:263` | #1096 | storage-write | flagged | yes | See PD-1. |
+| `ReservationAction.retryCreditSourceNonce` | partial `Reservation.sol:268` | #1096 | storage-write | flagged | yes | See PD-1. |
+| `BridgeState.Storage.reservationRetryCreditActionNonce` | partial `BridgeState.sol:461` | #1096 | storage-write | flagged | yes | See PD-2. |
 | `requestPartialReservedRedemption` | partial `Reservation.sol:685-718` | #1096 | entry-point | no | yes | |
 | `_requestReservedRedemption` shared body | partial `Reservation.sol:723-852` | #1096 | internal | no | yes | |
 | `consumeRetryCredit` | partial `Reservation.sol:860-895` | #1096 | internal | no | yes | Amount/shape binding at `:880-884`. |
@@ -89,7 +116,7 @@ Ten changes, all verified by reading both files end to end.
 |---|---|---|---|---|---|---|
 | `ReservationRouter.submitReservationProof` | `ReservationRouter.sol:322-338` | #1090 | entry-point | yes | no | Sole external settlement entry. **Never pause-gate.** |
 | `ReservationProofs.submitReservationProof` dispatcher | `:134-180` | #1091 | entry-point | yes | yes | m1 drops the `Redemption` (`:151`) and `Dissolution` (`:169`) arms. |
-| `enum ProofType` | `:117-122` | #1091 | invariant | yes | yes | m1 must keep numbering stable or m2 breaks encoding. See D-7. |
+| `enum ProofType` | `:117-122` | #1091 | invariant | yes | yes | m1 must keep numbering stable or m2 breaks encoding. See PD-7. |
 | `loadSettleableAction` | `:186-206` | #1091 | internal | yes | no | **Shared across all four action types (rule 5): m1 work.** |
 | `submitReservationAcceptanceProof` | `:343-390` | #1091 | entry-point | yes | no | |
 | Requires position `Unknown` | `:360-364` | #1091 | invariant | yes | no | |
@@ -149,7 +176,7 @@ All rows below are **settlement-path**. None may be pause-gated (rule 2).
 | `Reservation.requestReservationReanchor` | `Reservation.sol:771-868` | #1091 | entry-point | yes | no | |
 | Requires `state == Active` | `Reservation.sol:781-784` | #1091 | invariant | yes | no | |
 | **Requires `block.timestamp < dissolutionEligibleAt`** | `Reservation.sol:785-788` | #1094 | invariant | **no** | yes | **Rule 4: deleted in m1.** m2 restores it alongside dissolution. |
-| Source wallet must be `MovingFunds`, or `Live` with `privileged` | `Reservation.sol:790-806` | #1094 | invariant | yes | no | **Not relaxed by rule 4.** See D-4. |
+| Source wallet must be `MovingFunds`, or `Live` with `privileged` | `Reservation.sol:790-806` | #1094 | invariant | yes | no | **Not relaxed by rule 4.** See PD-4. |
 | Target differs from source; target must be `Live` | `Reservation.sol:808-817` | #1091 | invariant | yes | no | |
 | **Reserves `walletReservationsCount[target]`** | `Reservation.sol:820-827` | #1094 | storage-write | yes | no | initiation-path. Cap check `<= maxReservationsPerWallet`. |
 | **Reserves `walletReservationsAmount[target]`** | `Reservation.sol:829-837` | #1093 | storage-write | yes | no | initiation-path. |
@@ -174,11 +201,11 @@ All rows below are **settlement-path**. None may be pause-gated (rule 2).
 | - **reconstructs `addWalletReservationKey`** | `:295-299` | #1094 | storage-write | yes | no | settlement-path. |
 | - **reconstructs `reservationsByAnchorUtxo`** | `:300` | #1094 | storage-write | yes | no | settlement-path. |
 | Not late: requires `requestNonce == requestNonce` | `:772-775` | #1091 | invariant | yes | no | |
-| `requireCurrentSourceAnchor` | `:778`, body `:308-313` | #1091 | view | yes | yes | **Shared helper. Deleted by #1096** (folded into `prepareReservationForSettlement`). See D-9. |
+| `requireCurrentSourceAnchor` | `:778`, body `:308-313` | #1091 | view | yes | yes | **Shared helper. Deleted by #1096** (folded into `prepareReservationForSettlement`). See PD-9. |
 | **SPV: `validateProof`** | `:780` | #1091 | internal | yes | no | |
 | `consumeAnchor` | `:782`, body `:1334-1358` | #1091 | internal | yes | no | **Shared with redemption (rule 5): m1 work.** |
 | - input must point at the current anchor outpoint | `:1342-1346` | #1091 | invariant | yes | no | |
-| - **`spentMainUTXOs[anchorUtxoKey] = true`** | `:1356` | #1091 | storage-write | yes | no | Fraud-defeat recognition. See D-8 on the #1102 convergence. |
+| - **`spentMainUTXOs[anchorUtxoKey] = true`** | `:1356` | #1091 | storage-write | yes | no | Fraud-defeat recognition. See PD-8 on the #1102 convergence. |
 | - **`delete reservationsByAnchorUtxo[anchorUtxoKey]`** | `:1357` | #1091 | storage-write | yes | no | |
 | Exactly one output | `:784` (`parseSingleOutput` `:1315-1330`) | #1091 | view | yes | no | |
 | Output pays `action.targetWalletPubKeyHash` | `:788-791` | #1091 | invariant | yes | no | |
@@ -256,7 +283,7 @@ All rows **settlement-path**.
 
 | Item | Source | PR | Kind | m1 | m2 | Note |
 |---|---|---|---|---|---|---|
-| **C1 body** `closeReservation`: count `-=1`, amount `-=`, total `-=`, `removeWalletReservationKey`, `state = Closed` | `Reservation.sol:1490-1506` (writes at `:1495`, `:1496-1498`, `:1499`, `:1500-1504`, `:1505`) | #1091 | storage-write | flagged | yes | Body is m1 work only if a caller exists. See D-3. |
+| **C1 body** `closeReservation`: count `-=1`, amount `-=`, total `-=`, `removeWalletReservationKey`, `state = Closed` | `Reservation.sol:1490-1506` (writes at `:1495`, `:1496-1498`, `:1499`, `:1500-1504`, `:1505`) | #1091 | storage-write | flagged | yes | Body is m1 work only if a caller exists. See PD-3. |
 | **C1a** `closeReservation` call in whole redemption settlement | `ReservationProofs.sol:715`; partial `:772` | #1091 | storage-write | no | yes | **UNREACHABLE in variant B** — redemption is m2 (rule 3). |
 | **C1b** `closeReservation` call in `settleDissolution`, non-terminated wallet | `ReservationProofs.sol:1142` | #1091 | storage-write | no | yes | **UNREACHABLE in variant B** — dissolution is m2 (rule 3). |
 | **S1 body** `strandReservation`: count `-=1`, amount `-=`, total `-=`, `removeWalletReservationKey`, `state = Stranded`, `delete reservationsByAnchorUtxo`, conditional `emit ReservationStranded` | `Reservation.sol:1442-1487` (writes at `:1450`, `:1451-1453`, `:1454`, `:1455-1459`, `:1460`, `:1462-1472`; event `:1478-1483`) | #1094 | storage-write | yes | no | **REACHABLE.** |
@@ -311,7 +338,7 @@ Both require the custodying or target wallet to be *already* retiring or termina
 | Acceptance arm: capacity release | `Reservation.sol:997-1005` | #1091 | storage-write | yes | no | **No slashing.** Position never existed. |
 | Reanchor arm: `state = Active`, target capacity release | `Reservation.sol:1023-1029` | #1091 | storage-write | yes | no | **No slashing.** |
 | Redemption arm: `state = Active` | `Reservation.sol:1007` | #1091 | storage-write | no | yes | |
-| Redemption arm: **mint retry credit** `retryCredit = true` + event | `Reservation.sol:1009-1012`; partial adds nonce write `:1157-1161` | #1091 / #1096 | storage-write | flagged | yes | See D-2. |
+| Redemption arm: **mint retry credit** `retryCredit = true` + event | `Reservation.sol:1009-1012`; partial adds nonce write `:1157-1161` | #1091 / #1096 | storage-write | flagged | yes | See PD-2. |
 | **Redemption arm: `notifyWalletRedemptionTimeout` -> SLASH** | `Reservation.sol:1016-1019`; body `Wallets.sol:245`, seize at `:265-270` with `redemptionTimeoutSlashingAmount` (`:266`) | #1091 | internal | no | yes | Fed by **Redemption** actions only. |
 | **Redemption arm: refund `bank.transferBalance(redeemer, amount)`** | `Reservation.sol:1022` | #1091 | internal | no | yes | **settlement-path. Never pause-gate.** |
 | **Dissolution arm: `notifyWalletRedemptionTimeout` -> SLASH** | `Reservation.sol:1042-1045` | #1094 | internal | no | yes | Fed by **Dissolution** actions only. |
@@ -321,9 +348,9 @@ Both require the custodying or target wallet to be *already* retiring or termina
 | **`beginWalletClosing` requires `walletReservationsCount == 0`** | `Wallets.sol:664-677` (`:675-677`), repeated `:706-709` | #1094 | invariant | yes | no | The pin. Blocks orderly retirement while any reservation is custodied. |
 | Same guard in `moveFunds` fast path | `Wallets.sol:627-630` (`:628`) | #1094 | invariant | yes | no | |
 | Same guard in the closing-eligibility check | `Wallets.sol:437-441` (`:438`) | #1094 | invariant | yes | no | |
-| **`notifyWalletMovingFundsTimeout` -> SLASH + terminate** | `Wallets.sol:493-523`; seize `:507-511` with `movingFundsTimeoutSlashingAmount` (`:508`) | pre-existing | internal | yes | no | **The only slashing path reachable in variant B**, and it is fed by **no reservation action type**: it is reached because reservations block `beginWalletClosing`. This is the §5.3 endgame, verified. |
+| **`notifyWalletMovingFundsTimeout` -> SLASH + terminate** | `Wallets.sol:493-516`; seize `:507-511` with `movingFundsTimeoutSlashingAmount` (`:508`) | pre-existing | internal | yes | no | **The only slashing path reachable in variant B**, and it is fed by **no reservation action type**: it is reached because reservations block `beginWalletClosing`. This is the §5.3 endgame, verified. |
 
-**Slashing summary for variant B.** Neither m1 action type (acceptance, re-anchor) has a slashing arm. The two reservation-driven slashing arms (`Reservation.sol:1016-1019` and `:1042-1045`) are both m2. The only stake seizure reachable in m1 is `Wallets.sol:507-511`, reached indirectly: a pinned wallet cannot pass `Wallets.sol:675-677`, so it sits in `MovingFunds` until its timeout fires. Honest operators, slashed by arithmetic.
+**Slashing summary for variant B.** Neither m1 action type (acceptance, re-anchor) has a slashing arm. The two reservation-driven slashing arms (`Reservation.sol:1016-1019` and `:1042-1045`) are both m2. The only stake seizure reachable in m1 is `Wallets.sol:507-513`, reached indirectly: a pinned wallet cannot pass `Wallets.sol:674-677`, so it sits in `MovingFunds` until its timeout fires. Honest operators, slashed by arithmetic.
 
 ---
 
@@ -348,7 +375,7 @@ Both require the custodying or target wallet to be *already* retiring or termina
 |---|---|---|---|---|---|---|
 | `ReservationRouter.requestReservationDissolution` | `ReservationRouter.sol:302-304` | #1090 | entry-point | no | yes | Permissionless. |
 | `Reservation.requestReservationDissolution` | `Reservation.sol:887-953` | #1091/#1094 | entry-point | no | yes | Requires `Active` (`:891-894`), `>= dissolutionEligibleAt` (`:898-902`), wallet `Live`/`MovingFunds` (`:908-916`). |
-| **`walletPendingDissolution[wallet] = key`** (per-wallet lock) | `Reservation.sol:917-921` | #1091 | storage-write | flagged | yes | See D-5. |
+| **`walletPendingDissolution[wallet] = key`** (per-wallet lock) | `Reservation.sol:917-921` | #1091 | storage-write | flagged | yes | See PD-5. |
 | Snapshot incl. `actionDataHash = wallet.mainUtxoHash` | `Reservation.sol:931-943` (`:942`) | #1091 | storage-write | no | yes | |
 | `submitReservationDissolutionProof` | `ReservationProofs.sol:921-998` | #1091 | entry-point | no | yes | |
 | **SPV: `validateProof`** | `:957-960` | #1091 | internal | no | yes | |
@@ -379,7 +406,7 @@ Both require the custodying or target wallet to be *already* retiring or termina
 | `loadSettleableAction` | `:186-206` | #1091 | internal | yes | no | **Shared** (all 4 types). |
 | `strandLateSettlementIfTargetWalletClosed` | `:218-243` | #1094 | internal | yes | no | **Shared** (acceptance + re-anchor). |
 | `prepareReservationForSettlement` | `:254-301` | #1091/#1094 | internal | yes | yes | **Shared** (redemption, re-anchor, dissolution). Signature changed by #1096. |
-| `requireCurrentSourceAnchor` | `:308-313` | #1091 | view | yes | yes | **Shared** (3 sites). Deleted by #1096; see D-9. |
+| `requireCurrentSourceAnchor` | `:308-313` | #1091 | view | yes | yes | **Shared** (3 sites). Deleted by #1096; see PD-9. |
 | `consumeAcceptedDeposit` | `:400-432` | #1091/#1094 | internal | yes | no | **Acceptance-exclusive** but acceptance is m1. |
 | `validateAnchorOutput` | `:437-452` | #1091 | view | yes | no | Acceptance-exclusive, m1. |
 | `settleAcceptance` | `:458-592` | #1091 | internal | yes | no | Acceptance-exclusive, m1. |
@@ -399,7 +426,7 @@ Both require the custodying or target wallet to be *already* retiring or termina
 | `Reservation.addWalletReservationKey` | `Reservation.sol:1405-1414` | #1094 | internal | yes | no | **Shared.** |
 | `Reservation.removeWalletReservationKey` | `Reservation.sol:1418-1437` | #1094 | internal | yes | no | **Shared.** |
 | `Reservation.strandReservation` | `Reservation.sol:1442-1487` | #1094 | internal | yes | no | **Shared**, m1-reachable. |
-| `Reservation.closeReservation` | `Reservation.sol:1490-1506` | #1091 | internal | flagged | yes | **Shared between two m2 actions only.** Rule 5 says an m1/m2-shared helper is m1 work, but both callers are m2. See D-3. |
+| `Reservation.closeReservation` | `Reservation.sol:1490-1506` | #1091 | internal | flagged | yes | **Shared between two m2 actions only.** Rule 5 says an m1/m2-shared helper is m1 work, but both callers are m2. See PD-3. |
 | `retireRetryCreditForGeneration` | partial `:702-715` | #1096 | internal | no | yes | Redemption-exclusive. |
 | `settleWholeRedemption` / `settlePartialRedemption` / `validatePartialOutputs` | partial `:720-786` / `:795-876` / `:882-931` | #1096 | internal | no | yes | Redemption-exclusive. |
 | `Reservation.consumeRetryCredit` | partial `Reservation.sol:860-895` | #1096 | internal | no | yes | Redemption-exclusive. |
@@ -456,38 +483,38 @@ Rule 2 in full. Every function below participates in settling or accounting for 
 
 ## Open questions
 
-**DECISION NEEDED D-1 — action-record fields for deferred action types.**
+**DECISION NEEDED PD-1 — action-record fields for deferred action types.**
 Rule 1 says storage-complete means written, not merely declared. `ReservationAction.isPartial` (partial `Reservation.sol:263`) and `retryCreditSourceNonce` (`:268`) are only ever written on the redemption request path (partial `:817`, `:825`), which is m2. No m1 code path can write them, and no m1-created action record (Acceptance or Reanchor) is ever read for them: `resolveLateAgainstPending` reads `isPartial` only after confirming `actionType == Redemption` (partial `:1434-1435`). **Does rule 1 bind per-generation action-record fields, or only the long-lived `ReservationRequest` position record?** If it binds action records, m1 must ship a write it has no semantics for.
 
-**DECISION NEEDED D-2 — `retryCredit` and `reservationRetryCreditActionNonce` in m1.**
+**DECISION NEEDED PD-2 — `retryCredit` and `reservationRetryCreditActionNonce` in m1.**
 `reservation.retryCredit` (`Reservation.sol:180`) is a *position* field, so rule 1 points at m1. But its only mint sites are the redemption timeout arm (`Reservation.sol:1009-1012`; partial adds the nonce write at `:1157-1161`) and `unwindPendingAction`'s Redemption branch (`:1263-1264`; partial `:1487-1491`), both m2. Its only consumer is the redemption request path (`Reservation.sol:671-674`; partial `consumeRetryCredit:860-895`), also m2. `reservationRetryCreditActionNonce` (partial `BridgeState.sol:461`) is the same shape. **Must m1 declare and write these, and if so, from where?** A declared-but-never-written field is a rule-1 violation as stated; a write with no m1 semantics is worse.
 
-**DECISION NEEDED D-3 — does `closeReservation` ship in m1?**
+**DECISION NEEDED PD-3 — does `closeReservation` ship in m1?**
 Rule 5 says a helper shared between an m1 action and an m2 action is m1 work. `closeReservation` (`Reservation.sol:1490-1506`) is shared between two **m2** actions only (`ReservationProofs.sol:715` redemption, `:1142` dissolution). Rule 5 does not cover a helper shared exclusively between deferred actions. Shipping it in m1 leaves dead code that will trip a linter and an auditor; omitting it makes the m2 diff touch `Reservation.sol` again. **Ship the orphan, or defer it?** Same question for `Reservation.notifyReservedRedemptionVeto` and the `Vetoed` enum member.
 
-**DECISION NEEDED D-4 — re-anchor cannot unpin a healthy Live wallet even after rule 4.**
+**DECISION NEEDED PD-4 — re-anchor cannot unpin a healthy Live wallet even after rule 4.**
 Rule 4 deletes the `block.timestamp < dissolutionEligibleAt` gate (`Reservation.sol:785-788`) so re-anchor is unbounded in time. It does **not** touch the wallet-state gate (`Reservation.sol:790-806`): a re-anchor still requires the source wallet to be `MovingFunds`, or `Live` with `privileged == true`, where `privileged` is `msg.sender == governance` (`ReservationRouter.sol:293`). And the target must be `Live` with a free slot (`Reservation.sol:820-827`). So in m1 a position on a healthy `Live` wallet is unpinnable **only by a governance transaction**, and only if some other Live wallet has a free slot. **Is governance-only rotation the intended m1 unpin path, or should rule 4 also relax the source-wallet gate?** If the former, the m1 spec should say so explicitly, because §4.2 shows there is no other exit.
 
-**DECISION NEEDED D-5 — `walletPendingDissolution` write in m1.**
+**DECISION NEEDED PD-5 — `walletPendingDissolution` write in m1.**
 Rule 1 would put the `walletPendingDissolution[wallet] = key` write (`Reservation.sol:921`) in m1, but the only writer is `requestReservationDissolution` (m2) and the only readers are m2 (`:918`, `:1033`, `ReservationProofs.sol:1127`, `:1286`, `:1156-1170`). It is a per-wallet action lock, not position state, so no m1-era position can carry one. **Does rule 1 reach per-wallet action locks?**
 
-**DECISION NEEDED D-6 — `expiresAt` and `dissolutionEligibleAt` are written but unread in m1.**
+**DECISION NEEDED PD-6 — `expiresAt` and `dissolutionEligibleAt` are written but unread in m1.**
 Both are written at acceptance (`ReservationProofs.sol:533`, `:537-539`), which rule 1 requires. In m1 their only readers are deleted: `expiresAt` is read by the redemption expiry gate (`Reservation.sol:666-670`) and by renewal (`:1165`), both m2; `dissolutionEligibleAt` is read by the re-anchor gate (`:786`, deleted by rule 4) and the dissolution gate (`:900`, m2). This is the rule working as intended, but it means an m1 position advertises an expiry that nothing enforces. **Should m1 emit `ReservationAccepted.expiresAt` (`ReservationProofs.sol:558`) unchanged, knowing off-chain consumers will read it as an enforced deadline that m1 does not enforce?**
 
-**DECISION NEEDED D-7 — `ProofType` enum stability across the milestone boundary.**
+**DECISION NEEDED PD-7 — `ProofType` enum stability across the milestone boundary.**
 `enum ProofType { Acceptance, Redemption, Reanchor, Dissolution }` (`:117-122`) is ABI-encoded as `uint8` by the router (`ReservationRouter.sol:323`). m1 has no Redemption or Dissolution handler. **Does m1 keep the four-member enum with two arms reverting on `ProofType(1)`/`ProofType(3)`, or shrink to `{Acceptance, Reanchor}` and renumber?** Renumbering silently changes the meaning of `proofType == 1` for any client built against m1, and the dispatcher's `else` fallthrough (`:169`) means an out-of-range value would be routed rather than rejected.
 
-**DECISION NEEDED D-8 — which `spentMainUTXOs` lineage does the m1 rewrite take?**
+**DECISION NEEDED PD-8 — which `spentMainUTXOs` lineage does the m1 rewrite take?**
 `consumeAnchor` writes `spentMainUTXOs[anchorUtxoKey] = true` (`:1356`) on the settlement line. Separately, `feature-spec.md:1067-1069` records that #1102 "moved anchor consumption to `spentMainUTXOs`" on `feat/utxo-reservation-core`, and that a reverse index used by `strandReservation` "exists on `feat/utxo-reservation-guards` but was deleted from `feat/utxo-reservation-core` by the #1102 merge." Only the guards and partial trees are available locally, so **the exact shape of the #1102 core-line implementation is `UNVERIFIED`** and the two lineages have not been reconciled anywhere I can read. **Which lineage is the m1 rewrite's base?** The answer changes whether `strandReservation`'s `delete self.reservationsByAnchorUtxo[...]` (`Reservation.sol:1462-1472`) still has an index to delete from.
 
-**DECISION NEEDED D-9 — `requireCurrentSourceAnchor`: keep the guards helper or take #1096's fold?**
+**DECISION NEEDED PD-9 — `requireCurrentSourceAnchor`: keep the guards helper or take #1096's fold?**
 Guards keeps a standalone `requireCurrentSourceAnchor` (`:308-313`) called at three sites (`:665`, `:778`, `:955`), each *after* `prepareReservationForSettlement`. #1096 deletes the helper and folds the check to the *top* of `prepareReservationForSettlement` (partial `:270-273`), changing its signature to take `action`. This reorders two reverts: partial checks the source anchor **before** the settleability state check (partial `:277-282`), guards checks it after (`:262-267` then `:665`). Acceptance calls neither (it has no source anchor). **Which shape does m1 take?** Taking the guards shape means m2's #1096 rebase must redo the fold; taking the partial shape means m1 ships a signature that only #1096 motivates, and the revert-string ordering visible to clients differs from every reviewed branch below #1096.
 
-**DECISION NEEDED D-10 — `unwindPendingAction`'s deferred branches.**
-Rule 5 makes `unwindPendingAction` (`:1243`) m1 work because m1 reaches it from late acceptance (`:490`) and late re-anchor (`:821`). But two of its four branches are unreachable in m1: Redemption (`:1261-1272`, refunds escrow) and Dissolution (`:1282-1292`, releases the wallet lock). **Does m1 ship the full four-branch body, or only the Acceptance and Reanchor branches?** Shipping all four requires D-2 and D-5 to be answered first, since the Redemption branch writes `retryCredit` and the Dissolution branch writes `walletPendingDissolution`.
+**DECISION NEEDED PD-10 — `unwindPendingAction`'s deferred branches.**
+Rule 5 makes `unwindPendingAction` (`:1243`) m1 work because m1 reaches it from late acceptance (`:490`) and late re-anchor (`:821`). But two of its four branches are unreachable in m1: Redemption (`:1261-1272`, refunds escrow) and Dissolution (`:1282-1292`, releases the wallet lock). **Does m1 ship the full four-branch body, or only the Acceptance and Reanchor branches?** Shipping all four requires PD-2 and PD-5 to be answered first, since the Redemption branch writes `retryCredit` and the Dissolution branch writes `walletPendingDissolution`.
 
-**DECISION NEEDED D-11 — the `restoreRetryCredit` argument at the late-re-anchor call site.**
+**DECISION NEEDED PD-11 — the `restoreRetryCredit` argument at the late-re-anchor call site.**
 `:821` passes `true` for `restoreRetryCredit`. That argument is consumed only inside the Redemption branch (`:1262`), so in m1 it is provably inert. **Does m1 keep the `restoreRetryCredit` parameter at all?** Dropping it makes the m2 restoration (partial `:1448-1453`, which passes `action.isPartial`) a signature change rather than an argument change.
 
-**DECISION NEEDED D-12 — the spec's closing-site list is wrong and is load-bearing.**
+**DECISION NEEDED PD-12 — the spec's closing-site list is wrong and is load-bearing.**
 `m1-variant-comparison.md:251-253` cites `ReservationProofs.sol:715`/`:836` as "the redemption path (unreachable)". `:836` is the re-anchor source-wallet count decrement and **is reachable in m1** (§4.3-W1). The §5.3 endgame conclusion still holds, but the cited evidence does not. **Should the spec be corrected before the m1 rewrite is cut**, given that §5.4's proposed `activeReservationsCount` mitigation is sized against this list?

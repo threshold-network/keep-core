@@ -1,6 +1,9 @@
 # m1 Variant Comparison — A+ vs B
 
-Status: DRAFT — decision support, 2026-08-21.
+Status: DECIDED — m1 is **variant B with a minimal router** (2026-08-21, §6).
+Retained as the argument that was weighed plus the risk register B carries.
+§6.1's A+ recommendation is kept unchanged and is **not** a live dispute.
+Build scope: `m1-b-implementation.md`.
 
 Side-by-side comparison of the two candidate designs for a from-scratch,
 essentials-only m1. Both are rewrites rather than PR omissions, so neither
@@ -25,7 +28,7 @@ actually in contention.
 | 6 | Stale deposit cleanup (`notifyStaleReservedDeposit`) | Un-accepted revealed deposits must be releasable |
 | 7 | Stranding (`notifyReservationStranded` / `strandReservation`, requires wallet `Terminated`) | Dead-wallet capacity release |
 | 8 | Caps + governance parameters (`updateReservationParameters`) | The only safety valve at launch |
-| 9 | Wallet-lifecycle guards, full storage layout | §11's no-live-action-migration rule (`feature-spec.md` §3.4) |
+| 9 | Wallet-lifecycle guards, full storage layout | `feature-spec.md` §11's no-live-action-migration rule (append-only mechanism at §3.4) |
 | 10 | Router, **only if** EIP-170 requires it | Deleting it saves ~736 prod / ~2,000 with tests off either variant — a smaller swing than the dissolution choice below (910 / ~2,500). The stacked router file is 1,051 prod / ~3,400 with tests; a rewritten one is leaner. Decided by the compiler, not by argument |
 
 **Absent from both** (deferred to m2): in-kind redemption whole and partial,
@@ -197,6 +200,11 @@ points (`requestReservedRedemption`, `notifyReservedRedemptionVeto`,
 71 B comfortably — one external wrapper with calldata decoding exceeds that
 alone.
 
+**Baseline caveat (2026-08-21).** The subtraction assumes `#1090` moved out
+only the reservation surface. If it also refactored unrelated `Bridge` code, the
+surface's inline cost is smaller and the 71 B gap is not the real one
+(`feature-spec.md` §2).
+
 The genuine unknown is growth: all three figures are `#1090`-era, and
 `#1091`-`#1096` each added entry points and logic, so today's inline cost sits
 somewhere between 2,244 B and 4,245 B and is unmeasured. Verdict:
@@ -249,20 +257,25 @@ degrade, it **resolves into slashing and stranding**. Every step is
 source-verified on `feat/utxo-reservation-guards`.
 
 1. In B nothing closes a position except stranding. `settleDissolution` is
-   gone, `ReservationProofs.sol:715`/`:836` are the redemption path
-   (unreachable, §0.2), and `strandReservation` requires the wallet to be
-   `Terminated`.
+   gone; `ReservationProofs.sol:715` (`closeReservation` on the redemption
+   settlement path) is unreachable in m1 (§0.2); and `strandReservation`
+   requires the wallet to be `Terminated`. The one count-decrement m1 does
+   reach, `ReservationProofs.sol:836` inside
+   `submitReservationReanchorProof` (`:743`), releases the *source* wallet's
+   count while the target wallet takes it — a transfer between wallets, not a
+   close. The position survives the hop, which is exactly why re-anchor is no
+   exit.
 2. Occupancy is therefore **monotonic**, tending to
    `liveWalletsCount x maxReservationsPerWallet`.
 3. At full occupancy re-anchor reverts: it needs a Live target holding a free
    slot (`targetCount <= maxReservationsPerWallet`, `Reservation.sol:820-827`).
 4. An anchored wallet then cannot retire. `beginWalletClosing` requires
    `walletReservationsCount == 0` — "Wallet still custodies reservations"
-   (`Wallets.sol:675-677`, repeated at `:707-709`).
+   (`Wallets.sol:674-677`, repeated at `:707-709`).
 5. Its MovingFunds clock expires and `notifyWalletMovingFundsTimeout`
    **seizes operator stake** (`ecdsaWalletRegistry.seize` with
    `movingFundsTimeoutSlashingAmount`) and terminates the wallet
-   (`Wallets.sol:493-523`).
+   (`Wallets.sol:493-516`).
 6. Termination makes `notifyReservationStranded` available, converting the
    depositor's segregated in-kind claim into an ordinary pooled claim.
 
@@ -327,7 +340,7 @@ today.
    as the hotfix when the cliff approaches.
 3. **Storage-complete now, behaviour-minimal now** (§2.1) — and *written*,
    not merely declared. Every field the full feature will need must exist in
-   `BridgeState.Storage` at m1, because §11 forbids a live
+   `BridgeState.Storage` at m1, because `feature-spec.md` §11 forbids a live
    `ReservationAction` from spanning a layout change. B has a concrete trap
    here: acceptance writes
    `dissolutionEligibleAt = expiresAt + reservationDissolutionDelay`
@@ -402,9 +415,9 @@ slash honest operators if it slips.
    position lives**: the vault is plain `Ownable`, not proxy-upgradeable, and
    re-pointing `Bridge.reservationVault` requires
    `reservationTotalAmount == 0 && pendingReservedDeposits == 0`
-   (`Reservation.sol:1267-1274`).
+   (`Reservation.sol:1263-1274`).
    - **Renewal.** The shipped vault already does this correctly — entry point
-     at `ReservationVault.sol:380-392`, `renewalsPaused = true` in the
+     at `ReservationVault.sol:367`, `renewalsPaused = true` in the
      constructor (`:222`), `unpauseRenewals()` `onlyOwner` (`:415-418`). But
      A+ and B **cut renewal**, so on the rewrite path renewal is not
      deferred-to-m2, it is **permanently unreachable** for every m1-era
@@ -426,7 +439,7 @@ slash honest operators if it slips.
    into (`Reservation.sol:1454`, `:1510`), not a competing index. Reconcile
    the two write sites or stranding breaks, and stranding is the fallback the
    whole loss story rests on (`exit/README.md`).
-4. **Storage-complete at m1** (shared, §5.4 item 3). §11 forbids a live
+4. **Storage-complete at m1** (shared, §5.4 item 3). `feature-spec.md` §11 forbids a live
    `ReservationAction` from spanning a layout change, so every field m2 will
    read must exist unread at m1.
 
@@ -521,7 +534,7 @@ branch-tagged because the expiry and guard models differ across the stack:
   (`ReservationProofs.sol:715, :836, :1140-1142`).
 - `feat/utxo-reservation-guards`, wallet lifecycle and storage (§5.3/§5.4):
   `beginWalletClosing` requiring a zero reservation count
-  (`Wallets.sol:675-677`, repeated at `:707-709`),
+  (`Wallets.sol:674-677`, repeated at `:707-709`),
   `notifyWalletMovingFundsTimeout` seizing operator stake and terminating
   (`:493-523`), and the absence of a global position counter beside
   `liveWalletsCount` (`BridgeState.sol:253`) and `reservationTotalAmount`

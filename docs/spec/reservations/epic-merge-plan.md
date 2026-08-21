@@ -1,7 +1,10 @@
 # UTXO Reservations — Epic Branch, Review, and Merge Plan
 
-Status: ACTIVE — branch/retarget setup executed 2026-08-19. Review and merge
-phases below are not yet started. Companion doc:
+Status: REFERENCE — superseded as a delivery plan 2026-08-21 by the variant B
+decision (`roadmap.md` §1). Retained as the verified record of the eight-PR
+stack, because the m1 rewrite extracts from those PRs. The live delivery plan is
+`pr-strategy.md`; the branch/retarget setup in §0 was executed 2026-08-19 and the
+review and merge phases below will not happen. Companion doc:
 `feature-spec.md` (the reverse-engineered spec and
 gap analysis this plan assumes).
 
@@ -11,20 +14,26 @@ As of 2026-08-21, milestone 1 is defined as **variant B**, an essentials-only re
 **What survives:**
 The per-PR review findings, the invariant lists, the conflict/rebase state, and the dependency reasoning remain valid. The rewrite extracts from these PRs, so knowing which parts were reviewed and which are known-broken is essential.
 
-**What does not survive:**
-- The combined-parity audit item (superseded; see `m1-b-implementation.md` for the live audit gate for m1 B).
-- The epic-branch-to-main landing procedure (superseded; see `m1-b-implementation.md` for the live landing procedure for m1 B).
-- Any step whose sole purpose was landing all eight PRs onto a shared tip (the rewrite does not use these PRs as a delivery vehicle).
-- The keep-core Option A versus Option B decision (superseded; see `m1-b-implementation.md` for the live keep-core plan for m1 B).
+**What does not survive.** Every section below is reference only, never a
+procedure to execute. Superseded specifically: the milestone scope and merge
+sequence, the review plan's merge gates and sequencing, the combined-parity
+audit gate and its checklist, the epic-branch-to-main landing procedure, the
+keep-core Option A/B decision, and any step whose sole purpose was landing all
+eight PRs onto a shared tip. Live replacements: `m1-b-implementation.md` §4
+(launch gates, including §4.5's storage-layout gate), `pr-strategy.md` §4 and §9
+(decomposition and landing), and `pr-strategy.md` §8 (keep-core).
 
-## What the variant B decision superseded (2026-08-21)
+Two corrections to how this was previously worded. `#1096` is no longer "the one
+clean PR omission" — under B it is one of several unwritten m2 features, so its
+special status in the merge narrative is gone. And `#4238` is **not** "the
+original single-phase design": all four of its proposal structs carry
+`RequestNonce` and its chain interface reads action records by generation, so it
+is a reusable two-phase type layer that lacks an executor (§0.1 and
+`milestone-inventory.md` C-8). The two-phase keep-core rework discussion is
+nonetheless outside m1's scope, which needs acceptance and re-anchor only.
 
-- The milestone scope and merge sequence (originally in the "Milestone scope" section) are superseded; they remain as reference for extraction but do not describe the m1 delivery path.
-- The review plan's merge gates and sequencing are superseded; the review focus and dependency reasoning remain valid for extraction, but the gates no longer describe a path to m1 merge. This section remains as reference for what needs to be verified during the rewrite.
-- The two-phase keep-core rework discussion is not part of m1; #4238 as-is represents the original single-phase design which is not shipped in m1 B. This section remains as reference for understanding the keep-core PR's intent.
-- The audit gate and its checklist are superseded; the audit for m1 B will target the rewritten code, and the checklist items may require adjustment. This section remains as reference for the original plan's audit preparation.
-- The landing procedure is not for m1 B; the epic branch may still be used as an integration base for the rewrite, but the steps and gates are superseded. This section remains as reference for the original landing process.
-- #1096 is no longer the "one clean PR omission"; it is simply one of several unwritten m2 features, so its special status in the merge narrative is gone. [This repairs the sentence that was cut in half.]
+This list previously appeared twice, in two blocks a screen apart, naming
+different live replacements for the same three superseded sections.
 
 ## 0. What was just set up (done, 2026-08-19)
 Note: This section describes the setup for the original eight-PR stack. It applies to the old stack, not necessarily to m1.
@@ -199,7 +208,7 @@ They are recorded here rather than silently deleted:
 
 | Dropped section | Why | Live version |
 |---|---|---|
-| keep-core Option A versus Option B (review `#4238` now or after a two-phase rework) | Both options assumed `#4238` was the delivery vehicle. Under B it is a rewrite, so the question does not arise | `pr-strategy.md` §8 |
+| keep-core Option A versus Option B (review `#4238` now or after a two-phase rework) | Both options assumed `#4238` was the delivery vehicle. Under B the Solidity is a rewrite and `#4238` is not the delivery vehicle, so the question does not arise. Note `#4238` itself is a reusable two-phase type layer, not a rewrite target (`milestone-inventory.md` C-8) | `pr-strategy.md` §8 |
 | The combined-parity audit gate over all 8 PRs | m1 is a rewrite, so the combined parity of the original eight is not the audit target | `m1-b-implementation.md` §4.5, `roadmap.md` §2.1 |
 | The `reservations-epic` to `main` landing procedure | It sequenced a stack merge that will not happen | `pr-strategy.md` §4 and §9 |
 
@@ -208,7 +217,7 @@ They are recorded here rather than silently deleted:
 - [ ] Decide on `reservations-epic` branch protection (§2) — currently
       unprotected in both repos.
 - [ ] Start bottom-up review of the tbtc-v2 stack at `#1088` (§3) — for extraction guidance, see the review-plan table.
-- [ ] Rebase `feat/utxo-reservation-router` (#1090) over the `#1102` fold —
+- [ ] Rebase `#1091` onto `#1090` (13 behind), then `#1092` onto the rebased `#1091` (5 behind). `#1090` itself needs no rebase —
       it is up to date with its base and contains the #1102 fold, but note that #1091 is 13 behind and #1092 is 5 behind.
 - [ ] Verify the `#1102` merge (`3566e059`) is fully present on #1088's tip
       (nothing rebased away in the fold) before reviewing `#1088`.

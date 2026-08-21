@@ -29,6 +29,11 @@ fold**, so line numbers in files `#1102` touched are pre-fix - see
 was measured with git against every fetched branch ref, so its numbers are
 current.
 
+`proofs.md` labels its own decisions `PD-N` because this set's canonical
+decision register (`../milestone-inventory.md` section 7) renumbered them during
+synthesis; nine of its twelve changed number. That fragment carries the
+concordance. A bare `D-N` always means the register.
+
 Rows that could not be verified carry an explicit `UNVERIFIED` marker rather
 than an assertion. Those are collected in `../milestone-inventory.md`.
 

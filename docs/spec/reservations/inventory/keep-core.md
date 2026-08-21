@@ -22,7 +22,7 @@ Diffstat against `origin/main`: 11 files, +1833 -9.
 Every current doc describes `#4238` as implementing the **original single-phase
 design**, needing rework for "nonce-carrying proposals, a
 watchtower-delay-respecting executor, and partial-redemption awareness"
-(`feature-spec.md` §16, `roadmap.md` §5, `epic-merge-plan.md` §3). Measured
+(`feature-spec.md` §16, `roadmap.md` §5). Measured
 against the source, that characterisation is wrong in one direction and
 understated in the other.
 
@@ -55,7 +55,7 @@ are two-phase constructs. A purely single-phase client would have neither.
 | `ReservationAnchorProposal` + 4 methods | `:181-231` | type | yes | yes | `ActionType`, `ValidityBlocks`, `Marshal`, `Unmarshal` |
 | `ReservationReanchorProposal` + 4 methods | `:287-340` | type | yes | yes | m1's unpin path |
 | `ReservedRedemptionProposal` + 4 methods | `:233-285` | type | **declare only** | yes | m1 never proposes one |
-| `ReservationDissolutionProposal` + 4 methods | `:342-396` | type | **declare only** | yes | Variant B's cut |
+| `ReservationDissolutionProposal` + 4 methods | `:342-396` | type | **declare only** | yes | variant B's cut |
 | `assembleReservationAnchorTransaction` | `:398` | internal | yes | yes | Bitcoin tx assembly |
 | `assembleReservationReanchorTransaction` | `:581` | internal | yes | yes | |
 | `computeReservationRedeemerOutputScriptHash` | `:557` | internal | yes | yes | Shared helper |
@@ -64,8 +64,8 @@ are two-phase constructs. A purely single-phase client would have neither.
 | `GetReservation` | `chain.go:432` | interface | yes | yes | Bound at `ethereum/tbtc.go` |
 | `GetReservationAction` | `chain.go:437-440` | interface | yes | yes | Two-phase read |
 | `ReservationParameters` | `chain.go:444` | interface | yes | yes | |
-| `ValidateReservationAnchorProposal` | `chain.go:449` | interface | yes | yes | Bound |
-| `ValidateReservationReanchorProposal` | `chain.go:469` | interface | yes | yes | Bound |
+| `ValidateReservationAnchorProposal` | `chain.go:449` | interface | yes | yes | Interface method present; `ethereum/tbtc.go` implementation is an **error stub** (`:2415-2499`) - m1 must implement |
+| `ValidateReservationReanchorProposal` | `chain.go:469` | interface | yes | yes | Interface method present; `ethereum/tbtc.go` implementation is an **error stub** (`:2415-2499`) - m1 must implement |
 | `ValidateReservedRedemptionProposal` | `chain.go` | interface | no | yes | Bound; m2 only |
 | `ValidateReservationDissolutionProposal` | `chain.go:477` | interface | no | yes | Bound; m2 only |
 | `ActionReservationAnchor` (enum 6) | `wallet.go` | type | yes | yes | Plus string and metrics names |

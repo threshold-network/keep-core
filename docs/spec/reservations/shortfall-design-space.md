@@ -1,6 +1,12 @@
 # Reservation Shortfall - Design Space
 
 Status: DRAFT analysis. Not scoped in any of the 9 reservation PRs. Companion to
+
+**Not adopted and not scoped (2026-08-21).** Space C is viable only conditional
+on an unbuilt `anchorAmount`/`mintedAmount` decoupling, and milestone 1 is
+variant B, which builds none of it. Retained as the who-pays analysis that rules
+out Spaces A and B. The accepted loss-story build is
+`stranding-compensation-proposal.md` Tiers 0-1.
 `feature-spec.md` (what the PRs build),
 `stranding-compensation-proposal.md` (Space A, now rejected here), and
 `exit/proposal.md` (recovery under wallet failure, unaffected).
@@ -35,14 +41,22 @@ Every slashing amount is a flat `uint96` T quantity with no BTC term:
 | Parameter | Value | Source |
 |---|---|---|
 | `groupSize` | 100 | `EcdsaDkg.sol:140` |
-| `fraudSlashingAmount` | 100 T | `Bridge.sol:410` |
-| `movingFundsTimeoutSlashingAmount` | 100 T | `Bridge.sol:401` |
-| `movedFundsSweepTimeoutSlashingAmount` | 100 T | `Bridge.sol:406` |
-| `redemptionTimeoutSlashingAmount` | 100 T | `Bridge.sol:395` |
+| `fraudSlashingAmount` | 100 T | `Bridge.sol:338` |
+| `movingFundsTimeoutSlashingAmount` | 100 T | `Bridge.sol:329` |
+| `movedFundsSweepTimeoutSlashingAmount` | 100 T | `Bridge.sol:334` |
+| `redemptionTimeoutSlashingAmount` | 100 T | `Bridge.sol:323` |
 
 Maximum seizure is 100 members x 100 T = **10,000 T**, invariant to the 50 BTC at risk. At T
 around $0.03 and BTC around $100k that is roughly **0.006%** of a single-wallet stranding. At T =
 $1 it is 0.2%. The conclusion does not depend on the price assumption.
+
+**Parameter regime (added 2026-08-21).** The values above are
+`feature-spec.md` §10's **steady-state provisional** figures, not the m1 launch
+posture. At m1 launch `roadmap.md` §1.4 sets `maxReservationsPerWallet = 1` and
+a tiny `reservationMaxTotalAmount`, so a single termination strands **one**
+position. The correlated-batch argument therefore applies from the first cap
+raise onward, not at launch — but Tier 0 must record per-position from day one,
+because batching becomes observable only after the raise.
 
 **The cheapest attack recovers nothing at all.** `notifyOperatorInactivity`
 (`WalletRegistry.sol:1078-1129`) applies exactly one penalty:

@@ -11,9 +11,10 @@ feature's cost, and §0.1 is where that distinction bites.
 **Milestone 1 is a rails release, not a product release.** Users can create
 reservations. They cannot redeem in-kind or renew.
 
-Companions: `feature-spec.md`, `epic-merge-plan.md` (stack topology, §5
-audit gate, §11 deploy-inert pattern), `timeline-estimate.md`,
-`testing-plan.md`, `exit/alternatives.md` (§7, custody-term cost).
+Companions: `feature-spec.md` (§11, the deploy-inert pattern),
+`epic-merge-plan.md` (§0.1-§3, stack topology and extraction guidance — its §5
+audit gate was dropped as superseded, see its §4), `timeline-estimate.md`,
+`testing-plan.md`, `exit/alternatives.md` (§3.1 and §6, custody-term cost).
 
 ## 0. Source-verified facts that determine the scope
 
@@ -74,7 +75,7 @@ writes them. Two knock-on effects worth stating outright:
   `requestReservationDissolution`, nothing can be opened against an honest
   wallet and left to time out. This was B's headline benefit and it holds.
 - **Nothing in m1 B reads `expiresAt` or `dissolutionEligibleAt`.** Every
-  consumer is cut or deleted: redemption's `<= expiresAt + gracePeriod`,
+  consumer is cut or deleted: redemption's strict `< expiresAt`,
   renewal, dissolution's `>= dissolutionEligibleAt`, and re-anchor's
   `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the
   custody term is **not enforced by any on-chain gate in m1** — it is a
@@ -95,7 +96,7 @@ is m1 work.
 shows the cheap version.** `ReservationVault` is plain `Ownable`, not
 proxy-upgradeable (§2.2), and re-pointing `Bridge.reservationVault` requires
 `reservationTotalAmount == 0 && pendingReservedDeposits == 0`
-(`Reservation.sol:1267-1274`) — total quiescence. So an m1 vault that
+(`Reservation.sol:1263-1274`) — total quiescence. So an m1 vault that
 *omits* an entry point cannot gain it later while any position lives; that
 path is closed, not deferred.
 
@@ -103,7 +104,7 @@ The shipped vault avoids this for renewal and not for redemption:
 
 | Path | Shipped vault | m2 cost |
 |---|---|---|
-| Renewal | Entry point present (`ReservationVault.sol:380-392`), `renewalsPaused = true` set in the constructor (`:222`), `unpauseRenewals()` is `onlyOwner` (`:415-418`) | One owner transaction |
+| Renewal | Entry point present (`ReservationVault.sol:367`), `renewalsPaused = true` set in the constructor (`:222`), `unpauseRenewals()` is `onlyOwner` (`:415-418`) | One owner transaction |
 | Redemption | `redeemReservation` present (`:293`) with **no pause flag** — `pauseRenewals`/`blockRenewal` (`:409`, `:424`) cover renewals only | Needs the flag added before launch, or a quiescence-gated vault swap |
 
 So the pattern §2.2 recommends for redemption is not new machinery: it is
@@ -151,11 +152,16 @@ governance force-close" was evaluated and rejected on this basis.
 necessarily ships the action record, `ActionType.Acceptance`, the
 designated-wallet binding, and `notifyReservationActionTimeout` (:911).
 
-Acceptance **already populates every field**: `ReservationProofs.sol:448-463`
+Acceptance **already populates every field**: `ReservationProofs.sol:527-539`
 writes `owner`, `mintedAmount`, `acceptedAt`, `walletPubKeyHash`,
-`anchorAmount`, `expiresAt`, `anchorTxHash`, `anchorTxOutputIndex`, `state`,
-`termSeconds`, and `gracePeriod` (on #1093+, `dissolutionEligibleAt` per
-§0.1). So storage-completeness is **already satisfied** — it is an invariant
+`anchorAmount`, `expiresAt`, `anchorTxHash`, `anchorTxOutputIndex`, `state`
+and `dissolutionEligibleAt`.
+
+**Corrected 2026-08-21.** This previously cited `:448-463` (a fee require, not
+the position write) and listed `termSeconds` and `gracePeriod` among the fields
+written. Neither identifier exists anywhere in the guards or partial trees —
+zero grep hits — because #1092/#1093 replaced that expiry model, as §0.1 above
+records. The surviving term state is `expiresAt` plus `dissolutionEligibleAt`. So storage-completeness is **already satisfied** — it is an invariant
 to *preserve* under any re-scope, not a gap to close (§2.1).
 
 ### 0.6 Dissolution is permissionless — leaving it unwired arms a slashing vector
@@ -191,12 +197,12 @@ turns on.
 | Layer | Replaceable by | Cost | Minimise in m1? |
 |---|---|---|---|
 | `ReservationRouter` (Bridge code via `delegatecall`) | Bridge implementation upgrade — `setReservationRouter` is once-only (`BridgeState.sol:1018-1021`), so replacing router code *is* a proxy-admin ceremony (invariant 4, §2) | The ceremony m2 needs anyway for its ~4,641 lines | **Yes — safe** |
-| `ReservationVault` (plain `Ownable`, immutables in bytecode, §2.2) | Deploying v2 and re-pointing `Bridge.reservationVault`, which `updateReservationParameters` gates on `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1267-1274`) | Total quiescence | **No — cannot be undone** |
+| `ReservationVault` (plain `Ownable`, immutables in bytecode, §2.2) | Deploying v2 and re-pointing `Bridge.reservationVault`, which `updateReservationParameters` gates on `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1263-1274`) | Total quiescence | **No — cannot be undone** |
 
 **In B the vault gate is unreachable while the product is in use.**
 `reservationTotalAmount` decrements only when a position closes, and B's close
-sites are stranding alone: redemption's (`ReservationProofs.sol:715`, `:836`)
-and dissolution's (`:1140-1142`) are both cut, leaving
+sites are stranding alone: redemption's (`ReservationProofs.sol:715`) and
+dissolution's (`:1140-1142`) are both cut, leaving
 `strandReservation` and `strandLateSettlementIfTargetWalletClosed`, which
 require the custodying wallet to be `Terminated`. So reaching
 `reservationTotalAmount == 0` in B means **every wallet holding a reservation
@@ -221,8 +227,10 @@ The shipped vault already demonstrates the pattern the gate requires, and
 applies it unevenly: `extendCustody` (`ReservationVault.sol:367`) is guarded by
 `renewalsPaused`, set `true` in the constructor (`:222`) with `unpauseRenewals`
 `onlyOwner` (`:415-418`), whereas `redeemReservation` (`:293`),
-`retryRedeemReservation` (`:469`) and the in-kind fee pair (`:529`, `:568`)
-have **no pause at all**. m1 must add the redemption-side flag by copying
+`retryRedeemReservation` (`:469`) have **no pause at all** — that is the gap
+m1 must close. The in-kind fee pair (`:529`, `:568`) is also unpaused and
+**must stay that way**: both sit on the settlement/accounting path, which a
+pause flag may never reach (`m1-b-implementation.md` §3). m1 must add the redemption-side flag by copying
 renewal's pattern within the same file.
 
 ### 0.8 A retiring wallet's last exit needs an explicit call that nothing makes
@@ -299,9 +307,9 @@ risks it names are now **launch gates**, not tradeoffs
 
 B is an essentials-only rewrite (`m1-variant-comparison.md` §5.2), so the
 eight-PR stack becomes **reference material rather than the delivery
-vehicle**. Consequences to absorb elsewhere: `epic-merge-plan.md`'s sequence
-becomes an extraction order, and `timeline-estimate.md` priced the stacked
-path plus rework, so its numerator changes.
+vehicle**. Consequences absorbed elsewhere: `epic-merge-plan.md`'s merge sequence becomes
+an extraction order, and `timeline-estimate.md` §7 re-prices m1 from "review +
+merge + rework" to writing 5,261 Solidity lines fresh.
 
 What m1 implements: routing and permanent reveal-time classification ·
 a minimal `ReservationRouter` (§1.6) · two-phase acceptance with
@@ -330,7 +338,7 @@ vault entry point in B does not defer that path — it closes it.
 ### 1.3 Launch posture (decided)
 
 Deploy inert, then activate for design partners under a tiny cap
-(`epic-merge-plan.md` §11's deploy-inert-then-activate). Small
+(`feature-spec.md` §11's deploy-inert-then-activate). Small
 `reservationMaxTotalAmount`; `maxReservationsPerWallet = 1`. No position
 exists until governance flips the switch.
 
@@ -405,7 +413,8 @@ Residual conditions:
 
 Acceptance writes every field today (§0.5). The rule is therefore
 **defensive**: any re-scope of the acceptance path must keep writing
-`termSeconds`, `expiresAt`, and `dissolutionEligibleAt`. If a future edit
+`expiresAt` and `dissolutionEligibleAt` (the two fields that exist; an earlier
+version of this sentence also named `termSeconds`, which does not). If a future edit
 dropped them, m2 would read zeros and every m1 position would be instantly
 dissolution-eligible — permanently barring the earliest users from in-kind
 redemption. Add a test asserting the fields are non-zero after acceptance.
@@ -423,17 +432,19 @@ Solidity lines of redemption, renewal, veto integration and dissolution
 (§3.1). That is a Bridge implementation upgrade.
 
 What survives is the storage half of the argument.
-`epic-merge-plan.md` §11's no-live-action-on-intermediate-layout rule is still
+`feature-spec.md` §11's no-live-action-on-intermediate-layout rule is still
 satisfied by construction, because m1 ships the **complete** layout (§2.1) and
 the only m1 in-flight records are acceptance and re-anchor actions, both
 transient (bounded by `reservationActionTimeout`). So m2 adds code against an
 unchanged layout: an upgrade, not a migration.
 
 **Resolved 2026-08-21: `ReservationVault` is not proxy-upgradeable.**
-`contract ReservationVault is IVault, Ownable` — plain `Ownable`, no
+`contract ReservationVault is IVault, IReservationFeeFinancer, Ownable`
+(`:57`) — plain `Ownable`, no
 `Initializable`, and four `immutable` state variables (`bank`, `tbtcVault`,
 `tbtcToken`, `bridge`) set in a `constructor`
-(`contracts/vault/ReservationVault.sol:79-142`). `deploy/95_deploy_
+(`contracts/vault/ReservationVault.sol:57`, `:69-72`, `:183-223`).
+`deploy/95_deploy_
 reservation_vault.ts:12-17` is a plain `deployments.deploy` with constructor
 args and no proxy option. Immutables are baked into bytecode, so a proxy
 cannot be retrofitted without refactoring the contract.
@@ -442,7 +453,7 @@ So enabling redemption means **replacing** the vault and re-pointing the
 Bridge's `reservationVault`. That re-point is **contract-enforced, not
 merely discouraged**: `updateReservationParameters` reverts a vault change
 unless `reservationTotalAmount == 0` **and** `pendingReservedDeposits == 0`
-(`Reservation.sol:1267-1274` on `feat/utxo-reservation-guards`). Nothing is
+(`Reservation.sol:1263-1274` on `feat/utxo-reservation-guards`). Nothing is
 silently orphaned — the transaction simply fails. (An earlier draft of this
 section claimed a swap orphans revealed-but-unaccepted deposits; that is
 wrong, and `feature-spec.md` §15 has been corrected to record the guard as
@@ -487,11 +498,10 @@ Pre-launch scrutiny belongs here.
 
 ## 3. Milestone 2 - what it restores and what it inherits
 
-m2 was previously described only as "everything else", scattered across §2.2
-and `m1-b-implementation.md` §6. It gets its own scope statement here because
-the B decision made it a comparable project rather than a small follow-up:
+m2 is a comparable project, not a follow-up:
 5,261 production Solidity lines in m1 against 4,641 in m2, a ratio of
-**1.13 : 1** (`m1-variant-comparison.md` §5.1).
+**1.13 : 1** (`m1-b-implementation.md` §6; derived from
+`m1-variant-comparison.md` §5.1's 3,731 plus dissolution's 910).
 
 ### 3.1 What m2 restores
 
@@ -597,7 +607,7 @@ concrete action in `pr-strategy.md`.
 
 ### 4.4 keep-core `#4238`
 
-It models the single-phase whole-redemption design and predates the two-phase
+It models the whole-redemption *transaction* shape and predates the
 machine, so it is a **rewrite**, not an edit. Under B it needs acceptance and
 re-anchor as nonce-carrying proposals, and **not** dissolution - which is the
 one place the B decision genuinely reduces client scope, worth roughly 300-500
@@ -631,8 +641,11 @@ point to leave unwired and no slashing vector to arm (§0.6).
    redemption entry point **disabled behind an owner-settable flag** per
    §2.2's recommended design (the vault cannot be upgraded, and a swap is
    blocked by the guard until every position closes, so the flag is what
-   gives m2 a reachable delivery path). Renewal
-   gets no entry point at all.
+   gives m2 a reachable delivery path). Renewal keeps its entry point:
+   `extendCustody` (`ReservationVault.sol:367`) ships as-is, already gated by
+   `renewalsPaused` set `true` in the constructor (`:222`) — under §0.7's rule
+   an omitted vault entry point is closed, not deferred, so nothing is dropped
+   here.
 3. **Anchor-index reconciliation** across `#1091`/`#1094` (§4.3 item 3).
 4. **Parameter and activation wiring** — §1.4 values, the deploy-inert
    switch, and governance runbook steps.
@@ -651,6 +664,13 @@ point to leave unwired and no slashing vector to arm (§0.6).
    test that justifies wiring it.
 
 ## 5.1 Code mass: m1 vs m2, measured (2026-08-21)
+
+**Superseded by the B decision (§1) as a statement about m1; retained as the
+measurement of the stacked stack.** Everything in this subsection describes the
+whole-PR plan: m1 = 7 PRs, 9,206 production lines, 445 deployed-but-unreachable,
+93% of the feature audited in m1, dissolution reachable. Under B none of that
+holds — m1 is a 5,261-line rewrite with no dead weight, and dissolution is not
+reachable at all. The live figures are §3 and `m1-variant-comparison.md` §3/§5.1.
 
 Measured from the PR diffs (`gh api .../pulls/N/files`, additions only) and
 function-level classification of the four reservation contracts at the m1 tip
@@ -692,8 +712,19 @@ excluded):
 | **Dead weight total** | | **445** |
 | Reachable in m1 | acceptance, re-anchor, dissolution, stranding, timeout, caps, params, getters | 1,701 |
 
-So m1 carries **445 code lines it cannot execute — 4.8% of its production
-Solidity.** That is the true price of the carve-out, and it is small.
+So m1 carries **445 dead code lines against 1,701 reachable — 20.7% of the four
+reservation contracts' function bodies**, or 4.8% of the 9,206-line
+production-Solidity diff total. The two bases are not comparable: the table
+above excludes comments, the 9,206 figure includes them and spans files the
+classification never touched. The 20.7% figure is the one that matches the
+table.
+
+**Corrected 2026-08-21.** This previously read "445 code lines it cannot
+execute — 4.8% of its production Solidity. That is the true price of the
+carve-out, and it is small." The 4.8% divided a comments-excluded numerator by a
+comments-included denominator, flattering the conclusion by roughly 4x. On the
+table's own basis the carve-out costs a fifth of the reservation contracts'
+function bodies, not a twentieth.
 
 ### Effort to prepare m1 for release
 
@@ -773,7 +804,7 @@ production lines (~2,000 with tests), while the A+ -> B dissolution drop saves
 figures above are the file's *stacked* mass, not the saving a rewrite
 realises, because the rewritten router is itself leaner.
 
-### Variant B — also drop dissolution, make re-anchor unbounded
+### variant B — also drop dissolution, make re-anchor unbounded
 
 The deeper cut is available only when writing from scratch, because it
 changes the protocol rather than omitting a PR. Drop dissolution from m1
@@ -782,8 +813,8 @@ changes the protocol rather than omitting a PR. Drop dissolution from m1
 
 | | Production Solidity | + tests |
 |---|---|---|
-| Variant B | **5,261** (-43%) | ~14,200-15,300 |
-| Variant B, no router | **4,525** (-51%) | ~12,200-13,100 |
+| variant B | **5,261** (-43%) | ~14,200-15,300 |
+| variant B, no router | **4,525** (-51%) | ~12,200-13,100 |
 
 What B buys beyond the lines is worth more than the lines:
 
@@ -852,8 +883,16 @@ rather than independent, which creates a useful intermediate rung.
 companion to it.** In a create-only m1 the only paths that close a position
 are `settleDissolution` (`ReservationProofs.sol:1140-1142`) and
 `strandReservation`, which requires the wallet to be `Terminated`; the
-remaining close sites (`:715`, `:836`) sit inside
-`submitReservedRedemptionProof` and are unreachable (§0.2). Dropping
+remaining close site (`:715`) sits inside `submitReservedRedemptionProof` and
+is unreachable (§0.2). **`ReservationProofs.sol:836` is not a close site** and
+must not be cut: it is the re-anchor source-wallet count decrement inside
+`submitReservationReanchorProof` (`:743`), paired with the target's increment
+taken at request time (`Reservation.sol:820-827`). It is reachable in m1 and
+load-bearing — it is the write that lets a re-anchored-away wallet's count fall
+to zero, which is the precondition for `beginWalletClosing`
+(`Wallets.sol:674-677`) and for §0.8's below-dust exit. Cut it and re-anchor
+moves a position while leaving the source slot occupied forever, so occupancy
+becomes monotonic even with re-anchor working (`milestone-inventory.md` C-2). Dropping
 dissolution while keeping re-anchor's `< dissolutionEligibleAt` gate
 therefore leaves a position past its eligibility date with **no unpin path at
 all** — strictly worse than the stacked design, where dissolution eventually
@@ -891,7 +930,7 @@ of 1 sits a factor of ten below the documented default. But raising it only
 defers, because occupancy is monotonic when nothing closes, and
 `m1-variant-comparison.md` §5.3 traces the terminal state: at saturation
 re-anchor has no target, `beginWalletClosing` cannot pass its zero-count
-requirement (`Wallets.sol:675-677`), the MovingFunds clock expires, and
+requirement (`Wallets.sol:674-677`), the MovingFunds clock expires, and
 `notifyWalletMovingFundsTimeout` seizes operator stake and terminates the
 wallet (`:493-523`) — after which the depositor's position strands. Honest
 operators slashed, depositors stranded, reached by arithmetic rather than by
@@ -1037,7 +1076,7 @@ and are recorded as resolved rather than deleted.
 ## Provenance
 
 Derived 2026-08-21 from `feature-spec.md` (§3-§7, §13, §15, §16),
-`epic-merge-plan.md` (§3, §5, §11), `timeline-estimate.md`, and the keep-core
+`epic-merge-plan.md` (§3), `feature-spec.md` (§11), `timeline-estimate.md`, and the keep-core
 §13 proposal inventory. **Verified against source**, branch-tagged because
 the expiry model differs across the stack:
 `feat/utxo-reservation-settlement` (#1091) — gate map (:618, :735, :742,
@@ -1053,6 +1092,6 @@ window (:1232-1236), vault gates (:614, :1133);
 (:1363-1378), permissionless dissolution (:887-890) and its router wrapper
 (`ReservationRouter.sol:302-304`, no modifier), the dissolution-timeout
 slashing contract (:961-975), and the vault-migration guard (:1267-1274);
-`ReservationVault.sol:79-142` plus `deploy/95_deploy_reservation_vault.ts`
+`ReservationVault.sol:57`, `:69-72`, `:183-223` plus `deploy/95_deploy_reservation_vault.ts`
 for non-upgradeability and the governance activation sequence. A scope
 decomposition for decision, not a commitment of dates.

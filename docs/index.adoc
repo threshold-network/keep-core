@@ -6,3 +6,4 @@
 * xref:./run-keep-node.adoc[Run Keep Client Node]
 * xref:./development/README.adoc[Developers]
 * xref:./dev-ops.adoc[DevOps]
+* link:./spec/reservations/README.md[UTXO Reservations - design and planning (tbtc-v2 + keep-core)]

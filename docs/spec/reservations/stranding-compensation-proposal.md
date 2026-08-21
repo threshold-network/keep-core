@@ -8,7 +8,9 @@ decided build**; Tiers 2-3 and §4/§6/§8 are retained as design reference;
 §9's exit interlock is dormant unless `exit/proposal.md` is ever built. The
 "Space A" framing below is the rejected original.
 
-Status: **SUPERSEDED IN PART.** This document is "Space A" (the network bears the shortfall) in
+Status: **LIVE IN PART** — Tiers 0-1 (§10) are the accepted build (2026-08-21).
+The "Space A" solvency framing below is **rejected** by
+`shortfall-design-space.md`; §4/§6/§8 and Tiers 2-3 are design reference. This document is "Space A" (the network bears the shortfall) in
 `shortfall-design-space.md`, which **rejects Space A as the answer to solvency** on
 funding invariance: every slashing amount in tBTC is a flat `uint96` T quantity with no BTC term
 (max seizure 10,000 T against 50 BTC of exposure, roughly 0.006%), and the cheapest stranding
@@ -86,6 +88,14 @@ Exposure, at the launch parameters (spec §10):
 | Per-wallet amount cap | 50 BTC |
 | Per-wallet count cap | 10 positions |
 | Single-position cap | 25 BTC |
+
+**Parameter regime (added 2026-08-21).** The values above are
+`feature-spec.md` §10's **steady-state provisional** figures, not the m1 launch
+posture. At m1 launch `roadmap.md` §1.4 sets `maxReservationsPerWallet = 1` and
+a tiny `reservationMaxTotalAmount`, so a single termination strands **one**
+position. The correlated-batch argument therefore applies from the first cap
+raise onward, not at launch — but Tier 0 must record per-position from day one,
+because batching becomes observable only after the raise.
 
 Fee income, at full utilization of the global cap:
 

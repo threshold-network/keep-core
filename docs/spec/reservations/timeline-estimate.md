@@ -10,9 +10,9 @@ is `testing-plan.md`.
 
 | Phase | Estimate | Compresses with agents? |
 |---|---|---|
-| Engineering to code-complete (stack merge — **superseded, see §7: B is a rewrite, not a merge**, stranding-compensation module **Tiers 0-1**, fee-grinding fix, keep-core two-phase rework **incl. the two executor duties from the Stranded-decision review** — re-anchor-on-rotation and stranding-cleanup, integration tests, findings/reference docs, fork dry-run). The emergency-exit build is **out of scope** per the 2026-08-21 decision (§5). | ~33-49 engineer-days serialized -> ~4-6 weeks calendar with parallel agent workstreams | Yes |
+| Engineering to code-complete (stack merge — **superseded, see §7: B is a rewrite, not a merge**, stranding-compensation module **Tiers 0-1**, fee-grinding fix, keep-core two-phase client — **new code on `#4238`'s reusable type layer, not rework** (C-8) — **incl. the two executor duties from the Stranded-decision review** — re-anchor-on-rotation and stranding-cleanup, integration tests, findings/reference docs, fork dry-run). The emergency-exit build is **out of scope** per the 2026-08-21 decision (§5). | ~33-49 engineer-days serialized -> ~4-6 weeks calendar with parallel agent workstreams | Yes |
 | External audit engagement + fix/re-review cycle | ~4-8 weeks calendar | No — vendor calendar |
-| Governance sign-off (2 unset params + launch approval) | ~1-3 weeks, overlaps with audit | No — DAO/Council calendar |
+| Governance sign-off (1 unset param + launch approval) | ~1-3 weeks, overlaps with audit | No — DAO/Council calendar |
 | **Total (baseline)** | **~10-14 weeks (2.5-3.5 months)** *(Engineering ~4-6 + Audit ~4-8 = ~8-14 alone; the extra ~2 weeks at the low end is a non-overlapping admin/handoff buffer, made explicit in §3 after the 2026-08-21 review — not a separate governance delay, since governance is stated to overlap audit)* | |
 
 ## 2. Testing-plan items, added effort, and whether they sit on the critical path
@@ -95,8 +95,16 @@ it explicitly below.
 |---|---|---|---|
 | Engineering to code-complete + hardened | ~4-6 weeks | ~7-10 weeks | ~9-12 weeks |
 | Audit + fixes + governance | ~4-8 weeks | ~4-8 weeks (unchanged) | ~4-8 weeks (unchanged) |
-| Non-overlapping admin/handoff buffer *(undocumented until this review; applies uniformly below — see §1)* | ~2 weeks | ~2 weeks | ~2 weeks |
+| Non-overlapping admin/handoff buffer *(undocumented until this review; **applied at the low end only** — at the high end the audit window absorbs it, see §1 and the note below)* | ~2 weeks (low end only) | ~2 weeks (low end only) | ~2 weeks (low end only) |
 | **Total elapsed** | **~10-14 weeks** | **~13-18 weeks (~3.25-4.5 months)** | **~15-20 weeks (~3.75-5 months)** |
+
+**Buffer accounting, clarified 2026-08-21.** The row above previously read
+"applies uniformly below", which does not match the totals: every low end
+includes the two-week buffer and every high end does not. Summing the rows
+uniformly would give 10-16 / 13-20 / 15-22, two weeks above each stated high
+end. §1's own parenthetical is the correct reading — the buffer is a low-end
+addition, absorbed by the audit window at the high end — so the totals stand and
+the row label was wrong, not the arithmetic.
 
 ## 4. Reading this estimate
 

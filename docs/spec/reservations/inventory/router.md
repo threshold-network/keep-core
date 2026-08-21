@@ -17,11 +17,11 @@ were enumerated mechanically from the file, and they match
 | Item | Source | PR | Kind | m1 | m2 | Note |
 |---|---|---|---|---|---|---|
 | `requestReservationAcceptance` | `ReservationRouter.sol:242` | #1091 | entry-point | yes | yes | The product's entry gate |
-| `requestReservationReanchor` | `:286` | #1091 | entry-point | yes | yes | Variant B's only unpin path; load-bearing |
+| `requestReservationReanchor` | `:286` | #1091 | entry-point | yes | yes | variant B's only unpin path; load-bearing |
 | `submitReservationProof` | `:322` | #1091 | entry-point | yes | yes | Only `onlySpvMaintainer` entry point; m1 dispatches acceptance and re-anchor only |
 | `notifyReservationActionTimeout` | `:351` | #1091 | entry-point | yes | yes | Required cleanup, and the slashing path |
 | `notifyStaleReservedDeposit` | `:450` | #1094 | entry-point | yes | yes | Releases un-accepted revealed deposits |
-| `notifyReservationStranded` | `:461` | #1094 | entry-point | yes | yes | Variant B's only position-closing path |
+| `notifyReservationStranded` | `:461` | #1094 | entry-point | yes | yes | variant B's only position-closing *entry point* (the second closing site is inside acceptance/re-anchor settlement) |
 | `updateReservationParameters` | `:421` | #1088 | entry-point | yes | yes | `onlyGovernance`; also carries the vault re-point |
 | `updateReservationCaps` | `:476` | #1093 | entry-point | yes | yes | `onlyGovernance`; the only safety valve at launch |
 
@@ -46,7 +46,7 @@ were enumerated mechanically from the file, and they match
 | Item | Source | PR | Kind | m1 | m2 | Note |
 |---|---|---|---|---|---|---|
 | `requestReservedRedemption` | `:262` | #1091 | entry-point | no | yes | Redemption deferred |
-| `requestReservationDissolution` | `:302` | #1091 | entry-point | no | yes | Variant B's defining cut; note it has **no modifier**, so it is permissionless |
+| `requestReservationDissolution` | `:302` | #1091 | entry-point | no | yes | variant B's defining cut; note it has **no modifier**, so it is permissionless |
 | `notifyReservedRedemptionVeto` | `:366` | #1091 | entry-point | no | yes | Veto is vacuous with no redemptions |
 | `extendReservation` | `:382` | #1092 | entry-point | no | yes | Renewal deferred |
 | `walletPendingDissolution` | `:600` | #1091 | view | no | yes | Dissolution view |
@@ -61,7 +61,7 @@ were enumerated mechanically from the file, and they match
 
 ## 2. The four delegatecall invariants - all genuinely test-asserted
 
-`epic-merge-plan.md` §3 step 2 asked reviewers to "verify the tests actually
+The review plan's earlier §3 step 2 asked reviewers to "verify the tests actually
 assert them, not just describe them". Answer: **all four have real tests** in
 `test/bridge/ReservationRouter.test.ts` (634 lines).
 
