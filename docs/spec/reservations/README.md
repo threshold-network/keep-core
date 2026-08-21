@@ -38,7 +38,9 @@ argument that was weighed plus the risk register the choice carries.
 | `m1-b-implementation.md` | **Build scope for the decided variant.** Minimal router surface (20 of 24 entry points, with what was cut and why), the vault's full-surface requirement and the initiation-only pause rule, the four launch gates, operational duties, and what m2 must then build. |
 | `timeline-estimate.md` | Schedule: phases, baseline + testing fold-in, testnet round (added 2026-08-21), and the §5 rewrite after the Stranded-decision review. |
 | `testing-plan.md` | Test & hardening plan: pre-audit vs during-audit tooling (Foundry invariants, TLA+, multi-signer sim, fork e2e, Certora, etc.), effort, critical-path impact. |
-| `epic-merge-plan.md` | Sequencing the 8-PR tbtc-v2 stack plus standalone keep-core #4238 to mergeable/audit-ready state. |
+| `milestone-inventory.md` | **The completeness ledger.** Every item the m1 rewrite must ship, declare or build new, with source, PR attribution and milestone assignment. Four trap sections catch what a straightforward extraction loses: items with no extraction source, fields carried for layout only, writes that look dead but are load-bearing, and wrong claims in the existing docs (C-1 to C-8). §2.10 covers the non-code obligations. Ends in a numbered open-decisions register (D-1 to D-27) other docs cite. |
+| `pr-strategy.md` | **How m1 actually ships.** Assesses five options for delivering a rewrite while preserving the eight existing PRs as reference, answers definitively what makes a PR permanently readable, and recommends a per-repo PR decomposition with branch names and review focus. |
+| `epic-merge-plan.md` | Reference record of the 8-PR tbtc-v2 stack plus standalone keep-core #4238: the verified PR inventory, per-PR extraction guidance, and the `gh-stack` mechanics. No longer a delivery plan (superseded 2026-08-21); `pr-strategy.md` is the live one. |
 
 ### Loss-story design
 | File | Role |
@@ -59,11 +61,15 @@ argument that was weighed plus the risk register the choice carries.
 1. `feature-spec.md` — the design (start §1-§4, skim the rest).
 2. `exit/README.md` — the Decision + why `Stranded` won (before building anything).
 3. `pr-review-followups.md` + `feature-spec.md` §15/§16 — what's open.
-4. `shortfall-design-space.md` → `stranding-compensation-proposal.md` — the loss story.
-5. `roadmap.md` — the milestone cut and merge order (read before executing
-   the merge plan), then `m1-variant-comparison.md` if the A+/B choice is
-   still open.
-6. `epic-merge-plan.md` → `testing-plan.md` → `timeline-estimate.md` — how it ships.
+4. `shortfall-design-space.md` -> `stranding-compensation-proposal.md` — the loss story.
+5. `roadmap.md` — the milestone cut: §1 is m1, §3 is m2, §4 is how m1 ships
+   relative to the existing PRs. Then `m1-variant-comparison.md` if the A+/B
+   choice is still open.
+6. `milestone-inventory.md` — the completeness check before building: what m1
+   ships, declares, or builds new, and the open decisions that gate it.
+7. `pr-strategy.md` — how the work becomes pull requests, with
+   `epic-merge-plan.md` as the extraction reference behind it.
+8. `testing-plan.md` -> `timeline-estimate.md` — hardening and schedule.
 
 **Note on duplicated-looking references:** several docs summarize a conclusion
 that another doc carries in full (e.g. `feature-spec.md` §17 summarizes

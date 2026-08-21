@@ -161,7 +161,7 @@ transferable TBTC and an exercisable Bitcoin path. The proof step in step 4 is a
 formality that graduates an already-guaranteed escrow to a burn; it carries none of Mechanism
 3's risk.
 
-**Why it closes R1–R5:**
+**Why it closes R1-R5:**
 - **R1**: no anchor-embedded *timelock* — arming is a fresh Ethereum call, independent of anchor
   age. The committee's pubkey embedded in the script should be a stable, rarely-rotated
   reference (governance-gated, like `MaintainerProxyV2`), not something tied to the renewal

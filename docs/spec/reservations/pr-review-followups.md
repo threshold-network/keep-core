@@ -108,7 +108,7 @@ entry point (`ReservationRouter.sol:208-212,:303-312`; corroborated at
 `Bridge.sol:327-330,:866`). **This item's premise stands: verified, not
 resolved.** A maintainer stall still blocks dissolution with no
 permissionless fallback — worse, a stalled-then-timed-out dissolution
-*slashes the wallet* (`notifyWalletRedemptionTimeout` →
+*slashes the wallet* (`notifyWalletRedemptionTimeout` ->
 `ecdsaWalletRegistry.seize`) and can terminate an entirely honest,
 unresponsive-maintainer-blocked wallet, stranding every position it
 custodies. Enumerate the mainnet `isSpvMaintainer` set before launch;
@@ -228,7 +228,7 @@ the ratio improves. So the exposure is worst on mid-sized positions, not the
 minimum-sized ones — my first pass on this item asserted the opposite.
 
 **What is executed vs computed.** The *invariant* is executed:
-`Bridge.Reservation.test.ts` → "leaves residual backing independent of claim
+`Bridge.Reservation.test.ts` -> "leaves residual backing independent of claim
 size after maximal grinding" grinds a minimum-size and a peak-size reservation
 to the dust floor and asserts both leave identical backing, that the peak case
 exhausts the cumulative budget exactly, and that fractional loss is worse for

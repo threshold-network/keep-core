@@ -359,7 +359,7 @@ R4 leak §3.1 describes, and it does not close at any `f`.
 **Time value gives a real break-even below 1, which is nonetheless not usable.** The liquid tranche
 sells at time zero while the extraction waits out `T`. Discounting at rate `ρ`, gain is
 `δ^T − f` with `δ = e^{−ρ}`, so `f* = e^{−ρT}` — for example roughly 0.85 at `ρ = 8%` and
-`T = 2` years. But the mechanism must be safe against the *most patient* depositor, and as `ρ → 0`
+`T = 2` years. But the mechanism must be safe against the *most patient* depositor, and as `ρ -> 0`
 the threshold returns to 1. A depositor who can finance the deferred claim at near-risk-free rates
 is effectively that patient. So this is an argument *for* `f = 1`, not a cheaper setting, and the
 blanket claim "zero only at `f = 1`" holds strictly in the zero-discount limit.

@@ -32,8 +32,8 @@ executing §3.
 - **Formal verification for keep-core: not code-level — protocol-level.**
   There's no mature formal-verification framework for Go client code
   analogous to Certora. The real leverage is a **TLA+ model of the
-  two-phase protocol itself** (request → authorize → prove/settle → renew
-  → dissolve, with veto/timeout transitions), checked *before* finishing
+  two-phase protocol itself** (request -> authorize -> prove/settle -> renew
+  -> dissolve, with veto/timeout transitions), checked *before* finishing
   the keep-core wiring — it catches cross-system races between the
   contract, the watchtower, and the wallet that no amount of single-repo
   unit testing can see, because each repo's tests can only see its own
@@ -180,7 +180,7 @@ Checked out at `feat/utxo-reservation-wallet-support`.
 6. **Build the fork-based e2e test** — mainnet-fork Ethereum (the
    `FORKING_URL` config already exists, just unused for this feature) +
    Bitcoin regtest/testnet, exercising the full lifecycle from the spec's
-   walkthrough (reserve → accept → settle → renew → partial-redeem →
+   walkthrough (reserve -> accept -> settle -> renew -> partial-redeem ->
    dissolve/strand). This isn't a new idea — it's explicitly required by
    the release runbook's own pre-audit checklist ("fork dry-run of the
    full activation sequence"), which is currently unchecked. Treat it as
@@ -191,8 +191,8 @@ Checked out at `feat/utxo-reservation-wallet-support`.
    a full reservation lifecycle through real coordination rounds (not
    single-node dispatch tests). This is the keep-core equivalent of #6 —
    currently nothing exercises reservation actions past a single node.
-8. **TLA+ model of the two-phase reservation protocol** (request →
-   authorize → prove/settle → renew/expire → dissolve, with watchtower
+8. **TLA+ model of the two-phase reservation protocol** (request ->
+   authorize -> prove/settle -> renew/expire -> dissolve, with watchtower
    veto and timeout transitions modeled explicitly). This is protocol-
    level, not code-level — it checks RFC 13's design for races/deadlocks
    across the contract/watchtower/wallet boundary that no single repo's
@@ -243,7 +243,7 @@ Scope corrections, not new tiers:
 - **Drop dissolution from every lifecycle walkthrough.** §0, Tier 1 item 1
   and Tier 2 item 7 all end their sequence at `dissolve`, and Tier 1 item 8's
   TLA+ model includes dissolution transitions. B has no dissolution path, so
-  the m1 lifecycle is reserve → accept → settle → re-anchor → strand. Model
+  the m1 lifecycle is reserve -> accept -> settle -> re-anchor -> strand. Model
   dissolution when m2 restores it.
 - **The "no double-settle/double-mint across re-anchor + dissolution paths"
   invariant** loses one of its two paths. Re-anchor is the only settling

@@ -2,8 +2,8 @@
 
 Status: DRAFT, 2026-08-20. Investigated via `tlabs-xyz/frost-upgrade` (the FROST migration's own
 analysis corpus) plus direct code reads of the actual FROST PR branches
-(`tbtc-v2#971`→`#1027`/`#972`/`#973`, `keep-core#3866`→`#4199`→`#4226`, `#4005`→`#4198`→`#4227`) and
-the reservations branches (`tbtc-v2#1088`→...→`#1096`, `keep-core#4238`), cross-referenced directly —
+(`tbtc-v2#971`->`#1027`/`#972`/`#973`, `keep-core#3866`->`#4199`->`#4226`, `#4005`->`#4198`->`#4227`) and
+the reservations branches (`tbtc-v2#1088`->...->`#1096`, `keep-core#4238`), cross-referenced directly —
 not inferred from either project's own docs, since **the FROST corpus explicitly scopes reservations
 out and has never analyzed this interaction**, and the reservations spec never mentions FROST. This
 document is the first analysis of the actual intersection.
@@ -12,7 +12,7 @@ document is the first analysis of the actual intersection.
 
 **Reservations do not need to expire, and do not need to preemptively migrate on a deadline.**
 FROST's own governance already decided (`docs/adr/0017-fund-migration-own-timeline.md`, ratified
-2026-08-10) that the ECDSA→FROST fund drain runs on **no committed calendar** — coexistence is
+2026-08-10) that the ECDSA->FROST fund drain runs on **no committed calendar** — coexistence is
 supported indefinitely as long as each ECDSA wallet's signing group stays healthy (passes its
 heartbeat). A reservation anchored to a healthy ECDSA wallet can simply keep operating through its
 full lifecycle (renew, partial-redeem, dissolve) with **zero interaction with FROST** for as long as

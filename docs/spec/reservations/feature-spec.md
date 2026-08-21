@@ -42,14 +42,18 @@ incrementally by #1090/#1092/#1094/#1096): `docs/rfc/rfc-13.adoc` on tbtc-v2.
 Governance parameter doc: `docs/utxo-reservation-frozen-spec.md`. Deployment
   doc: `docs/utxo-reservation-release-runbook.md`.
 
-  *(Provenance split: claims here are grounded either in branches read
-  directly from a local checkout — #1088, #1090, #1091, #1102 (with
-  `tbtc-v2-h6v61g` only as the pre-#1090 single-phase baseline, not the
-  architecture this spec describes) — or, for #1092-#1096 and keep-core
-  #4238, in PR body text / GitHub API only, since those branches were not
-  available to verify locally. The frozen-spec and runbook docs, cited as
-  primary sources for §10/§11, were likewise not locatable on any checked
-  branch — treat the §10/§11 parameters as PR-body-sourced until verified.)*
+  *(Provenance split, **updated 2026-08-21**: this previously said that
+  #1092-#1096 and keep-core #4238 were grounded "in PR body text / GitHub API
+  only, since those branches were not available to verify locally", with a
+  local checkout covering only #1088, #1090, #1091 and #1102. That is no longer
+  true: every branch in the chain was fetched and read directly during the
+  milestone-split inventory pass, and the resulting line-cited rows are in
+  `inventory/`. Two caveats replace it. First, the fragments verified against
+  `feat/utxo-reservation-guards` predate the #1102 fold, so line numbers in the
+  files #1102 touched are pre-fix (`milestone-inventory.md` C-3). Second, the
+  frozen-spec and runbook docs cited as primary sources for §10/§11 remain
+  unlocatable on any checked branch — treat the §10/§11 parameters as
+  PR-body-sourced until verified.)*
 
 Companion analysis: `frost-reservations-interaction.md` investigates this
 feature's interaction with the separate FROST/Schnorr threshold-signing migration
@@ -90,7 +94,7 @@ same shape the pooled redemption path already has (`pendingRedemptions` /
 - the watchtower veto delay was enforced only by the off-chain proposal
   validator, not by the Bridge proof path itself.
 
-PRs #1090–#1096 are RFC 13: the redesign that replaces the single-phase model
+PRs #1090-#1096 are RFC 13: the redesign that replaces the single-phase model
 with a **two-phase authorize-then-prove settlement machine**, plus a
 **reservation router** to solve an EIP-170 (24,576-byte) contract-size
 collision, corrected backing/fee mechanics, and wallet-lifecycle integration.
@@ -150,7 +154,7 @@ reservationRouter`.
 ### 3.1 Reservation position (`ReservationRequest`, in `Reservation.sol`)
 
 A **reservation** ("position") is keyed by `reservationKey` (derived from the
-originating deposit / anchor UTXO). Key fields (accreted across #1088→#1096):
+originating deposit / anchor UTXO). Key fields (accreted across #1088->#1096):
 
 - `ReservationState state` — `Unknown(0) | Active(1) | ActionPending(2) |
   Closed(3) | Stranded(4)`
@@ -169,11 +173,15 @@ originating deposit / anchor UTXO). Key fields (accreted across #1088→#1096):
 - `address owner`, anchor UTXO reference, per-wallet enumeration bookkeeping
   (count `walletReservationsCount` plus, on the #1094 line, a swap-remove
   key list `walletReservationKeys`/`walletReservationKeyIndex`), reverse
-  anchor lookup `reservationsByAnchorUtxo` (UTXO key → reservation key,
-  declared on the #1094 line and used by `strandReservation` — **#1102
-  removed it from the merged base, so its re-introduction on #1094's line
-  is an open reconciliation when the upper stack rebases over the #1102
-  fold**)
+  anchor lookup `reservationsByAnchorUtxo` (UTXO key -> reservation key,
+  **introduced by #1091** and used by `strandReservation` — **corrected
+  2026-08-21:** this previously said "#1102 removed it from the merged base,
+  so its re-introduction on #1094's line is an open reconciliation". There was
+  no removal: the mapping is absent from #1088's branch entirely, so #1102 -
+  which merged into that branch - had nothing to remove, and `spentMainUTXOs`
+  is a pre-existing Bridge registry rather than a replacement. The real item is
+  **two write sites, #1091's and #1094's, and no removal**. See
+  `milestone-inventory.md` C-1)
 
 ### 3.2 Action generation (`ReservationAction`, added in #1091)
 
@@ -215,13 +223,13 @@ Every Bitcoin-side action against a position is an explicit, nonce-keyed
 reordered. Measured per branch (2026-08-21), `__gap` reaches 41 by **two
 independent routes that then collide**:
 
-- **core branch**: 48 → 42 (#1088) → **41 (#1102, merged 2026-08-21)**.
+- **core branch**: 48 -> 42 (#1088) -> **41 (#1102, merged 2026-08-21)**.
 - **descendant chain** (each branch cut from the pre-#1102 core at 42, so
-  these are pre-rebase values): 42 → **41 (#1090 router)** → 39
-  (#1091 settlement, #1092 renewal) → 37 (#1093 backing) → 34
-  (#1094 guards, #1095 release) → 33 (#1096 partial-redemption).
+  these are pre-rebase values): 42 -> **41 (#1090 router)** -> 39
+  (#1091 settlement, #1092 renewal) -> 37 (#1093 backing) -> 34
+  (#1094 guards, #1095 release) -> 33 (#1096 partial-redemption).
 
-Both #1102 (on core) and #1090 (on its own branch) decrement 42 → 41 by
+Both #1102 (on core) and #1090 (on its own branch) decrement 42 -> 41 by
 different additions. After #1090 (and the stack above it) rebases over the
 #1102 fold, the two decrements compete for the same slot budget — the
 append-only discipline must be re-verified against the combined diff, not
@@ -234,7 +242,7 @@ prefix).
 
 ---
 
-## 4. The two-phase settlement machine (#1091, refined by #1092–#1096)
+## 4. The two-phase settlement machine (#1091, refined by #1092-#1096)
 
 Every generation goes through the same lifecycle:
 
@@ -286,16 +294,16 @@ intended punishment for signing unauthorized. Re-anchor and dissolution are
 authorized immediately at request time (no watchtower window).
 
 **Settlement** is exactly one of:
-- **Proof → Settled**: SPV proof names `(reservationKey, nonce)`; the
+- **Proof -> Settled**: SPV proof names `(reservationKey, nonce)`; the
   transaction must match the generation's snapshot exactly (inputs, output
   script/target, fee within bound). Consumed outpoints recorded in
   `spentMainUTXOs`.
-- **Timeout → TimedOut** (terminal, permissionless notification): releases
+- **Timeout -> TimedOut** (terminal, permissionless notification): releases
   reserved capacity + the main-UTXO lock, refunds the escrowed claim
   (redemptions), slashes the wallet like a pooled redemption timeout
   (redemptions), mints the single-use fee-free retry entitlement if the
   generation had paid the fee, returns the position to `Active`.
-- **Veto → Vetoed** (terminal): watchtower detains the escrowed claim
+- **Veto -> Vetoed** (terminal): watchtower detains the escrowed claim
   (penalty/freeze/ban per pooled-parity policy); position returns to
   `Active` (anchor unspent; in-kind claim survives).
 
@@ -403,7 +411,7 @@ term grant), wallet Live or MovingFunds. Acquires the **per-wallet
 main-UTXO action lock** (`walletPendingDissolution`): at most one
 dissolution per wallet in flight — removes the concurrent-dissolution race.
 Snapshots fee bound and expected main UTXO. Bitcoin shape: 1-in (anchor) [+
-2nd in: wallet main UTXO] → 1-out (wallet P2(W)PKH); pool absorbs `anchor −
+2nd in: wallet main UTXO] -> 1-out (wallet P2(W)PKH); pool absorbs `anchor −
 miner fee`, owner's claim (= anchor) remains outstanding as ordinary TBTC.
 
 ---
@@ -544,7 +552,7 @@ time (never at proof time):
   callback" scenario). A stale deposit's only exit is the depositor's
   Bitcoin refund; it can never be re-authorized.
 - **H-06 — stranding on termination**: `notifyReservationStranded`
-  (permissionless, wallet must be `Terminated`): position → `Stranded`,
+  (permissionless, wallet must be `Terminated`): position -> `Stranded`,
   capacity released, any pending action unwound (pending redemption escrow
   returns to its redeemer), enumeration/anchor-index cleared. The anchor is
   deliberately **not** marked honestly spent (a terminated-wallet spend
@@ -569,9 +577,10 @@ time (never at proof time):
 - **L-01 — monitoring surface**: per-wallet reservation enumeration
   (`walletReservationsCount` + the #1094-line `walletReservationKeys`
   swap-remove list), reverse anchor lookup (`reservationsByAnchorUtxo` —
-  #1094-line only; removed from the merged base by #1102, reconcile on
-  rebase), per-wallet count/amount getters, pending-
-  deposit getters.
+  introduced by #1091, written again by #1094; **corrected 2026-08-21**, it
+  was not "removed from the merged base by #1102" - two write sites, no
+  removal, see `milestone-inventory.md` C-1), per-wallet count/amount getters,
+  pending-deposit getters.
 - **Wallet closing guard**: a wallet holding reservation anchors (or
   pending reservation actions) cannot *begin* closing — moving-funds
   completion requires the reservation count to be zero (existing
@@ -857,7 +866,7 @@ follow-up section, gated on the two-phase ABI landing in #1091+):
   pre-expiry reserved redemptions, drive expired positions toward
   dissolution after pending actions resolve, and never propose dissolution
   before the snapshotted `dissolutionEligibleAt`.
-- **On `Live → MovingFunds`, re-anchor every open reservation to a Live
+- **On `Live -> MovingFunds`, re-anchor every open reservation to a Live
   target** (`requestReservationReanchor`, permitted for `MovingFunds`
   source wallets, §4.3). A rotating wallet's un-re-anchored anchors are
   stranded if `movingFundsTimeout` fires — re-anchor is the intended
@@ -1053,24 +1062,35 @@ gap the runbook's keep-core follow-up section calls out.
   fold before the stack can merge (§3 step 2 of `epic-merge-plan.md`).
 - **`__gap` reaches 41 by two independent decrements — rebase must
   reconcile the slot budget (§3.4).** Measured 2026-08-21: the core branch
-  hit 41 via #1102 (42 → 41, merged), while the descendant chain's own
-  #1090 router also decrements 42 → 41 on its branch (then → 39 settlement/
-  renewal → 37 backing → 34 guards/release → 33 partial-redemption,
+  hit 41 via #1102 (42 -> 41, merged), while the descendant chain's own
+  #1090 router also decrements 42 -> 41 on its branch (then -> 39 settlement/
+  renewal -> 37 backing -> 34 guards/release -> 33 partial-redemption,
   pre-rebase). Two different additions both landing on 41 means the two
   decrements compete for the same slot budget when #1090+ rebase over the
   #1102 fold — the combined storage-layout parity must be re-run against
   the rebased whole, not trusted to each PR's own single-increment parity
   test. This is the concrete storage item in §3 step 2 of
   `epic-merge-plan.md` and belongs on the §5 audit checklist.
-- **`reservationsByAnchorUtxo` is #1094-line only, removed from the merged
-  base by #1102 — reconcile on rebase.** The reverse-anchor lookup (UTXO
-  key → reservation key, used by `strandReservation`) exists on
-  `feat/utxo-reservation-guards` but was deleted from `feat/utxo-reservation-core`
-  by the #1102 merge (which moved anchor consumption to `spentMainUTXOs`).
-  #1094's declaration must be confirmed compatible with the #1102 base when
-  the upper stack rebases — verify stranding still resolves anchors, or the
-  mapping is re-introduced on the base. Cross-referenced from §3.1 and §12
-  L-01.
+- **`reservationsByAnchorUtxo` has two write sites and no removal — corrected
+  2026-08-21.** This item previously read: "`reservationsByAnchorUtxo` is
+  #1094-line only, removed from the merged base by #1102 — reconcile on
+  rebase", and explained that the mapping "was deleted from
+  `feat/utxo-reservation-core` by the #1102 merge (which moved anchor
+  consumption to `spentMainUTXOs`)". Measured against the branches, that is
+  wrong on both counts. The mapping is **introduced by #1091**, not #1094, and
+  has 0 hits in `BridgeState.sol` on `feat/utxo-reservation-core`, so #1102 -
+  which merged into that branch - had nothing to delete. `spentMainUTXOs` is a
+  **pre-existing** Bridge registry that reservations write into
+  (`Reservation.sol:1454`, `:1510`; documented at `:66`), present on #1088's
+  branch with 6 mentions, so it was not introduced by #1102 either. The two are
+  different things, not competing designs: `spentMainUTXOs` is the
+  honestly-spent-outpoint registry, `reservationsByAnchorUtxo` is the reverse
+  index from anchor outpoint to reservation key.
+  The genuine item is narrower: **two write sites** (#1091's and #1094's
+  stranding write) must be reconciled in the rewrite, because stranding is one
+  of only two position-closing paths reachable under variant B. See
+  `inventory/pr-map.md` §4 and `milestone-inventory.md` C-1. Cross-referenced
+  from §3.1 and §12 L-01.
 - **Positive, verified counterpoint**: CI is currently green on both
   stack tips — `contracts-build-and-test` and `contracts-slither` pass on
   tbtc-v2 #1096, and the full Go suite (`client-build-test-publish`,
@@ -1088,7 +1108,7 @@ gap the runbook's keep-core follow-up section calls out.
     and backing reconcile exactly on redemption, so backing-ratio monitoring
     cannot see the owner-side loss; the dissolution path reconciles nowhere
     (:1155-1167). Re-frame followups item 7 with a per-path victim table.
-  - **SPV-maintainer stall → slashing → termination → correlated stranding.**
+  - **SPV-maintainer stall -> slashing -> termination -> correlated stranding.**
     Every reservation proof is `onlySpvMaintainer`; a dissolution timeout
     slashes the wallet and pays the notifier; two 48h cycles terminate an
     HONEST wallet holding anchors. Record the composition (the elements
@@ -1197,7 +1217,7 @@ The deployment runbook is detailed and its scripts (`95_deploy_reservation_vault
 ## 17. FROST/Schnorr migration interaction (forward-looking, non-blocking)
 
 A separate, unrelated migration (`tlabs-xyz/frost-upgrade`; tbtc-v2 FROST PR chain
-#971→#1027/#972/#973, keep-core #3866→#4199→#4226 and #4005→#4198→#4227) replaces
+#971->#1027/#972/#973, keep-core #3866->#4199->#4226 and #4005->#4198->#4227) replaces
 tBTC v2's threshold-ECDSA (GG20) signer with FROST threshold Schnorr for new P2TR
 wallets, coexisting with ECDSA wallets on no committed drain calendar
 (`frost-upgrade/docs/adr/0017-fund-migration-own-timeline.md`, ratified 2026-08-10).

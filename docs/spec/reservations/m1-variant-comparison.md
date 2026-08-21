@@ -266,11 +266,31 @@ source-verified on `feat/utxo-reservation-guards`.
 6. Termination makes `notifyReservationStranded` available, converting the
    depositor's segregated in-kind claim into an ordinary pooled claim.
 
-So B's capacity limit terminates in **honest operators slashed and depositors
-stranded** — the same harm class as the §0.6 vector B was chosen to remove,
-arriving through a different door. One difference decides the variant choice:
-§0.6 is a **liveness duty**, dischargeable by wiring keep-core correctly; this
-is a **capacity limit**, dischargeable by no amount of client-side diligence.
+**Step 5 corrected 2026-08-21.** The chain above assumes the MovingFunds clock
+is still running. It is not, if the wallet proved its funds moved:
+`notifyWalletFundsMoved` deletes `movingFundsRequestedAt` (`Wallets.sol:434`,
+"Zero is the completion sentinel and cannot be reported as a timeout") and
+`notifyMovingFundsTimeout` requires it non-zero
+(`MovingFunds.sol:594-598`). So the endgame has two branches and step 6 does
+not always follow:
+
+- **Wallet never proves funds moved:** the chain holds as written. Stake is
+  seized, the wallet terminates, and the position becomes strandable.
+- **Wallet proves funds moved and keeps anchors:** no slashing at all, but also
+  no termination, so `notifyReservationStranded` never becomes available. The
+  position has no close path until a slot frees and re-anchor can drain it.
+
+See `roadmap.md` §0.8 for the full derivation, including the permissionless
+below-dust exit that closes such a wallet once its count reaches zero.
+
+So B's capacity limit terminates in **stranded depositors, and slashed
+operators only on the branch where the wallet never proved its funds moved** —
+the same harm class as the §0.6 vector B was chosen to remove, arriving through
+a different door. On the other branch operators keep their stake but the
+position loses even the stranding exit, which is worse for the depositor.
+Either way the conclusion that decides the variant choice is unchanged: §0.6 is
+a **liveness duty**, dischargeable by wiring keep-core correctly; this is a
+**capacity limit**, dischargeable by no amount of client-side diligence.
 And it is reached by arithmetic, not by an attacker.
 
 **The condition that makes B defensible** — the amount cap must bind before
@@ -396,12 +416,16 @@ slash honest operators if it slips.
    The consequence for §1.4's promise clock is the sharp part: if renewal has
    no entry point, the first cohort's in-kind deadline **cannot be bought back
    by extending the term**. The 12 months is then final for those positions.
-3. **`reservationsByAnchorUtxo` reconciliation** (shared; `roadmap.md` §4
-   items 2-3). `#1091` writes the mapping (`ReservationProofs.sol:465`),
-   `#1094` writes it again for stranding, and `#1102` removed it from the
-   merged base in favour of `spentMainUTXOs`. Two write sites, one removal —
-   fix together or stranding breaks, and stranding is the fallback the whole
-   loss story rests on (`exit/README.md`).
+3. **`reservationsByAnchorUtxo` reconciliation** (shared; `roadmap.md` §4.3
+   item 3). `#1091` introduces the mapping (`ReservationProofs.sol:465`) and
+   `#1094` writes it again for stranding. **Two write sites, no removal** -
+   corrected 2026-08-21. The earlier claim that `#1102` removed it in favour
+   of `spentMainUTXOs` was wrong on two counts: the mapping does not exist on
+   `#1088`'s branch at all, so `#1102` had nothing to remove, and
+   `spentMainUTXOs` is a pre-existing Bridge registry that reservations write
+   into (`Reservation.sol:1454`, `:1510`), not a competing index. Reconcile
+   the two write sites or stranding breaks, and stranding is the fallback the
+   whole loss story rests on (`exit/README.md`).
 4. **Storage-complete at m1** (shared, §5.4 item 3). §11 forbids a live
    `ReservationAction` from spanning a layout change, so every field m2 will
    read must exist unread at m1.
@@ -453,7 +477,7 @@ on-chain bound keeps the system away from it.
 |---|---|---|
 | Default | **A+** | Keeps dissolution — the only sound unpin for a *live* wallet. B's substitutes are a governance dial and a promise |
 | B, only with §5.4 item 1 shipped | acceptable | A global active-position cap below the slot floor makes §5.3 unreachable by construction |
-| B without that cap | **reject** | The endgame is honest operators slashed and depositors stranded, and monitoring cannot prevent it — only notice it |
+| B without that cap | **reject** | The endgame is stranded depositors, with operators slashed only on the branch where the wallet never proved its funds moved (§5.3, step 5 correction); on the other branch the position loses even the stranding exit. Monitoring cannot prevent either - only notice it |
 
 **Recommendation: implement A+.** Not a confirmed decision — the call is the
 team's — but the argument is one-sided enough to state plainly:

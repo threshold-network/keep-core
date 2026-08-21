@@ -129,9 +129,17 @@ the debt belongs in §5.
 ## 4. Launch gates
 
 These are the residual risks `m1-variant-comparison.md` §5.4 identified.
-Under the B decision they are **gates, not tradeoffs**: without them B's
-failure mode is honest operators slashed and depositors stranded, reached by
+Under the B decision they are **gates, not tradeoffs**: without them B fails by
 arithmetic rather than by an attacker (§5.3 of that document).
+
+**Failure-mode framing corrected 2026-08-21.** This previously said the failure
+mode is "honest operators slashed and depositors stranded". Slashing is only
+the branch where a wallet never proves its funds moved. A wallet that *does*
+prove it has its MovingFunds clock deleted (`Wallets.sol:434`) and cannot be
+timed out at all (`MovingFunds.sol:594-598`), so honest operators are **not**
+slashed. Under saturation that case is worse, not better: the position cannot
+close, cannot time out, and cannot be stranded, because stranding needs a
+`Terminated` wallet that never arrives. See `roadmap.md` §0.8.
 
 ### 4.1 Global active-position cap, enforced at acceptance
 
@@ -156,10 +164,24 @@ relational check or emit both sides and make it a runbook gate.
 
 ### 4.3 `reservationsByAnchorUtxo` reconciliation
 
-`#1091` writes the mapping (`ReservationProofs.sol:465`), `#1094` writes it
-again for stranding, and `#1102` removed it from the merged base in favour of
-`spentMainUTXOs`. Two write sites and one removal must be reconciled in the
-rewrite, because stranding depends on it and stranding is B's only close path.
+**Corrected 2026-08-21.** This previously read: "`#1091` writes the mapping
+(`ReservationProofs.sol:465`), `#1094` writes it again for stranding, and
+`#1102` removed it from the merged base in favour of `spentMainUTXOs`. Two
+write sites and one removal must be reconciled." The removal does not exist.
+
+`reservationsByAnchorUtxo` is **introduced by `#1091`** and is absent from
+`#1088`'s branch entirely (0 hits in `BridgeState.sol` on
+`feat/utxo-reservation-core`), so `#1102` - which merged into that branch -
+had nothing to remove. `spentMainUTXOs` is a **pre-existing Bridge registry**
+that reservations write into (`Reservation.sol:1454`, `:1510`, documented at
+`:66` as "the existing registry of honestly-spent" outpoints), not a competing
+index introduced by `#1102`.
+
+So there are **two write sites and no removal**: `#1091`'s and `#1094`'s
+stranding write. Both must be carried, because stranding is one of only two
+position-closing paths reachable in B, and the other one
+(`strandLateSettlementIfTargetWalletClosed`) also lands in `Stranded`. See
+`inventory/pr-map.md` §4 and `milestone-inventory.md` C-1.
 
 ### 4.4 Keep writing `dissolutionEligibleAt`
 
@@ -200,7 +222,8 @@ B's duty list is longer than A+'s because nothing closes a position on its own.
 | Free-slot monitor (`walletReservationsCount < cap` across Live wallets) | Leading indicator of the §4.1 cliff |
 | Occupancy monitor (`activeReservationsCount` vs `liveWalletsCount x cap`) | Alert well before saturation |
 | Action-timeout watch | Pending acceptances and re-anchors approaching `reservationActionTimeout`, since expiry slashes |
-| Stranding watcher on `Terminated` wallets | Releases capacity; B's only close path |
+| Stranding watcher on `Terminated` wallets | Releases capacity; one of B's two close paths |
+| **Below-dust report after the last re-anchor** | `notifyMovingFundsBelowDust` (`MovingFunds.sol:627`) is permissionless and is the **only remaining** route to close a wallet that proved its funds moved while still holding anchors. Nothing triggers it: `notifyWalletFundsMoved`'s own closing attempt (`Wallets.sol:441`) runs once with the count still non-zero and cannot be retried, since `:435` deletes the commitment hash `:424-427` requires. See `roadmap.md` §0.8 |
 | Stale reserved-deposit cleanup | `notifyStaleReservedDeposit` |
 | In-kind fee reserve and `inKindFeeDebtSat` watch | Re-anchor charges an in-kind miner fee (§3), so the reserve depletes and can enter debt in m1. Non-zero debt means the system is over-supplied by exactly that amount, publicly visible and repayable by anyone |
 | Cap-dial runbook | Trigger, executor and accepted blast radius agreed **before** launch |

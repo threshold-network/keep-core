@@ -54,7 +54,7 @@ A distinct phase, not just another test-tooling item: it exercises the
 full stack with real multi-operator coordination, a live L1, and real
 Bitcoin-testnet UTXOs, and it is the validation ground for the two
 executor duties added in the Stranded-decision review (§5) — re-anchor-on-
-rotation and stranding-cleanup — plus the whole liveness-downtime → `Stranded`
+rotation and stranding-cleanup — plus the whole liveness-downtime -> `Stranded`
 path our analysis rests on. Setup and first runs sit on the critical path
 (before audit submission); the tail (extended runs, soak, live-only bug
 fixes) overlaps the audit window's idle capacity.
@@ -73,8 +73,8 @@ it explicitly below.
 | Item | Raw effort | Net add to critical path | Why net < raw |
 |---|---|---|---|
 | Staging environment: testnet contract deployment, accelerated-param governance config, operator(key set) bring-up, BTC-testnet funding/UTXOs, monitoring wiring | 3-5 days | ~3-4 days | Deployment is scriptable and parallelizable; the accelerated-param config and operator lifecycle are the sequential core. |
-| Core lifecycle runs on live network (accept → whole + partial redeem → renew → dissolve → re-anchor, real coordination rounds) | 4-6 days | ~3-4 days | Wall-clock waits between accelerated events leave the engineer free to run parallel workstreams; raw time is dominated by run duration, not attention. |
-| **Liveness/stranding drill** (forced Scenario: take an operator set dark → MovingFunds → executor re-anchor attempt → movingFundsTimeout → Terminated → `notifyReservationStranded`; verify capacity release, event, monitoring, and the Tier 0 liability accounting that consumes it) | 2-3 days | ~2 days | Sequenced after the core runs and the coordination-executor rework it validates; deliberately orchestrated, so bounded. |
+| Core lifecycle runs on live network (accept -> whole + partial redeem -> renew -> dissolve -> re-anchor, real coordination rounds) | 4-6 days | ~3-4 days | Wall-clock waits between accelerated events leave the engineer free to run parallel workstreams; raw time is dominated by run duration, not attention. |
+| **Liveness/stranding drill** (forced Scenario: take an operator set dark -> MovingFunds -> executor re-anchor attempt -> movingFundsTimeout -> Terminated -> `notifyReservationStranded`; verify capacity release, event, monitoring, and the Tier 0 liability accounting that consumes it) | 2-3 days | ~2 days | Sequenced after the core runs and the coordination-executor rework it validates; deliberately orchestrated, so bounded. |
 | **Subtotal, testnet pre-audit core** | **9-14 days raw** | **~8-10 days net (~+2 weeks critical path)** | |
 | Extended runs / soak + triage/fix/rerun of bugs that only appear on a live network with real Bitcoin (real fee markets, real coordination, real downtime) | 3-5 days raw | ~0 net | Absorbs into the audit window's idle capacity alongside the other during-audit items; running longer is free of critical-path cost. |
 | **Subtotal, testnet audit-overlap tail** | **3-5 days raw** | **~0 days** | |
@@ -114,10 +114,10 @@ it explicitly below.
   catching it during the multi-signer simulation (item 7) or, worse,
   during audit.
 - **The testnet round is where the Stranded-executor duties and the whole
-  liveness-downtime → `Stranded` path actually get exercised.** The two
+  liveness-downtime -> `Stranded` path actually get exercised.** The two
   executor duties added in the decision review (§5) — re-anchor-on-rotation
-  and stranding-cleanup — and the operator-goes-dark → `MovingFunds` →
-  timeout → `Terminated` → `Stranded` behavior the analysis rests on cannot
+  and stranding-cleanup — and the operator-goes-dark -> `MovingFunds` ->
+  timeout -> `Terminated` -> `Stranded` behavior the analysis rests on cannot
   be proven by unit/fork/simulation tests alone; they need a live L1 with
   real multi-operator coordination and real Bitcoin testnet. Plan for the
   accelerated-parameter prerequisite (the native timers are governable but
@@ -152,7 +152,7 @@ lock produced (`exit/stranded.md`). Net timeline impact is
   feeds the re-open decision loop rather than being a leaf deliverable.
 - **Two executor duties added to the keep-core rework, absorbed by its
   existing budget.** The spec's §13 executor section now requires (a)
-  re-anchor every open reservation on `Live → MovingFunds`, and (b) call
+  re-anchor every open reservation on `Live -> MovingFunds`, and (b) call
   `notifyReservationStranded` for terminated wallets holding un-stranded
   reservations. These are small behavioral additions inside the already-
   budgeted 10-15 day coordination-executor rework (same PRs, same wiring),
@@ -170,7 +170,7 @@ lock produced (`exit/stranded.md`). Net timeline impact is
   the input that would justify revisiting scope later.
 - **A testnet round was added (§2, §3) and is the natural validator for the
   material above.** It is where the two new executor duties and the
-  liveness-downtime → `Stranded` path get proven against a live network,
+  liveness-downtime -> `Stranded` path get proven against a live network,
   and where the Tier 0 evidence-gathering actually starts producing real
   stranding-frequency data. It adds ~+2 weeks to engineering (pre-audit
   core) with its tail absorbed by the audit window — see §2's testnet
@@ -182,8 +182,8 @@ budget already reserved for them, converts the compensation module into
 the clearly-prioritized Tier 0-first deliverable, and sharpens the spec
 without adding schedule. The **testnet round** is a separate, deliberate
 addition on top (validation ground for those executor duties and the
-liveness→`Stranded` path), and it is what moves the §3 totals: ~13-18
-weeks → **~15-20 weeks**. Revisit both if Tier 0's real stranding-
+liveness->`Stranded` path), and it is what moves the §3 totals: ~13-18
+weeks -> **~15-20 weeks**. Revisit both if Tier 0's real stranding-
 frequency data later justifies reopening the exit decision.
 
 ## 6. Effect of the create-only milestone split (2026-08-21)

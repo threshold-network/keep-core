@@ -225,6 +225,68 @@ applies it unevenly: `extendCustody` (`ReservationVault.sol:367`) is guarded by
 have **no pause at all**. m1 must add the redemption-side flag by copying
 renewal's pattern within the same file.
 
+### 0.8 A retiring wallet's last exit needs an explicit call that nothing makes
+
+Added 2026-08-21 from a direct read of the wallet lifecycle, then **corrected
+the same day** - the first version of this section claimed a permanent deadlock
+and was wrong. The deadlock is real only under saturation; the general case is
+an unclaimed operational duty. Both are recorded because the distinction is the
+whole point.
+
+`m1-b-implementation.md` §4.1 describes one chain: at saturation re-anchor has
+no target, an anchored wallet cannot retire because closing requires a zero
+reservation count (`Wallets.sol:674-677`, repeated `:706-709`), its MovingFunds
+clock expires, and the timeout seizes operator stake and terminates the wallet
+(`:507-513`, then `terminateWallet` at `:515`).
+
+That chain needs the clock to still be running. `notifyWalletFundsMoved`
+deletes it on a successful proof - `delete wallet.movingFundsRequestedAt`
+(`Wallets.sol:434`) - commented "Zero is the completion sentinel and cannot be
+reported as a timeout" (`:431-433`), and `notifyMovingFundsTimeout` requires
+`movingFundsRequestedAt != 0` (`MovingFunds.sol:594-598`). So a wallet that
+proves its funds moved while still holding anchors is **not slashable**.
+
+It is also not stuck. The exit is
+`MovingFunds.notifyMovingFundsBelowDust` (`:627`), which is `external` with
+**no modifier** - permissionless. It computes the balance (`:634-637`), requires
+it below the dust threshold (`:639-642`), and calls
+`Wallets.notifyWalletMovingFundsBelowDust` (`:644`), which checks only
+MovingFunds state (`:479-482`) before calling `beginWalletClosing` (`:484`).
+Its natspec names the precondition directly: "The wallet must not custody
+reservation anchors" (`:620-621`), enforced downstream by the count require.
+In this case `mainUtxoHash` was deleted at `Wallets.sol:430`, so the balance is
+zero and the dust check passes trivially.
+
+**So the sequence is: re-anchor every position off the wallet until
+`walletReservationsCount` reaches zero, then anyone reports below-dust and the
+wallet closes cleanly - no slashing, no termination, no stranding.** That is a
+better outcome than the §4.1 chain suggests.
+
+The finding that survives is narrower and is an operational one. **Nothing
+triggers that report.** Of the three `beginWalletClosing` call sites
+(`Wallets.sol:441`, `:484`, `:633`), the one inside `notifyWalletFundsMoved`
+(`:441`) runs once, at proof time, when the count is still non-zero, so it is
+skipped (`:437-441`). It cannot be retried either: the same function deletes
+`movingFundsTargetWalletsCommitmentHash` (`:435`), and re-submitting the proof
+requires that hash to match (`:424-427`). The `:633` site is in `moveFunds`,
+already past. So `:484` via the permissionless below-dust report is the only
+remaining route, and it is a call someone must choose to make.
+
+Two consequences:
+
+1. **The below-dust report is a mandatory keep-core duty, not optional
+   cleanup.** After the last re-anchor off a retiring wallet, an executor must
+   call `notifyMovingFundsBelowDust` or the wallet sits in `MovingFunds`
+   indefinitely - not blocked, just unattended. Add it to the duty list
+   alongside the re-anchor executor.
+2. **The genuine deadlock is saturation-specific.** If no free slot exists,
+   re-anchor cannot drain the count, so all three exits are shut at once:
+   closing is blocked on the count, the timeout is unreachable once funds are
+   proven moved, and stranding needs a `Terminated` wallet
+   (`Reservation.sol:1374-1378`) that never arrives. This is the real
+   justification for §4.1's global position cap: the cap is what keeps the
+   drain available, and without it the failure is silent rather than a revert.
+
 ## 1. Milestone 1 — create-only rails, variant B
 
 **Decided 2026-08-21: m1 is variant B with a minimal router.** This supersedes
@@ -332,7 +394,7 @@ What B accepts in exchange:
   had. Executor failure has no fallback.
 
 Residual conditions:
-- Re-anchor needs the keep-core executor to sign and prove (§4/§5). This is
+- Re-anchor needs the keep-core executor to sign and prove (§5). This is
   now the only such duty, so it carries the whole pinning guarantee.
 - While `Live`, re-anchor requires `privileged` — governance-driven rotation
   only. Acceptable at design-partner scale.
@@ -348,15 +410,24 @@ dropped them, m2 would read zeros and every m1 position would be instantly
 dissolution-eligible — permanently barring the earliest users from in-kind
 redemption. Add a test asserting the fields are non-zero after acceptance.
 
-### 2.2 m2 needs no Bridge upgrade — but the vault is NOT upgradeable
+### 2.2 m2 needs a Bridge upgrade under B, and the vault is NOT upgradeable
 
-Because redemption and renewal are vault-gated (§0.2) and their Bridge-side
-code ships in m1, enabling them is a **vault-side change**, not a Bridge
-storage migration. `epic-merge-plan.md` §11's no-live-action-on-intermediate-
-layout rule is therefore satisfied by construction for the redemption
-rollout: there is no Bridge layout change at all, and the only m1 in-flight
-records are acceptance and re-anchor actions, both transient (bounded by
-`reservationActionTimeout`).
+**Premise corrected 2026-08-21.** This section previously read "m2 needs no
+Bridge upgrade" on the grounds that "redemption and renewal are vault-gated
+(§0.2) and their Bridge-side code ships in m1, enabling them is a
+**vault-side change**, not a Bridge storage migration". That held for the
+create-only whole-PR plan, where the Bridge-side code shipped and sat
+unreachable behind caller gates. **It is false under B** (§0.7 item 2): B does
+not ship that code at all, so m2 must write and deploy roughly 4,641 production
+Solidity lines of redemption, renewal, veto integration and dissolution
+(§3.1). That is a Bridge implementation upgrade.
+
+What survives is the storage half of the argument.
+`epic-merge-plan.md` §11's no-live-action-on-intermediate-layout rule is still
+satisfied by construction, because m1 ships the **complete** layout (§2.1) and
+the only m1 in-flight records are acceptance and re-anchor actions, both
+transient (bounded by `reservationActionTimeout`). So m2 adds code against an
+unchanged layout: an upgrade, not a migration.
 
 **Resolved 2026-08-21: `ReservationVault` is not proxy-upgradeable.**
 `contract ReservationVault is IVault, Ownable` — plain `Ownable`, no
@@ -389,16 +460,23 @@ unavailable for as long as the product is being used.
 
 **Recommended m1 vault design (avoids the swap entirely):** ship the m1
 vault **with** the redemption entry point present but disabled by an
-owner-settable flag, so m2 is a single governance transaction
-(`setRedemptionsEnabled(true)`) rather than a swap that the guard blocks
-indefinitely. This keeps create-only behaviour (unreachable while the flag
-is false) and is the same principle already accepted for the Bridge-side
-redemption code (§0.2/§1.2). Costs: the vault's redemption plumbing is
-deployed and audited in m1, and the flag becomes a governance-safety item
+owner-settable flag, so enabling it later is a governance transaction rather
+than a swap the guard blocks indefinitely. This keeps create-only behaviour
+(unreachable while the flag is false). Costs: the vault's redemption plumbing
+is deployed and audited in m1, and the flag becomes a governance-safety item
 (accidental enable). Given the vault cannot be upgraded *and* the swap is
 gated on total quiescence, this is no longer a convenience — **without the
 flag, m2's in-kind redemption promise has no reachable delivery path while
 positions keep being created.**
+
+**Two claims here corrected 2026-08-21.** This previously said the flag makes
+m2 "a single governance transaction (`setRedemptionsEnabled(true)`)" and called
+it "the same principle already accepted for the Bridge-side redemption code
+(§0.2/§1.2)". Both assumed the whole-PR plan. Under B the Bridge-side
+redemption code is **not** deployed, so that principle was never accepted for
+it, and the flag flip is one step of a Bridge upgrade rather than the whole of
+m2. The flag's value is unchanged and is in fact higher: it is what keeps the
+path reachable at all (§3.1).
 
 ### 2.3 The Bitcoin side is the only true one-way door
 
@@ -407,72 +485,155 @@ commitment, and anchor identification (`anchorTxHash` / output index) are on
 Bitcoin for every accepted position and cannot be re-shaped by an upgrade.
 Pre-launch scrutiny belongs here.
 
-## 3. Optimal merge order
+## 3. Milestone 2 - what it restores and what it inherits
 
-**Keep the stack intact; cut only `#1096`.** Per §0.1 there is no cheaper
-cut, and per §0.2 no cut is needed to reach create-only behavior.
+m2 was previously described only as "everything else", scattered across §2.2
+and `m1-b-implementation.md` §6. It gets its own scope statement here because
+the B decision made it a comparable project rather than a small follow-up:
+5,261 production Solidity lines in m1 against 4,641 in m2, a ratio of
+**1.13 : 1** (`m1-variant-comparison.md` §5.1).
 
-| Step | PR | Action | Gate before advancing |
-|---|---|---|---|
-| 1 | `#1088` | Merge (already carries `#1102`'s 30-finding fold) | Storage layout final; classification permanence tested |
-| 2 | `#1090` | **Rebase over the `#1102` fold** — currently CONFLICTING | Router parity, selector disjointness, no standalone authority, one-time setter (all four per `ReservationRouter` natspec) |
-| 3 | `#1091` | Rebase; **reconcile `reservationsByAnchorUtxo`** (§4) | Two-phase machine; acceptance writes all fields (§2.1) |
-| 4 | `#1092` | Rebase — required by §0.1, reachability closed by the vault | `dissolutionEligibleAt` snapshot semantics; window `< term` |
-| 5 | `#1093` | Rebase | Backing invariant claim ≡ anchor; caps enforced |
-| 6 | `#1094` | Rebase; **same anchor-index reconciliation** (§4) | Designated-wallet binding; stranding releases capacity |
-| 7 | `#1095` | Rebase; update frozen params to §1.4 and document create-only | Frozen-param sign-off incl. promise-clock date |
-| — | `#1096` | **Defer to m2**; retarget after step 7 lands | — |
+### 3.1 What m2 restores
 
-Then: one audit against the assembled m1 (`epic-merge-plan.md` §5), deploy
-inert, activate per §1.3.
+| Capability | Approximate production Solidity | Entry point m1 must have shipped |
+|---|---|---|
+| In-kind whole redemption, veto integration, retry credit, late settlement | ~3,035 with renewal and storage | `redeemReservation` (`ReservationVault.sol:293`), `retryRedeemReservation` (`:469`) - **flag-gated, present** |
+| Renewal / term extension | included above | `extendCustody` (`:367`) - already flag-gated as shipped |
+| Partial redemption, 1-in-2-out (`#1096`) | ~696 | shares the redemption entry points |
+| Dissolution restored | ~910 | none needed: dissolution is Bridge-side only |
 
-**m2 order:** enable redemption on the vault — a flag flip under the
-recommended design, otherwise a vault redeploy plus `reservationVault`
-re-point after draining `pendingReservedDeposits` (§2.2) → then `#1096`
-partial (Bridge change, its own audit delta).
+Redemption and renewal are **vault-gated**, so the flag flip is what makes
+their vault entry points reachable at all (§2.2). It is **necessary but not
+sufficient**: under B the Bridge-side code for those paths is absent, so m2
+must ship it first. The flag turns m2 from impossible into possible; it does
+not make it cheap. Dissolution is **not** vault-gated: it is permissionless
+(§0.6) and lives entirely in Bridge code, so it needs no vault action at all,
+only router and library code plus a keep-core executor. These two halves of m2
+have different risk profiles and need not ship together.
 
-## 4. Suggested edits to existing PRs
+### 3.2 What m2 inherits from the B decision
 
-1. **`#1090` — rebase (blocking).** Only CONFLICTING PR; it is the head of
-   the chain, so nothing above it can merge first. Mechanical.
-2. **`#1091` — reconcile the anchor index (substantive).**
-   `ReservationProofs.sol:465` writes `reservationsByAnchorUtxo`, which
-   `#1102` removed from the merged base in favour of `spentMainUTXOs`.
-   Decide one mechanism and apply it consistently.
-3. **`#1094` — same reconciliation.** It declares and uses the anchor
-   mapping for `strandReservation`. This and item 2 are the same defect
-   surfacing twice; fix them together or the stranding path breaks.
-4. **`#1092` — no code change, but retract the "cut" note** wherever the
-   docs claim it is omitted (§0.1). Its parameters need m1 values (§1.4).
-5. **`#1093` — no structural change.** Confirm cap enforcement is reachable
-   with renewal unreachable (caps are checked at acceptance, so they should
-   be — verify, do not assume).
-6. **`#1095` — content edits.** Frozen params per §1.4, the create-only
-   surface, the reachability matrix (§0.2), and the promise-clock date.
-7. **`#1096` — retarget only**, after step 7.
-8. **keep-core `#4238` — re-scope.** It models the single-phase whole-
-   redemption design and predates the two-phase machine. For m1 it needs
-   acceptance and re-anchor as nonce-carrying proposals, **plus dissolution
-   — which is *not* optional.** Dissolution is permissionless (§0.6), so it
-   cannot be gated off by a minimal vault, and an unwired dissolution path
-   lets anyone slash honest wallets on timeout. Only the redemption proposal
-   can stay unwired in m1, because redemption is vault-gated.
+Three consequences A+ would not have created. All three are decisions, not
+chores, and none of them is forced by the code:
+
+1. **Whether to restore re-anchor's eligibility gate.** m1 deletes
+   `block.timestamp < reservation.dissolutionEligibleAt`
+   (`Reservation.sol:785-788`) to make re-anchor unbounded, which is what
+   makes dropping dissolution sound (§1.5). Restoring dissolution does not
+   restore the gate. Leaving it out means a position can be rotated
+   indefinitely past its eligibility date.
+2. **Whether m1-era positions get m2 semantics.** They carry `expiresAt` and
+   `dissolutionEligibleAt` snapshotted under m1 parameters, and `:180-184`
+   makes those non-retroactive by design. So the first cohort's term is fixed
+   at whatever m1 set, and cannot be extended by a later governance change.
+3. **The in-kind promise has a dated deadline, not an open one.** The
+   12-month term (§1.4) dates the first cohort's earliest
+   `dissolutionEligibleAt`. If m2's redemption has not shipped by then, those
+   positions' only exit remains the pool. The term converts a launch blocker
+   into a scheduling commitment.
+
+### 3.3 What m2 must not have to do
+
+m2 must be an **upgrade, not a migration**. That requires m1 to have shipped:
+the complete storage layout (§2.1), every vault entry point (§0.7), and every
+field m2 reads, written where an m1 path writes it
+(`milestone-inventory.md`). Failing any of these turns a flag flip into a
+vault redeploy that active positions block.
+
+## 4. How m1 ships relative to the existing PRs
+
+This section replaces the earlier "optimal merge order" and "suggested edits to
+existing PRs". Both assumed the eight-PR stack was the delivery vehicle. Under
+B it is **reference material**, so the question changed from "in what order do
+we merge these" to "what do we extract from them, and how do we preserve them".
+`pr-strategy.md` holds the mechanics and the recommendation; this section holds
+only the facts that constrain it.
+
+### 4.1 Measured state of the stack (2026-08-21)
+
+Three branches are behind their bases, not one. The earlier claim that `#1090`
+was the only CONFLICTING PR is **out of date**:
+
+| PR | Behind its base | Consequence |
+|---|---|---|
+| `#1088` | 2 commits | `reservations-epic` moved on with an unrelated security fix (`#1098`); the epic branch is not frozen |
+| `#1090` | 0 | Since rebased; **contains** the `#1102` fold |
+| `#1091` | **13 commits** | The fold stops here |
+| `#1092` | 5 commits | |
+| `#1093`-`#1096` | 0 | |
+
+### 4.2 The `#1102` fold does not reach the tip anyone is citing
+
+`3566e059` is present on `feat/utxo-reservation-core` and
+`feat/utxo-reservation-router`, and **absent** from
+`feat/utxo-reservation-guards` and `feat/utxo-reservation-partial-redemption`,
+because `#1091` is 13 commits behind `#1090`.
+
+This matters beyond extraction: `m1-b-implementation.md` and `feature-spec.md`
+both source-verify against the guards tip, which predates 30 review fixes
+touching 10 production files (+685 -190), `Reservation.sol` most of all
+(+342 -95). Their line numbers are pre-fix. Resolving this is the first
+concrete action in `pr-strategy.md`.
+
+### 4.3 Extraction hazards, in priority order
+
+1. **`#1091` rewrites `#1088` heavily** (-1266 production lines). Never
+   extract the `#1088` form of anything `#1091` touched; the single-phase
+   mechanics were replaced by the two-phase machine.
+2. **`#1093` reworks `#1091`'s backing model** (the H-04 finding). Take the
+   `#1093` form of anything touching `mintedAmount` or `anchorAmount`.
+3. **The reverse anchor index has two write sites**, `#1091` and `#1094`'s
+   stranding write. Both must be carried, because stranding is B's only
+   position-closing path. **Correction to the earlier claim in this section:**
+   `#1102` did not remove `reservationsByAnchorUtxo` in favour of
+   `spentMainUTXOs`. The mapping does not exist on `#1088`'s branch at all -
+   `#1091` introduces it - and `spentMainUTXOs` is a pre-existing Bridge
+   registry that reservations write into (`Reservation.sol:1454`, `:1510`),
+   not a competing design. There is no removal to reconcile, only two write
+   sites.
+4. **`#1092` cannot be skipped** even though renewal is deferred: its expiry
+   and snapshot semantics are structural to `#1093`+ (§0.1).
+5. **`#1095` contains no production Solidity.** Docs source only.
+
+### 4.4 keep-core `#4238`
+
+It models the single-phase whole-redemption design and predates the two-phase
+machine, so it is a **rewrite**, not an edit. Under B it needs acceptance and
+re-anchor as nonce-carrying proposals, and **not** dissolution - which is the
+one place the B decision genuinely reduces client scope, worth roughly 300-500
+production Go lines.
+
+**This reverses what this section said before.** The earlier text argued
+dissolution was "*not* optional" for m1 because it is permissionless and cannot
+be gated off by a minimal vault. That reasoning was right for a create-only m1
+built from the stack, where the dissolution entry point ships whether or not
+the client supports it. It does not apply to B: B removes
+`requestReservationDissolution` from the router entirely, so there is no entry
+point to leave unwired and no slashing vector to arm (§0.6).
 
 ## 5. Implementation gaps for m1 (high level)
 
-1. **keep-core two-phase client** — acceptance, re-anchor, **and
-   dissolution**, with nonce-carrying proposals, executor duties, and
-   regenerated ABI bindings. Dissolution is mandatory per §0.6, and it is
-   also the only position-closing path in m1, so it gates both wallet safety
-   and §2.2's quiescence. This is the critical path (`feature-spec.md` §16
-   item 3).
+1. **keep-core two-phase client** — acceptance and re-anchor only, with
+   nonce-carrying proposals, executor duties, and regenerated ABI bindings.
+   **Corrected 2026-08-21:** this item previously read "acceptance, re-anchor,
+   **and dissolution**... Dissolution is mandatory per §0.6" and called that
+   the critical path. Under B that is false - the router has no
+   `requestReservationDissolution`, so there is no vector to arm (§4.4, §6
+   reversed item 3, `milestone-inventory.md` C-7). Dropping the dissolution
+   executor is B's one genuine client-side saving, roughly 300-500 production
+   Go.
+   It remains the critical path, but for a different reason: `#4238` supplies
+   types, proposals and Bitcoin-tx assembly and **contains no executor at
+   all** - `pkg/tbtcpg` has no reservation task and the chain interface has no
+   submission method - so this is new code rather than rework
+   (`milestone-inventory.md` §2.9, C-8).
 2. **m1 `ReservationVault`** — exposes the acceptance/credit path, plus the
    redemption entry point **disabled behind an owner-settable flag** per
    §2.2's recommended design (the vault cannot be upgraded, and a swap is
    blocked by the guard until every position closes, so the flag is what
    gives m2 a reachable delivery path). Renewal
    gets no entry point at all.
-3. **Anchor-index reconciliation** across `#1091`/`#1094` (§4 items 2-3).
+3. **Anchor-index reconciliation** across `#1091`/`#1094` (§4.3 item 3).
 4. **Parameter and activation wiring** — §1.4 values, the deploy-inert
    switch, and governance runbook steps.
 5. **Executor duty: re-anchor on rotation** — prompted by
@@ -508,7 +669,7 @@ is the requested unit and the ratios are informative.
 | **Total additions** | **27,041** | **3,259** | **8.3 : 1** |
 
 keep-core `#4238` adds 919 production Go + 914 test Go, but models the
-pre-two-phase design (§4 item 8), so it is a starting point rather than
+pre-two-phase design (§4.4), so it is a starting point rather than
 shippable m1 content.
 
 Test-to-production ratio on the m1 stack is 1.73:1 — the Solidity is heavily
@@ -542,7 +703,7 @@ Nearly all of it is keep-core Go, not Solidity:
 |---|---|---|
 | keep-core two-phase rework (acceptance + re-anchor + **dissolution**) | ~1,400-1,900 prod Go, ~1,000-1,500 test Go | `#4238`'s 919+914 largely rewritten; 3 of 4 action types, nonce-carrying, 6 stubbed `TbtcChain` methods implemented |
 | Redemption pause flag on the vault | ~30 prod, ~80 test | Mirrors the shipped `renewalsPaused`/`pauseRenewals` pattern (`ReservationVault.sol:381,409`) |
-| Anchor-index reconciliation (`#1091` :465 vs `#1094`) | ~20-60 prod, ~100 test | §4 items 2-3 |
+| Anchor-index reconciliation (`#1091` :465 vs `#1094`) | ~20-60 prod, ~100 test | §4.3 item 3 |
 | m1-specific tests (reachability, storage-completeness, dissolution-timeout slashing) | ~200-400 test | §5 item 7 |
 | Params, deploy and activation wiring | ~100-200 | §1.3/§1.4 |
 | `#1090` rebase | ~0 net | Conflict resolution, no new logic |
@@ -816,7 +977,7 @@ are kept with their reversal marked, per this set's convention.
   the term except wallet termination. Re-anchor is unbounded to compensate
   (its `< dissolutionEligibleAt` gate is deleted), which is what makes the cut
   sound at all, but a position past eligibility now has no owner-side exit.
-  This is the accepted residual risk (§4 above bounds it).
+  This is the accepted residual risk (§1.5 bounds it).
 - ~~**keep-core dissolution ships in m1, not deferrable.**~~ Its premise was
   that an unwired permissionless dissolution is a slashing vector; B removes
   the entry point entirely, so there is nothing to wire and no vector (§0.2).

@@ -54,10 +54,10 @@ as a matter of protocol policy, not because the Bitcoin itself became unspendabl
 
 **What the call does — `notifyReservationStranded(reservationKey)`, permissionless, no reward:**
 
-1. Flips reservation state `Active → Stranded`.
+1. Flips reservation state `Active -> Stranded`.
 2. Releases tracked capacity: decrements the wallet's `walletReservationsCount` /
    `walletReservationsAmount` and the global `reservationTotalAmount` by the anchor's value.
-3. Removes the reservation from the wallet's enumeration list and the anchor→reservation reverse
+3. Removes the reservation from the wallet's enumeration list and the anchor->reservation reverse
    index.
 4. Emits `ReservationStranded(reservationKey, walletPubKeyHash, owner, anchorAmount)` — the only
    artifact. No storage record naming an owed amount is created; the event is the entire trail.
@@ -91,7 +91,7 @@ malice and are the more ordinary way a wallet ends up `Terminated`.
    `Active`.
 2. **W1 ages out and is asked to move funds** — nothing to do with Alice's reservation; W1 is
    simply old enough (or low enough on non-reservation balance) to be rotated out in the normal
-   course of wallet lifecycle. `moveFunds` transitions it `Live → MovingFunds`.
+   course of wallet lifecycle. `moveFunds` transitions it `Live -> MovingFunds`.
 3. **The escape hatch exists.** While W1 is in `MovingFunds`, Alice's reservation *can* be
    re-anchored to any Live wallet with capacity (`requestReservationReanchor` is explicitly
    allowed for `MovingFunds` source wallets, `../feature-spec.md` §4.3). If the
@@ -104,7 +104,7 @@ malice and are the more ordinary way a wallet ends up `Terminated`.
    re-anchor that would have saved Alice's claim.
 5. **Termination fires, unconditionally.** Anyone calls `notifyWalletMovingFundsTimeout`;
    `movingFundsTimeoutSlashingAmount` is seized from W1's operator stake and split with the
-   caller as a reward. W1 → `Terminated`. This transition has no dependency on Alice's
+   caller as a reward. W1 -> `Terminated`. This transition has no dependency on Alice's
    reservation whatsoever — it fires whether W1 holds zero reservations or fifty, and W1's
    operators may not have done anything dishonest at all.
 6. **The gap.** Alice's reservation still reads `Active` in storage. Her 10 tBTC balance is
@@ -114,7 +114,7 @@ malice and are the more ordinary way a wallet ends up `Terminated`.
    protocol regardless of whether the coins themselves are spendable.
 7. **Someone calls `notifyReservationStranded`** — a keep-core watchtower bot, Alice herself, a
    bystander running a script; nobody is paid to do it and nobody is blocked from doing it.
-   Reservation → `Stranded`. W1's and the global reservation-capacity counters drop by 10 BTC.
+   Reservation -> `Stranded`. W1's and the global reservation-capacity counters drop by 10 BTC.
    Alice's entry is removed from W1's enumeration and the anchor index.
    `ReservationStranded(key, W1, Alice, 10 BTC)` fires.
 8. **End state.** Alice still holds exactly 10 tBTC — untouched by any of the above. What she lost
@@ -147,7 +147,7 @@ closing a documentation gap so the responsibility is actually assigned somewhere
 
 The spec lists `requestReservationReanchor` as an executor duty (§13), but nowhere says *when* the
 executor should call it for a wallet entering `MovingFunds`. If the executor does not automatically
-re-anchor all reservations to a Live target the moment its wallet transitions `Live → MovingFunds`,
+re-anchor all reservations to a Live target the moment its wallet transitions `Live -> MovingFunds`,
 every routine rotation of an anchor-holding wallet becomes a stranding candidate. **Recommendation:**
 on detecting `WalletMovingFunds(walletPubKeyHash)`, the keep-core executor should enumerate that
 wallet's reservation keys, pick a Live target with capacity, and call
