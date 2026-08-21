@@ -97,6 +97,14 @@ original single-phase design; the two-phase/partial-redemption keep-core
 rework is **not yet an open PR** — it must be created on `reservations-epic`
 before `#4238` alone is treated as feature-complete.
 
+**Milestone scope (read `roadmap.md` §3 before executing this plan).** The
+review and merge sequence below covers all 8 tbtc-v2 PRs. The create-only
+milestone-1 cut merges steps 1-7 (`#1088` through `#1095`) and **defers
+`#1096` to m2** — it is the only clean PR omission in the stack, because
+`#1092`'s expiry model is structural to `#1093`+ (`roadmap.md` §0.1).
+Create-only behaviour comes from the m1 vault exposing no redemption or
+renewal entry point, not from omitting PRs (`roadmap.md` §0.2).
+
 **Excluded as false positives (verified, not reservation work):**
 - tbtc-v2: `#911` (non-fungible, closed), `#971` (FROST Taproot, base
   `frost-upgrade`), `#1003` (Trail of Bits covenant remediation, base
