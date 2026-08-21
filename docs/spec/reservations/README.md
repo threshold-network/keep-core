@@ -26,6 +26,7 @@ authoritative Decision block (including the re-open triggers) lives in
 | File | Role |
 |---|---|
 | `roadmap.md` | **Scope decision.** Milestone-based decomposition for a create-only first release: what ships in m1, what defers to m2, optimal merge order, suggested edits to existing PRs, and the m1 implementation gaps. Source-verified and branch-tagged; §0 records two earlier decisions it reversed. |
+| `m1-variant-comparison.md` | **Decision support.** Flat side-by-side of the two m1 designs actually in contention (A+ and B): shared feature set, the single difference (dissolution), measured line counts, pros/cons, and the volume condition that selects between them. Derivation lives in `roadmap.md` §5.2. |
 | `timeline-estimate.md` | Schedule: phases, baseline + testing fold-in, testnet round (added 2026-08-21), and the §5 rewrite after the Stranded-decision review. |
 | `testing-plan.md` | Test & hardening plan: pre-audit vs during-audit tooling (Foundry invariants, TLA+, multi-signer sim, fork e2e, Certora, etc.), effort, critical-path impact. |
 | `epic-merge-plan.md` | Sequencing the 8-PR tbtc-v2 stack plus standalone keep-core #4238 to mergeable/audit-ready state. |
@@ -50,7 +51,9 @@ authoritative Decision block (including the re-open triggers) lives in
 2. `exit/README.md` — the Decision + why `Stranded` won (before building anything).
 3. `pr-review-followups.md` + `feature-spec.md` §15/§16 — what's open.
 4. `shortfall-design-space.md` → `stranding-compensation-proposal.md` — the loss story.
-5. `roadmap.md` — the milestone cut and merge order (read before executing the merge plan).
+5. `roadmap.md` — the milestone cut and merge order (read before executing
+   the merge plan), then `m1-variant-comparison.md` if the A+/B choice is
+   still open.
 6. `epic-merge-plan.md` → `testing-plan.md` → `timeline-estimate.md` — how it ships.
 
 **Note on duplicated-looking references:** several docs summarize a conclusion

@@ -608,6 +608,10 @@ question: at design-partner volumes the budget never depletes, and B is then
 the better design; at production volumes it does, and dissolution has to come
 back regardless.
 
+`m1-variant-comparison.md` carries this as a flat side-by-side — shared
+feature set, the single difference, line counts and pros/cons — for readers
+who need the choice rather than the derivation.
+
 ### The cost side of a rewrite
 
 None of this is free, and the comparison is not like-for-like:
