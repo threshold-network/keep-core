@@ -98,16 +98,23 @@ for Reanchor/Dissolution the way `notifyRedemptionTimeout` exists on the
 pooled path — if the SPV maintainer stalls, an expired reservation can't be
 dissolved by anyone else.
 
-**Catalog match: partial, not confirmed.** #1091's "two-phase
-authorize-then-prove reservation settlement" and its permissionless
+**Catalog match: confirmed by the 2026-08-21 multi-agent review — proof
+submission REMAINS maintainer-gated, only the request side opened up.**
+#1091's "two-phase authorize-then-prove reservation settlement" makes
 `requestReservationDissolution` (eligible once `now > dissolutionEligibleAt`)
-address the *request* side permissionlessly. Whether the final **SPV proof
-submission** step is still `onlySpvMaintainer`-only, or was opened up
-alongside it, isn't stated in the spec excerpts read for this cross-check.
-**Action: confirm in #1091 whether `submitReservationReanchorProof` /
-`submitReservationDissolutionProof`-equivalent entry points remain
-maintainer-gated after the authorize/prove split, or whether proof
-submission is now permissionless too.**
+and `notifyReservationActionTimeout` permissionless on the *request* side,
+but proof submission stays behind the single `onlySpvMaintainer`-gated
+entry point (`ReservationRouter.sol:208-212,:303-312`; corroborated at
+`Bridge.sol:327-330,:866`). **This item's premise stands: verified, not
+resolved.** A maintainer stall still blocks dissolution with no
+permissionless fallback — worse, a stalled-then-timed-out dissolution
+*slashes the wallet* (`notifyWalletRedemptionTimeout` →
+`ecdsaWalletRegistry.seize`) and can terminate an entirely honest,
+unresponsive-maintainer-blocked wallet, stranding every position it
+custodies. Enumerate the mainnet `isSpvMaintainer` set before launch;
+`MaintainerProxy.sol` wraps the four pooled-path proofs but has no
+`submitReservationProof` wrapper, so reservation settlement may have no
+mainnet submitter wired at all as of #1091 — verify against #1094/#1095.
 
 ## 4. Live (non-snapshotted) governance parameters applied retroactively
 **Severity: High.** `updateReservationParameters` in #1088 changes
@@ -236,12 +243,23 @@ from the invariant at fixture values, not a measured result**; no test exercises
 the 2000/1500/100000 regime, which would need 50 hops. The mechanism is
 verified; the specific fixture numbers are derived.
 
-Medium rather than High, for three reasons:
-- The value goes to Bitcoin miners, not to an attacker. Griefing cost is
-  roughly 1:1 with the damage, and there is no profit unless the attacker
-  also captures the miner fee.
-- It needs a Byzantine wallet operator *and* SPV-maintainer proof submission.
-  Not a permissionless path.
+Medium rather than High, for three reasons — but the first reason splits
+by adversary, per the 2026-08-21 multi-agent review:
+- **Outside griefer:** the value goes to Bitcoin miners, not to the
+  attacker. Griefing cost is roughly 1:1 with the damage, and there is no
+  profit unless the attacker also captures the miner fee.
+- **Custodying wallet operator (the case that actually matters):** this
+  premise does NOT hold. The re-anchor miner fee is deducted from the
+  *anchor* — the depositor's backing, not the operator's stake (§6 "the
+  anchor shrinks by the miner fee") — so a Byzantine operator's
+  out-of-pocket cost is ~zero, the action is authorized and provable (no
+  fraud slashing, unlike a raw stolen-spend), and it is repeatable across
+  the whole global cap. This adversary's griefing cost is not 1:1; treat it
+  as the severity-driving case, not the outside-griefer case.
+- It needs a Byzantine wallet operator *and* SPV-maintainer proof
+  submission (confirmed gated, item 3 above) — not a permissionless path,
+  which does bound *frequency* even though it does not bound the operator's
+  own-position griefing cost above.
 - The loss class is not novel. `MovingFunds.submitMovingFundsProof`
   (`MovingFunds.sol:412-415`) caps migration fees against
   `movingFundsTxMaxTotalFee` and reconciles nothing either, and that

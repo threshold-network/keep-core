@@ -82,78 +82,60 @@ redeemed, re-anchored, or dissolved first. `Stranded` exists precisely to handle
 guard cannot: a wallet that never got the chance to wind down honestly.
 
 ## 2. Step-by-step example
-84:
-85:The representative case is a liveness failure, not fraud — moving-funds timeouts require no
-86:malice and are the more ordinary way a wallet ends up `Terminated`.
-87:
-88:1. **Alice reserves.** She deposits 5 BTC into a reservation custodied by wallet W1. At
-89:   acceptance: `mintedAmount = anchorAmount = 5 BTC`, 5 tBTC minted to Alice, reservation state
-90:   `Active`.
-91:2. **W1 ages out and is asked to move funds** — nothing to do with Alice's reservation; W1 is
-92:   simply old enough (or low enough on non-reservation balance) to be rotated out in the normal
-93:   course of wallet lifecycle. `moveFunds` transitions it `Live → MovingFunds`.
+
+The representative case is a liveness failure, not fraud — moving-funds timeouts require no
+malice and are the more ordinary way a wallet ends up `Terminated`.
+
+1. **Alice reserves.** She deposits 10 BTC into a reservation custodied by wallet W1. At
+   acceptance: `mintedAmount = anchorAmount = 10 BTC`, 10 tBTC minted to Alice, reservation state
+   `Active`.
+2. **W1 ages out and is asked to move funds** — nothing to do with Alice's reservation; W1 is
+   simply old enough (or low enough on non-reservation balance) to be rotated out in the normal
+   course of wallet lifecycle. `moveFunds` transitions it `Live → MovingFunds`.
 3. **The escape hatch exists.** While W1 is in `MovingFunds`, Alice's reservation *can* be
    re-anchored to any Live wallet with capacity (`requestReservationReanchor` is explicitly
    allowed for `MovingFunds` source wallets, `../feature-spec.md` §4.3). If the
-97:   keep-core executor or Alice initiates this, the anchor migrates cleanly to a healthy wallet
-98:   and Alice keeps her in-kind claim — stranding is avoided entirely.
-99:4. **W1's operators go quiet** — infrastructure trouble, an upgrade gone wrong, insufficient
-100:   uptime, no theft implied — and fail to complete the funds move before `movingFundsTimeout`
-101:   elapses. **Critically: this means re-anchor was available for the whole MovingFunds window
-102:   and was not used** — the wallet went dark enough to sign nothing at all, not even the
-103:   re-anchor that would have saved Alice's claim.
-104:5. **Termination fires, unconditionally.** Anyone calls `notifyWalletMovingFundsTimeout`;
-105:   `movingFundsTimeoutSlashingAmount` is seized from W1's operator stake and split with the
-106:   caller as a reward. W1 → `Terminated`. This transition has no dependency on Alice's
-107:   reservation whatsoever — it fires whether W1 holds zero reservations or fifty, and W1's
-108:   operators may not have done anything dishonest at all.
-109:6. **The gap.** Alice's reservation still reads `Active` in storage. Her 5 tBTC balance is
-110:   unaffected either way, both now and forever — nothing about it depends on this step. The 5 BTC
-111:   sitting at the anchor's address may well still be intact; what changed is that the protocol
-112:   will never again accept a signature from W1, so it is permanently unreachable through the
-113:   protocol regardless of whether the coins themselves are spendable.
-114:7. **Someone calls `notifyReservationStranded`** — a keep-core watchtower bot, Alice herself, a
-115:   bystander running a script; nobody is paid to do it and nobody is blocked from doing it.
-116:   Reservation → `Stranded`. W1's and the global reservation-capacity counters drop by 5 BTC.
-117:   Alice's entry is removed from W1's enumeration and the anchor index.
-118:   `ReservationStranded(key, W1, Alice, 5 BTC)` fires.
-119:8. **End state.** Alice still holds exactly 5 tBTC — untouched by any of the above. What she lost
-120:   in step 5, not step 7, is the option to redeem those specific 5 BTC back in-kind. She can still
-121:   redeem 5 tBTC through the ordinary pooled path, against backing that is now short by W1's
-122:   unreachable 5 BTC — a shortfall spread across every tBTC holder, not billed to Alice alone. No
-123:   compensation is paid to her specifically for losing the option. The event is the only durable
-124:   record this happened to her, and nothing in that event or anywhere else distinguishes this
-125:   ordinary-timeout case from a genuine theft — both look identical downstream of `Terminated`.
+   keep-core executor or Alice initiates this, the anchor migrates cleanly to a healthy wallet
+   and Alice keeps her in-kind claim — stranding is avoided entirely.
+4. **W1's operators go quiet** — infrastructure trouble, an upgrade gone wrong, insufficient
+   uptime, no theft implied — and fail to complete the funds move before `movingFundsTimeout`
+   elapses. **Critically: this means re-anchor was available for the whole MovingFunds window
+   and was not used** — the wallet went dark enough to sign nothing at all, not even the
+   re-anchor that would have saved Alice's claim.
+5. **Termination fires, unconditionally.** Anyone calls `notifyWalletMovingFundsTimeout`;
+   `movingFundsTimeoutSlashingAmount` is seized from W1's operator stake and split with the
+   caller as a reward. W1 → `Terminated`. This transition has no dependency on Alice's
+   reservation whatsoever — it fires whether W1 holds zero reservations or fifty, and W1's
+   operators may not have done anything dishonest at all.
+6. **The gap.** Alice's reservation still reads `Active` in storage. Her 10 tBTC balance is
+   unaffected either way, both now and forever — nothing about it depends on this step. The 10 BTC
+   sitting at the anchor's address may well still be intact; what changed is that the protocol
+   will never again accept a signature from W1, so it is permanently unreachable through the
+   protocol regardless of whether the coins themselves are spendable.
+7. **Someone calls `notifyReservationStranded`** — a keep-core watchtower bot, Alice herself, a
+   bystander running a script; nobody is paid to do it and nobody is blocked from doing it.
+   Reservation → `Stranded`. W1's and the global reservation-capacity counters drop by 10 BTC.
+   Alice's entry is removed from W1's enumeration and the anchor index.
+   `ReservationStranded(key, W1, Alice, 10 BTC)` fires.
+8. **End state.** Alice still holds exactly 10 tBTC — untouched by any of the above. What she lost
+   in step 5, not step 7, is the option to redeem those specific 10 BTC back in-kind. She can still
+   redeem 10 tBTC through the ordinary pooled path, against backing that is now short by W1's
+   unreachable 10 BTC — a shortfall spread across every tBTC holder, not billed to Alice alone. No
+   compensation is paid to her specifically for losing the option. The event is the only durable
+   record this happened to her, and nothing in that event or anywhere else distinguishes this
+   ordinary-timeout case from a genuine theft — both look identical downstream of `Terminated`.
+
 ## 3. What is genuinely incomplete, and what to do about it
-127:
-128:Five items. The first three are mechanical documentation/monitoring fills, made below. The other
-129:two are flagged, not silently decided.
-130:
-131:### 3.1 Monitoring watch-list gap (fixed here)
-132:
-133:`../feature-spec.md`'s executor-monitoring bullet lists `pendingReservedDeposits`,
-134:`inKindFeeDebtSat`, dissolution-eligible positions, and per-wallet reserved amount/count — it does
-135:not mention watching for terminated wallets that still custody un-stranded reservations. Every
-136:other permissionless housekeeping call in this feature (dissolution, action timeout, marking a
-137:stale deposit) is unrewarded and relies on exactly this kind of bot-driven monitoring; this one
-138:case was left off the list. **Recommendation, consistent with the existing pattern:** the
-139:keep-core wallet-side executor should watch for `Terminated` wallets against its own set of
-140:tracked reservation keys and call `notifyReservationStranded` for each, the same way it already
-141:drives dissolution and timeout calls. No protocol change, no new incentive mechanism — just
-142:closing a documentation gap so the responsibility is actually assigned somewhere.
-143:
-144:### 3.2 Re-anchor on wallet rotation gap (fixed here)
-145:
-146:The spec lists `requestReservationReanchor` as an executor duty (§13), but nowhere says *when* the
-147:executor should call it for a wallet entering `MovingFunds`. If the executor does not automatically
-148:re-anchor all reservations to a Live target the moment its wallet transitions `Live → MovingFunds`,
-149:every routine rotation of an anchor-holding wallet becomes a stranding candidate. **Recommendation:**
-150:on detecting `WalletMovingFunds(walletPubKeyHash)`, the keep-core executor should enumerate that
-151:wallet's reservation keys, pick a Live target with capacity, and call
-152:`requestReservationReanchor` for each — the same executor that already drives dissolution,
-153:timeout, and stale-deposit calls. This is purely operational assignment, no protocol change.
-154:
-155:### 3.3 No caller incentive exists (assumption made, flagged for override)
+
+Five items. The first three are mechanical documentation/monitoring fills, made below. The other
+two are flagged, not silently decided.
+
+### 3.1 Monitoring watch-list gap (fixed here)
+
+`../feature-spec.md`'s executor-monitoring bullet lists `pendingReservedDeposits`,
+`inKindFeeDebtSat`, dissolution-eligible positions, and per-wallet reserved amount/count — it does
+not mention watching for terminated wallets that still custody un-stranded reservations. Every
+other permissionless housekeeping call in this feature (dissolution, action timeout, marking a
 stale deposit) is unrewarded and relies on exactly this kind of bot-driven monitoring; this one
 case was left off the list. **Recommendation, consistent with the existing pattern:** the
 keep-core wallet-side executor should watch for `Terminated` wallets against its own set of
@@ -161,7 +143,18 @@ tracked reservation keys and call `notifyReservationStranded` for each, the same
 drives dissolution and timeout calls. No protocol change, no new incentive mechanism — just
 closing a documentation gap so the responsibility is actually assigned somewhere.
 
-### 3.2 No caller incentive exists (assumption made, flagged for override)
+### 3.2 Re-anchor on wallet rotation gap (fixed here)
+
+The spec lists `requestReservationReanchor` as an executor duty (§13), but nowhere says *when* the
+executor should call it for a wallet entering `MovingFunds`. If the executor does not automatically
+re-anchor all reservations to a Live target the moment its wallet transitions `Live → MovingFunds`,
+every routine rotation of an anchor-holding wallet becomes a stranding candidate. **Recommendation:**
+on detecting `WalletMovingFunds(walletPubKeyHash)`, the keep-core executor should enumerate that
+wallet's reservation keys, pick a Live target with capacity, and call
+`requestReservationReanchor` for each — the same executor that already drives dissolution,
+timeout, and stale-deposit calls. This is purely operational assignment, no protocol change.
+
+### 3.3 No caller incentive exists (assumption made, flagged for override)
 
 Delay in calling `notifyReservationStranded` has exactly one consequence: the stranded anchor's
 BTC amount keeps occupying a slot against `reservationMaxTotalAmount`, the *global* reservation
@@ -173,7 +166,7 @@ capacity turns out to matter in practice (e.g. the cap fills with dead anchors d
 neglect), the fix is operational — add it to the executor's watch-list per §3.1 — not a protocol
 incentive. Flag this if a different call is wanted.
 
-### 3.3 Stranding frequency is dominated by liveness failures, not fraud — and that is the number the rest of this folder needs
+### 3.4 Stranding frequency is dominated by liveness failures, not fraud — and that is the number the rest of this folder needs
 
 Two of the three termination paths (§1) require no malice at all: a wallet simply failed to
 complete a routine funds move or sweep proof in time. Fraud requires operators to deliberately
@@ -189,7 +182,7 @@ key. That is a stronger case for Mechanism 1 than "rescuing coins that are proba
 stolen" — a meaningful share of terminations may not represent an actual Bitcoin-layer loss at
 all, only a protocol-policy write-off.
 
-### 3.4 The fraud-griefing property (documented, not a design defect to fix here)
+### 3.5 The fraud-griefing property (documented, not a design defect to fix here)
 
 The fraud path specifically is operator-triggerable: since fraud requires the wallet's own
 operators to sign something unauthorized, that operator set can *choose* to strand any reservation
@@ -201,7 +194,7 @@ of network-wide socialized shortfall once it happens. What reservations change i
 is*: a pooled wallet's stolen main UTXO loss is diffused anonymously across whoever happened to be
 backed by that wallet; a stranded reservation's lost option is billed to one named, individually
 identifiable depositor. Whether that concentration is profitable for a colluding operator set
-depends on stake-at-risk versus anchor value, which is unquantified (§3.3). This is exactly the
+depends on stake-at-risk versus anchor value, which is unquantified (§3.4). This is exactly the
 failure mode `proposal.md`'s Mechanism 1 targets, *provided* the depositor armed their exit before
 the wallet went bad — armed-after-the-fact protection does not exist, and cannot: fraud is not
 announced in advance by design, so a depositor with no live escrow arrangement has no way to

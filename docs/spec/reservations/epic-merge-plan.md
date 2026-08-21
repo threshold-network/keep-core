@@ -40,6 +40,12 @@ gap analysis this plan assumes).
   no longer gate these PRs — they gate against `reservations-epic` instead,
   which currently has no protection rules of its own (§2 covers whether to
   add any).
+- **`#1102`** (`fix: #1088 review follow-ups`, based on `feat/utxo-reservation-core`,
+  addressing 30 findings from #1088's review per `pr-review-followups.md`) is **not**
+  included in the `gh stack link` command above and is not part of stack `#1101`. Its
+  findings already appear on #1088's tip, but confirm whether it needs its own retarget
+  to `reservations-epic` or folds into the #1088 review step (§3) before treating the
+  review surface as complete.
 
 ## 1. Why an epic branch (rationale, for reviewers who ask)
 
@@ -94,6 +100,12 @@ force reviewers to look at PRs in order.
 | 6 | #1094 | Guards: designated-wallet binding, pending-deposit/vault-migration guard, stranding | Approved + CI green |
 | 7 | #1095 | Docs+tests only — lower bar, but confirm the runbook/frozen-spec numbers in it match what governance actually signs off (§6) | Approved + CI green |
 | 8 | #1096 | Partial redemption — newest, most likely to have interaction bugs with retry-credit/late-settlement logic from #1091. Give this the second-highest scrutiny after #1091 | Approved + CI green |
+
+**Note on `#1102`:** not in this table (it is not part of stack `#1101`) — its 30
+findings against #1088 are already reflected on #1088's tip per
+`pr-review-followups.md`; step 1's review of #1088 should confirm they are compatible
+with, not stacked on top of, what #1093's H-04 backing rework later touches (see
+`feature-spec.md` §15).
 
 **Cross-cutting review pass (after all 8 individually approved, before any
 merge):** re-read the full diff top-to-bottom as one unit (`git diff

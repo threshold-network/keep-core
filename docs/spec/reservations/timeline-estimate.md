@@ -13,7 +13,7 @@ is `testing-plan.md`.
 | Engineering to code-complete (stack merge, stranding-compensation module **Tiers 0-1**, fee-grinding fix, keep-core two-phase rework **incl. the two executor duties from the Stranded-decision review** — re-anchor-on-rotation and stranding-cleanup, integration tests, findings/reference docs, fork dry-run). The emergency-exit build is **out of scope** per the 2026-08-21 decision (§5). | ~33-49 engineer-days serialized -> ~4-6 weeks calendar with parallel agent workstreams | Yes |
 | External audit engagement + fix/re-review cycle | ~4-8 weeks calendar | No — vendor calendar |
 | Governance sign-off (2 unset params + launch approval) | ~1-3 weeks, overlaps with audit | No — DAO/Council calendar |
-| **Total (baseline)** | **~10-14 weeks (2.5-3.5 months)** | |
+| **Total (baseline)** | **~10-14 weeks (2.5-3.5 months)** *(Engineering ~4-6 + Audit ~4-8 = ~8-14 alone; the extra ~2 weeks at the low end is a non-overlapping admin/handoff buffer, made explicit in §3 after the 2026-08-21 review — not a separate governance delay, since governance is stated to overlap audit)* | |
 
 ## 2. Testing-plan items, added effort, and whether they sit on the critical path
 
@@ -95,6 +95,7 @@ it explicitly below.
 |---|---|---|---|
 | Engineering to code-complete + hardened | ~4-6 weeks | ~7-10 weeks | ~9-12 weeks |
 | Audit + fixes + governance | ~4-8 weeks | ~4-8 weeks (unchanged) | ~4-8 weeks (unchanged) |
+| Non-overlapping admin/handoff buffer *(undocumented until this review; applies uniformly below — see §1)* | ~2 weeks | ~2 weeks | ~2 weeks |
 | **Total elapsed** | **~10-14 weeks** | **~13-18 weeks (~3.25-4.5 months)** | **~15-20 weeks (~3.75-5 months)** |
 
 ## 4. Reading this estimate
@@ -164,7 +165,7 @@ lock produced (`exit/stranded.md`). Net timeline impact is
   and compensation expectations but adds no implementation work.
 - **Liveness-dominant frequency (evidence-shaping, not schedule-shaping).**
   Expected stranding is dominated by operator downtime, not fraud
-  (`exit/stranded.md` §3.3). This does not move any date; it confirms Tier 0's
+  (`exit/stranded.md` §3.4). This does not move any date; it confirms Tier 0's
   importance (it must measure real liveness-downtime strandings) and is
   the input that would justify revisiting scope later.
 - **A testnet round was added (§2, §3) and is the natural validator for the

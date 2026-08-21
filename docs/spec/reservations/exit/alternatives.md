@@ -20,8 +20,8 @@ verdict and the same counterexample.
 
 | Illiquid window | Consequence |
 |---|---|
-| Zero (claim liquid throughout) | A live co-signer at exercise time is unavoidable. This is the adopted committee. |
-| A bounded dispute window | The adopted mechanism. Arming escrows the claim temporarily; a committee is still needed to authorize the Bitcoin spend during the window Bitcoin cannot see. |
+| Zero (claim liquid throughout) | A live co-signer at exercise time is unavoidable. This is the retained-reference committee design. |
+| A bounded dispute window | The retained-reference mechanism. Arming escrows the claim temporarily; a committee is still needed to authorize the Bitcoin spend during the window Bitcoin cannot see. |
 | The position's whole `Active` life | **No committee is needed for R1-R5.** A permanent lien plus a bare timelocked owner-key branch satisfies all five written requirements — but it caps custody at the timelock (§3.1) and bypasses the redemption watchtower (§3.2), which is likely disqualifying. |
 | Zero, and R2 relaxed to deterrence | Owner-bonded slashable collateral. Insurance, not enforcement. |
 
@@ -145,7 +145,7 @@ primitive. What it cannot do is *prevent* one. That is why the fix is never "gat
 spend" and always "make sure the claim is still there when Ethereum finds out."
 
 **This reframes R2 usefully:** R2 does not require Bitcoin to check Ethereum. It requires the claim
-to be present when Ethereum learns of the Bitcoin spend. The adopted mechanism achieves that for a
+to be present when Ethereum learns of the Bitcoin spend. The retained-reference mechanism achieves that for a
 bounded window by arming. A lien achieves it permanently, without a committee.
 
 ## 3. Mechanism 5: escrow-at-mint lien
@@ -248,7 +248,7 @@ renewable up to `T`, after which the position must be redeemed or it becomes own
 is a real product constraint the current design does not have, and it should be priced as one
 rather than hidden.
 
-**And that constraint is not only this mechanism's cost.** §7 records why the adopted committee
+**And that constraint is not only this mechanism's cost.** §7 records why the retained-reference committee
 design needs a bounded term as well: resharing keeps the committee key alive only while the group
 keeps refreshing, so an unbounded custody term is an unbounded key-liveness obligation on a party
 that must outlive the position. Capping `T` bounds the lien's exit *and* the committee's duty. It is
@@ -436,7 +436,8 @@ was reported wrongly by an agent and corrected here.
 - **Expected annual loss.** Still unquantified. This is the decisive input for whether *any*
   mechanism is worth building, and two attempts to derive it failed to produce a number. Needed:
   a defensible annual per-wallet termination probability, multiplied through the correlated
-  per-wallet exposure (up to 50 BTC and 10 positions at once), compared against the build-and-carry
+  per-wallet exposure (up to 50 BTC and 5 positions at once — the amount cap binds at 5 given
+  `reservationMinAmount`=10 BTC; the count cap of 10 only binds if the amount cap is disabled), compared against the build-and-carry
   cost of a second threshold signing group.
 
 ## 7. Recommendation
@@ -446,7 +447,7 @@ changes which way it leans.
 
 Three coherent packages, each paying a different price:
 
-1. **Committee plus liquid claim** (adopted, Mechanism 1). Pay in trust surface: a new threshold
+1. **Committee plus liquid claim** (retained as reference, Mechanism 1). Pay in trust surface: a new threshold
    group with DKG, resharing, monitoring and governance, R2/R4/R5 holding only against a
    non-colluding committee, and an unresolved key-rotation-versus-anchor-staleness problem. Buys
    claim liquidity *and* policy enforcement at exit time.
@@ -508,7 +509,7 @@ custody term (§3.1), that is an *unbounded key-liveness obligation*, and if the
 below `t` the emergency branch is permanently dead - the exact failure the mechanism exists to
 prevent, now caused by the mechanism. Two consequences, both now recorded in the proposal's `§5`: a
 terminal disposition backed by the compensation module is mandatory rather than a loose end, and
-**capping the custody term is something the adopted design needs too**, not merely a cost of the
+**capping the custody term is something the retained-reference design needs too**, not merely a cost of the
 lien. §3.1 prices the unbounded term as an argument against Mechanism 5; it is equally an argument
 for capping it whichever mechanism ships.
 

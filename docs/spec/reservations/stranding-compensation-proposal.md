@@ -1,5 +1,13 @@
 # Reservation Stranding Loss Absorption - Design Sketch
 
+**Decision (2026-08-21, `exit/README.md`): Tiers 0-1 are the accepted build.**
+Per the Decision in `exit/README.md`, the emergency-exit family
+(`exit/proposal.md`, `exit/alternatives.md`) is deferred as reference and `Stranded` is
+the accepted fallback. Within this document, **Tiers 0 and 1 (§10) are the
+decided build**; Tiers 2-3 and §4/§6/§8 are retained as design reference;
+§9's exit interlock is dormant unless `exit/proposal.md` is ever built. The
+"Space A" framing below is the rejected original.
+
 Status: **SUPERSEDED IN PART.** This document is "Space A" (the network bears the shortfall) in
 `shortfall-design-space.md`, which **rejects Space A as the answer to solvency** on
 funding invariance: every slashing amount in tBTC is a flat `uint96` T quantity with no BTC term
@@ -84,11 +92,11 @@ Fee income, at full utilization of the global cap:
 | | Value |
 |---|---|
 | Initiation, 40 bps on 100 BTC | 0.4 BTC, one-time |
-| Custody, 20 bps/yr on 100 BTC | 0.2 BTC/yr |
-| Total after year one | ~0.6 BTC |
+| Custody, 20 bps/yr (from year two — first-year custody is inside the 40 bps initiation) | 0.2 BTC/yr |
+| Total after year one | ~0.4 BTC |
 
 A single wallet termination strands up to 50 BTC. So a fully utilized feature's entire first-year
-fee income covers roughly **1.2%** of one wallet's stranding event, and the fee reserve's primary
+fee income covers roughly **0.8%** of one wallet's stranding event, and the fee reserve's primary
 job is already financing in-kind miner fees (`inKindFeeDebtSat`), so most of it is committed
 elsewhere.
 
@@ -130,7 +138,9 @@ Distinct from the buyback and should not be conditional on it, because the fee b
 that was not delivered regardless of what happens to the principal.
 
 On stranding, the owner is owed back the initiation and extension fees paid on that position:
-`40 + 20N` bps of the anchor. For a 25 BTC position held one year that is 60 bps, or 0.15 BTC.
+`40 + 20(N-1)` bps of the anchor (initiation covers the first-year custody fee, so year one
+contributes 40 bps and each renewal adds another 20). For a 25 BTC position held one term (no
+renewal) that is 40 bps, or 0.10 BTC.
 
 This is affordable **by construction**: the reserve is made of exactly these fees, and refunding a
 position's own contribution can never exceed what that position paid in. It needs a per-position
@@ -142,8 +152,11 @@ Redemption fees are not refundable, since a redemption that settled delivered it
 ## 6. Correlated stranding forces pro-rata, not first-come
 
 A design constraint that falls directly out of the caps and is easy to miss: **strandings are
-correlated by wallet.** One termination strands up to 10 positions and up to 50 BTC
-simultaneously. Stranding events are not independent arrivals, they are batches.
+correlated by wallet.** One termination strands up to **5 positions** (the launch
+`reservationMinAmount`=10 BTC plus the 50 BTC per-wallet amount cap means the amount cap binds
+at 5 positions before the count cap of 10 can; the count cap only binds if the amount cap is
+disabled) and up to 50 BTC simultaneously. Stranding events are not independent arrivals, they
+are batches.
 
 So a shared pot with first-come-first-served claiming is both unfair and gameable via gas
 auctions among co-victims of the same wallet. The module needs:

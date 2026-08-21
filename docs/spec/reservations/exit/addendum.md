@@ -88,7 +88,7 @@ the hash-lock.
 
 **Verdict**: cannot satisfy R2/R4 as a self-contained, no-live-party mechanism, with or without
 an arming/escrow refinement. The only way to close the gap is a live check at exercise time —
-the mechanism actually adopted in the main proposal.
+the mechanism retained as reference in the main proposal.
 
 ### A.4 Mechanism 4 — inverted liveness (heartbeat-suppressed exit)
 
@@ -111,7 +111,7 @@ it's a depositor draining a live, cooperating wallet.
 
 The suppression doesn't need an attacker. A Bitcoin fee spike, mempool congestion, relay-level
 censorship, an operator outage, a reorg, or a plain bug all produce it, and those are normal
-recurring events. It also inverts the value of attacking the mechanism: under the adopted design,
+recurring events. It also inverts the value of attacking the mechanism: under the retained-reference design,
 DoSing the committee produces illiquidity and nothing more, so it's a nuisance; here it produces
 unauthorized exit eligibility across many positions at once, so heartbeat suppression becomes a
 genuinely valuable target.
@@ -139,7 +139,7 @@ or wallet failure only (main doc `§2`).
 
 ### A.5 Comparison
 
-| | Escrow-gated attestor (adopted) | ETH-derived hash-lock | Self-settling proof (static CLTV) | Inverted liveness (heartbeat) |
+| | Escrow-gated attestor (retained as reference) | ETH-derived hash-lock | Self-settling proof (static CLTV) | Inverted liveness (heartbeat) |
 |---|---|---|---|---|
 | R1 (no refresh dependency) | Yes | Yes, in principle | Yes | No — a heartbeat *is* a refresh dependency, by design |
 | R2 (burn enforced) | Partly — escrow-before-authorization closes it unconditionally against a depositor acting alone, but not against committee collusion, which runs through the disarm refund (main doc §3, §4) | No — doesn't work on transparent-state Ethereum | No — raw CLTV branch bypasses any arming step; sell-then-wait is profitable | No — same out-of-band Bitcoin exit; sell-then-exit survives, and wallet failure becomes profitable |
@@ -157,7 +157,7 @@ space rather than puzzles to re-attempt per mechanism:
    static-CLTV design look attractive is exactly what makes it impossible to close against the
    sell-then-wait attack. Any variant that avoids a live actor at exercise time hits this, as
    `A.2` and `A.3` both did. A live check at exercise time is not an implementation detail of the
-   adopted design, it is the only known way to close R2 at all.
+   retained-reference design, it is the only known way to close R2 at all.
 2. **The exit must fail closed (R5).** `A.4` satisfies lesson 1 and still fails, for an
    independent reason: it makes the exit the default and liveness the suppressor, so its own
    operational hiccups authorize withdrawals that should never have been authorized. Any future

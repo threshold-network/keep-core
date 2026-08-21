@@ -62,7 +62,7 @@ Checked out at `feat/utxo-reservation-partial-redemption` (stack tip).
     Mocha `describe`/`it` asserting one example state each time, **not**
     property-based/fuzzed invariant checking. This is the single most
     misleading filename in the suite for an auditor skimming test names —
-    worth relabeling or backing with real fuzzed invariants (§3.1) before
+    worth relabeling or backing with real fuzzed invariants (§3 Tier 1) before
     review.
   - `solidity/test/deploy/95_deploy_reservation_vault.test.ts` — deploy
     script test.

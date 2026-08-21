@@ -49,8 +49,8 @@ $1 it is 0.2%. The conclusion does not depend on the price assumption.
 `sortitionPool.setRewardIneligibility(ineligibleOperators, block.timestamp + _sortitionPoolRewardsBanDuration)`
 at line 1111. No `seize`, no stake touched. Going dark costs forgone rewards for a ban period.
 
-Fees are no better: at full utilization of the 100 BTC global cap, first-year income is about 0.6
-BTC against 50 BTC of per-wallet exposure, roughly 1.2%.
+Fees are no better: at full utilization of the 100 BTC global cap, first-year income is about 0.4
+BTC against 50 BTC of per-wallet exposure, roughly 0.8%.
 
 So Space A is rejected **on funding invariance, not on fee arithmetic**. The distinction matters:
 "fees are too small" invites "then fund it from slashing," and slashing is worse. The compensation
@@ -217,7 +217,7 @@ the points checked against `feature-spec.md` §4.2:
   where value exits to the pool; it only ever moves between a redeemer and the same position.
 - Reserved BTC becoming pooled backing is not merely unbuilt, it is **explicitly walled off**:
   "a reserved deposit is never swept into the pooled main UTXO (`DepositSweep` rejects deposits
-  with `pendingReservedDeposit.isReserved == true`)" (L818-820). Route 2 needs the reverse
+  with `pendingReservedDeposit.isReserved == true`)" (§14 invariant 3). Route 2 needs the reverse
   direction of exactly this rule.
 
 A third point, checked and then withdrawn: `redeemAmount = 9.11 > mintedAmount = 8.00` does fail
@@ -239,7 +239,7 @@ cost specific to Route 2: Route 1 never asks BTC to leave a reservation for the 
 
 **Route 1 is the route that does not require breaking the reserved-versus-pooled wall.** Both
 routes equally require the shared accounting prerequisite of §4. Only Route 2 additionally
-requires reserved BTC to become pooled backing, which L818-820 forbids outright and which has no
+requires reserved BTC to become pooled backing, which §14 invariant 3 forbids outright and which has no
 existing or partial substitute in `#1096`. Route 1's residual cost (§4.5's disposal and `k`
 premium) is paid by the assessed holder in the open market; Route 2's cost is paid by the
 protocol, in the segregation guarantee itself. Recorded as resolved, not open: use Route 1, and
@@ -368,7 +368,7 @@ Does not fix:
 - **Settlement route is resolved, not open (§4.4).** Route 1 (raise the tBTC owed) is the
   decision; Route 2 (take the assessment from the anchor) needed a reserved-to-pooled BTC
   transfer that #1096 does not provide and that the segregation invariant
-  (`feature-spec.md` L818-820: "a reserved deposit is never swept into the pooled
+  (`feature-spec.md` §14 invariant 3: "a reserved deposit is never swept into the pooled
   main UTXO") explicitly forbids. Route 1's residual cost is the assessed holder's market
   acquisition and the `k` haircut of §4.5, a market friction rather than an invariant break, and
   is the correct tradeoff to accept.

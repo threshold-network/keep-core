@@ -22,6 +22,7 @@ the existing pooled/shared-UTXO redemption model.
 | # | Title | Branch (base <- head) | URL |
 |---|---|---|---|
 | 1088 | draft: UTXO reservations — segregated custody with in-kind redemption | (root) `feat/utxo-reservation-core` | https://github.com/threshold-network/tbtc-v2/pull/1088 |
+| 1102 | fix: #1088 review follow-ups (backing-invariant + caps) | `feat/utxo-reservation-core` | https://github.com/threshold-network/tbtc-v2/pull/1102 |
 | 1090 | feat(bridge): delegatecall reservation router (EIP-170) + RFC 13 | `feat/utxo-reservation-core` <- `feat/utxo-reservation-router` | https://github.com/threshold-network/tbtc-v2/pull/1090 |
 | 1091 | feat(bridge): two-phase authorize-then-prove reservation settlement | `feat/utxo-reservation-router` <- `feat/utxo-reservation-settlement` | https://github.com/threshold-network/tbtc-v2/pull/1091 |
 | 1092 | feat(bridge): bounded permissionless renewal and strict expiry semantics | `feat/utxo-reservation-settlement` <- `feat/utxo-reservation-renewal` | https://github.com/threshold-network/tbtc-v2/pull/1092 |
@@ -33,7 +34,16 @@ the existing pooled/shared-UTXO redemption model.
 Primary design doc read directly (most authoritative source, updated
 incrementally by #1090/#1092/#1094/#1096): `docs/rfc/rfc-13.adoc` on tbtc-v2.
 Governance parameter doc: `docs/utxo-reservation-frozen-spec.md`. Deployment
-doc: `docs/utxo-reservation-release-runbook.md`.
+  doc: `docs/utxo-reservation-release-runbook.md`.
+
+  *(Provenance split: claims here are grounded either in branches read
+  directly from a local checkout — #1088, #1090, #1091, #1102 (with
+  `tbtc-v2-h6v61g` only as the pre-#1090 single-phase baseline, not the
+  architecture this spec describes) — or, for #1092-#1096 and keep-core
+  #4238, in PR body text / GitHub API only, since those branches were not
+  available to verify locally. The frozen-spec and runbook docs, cited as
+  primary sources for §10/§11, were likewise not locatable on any checked
+  branch — treat the §10/§11 parameters as PR-body-sourced until verified.)*
 
 Companion analysis: `frost-reservations-interaction.md` investigates this
 feature's interaction with the separate FROST/Schnorr threshold-signing migration
@@ -145,14 +155,14 @@ originating deposit / anchor UTXO). Key fields (accreted across #1088→#1096):
 - `uint32 dissolutionEligibleAt` — `expiresAt + dissolutionDelay` at the time
   of the last term grant (acceptance or renewal); later governance changes
   to the delay never move an already-granted term's eligibility
-- `uint32 termSeconds`, `uint32 gracePeriod` — snapshotted at acceptance
+- `uint32 termSeconds`, `uint32 gracePeriod` — snapshotted at acceptance (*the #1092 renewal model replaces the `expiresAt + gracePeriod` expiry semantics with `dissolutionEligibleAt` / renewal-window; `reservationGracePeriod` is still a live `updateReservationParameters` arg in reachable source — §10 must say which model survives #1092*)
 - `bool retryCredit` — single-use, fee-free redemption-retry entitlement
 - `uint64 retryCreditSourceNonce` — generation that minted the outstanding
   retry credit; binds a retry to the exact amount/shape (whole vs partial)
   of that source generation
 - `address owner`, anchor UTXO reference, per-wallet enumeration bookkeeping
-  (`walletReservationKeys` / `walletReservationKeyIndex`, swap-remove
-  maintained), reverse anchor lookup (`reservationByAnchorUtxo`)
+  (`walletReservations`, swap-remove maintained — single canonical name), reverse anchor lookup
+  (`reservationsByAnchorUtxo`, plural, matching source)
 
 ### 3.2 Action generation (`ReservationAction`, added in #1091)
 
@@ -470,7 +480,8 @@ lifecycles.
 | `MAX_FEE_BASIS_POINTS` | 500 (hard constant) | sanity cap on any governance fee update |
 
 All-in initiation is 40 bps regardless of horizon (pooled-parity endpoint);
-an N-year hold pays `40 + 20N` bps vs pooled's flat 40 bps — strictly a
+an N-year hold pays `40 + 20(N-1)` bps in initiation+extension fees, plus
+  20 bps at redemption = `40 + 20N` bps all-in, vs pooled's flat 40 bps — strictly a
 premium at every horizon, by design (the minimum reservation size, not a
 fee change, is what's meant to keep carry >= per-position lifecycle cost).
 `SATOSHI_MULTIPLIER = 10**10` converts satoshi to 18-decimal TBTC units.
@@ -511,7 +522,14 @@ time (never at proof time):
   capacity released, any pending action unwound (pending redemption escrow
   returns to its redeemer), enumeration/anchor-index cleared. The anchor is
   deliberately **not** marked honestly spent (a terminated-wallet spend
-  stays recognizable as such). Owner keeps minted TBTC as an ordinary
+  stays recognizable as such). *(There is a second, distinct entry into
+  `Stranded` that this spec must also record: on the dissolution-*proof*
+  path, `ReservationProofs` flips `state = Stranded` whenever the custodying
+  wallet is `Terminated` after `closeReservation` — there the dissolution tx
+  is proven and its outpoints recorded, so the "not honestly spent"
+  property does NOT hold on that path. And the standalone
+  `notifyReservationStranded` primitive is traced to #1094 PR-body text, not
+  yet read from a diff — verify.)* Owner keeps minted TBTC as an ordinary
   pooled claim — backing shortfall socialized like a terminated wallet's
   main UTXO today. **The depositor's tBTC balance never changes** — stranding
   removes the in-kind redemption *option*, not the claim; it is a
@@ -524,7 +542,7 @@ time (never at proof time):
   (interface deliberately not yet stubbed in storage).
 - **L-01 — monitoring surface**: per-wallet reservation enumeration
   (`walletReservations`, swap-remove maintained), reverse anchor lookup
-  (`reservationByAnchorUtxo`), per-wallet count/amount getters, pending-
+  (`reservationsByAnchorUtxo`), per-wallet count/amount getters, pending-
   deposit getters.
 - **Wallet closing guard**: a wallet holding reservation anchors (or
   pending reservation actions) cannot *begin* closing — moving-funds
@@ -592,10 +610,12 @@ sign-off; mechanics are fixed, numbers are not.
 | `reservationVault` | Liability-side vault | deployed vault | Changeable only with zero active reservations **and** zero pending reserved deposits |
 | `reservationMinAmount` | Minimum anchor amount | 10 BTC (1,000,000,000 sat) | Must exceed `reservationTxMaxFee` |
 | `reservationTxMaxFee` | Per-tx Bitcoin miner-fee cap | 50,000 sat (0.0005 BTC) *(pending, fee-market)* | > 0; a partial's redeemed portion and remainder must each exceed it |
+| `reservationDissolutionTxMaxFee` | Dissolution-tx miner-fee cap (2-in-1-out shape) | *(pending — same fee-market basis as `reservationTxMaxFee`)* | Must be > 0 (`reservationTxMaxFee` covers acceptance/redemption/re-anchor 1-in-1-out and partial 1-in-2-out) |
+| `maxCumulativeReanchorFee` | Cumulative re-anchor miner-fee cap, per reservation | *(pending — the fee-grinding bound)* | Must be > 0; per-reservation `cumulativeReanchorFee` must stay under it (see §15 fee-grinding) |
 | `reservationTermSeconds` | Custody term per acceptance/renewal | 365 days | Hard bounds 90-730 days (protocol constants) |
 | `reservationDissolutionDelay` | Post-expiry delay before dissolvable | 7 days | Snapshotted per granted term |
 | `reservationMaxTotalAmount` | Global reserved-anchor cap | 100 BTC (10,000,000,000 sat) | Deliberately conservative; below the 10% fraction target at plausible launch backing |
-| `maxReservationsPerWallet` | Per-wallet reservation count cap | 10 | Bounds re-anchor ceremonies in a rotation window |
+| `maxReservationsPerWallet` | Per-wallet reservation count cap | 10 | Binds fully only if the amount cap is disabled — with `reservationMinAmount`=10 BTC and `maxReservationsAmountPerWallet`=50 BTC the amount cap already limits a wallet to 5 positions (*pending #1093 verification of the amount cap*); still bounds re-anchor ceremonies per rotation window |
 | `reservationActionTimeout` | Timeout for acceptance/re-anchor/dissolution | 48 hours | Must be **> 2 hours**; acceptance needs `> 4 hours` in practice (see note below) |
 | `reservationRenewalWindowSeconds` | Renewal window before expiry | 30 days | `0 < window < term`, enforced atomically |
 
@@ -603,9 +623,10 @@ Acceptance timing note: the proposal validator requires the deposit be
 older than 2 hours (`DEPOSIT_MIN_AGE`) while preserving the final 2-hour
 action-timeout safety margin (`REQUEST_TIMEOUT_SAFETY_MARGIN`); an
 acceptance requested immediately after reveal needs
-`reservationActionTimeout > 4 hours` to have any valid window, and the
-whole authorization must fit inside the deposit's remaining guaranteed
-reveal-ahead window (`DEPOSIT_REFUND_SAFETY_MARGIN = 24 hours`).
+`reservationActionTimeout > 4 hours` to have any valid window, and signing
+  must begin at least `DEPOSIT_REFUND_SAFETY_MARGIN = 24 hours` before the
+  deposit's Bitcoin refund locktime (the margin is a guard-railing subtrahend
+  on signing *start*, not a window the whole authorization must fit inside).
 
 ### Bridge reservation caps (`updateReservationCaps`)
 
@@ -613,6 +634,16 @@ reveal-ahead window (`DEPOSIT_REFUND_SAFETY_MARGIN = 24 hours`).
 |---|---|---|
 | `maxReservationsAmountPerWallet` | Per-wallet total anchor amount | 50 BTC (5,000,000,000 sat) (0 disables) |
 | `reservationMaxSingleAmount` | Single-reservation maximum | 25 BTC (2,500,000,000 sat) (0 disables) |
+
+*Provenance (verify before relying): `maxReservationsAmountPerWallet` and
+`reservationMaxSingleAmount` (both `0 disables`) and the
+`updateReservationCaps` entry point are attributed to #1093's H-04 caps
+rework but are NOT present in the reachable checkouts (#1093 not available
+here) — only global `reservationMaxTotalAmount` and per-wallet count
+`maxReservationsPerWallet` are on-chain-verified. Treat this table as
+PR-body-sourced until #1093 is confirmed; the exposure math in
+`shortfall-design-space.md` §2 and `stranding-compensation-proposal.md` §3
+depends on the amount cap.*
 
 ### `ReservationVault` fees and reserve
 
@@ -768,12 +799,12 @@ deferred** to a follow-up.
   `ActionMovedFundsSweep` (`ActionReserveAnchor=6`,
   `ActionReservedRedemption=7`, `ActionReAnchor=8`, `ActionDissolve=9`) —
   appended, not inserted, to preserve serialized compatibility.
-- `pkg/tbtc/chain.go`: five new `TbtcChain` interface methods
+- `pkg/tbtc/chain.go`: six new `TbtcChain` interface methods
   (`GetReservation`, `ReservationParameters`,
   `ValidateReserveAnchorProposal`, `ValidateReservedRedemptionProposal`,
   `ValidateReAnchorReservationProposal`,
   `ValidateDissolveReservationProposal`).
-- `pkg/chain/ethereum/tbtc.go`: the five methods above **stubbed**,
+- `pkg/chain/ethereum/tbtc.go`: the six methods above **stubbed**,
   returning descriptive errors until the Bridge ABI is regenerated.
 - `pkg/clientinfo/performance.go`, `pkg/tbtc/marshaling.go`: metric names
   and the coordination-proposal unmarshal factory extended for the four
@@ -815,7 +846,7 @@ follow-up section, gated on the two-phase ABI landing in #1091+):
   cap. Termination is triggerable by any of three wallet-lifecycle paths
   (moving-funds timeout, moved-funds sweep timeout, fraud-challenge defeat
   timeout), of which the timeout paths are liveness failures requiring no
-  malice — see `exit/stranded.md` §3.1-3.3 for the operative
+  malice — see `exit/stranded.md` §3.4 for the operative
   framing.
 - Monitoring should watch `pendingReservedDeposits`, `inKindFeeDebtSat`,
   dissolution-eligible positions, per-wallet reserved amount/count, and
@@ -871,9 +902,19 @@ gap the runbook's keep-core follow-up section calls out.
 
 ## 15. Open questions / risks (consolidated)
 
+- **Decision & loss-story anchor (2026-08-21)** — the accepted fallback is
+  `Stranded`; the emergency-exit Mechanism 1 is deferred as reference
+  (Decision block: `exit/README.md`). The loss-story docs are
+  `shortfall-design-space.md` (who-pays: Space A and Space B rejected; Space
+  C viable only conditional on an unbuilt `anchorAmount`/`mintedAmount`
+  decoupling — **not adopted**) and `stranding-compensation-proposal.md`
+  (Tiers 0-1 are the decided build; Tier 0 is the stranding-frequency
+  evidence instrument). The compensation-module items below are answered
+  there, not unowned gaps.
 - **Parameter sign-off**: every governance value in §10 is provisional
   (owner-set 2026-08-09) and requires final governance sign-off before
-  launch; two values (`reservationTxMaxFee`, `feeReserveTarget`) have no
+  launch; four values (`reservationTxMaxFee`, `feeReserveTarget`,
+  `reservationDissolutionTxMaxFee`, `maxCumulativeReanchorFee`) have no
   proposed number yet at all.
 - **Reserved-fraction target is an off-chain governance rule**, not an
   on-chain invariant — accepted limitation, flagged for audit (§9).
@@ -886,13 +927,15 @@ gap the runbook's keep-core follow-up section calls out.
   `reservedRedemptionVetoDelay < redemptionTimeout`; avoid re-pointing
   `reservationVault` while any reserved deposit could still settle late.
 - **Governance compensation module for `Stranded` positions** is stubbed
-  only as an event (`ReservationStranded`), no storage/interface yet.
+  only as an event (`ReservationStranded`), no storage/interface yet —
+  designed in `stranding-compensation-proposal.md` (Tiers 0-1, the decided
+  build) per the Decision in `exit/README.md`.
 - **keep-core is two redesign generations behind** the current tbtc-v2
   design (§13) — landing keep-core support is explicitly gated on the
   tbtc-v2 ABI publishing, itself gated on #1088-#1096 merging. Verified
   directly: `pkg/tbtc/gen/pb/` on the keep-core PR branch has no
   reservation message types (JSON marshaling only, as the PR's own TODOs
-  say), and the five new `TbtcChain` Ethereum-binding methods are stubs
+  say), and the six new `TbtcChain` Ethereum-binding methods are stubs
   that return errors, not implementations.
 - **Re-anchor fee grinding: capped, but the cap is unbounded as a ratio.**
   Resolved at the source in #1088: `maxCumulativeReanchorFee`
@@ -901,13 +944,18 @@ gap the runbook's keep-core follow-up section calls out.
   claimed by #1093's H-04 backing fix; confirm the two caps are compatible,
   not stacked). What remains open is the *bound itself*: backing left after
   maximal grinding is a constant `reservationTxMaxFee + 1 -
-  reservationDissolutionTxMaxFee` independent of claim size, so fractional
-  underbacking peaks on mid-sized positions (~99.5% of a fixture peak claim)
-  and no expression on the fee caps alone can deliver a ratio guarantee
+  reservationDissolutionTxMaxFee` independent of claim size; because
+  `maxCumulativeReanchorFee` caps the grind on large claims, fractional
+  underbacking peaks where the budget and the dust floor bind simultaneously,
+  at claim = `maxCumulativeReanchorFee + reservationTxMaxFee + 1` (~99.5%
+  loss at fixture values), and improves above that. No expression on the fee
+  caps alone can deliver a ratio guarantee
   (followups item 7). Governance must pick among four levers (relational
   `require` / per-position fraction of `mintedAmount` / proportional dust
-  floor / leave unbounded with monitoring — `ReservationDissolved` exposes
-  realized fee loss per dissolution). Decision deferred to the #1093 backing
+  floor / leave unbounded with monitoring — *`ReservationDissolved` exposes
+  realized fee loss per dissolution only on the #1102+ line; the #1091+
+  event carries no fee fields, so the monitor would need the fee-bearing
+  variant*). Decision deferred to the #1093 backing
   review.
 - **Stranding reachability from all three termination paths: verify,
   don't assume.** H-06's fix requires wallet `Terminated`, which the
@@ -958,6 +1006,45 @@ gap the runbook's keep-core follow-up section calls out.
   `client-integration-test`, `client-lint`, `client-vet`) passes on
   keep-core #4238 — checked live 2026-08-19, not just self-reported PR-body
   numbers.
+- **Review-confirmed decision-relevant risks (2026-08-21 multi-agent
+  review; evidence-triggers, NOT decisions).** These design-level findings
+  survived adversarial refutation — record them as open team questions, not
+  as resolved:
+  - **Grinding expropriates the redeeming owner, not the pool.** On the
+    redemption path the contract burns the owner's escrowed `mintedAmount`
+    while validating the Bitcoin output against `anchorAmount` only
+    (`pr-1102 Reservation.sol:740-755`); the header (:53-60) states supply
+    and backing reconcile exactly on redemption, so backing-ratio monitoring
+    cannot see the owner-side loss; the dissolution path reconciles nowhere
+    (:1155-1167). Re-frame followups item 7 with a per-path victim table.
+  - **SPV-maintainer stall → slashing → termination → correlated stranding.**
+    Every reservation proof is `onlySpvMaintainer`; a dissolution timeout
+    slashes the wallet and pays the notifier; two 48h cycles terminate an
+    HONEST wallet holding anchors. Record the composition (the elements
+    alone are known), enumerate the mainnet `isSpvMaintainer` set, and check
+    whether `MaintainerProxy` wires a `submitReservationProof` (none found
+    at #1091 — possible no-mainnet-submitter).
+  - **§6 financing vs §15 constant-residual contradiction.** §6 describes
+    in-kind fees as financed (supply shrinks in lockstep); §15 presupposes
+    they are not. Reachable code sides with §15 (re-anchor does not change
+    `mintedAmount`, `pr-1102 :990-992`). Resolve against #1093; the
+    decoupled `anchorAmount`/`mintedAmount` primitive Space C needs is the
+    same one that would close the grinding question.
+  - **Space C's `c` is not enforced.** The re-anchor caller chooses the
+    target (`ReservationRouter` permissionless), the amount caps are
+    `0 disables`, and no cap is relational to any LTV — nothing binds `c`
+    at any reachable depth (`shortfall-design-space.md` §7 leaves it open).
+  - **Route-1 assessment base can walk before the trigger.** In-kind
+    redemption stays open to all healthy holders until `Terminated`;
+    under Space C exiting is dominant, so the §4.3 base can be empty at
+    attach time. Attach the lien at acceptance or arm on the first liveness
+    signal, or answer §7's "is the assessment wanted at all?" in the
+    negative (`shortfall-design-space.md`).
+  - **The reopen trigger is unevaluable as written**
+    (`exit/README.md`). It compares expected annual loss to a carrying cost
+    that is nowhere quantified. Estimate termination hazard per wallet-year
+    from Bridge event history (a computation finishable now, no new build)
+    rather than relying on Tier 0's near-zero realized-stranding sample.
 - All 9 PRs are still **DRAFT / REVIEW_REQUIRED**, none merged; the stack
   order is meaningful (each depends on its parent's storage/state
   invariants) and should land in the git-stack order given in §Sources.

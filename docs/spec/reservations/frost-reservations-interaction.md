@@ -163,8 +163,9 @@ outputs/ narrative reports' "5-22 months, one program" framing is superseded by 
   + deposit inflow to FROST) plus a **mandatory but undated backstop**: any individual ECDSA wallet
   whose heartbeat fails arms an automatic, non-extendable 365-day `MovingFunds` clock, independent of
   whether the governance backstop date has been set yet.
-- **Reservations' own timeline** (`timeline-estimate.md`): ~13-18 weeks (~3.25-4.5 months)
-  to mainnet-ready, dominated by its own audit engagement, not FROST's.
+- **Reservations' own timeline** (`timeline-estimate.md`): ~15-20 weeks (~3.75-5 months)
+  to mainnet-ready (after the 2026-08-21 testnet-round addition), dominated by its own audit
+  engagement, not FROST's.
 
 **These two timelines do not force sequencing on each other.** Reservations can launch and operate on
 ECDSA wallets throughout the entirety of FROST's Program A (activation) and the early, organic-decay

@@ -27,13 +27,13 @@ authoritative Decision block (including the re-open triggers) lives in
 |---|---|
 | `timeline-estimate.md` | Schedule: phases, baseline + testing fold-in, testnet round (added 2026-08-21), and the §5 rewrite after the Stranded-decision review. |
 | `testing-plan.md` | Test & hardening plan: pre-audit vs during-audit tooling (Foundry invariants, TLA+, multi-signer sim, fork e2e, Certora, etc.), effort, critical-path impact. |
-| `epic-merge-plan.md` | Sequencing the 9-PR stack to mergeable/audit-ready state. |
+| `epic-merge-plan.md` | Sequencing the 8-PR tbtc-v2 stack plus standalone keep-core #4238 to mergeable/audit-ready state. |
 
 ### Loss-story design
 | File | Role |
 |---|---|
 | `stranding-compensation-proposal.md` | Compensation module design (Tiers 0-1). The **only buildable** loss-story piece under the Decision; Tier 0 doubles as the stranding-frequency evidence instrument that could reopen the exit question. |
-| `shortfall-design-space.md` | Who-pays analysis when a wallet dies holding anchors (Spaces A/B/C). Rejects Space A (slashing invariance) and Space B (fungibility), adopts Space C (mint < lock). |
+| `shortfall-design-space.md` | Who-pays analysis when a wallet dies holding anchors (Spaces A/B/C). Rejects Space A (slashing invariance) and Space B (fungibility); finds Space C (mint < lock) only viable **conditional on an unbuilt `anchorAmount`/`mintedAmount` decoupling** — **not adopted, not scoped** (LTV value and the §4.3 assessment are still open). |
 | `exit/` | Emergency-exit design family — **deferred, retained as reference** (see `exit/README.md` for its own index and the Decision block). |
 
 ### Cross-cutting

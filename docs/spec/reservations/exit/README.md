@@ -17,7 +17,7 @@ here is scoped, funded, or planned.
 **Why, plainly:** every viable mechanism costs standing operational overhead - a second
 threshold-signing committee with its own DKG, resharing, monitoring and governance - to cover a
 failure whose real-world frequency and size are unmeasured. Two load-bearing numbers are unknown:
-expected annual stranding frequency (liveness-dominant, not fraud - `stranded.md` §3.3), and how
+expected annual stranding frequency (liveness-dominant, not fraud - `stranded.md` §3.4), and how
 much depositors actually value the in-kind guarantee over fungible tBTC at par. Until market/user
 evidence answers those, that cost is not justified against the `Stranded` status quo, which is
 free, already built, safe, and socialized. This is the same gate the analysis itself set
@@ -179,8 +179,11 @@ cheapest answer is the **Threshold Council Safe appointing and rotating a distin
 
 - Expected annual loss from wallet termination - unquantified, and it is what actually decides
   whether any mechanism in this folder is worth its cost (`alternatives.md` §6).
-- **Capping the custody term.** No maximum exists today, which leaves the committee's key-liveness
-  duty unbounded (`proposal.md` §5.1). This is needed by Mechanism 1 if ever built, not only by the
+- **Capping the custody term.** No maximum TOTAL custody duration exists today
+  — each term is capped at `MAX_RESERVATION_TERM` (730 days, `../feature-spec.md`
+  §5), but renewals are unlimited in number, so a position's life is unbounded,
+  which leaves the committee's key-liveness duty unbounded too (`proposal.md`
+  §5.1). This is needed by Mechanism 1 if ever built, not only by the
   rejected lien (`alternatives.md` §3.1).
 - Committee composition, selection, and rotation (`proposal.md` §4); resolved in principle via
   threshold resharing (§5.1), not yet an operational plan.
