@@ -70,6 +70,28 @@ exposes neither makes both unreachable **without touching Bridge code**.
 This is the cheapest possible scope control, and it makes m2 a *vault-side*
 change (§3).
 
+**But "vault-side" is not automatically cheap, and the shipped vault already
+shows the cheap version.** `ReservationVault` is plain `Ownable`, not
+proxy-upgradeable (§2.2), and re-pointing `Bridge.reservationVault` requires
+`reservationTotalAmount == 0 && pendingReservedDeposits == 0`
+(`Reservation.sol:1267-1274`) — total quiescence. So an m1 vault that
+*omits* an entry point cannot gain it later while any position lives; that
+path is closed, not deferred.
+
+The shipped vault avoids this for renewal and not for redemption:
+
+| Path | Shipped vault | m2 cost |
+|---|---|---|
+| Renewal | Entry point present (`ReservationVault.sol:380-392`), `renewalsPaused = true` set in the constructor (`:222`), `unpauseRenewals()` is `onlyOwner` (`:415-418`) | One owner transaction |
+| Redemption | `redeemReservation` present (`:293`) with **no pause flag** — `pauseRenewals`/`blockRenewal` (`:409`, `:424`) cover renewals only | Needs the flag added before launch, or a quiescence-gated vault swap |
+
+So the pattern §2.2 recommends for redemption is not new machinery: it is
+**copying renewal's constructor-paused flag one function over**, already
+written and audited in the same file. Any m1 that intends to reach a path in
+m2 must ship that path's entry point flag-gated — this applies with extra
+force to the A+/B rewrites, which cut renewal entirely
+(`m1-variant-comparison.md` §5.5).
+
 ### 0.3 Minted tBTC is an ordinary fungible claim
 
 The contract says so: on `Stranded`, *"the owner's minted balance remains an

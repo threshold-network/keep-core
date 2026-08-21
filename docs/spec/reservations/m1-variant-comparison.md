@@ -368,15 +368,26 @@ slash honest operators if it slips.
    executor must be in production. This is the §0.6 duty, and it is
    dischargeable — but only by shipping client code, not by a contract
    parameter.
-2. **Redemption kept unreachable behind an owner-settable flag** (shared;
-   `roadmap.md` §0.2/§2.2). `ReservationVault.sol` ships `redeemReservation`
-   and `retryRedeemReservation`, and **has no redemption pause** — its
-   `pauseRenewals`/`blockRenewal` pair (`:409`, `:424`) covers renewals only.
-   Add a `redemptionsEnabled` flag defaulting to false, mirroring the existing
-   guardian pattern, so m2 is a governance transaction rather than a vault
-   redeploy. §2.2 records why the redeploy alternative is hazardous: the vault
-   is a plain `Ownable`, not proxy-upgradeable, and swapping it strands
-   deposits revealed to the old vault but not yet accepted.
+2. **Every path m2 wants must ship its entry point in m1, flag-gated**
+   (shared; `roadmap.md` §0.2/§2.2). This is stronger than "defer the vault
+   work", because a path the m1 vault omits **cannot be added later while any
+   position lives**: the vault is plain `Ownable`, not proxy-upgradeable, and
+   re-pointing `Bridge.reservationVault` requires
+   `reservationTotalAmount == 0 && pendingReservedDeposits == 0`
+   (`Reservation.sol:1267-1274`).
+   - **Renewal.** The shipped vault already does this correctly — entry point
+     at `ReservationVault.sol:380-392`, `renewalsPaused = true` in the
+     constructor (`:222`), `unpauseRenewals()` `onlyOwner` (`:415-418`). But
+     A+ and B **cut renewal**, so on the rewrite path renewal is not
+     deferred-to-m2, it is **permanently unreachable** for every m1-era
+     position unless the entry point ships paused.
+   - **Redemption.** `redeemReservation` ships (`:293`) with **no pause flag**
+     — `pauseRenewals`/`blockRenewal` (`:409`, `:424`) are renewal-only. Add
+     `redemptionsEnabled`, default false, by copying renewal's pattern one
+     function over in the same file.
+   The consequence for §1.4's promise clock is the sharp part: if renewal has
+   no entry point, the first cohort's in-kind deadline **cannot be bought back
+   by extending the term**. The 12 months is then final for those positions.
 3. **`reservationsByAnchorUtxo` reconciliation** (shared; `roadmap.md` §4
    items 2-3). `#1091` writes the mapping (`ReservationProofs.sol:465`),
    `#1094` writes it again for stranding, and `#1102` removed it from the
