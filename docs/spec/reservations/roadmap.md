@@ -185,21 +185,46 @@ dropped them, m2 would read zeros and every m1 position would be instantly
 dissolution-eligible — permanently barring the earliest users from in-kind
 redemption. Add a test asserting the fields are non-zero after acceptance.
 
-### 2.2 m2 needs no Bridge upgrade for redemption
+### 2.2 m2 needs no Bridge upgrade — but the vault is NOT upgradeable
 
 Because redemption and renewal are vault-gated (§0.2) and their Bridge-side
 code ships in m1, enabling them is a **vault-side change**, not a Bridge
-storage migration. Consequences:
+storage migration. `epic-merge-plan.md` §11's no-live-action-on-intermediate-
+layout rule is therefore satisfied by construction for the redemption
+rollout: there is no Bridge layout change at all, and the only m1 in-flight
+records are acceptance and re-anchor actions, both transient (bounded by
+`reservationActionTimeout`).
 
-- `epic-merge-plan.md` §11's no-live-action-on-intermediate-layout rule is
-  satisfied by construction for the redemption rollout — there is no Bridge
-  layout change at all.
-- The only m1 in-flight records are acceptance and re-anchor actions, both
-  transient (bounded by `reservationActionTimeout`).
-- Confirm whether the vault is proxy-upgradeable. If it is not, m2 requires
-  re-pointing `reservationVault`, which `feature-spec.md` §15 already flags
-  as hazardous while any reserved deposit could still settle late. **This is
-  the single most important unknown in the plan** (§5).
+**Resolved 2026-08-21: `ReservationVault` is not proxy-upgradeable.**
+`contract ReservationVault is IVault, Ownable` — plain `Ownable`, no
+`Initializable`, and four `immutable` state variables (`bank`, `tbtcVault`,
+`tbtcToken`, `bridge`) set in a `constructor`
+(`contracts/vault/ReservationVault.sol:79-142`). `deploy/95_deploy_
+reservation_vault.ts:12-17` is a plain `deployments.deploy` with constructor
+args and no proxy option. Immutables are baked into bytecode, so a proxy
+cannot be retrofitted without refactoring the contract.
+
+So enabling redemption means **replacing** the vault, which requires
+re-pointing the Bridge's `reservationVault` — exactly what
+`feature-spec.md` §15 flags as hazardous while any reserved deposit could
+still settle late. Concretely, a swap orphans deposits revealed to the old
+vault but not yet accepted (`pendingReservedDeposits > 0`), because
+reveal-time classification is permanent. A swap therefore requires draining
+`pendingReservedDeposits` to zero (each one accepted or cleared via
+`notifyStaleReservedDeposit`) plus letting in-flight actions settle or time
+out — a longer quiesce than the action timeout alone.
+
+**Recommended m1 vault design (avoids the swap entirely):** ship the m1
+vault **with** the redemption entry point present but disabled by an
+owner-settable flag, so m2 is a single governance transaction
+(`setRedemptionsEnabled(true)`) rather than a deploy-plus-re-point with a
+drain window. This keeps create-only behaviour (unreachable while the flag
+is false) and is the same principle already accepted for the Bridge-side
+redemption code (§0.2/§1.2). Costs: the vault's redemption plumbing is
+deployed and audited in m1, and the flag becomes a governance-safety item
+(accidental enable). Given the vault cannot be upgraded, this trade is
+strongly favourable — the alternative pays a hazardous swap for the same
+outcome.
 
 ### 2.3 The Bitcoin side is the only true one-way door
 
@@ -227,8 +252,10 @@ cut, and per §0.2 no cut is needed to reach create-only behavior.
 Then: one audit against the assembled m1 (`epic-merge-plan.md` §5), deploy
 inert, activate per §1.3.
 
-**m2 order:** vault upgrade exposing redemption (no Bridge change, §2.2) →
-`#1096` partial (Bridge change, its own audit delta).
+**m2 order:** enable redemption on the vault — a flag flip under the
+recommended design, otherwise a vault redeploy plus `reservationVault`
+re-point after draining `pendingReservedDeposits` (§2.2) → then `#1096`
+partial (Bridge change, its own audit delta).
 
 ## 4. Suggested edits to existing PRs
 
@@ -259,15 +286,17 @@ inert, activate per §1.3.
 1. **keep-core two-phase client** — acceptance and re-anchor only, with
    nonce-carrying proposals, executor duties, and regenerated ABI bindings.
    This is the critical path (`feature-spec.md` §16 item 3).
-2. **Minimal m1 `ReservationVault`** — exposes the acceptance/credit path
-   and *no* redemption or renewal entry point (§0.2). **Confirm proxy
-   upgradeability** (§2.2) — it determines whether m2 is an upgrade or a
-   hazardous re-point.
+2. **m1 `ReservationVault`** — exposes the acceptance/credit path, plus the
+   redemption entry point **disabled behind an owner-settable flag** per
+   §2.2's recommended design (the vault cannot be upgraded, so the flag is
+   what keeps m2 from needing a hazardous redeploy-and-re-point). Renewal
+   gets no entry point at all.
 3. **Anchor-index reconciliation** across `#1091`/`#1094` (§4 items 2-3).
 4. **Parameter and activation wiring** — §1.4 values, the deploy-inert
    switch, and governance runbook steps.
 5. **Executor duty: re-anchor on rotation** — prompted by
    `WalletMovingFunds`, since §1.5's unpinning depends on it being performed.
+   Without this the pinning risk returns in practice.
 6. **Monitoring** — anchored wallets (pinning watch), earliest
    `dissolutionEligibleAt` (promise clock), pooled-liquidity exposure vs cap.
 7. **Tests** — acceptance happy path; timeout and stale-deposit cleanup; cap
@@ -293,9 +322,13 @@ inert, activate per §1.3.
 ## 7. Open questions for review
 
 1. Is a rails release with **no reachable in-kind exit** acceptable in front
-   of design partners, given the promise rests on the m2 vault upgrade?
-2. **Is the `ReservationVault` proxy-upgradeable?** (§2.2) — if not, m2
-   needs a vault re-point, which `feature-spec.md` §15 flags as hazardous.
+   of design partners, given the promise rests on an m2 governance action?
+2. **Approve the flag-gated vault design?** (§2.2) — `ReservationVault` is
+   confirmed non-upgradeable (plain `Ownable`, `immutable` constructor
+   args), so m2 either flips an owner-settable `redemptionsEnabled` flag on
+   the m1 vault, or redeploys and re-points `reservationVault` after
+   draining `pendingReservedDeposits` to zero. The flag is recommended; it
+   trades a small m1 audit addition for eliminating the swap hazard.
 3. Concrete cap value for `reservationMaxTotalAmount`.
 4. Should reservation-eligible **wallets be allowlisted** at activation?
    Depositors pick the designated wallet at reveal, so any Live wallet can
