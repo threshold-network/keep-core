@@ -136,8 +136,8 @@ Milestone 1 must ship the complete storage layout atomically (no live reservatio
 |---------------------------------|------------|--------------|----------------------------|------------------------|
 | `m1/storage-layout` | #1088 (post-#1102), #1090, #1091, #1092, #1093, #1094, **#1096** | Full storage layout declaration (all fields, enums, structs) and governance parameters. Must be written exactly as in m2 (no omissions). **#1096 is required** for three declare-only fields that exist only on the partial branch — `ReservationAction.isPartial`, `retryCreditSourceNonce`, `BridgeState.Storage.reservationRetryCreditActionNonce` (`milestone-inventory.md` §4). **Also required post-fold**: `ReservationRequest.cumulativeReanchorFee`, `maxCumulativeReanchorFee` and `reservationDissolutionTxMaxFee`, which are on the core line only and are absent from `milestone-inventory.md` §2.1 (see its §1.3). Assert the layout field-for-field against §2.1 and §4 — `m1-b-implementation.md` §4.5 is a launch gate. | +1200 -50 | First: foundation. No behavior depends on it yet, but all later PRs require these declarations. |
 | `m1/router-minimal` | #1090 (post-#1102) through **#1094** — verified 2026-08-21: only `submitReservationProof` and `updateReservationParameters` exist at #1090; `requestReservationAcceptance`/`requestReservationReanchor`/`notifyReservationActionTimeout` first appear at #1091, `updateReservationCaps` at #1093, `notifyStaleReservedDeposit`/`notifyReservationStranded` at #1094 (#1102 does not touch `ReservationRouter.sol`, so no fold gap here) | Minimal router: 8 retained entry points (acceptance, re-anchor, submitProof, timeout, stale deposit, stranding, update parameters, update caps), 11 views, 1 new view (`activeReservationsCount` — genuinely new, not present at any source tip), 4 delegatecall invariants, EIP-170 workaround. | +600 -200 | Second: depends on storage layout. Enables entry-point stubs. |
-| `m1/acceptance-core` | #1091 (acceptance half) | Two-phase acceptance: request side (vault set, deposit revealed, wallet Live, nonce increment), proof side (SPV, consumeAcceptedDeposit, emit events), settlement path (writes `expiresAt`, `dissolutionEligibleAt`, `mintedAmount`, `anchorAmount`, `state=Active`, external mint). | +1800 -400 | Third: uses router and storage. First reachable path. |
-| `m1/reanchor-core` | #1091 (re-anchor half) | Re-anchor request and proof (unbounded, no dissolution gate), settlement path (wallet amount/count transfers, `walletPubKeyHash` update, `anchorAmount` rewrite, external in-kind fee call). | +1000 -300 | Fourth: builds on acceptance; shares settlement helpers. |
+| `m1/acceptance-core` | #1091 (acceptance half) + **#1093** | Two-phase acceptance: request side (vault set, deposit revealed, wallet Live, nonce increment), proof side (SPV, consumeAcceptedDeposit, emit events), settlement path (writes `expiresAt`, `dissolutionEligibleAt`, `mintedAmount`, `anchorAmount`, `state=Active`, external mint). **#1093 required**: it reworks the backing-accounting model #1091 established (H-04, `inventory/pr-map.md` §5.3) — the `anchorAmount` write at acceptance settlement moves from a single `reservationTotalAmount` counter to per-wallet accounting arrays. Take the #1093 form of anything writing `mintedAmount` or `anchorAmount`, verified 2026-08-21 by diffing `ReservationProofs.sol` #1091..#1093. | +1800 -400 | Third: uses router and storage. First reachable path. |
+| `m1/reanchor-core` | #1091 (re-anchor half) + **#1093** | Re-anchor request and proof (unbounded, no dissolution gate), settlement path (wallet amount/count transfers, `walletPubKeyHash` update, `anchorAmount` rewrite, external in-kind fee call). **#1093 required**: its re-anchor settlement writes `reservation.mintedAmount = newAnchorAmount` — the H-04 underbacking fix — which does not exist at #1091 (verified 2026-08-21). Extracting the re-anchor settlement from #1091 alone ships the pre-fix underbacking behavior. | +1000 -300 | Fourth: builds on acceptance; shares settlement helpers. |
 | `m1/timeout-and-stranding` | #1091 (timeout), #1094 (stale deposit cleanup + stranding) | Timeout slashing path (`notifyReservationActionTimeout`), stranding group from #1094 — stale deposit cleanup (`notifyStaleReservedDeposit`) and stranding (`notifyReservationStranded`, `strandReservation`, `strandLateSettlementIfTargetWalletClosed`); `notifyStaleReservedDeposit` does not exist at #1091, only from #1094 on. | +800 -150 | Fifth: uses storage and router; no new state writes beyond existing fields. |
 | `m1/vault-pause-flags` | tbtc-v2 #1088 (base vault) + **#1093** (in-kind fee financing) | ReservationVault with pause flags on initiation-only entry points (`redemptionsPaused` constructor-default `true` for redemptions, `renewalsPaused` constructor-default `true` for renewals), The fee-financing surface (`financeInKindFee` `:529`, `repayInKindFeeDebt` `:568`, `inKindFeeDebtSat`, `updateFeeReserveTarget` `:599`) must be **present and ungated** — re-anchor is B's only unpin and calls it on the settlement path (`m1-b-implementation.md` §3). Note `pauseRenewals`/`unpauseRenewals` already ship (`:409`, `:415`); what is new is the `redemptionsPaused` trio. Plus restrictive `pauseRenewals` and `unpauseRenewals` functions. | +662 −1 | Sixth: isolates vault changes; depends on storage layout for state reads. |
 | `m1/bridge-integration-seams` | New work | Bridge integration seams: `Deposit.sol` reveal path, `Wallets.sol` lifecycle gates, `WalletProposalValidator.sol` (sweep-exclusion guard plus m1 proposal validators), `BridgeGovernance.sol` and `BridgeGovernanceParameters.sol` wiring, and `Bridge.sol`'s `isReservedDeposit`, `setReservationRouter` and `fallback`. Review focus must note that `WalletProposalValidator` is non-upgradeable, so its m1 content is a real decision rather than a free omission. | +800 -50 | Seventh: integrates vault with bridge; depends on storage layout and router. |
@@ -160,7 +160,7 @@ cited a third unsourced figure of ~6300.)
 
 | PR Name (keep-core repo, targeting the keep-core epic branch) | Source PRs | Review Focus | Rough Size (Go +/-) | Ordering Justification |
 |---------------------------------|------------|--------------|----------------------------|------------------------|
-| `m1/keep-core-client` | New work | Keep-core client rework for acceptance and re-anchor with nonce-carrying proposals, regenerated ABI bindings, and executor duties. | ~1,100-1,400 +1,200 | First: client work; must wait for stable tbtc-v2 ABI surface. |
+| `m1/keep-core-client` | **#4238** (build on, not supersede — §8) | Keep-core client rework for acceptance and re-anchor with nonce-carrying proposals, regenerated ABI bindings, and executor duties. | ~1,100-1,400 +1,200 | First: client work; must wait for stable tbtc-v2 ABI surface. |
 
 **Total estimated lines**: ~1,100-1,400 production Go (`m1-variant-comparison.md`
 §3 and `timeline-estimate.md` §7), ~1,200 test Go. (Corrected 2026-08-21: this
@@ -266,7 +266,7 @@ same repo-location argument.
 2. **Create one epic branch per repo** (a keep-core PR cannot target a branch in tbtc-v2):
    - tbtc-v2: `git checkout -b milestone/utxo-reservation-m1 main`
    - keep-core: `git checkout -b milestone/utxo-reservation-m1 main` (or reuse the existing `reservations-epic`, to which `#4238` is already retargeted)
-3. **Rebase #1091 and #1092 onto #1090**:  
+3. **Rebase #1091 onto #1090, then #1092 onto the rebased #1091** (sequentially, per §7 — never #1092 directly onto #1090; that replays #1091's commits a second time):  
    `pre_rebase_settlement_tip=$(git rev-parse feat/utxo-reservation-settlement)` (capture before rebasing — needed by the last command below)  
    `git checkout feat/utxo-reservation-settlement`  
    `git rebase feat/utxo-reservation-router`  
@@ -278,9 +278,9 @@ same repo-location argument.
 5. **Open PR #B**: `m1/router-minimal` -> epic branch  
    - Extract minimal router from #1090 through #1094 (tip), not #1090 alone: 6 of the 8 named entry points do not exist at #1090 (see §4.1 evidence). `ReservationRouter.sol` is not touched by #1102, so no rebase/fold gap applies here regardless of which of #1091-#1094 you read from.
 6. **Open PR #C**: `m1/acceptance-core` -> epic branch  
-   - Extract acceptance half from rebased #1091 (request + proof + settlement), verified via extraction provenance.
+   - Extract acceptance request/proof from rebased #1091, but take the settlement path's `mintedAmount`/`anchorAmount` writes from #1093 (H-04 backing rework — see §4.1), verified via extraction provenance.
 7. **Open PR #D**: `m1/reanchor-core` -> epic branch  
-   - Extract re-anchor half from rebased #1091 (request + proof + settlement).
+   - Extract re-anchor request/proof from rebased #1091, but take the settlement path's `mintedAmount = newAnchorAmount` rewrite from #1093, not #1091 — #1091 does not have the H-04 fix (see §4.1).
 8. **Open PR #E**: `m1/timeout-and-stranding` -> epic branch  
    - Extract timeout (`notifyReservationActionTimeout`) from rebased #1091 and stranding (`notifyStaleReservedDeposit`, `notifyReservationStranded`, `strandReservation`, `strandLateSettlementIfTargetWalletClosed`) from rebased #1094.
 9. **Open PR #F**: `m1/vault-pause-flags` -> epic branch  
@@ -288,7 +288,7 @@ same repo-location argument.
 10. **Open PR #G**: `m1/bridge-integration-seams` -> epic branch  
     - Implement Bridge integration seams: `Deposit.sol` reveal path, `Wallets.sol` lifecycle gates, `WalletProposalValidator.sol` (sweep-exclusion guard plus m1 proposal validators), `BridgeGovernance.sol` and `BridgeGovernanceParameters.sol` wiring, and `Bridge.sol`'s `isReservedDeposit`, `setReservationRouter` and `fallback`.
 11. **Open PR #H** in `threshold-network/keep-core`: `m1/keep-core-client` -> the **keep-core** epic branch  
-    - Implement keep-core client rework for acceptance and re-anchor with nonce-carrying proposals, regenerated ABI bindings, and executor duties.
+    - Extend `#4238` (build on, not supersede — §8: its four proposal structs and chain interface already carry the two-phase nonce constructs) with the missing executor for acceptance and re-anchor, plus regenerated ABI bindings.
 12. **Review and merge** each PR in order A-H onto the epic branch.
 13. **Final verification**: Run full reservation test suite on the epic branch to confirm m1 behavior.
 14. **Ready for milestone**: The epic branch now contains the complete m1 implementation; open a final PR from `milestone/utxo-reservation-m1` to `main` when desired.
@@ -300,9 +300,12 @@ same repo-location argument.
 
 ## 10. Open Questions
 
-- Should the epic branch be created from `main` or from `reservations-epic`? (Using `main` avoids carrying the unrelated security fix #1098, but loses the epic branch's isolation property.)
-- What naming convention should be used for the m1 PRs to clearly indicate they target the epic branch? (e.g., `m1/...` vs `milestone/...`.)
-- How should the extraction provenance links be formatted to remain stable if the original PR is later closed or the comment is resolved?
+**Resolved by this document (kept here as a closure note, not re-litigated elsewhere):**
+- Epic branch source: `main`, not `reservations-epic` — decided at step 2 (line 267), avoiding the unrelated security fix #1098.
+- m1 PR naming convention: `m1/...`, used throughout §4.1/§4.2's tables and §9's action list; `milestone/...` is reserved for the epic branch name itself, a different thing.
+
+**Still open:**
+- How should the extraction provenance links (§6) remain stable if the original PR is later closed or a comment is resolved? §3 shows closed/merged PRs and their diffs survive branch deletion (which substantially covers "closed"), but does not test comment-resolution behavior specifically — resolved threads are a separate GitHub UI state, not something §3's git-based measurement observed.
 
 ## 11. Provenance
 
