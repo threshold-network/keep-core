@@ -273,7 +273,7 @@ same repo-location argument.
    `git rebase --onto feat/utxo-reservation-settlement <pre-rebase-settlement-tip>`  
    If the rebase conflicts, resolve it, then run the reservation test suite on each rebased branch. Do not extract until both suites pass.
 4. **Open PR #A**: `m1/storage-layout` -> epic branch  
-   - Extract storage layout, enums, structs, governance parameters from rebased #1088 (post-#1102, post-#1091 form), #1093, #1094.
+   - Extract storage layout, enums, structs, governance parameters from rebased #1088 (post-#1102), #1090, #1091, #1092, #1093, #1094, and **#1096** (required for `ReservationAction.isPartial`, `retryCreditSourceNonce`, `BridgeState.Storage.reservationRetryCreditActionNonce` — §4.1). **Gap**: step 3 above rebases only #1091 and #1092, not #1096 (which branches #1093->#1094->#1095->#1096). Per §7, #1093-#1096 inherit #1091's pre-rebase staleness regardless of being current with their own parent, so #1096 does not carry the #1102 fold either. Before extracting #1096's three fields, either rebase #1093-#1096 sequentially onto the rebased #1092, or verify none of the three fields sit in a file #1102 touched (`Reservation.sol`, `BridgeState.sol`, etc., per §7).
 5. **Open PR #B**: `m1/router-minimal` -> epic branch  
    - Extract minimal router from rebased #1090 (8 entry points, 11 views, +`activeReservationsCount`, 4 invariants, EIP-170 workaround).
 6. **Open PR #C**: `m1/acceptance-core` -> epic branch  
