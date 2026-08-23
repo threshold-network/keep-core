@@ -1030,15 +1030,16 @@ Status: blocking. Affects the m1 code surface and m2 rebase effort.
 
 **D-15. Which `spentMainUTXOs` lineage does the m1 rewrite take?**
 Question: `consumeAnchor` writes `spentMainUTXOs[anchorUtxoKey] = true` (`:1356`). `feature-spec.md:1067-1069` records that `#1102` "moved anchor consumption to `spentMainUTXOs`" on `feat/utxo-reservation-core`. Only the guards and partial trees are available locally, so the exact shape of the `#1102` core-line implementation is `UNVERIFIED`. Which lineage is the m1 rewrite's base?
-Recommendation: Extract from the guards tip (which has `spentMainUTXOs` writes at `:1356` and the reverse index at `:541-543`). Reconcile against `#1090`'s tip post-`#1102` before implementation. The two are not competing: `spentMainUTXOs` is the Bridge registry, `reservationsByAnchorUtxo` is the reverse index.
-Source: proofs.md PD-8; pr-map.md section 4; correction C-1, C-6.
-Status: blocking. Must settle before extraction begins.
+**RESOLVED 2026-08-23.** No reconciliation needed. `pr-strategy.md` §7 (corrected 2026-08-22) established `#1091`-`#1096` as the sole extraction source for reservation mechanics — `#1090`+`#1102` is not a competing lineage to merge or reconcile against, it's an incompatible parallel redesign (56/121 tests fail if merged; see `agent-docs/m1/step-01-execution-report.md`). Checked directly (`gh pr view 1102 --json body`): `#1102`'s PR body never names `spentMainUTXOs` as a fix target — it is pre-existing Bridge infrastructure (6 mentions already on `#1088`'s branch, before any reservation-specific development), not something `#1102` reshapes. The "deleted by `#1102`" claim that motivated the original `UNVERIFIED` framing was already independently refuted (`inventory/pr-map.md` §4: 0 hits for `reservationsByAnchorUtxo` on `#1088`/`#1090`'s own branches — it never existed there to be deleted). Take `#1091`-`#1096`'s `spentMainUTXOs` write (`ReservationProofs.sol:1356` on the guards tip) as-is; no `#1102` content applies here at all.
+Source: inventory/proofs.md PD-8; inventory/pr-map.md section 4; correction C-1, C-6.
+Status: **resolved**. Extraction may proceed without further reconciliation on this item.
 
 **D-16. Does `reservationByAnchorUtxo` the view stay in m1 while the reverse index has two unreconciled write sites?**
 Question: The view is cheap, but exposing a half-reconciled index is worse than not exposing it. Reconcile first, then decide.
+**RESOLVED 2026-08-23.** The "unreconciled" framing assumed the two write sites might belong to competing lineages needing reconciliation. They don't: both `#1091`'s acceptance-settlement write (`:541-543`) and `#1094`'s stranding delete (`Reservation.sol:1462-1472`) are within the single canonical `#1091`-`#1096` lineage (§7) — a write-then-delete pair across one position's lifecycle, not two lineages in tension. Keep the view; its own recommendation below already reached the right conclusion, the "reconcile first" instruction is superseded now that there is nothing to reconcile.
 Recommendation: Keep the view. Both write sites are in m1 code (acceptance settlement at `:541-543` and stranding at `Reservation.sol:1462-1472`). The index is consistent within m1: every write has a matching delete. The view is consumed by `consumeAnchor`'s delete and by off-chain monitoring.
 Source: router.md open question 1; pr-map.md section 4.
-Status: blocking. The view is load-bearing for the re-anchor proof path.
+Status: **resolved**. The view ships; no further reconciliation blocks it.
 
 ### Deferrable
 
