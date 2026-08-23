@@ -29,7 +29,7 @@ actually in contention.
 | 7 | Stranding (`notifyReservationStranded` / `strandReservation`, requires wallet `Terminated`) | Dead-wallet capacity release |
 | 8 | Caps + governance parameters (`updateReservationParameters`) | The only safety valve at launch |
 | 9 | Wallet-lifecycle guards, full storage layout | `feature-spec.md` §11's no-live-action-migration rule (append-only mechanism at §3.4) |
-| 10 | Router, **only if** EIP-170 requires it | Deleting it saves ~736 prod / ~2,000 with tests off either variant — a smaller swing than the dissolution choice below (910 / ~2,500). The stacked router file is 1,051 prod / ~3,400 with tests; a rewritten one is leaner. Decided by the compiler, not by argument |
+| 10 | Router, **only if** EIP-170 requires it | Deleting it saves ~736 prod / ~2,000 with tests off either variant — a smaller swing than the dissolution choice below (910 / ~2,500). **Corrected 2026-08-23:** this row previously stated "the stacked router file is 1,051 prod". 1,051 is the sum of per-PR additions; the actual `ReservationRouter.sol` at the guards tip is **643 lines**, of which 269 are m1 entry points and 90 are m2 (`agent-docs/m1/step-04-line-count-reconciliation.md` §7). The ~736 saving is therefore also suspect, since it was derived from the inflated figure. A rewritten router is leaner still. Decided by the compiler, not by argument |
 
 **Absent from both** (deferred to m2): in-kind redemption whole and partial,
 renewal / `extendCustody`, redemption veto and watchtower integration, retry
@@ -58,6 +58,16 @@ position past its eligibility date would have no unpin path at all.
 | + tests (1.7-1.9x) | 16,700-17,900 | 14,700-15,800 | 14,200-15,300 | 12,200-13,100 |
 | vs stacked m1 (9,206) | -33% | -41% | -43% | -51% |
 | keep-core production Go | ~1,400-1,900 | same | ~1,100-1,400 | same |
+
+**Unit warning, added 2026-08-23.** Every figure in this table is an
+**additions-sum**, inherited from `roadmap.md` §5.1's 9,206, which was measured
+"additions only" from PR diffs. Intra-stack churn means a line rewritten by a
+later PR counts more than once, so these numbers are systematically higher than
+the net content they describe. For contrast, the whole stack's net contract diff
+against `main` is **5,958 additions / 48 deletions**, and measured m1 content is
+**~4,500**. Do not compare anything in this table against a `git diff` figure
+without converting units first
+(`agent-docs/m1/step-04-line-count-reconciliation.md` §1-2).
 
 **A+ -> B saves 910 production Solidity (-15%), ~2,500 lines including tests,
 and ~300-500 production Go.** The router question is the cheaper of the two

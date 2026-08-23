@@ -137,21 +137,53 @@ Milestone 1 must ship the complete storage layout atomically (no live reservatio
 | `m1/storage-layout` | #1088, #1090, #1091, #1092, #1093, #1094, **#1096** | Full storage layout declaration (all fields, enums, structs) and governance parameters. Must be written exactly as in m2 (no omissions). **#1096 is required** for three declare-only fields that exist only on the partial branch — `ReservationAction.isPartial`, `retryCreditSourceNonce`, `BridgeState.Storage.reservationRetryCreditActionNonce` (`milestone-inventory.md` §4). **Also required, ported from `#1102` per §9 step 3** (not extracted from `#1090`'s fold branch — §7): `ReservationRequest.cumulativeReanchorFee`, `maxCumulativeReanchorFee`, `reservationDissolutionTxMaxFee`, and a re-derived `BridgeState.Storage.__gap` (do not copy `#1102`'s own `__gap` number — it was computed against a different field set). Assert the layout field-for-field against §2.1 and §4 — `m1-b-implementation.md` §4.5 is a launch gate. | +1200 -50 | First: foundation. No behavior depends on it yet, but all later PRs require these declarations. |
 | `m1/router-minimal` | #1090 (post-#1102) through **#1094** — verified 2026-08-21: only `submitReservationProof` and `updateReservationParameters` exist at #1090; `requestReservationAcceptance`/`requestReservationReanchor`/`notifyReservationActionTimeout` first appear at #1091, `updateReservationCaps` at #1093, `notifyStaleReservedDeposit`/`notifyReservationStranded` at #1094 (#1102 does not touch `ReservationRouter.sol`, so no fold gap here) | Minimal router: 8 retained entry points (acceptance, re-anchor, submitProof, timeout, stale deposit, stranding, update parameters, update caps), 11 views, 1 new view (`activeReservationsCount` — genuinely new, not present at any source tip), 4 delegatecall invariants, EIP-170 workaround. | +600 -200 | Second: depends on storage layout. Enables entry-point stubs. |
 | `m1/acceptance-core` | #1091 (acceptance half) + **#1093** | Two-phase acceptance: request side (vault set, deposit revealed, wallet Live, nonce increment), proof side (SPV, consumeAcceptedDeposit, emit events), settlement path (writes `expiresAt`, `dissolutionEligibleAt`, `mintedAmount`, `anchorAmount`, `state=Active`, external mint). **Extract `#1093` unmerged (§7, corrected 2026-08-22)**: `#1091`-`#1096` is the canonical design (every spec doc in this set is written against it), not one side of a conflict with `#1090`+`#1102` to reconcile — attempting that merge fails 56/121 tests and overflows EIP-170 (`agent-docs/m1/step-01-execution-report.md`). `#1093` already reworks the backing-accounting model #1091 established (H-04, `inventory/pr-map.md` §5.3); it needs no fold content beyond §9 step 3's ported items. | +1800 -400 | Third: uses router and storage. First reachable path. |
-| `m1/reanchor-core` | #1091 (re-anchor half) + **#1093** | Re-anchor request and proof (unbounded, no dissolution gate), settlement path (wallet amount/count transfers, `walletPubKeyHash` update, `anchorAmount` rewrite, external in-kind fee call). **Extract `#1093` unmerged (§7, corrected 2026-08-22)**, then apply §9 step 3's ported dust-floor + cumulative-fee-cap fix: verified 2026-08-21 that raw `#1093` has the H-04 `mintedAmount = newAnchorAmount` rewrite but zero occurrences of `cumulativeReanchorFee` anywhere in `Reservation.sol`/`ReservationProofs.sol` — it lacks `#1102`'s `maxCumulativeReanchorFee` grinding-cap enforcement inside `submitReservationReanchorProof` entirely. This is a genuine, scoped port (§9 step 3), not a tree merge. | +1000 -300 | Fourth: builds on acceptance; shares settlement helpers. |
+| `m1/reanchor-core` | #1091 (re-anchor half) + **#1093** | Re-anchor request and proof (unbounded, no dissolution gate), settlement path (wallet amount/count transfers, `walletPubKeyHash` update, `anchorAmount` rewrite, external in-kind fee call). **Extract `#1093` unmerged (§7, corrected 2026-08-22)**. **Corrected 2026-08-23: do not port enforcement, only the field declarations move (and those belong to PR #A, not here).** Verified 2026-08-21 that raw `#1093` has the H-04 `mintedAmount = newAnchorAmount` rewrite but zero occurrences of `cumulativeReanchorFee` anywhere in `Reservation.sol`/`ReservationProofs.sol` — it lacks `#1102`'s `maxCumulativeReanchorFee` grinding-cap *check* inside `submitReservationReanchorProof` entirely. Step 3 investigated porting that check; the 2026-08-23 decision accepted the resulting unbounded-ratio exposure for m1 instead (`pr-review-followups.md` items 5/7, lever 4) and deferred a structural bound to post-m1 work (`roadmap.md` §7 item 5). `ReservationRequest.cumulativeReanchorFee` and `BridgeState.Storage.maxCumulativeReanchorFee` still ship as **declare-only** fields per storage completeness (`milestone-inventory.md` §1.3, "the load-bearing one" — a position field m2 will read cannot be added later without the live-state migration §4.5 forbids); that declaration is PR #A's job (§4.1 row above), not this PR's. This PR only drops the *check*. The acceptance is pinned by a characterization test, now live at tbtc-v2 `#1104` (staged directly on `#1093`, not the epic branch — carry it forward verbatim per §6's extraction-provenance convention when this PR is opened). | +1000 -300 | Fourth: builds on acceptance-core; shares settlement helpers. |
 | `m1/timeout-and-stranding` | #1091 (timeout), #1094 (stale deposit cleanup + stranding) | Timeout slashing path (`notifyReservationActionTimeout`), stranding group from #1094 — stale deposit cleanup (`notifyStaleReservedDeposit`) and stranding (`notifyReservationStranded`, `strandReservation`, `strandLateSettlementIfTargetWalletClosed`); `notifyStaleReservedDeposit` does not exist at #1091, only from #1094 on. | +800 -150 | Fifth: uses storage and router; no new state writes beyond existing fields. |
 | `m1/vault-pause-flags` | tbtc-v2 #1088 (base vault) + **#1093** (in-kind fee financing) | ReservationVault with pause flags on initiation-only entry points (`redemptionsPaused` constructor-default `true` for redemptions, `renewalsPaused` constructor-default `true` for renewals), The fee-financing surface (`financeInKindFee` `:529`, `repayInKindFeeDebt` `:568`, `inKindFeeDebtSat`, `updateFeeReserveTarget` `:599`) must be **present and ungated** — re-anchor is B's only unpin and calls it on the settlement path (`m1-b-implementation.md` §3). Note `pauseRenewals`/`unpauseRenewals` already ship (`:409`, `:415`); what is new is the `redemptionsPaused` trio. Plus restrictive `pauseRenewals` and `unpauseRenewals` functions. | +662 −1 | Sixth: isolates vault changes; depends on storage layout for state reads. |
 | `m1/bridge-integration-seams` | New work | Bridge integration seams: `Deposit.sol` reveal path, `Wallets.sol` lifecycle gates, `WalletProposalValidator.sol` (sweep-exclusion guard plus m1 proposal validators), `BridgeGovernance.sol` and `BridgeGovernanceParameters.sol` wiring, and `Bridge.sol`'s `isReservedDeposit`, `setReservationRouter` and `fallback`. Review focus must note that `WalletProposalValidator` is non-upgradeable, so its m1 content is a real decision rather than a free omission. | +800 -50 | Seventh: integrates vault with bridge; depends on storage layout and router. |
 
-**Total estimated lines**: the `+` column above sums to **6,862**, against
-`m1-variant-comparison.md` §3's **5,261** for B-with-router — 1,601 lines above
-the audited scope. The `-` column sums to ~1,150. **Reconcile before opening PR
-#A**: either the per-PR estimates are high or the milestone figure is low; they
-have never been derived from each other. (Corrected 2026-08-21: this line
-previously stated ~5261 as though it were this table's total, and a bullet below
-cited a third unsourced figure of ~6300.)
+**Total lines — RESOLVED 2026-08-23 by measurement. The `Rough Size` column
+above is superseded by the table below; the two figures it was reconciled
+against were both wrong and were never in the same unit.**
+
+`m1 = ~4,500 net contract Solidity lines` (range 4,400-4,600), measured against
+`origin/feat/utxo-reservation-guards` by classifying every symbol in all 20
+changed contract files as m1 or m2. Full method and evidence:
+`agent-docs/m1/step-04-line-count-reconciliation.md`.
+
+Why the old comparison was void:
+- **5,261 is an additions-sum.** Its chain starts at `roadmap.md` §5.1's 9,206,
+  measured "additions only" from PR diffs, so a line rewritten by a later PR in
+  the stack counts twice. 9,206 is reproducible and correct in that unit.
+- **6,862 was a net-diff estimate**, pricing fresh extraction PRs onto an epic
+  branch that holds no reservation code and so has nothing to rewrite.
+- Subtracting one from the other produced a meaningless 1,601.
+
+The number that settles it: `git diff origin/main
+origin/feat/utxo-reservation-guards -- solidity/contracts` is **5,958
+additions**, and that includes every m2-only function — dissolution, in-kind
+redemption, renewal, watchtower veto, retry credit. m1 alone therefore cannot
+cost 6,862. Measured m2-only content is 1,440 lines, leaving ~4,500 for m1 plus
+~25 lines of genuinely new work.
+
+Corrected per-PR sizes, replacing the column above:
+
+| PR | old estimate | measured | note |
+|---|---|---|---|
+| #A `m1/storage-layout` | +1,200 | **~380** | declarations only |
+| #B `m1/router-minimal` | +600 | **~690** | slightly under-estimated |
+| #C `m1/acceptance-core` | +1,800 | **~470** | plus shared helpers below |
+| #D `m1/reanchor-core` | +1,000 | **~294** | |
+| #E `m1/timeout-and-stranding` | +800 | **~287** | |
+| #F `m1/vault-pause-flags` | +662 | **~642** | old figure was the file's line count, not an estimate |
+| #G `m1/bridge-integration-seams` | +800 | **~665** | extractable, not "New work" |
+| shared proof/lifecycle helpers | — | **~480** | needed by #C/#D/#E jointly; count once |
+
+The `-` column's ~1,150 is also overstated: the net diff shows only 48
+deletions across the whole stack.
 
 **Justification against one atomic PR**:
-- An atomic PR would bundle the whole 6,862-line `+` total, making review impractical and increasing the risk of missed errors.
+- An atomic PR would bundle the whole ~4,500-line m1 surface, making review impractical and increasing the risk of missed errors.
 - Decomposition isolates concerns: storage (layout), router (interface), acceptance (core product), re-anchor (unpin), timeout/stranding (cleanup), vault (side-car), bridge integration.
 - Each PR can be tested independently against the epic branch using existing test harnesses (9,908 lines of reservation tests).
 - Alternative (one atomic PR) forces reviewers to re-verify the entire storage layout and behavior in one sitting, which is error-prone and violates the principle of reviewable increments.
@@ -233,6 +265,14 @@ The #1102 fold (30 review fixes) is absent from `#1091` **and everything above i
 - **A full-tree merge compiles but does not pass.** Merging produces a tree holding both proof surfaces (`#1091`'s split `ReservationProofs.sol` plus `#1090`+fold's mechanics kept inside `Reservation.sol`) — 65/121 reservation tests pass (111/121 on the untouched control), and the merged `Reservation` library is 29,768 B, 5,192 B over the EIP-170 limit, because holding both surfaces is what causes the overflow — neither parent alone exceeds it. Verified 2026-08-22 (same report, §3.3, §5).
 - **The two trees are not old/new of one design.** Only 6 of 23 `Reservation.sol` functions are shared; retry model, veto keying, and the wallet-gate on redemption request all differ structurally, not incrementally (same report, §3.3 table). Reconciling that would be design work with no defined stopping point, not conflict resolution — and it is moot besides, because the design question is already answered: #1091's model is what every downstream spec doc describes.
 - Porting individual fixes needs #1102's 30 findings enumerated once (from its PR body — `gh pr view 1102 --json body`, itemized in full) and checked against m1's own scope. Done 2026-08-22: roughly 5-6 of the 30 are m1-relevant (dust floor + cumulative re-anchor fee cap, the two governance-parameter exposure/validation fixes, the `ReservationParametersUpdated` event fix, the `BridgeState.Storage.__gap` correction, optionally the `_outpointKey` helper). The remaining ~20+ are redemption/dissolution/veto mechanics `roadmap.md` §0.7 already puts out of m1 scope. See `agent-docs/m1/step-02-port-1102-fixes.md` for the itemized list and disposition.
+- **Independent corroboration, 2026-08-23** (reached by a different route than
+  the fold-history-rewrite argument above): `#1091`'s current GitHub head
+  (`f32c8cf3`) is `mergeable: CONFLICTING` against its own base and has **0
+  check-runs** — the branch has 5 commits / 8 files / +713 -27 of untested
+  delta on top of its last-green SHA (`a114ed7a`, 2026-08-11), including two
+  real contract-behavior changes. Not itself a reason for the recommendation
+  above (m1 already extracts `#1093` unmerged, not `#1091` raw), but it is
+  further evidence against ever proposing a rebase or merge of this stack.
 
 **Corrected 2026-08-22.** This section previously recommended sequentially rebasing `#1091` onto `#1090`, then `#1092` onto the rebased `#1091`, calling the rebase "mechanical (conflict resolution)" and validatable "by running the existing test suite... on the rebased branches". Executed and found false on both counts: the rebase does not run at all (history rewrite, not conflicts — first bullet above), and the merge fallback that does run fails 56 of 121 reservation tests and overflows EIP-170 (second and third bullets). The recommendation above replaces it.
 
@@ -280,8 +320,8 @@ same repo-location argument.
    - Extract minimal router from #1090 through #1094 (tip), not #1090 alone: 6 of the 8 named entry points do not exist at #1090 (see §4.1 evidence). `ReservationRouter.sol` is not touched by #1102, so no rebase/fold gap applies here regardless of which of #1091-#1094 you read from.
 6. **Open PR #C**: `m1/acceptance-core` -> epic branch  
    - Extract acceptance request/proof/settlement from **`#1093`** (unmerged — §7), verified via extraction provenance. `#1093` already carries the H-04 `mintedAmount` backing-model rework; it needs no fold content beyond step 3's ported items.
-7. **Open PR #D**: `m1/reanchor-core` -> epic branch  
-   - Extract re-anchor request/proof/settlement from **`#1093`** (unmerged — §7), then apply step 3's ported dust-floor + cumulative-fee-cap fix (`maxCumulativeReanchorFee`/`cumulativeReanchorFee` enforcement inside `submitReservationReanchorProof`) — confirmed 2026-08-22 that raw `#1093` has zero occurrences of `cumulativeReanchorFee` in `Reservation.sol`/`ReservationProofs.sol`, so this is a genuine port, not already present.
+7. **Open PR #D**: `m1/reanchor-core` -> epic branch
+   - Extract re-anchor request/proof/settlement from **`#1093`** (unmerged — §7). **Corrected 2026-08-23: do not port the `maxCumulativeReanchorFee` check.** Step 3 confirmed raw `#1093` has zero occurrences of `cumulativeReanchorFee` in `Reservation.sol`/`ReservationProofs.sol` (no `#1102`-equivalent check inside `submitReservationReanchorProof`); the follow-up decision accepted that as m1's exposure rather than porting the check (`pr-review-followups.md` items 5/7, lever 4), pinned by a characterization test already live at tbtc-v2 `#1104` (staged on `#1093` — carry it forward verbatim per §6, rather than re-deriving it). This does not touch step 4/PR #A's field declarations (`ReservationRequest.cumulativeReanchorFee`, `BridgeState.Storage.maxCumulativeReanchorFee` still ship, declare-only — storage completeness, `milestone-inventory.md` §1.3): PR #D only omits the check, not the fields.
 8. **Open PR #E**: `m1/timeout-and-stranding` -> epic branch  
    - Extract timeout (`notifyReservationActionTimeout`) from `#1091` and stranding (`notifyStaleReservedDeposit`, `notifyReservationStranded`, `strandReservation`, `strandLateSettlementIfTargetWalletClosed`) from `#1094`. Neither function is in step 3's m1-relevant `#1102` list, so no fold content applies here.
 9. **Open PR #F**: `m1/vault-pause-flags` -> epic branch  

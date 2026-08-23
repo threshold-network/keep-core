@@ -679,7 +679,7 @@ is the requested unit and the ratios are informative.
 
 ### Shipped code, by milestone
 
-| Bucket | m1 (`#1088`-`#1095`, 7 PRs) | m2 (`#1096`) | Ratio |
+| Bucket | m1 (`#1088`-`#1095`, 6 code PRs) | m2 (`#1096`) | Ratio |
 |---|---|---|---|
 | Production Solidity | **9,206** | **696** | 13 : 1 |
 | Solidity tests | 15,896 | 2,441 | 6.5 : 1 |
@@ -687,6 +687,25 @@ is the requested unit and the ratios are informative.
 | Docs in-repo | 1,340 | 108 | — |
 | Other (ABI JSON, config, lockfiles) | 167 | 14 | — |
 | **Total additions** | **27,041** | **3,259** | **8.3 : 1** |
+
+**Two corrections, 2026-08-23, from re-measuring this table.**
+
+1. **The unit is an additions-sum and is inflated by intra-stack churn.** The
+   9,206 reproduces exactly (`#1088` 3,393 + `#1090` 874 + `#1091` 3,594 +
+   `#1092` 351 + `#1093` 457 + `#1094` 537), so the arithmetic is sound. But the
+   whole stack's **net** contract diff against `main` is only **5,958 additions
+   / 48 deletions**. The 3,248-line difference is lines added by one PR and
+   rewritten by a later one, plus non-composing PR bases from the `#1091`
+   staleness (`pr-strategy.md` §7). Confirmation: `#1096`'s base was current, and
+   its PR-additions (696) equal its net delta (696) exactly, while the stale
+   branches' PR-diff deletions sum to 1,792 against a net 48.
+2. **`#1095` contributes 0 production Solidity.** The bucket header said 7 PRs;
+   only six carry contract code. `#1095` is docs and tests.
+
+Downstream figures derived from 9,206 by subtraction — `m1-variant-comparison.md`
+§3's 6,171 / 5,435 / 5,261 / 4,525 — inherit the inflated unit. Measured m1
+content is **~4,500 net contract lines**
+(`agent-docs/m1/step-04-line-count-reconciliation.md`).
 
 keep-core `#4238` adds 919 production Go + 914 test Go, but models the
 pre-two-phase design (§4.4), so it is a starting point rather than
