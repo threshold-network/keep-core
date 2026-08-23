@@ -1046,6 +1046,26 @@ and are recorded as resolved rather than deleted.
    created by the decision. B deletes it to make re-anchor unbounded; when
    dissolution returns, leaving it out means a position can be rotated
    indefinitely past its eligibility date (`m1-b-implementation.md` §6).
+5. **Post-m1 commitment, created by the 2026-08-23 step-3 decision: a
+   structural bound on re-anchor fee loss as a *fraction* of the claim.**
+   Milestone 1 accepts lever 4 of `pr-review-followups.md` item 7, leaving
+   cumulative re-anchor loss bounded only by the dust floor, which scales with
+   claim size. That acceptance is pinned by a characterization test and rests
+   entirely on `#1093` governance-gating every hop from a `Live` source wallet.
+   What remains open is which structural lever closes the ratio: item 7 lever 2
+   (a per-reservation bound at acceptance as a fraction of `mintedAmount`,
+   costing per-reservation state or recomputation) or lever 3 (a dust floor
+   proportional to `mintedAmount` rather than the flat `reservationTxMaxFee`,
+   cheaper but reversing the explicit "a minimum-sized reservation must remain
+   migratable" decision, which must be re-litigated first). A flat governance
+   ceiling is **not** a candidate: item 7's own constant-backing result shows no
+   bound on the fee caps can deliver a fractional guarantee.
+6. **Should arriving fee revenue pay down `inKindFeeDebtSat` before counting as
+   reserve?** New, from the same review (`pr-review-followups.md` item 8). The
+   aggregate in-kind fee debt has no ceiling, no automatic reduction path, and
+   only voluntary repayment; reverting on settlement is explicitly off the
+   table, so the answer cannot be a `require`. Independent of `vault.md`'s open
+   sweep-safety decision, which never touches the debt.
 
 ### Settled by the B decision
 

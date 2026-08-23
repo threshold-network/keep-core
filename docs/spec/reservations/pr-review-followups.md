@@ -323,6 +323,15 @@ is measurable off-chain. That makes "monitor and revisit" a defensible answer
 rather than an unexamined one — but only if someone is actually watching the
 metric.
 
+**RESOLVED 2026-08-23 for milestone 1: lever 4, plus a post-m1 structural
+lever.** See "Resolution of items 5 and 7 for milestone 1" at the end of this
+file. Item 5's open action ("confirm `#1093`'s backing model is compatible
+with, or supersedes, `#1088`'s cap rather than silently stacking two different
+caps") is closed by the same entry: it does neither, it drops the cap, and that
+is now an explicitly accepted and test-pinned regression rather than an
+omission. The "monitor the metric" answer above was superseded by something
+stronger, a characterization test that fails if the ceiling is ever ported.
+
 ## Minor: the one #1102 finding left unimplemented
 **Severity: Low (P3). Below this file's usual bar** — it is neither a new
 mechanism nor a design decision, so by the scope rule at the top it would
@@ -380,3 +389,171 @@ scoped finding — lower-priority to double check than item 5's cap
 overlap above, but worth the same "confirm compatible, not stacked"
 treatment when #1091 is reviewed.
 
+
+---
+
+## Resolution of items 5 and 7 for milestone 1 (2026-08-23)
+
+Roadmap-owner decision, recorded here because item 7's lever 4 requires that
+choosing it be written down "as an accepted risk rather than an omission".
+
+**Decided:** lever 4 for milestone 1 (leave the absolute ceiling unbounded),
+plus a committed post-m1 work item for a structural lever. **Not** lever 1.
+
+**Why not lever 1**, a flat governance-set `maxCumulativeReanchorFee`
+equivalent: §7's own constant-backing result establishes that no bound
+expressed on the fee caps can deliver a fractional guarantee. Porting one adds
+a `ReservationRequest` storage field under the deployed TIP-109
+upgrade-safety gate plus a parameter validated only `> 0`, and still leaves the
+ratio unbounded. Cost without a guarantee.
+
+**What `#1093` actually does**, verified against tip `e63b2a48`:
+- No cumulative-fee field of any kind. Zero occurrences of anything resembling
+  `cumulativeReanchorFee` in `solidity/contracts/`.
+- Per-hop fee bounded by the snapshotted `action.txMaxFee`
+  (`ReservationProofs.sol:643`).
+- The only terminal bound is the dust floor `newAnchorAmount > action.txMaxFee`
+  (`:651`), so cumulative loss is `initialAnchorAmount - (txMaxFee + 1)`. That
+  scales with the claim rather than being capped at a constant.
+- The loss is financed in kind, not socialised silently: the claim is written
+  down (`:704`), the vault burns TBTC and Bank balance in lockstep, and any
+  shortfall is recorded as `inKindFeeDebtSat` (item 8 below).
+
+| | `#1102` | `#1093` |
+|---|---|---|
+| absolute ceiling | `maxCumulativeReanchorFee`, 100,000 sat | none |
+| 10,000 sat claim | 4 hops, 8,000 sat lost | identical |
+| 2,998,500 sat claim | capped at 100,000 sat | 2,598,499 sat lost, measured |
+
+**The load-bearing assumption.** This is acceptable only because `#1093`
+governance-gates every hop whose source wallet is `Live`
+(`Reservation.sol:775-779`, with `privileged = msg.sender == governance` at
+`ReservationRouter.sol:284`), and because a re-anchor target must itself be
+`Live` (`:792-796`), so every hop after the first needs governance again. Item
+7 scored this Medium on a Byzantine custodying wallet operator acting
+unilaterally at "~zero cost, repeatable"; on `#1093` that operator cannot make
+the loop run at all. **If that gate is ever relaxed, delegated, or extended to
+non-`Live` source states, this acceptance is void and must be revisited.**
+
+**How the record is kept honest.** Item 7 asked for a monitored metric; this
+is stronger, an executable characterization test. In
+`Bridge.ReservationSettlement.test.ts`, `describe("cumulative re-anchor fee
+exposure (accepted regression)")`, added 2026-08-23:
+- grinds one reservation at the maximum permitted fee per hop, **deriving** the
+  hop count rather than hardcoding it, until the dust floor blocks settlement,
+  and asserts cumulative loss of 2,598,499 sat, 86.7% of a 2,998,500 sat
+  anchor, over 7 hops in a scaled fee regime;
+- asserts that figure exceeds `#1102`'s 100,000 sat ceiling, so the test
+  **fails if an absolute ceiling is later ported**, which is what makes the
+  accepted regression executable rather than an assertion in prose;
+- asserts the financing invariant exactly: reserve burn plus debt delta equals
+  the cumulative fee, so nothing is unaccounted;
+- separately asserts a third party cannot rotate a `Live` wallet's anchor,
+  which is the tripwire for the assumption above.
+
+Both cases pass on `#1093` at `e63b2a48`.
+
+**Post-m1 commitment:** the ratio question moves to lever 2 or lever 3. Lever
+3 is the cheaper of the two but reverses the explicit design decision at
+`Reservation.sol:975-979` that the floor is "deliberately a dust floor rather
+than `reservationMinAmount`: a minimum-sized reservation must remain
+migratable". It therefore requires that migratability requirement to be
+re-litigated, not merely a constant changed. Tracked in `roadmap.md`.
+
+## 8. Aggregate in-kind fee debt is unbounded and only voluntarily repayable
+**Severity: Medium. Provenance: step-3 review of `#1093`, 2026-08-23.** Not in
+the H-/M-/C- catalog. Separate from item 7 and not resolved by it: item 7
+bounds what a single reservation contributes, this is the sum across every
+reservation that ever re-anchors or dissolves.
+
+Verified from code at `#1093` tip `e63b2a48`:
+- `uint64 public inKindFeeDebtSat` (`ReservationVault.sol:122`) is one
+  **global** counter. No ceiling field exists anywhere in
+  `solidity/contracts/`.
+- `financeInKindFee` (`:529-561`) burns what the reserve can cover then
+  accumulates the remainder unconditionally (`:556`). It never reverts, by
+  design (`:523-528`): a confirmed Bitcoin spend must not fail to settle
+  because of reserve level. While the debt is non-zero the system is
+  over-supplied by exactly that amount.
+- **There is no debt-first logic.** Fee revenue arriving while debt is
+  outstanding simply becomes reserve; nothing applies it to the debt.
+  Initiation fees (`:233-245`), redemption fees (`:308-313`) and renewal fees
+  (`:386-398`) each "stay in the vault" per their own comments.
+- `sweepFees` (`:613-624`) is `onlyOwner` and manual, and moves only
+  `balance - feeReserveTarget` to the treasury. It never reads or writes the
+  debt.
+- `repayInKindFeeDebt` (`:568-586`) is the only path that reduces the debt. It
+  is voluntary and permissionless, with no keeper obligation anywhere in the
+  contract.
+- No invariant, assertion, or test in `solidity/test/` observes or bounds
+  `inKindFeeDebtSat`.
+
+Economic inference, flagged as inference: settlement fees are mandatory and
+system-driven (every re-anchor `ReservationProofs.sol:709-712`, every
+dissolution `:822-825`) and Bitcoin miner fees are exogenous, while every
+inbound fee is user-elective. So no code path and no evident economic force
+drives the debt toward zero.
+
+The `uint64` type is not a practical bound: its ceiling is about 1.8e19 sat,
+roughly 8,800 times the total Bitcoin supply and far above the protocol's own
+`RESERVATION_MAX_TOTAL` of 2.1e15 sat.
+
+**Independent of the sweep decision.** `vault.md`'s open "DECISION NEEDED" on
+sweep safety does not gate this. Sweep operates on `balance - feeReserveTarget`
+and never touches `:556`, so even a fully automatic sweep leaves the debt
+dynamics unchanged. The decision this actually needs is a different one, absent
+from the code entirely: **should arriving fee revenue reduce outstanding debt
+before it counts as reserve?**
+
+**Action:** decide that question, and note that reverting on settlement is
+explicitly off the table so the answer cannot be a `require`. Cheapest
+credible options: apply arriving fees to outstanding debt before retaining
+them as reserve; or add a governance-set alarm threshold that emits rather than
+blocks. Until then, add an observability assertion on the debt to the item 7
+characterization test, so growth is visible in CI rather than discovered later.
+
+## 9. Permissionless re-anchor requests let an outsider dictate migration targets
+**Severity: Low, rising to Medium for any wallet operator whose signing policy
+forbids executing a transaction it did not itself propose. Provenance: step-3
+review of `#1093`, 2026-08-23.** Not in the catalog, not raised by `#1102`.
+
+`requestReservationReanchor` is permissionless when the source wallet is
+`MovingFunds` (`Reservation.sol:780-784`; router entrypoint
+`ReservationRouter.sol:277-286` has no modifier), and nothing checks that the
+caller owns the reservation. A request requires `state == Active` and moves the
+reservation to `ActionPending` (`:760-763`, `:819`), the re-anchor timeout
+returns it to `Active` with no slashing or penalty (`:1003-1009`), and
+`notifyReservationActionTimeout` is likewise permissionless. One contract can
+therefore combine the timeout and a fresh request in a single transaction once
+the 48h `reservationActionTimeout` has elapsed, so the reservation is never
+observably `Active` to a competing caller and no other party, governance
+included, can insert its own request.
+
+**This is not a liveness block.** The attacker's pending action is itself a
+fulfillable authorization: the operator can build the re-anchor transaction to
+the named `Live` target and have the SPV maintainer prove it, which settles,
+decrements the source wallet's reservation count
+(`ReservationProofs.sol:683-686`) and clears
+`require(walletReservationsCount == 0, "Wallet still custodies reservations")`
+at `Wallets.sol:674-677`, `:706-709` and `:437-441`. The attacker cannot
+shorten that window, because `notifyReservationActionTimeout` requires
+`block.timestamp > action.timeoutAt` (`Reservation.sol:966-971`), so every
+cycle hands the operator a full 48h settleable window.
+
+What survives is narrower: the **target** of every executable migration is
+chosen by the attacker rather than the operator for as long as the attacker
+pays gas; a passive operator's own retirement stalls one 48h cycle at a time up
+to `dissolutionEligibleAt` (`:765-768`); and repeated naming of one target can
+steer several migrating reservations onto a single wallet up to
+`maxReservationsPerWallet`. No funds move and nothing leaves the protocol,
+since every target must be a registered `Live` wallet. The attacker also cannot
+create the precondition, as `MovingFunds` is a protocol-driven transition.
+
+**Action:** document the operational escape first, because the intuitive
+response to an unsolicited request is to refuse, and refusing is exactly what
+turns this from Low into Medium. Then evaluate bounding re-anchor generations
+per reservation, or a cooldown after a timed-out re-anchor, post-m1. Note that
+restricting the permissionless path itself would reverse a deliberate design
+decision asserted by `Bridge.Reservation.test.ts:3473` ("allows a
+permissionless migration re-anchor before dissolution is due"), so that route
+needs the design decision re-litigated first.
