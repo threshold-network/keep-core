@@ -56,6 +56,85 @@ TEEs as prerequisites, while remaining compatible with either in future.
 | `P2-M2` Implementation diversity + differential fuzzing | Independent verification path or secondary implementation checks, differential/fuzz harnesses, divergence triage workflow | Security + Protocol | Differential CI runs continuously with no unresolved critical divergence |
 | `P2-M3` Canary rollout + instant rollback controls | 10%-50%-100% rollout policy, signer cohort canaries, one-command rollback and config pinning | Platform + Ops | Canary progression is automated by SLO gates; rollback is validated under incident drill |
 
+### P0-M3 Rate-Limit Specification (Decision 7 extension)
+
+The P0-M3 milestone introduced per-call value/script-class rate
+controls for the signing path (`BuildTaprootTx` and its peers),
+mounted via the signing policy firewall. Decision 7 of the PR #4005
+review extends the same rate-limit discipline to the interactive
+session entry points — `InteractiveSessionOpen` and
+`InteractiveRound1` — because both are the canonical per-operator
+amplifiers: a hostile or misconfigured operator can otherwise
+inflate attempt throughput on a single key group without bound.
+The shape mirrors the existing `BuildTaprootTx` rate-limit
+configuration (token-bucket refill, env-var tunable, fail-closed
+rejection) but uses two buckets per operation rather than one, so
+that the per-caller and per-key-group budgets are independently
+observable.
+
+#### `InteractiveSessionOpen` rate-limit buckets
+
+| Bucket | Scope | Trigger | Reason code on exhaustion | Env-var knob | Default |
+| --- | --- | --- | --- | --- | --- |
+| Primary | per-`(sender, key_group)`, includes the attempt-context fingerprint so each fresh attempt has independent budget (replay protection) | `InteractiveSessionOpen` for a given `(sender, key_group)` exceeds the budget | `interactive_rate_limit_exceeded` | `TBTC_SIGNER_INTERACTIVE_OPEN_RATE_LIMIT_PER_MINUTE` | 60/min |
+| Cross-operator | per-`(member, key_group)`, aggregates across attempts to bound a member's effective work rate on a given wallet | Sum of Open calls for a `(member, key_group)` exceeds the cross-operator cap | `interactive_cross_operator_cap_exceeded` | `TBTC_SIGNER_INTERACTIVE_OPEN_CROSS_OPERATOR_CAP_PER_MINUTE` | 5/min |
+
+Both buckets are enforced at `InteractiveSessionOpen` (charged in order:
+primary bucket first, then cross-operator cap), implemented by
+`enforce_interactive_open_rate_limit` and
+`enforce_interactive_open_cross_operator_cap` in `src/engine/policy.rs`.
+The primary bucket is the per-caller throttle; the cross-operator cap is
+the per-`(member, key_group)` cap that prevents a single operator from
+inflating the effective budget by rotating `sender` identifiers or
+attempt contexts.
+
+#### `InteractiveRound1` rate-limit bucket
+
+`InteractiveRound1` has its own independent primary bucket — it does
+NOT reuse the Open cross-operator bucket. Implemented by
+`enforce_interactive_round1_rate_limit` in `src/engine/policy.rs`.
+
+| Bucket | Scope | Trigger | Reason code on exhaustion | Env-var knob | Default |
+| --- | --- | --- | --- | --- | --- |
+| Primary | per-`(sender, key_group)`, includes the attempt-context fingerprint | `InteractiveRound1` for a given `(sender, key_group)` exceeds the budget | `interactive_round1_rate_limit_exceeded` | `TBTC_SIGNER_INTERACTIVE_ROUND1_RATE_LIMIT_PER_MINUTE` | 60/min |
+
+There is no separate cross-operator cap on `InteractiveRound1` today —
+only the per-`(sender, key_group)` primary bucket. A cross-operator cap
+on Round1 (mirroring Open's) is a candidate future hardening, not
+implemented in Decision 7.
+
+#### Operator knobs and defaults
+
+All three knobs (`TBTC_SIGNER_INTERACTIVE_OPEN_RATE_LIMIT_PER_MINUTE`,
+`TBTC_SIGNER_INTERACTIVE_OPEN_CROSS_OPERATOR_CAP_PER_MINUTE`,
+`TBTC_SIGNER_INTERACTIVE_ROUND1_RATE_LIMIT_PER_MINUTE`) are env-var
+tunable, follow the existing `TBTC_SIGNER_*_ENV` pattern from
+`src/engine/config.rs`, and are parsed with the same bounded-parse
+rule as the rest of the policy surface. Defaults: 60/min for both
+primary buckets, 5/min for the cross-operator cap — deliberately much
+tighter than the primary bucket, since a compromised or misbehaving
+operator rotating `sender`/attempt identities is the threat this cap
+specifically targets. Each rejection emits a structured policy event
+with the `(sender, key_group)` / `(member, key_group)` tuple and the
+active bucket state at the time of rejection; the rejection is
+fail-closed (no exception carve-out for the host). All rate-limit
+state is process-local (in-memory token buckets) and resets on signer
+restart — it is never persisted or durable.
+
+#### Cumulative-rejection budget (Decision 8)
+
+The P0-M3 rate-limit discipline is independent of the
+`wallet_deadline_exceeded` terminal error class from Decision 8.
+Rate-limit rejections consume the per-(sender, key_group) and
+cross-operator buckets but do NOT consume the wallet-level attempt
+budget — a flood of rejects from a hostile operator therefore does
+not exhaust the wallet's deadline. The wallet-level deadline is
+only consumed by attempts that were admitted by all rate-limit
+buckets and produced a signing-flow outcome. This separation is
+load-bearing: keeping the rate-limit and the wallet-level deadline
+independent means a rate-limited operator cannot DoS the wallet's
+attempts by spending the deadline on its own rejections.
+
 ## Acceptance Test Catalog
 
 ### P0 acceptance tests

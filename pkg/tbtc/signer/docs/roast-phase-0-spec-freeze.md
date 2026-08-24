@@ -140,6 +140,32 @@ Mapping guidance:
   `attempt_id_mismatch`, and `attempt_transition_unauthorized` as non-retriable
   for that attempt payload.
 
+### Addendum: Phase 7 + PR #4005 decisions (append-only)
+
+The codes below are appended to the Phase 0 error taxonomy by
+Phase 7 and by the PR #4005 review decisions. They are listed
+separately from the frozen Phase 0 table above so that the Phase 0
+contract remains diff-stable for any reader still pinning the
+original table. Mapping guidance and the non-retriable guidance
+from the original §8 apply unchanged to the addendum entries.
+
+| Code | Meaning | Decision / phase |
+| --- | --- | --- |
+| `consumed_nonce_replay` | A second `InteractiveRound2` call against a `(session_id, attempt_id, member_identifier)` tuple whose engine-held nonces have already been consumed (signature share released, or consumption marker durably committed). Caller must mint a fresh attempt; the engine will never release a second share under one nonce pair. Stable code in `src/errors.rs`; produced by `EngineError::ConsumedNonceReplay`. | Phase 7 §4 (frozen) |
+| `interactive_attempt_already_aggregated` | `InteractiveAggregate` invoked again for an attempt that already produced an aggregate signature in this session. The per-attempt "aggregated" marker is durable; re-aggregation is rejected rather than recomputed (a lost signature is recovered with a fresh attempt, not by replay). Stable code in `src/errors.rs`; produced by `EngineError::InteractiveAttemptAlreadyAggregated`. Distinct from `consumed_nonce_replay` because the marker is "aggregated", not "nonce consumed". | Phase 7 §5 (frozen) |
+| `wallet_deadline_exceeded` | New terminal error class. The cumulative ROAST attempt budget for the wallet/session has been exceeded across the entire retry chain — the *wallet-level* deadline, not the per-attempt `attempt_exhausted` recoverable cap. Distinct from `attempt_exhausted`, which is recoverable (the caller can mint a new attempt within the cap); `wallet_deadline_exceeded` is terminal for the signing request and the wallet must be re-armed (e.g., via the operator's `persist_distributed_dkg_key_package` reset pathway or an explicit wallet re-arming procedure) before any further attempt is accepted. Surfaced as a structured rejection with the wallet-identifying context. | Decision 8 (PR #4005) |
+| `interactive_rate_limit_exceeded` | Policy-rejection code returned by `InteractiveSessionOpen` when the per-`(sender, key_group)` primary bucket is exhausted. Distinct from the existing `rate_limit_per_minute_exceeded` reason used for `BuildTaprootTx`; this addendum code carries the `(sender, key_group)` tuple in the structured reject payload so the Go host can surface the per-key-group attribution. The cross-operator `(member, key_group)` cap is enforced at the same entry point and surfaces as `interactive_cross_operator_cap_exceeded` (see below). | Decision 7 (PR #4005) |
+| `interactive_round1_rate_limit_exceeded` | Policy-rejection code returned by `InteractiveRound1` when its OWN independent per-`(sender, key_group)` primary bucket is exhausted. This is NOT the cross-operator cap — the cross-operator `(member, key_group)` cap is enforced at `InteractiveSessionOpen` (charged in order: primary bucket, then cross-operator cap) and surfaces as `interactive_cross_operator_cap_exceeded`, not as this code. `InteractiveRound1` has no cross-operator cap of its own. Both buckets are fail-closed and consume the rate-limit decrement before the reject is returned. | Decision 7 (PR #4005) |
+| `interactive_cross_operator_cap_exceeded` | Policy-rejection code returned by `InteractiveSessionOpen` when the per-`(member, key_group)` cross-operator cap is exceeded. The cross-operator cap aggregates across attempts to bound a member's effective work rate on a given wallet even when the member rotates `sender` identifiers or attempt contexts, so the primary per-`(sender, key_group)` bucket alone cannot police it. Charged at `InteractiveSessionOpen` only, never at `InteractiveRound1`. | Decision 7 (PR #4005) |
+| `frost_shadow_mode_advisory` | Audit signal (not an error code emitted as a rejection) emitted when a FROST signing output is gated to advisory-only under the FROST shadow mode (Decision 1). The signal is emitted on every gated output regardless of the final success/failure of the surrounding handshake; downstream observers consume the signal to confirm the shadow mode is active and to attribute the gated output to the caller. Pairs with the `TBTC_SIGNER_FROST_SHADOW_MODE` env var and the three-condition disjunction documented in `roast-phase-5-security-rollout-gates.md`. | Decision 1 (PR #4005) |
+
+`wallet_deadline_exceeded` is **terminal**; the other five Phase 7
+and Decision 7 codes are **recoverable** in the same sense as the
+existing `attempt_exhausted` (the caller may mint a new attempt
+subject to the budget). `frost_shadow_mode_advisory` is an audit
+signal, not a rejection — it is never returned in the response
+status, only emitted on the audit channel.
+
 ## 9. Replay, Restart, And Concurrency Invariants
 
 1. Attempt id is single-use for a given `(session_id, message, cohort)` flow.

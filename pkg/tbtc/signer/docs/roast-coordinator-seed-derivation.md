@@ -1,5 +1,58 @@
 # Coordinator-shuffle seed derivation (RFC-21 Annex A mirror)
 
+## Status: HKDF+CSPRNG migration reverted (Decision 2)
+
+The HKDF-SHA256 + CSPRNG coordinator-shuffle migration proposed in the
+PR #4005 review (originally decided as the new normative derivation)
+was attempted and reverted during implementation. The reverted attempt
+is documented here for the audit trail; the rest of this file describes
+the **current** derivation, which is unchanged from the prior
+unification-PR state.
+
+**What happened.** The migration's HKDF pull-in surfaced a
+`digest` crate version conflict between `sha2` (pinned at `0.10` in
+`Cargo.toml`) and the `hkdf` crate that the migration would have
+required, with the resolver landing on a configuration that broke
+downstream `frost-secp256k1-tr` compilation. Decision 2 was reverted
+rather than repinned, because the cost of reshuffling the ciphersuite
+dependency chain for a derivation change that was not security-binding
+on `frost-core` 3.x was disproportionate to the benefit.
+
+**What the current derivation actually is.** The current derivation
+remains the Go-`math/rand` port: `GoMathRandShuffle` in
+`src/go_math_rand.rs`, the 607-element `RNG_COOKED` table, and the
+four-line `roast_attempt_shuffle_seed` derivation in `src/engine/roast.rs`
+described in the "Derivation" and "Conformance vectors" sections
+below. No behavior changed.
+
+**What the reverted migration would have kept.** The design called for
+a single `COORDINATOR_SHUFFLE_VERSION: u8 = 1` byte (the prior unified
+state) to be fed into the attempt-context hash as a version-pin. This
+byte does not exist in the current derivation — `roast_attempt_shuffle_seed`
+in `src/engine/roast.rs` hashes only `key_group || session_id ||
+rfc21_message_digest`, with no version byte. The design intent is that
+the byte would be intentionally inert at version `1` — it would not
+alter the computed seed or the selected coordinator — but would
+establish the versioning slot so a future real migration could bump to
+`2` (or higher) without confusing the conformance corpus. Bumping the
+version byte would deliberately drop compatibility with the existing
+test vectors and force a documented re-pinning, which is the whole
+point of the pin. **None of this is implemented today; it is a design
+note for the eventual HKDF-SHA256 + CSPRNG migration, not a description
+of current behavior.**
+
+**Open follow-up.** The HKDF-SHA256 + CSPRNG migration itself is
+tracked as a follow-up to PR #4005. Until that follow-up lands and
+bumps `COORDINATOR_SHUFFLE_VERSION`, the normative derivation is the
+Go-port described below; the "Status" note at the top of this file
+is the load-bearing caveat for any reader cross-referencing the
+PR #4005 review's original Decision 2.
+
+This status note is appended to the top of the file (rather than
+replacing the body) so that pre-revert readers and the
+`coordinator_seed_derivation_matches_cross_language_vectors`
+conformance pinning remain diff-stable.
+
 The normative definition of the ROAST coordinator-shuffle seed lives in
 keep-core's RFC-21, *Annex A (normative): coordinator-shuffle seed
 derivation*
