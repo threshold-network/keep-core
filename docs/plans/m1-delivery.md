@@ -16,7 +16,7 @@ working scratchpad.
 | 1 | A `storage-layout` | `m1/storage-layout` @ `e175092a` | Built, awaiting human to open | — |
 | 2 | C `acceptance-core` | `m1/acceptance-core` @ `1f87f8d8` | **Clean 2026-08-25, awaiting human to open** (line-numbers fix landed) | **Duplicate wallet-binding guard annotated per option (b).** Net `-8/+2` on `Reservation.sol:391-398`, no behavior change. Directive comment line-number refs corrected at `1f87f8d8`. |
 | 3 | D `reanchor-core` | `m1/reanchor-core` @ `08536cd4` | Built, awaiting human to open | — (`cumulativeReanchorFee += minerFee` confirmed at `ReservationProofs.sol:692`) |
-| 4 | E `timeout-and-stranding` | `m1/timeout-and-stranding` @ `2e63515f` | Built, awaiting human to open | — |
+| 4 | E `timeout-and-stranding` | `m1/timeout-and-stranding` @ `0366836a` | **Built 2026-08-26, awaiting human to push** with 15-test stranding suite (real PR-E-local coverage via TestExecutor) | —
 | 5 | B `router-minimal` | `m1/router-minimal` @ `3156ed50` | **Clean 2026-08-25, awaiting human to open** | Bootstrap-ordering test split into two `it` blocks (hazard + safe order). 9/9 green with `FORKING_URL` unset. |
 | 6 | F `m1/vault-pause-flags` | `m1/vault-pause-flags` @ `941d79e9` | **Built 2026-08-25, awaiting human to push** (Option B scope) | Implementor may proceed to PR #G build brief |
 | 7 | G `m1/bridge-integration-seams` (deploy scripts + contract seams + tests) | `m1/bridge-integration-seams` @ `9a24212d` | **Built 2026-08-25 (deploy scripts by implementor; contract seams by manager-orchestrated subagents after implementor agent retired); 2026-08-26 characterization test passing + 2026-08-26 reservation-lifecycle coverage suite (3 new files, 13/13 passing), awaiting human to push** | ...
@@ -133,16 +133,22 @@ working scratchpad.
 
 ## Open items (agent-actionable, awaiting a decision — found in the 2026-08-26 review)
 
-~~**Reservation lifecycle has zero behavioral test coverage across PRs C/D/E.**~~ **PARTIALLY RESOLVED 2026-08-26, see PR G entry below for the actual coverage.** Per the human operator's call, attempted to split the test files so PRs C/D/E reviewers see the test in the same diff as the code. After two rounds:
+~~**Reservation lifecycle has zero behavioral test coverage across PRs C/D/E.**~~ **PARTIALLY RESOLVED 2026-08-26, see per-branch accounting below.** Per the human operator's call, attempted to split the test files so PRs C/D/E reviewers see the test in the same diff as the code. Final state after multiple rounds:
 
-- PR G (`m1/bridge-integration-seams` @ `9a24212d`): **13 new passing tests across 3 new self-contained files.** The real coverage: acceptance authorization + source-anchor binding + stranding/stale-deposit.
-- PR C (`m1/acceptance-core` @ `610609df`): `Bridge.ReservationAcceptanceAuthorization.test.ts` committed, but the 2 `it()` bodies are `it.skip(...)`'d because they call router entry points (`requestReservationAcceptance`, `submitReservationProof`, `updateReservationParameters`) that are only reachable via `Bridge.fallback()`'s delegatecall into `ReservationRouter.sol`, which doesn't exist on PR C. The file compiles and the test suite reports 0 failing / 2 pending, but it provides 0 functional coverage on PR C. Place-holder only.
-- PR D (`m1/reanchor-core` @ `f5221e47`): `Bridge.ReservationSourceAnchorBinding.test.ts` committed, the 1 `it()` body is `it.skip(...)`'d for the same router-bound reason. 0 functional coverage on PR D. Place-holder only.
-- PR E (`m1/timeout-and-stranding` @ `2038d3d1`): `Bridge.ReservationStranding.test.ts` committed, all 10 `it()` bodies `it.skip(...)`'d for the same reason. Note: `notifyReservationStranded`/`notifyStaleReservedDeposit`/`strandReservation` DO live on PR E's `Reservation.sol` library, but they are only reachable through the router fallback; the file's stubs call them as router methods, so they get skipped too. A future pass could exercise the library directly via low-level `delegatecall` from the test (bypassing the missing router), which would produce real PR-E-local coverage of these three functions. Place-holder only for now.
+- PR G (`m1/bridge-integration-seams` @ `9a24212d`): **13 new passing tests across 3 new self-contained files.** The real coverage: acceptance authorization + source-anchor binding + stranding/stale-deposit (the stranding portion here uses `Bridge.Deposit.test.ts`'s `BridgeStub.setWallet` to reach Terminated and exercises `Reservation.strandReservation` via the router fallback).
+- PR E (`m1/timeout-and-stranding` @ `0366836a`): **15 new passing tests in `Bridge.ReservationStranding.test.ts` plus a new `contracts/test/ReservationStrandingExecutor.sol` TestExecutor contract.** Real PR-E-local coverage of `notifyReservationStranded`, `notifyStaleReservedDeposit`, and (transitively) `strandReservation` — all three exercised via a TestExecutor that holds its own `BridgeState.Storage` and forwards calls using `using Reservation for BridgeState.Storage`. Bypasses the missing router entirely. Verified 15/15 passing, 0 skipped.
+- PR C (`m1/acceptance-core` @ `1f87f8d8`): **no test file shipped.** Cherry-pick attempt at `610609df` and stub-redo attempt at `ff68539d` both reverted; both produced placeholders with stubbed router entry points, providing zero functional coverage. Final state: no test file. The acceptance flow (`submitReservationAcceptanceProof`, `prepareReservationForSettlement`, `consumeAcceptedDeposit`) is exercised only by PR G's `Bridge.ReservationAcceptanceAuthorization.test.ts`.
+- PR D (`m1/reanchor-core` @ `08536cd4`): **no test file shipped.** Cherry-pick attempt at `e0c0dd71` and stub-redo attempt at `f5221e47` both reverted for the same reason. The re-anchor flow (`submitReservationReanchorProof`, `requireCurrentSourceAnchor`) is exercised only by PR G's `Bridge.ReservationSourceAnchorBinding.test.ts`.
 
-**Coverage net: PR G carries the real 13 tests; PRs C/D/E now carry placed fixture files with 0 functional coverage, that compile and don't fail.** Reviewers of PRs C/D/E will see a test file in the diff but every `it()` body is skipped with the reason "requires ReservationRouter fallback delegatecall from PR B/G". The "no behavioral tests" headline finding from the 2026-08-26 review (item 9) is therefore *not* closed at the per-PR level — it is closed once stack-merge lands (PR G carries forward into every lower PR's tree). The tracking claim "PR C/D/E now ship reservation lifecycle tests" must be qualified accordingly: they ship *placed fixtures*, not live tests. PR G is still the right branch to point reviewers at for the actual behavioral coverage.
+**Coverage net per branch:**
+| Branch | Real passing tests | Functional coverage of branch code |
+|---|---|---|
+| PR C | 0 | none — coverage lives only on PR G |
+| PR D | 0 | none — coverage lives only on PR G |
+| PR E | 15 | real — `notifyReservationStranded`, `notifyStaleReservedDeposit`, `strandReservation` exercised end-to-end via TestExecutor |
+| PR G | 13 | real — all three flow files |
 
-**Combined reservation suite regression on PR G:** **24/24 passing** (StorageLayout + ReservationCaps + ReservationSettlement + 3 new).
+
 
 ## Open items (manager-not-actionable)
 
