@@ -1,0 +1,28 @@
+{
+  "Title": "action-already-pending: pending action suppresses re-anchor, no proposal emitted",
+  "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+  "SourceWalletState": "MovingFunds",
+  "SourceWalletMainUtxoHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "SourceWalletMainUtxoValue": 500000,
+  "SourceWalletMainUtxoTxHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "SourceWalletMainUtxoTxIndex": 0,
+  "TargetWalletPublicKeyHash": "0x92a6ec889a8fa34f731e639edede4c75e184307c",
+  "LiveWalletsCount": 4,
+  "MovingFundsDustThreshold": 1000000,
+  "ReservationTxMaxFee": 100000,
+  "EstimateSatPerVByteFee": 1,
+  "ReanchorTxFee": 0,
+  "Reservations": [
+    {
+      "ReservationKey": "0000000000000000000000000000000000000000000000000000000000dddd04",
+      "WalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+      "AnchorTxHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "AnchorTxOutputIndex": 1,
+      "AnchorValue": 200000,
+      "State": "Active",
+      "RequestNonce": 4,
+      "HasPendingAction": true,
+      "PendingActionState": "Pending"
+    }
+  ]
+}

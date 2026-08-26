@@ -1,6 +1,7 @@
 package tbtcpg
 
 import (
+	"context"
 	"fmt"
 	"math/big"
 	"strings"
@@ -340,6 +341,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		}
 
 		confirmations, err := rat.btcChain.GetTransactionConfirmations(
+			context.Background(),
 			event.FundingTxHash,
 		)
 		if err != nil {

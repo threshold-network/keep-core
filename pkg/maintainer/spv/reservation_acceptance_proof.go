@@ -13,6 +13,7 @@ func SubmitReservationAcceptanceProof(
 	requiredConfirmations uint,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
+	metricsRecorder MetricsRecorder,
 ) error {
 	return submitReservationAcceptanceProof(
 		transactionHash,
@@ -20,7 +21,7 @@ func SubmitReservationAcceptanceProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		getGlobalMetricsRecorder(),
+		metricsRecorder,
 	)
 }
 
@@ -30,9 +31,7 @@ func submitReservationAcceptanceProof(
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	spvProofAssembler spvProofAssembler,
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-	},
+	metricsRecorder MetricsRecorder,
 ) error {
 	if requiredConfirmations == 0 {
 		return fmt.Errorf("provided required confirmations count must be greater than 0")
