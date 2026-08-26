@@ -226,7 +226,7 @@ Corrected per-PR sizes, replacing the column above:
 | PR | old estimate | measured | note |
 |---|---|---|---|
 | #A `m1/storage-layout` | +1,200 | **~380** | declarations only |
-| #B `m1/router-minimal` | +600 | **~690** | slightly under-estimated |
+| #B `m1/router-minimal` | +600 | ~690, **corrected 2026-08-26: ~860** | as-built exceeds even the first correction by 25% (1,160 with its new test file); no content defect found, the estimate undershot |
 | #C `m1/acceptance-core` | +1,800 | **~470** | plus shared helpers below |
 | #D `m1/reanchor-core` | +1,000 | **~294** | |
 | #E `m1/timeout-and-stranding` | +800 | **~287** | |
@@ -240,7 +240,7 @@ deletions across the whole stack.
 **Justification against one atomic PR**:
 - An atomic PR would bundle the whole ~4,500-line m1 surface, making review impractical and increasing the risk of missed errors.
 - Decomposition isolates concerns: storage (layout), router (interface), acceptance (core product), re-anchor (unpin), timeout/stranding (cleanup), vault (side-car), bridge integration.
-- Each PR can be tested independently against the epic branch using existing test harnesses (9,908 lines of reservation tests).
+- Each PR *can be* tested independently against the epic branch using existing test harnesses (9,908 lines of reservation tests) — **but as of 2026-08-26, none of them are.** That figure is the *source* PRs' (`#1091`-`#1096`) test suites; they were never ported when the m1 PRs extracted the production code. Measured directly against the built branches: PR C (acceptance), PR D (re-anchor) and PR E (timeout/stranding) ship **zero** test files, and PR B's own new `Bridge.ReservationCaps.test.ts` never calls `requestReservationAcceptance`/`submitReservationProof`/`requestReservationReanchor`/any `notifyReservation*` function — it only exercises the governance cap/parameter setters. PR D's own description explicitly flagged the fix: "the characterization test that pins this exposure (`#1104`) ... must be carried forward when PR #B makes the surface reachable; if it is dropped, the accepted regression stops being executable and degrades to prose." PR B has been built since 2026-08-25 and that carry-forward never happened — confirmed absent from every branch in the stack (`find ... -iname "*ReservationSettlement*"` → no matches anywhere under `/tmp/m1-*`). Net effect: the entire reservation lifecycle state machine (create→accept→prove→settle→re-anchor→timeout/stranding, roughly 1,600 production lines across C/D/E) has zero automated behavioral coverage across all eight m1 PRs combined. The 28 tests that do pass on the merged epic tree cover storage-layout parity, cap/parameter governance mechanics, and vault-level pause/fee mechanics only — none of them drive a reservation through its actual lifecycle. This is an open decision, not fixed here: either write the missing behavioral suite (likely landing with PR B or as a new PR before human push) or open the PRs with this gap explicitly disclosed to reviewers.
 - Alternative (one atomic PR) forces reviewers to re-verify the entire storage layout and behavior in one sitting, which is error-prone and violates the principle of reviewable increments.
 
 ### 4.2 keep-core PRs
@@ -254,6 +254,20 @@ deletions across the whole stack.
 previously said ~1,650, which is 18% above the top of the range every other doc
 gives and was unsourced. `milestone-inventory.md` D-26 asks for a bottom-up
 rebuild of this figure.)
+
+**Corrected again 2026-08-26, against the actually-built branch (tip `48985451d`).**
+PR #4238 turned out to land only the proposal/marshaling/assembler layer with no
+executor at all (`agent-docs/m1/manager-to-implementor-2026-08-26-pr-h-build-brief.md`),
+which pushed a first revision to ~2,300-2,500 production Go / ~2,300 test Go
+(recorded in `docs/plans/m1-delivery.md`). The actually-delivered branch measures
+**~4,849 production Go** (chain-interface implementations, executor task files,
+watcher files, operator wiring — excludes ~12,400 lines of auto-generated
+`ReservationRouter` ABI bindings under `pkg/chain/ethereum/tbtc/gen/`, which are
+not hand-written) and **~4,003 test Go**, independently verified via
+`git diff --numstat b4f63944..HEAD` with generated/test/testdata paths excluded.
+Content matches spec (three watchers, both executors, all required chain-interface
+methods, config-gated wiring); the code is not wrong, the estimate was — this is
+the third figure for this PR's size and the largest miss (~2x the second estimate).
 
 **Cross-repo ordering constraint**: keep-core binds against the tbtc-v2 ABI, so the Solidity entry-point surface must be stable before the Go client is finalised.
 

@@ -70,10 +70,79 @@ working scratchpad.
    re-derived from `git diff --stat` against each PR's actual base (not the doc's recollection),
    full commit list, the two defects found and fixed during each build, and verification commands
    with results. All eight PRs now have a ready-to-paste GitHub PR body.
+9. **Full branch/PR review against `pr-strategy.md` §4.1/§4.2 expectations.** All 8 branches
+   independently re-verified (content, tip hash, git parentage, build/test results) against the
+   spec doc and the claim docs. Results:
+   - **Headline finding: zero automated behavioral coverage of the reservation
+     lifecycle across all eight PRs combined.** PR C (acceptance), PR D (re-anchor)
+     and PR E (timeout/stranding) ship no test files at all; PR B's own new
+     `Bridge.ReservationCaps.test.ts` only exercises the governance cap/parameter
+     setters, never `requestReservationAcceptance`/`submitReservationProof`/
+     `requestReservationReanchor`/any `notifyReservation*` function. PR D's own
+     description explicitly flagged this risk ("the characterization test that
+     pins this exposure [`#1104`] ... must be carried forward when PR #B makes the
+     surface reachable; if it is dropped, the accepted regression stops being
+     executable and degrades to prose") — PR B has been built since 2026-08-25 and
+     the carry-forward never happened, confirmed absent from every branch. The 28
+     tests passing on the merged epic tree (storage-layout parity, cap/parameter
+     governance, vault-level pause/fee mechanics) never drive a reservation through
+     accept/prove/settle/re-anchor/timeout/stranding. Full detail and the two
+     remediation options: `pr-strategy.md` §4.1's justification section.
+   - **A, C, E, F, G otherwise clean match** against their own per-PR claims (tip
+     hash, base, required
+     functions present, forbidden functions absent where the row-141 correction applies,
+     build/test results reproduced).
+   - **PR H's claimed "552 tests passing" re-verified correct** (`go test ./pkg/tbtc/...
+     ./pkg/tbtcpg/... ./pkg/maintainer/spv/... ./pkg/clientinfo/... -count=1` → "552 passed in 7
+     packages", independently reproduced twice).
+   - **`pr-{A,C,D,E}-description.md` had stale self-reported tip/base hashes** — each was written
+     before a later fix landed on that same PR (or its cited predecessor) and never refreshed.
+     Fixed: A's Head `78e6b607`→`e175092a`; C's Head `54124d8c`→`1f87f8d8`, Base(A)
+     `78e6b607`→`e175092a`, Diff `+930`→`+932`; E's Head `aa91cd3d`→`2e63515f`, Base(D)
+     `e2bdb3a5`→`08536cd4`. B, F, G, H's description files were already current.
+   - **PR D's real git fork point from PR C is `f1ede944`, not C's current tip `1f87f8d8`** — D
+     was forked two commits before C's later duplicate-guard-comment fix (`3419e475`,
+     `1f87f8d8`) landed, and was never rebased. D's own diff never touches that region (confirmed:
+     D's hunks land at lines ~281/~334/~536 relative to its base), so the eventual epic merge is
+     unaffected — verified below. The one real consequence: opening PR D on GitHub with base set
+     to `m1/acceptance-core` *before* PR C merges will show a spurious 2-line "revert" of PR C's
+     comment fix in D's diff. `pr-D-description.md` corrected to state the true fork point and
+     flag this; left as an open human decision (rebase D..G, or open D directly against the epic
+     branch instead of stacking it on C) rather than auto-rebased — a rebase cascades through
+     E/B/F/G and would need all five re-verified plus a fresh dry run.
+   - **Two PR-strategy.md size-table figures are confirmed stale, both undershoots (not code
+     defects — content is correct, verified complete against spec):** PR B measures 860
+     production Solidity lines (1,160 with tests) against the doc's own corrected ~690 estimate;
+     PR H measures ~4,849 production Go lines (excluding generated ABI bindings and test code)
+     against the doc's revised ~2,300–2,500 estimate — roughly double, the third estimate in a row
+     for PR H's size (~1,100-1,400 → ~2,300-2,500 → ~4,849 actual). Corrected in `pr-strategy.md`
+     §4.1/§4.2 (see that doc's own correction there).
+   - **Epic-merge dry run re-run at current tips** (fresh scratch worktree, not the stale
+     2026-08-25 snapshot): all seven tbtc-v2 branches (A, C, D, E, B, F, G) still merge with zero
+     conflicts despite PR D's fork-point drift above (confirms the drift is harmless to the actual
+     merge, only to a stacked-PR diff view). Compiles clean; Bridge runtime bytecode measured
+     **22,791 B**, not the previously recorded 22,870 B (the earlier dry run predates PR G's
+     `cf457613` fallback-revert-bubbling fix, which shaved ~79 B). Still 1,785 B under the 24,576 B
+     EIP-170 limit. All 28 reservation regression tests pass on the merged tree.
 
 ## Resolved open items (carry-over from prior session, closed 2026-08-25)
 
 - ~~**Deploy-script gap.**~~ **RESOLVED by PR #G.** `solidity/deploy/97_set_reservation_parameters.ts` exists on `m1/bridge-integration-seams` and runs exactly the sequence this item specified: `beginReservationCapsUpdate`/`finalizeReservationCapsUpdate` first (passes trivially since `reservationMaxTotalAmount` defaults to `0`), then `beginReservationParametersUpdate`/`finalizeReservationParametersUpdate` (wires the vault address into the Bridge), then `setVaultStatus(vault, true)` via `BridgeGovernance`. See row 7 above.
+
+## Open items (agent-actionable, awaiting a decision — found in the 2026-08-26 review)
+
+- **Reservation lifecycle has zero behavioral test coverage across PRs C/D/E.**
+  See item 9's headline finding above. Two remediation paths, neither started:
+  (a) write a behavioral suite exercising accept/prove/settle, re-anchor, timeout,
+  and stranding through the router (PR B) before human push — this is genuinely
+  new test-writing work, not a quick fix, likely several hundred lines; or (b)
+  accept the gap for m1 and disclose it explicitly in the PR descriptions/review
+  request so reviewers aren't relying on a false "9,908 lines of reservation
+  tests" justification. Decision needed before opening PRs C, D, E, or B.
+- **PR D's stacked-base drift vs PR C** (item 9 above). Decision needed before
+  opening PR D: rebase D→G onto C's current tip (cascades, needs re-verification
+  of D/E/B/F/G plus a fresh dry run), or open D directly against the epic branch
+  rather than stacking it on C.
 
 ## Open items (manager-not-actionable)
 
@@ -86,7 +155,8 @@ working scratchpad.
   `agent-docs/m1/pr-*-description.md`.
 - **Epic integration (step map row 12-14: review/merge A-H onto `milestone/utxo-reservation-m1`,
   full suite, final PR to `main`)** — gated on A-H being human-opened first; de-risked by the
-  2026-08-25 dry-run merge (all seven tbtc-v2 branches merge clean, no manual conflicts).
+  2026-08-26 dry-run re-verification (all seven tbtc-v2 branches merge clean at current tips, no
+  manual conflicts, 28/28 passing, Bridge bytecode 22,791 B — see item 9 above).
 - **Post-m1: structural bound on re-anchor fee ratio** — `roadmap.md` §7 item 5, committed for post-m1 work.
 - **Should fee revenue pay down `inKindFeeDebtSat` first?** — `roadmap.md` §7 item 6, independent of `vault.md`'s sweep-safety decision, not blocking m1.
 
