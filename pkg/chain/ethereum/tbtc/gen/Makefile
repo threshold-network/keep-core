@@ -1,7 +1,7 @@
 npm_package_name=@keep-network/tbtc-v2
 
 # Contracts for which the bindings should be generated.
-required_contracts := Bridge MaintainerProxy LightRelay LightRelayMaintainerProxy WalletProposalValidator RedemptionWatchtower
+required_contracts := Bridge MaintainerProxy LightRelay LightRelayMaintainerProxy WalletProposalValidator RedemptionWatchtower ReservationRouter
 
 # There is a bug in the currently used abigen version (v1.10.19) that makes it
 # re-declaring structs used by multiple contracts
@@ -22,6 +22,7 @@ define after_abi_hook
 	$(eval type := $(1))
 	$(if $(filter $(type),WalletProposalValidator),$(call fix_wallet_proposal_validator_collision))
 	$(if $(filter $(type),MaintainerProxy),$(call fix_maintainer_proxy_collision))
+	$(if $(filter $(type),ReservationRouter),$(call fix_reservation_router_collision))
 endef
 define fix_wallet_proposal_validator_collision
 	@perl -pi -e s,BitcoinTxInfo,BitcoinTxInfo2,g ./abi/WalletProposalValidator.go
@@ -32,12 +33,26 @@ define fix_maintainer_proxy_collision
 	@perl -pi -e s,BitcoinTxProof,BitcoinTxProof2,g ./abi/MaintainerProxy.go
 	@perl -pi -e s,BitcoinTxInfo,BitcoinTxInfo3,g ./abi/MaintainerProxy.go
 endef
+# ReservationRouter introduces its own copies of the BitcoinTx.* structs
+# (BitcoinTxInfo, BitcoinTxProof, BitcoinTxUTXO) used by submitReservationProof.
+# These names already collide with Bridge's (BitcoinTxInfo/BitcoinTxProof/BitcoinTxUTXO),
+# WalletProposalValidator's (BitcoinTxInfo2/BitcoinTxUTXO3), and MaintainerProxy's
+# (BitcoinTxInfo3/BitcoinTxProof2/BitcoinTxUTXO2). Renumber ReservationRouter's
+# copies to the next free suffix in each family. The router code only ever runs
+# via Bridge.fallback delegatecall, so its storage pointer is unused; this is
+# a purely textual rename to keep the abi package compiling.
+define fix_reservation_router_collision
+	@perl -pi -e s,BitcoinTxInfo,BitcoinTxInfo4,g ./abi/ReservationRouter.go
+	@perl -pi -e s,BitcoinTxProof,BitcoinTxProof3,g ./abi/ReservationRouter.go
+	@perl -pi -e s,BitcoinTxUTXO,BitcoinTxUTXO4,g ./abi/ReservationRouter.go
+endef
 
 # See explanation in https://github.com/keep-network/keep-common/issues/117.
 define after_contract_hook
 	$(eval type := $(1))
 	$(if $(filter $(type),WalletProposalValidator),$(call fix_wallet_proposal_validator_contract_collision))
 	$(if $(filter $(type),MaintainerProxy),$(call fix_maintainer_proxy_contract_collision))
+	$(if $(filter $(type),ReservationRouter),$(call fix_reservation_router_contract_collision))
 endef
 define fix_wallet_proposal_validator_contract_collision
 	@perl -pi -e s,BitcoinTxUTXO,BitcoinTxUTXO3,g ./contract/WalletProposalValidator.go
@@ -50,6 +65,17 @@ define fix_maintainer_proxy_contract_collision
 	@perl -pi -e s,BitcoinTxUTXO,BitcoinTxUTXO2,g ./cmd/MaintainerProxy.go
 	@perl -pi -e s,BitcoinTxProof,BitcoinTxProof2,g ./cmd/MaintainerProxy.go
 	@perl -pi -e s,BitcoinTxInfo,BitcoinTxInfo3,g ./cmd/MaintainerProxy.go
+endef
+# keep-common's generator emits BitcoinTx* references inside the generated
+# contract/cmd binding code paths too (e.g. method wrappers). Apply the same
+# renames there so the contract and cmd packages compile.
+define fix_reservation_router_contract_collision
+	@perl -pi -e s,BitcoinTxInfo,BitcoinTxInfo4,g ./contract/ReservationRouter.go
+	@perl -pi -e s,BitcoinTxProof,BitcoinTxProof3,g ./contract/ReservationRouter.go
+	@perl -pi -e s,BitcoinTxUTXO,BitcoinTxUTXO4,g ./contract/ReservationRouter.go
+	@perl -pi -e s,BitcoinTxInfo,BitcoinTxInfo4,g ./cmd/ReservationRouter.go
+	@perl -pi -e s,BitcoinTxProof,BitcoinTxProof3,g ./cmd/ReservationRouter.go
+	@perl -pi -e s,BitcoinTxUTXO,BitcoinTxUTXO4,g ./cmd/ReservationRouter.go
 endef
 
 include ../../common/gen/Makefile
