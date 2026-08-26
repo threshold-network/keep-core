@@ -57,10 +57,18 @@ func (pg *ProposalGenerator) SetRedemptionMetricsRecorder(recorder interface {
 	}
 }
 
-// NewProposalGenerator returns a new proposal generator.
+// NewProposalGenerator returns a new proposal generator. When
+// reservationsEnabled is true the proposal generator appends the reservation
+// acceptance (anchor) and re-anchor tasks to the standard task list so that
+// wallets with reservations can produce anchor and re-anchor proposals in
+// addition to the default sweep / redemption / heartbeat / moving-funds /
+// moved-funds-sweep proposals. When reservationsEnabled is false the
+// reservation tasks are skipped entirely; the proposal generator is safe to
+// construct in either mode and the existing task ordering is preserved.
 func NewProposalGenerator(
 	chain Chain,
 	btcChain bitcoin.Chain,
+	reservationsEnabled bool,
 ) *ProposalGenerator {
 	tasks := []ProposalTask{
 		NewDepositSweepTask(chain, btcChain),
@@ -68,6 +76,20 @@ func NewProposalGenerator(
 		NewHeartbeatTask(chain),
 		NewMovingFundsTask(chain, btcChain),
 		NewMovedFundsSweepTask(chain, btcChain),
+	}
+
+	if reservationsEnabled {
+		// PR H: reservation acceptance (anchor) and re-anchor tasks.
+		// These tasks only run when the operator has opted into the m1
+		// reservation feature via config.Reservations.Enabled; the gate
+		// is applied at task registration so the coordination loop
+		// never even considers these actions on a non-reservation
+		// deployment.
+		tasks = append(
+			tasks,
+			NewReservationAcceptanceTask(chain, btcChain),
+			NewReservationReanchorTask(chain, btcChain),
+		)
 	}
 
 	return &ProposalGenerator{

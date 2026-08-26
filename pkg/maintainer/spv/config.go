@@ -65,4 +65,18 @@ type Config struct {
 	// IdleBackoffTime is a wait time which should be applied when there are no
 	// more transaction proofs to submit.
 	IdleBackoffTime time.Duration
+
+	// Reservations gates the m1 reservation feature within the SPV maintainer:
+	// reservation acceptance / re-anchor proof tasks and the stranding /
+	// stale-deposit / action-timeout watchers. When disabled the SPV maintainer
+	// constructs without any reservation plumbing.
+	Reservations ReservationsConfig
+}
+
+// ReservationsConfig holds the reservation-related spv.Config fields. The
+// structure mirrors tbtc.ReservationsConfig so an operator can keep the two
+// flags in lockstep via configuration.
+type ReservationsConfig struct {
+	// Enabled toggles reservation plumbing in the SPV maintainer.
+	Enabled bool
 }

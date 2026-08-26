@@ -22,6 +22,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/firewall"
 	"github.com/keep-network/keep-core/pkg/generator"
+	"github.com/keep-network/keep-core/pkg/maintainer/spv"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
 	"github.com/keep-network/keep-core/pkg/net/retransmission"
@@ -160,6 +161,19 @@ func start(cmd *cobra.Command) error {
 		proposalGenerator := tbtcpg.NewProposalGenerator(
 			tbtcChain,
 			btcChain,
+			clientConfig.Tbtc.Reservations.Enabled,
+		)
+
+		// PR H: when reservations are enabled, hand tbtc.Initialize a
+		// wiring callback that constructs the reservation watchers in the
+		// spv package and subscribes them to the chain. The wiring lives
+		// in spv because that is where the watcher types are defined; the
+		// indirection keeps the tbtc package free of any static import of
+		// spv (which would cycle with spv's existing import of tbtc).
+		wireReservationWatchers := tbtc.ReservationWatchersWirer(
+			func(ctx context.Context, chain tbtc.Chain) error {
+				return spv.WireReservationWatchers(ctx, chain, tbtcChain)
+			},
 		)
 
 		err = tbtc.Initialize(
@@ -175,6 +189,7 @@ func start(cmd *cobra.Command) error {
 			clientInfoRegistry,
 			perfMetrics, // Pass the existing performance metrics instance to avoid duplicate registrations
 			clientConfig.Ethereum.Network,
+			wireReservationWatchers,
 		)
 		if err != nil {
 			return fmt.Errorf("error initializing TBTC: [%v]", err)

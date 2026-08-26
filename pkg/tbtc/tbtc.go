@@ -96,11 +96,39 @@ type Config struct {
 	PreParamsGenerationConcurrency int
 	// Concurrency level for key-generation for tECDSA.
 	KeyGenerationConcurrency int
+	// Reservations gates the m1 reservation feature (acceptance, re-anchor,
+	// stranding / stale / action-timeout watchers). When disabled the
+	// coordination layer constructs without any reservation plumbing, so
+	// non-reservation deployments stay side-effect free.
+	Reservations ReservationsConfig
+}
+
+// ReservationsConfig holds the reservation-related tbtc.Config fields. It is
+// a separate type so future reservation knobs (poll intervals, cap overrides)
+// can be added without breaking the top-level Config layout.
+type ReservationsConfig struct {
+	// Enabled toggles reservation acceptance / re-anchor proposal
+	// generation and reservation watcher wiring. Defaults to false so
+	// existing deployments opt in explicitly.
+	Enabled bool
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
 // preconditions like staking are met, and then kicking off the internal TBTC
 // implementation. Returns an error if this failed.
+// ReservationWatchersWirer is the contract the Initialize caller fulfils
+// to gate the PR H reservation watcher wiring on config.Reservations.Enabled.
+// The signature accepts the live tbtc.Chain so the wiring can subscribe to
+// the On* event surface and forward Bridge notifications; production
+// implementations live in pkg/maintainer/spv and are passed in by cmd/start.go
+// to avoid a static tbtc -> spv import cycle.
+//
+// When config.Reservations.Enabled is true and the wirer is non-nil,
+// Initialize invokes the wirer after the existing event subscriptions have
+// been registered so the watcher event handlers see the same chain handle.
+// When Reservations.Enabled is false the wirer is not invoked.
+type ReservationWatchersWirer func(ctx context.Context, chain Chain) error
+
 func Initialize(
 	ctx context.Context,
 	chain Chain,
@@ -114,6 +142,7 @@ func Initialize(
 	clientInfo *clientinfo.Registry,
 	perfMetrics *clientinfo.PerformanceMetrics,
 	ethereumNetwork ethereum.Network,
+	wireReservationWatchers ReservationWatchersWirer,
 ) error {
 	groupParameters := defaultGroupParameters(ethereumNetwork)
 
@@ -373,6 +402,23 @@ func Initialize(
 			}
 		}()
 	})
+
+	if config.Reservations.Enabled && wireReservationWatchers != nil {
+		// PR H: wire reservation watchers (stranding, stale-deposit,
+		// action-timeout). The wiring function is supplied by the
+		// caller (cmd/start.go) so the tbtc package never imports spv
+		// directly. The wirer constructs the watchers and subscribes
+		// them to the chain; construction itself is gated on
+		// Reservations.Enabled inside spv. Failing to wire the watchers
+		// is fatal: the operator opted into reservations, so a missing
+		// watcher would silently strand anchors.
+		if err := wireReservationWatchers(ctx, chain); err != nil {
+			return fmt.Errorf(
+				"failed to wire reservation watchers: [%w]",
+				err,
+			)
+		}
+	}
 
 	return nil
 }
