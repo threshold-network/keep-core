@@ -2868,3 +2868,1146 @@ func parseReservationActionState(value uint8) (tbtc.ReservationActionState, erro
 		return 0, fmt.Errorf("unexpected reservation action state value: [%d]", value)
 	}
 }
+
+// RequestReservationAcceptance asks the Bridge (via its ReservationRouter
+// delegatecall target) to start a new reservation acceptance action generation
+// for the given reservation. The Bridge binding holds the actual storage; the
+// reservationRouter binding is bound to the Bridge address so this call routes
+// through Bridge.fallback into the router code.
+func (tc *TbtcChain) RequestReservationAcceptance(
+	reservationKey *big.Int,
+	walletPublicKeyHash [20]byte,
+) error {
+	gasEstimate, err := tc.reservationRouter.RequestReservationAcceptanceGasEstimate(
+		reservationKey,
+		walletPublicKeyHash,
+	)
+	if err != nil {
+		return err
+	}
+
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.reservationRouter.RequestReservationAcceptance(
+		reservationKey,
+		walletPublicKeyHash,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
+// RequestReservationReanchor asks the Bridge (via its ReservationRouter
+// delegatecall target) to start a new reservation re-anchor action generation
+// for the given reservation, targeting the given wallet.
+func (tc *TbtcChain) RequestReservationReanchor(
+	reservationKey *big.Int,
+	targetWalletPublicKeyHash [20]byte,
+) error {
+	gasEstimate, err := tc.reservationRouter.RequestReservationReanchorGasEstimate(
+		reservationKey,
+		targetWalletPublicKeyHash,
+	)
+	if err != nil {
+		return err
+	}
+
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.reservationRouter.RequestReservationReanchor(
+		reservationKey,
+		targetWalletPublicKeyHash,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
+// SubmitReservationProof submits an SPV proof for the given reservation
+// action generation to the Bridge. The proof path is onlySpvMaintainer on
+// the router; the call goes through Bridge.fallback's delegatecall so the
+// router code reads the Bridge's isSpvMaintainer mapping at the Bridge's
+// address.
+func (tc *TbtcChain) SubmitReservationProof(
+	proofType uint8,
+	txInfo *tbtc.BitcoinTxInfo,
+	proof *tbtc.BitcoinTxProof,
+	mainUtxo *tbtc.BitcoinTxUTXO,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	abiTxInfo := tbtcabi.BitcoinTxInfo4{
+		Version:      txInfo.Version,
+		InputVector:  txInfo.InputVector,
+		OutputVector: txInfo.OutputVector,
+		Locktime:     txInfo.Locktime,
+	}
+	abiProof := tbtcabi.BitcoinTxProof3{
+		MerkleProof:      proof.MerkleProof,
+		TxIndexInBlock:   proof.TxIndexInBlock,
+		BitcoinHeaders:   proof.BitcoinHeaders,
+		CoinbasePreimage: proof.CoinbasePreimage,
+		CoinbaseProof:    proof.CoinbaseProof,
+	}
+	abiUtxo := tbtcabi.BitcoinTxUTXO4{
+		TxHash:        mainUtxo.TxHash,
+		TxOutputIndex: mainUtxo.TxOutputIndex,
+		TxOutputValue: mainUtxo.TxOutputValue,
+	}
+
+	gasEstimate, err := tc.reservationRouter.SubmitReservationProofGasEstimate(
+		proofType,
+		abiTxInfo,
+		abiProof,
+		abiUtxo,
+		reservationKey,
+		requestNonce,
+	)
+	if err != nil {
+		return err
+	}
+
+	// The original estimate for this contract call is too low; the
+	// reservation proof path dispatches into ReservationProofs.submit*Proof,
+	// which performs a non-trivial amount of storage I/O. Apply a 20%
+	// margin mirroring the existing SubmitRedemptionProofWithReimbursement
+	// pattern in this file.
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.reservationRouter.SubmitReservationProof(
+		proofType,
+		abiTxInfo,
+		abiProof,
+		abiUtxo,
+		reservationKey,
+		requestNonce,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
+// NotifyReservationActionTimeout notifies the Bridge that the timeout for
+// the given reservation action generation has elapsed.
+func (tc *TbtcChain) NotifyReservationActionTimeout(
+	reservationKey *big.Int,
+	walletMembersIDs []uint32,
+) error {
+	gasEstimate, err := tc.reservationRouter.NotifyReservationActionTimeoutGasEstimate(
+		reservationKey,
+		walletMembersIDs,
+	)
+	if err != nil {
+		return err
+	}
+
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.reservationRouter.NotifyReservationActionTimeout(
+		reservationKey,
+		walletMembersIDs,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
+// NotifyStaleReservedDeposit notifies the Bridge that the given reserved
+// deposit's wallet did not anchor it within the reservation-action timeout.
+func (tc *TbtcChain) NotifyStaleReservedDeposit(
+	depositKey *big.Int,
+) error {
+	gasEstimate, err := tc.reservationRouter.NotifyStaleReservedDepositGasEstimate(
+		depositKey,
+	)
+	if err != nil {
+		return err
+	}
+
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.reservationRouter.NotifyStaleReservedDeposit(
+		depositKey,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
+// NotifyReservationStranded notifies the Bridge that the wallet custodying
+// the given reservation has been closed or terminated.
+func (tc *TbtcChain) NotifyReservationStranded(
+	reservationKey *big.Int,
+) error {
+	gasEstimate, err := tc.reservationRouter.NotifyReservationStrandedGasEstimate(
+		reservationKey,
+	)
+	if err != nil {
+		return err
+	}
+
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.reservationRouter.NotifyReservationStranded(
+		reservationKey,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
+// ReservationParametersFull is an alias for ReservationParameters; both
+// return the same tbtc.ReservationParameters struct that already carries
+// the full 10-tuple.
+func (tc *TbtcChain) ReservationParametersFull() (
+	*tbtc.ReservationParameters,
+	error,
+) {
+	return tc.ReservationParameters()
+}
+
+// ReservationCaps returns the cap parameters that gate reservation
+// acceptance. The reservationRouter binding is bound to the Bridge
+// address; the call routes through Bridge.fallback into the router's
+// reservationCaps view.
+func (tc *TbtcChain) ReservationCaps() (
+	uint64,
+	uint64,
+	error,
+) {
+	caps, err := tc.reservationRouter.ReservationCaps()
+	if err != nil {
+		return 0, 0, fmt.Errorf(
+			"cannot get reservation caps: [%v]",
+			err,
+		)
+	}
+
+	return caps.MaxReservationsAmountPerWallet, caps.ReservationMaxSingleAmount, nil
+}
+
+// WalletReservationsAmount returns the aggregate satoshi amount currently
+// anchored by the given wallet across all of its reservations.
+func (tc *TbtcChain) WalletReservationsAmount(
+	walletPublicKeyHash [20]byte,
+) (uint64, error) {
+	amount, err := tc.reservationRouter.WalletReservationsAmount(walletPublicKeyHash)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot get wallet reservations amount for [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	return amount, nil
+}
+
+// WalletReservationsCount returns the number of reservations currently
+// custodied by the given wallet.
+func (tc *TbtcChain) WalletReservationsCount(
+	walletPublicKeyHash [20]byte,
+) (uint32, error) {
+	count, err := tc.reservationRouter.WalletReservationsCount(walletPublicKeyHash)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot get wallet reservations count for [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	return count, nil
+}
+
+// WalletReservations returns the reservation keys for all reservations
+// currently custodied by the given wallet.
+func (tc *TbtcChain) WalletReservations(
+	walletPublicKeyHash [20]byte,
+) ([]*big.Int, error) {
+	keys, err := tc.reservationRouter.WalletReservations(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get wallet reservations for [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	return keys, nil
+}
+
+// ReservationByAnchorUtxo returns the reservation key whose anchor outpoint
+// is the given Bitcoin transaction output, or an empty value if no
+// reservation is anchored there.
+func (tc *TbtcChain) ReservationByAnchorUtxo(
+	anchorTxHash [32]byte,
+	anchorTxOutputIndex uint32,
+) (*big.Int, error) {
+	key, err := tc.reservationRouter.ReservationByAnchorUtxo(
+		anchorTxHash,
+		anchorTxOutputIndex,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get reservation by anchor utxo [0x%x:%d]: [%v]",
+			anchorTxHash,
+			anchorTxOutputIndex,
+			err,
+		)
+	}
+
+	return key, nil
+}
+
+// ReservedDepositWallet returns the wallet public key hash to which the
+// given reserved deposit was revealed. Returns the zero hash if the
+// deposit is not a reserved deposit.
+func (tc *TbtcChain) ReservedDepositWallet(
+	depositKey *big.Int,
+) ([20]byte, error) {
+	walletPublicKeyHash, err := tc.reservationRouter.ReservedDepositWallet(depositKey)
+	if err != nil {
+		return [20]byte{}, fmt.Errorf(
+			"cannot get reserved deposit wallet for [0x%x]: [%v]",
+			depositKey,
+			err,
+		)
+	}
+
+	return walletPublicKeyHash, nil
+}
+
+// PendingReservedDeposits returns the number of reserved deposits that
+// have been revealed to the Bridge but not yet accepted by a wallet.
+func (tc *TbtcChain) PendingReservedDeposits() (uint64, error) {
+	count, err := tc.reservationRouter.PendingReservedDeposits()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot get pending reserved deposits: [%v]",
+			err,
+		)
+	}
+
+	return count, nil
+}
+
+// convertReservationRequestFromAbiType converts the ReservationRouter-
+// specific Reservation.ReservationRequest ABI struct to the TBTC
+// application `tbtc.ReservationRequest` representation. This is the
+// verbatim-on-chain conversion; callers that want a slightly-shrunk Go
+// representation use GetReservation, which drops CumulativeReanchorFee
+// because m1 has no fee-ceiling enforcement.
+func convertReservationRequestFromAbiType(
+	abiReservation tbtcabi.ReservationReservationRequest,
+) (*tbtc.ReservationRequest, error) {
+	state, err := parseReservationState(abiReservation.State)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse reservation state: [%v]", err)
+	}
+
+	return &tbtc.ReservationRequest{
+		Owner:                 chain.Address(abiReservation.Owner.String()),
+		MintedAmount:          abiReservation.MintedAmount,
+		AcceptedAt:            abiReservation.AcceptedAt,
+		WalletPublicKeyHash:   abiReservation.WalletPubKeyHash,
+		AnchorAmount:          abiReservation.AnchorAmount,
+		ExpiresAt:             abiReservation.ExpiresAt,
+		AnchorTxHash:          abiReservation.AnchorTxHash,
+		AnchorTxOutputIndex:   abiReservation.AnchorTxOutputIndex,
+		State:                 state,
+		RequestNonce:          abiReservation.RequestNonce,
+		RetryCredit:           abiReservation.RetryCredit,
+		DissolutionEligibleAt: abiReservation.DissolutionEligibleAt,
+		CumulativeReanchorFee: abiReservation.CumulativeReanchorFee,
+	}, nil
+}
+
+// Reservations returns the on-chain reservation request record for the
+// given reservation key, including the cumulative re-anchor fee that the
+// existing GetReservation representation drops.
+func (tc *TbtcChain) Reservations(
+	reservationKey *big.Int,
+) (*tbtc.ReservationRequest, error) {
+	abiReservation, err := tc.reservationRouter.Reservations(reservationKey)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get reservation [0x%x]: [%v]",
+			reservationKey,
+			err,
+		)
+	}
+
+	reservation, err := convertReservationRequestFromAbiType(abiReservation)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot convert reservation [0x%x] from abi type: [%v]",
+			reservationKey,
+			err,
+		)
+	}
+
+	return reservation, nil
+}
+
+// convertReservationActionRecordFromAbiType converts the ReservationRouter-
+// specific Reservation.ReservationAction ABI struct to the TBTC
+// application `tbtc.ReservationActionRecord` representation. This is the
+// verbatim-on-chain conversion; callers that want a slightly-shrunk Go
+// representation use GetReservationAction, which drops the late-settlement
+// and retry-credit fields because m1 does not consume them.
+func convertReservationActionRecordFromAbiType(
+	abiAction tbtcabi.ReservationReservationAction,
+) (*tbtc.ReservationActionRecord, error) {
+	actionType, err := parseReservationActionType(abiAction.ActionType)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot parse reservation action type: [%v]",
+			err,
+		)
+	}
+
+	state, err := parseReservationActionState(abiAction.State)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot parse reservation action state: [%v]",
+			err,
+		)
+	}
+
+	return &tbtc.ReservationActionRecord{
+		TargetWalletPublicKeyHash: abiAction.TargetWalletPubKeyHash,
+		RequestedAt:               abiAction.RequestedAt,
+		TimeoutAt:                 abiAction.TimeoutAt,
+		TxMaxFee:                  abiAction.TxMaxFee,
+		ActionType:                actionType,
+		State:                     state,
+		FeePaid:                   abiAction.FeePaid,
+		Redeemer:                  chain.Address(abiAction.Redeemer.String()),
+		Amount:                    abiAction.Amount,
+		ActionDataHash:            abiAction.ActionDataHash,
+		SourceAnchorUtxoHash:      abiAction.SourceAnchorUtxoHash,
+		UsedRetryCredit:           abiAction.UsedRetryCredit,
+		WatchtowerDefaultDelay:    abiAction.WatchtowerDefaultDelay,
+		WatchtowerLevelOneDelay:   abiAction.WatchtowerLevelOneDelay,
+		WatchtowerLevelTwoDelay:   abiAction.WatchtowerLevelTwoDelay,
+		IsPartial:                 abiAction.IsPartial,
+		RetryCreditSourceNonce:    abiAction.RetryCreditSourceNonce,
+	}, nil
+}
+
+// ReservationActions returns the on-chain reservation action record for the
+// given reservation key and request nonce, including the late-settlement
+// and retry-credit fields that the existing GetReservationAction
+// representation drops.
+func (tc *TbtcChain) ReservationActions(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationActionRecord, error) {
+	abiAction, err := tc.reservationRouter.ReservationActions(
+		reservationKey,
+		requestNonce,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get reservation action [0x%x:%d]: [%v]",
+			reservationKey,
+			requestNonce,
+			err,
+		)
+	}
+
+	action, err := convertReservationActionRecordFromAbiType(abiAction)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot convert reservation action [0x%x:%d] from abi type: [%v]",
+			reservationKey,
+			requestNonce,
+			err,
+		)
+	}
+
+	return action, nil
+}
+
+// ActiveReservationsCount returns the current count of active reservations
+// across all wallets and the cap on that count.
+func (tc *TbtcChain) ActiveReservationsCount() (uint32, uint32, error) {
+	activeReservationsCount, err := tc.reservationRouter.ActiveReservationsCount()
+	if err != nil {
+		return 0, 0, fmt.Errorf(
+			"cannot get active reservations count: [%v]",
+			err,
+		)
+	}
+
+	return activeReservationsCount.Count, activeReservationsCount.MaxActive, nil
+}
+
+// ReservationRouter returns the address of the ReservationRouter contract
+// as stored on the Bridge. The router contract holds its own empty storage
+// and only ever executes via Bridge.fallback's delegatecall, so this is
+// the one place where the chain handle reads a router address value
+// rather than binding a call to it: any actual reservation call routes
+// through the Bridge binding (tc.reservationRouter, which is bound to the
+// Bridge address) and dispatches into the router code via the fallback.
+func (tc *TbtcChain) ReservationRouter() (chain.Address, error) {
+	address, err := tc.bridge.GetReservationRouter()
+	if err != nil {
+		return "", fmt.Errorf(
+			"cannot get reservation router address: [%v]",
+			err,
+		)
+	}
+
+	return chain.Address(address.Hex()), nil
+}
+
+// IsReservedDeposit returns true if the given deposit was revealed with
+// the reservation vault address and is therefore a reservation rather than
+// a default deposit.
+func (tc *TbtcChain) IsReservedDeposit(
+	depositKey *big.Int,
+) (bool, error) {
+	isReserved, err := tc.bridge.IsReservedDeposit(depositKey)
+	if err != nil {
+		return false, fmt.Errorf(
+			"cannot check if deposit [0x%x] is reserved: [%v]",
+			depositKey,
+			err,
+		)
+	}
+
+	return isReserved, nil
+}
+
+// OnReservationAcceptanceRequested registers a callback that is invoked
+// when an on-chain ReservationAcceptanceRequested event is seen. The
+// subscription filters against the Bridge's address (the binding is bound
+// to the Bridge address; delegatecall preserves the caller's address
+// context so events emitted by router code carry the Bridge's address).
+func (tc *TbtcChain) OnReservationAcceptanceRequested(
+	handler func(event *tbtc.ReservationAcceptanceRequestedEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationKey *big.Int,
+		requestNonce uint64,
+		walletPublicKeyHash [20]byte,
+		depositAmount uint64,
+		txMaxFee uint64,
+		timeoutAt uint32,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationAcceptanceRequestedEvent{
+			ReservationKey:      reservationKey,
+			RequestNonce:        requestNonce,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			DepositAmount:       depositAmount,
+			TxMaxFee:            txMaxFee,
+			TimeoutAt:           timeoutAt,
+			BlockNumber:         blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationAcceptanceRequestedEvent(
+		nil,
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// PastReservationAcceptanceRequestedEvents fetches past
+// ReservationAcceptanceRequested events according to the provided filter
+// or unfiltered if the filter is nil.
+func (tc *TbtcChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	var startBlock uint64
+	var endBlock *uint64
+	var reservationKey []*big.Int
+	var walletPublicKeyHash [][20]byte
+
+	if filter != nil {
+		startBlock = filter.StartBlock
+		endBlock = filter.EndBlock
+		reservationKey = filter.ReservationKey
+		walletPublicKeyHash = filter.WalletPublicKeyHash
+	}
+
+	events, err := tc.reservationRouter.PastReservationAcceptanceRequestedEvents(
+		startBlock,
+		endBlock,
+		reservationKey,
+		walletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	convertedEvents := make([]*tbtc.ReservationAcceptanceRequestedEvent, 0)
+	for _, event := range events {
+		convertedEvents = append(convertedEvents, &tbtc.ReservationAcceptanceRequestedEvent{
+			ReservationKey:      event.ReservationKey,
+			RequestNonce:        event.RequestNonce,
+			WalletPublicKeyHash: event.WalletPubKeyHash,
+			DepositAmount:       event.DepositAmount,
+			TxMaxFee:            event.TxMaxFee,
+			TimeoutAt:           event.TimeoutAt,
+			BlockNumber:         event.Raw.BlockNumber,
+		})
+	}
+
+	sort.SliceStable(convertedEvents, func(i, j int) bool {
+		return convertedEvents[i].BlockNumber < convertedEvents[j].BlockNumber
+	})
+
+	return convertedEvents, nil
+}
+
+// OnReservationAccepted registers a callback that is invoked when an
+// on-chain ReservationAccepted event is seen.
+func (tc *TbtcChain) OnReservationAccepted(
+	handler func(event *tbtc.ReservationAcceptedEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationKey *big.Int,
+		requestNonce uint64,
+		walletPublicKeyHash [20]byte,
+		owner common.Address,
+		anchorTxHash [32]byte,
+		anchorAmount uint64,
+		expiresAt uint32,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationAcceptedEvent{
+			ReservationKey:      reservationKey,
+			RequestNonce:        requestNonce,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			Owner:               chain.Address(owner.Hex()),
+			AnchorTxHash:        anchorTxHash,
+			AnchorAmount:        anchorAmount,
+			ExpiresAt:           expiresAt,
+			BlockNumber:         blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationAcceptedEvent(
+		nil,
+		nil,
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// PastReservationAcceptedEvents fetches past ReservationAccepted events
+// according to the provided filter or unfiltered if the filter is nil.
+func (tc *TbtcChain) PastReservationAcceptedEvents(
+	filter *tbtc.ReservationAcceptedEventFilter,
+) ([]*tbtc.ReservationAcceptedEvent, error) {
+	var startBlock uint64
+	var endBlock *uint64
+	var reservationKey []*big.Int
+	var walletPublicKeyHash [][20]byte
+	var owner []common.Address
+
+	if filter != nil {
+		startBlock = filter.StartBlock
+		endBlock = filter.EndBlock
+		reservationKey = filter.ReservationKey
+		walletPublicKeyHash = filter.WalletPublicKeyHash
+		for _, o := range filter.Owner {
+			owner = append(owner, common.HexToAddress(string(o)))
+		}
+	}
+
+	events, err := tc.reservationRouter.PastReservationAcceptedEvents(
+		startBlock,
+		endBlock,
+		reservationKey,
+		walletPublicKeyHash,
+		owner,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	convertedEvents := make([]*tbtc.ReservationAcceptedEvent, 0)
+	for _, event := range events {
+		convertedEvents = append(convertedEvents, &tbtc.ReservationAcceptedEvent{
+			ReservationKey:      event.ReservationKey,
+			RequestNonce:        event.RequestNonce,
+			WalletPublicKeyHash: event.WalletPubKeyHash,
+			Owner:               chain.Address(event.Owner.Hex()),
+			AnchorTxHash:        event.AnchorTxHash,
+			AnchorAmount:        event.AnchorAmount,
+			ExpiresAt:           event.ExpiresAt,
+			BlockNumber:         event.Raw.BlockNumber,
+		})
+	}
+
+	sort.SliceStable(convertedEvents, func(i, j int) bool {
+		return convertedEvents[i].BlockNumber < convertedEvents[j].BlockNumber
+	})
+
+	return convertedEvents, nil
+}
+
+// OnReservationReanchorRequested registers a callback that is invoked
+// when an on-chain ReservationReanchorRequested event is seen.
+func (tc *TbtcChain) OnReservationReanchorRequested(
+	handler func(event *tbtc.ReservationReanchorRequestedEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationKey *big.Int,
+		requestNonce uint64,
+		sourceWalletPublicKeyHash [20]byte,
+		targetWalletPublicKeyHash [20]byte,
+		txMaxFee uint64,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationReanchorRequestedEvent{
+			ReservationKey:            reservationKey,
+			RequestNonce:              requestNonce,
+			SourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
+			TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
+			TxMaxFee:                  txMaxFee,
+			BlockNumber:               blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationReanchorRequestedEvent(
+		nil,
+		nil,
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// PastReservationReanchorRequestedEvents fetches past
+// ReservationReanchorRequested events according to the provided filter or
+// unfiltered if the filter is nil.
+func (tc *TbtcChain) PastReservationReanchorRequestedEvents(
+	filter *tbtc.ReservationReanchorRequestedEventFilter,
+) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
+	var startBlock uint64
+	var endBlock *uint64
+	var reservationKey []*big.Int
+	var sourceWalletPublicKeyHash [][20]byte
+	var targetWalletPublicKeyHash [][20]byte
+
+	if filter != nil {
+		startBlock = filter.StartBlock
+		endBlock = filter.EndBlock
+		reservationKey = filter.ReservationKey
+		sourceWalletPublicKeyHash = filter.SourceWalletPublicKeyHash
+		targetWalletPublicKeyHash = filter.TargetWalletPublicKeyHash
+	}
+
+	events, err := tc.reservationRouter.PastReservationReanchorRequestedEvents(
+		startBlock,
+		endBlock,
+		reservationKey,
+		sourceWalletPublicKeyHash,
+		targetWalletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	convertedEvents := make([]*tbtc.ReservationReanchorRequestedEvent, 0)
+	for _, event := range events {
+		convertedEvents = append(convertedEvents, &tbtc.ReservationReanchorRequestedEvent{
+			ReservationKey:            event.ReservationKey,
+			RequestNonce:              event.RequestNonce,
+			SourceWalletPublicKeyHash: event.SourceWalletPubKeyHash,
+			TargetWalletPublicKeyHash: event.TargetWalletPubKeyHash,
+			TxMaxFee:                  event.TxMaxFee,
+			BlockNumber:               event.Raw.BlockNumber,
+		})
+	}
+
+	sort.SliceStable(convertedEvents, func(i, j int) bool {
+		return convertedEvents[i].BlockNumber < convertedEvents[j].BlockNumber
+	})
+
+	return convertedEvents, nil
+}
+
+// OnReservationReanchored registers a callback that is invoked when an
+// on-chain ReservationReanchored event is seen.
+func (tc *TbtcChain) OnReservationReanchored(
+	handler func(event *tbtc.ReservationReanchoredEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationKey *big.Int,
+		requestNonce uint64,
+		newWalletPublicKeyHash [20]byte,
+		newAnchorTxHash [32]byte,
+		newAnchorAmount uint64,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationReanchoredEvent{
+			ReservationKey:         reservationKey,
+			RequestNonce:           requestNonce,
+			NewWalletPublicKeyHash: newWalletPublicKeyHash,
+			NewAnchorTxHash:        newAnchorTxHash,
+			NewAnchorAmount:        newAnchorAmount,
+			BlockNumber:            blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationReanchoredEvent(
+		nil,
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// PastReservationReanchoredEvents fetches past ReservationReanchored
+// events according to the provided filter or unfiltered if the filter is
+// nil.
+func (tc *TbtcChain) PastReservationReanchoredEvents(
+	filter *tbtc.ReservationReanchoredEventFilter,
+) ([]*tbtc.ReservationReanchoredEvent, error) {
+	var startBlock uint64
+	var endBlock *uint64
+	var reservationKey []*big.Int
+	var newWalletPublicKeyHash [][20]byte
+
+	if filter != nil {
+		startBlock = filter.StartBlock
+		endBlock = filter.EndBlock
+		reservationKey = filter.ReservationKey
+		newWalletPublicKeyHash = filter.NewWalletPublicKeyHash
+	}
+
+	events, err := tc.reservationRouter.PastReservationReanchoredEvents(
+		startBlock,
+		endBlock,
+		reservationKey,
+		newWalletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	convertedEvents := make([]*tbtc.ReservationReanchoredEvent, 0)
+	for _, event := range events {
+		convertedEvents = append(convertedEvents, &tbtc.ReservationReanchoredEvent{
+			ReservationKey:         event.ReservationKey,
+			RequestNonce:           event.RequestNonce,
+			NewWalletPublicKeyHash: event.NewWalletPubKeyHash,
+			NewAnchorTxHash:        event.NewAnchorTxHash,
+			NewAnchorAmount:        event.NewAnchorAmount,
+			BlockNumber:            event.Raw.BlockNumber,
+		})
+	}
+
+	sort.SliceStable(convertedEvents, func(i, j int) bool {
+		return convertedEvents[i].BlockNumber < convertedEvents[j].BlockNumber
+	})
+
+	return convertedEvents, nil
+}
+
+// OnReservationActionTimedOut registers a callback that is invoked when an
+// on-chain ReservationActionTimedOut event is seen.
+func (tc *TbtcChain) OnReservationActionTimedOut(
+	handler func(event *tbtc.ReservationActionTimedOutEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationKey *big.Int,
+		requestNonce uint64,
+		actionType uint8,
+		blockNumber uint64,
+	) {
+		parsedActionType, err := parseReservationActionType(actionType)
+		if err != nil {
+			logger.Errorf(
+				"unexpected reservation action type on ReservationActionTimedOut event: [%v]",
+				err,
+			)
+			return
+		}
+
+		handler(&tbtc.ReservationActionTimedOutEvent{
+			ReservationKey: reservationKey,
+			RequestNonce:   requestNonce,
+			ActionType:     parsedActionType,
+			BlockNumber:    blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationActionTimedOutEvent(
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// PastReservationActionTimedOutEvents fetches past
+// ReservationActionTimedOut events according to the provided filter or
+// unfiltered if the filter is nil.
+func (tc *TbtcChain) PastReservationActionTimedOutEvents(
+	filter *tbtc.ReservationActionTimedOutEventFilter,
+) ([]*tbtc.ReservationActionTimedOutEvent, error) {
+	var startBlock uint64
+	var endBlock *uint64
+	var reservationKey []*big.Int
+
+	if filter != nil {
+		startBlock = filter.StartBlock
+		endBlock = filter.EndBlock
+		reservationKey = filter.ReservationKey
+	}
+
+	events, err := tc.reservationRouter.PastReservationActionTimedOutEvents(
+		startBlock,
+		endBlock,
+		reservationKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	convertedEvents := make([]*tbtc.ReservationActionTimedOutEvent, 0)
+	for _, event := range events {
+		parsedActionType, err := parseReservationActionType(event.ActionType)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unexpected reservation action type on past ReservationActionTimedOut event: [%v]",
+				err,
+			)
+		}
+
+		convertedEvents = append(convertedEvents, &tbtc.ReservationActionTimedOutEvent{
+			ReservationKey: event.ReservationKey,
+			RequestNonce:   event.RequestNonce,
+			ActionType:     parsedActionType,
+			BlockNumber:    event.Raw.BlockNumber,
+		})
+	}
+
+	sort.SliceStable(convertedEvents, func(i, j int) bool {
+		return convertedEvents[i].BlockNumber < convertedEvents[j].BlockNumber
+	})
+
+	return convertedEvents, nil
+}
+
+// OnReservationActionSuperseded registers a callback that is invoked when
+// an on-chain ReservationActionSuperseded event is seen.
+func (tc *TbtcChain) OnReservationActionSuperseded(
+	handler func(event *tbtc.ReservationActionSupersededEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationKey *big.Int,
+		requestNonce uint64,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationActionSupersededEvent{
+			ReservationKey: reservationKey,
+			RequestNonce:   requestNonce,
+			BlockNumber:    blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationActionSupersededEvent(
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// OnReservationLateSettled registers a callback that is invoked when an
+// on-chain ReservationLateSettled event is seen.
+func (tc *TbtcChain) OnReservationLateSettled(
+	handler func(event *tbtc.ReservationLateSettledEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationKey *big.Int,
+		requestNonce uint64,
+		actionType uint8,
+		blockNumber uint64,
+	) {
+		parsedActionType, err := parseReservationActionType(actionType)
+		if err != nil {
+			logger.Errorf(
+				"unexpected reservation action type on ReservationLateSettled event: [%v]",
+				err,
+			)
+			return
+		}
+
+		handler(&tbtc.ReservationLateSettledEvent{
+			ReservationKey: reservationKey,
+			RequestNonce:   requestNonce,
+			ActionType:     parsedActionType,
+			BlockNumber:    blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationLateSettledEvent(
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// OnReservationRetryCreditMinted registers a callback that is invoked when
+// an on-chain ReservationRetryCreditMinted event is seen.
+func (tc *TbtcChain) OnReservationRetryCreditMinted(
+	handler func(event *tbtc.ReservationRetryCreditMintedEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationKey *big.Int,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationRetryCreditMintedEvent{
+			ReservationKey: reservationKey,
+			BlockNumber:    blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationRetryCreditMintedEvent(
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// OnReservedDepositMarkedStale registers a callback that is invoked when
+// an on-chain ReservedDepositMarkedStale event is seen.
+func (tc *TbtcChain) OnReservedDepositMarkedStale(
+	handler func(event *tbtc.ReservedDepositMarkedStaleEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		depositKey *big.Int,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservedDepositMarkedStaleEvent{
+			DepositKey:  depositKey,
+			BlockNumber: blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservedDepositMarkedStaleEvent(
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// OnReservationStranded registers a callback that is invoked when an
+// on-chain ReservationStranded event is seen.
+func (tc *TbtcChain) OnReservationStranded(
+	handler func(event *tbtc.ReservationStrandedEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationKey *big.Int,
+		walletPublicKeyHash [20]byte,
+		owner common.Address,
+		anchorAmount uint64,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationStrandedEvent{
+			ReservationKey:      reservationKey,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			Owner:               chain.Address(owner.Hex()),
+			AnchorAmount:        anchorAmount,
+			BlockNumber:         blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationStrandedEvent(
+		nil,
+		nil,
+		nil,
+		nil,
+	).OnEvent(onEvent)
+}
+
+// OnReservationParametersUpdated registers a callback that is invoked when
+// an on-chain ReservationParametersUpdated event is seen.
+func (tc *TbtcChain) OnReservationParametersUpdated(
+	handler func(event *tbtc.ReservationParametersUpdatedEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationMinAmount uint64,
+		reservationTxMaxFee uint64,
+		reservationTermSeconds uint32,
+		reservationDissolutionDelay uint32,
+		reservationMaxTotalAmount uint64,
+		maxReservationsPerWallet uint32,
+		reservationActionTimeout uint32,
+		reservationRenewalWindowSeconds uint32,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationParametersUpdatedEvent{
+			ReservationMinAmount:            reservationMinAmount,
+			ReservationTxMaxFee:             reservationTxMaxFee,
+			ReservationTermSeconds:          reservationTermSeconds,
+			ReservationDissolutionDelay:     reservationDissolutionDelay,
+			ReservationMaxTotalAmount:       reservationMaxTotalAmount,
+			MaxReservationsPerWallet:        maxReservationsPerWallet,
+			ReservationActionTimeout:        reservationActionTimeout,
+			ReservationRenewalWindowSeconds: reservationRenewalWindowSeconds,
+			BlockNumber:                     blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationParametersUpdatedEvent(
+		nil,
+	).OnEvent(onEvent)
+}
+
+// OnReservationVaultUpdated registers a callback that is invoked when an
+// on-chain ReservationVaultUpdated event is seen.
+func (tc *TbtcChain) OnReservationVaultUpdated(
+	handler func(event *tbtc.ReservationVaultUpdatedEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		reservationVault common.Address,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationVaultUpdatedEvent{
+			ReservationVault: chain.Address(reservationVault.Hex()),
+			BlockNumber:      blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationVaultUpdatedEvent(
+		nil,
+	).OnEvent(onEvent)
+}
+
+// OnReservationCapsUpdated registers a callback that is invoked when an
+// on-chain ReservationCapsUpdated event is seen.
+func (tc *TbtcChain) OnReservationCapsUpdated(
+	handler func(event *tbtc.ReservationCapsUpdatedEvent),
+) subscription.EventSubscription {
+	onEvent := func(
+		maxReservationsAmountPerWallet uint64,
+		reservationMaxSingleAmount uint64,
+		maxActiveReservations uint32,
+		blockNumber uint64,
+	) {
+		handler(&tbtc.ReservationCapsUpdatedEvent{
+			MaxReservationsAmountPerWallet: maxReservationsAmountPerWallet,
+			ReservationMaxSingleAmount:     reservationMaxSingleAmount,
+			MaxActiveReservations:          maxActiveReservations,
+			BlockNumber:                    blockNumber,
+		})
+	}
+
+	return tc.reservationRouter.ReservationCapsUpdatedEvent(
+		nil,
+	).OnEvent(onEvent)
+}

@@ -1499,3 +1499,228 @@ func (lc *localChain) ValidateReservationDissolutionProposal(
 ) error {
 	panic("unsupported")
 }
+func (lc *localChain) RequestReservationAcceptance(
+	reservationKey *big.Int,
+	walletPublicKeyHash [20]byte,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) RequestReservationReanchor(
+	reservationKey *big.Int,
+	targetWalletPublicKeyHash [20]byte,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) SubmitReservationProof(
+	proofType uint8,
+	txInfo *BitcoinTxInfo,
+	proof *BitcoinTxProof,
+	mainUtxo *BitcoinTxUTXO,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) NotifyReservationActionTimeout(
+	reservationKey *big.Int,
+	walletMembersIDs []uint32,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) NotifyStaleReservedDeposit(
+	depositKey *big.Int,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) NotifyReservationStranded(
+	reservationKey *big.Int,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) ReservationParametersFull() (*ReservationParameters, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ReservationCaps() (
+	uint64,
+	uint64,
+	error,
+) {
+	return 0, 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) WalletReservationsAmount(
+	walletPublicKeyHash [20]byte,
+) (uint64, error) {
+	return 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) WalletReservationsCount(
+	walletPublicKeyHash [20]byte,
+) (uint32, error) {
+	return 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) WalletReservations(
+	walletPublicKeyHash [20]byte,
+) ([]*big.Int, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ReservationByAnchorUtxo(
+	anchorTxHash [32]byte,
+	anchorTxOutputIndex uint32,
+) (*big.Int, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ReservedDepositWallet(
+	depositKey *big.Int,
+) ([20]byte, error) {
+	return [20]byte{}, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) PendingReservedDeposits() (uint64, error) {
+	return 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) Reservations(
+	reservationKey *big.Int,
+) (*ReservationRequest, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ReservationActions(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*ReservationActionRecord, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ActiveReservationsCount() (uint32, uint32, error) {
+	return 0, 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ReservationRouter() (chain.Address, error) {
+	return "", fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) IsReservedDeposit(
+	depositKey *big.Int,
+) (bool, error) {
+	return false, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) OnReservationAcceptanceRequested(
+	handler func(event *ReservationAcceptanceRequestedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) PastReservationAcceptanceRequestedEvents(
+	filter *ReservationAcceptanceRequestedEventFilter,
+) ([]*ReservationAcceptanceRequestedEvent, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) OnReservationAccepted(
+	handler func(event *ReservationAcceptedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) PastReservationAcceptedEvents(
+	filter *ReservationAcceptedEventFilter,
+) ([]*ReservationAcceptedEvent, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) OnReservationReanchorRequested(
+	handler func(event *ReservationReanchorRequestedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) PastReservationReanchorRequestedEvents(
+	filter *ReservationReanchorRequestedEventFilter,
+) ([]*ReservationReanchorRequestedEvent, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) OnReservationReanchored(
+	handler func(event *ReservationReanchoredEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) PastReservationReanchoredEvents(
+	filter *ReservationReanchoredEventFilter,
+) ([]*ReservationReanchoredEvent, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) OnReservationActionTimedOut(
+	handler func(event *ReservationActionTimedOutEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) PastReservationActionTimedOutEvents(
+	filter *ReservationActionTimedOutEventFilter,
+) ([]*ReservationActionTimedOutEvent, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) OnReservationActionSuperseded(
+	handler func(event *ReservationActionSupersededEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) OnReservationLateSettled(
+	handler func(event *ReservationLateSettledEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) OnReservationRetryCreditMinted(
+	handler func(event *ReservationRetryCreditMintedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) OnReservedDepositMarkedStale(
+	handler func(event *ReservedDepositMarkedStaleEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) OnReservationStranded(
+	handler func(event *ReservationStrandedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) OnReservationParametersUpdated(
+	handler func(event *ReservationParametersUpdatedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) OnReservationVaultUpdated(
+	handler func(event *ReservationVaultUpdatedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) OnReservationCapsUpdated(
+	handler func(event *ReservationCapsUpdatedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
