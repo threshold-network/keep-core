@@ -80,4 +80,17 @@ type Config struct {
 	// BIP94 minimum-difficulty runs) where the default 144 headers is
 	// insufficient.
 	MaxProofHeaders uint
+	// Reservations gates the m1 reservation feature within the SPV maintainer:
+	// reservation acceptance / re-anchor proof tasks and the stranding /
+	// stale-deposit / action-timeout watchers. When disabled the SPV maintainer
+	// constructs without any reservation plumbing.
+	Reservations ReservationsConfig
+}
+
+// ReservationsConfig holds the reservation-related spv.Config fields. The
+// structure mirrors tbtc.ReservationsConfig so an operator can keep the two
+// flags in lockstep via configuration.
+type ReservationsConfig struct {
+	// Enabled toggles reservation plumbing in the SPV maintainer.
+	Enabled bool
 }
