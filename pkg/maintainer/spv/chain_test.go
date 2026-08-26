@@ -720,3 +720,131 @@ func (mbc *mockBlockCounter) SetCurrentBlock(block uint64) {
 func (mbc *mockBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
 	panic("unsupported")
 }
+
+// SubmitReservationProof is a stub matching the reservation
+// additions on the production Chain interface. The reservation
+// acceptance and re-anchor proposal builders replace this stub
+// with the call path that records a submitted proof for assertion
+// in tests.
+func (lc *localChain) SubmitReservationProof(
+	proofType uint8,
+	txInfo *tbtc.BitcoinTxInfo,
+	proof *tbtc.BitcoinTxProof,
+	mainUtxo *tbtc.BitcoinTxUTXO,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	panic("unsupported")
+}
+
+// NotifyReservationActionTimeout is a stub matching the reservation
+// additions on the production Chain interface. The timeout watcher
+// builder replaces this stub with the call path that records a
+// timeout notification for assertion in tests.
+func (lc *localChain) NotifyReservationActionTimeout(
+	reservationKey *big.Int,
+	walletMembersIDs []uint32,
+) error {
+	panic("unsupported")
+}
+
+// NotifyStaleReservedDeposit is a stub matching the reservation
+// additions on the production Chain interface. The stale deposit
+// watcher builder replaces this stub with the call path that
+// records a stale deposit notification for assertion in tests.
+func (lc *localChain) NotifyStaleReservedDeposit(depositKey *big.Int) error {
+	panic("unsupported")
+}
+
+// NotifyReservationStranded is a stub matching the reservation
+// additions on the production Chain interface. The stranded
+// reservation watcher builder replaces this stub with the call path
+// that records a stranded notification for assertion in tests.
+func (lc *localChain) NotifyReservationStranded(reservationKey *big.Int) error {
+	panic("unsupported")
+}
+
+// GetReservation is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *localChain) GetReservation(
+	reservationKey *big.Int,
+) (*tbtc.Reservation, error) {
+	panic("unsupported")
+}
+
+// GetReservationAction is a stub matching the reservation additions on
+// the production Chain interface.
+func (lc *localChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationAction, error) {
+	panic("unsupported")
+}
+
+// ReservationParameters is a stub matching the reservation additions on
+// the production Chain interface.
+func (lc *localChain) ReservationParameters() (
+	*tbtc.ReservationParameters,
+	error,
+) {
+	panic("unsupported")
+}
+
+// WalletReservations is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *localChain) WalletReservations(
+	walletPublicKeyHash [20]byte,
+) ([]*big.Int, error) {
+	panic("unsupported")
+}
+
+// Reservations is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *localChain) Reservations(
+	reservationKey *big.Int,
+) (*tbtc.ReservationRequest, error) {
+	panic("unsupported")
+}
+
+// ReservationActions is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *localChain) ReservationActions(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationActionRecord, error) {
+	panic("unsupported")
+}
+
+// IsReservedDeposit is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *localChain) IsReservedDeposit(
+	depositKey *big.Int,
+) (bool, error) {
+	panic("unsupported")
+}
+
+// ReservedDepositWallet is a stub matching the reservation additions on
+// the production Chain interface.
+func (lc *localChain) ReservedDepositWallet(
+	depositKey *big.Int,
+) ([20]byte, error) {
+	panic("unsupported")
+}
+
+func (lc *localChain) PastReservationAcceptedEvents(
+	filter *tbtc.ReservationAcceptedEventFilter,
+) ([]*tbtc.ReservationAcceptedEvent, error) {
+	return nil, nil
+}
+
+func (lc *localChain) PastReservationReanchoredEvents(
+	filter *tbtc.ReservationReanchoredEventFilter,
+) ([]*tbtc.ReservationReanchoredEvent, error) {
+	return nil, nil
+}
+
+func (lc *localChain) PastReservationActionTimedOutEvents(
+	filter *tbtc.ReservationActionTimedOutEventFilter,
+) ([]*tbtc.ReservationActionTimedOutEvent, error) {
+	return nil, nil
+}

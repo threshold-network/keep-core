@@ -1284,3 +1284,199 @@ func (mbc *MockBlockCounter) SetCurrentBlock(block uint64) {
 func (mbc *MockBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
 	panic("unsupported")
 }
+
+// ValidateReservationAnchorProposal is a stub matching the reservation
+// additions on the production Chain interface. Full behavioral
+// validation belongs to the reservation acceptance proposal builder.
+func (lc *LocalChain) ValidateReservationAnchorProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	panic("unsupported")
+}
+
+// ValidateReservationReanchorProposal is a stub matching the reservation
+// additions on the production Chain interface. Full behavioral
+// validation belongs to the reservation re-anchor proposal builder.
+func (lc *LocalChain) ValidateReservationReanchorProposal(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationReanchorProposal,
+) error {
+	panic("unsupported")
+}
+
+// RequestReservationAcceptance is a stub matching the reservation
+// additions on the production Chain interface. The reservation
+// acceptance proposal builder replaces this stub with the call path that
+// records a submitted acceptance request for assertion in tests.
+func (lc *LocalChain) RequestReservationAcceptance(
+	reservationKey *big.Int,
+	walletPublicKeyHash [20]byte,
+) error {
+	panic("unsupported")
+}
+
+// RequestReservationReanchor is a stub matching the reservation additions
+// on the production Chain interface. The reservation re-anchor proposal
+// builder replaces this stub with the call path that records a submitted
+// re-anchor request for assertion in tests.
+func (lc *LocalChain) RequestReservationReanchor(
+	reservationKey *big.Int,
+	targetWalletPublicKeyHash [20]byte,
+) error {
+	panic("unsupported")
+}
+
+// GetReservation is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *LocalChain) GetReservation(
+	reservationKey *big.Int,
+) (*tbtc.Reservation, error) {
+	panic("unsupported")
+}
+
+// GetReservationAction is a stub matching the reservation additions on
+// the production Chain interface.
+func (lc *LocalChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationAction, error) {
+	panic("unsupported")
+}
+
+// ReservationParameters is a stub matching the reservation additions on
+// the production Chain interface.
+func (lc *LocalChain) ReservationParameters() (
+	*tbtc.ReservationParameters,
+	error,
+) {
+	panic("unsupported")
+}
+
+// ReservationCaps is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *LocalChain) ReservationCaps() (
+	maxReservationsAmountPerWallet uint64,
+	reservationMaxSingleAmount uint64,
+	err error,
+) {
+	panic("unsupported")
+}
+
+// WalletReservationsAmount is a stub matching the reservation additions
+// on the production Chain interface.
+func (lc *LocalChain) WalletReservationsAmount(
+	walletPublicKeyHash [20]byte,
+) (uint64, error) {
+	panic("unsupported")
+}
+
+// WalletReservationsCount is a stub matching the reservation additions on
+// the production Chain interface.
+func (lc *LocalChain) WalletReservationsCount(
+	walletPublicKeyHash [20]byte,
+) (uint32, error) {
+	panic("unsupported")
+}
+
+// WalletReservations is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *LocalChain) WalletReservations(
+	walletPublicKeyHash [20]byte,
+) ([]*big.Int, error) {
+	panic("unsupported")
+}
+
+// ReservationByAnchorUtxo is a stub matching the reservation additions
+// on the production Chain interface.
+func (lc *LocalChain) ReservationByAnchorUtxo(
+	anchorTxHash [32]byte,
+	anchorTxOutputIndex uint32,
+) (*big.Int, error) {
+	panic("unsupported")
+}
+
+// PendingReservedDeposits is a stub matching the reservation additions
+// on the production Chain interface.
+func (lc *LocalChain) PendingReservedDeposits() (uint64, error) {
+	panic("unsupported")
+}
+
+// Reservations is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *LocalChain) Reservations(
+	reservationKey *big.Int,
+) (*tbtc.ReservationRequest, error) {
+	panic("unsupported")
+}
+
+// ReservationActions is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *LocalChain) ReservationActions(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationActionRecord, error) {
+	panic("unsupported")
+}
+
+// ActiveReservationsCount is a stub matching the reservation additions on
+// the production Chain interface.
+func (lc *LocalChain) ActiveReservationsCount() (
+	count uint32,
+	maxActive uint32,
+	err error,
+) {
+	panic("unsupported")
+}
+
+// IsReservedDeposit is a stub matching the reservation additions on the
+// production Chain interface.
+func (lc *LocalChain) IsReservedDeposit(
+	depositKey *big.Int,
+) (bool, error) {
+	panic("unsupported")
+}
+
+// PastReservationAcceptanceRequestedEvents is a stub matching the
+// reservation additions on the production Chain interface. The proposal
+// builder replaces this with the map-backed fixture used to assert that
+// no duplicate acceptance request is generated.
+func (lc *LocalChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	panic("unsupported")
+}
+
+// PastReservationAcceptedEvents is a stub matching the reservation
+// additions on the production Chain interface. The acceptance proof
+// builder replaces this with the map-backed fixture used to assert
+// proof dispatch against observed acceptances.
+func (lc *LocalChain) PastReservationAcceptedEvents(
+	filter *tbtc.ReservationAcceptedEventFilter,
+) ([]*tbtc.ReservationAcceptedEvent, error) {
+	panic("unsupported")
+}
+
+// PastReservationReanchorRequestedEvents is a stub matching the
+// reservation additions on the production Chain interface. The proposal
+// builder replaces this with the map-backed fixture used to assert that
+// no duplicate re-anchor request is generated.
+func (lc *LocalChain) PastReservationReanchorRequestedEvents(
+	filter *tbtc.ReservationReanchorRequestedEventFilter,
+) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
+	panic("unsupported")
+}
+
+// PastReservationReanchoredEvents is a stub matching the reservation
+// additions on the production Chain interface. The re-anchor proof
+// builder replaces this with the map-backed fixture used to assert
+// proof dispatch against observed re-anchors.
+func (lc *LocalChain) PastReservationReanchoredEvents(
+	filter *tbtc.ReservationReanchoredEventFilter,
+) ([]*tbtc.ReservationReanchoredEvent, error) {
+	panic("unsupported")
+}
