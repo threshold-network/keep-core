@@ -58,8 +58,11 @@ func init() {
 		bDepositsCommand(),
 		bFraudChallengesCommand(),
 		bFraudParametersCommand(),
+		bGetRebateStakingCommand(),
 		bGetRedemptionWatchtowerCommand(),
+		bGetReservationRouterCommand(),
 		bGovernanceCommand(),
+		bIsReservedDepositCommand(),
 		bIsVaultTrustedCommand(),
 		bLiveWalletsCountCommand(),
 		bMovedFundsSweepRequestsCommand(),
@@ -77,6 +80,8 @@ func init() {
 		bEcdsaWalletCreatedCallbackCommand(),
 		bEcdsaWalletHeartbeatFailedCallbackCommand(),
 		bInitializeCommand(),
+		bInitializeV2FixVaultZeroDepositCommand(),
+		bInitializeV5RepairRebateStakingCommand(),
 		bNotifyMovingFundsBelowDustCommand(),
 		bNotifyRedemptionVetoCommand(),
 		bNotifyWalletCloseableCommand(),
@@ -87,7 +92,9 @@ func init() {
 		bResetMovingFundsTimeoutCommand(),
 		bRevealDepositCommand(),
 		bRevealDepositWithExtraDataCommand(),
+		bSetRebateStakingCommand(),
 		bSetRedemptionWatchtowerCommand(),
+		bSetReservationRouterCommand(),
 		bSetSpvMaintainerStatusCommand(),
 		bSetVaultStatusCommand(),
 		bSubmitDepositSweepProofCommand(),
@@ -331,6 +338,40 @@ func bFraudParameters(c *cobra.Command, args []string) error {
 	return nil
 }
 
+func bGetRebateStakingCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "get-rebate-staking",
+		Short:                 "Calls the view method getRebateStaking on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bGetRebateStaking,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bGetRebateStaking(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	result, err := contract.GetRebateStakingAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
 func bGetRedemptionWatchtowerCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "get-redemption-watchtower",
@@ -365,6 +406,40 @@ func bGetRedemptionWatchtower(c *cobra.Command, args []string) error {
 	return nil
 }
 
+func bGetReservationRouterCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "get-reservation-router",
+		Short:                 "Calls the view method getReservationRouter on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bGetReservationRouter,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bGetReservationRouter(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	result, err := contract.GetReservationRouterAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
 func bGovernanceCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "governance",
@@ -387,6 +462,49 @@ func bGovernance(c *cobra.Command, args []string) error {
 	}
 
 	result, err := contract.GovernanceAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func bIsReservedDepositCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "is-reserved-deposit [arg_depositKey]",
+		Short:                 "Calls the view method isReservedDeposit on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bIsReservedDeposit,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func bIsReservedDeposit(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_depositKey, err := hexutil.DecodeBig(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_depositKey, a uint256, from passed value %v",
+			args[0],
+		)
+	}
+
+	result, err := contract.IsReservedDepositAtBlock(
+		arg_depositKey,
 		cmd.BlockFlagValue.Int,
 	)
 
@@ -1296,6 +1414,125 @@ func bInitialize(c *cobra.Command, args []string) error {
 	return nil
 }
 
+func bInitializeV2FixVaultZeroDepositCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "initialize-v2-fix-vault-zero-deposit",
+		Short:                 "Calls the nonpayable method initializeV2FixVaultZeroDeposit on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  bInitializeV2FixVaultZeroDeposit,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bInitializeV2FixVaultZeroDeposit(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.InitializeV2FixVaultZeroDeposit()
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallInitializeV2FixVaultZeroDeposit(
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bInitializeV5RepairRebateStakingCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "initialize-v5-repair-rebate-staking [arg_newRebateStaking]",
+		Short:                 "Calls the nonpayable method initializeV5RepairRebateStaking on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bInitializeV5RepairRebateStaking,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bInitializeV5RepairRebateStaking(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_newRebateStaking, err := chainutil.AddressFromHex(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_newRebateStaking, a address, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.InitializeV5RepairRebateStaking(
+			arg_newRebateStaking,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallInitializeV5RepairRebateStaking(
+			arg_newRebateStaking,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
 func bNotifyMovingFundsBelowDustCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "notify-moving-funds-below-dust [arg_walletPubKeyHash] [arg_mainUtxo_json]",
@@ -2026,6 +2263,71 @@ func bRevealDepositWithExtraData(c *cobra.Command, args []string) error {
 	return nil
 }
 
+func bSetRebateStakingCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "set-rebate-staking [arg_rebateStaking]",
+		Short:                 "Calls the nonpayable method setRebateStaking on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bSetRebateStaking,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bSetRebateStaking(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg_rebateStaking, err := chainutil.AddressFromHex(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_rebateStaking, a address, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.SetRebateStaking(
+			arg_rebateStaking,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallSetRebateStaking(
+			arg_rebateStaking,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
 func bSetRedemptionWatchtowerCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "set-redemption-watchtower [arg_redemptionWatchtower]",
@@ -2074,6 +2376,71 @@ func bSetRedemptionWatchtower(c *cobra.Command, args []string) error {
 		// Do a call.
 		err = contract.CallSetRedemptionWatchtower(
 			arg_redemptionWatchtower,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func bSetReservationRouterCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "set-reservation-router [arg__reservationRouter]",
+		Short:                 "Calls the nonpayable method setReservationRouter on the Bridge contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  bSetReservationRouter,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func bSetReservationRouter(c *cobra.Command, args []string) error {
+	contract, err := initializeBridge(c)
+	if err != nil {
+		return err
+	}
+
+	arg__reservationRouter, err := chainutil.AddressFromHex(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg__reservationRouter, a address, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.SetReservationRouter(
+			arg__reservationRouter,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallSetReservationRouter(
+			arg__reservationRouter,
 			cmd.BlockFlagValue.Int,
 		)
 		if err != nil {
