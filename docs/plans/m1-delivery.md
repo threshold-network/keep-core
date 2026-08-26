@@ -19,7 +19,7 @@ working scratchpad.
 | 4 | E `timeout-and-stranding` | `m1/timeout-and-stranding` @ `2e63515f` | Built, awaiting human to open | — |
 | 5 | B `router-minimal` | `m1/router-minimal` @ `3156ed50` | **Clean 2026-08-25, awaiting human to open** | Bootstrap-ordering test split into two `it` blocks (hazard + safe order). 9/9 green with `FORKING_URL` unset. |
 | 6 | F `m1/vault-pause-flags` | `m1/vault-pause-flags` @ `941d79e9` | **Built 2026-08-25, awaiting human to push** (Option B scope) | Implementor may proceed to PR #G build brief |
-| 7 | G `m1/bridge-integration-seams` (deploy scripts + contract seams + tests) | `m1/bridge-integration-seams` @ `cf457613` | **Built 2026-08-25 (deploy scripts by implementor; contract seams by manager-orchestrated subagents after implementor agent retired), awaiting human to push** | 95/96/97 deploy scripts (97 references functions that land in the contract-seam layer; TODO already replaced with reference to `agent-docs/inventory/reservation-parameters.md`; `reservationTermSeconds` bumped to the on-chain 90-day floor — full comparison table in the inventory file's "Comparison against `feature-spec.md`" section). Governance begin/finalize wrappers in `BridgeGovernanceParameters.sol`/`BridgeGovernance.sol`; `isReservedDeposit` view, `setReservationRouter` s…
+| 7 | G `m1/bridge-integration-seams` (deploy scripts + contract seams + tests) | `m1/bridge-integration-seams` @ `9a24212d` | **Built 2026-08-25 (deploy scripts by implementor; contract seams by manager-orchestrated subagents after implementor agent retired); 2026-08-26 characterization test passing + 2026-08-26 reservation-lifecycle coverage suite (3 new files, 13/13 passing), awaiting human to push** | ...
 | 8 | H `m1/keep-core-client` (keep-core repo) | `m1/keep-core-client` @ `48985451d` | **Built 2026-08-26, awaiting human to push** | Base PR #4238 (`b4f63944`), 62 files vs `main` merge-base, +23040/-50. Chain-interface writes/reads/events on `pkg/tbtc.Chain`, then `pkg/tbtcpg.Chain`/`pkg/maintainer/spv.Chain`; acceptance + re-anchor proposal/proof tasks; three watchers (stranding/stale-deposit/action-timeout); operator wiring in `pkg/tbtcpg/tbtcpg.go`, `pkg/maintainer/spv/spv.go`, `pkg/tbtc/tbtc.go` gated on `config.Reservations.Enabled`. `go build ./...` clean, 552 tests passing. Full detail: `agent-docs/m1/STATUS.md` row 11 and "PR H build completed 2026-08-26" session note. |
 
 **Worktrees present** (`git worktree list`): `/tmp/m1-{a,b,c,d,e,f,g,h}` exist. `/tmp/m1-h-{a,r,w}` were transient parallel-builder worktrees for PR H's acceptance/re-anchor/watchers branches, merged into `m1-h` and safe to prune. `/tmp/src-{1091,1093,1094,1096,1102}` are read-only reference copies. (`m1-g2` worktree and `m1/bridge-integration-seams-g2` branch retired 2026-08-26 — fast-forward-merged into `m1/bridge-integration-seams`; single branch now carries all of PR #G.)
@@ -133,15 +133,16 @@ working scratchpad.
 
 ## Open items (agent-actionable, awaiting a decision — found in the 2026-08-26 review)
 
-- **Reservation lifecycle has zero behavioral test coverage across PRs C/D/E.**
-  See item 9's headline finding above. Two remediation paths, neither started:
-  (a) write a behavioral suite exercising accept/prove/settle, re-anchor, timeout,
-  and stranding through the router (PR B) before human push — this is genuinely
-  new test-writing work, not a quick fix, likely several hundred lines; or (b)
-  accept the gap for m1 and disclose it explicitly in the PR descriptions/review
-  request so reviewers aren't relying on a false "9,908 lines of reservation
-  tests" justification. Decision needed before opening PRs C, D, E, or B.
-  **Decided 2026-08-26: (a), write the tests now.**
+~~**Reservation lifecycle has zero behavioral test coverage across PRs C/D/E.**~~ **PARTIALLY RESOLVED 2026-08-26, see PR G entry below for the actual coverage.** Per the human operator's call, attempted to split the test files so PRs C/D/E reviewers see the test in the same diff as the code. After two rounds:
+
+- PR G (`m1/bridge-integration-seams` @ `9a24212d`): **13 new passing tests across 3 new self-contained files.** The real coverage: acceptance authorization + source-anchor binding + stranding/stale-deposit.
+- PR C (`m1/acceptance-core` @ `610609df`): `Bridge.ReservationAcceptanceAuthorization.test.ts` committed, but the 2 `it()` bodies are `it.skip(...)`'d because they call router entry points (`requestReservationAcceptance`, `submitReservationProof`, `updateReservationParameters`) that are only reachable via `Bridge.fallback()`'s delegatecall into `ReservationRouter.sol`, which doesn't exist on PR C. The file compiles and the test suite reports 0 failing / 2 pending, but it provides 0 functional coverage on PR C. Place-holder only.
+- PR D (`m1/reanchor-core` @ `f5221e47`): `Bridge.ReservationSourceAnchorBinding.test.ts` committed, the 1 `it()` body is `it.skip(...)`'d for the same router-bound reason. 0 functional coverage on PR D. Place-holder only.
+- PR E (`m1/timeout-and-stranding` @ `2038d3d1`): `Bridge.ReservationStranding.test.ts` committed, all 10 `it()` bodies `it.skip(...)`'d for the same reason. Note: `notifyReservationStranded`/`notifyStaleReservedDeposit`/`strandReservation` DO live on PR E's `Reservation.sol` library, but they are only reachable through the router fallback; the file's stubs call them as router methods, so they get skipped too. A future pass could exercise the library directly via low-level `delegatecall` from the test (bypassing the missing router), which would produce real PR-E-local coverage of these three functions. Place-holder only for now.
+
+**Coverage net: PR G carries the real 13 tests; PRs C/D/E now carry placed fixture files with 0 functional coverage, that compile and don't fail.** Reviewers of PRs C/D/E will see a test file in the diff but every `it()` body is skipped with the reason "requires ReservationRouter fallback delegatecall from PR B/G". The "no behavioral tests" headline finding from the 2026-08-26 review (item 9) is therefore *not* closed at the per-PR level — it is closed once stack-merge lands (PR G carries forward into every lower PR's tree). The tracking claim "PR C/D/E now ship reservation lifecycle tests" must be qualified accordingly: they ship *placed fixtures*, not live tests. PR G is still the right branch to point reviewers at for the actual behavioral coverage.
+
+**Combined reservation suite regression on PR G:** **24/24 passing** (StorageLayout + ReservationCaps + ReservationSettlement + 3 new).
 
 ## Open items (manager-not-actionable)
 
