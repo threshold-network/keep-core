@@ -65,9 +65,9 @@ working scratchpad.
    `solidity/node_modules` dev symlink got picked up by `git add -A` while committing this and was
    un-staged before commit — local machine artifact, not repo content.)
 
-## New open items (carry-over from prior session)
+## Resolved open items (carry-over from prior session, closed 2026-08-25)
 
-- **Deploy-script gap is real, not hypothetical.** `solidity/deploy/95_deploy_reservation_vault.ts` ends with an explicit NOTE block delegating all wiring to governance. `96_transfer_reservation_vault_ownership.ts` only transfers `Ownable`. Repo-wide grep across `solidity/` (excluding `node_modules`/`test/`/`artifacts/`/`cache/`) finds zero callers of `updateReservationParameters` or `updateReservationCaps` outside the contract definitions, the `BridgeGovernance` wrapper at `:1862`, and `typechain/` bindings. On a fresh deploy today the vault ships orphaned. The new `97_set_reservation_parameters.ts` belongs in **PR #G** (it calls `BridgeGovernance` setters, which is PR #G's stated scope) and must call `updateReservationCaps` first (passes trivially because `reservationMaxTotalAmount` defaults to `0`), then `updateReservationParameters`. Without this script, reservations are unreachable on a clean deploy.
+- ~~**Deploy-script gap.**~~ **RESOLVED by PR #G.** `solidity/deploy/97_set_reservation_parameters.ts` exists on `m1/bridge-integration-seams` and runs exactly the sequence this item specified: `beginReservationCapsUpdate`/`finalizeReservationCapsUpdate` first (passes trivially since `reservationMaxTotalAmount` defaults to `0`), then `beginReservationParametersUpdate`/`finalizeReservationParametersUpdate` (wires the vault address into the Bridge), then `setVaultStatus(vault, true)` via `BridgeGovernance`. See row 7 above.
 
 ## Open items (manager-not-actionable)
 
