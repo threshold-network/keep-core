@@ -63,6 +63,16 @@ type localChain struct {
 	currentEpoch            uint64
 	currentEpochDifficulty  *big.Int
 	previousEpochDifficulty *big.Int
+	reservations                      map[string]*tbtc.Reservation
+	reservationActions                map[string]*tbtc.ReservationAction
+	submitReservationProofHook        func(
+		proofType uint8,
+			txInfo *tbtc.BitcoinTxInfo,
+			proof *tbtc.BitcoinTxProof,
+			mainUtxo *tbtc.BitcoinTxUTXO,
+			reservationKey *big.Int,
+			requestNonce uint64,
+		) error
 }
 
 func newLocalChain() *localChain {
@@ -734,6 +744,16 @@ func (lc *localChain) SubmitReservationProof(
 	reservationKey *big.Int,
 	requestNonce uint64,
 ) error {
+	if lc.submitReservationProofHook != nil {
+		return lc.submitReservationProofHook(
+			proofType,
+			txInfo,
+			proof,
+			mainUtxo,
+			reservationKey,
+			requestNonce,
+		)
+	}
 	panic("unsupported")
 }
 
@@ -764,21 +784,37 @@ func (lc *localChain) NotifyReservationStranded(reservationKey *big.Int) error {
 	panic("unsupported")
 }
 
-// GetReservation is a stub matching the reservation additions on the
-// production Chain interface.
+// GetReservation returns the configured reservation record.
 func (lc *localChain) GetReservation(
 	reservationKey *big.Int,
 ) (*tbtc.Reservation, error) {
-	panic("unsupported")
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.reservations != nil {
+		if reservation, ok := lc.reservations[reservationKey.String()]; ok {
+			return reservation, nil
+		}
+	}
+	return nil, fmt.Errorf("reservation not found")
 }
 
-// GetReservationAction is a stub matching the reservation additions on
-// the production Chain interface.
+// GetReservationAction returns the configured reservation action record, or
+// an error if not found.
 func (lc *localChain) GetReservationAction(
 	reservationKey *big.Int,
 	requestNonce uint64,
 ) (*tbtc.ReservationAction, error) {
-	panic("unsupported")
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.reservationActions != nil {
+		key := fmt.Sprintf("%s/%d", reservationKey.String(), requestNonce)
+		if action, ok := lc.reservationActions[key]; ok {
+			return action, nil
+		}
+	}
+	return nil, fmt.Errorf("reservation action not found")
 }
 
 // ReservationParameters is a stub matching the reservation additions on
@@ -836,6 +872,43 @@ func (lc *localChain) PastReservationAcceptedEvents(
 ) ([]*tbtc.ReservationAcceptedEvent, error) {
 	return nil, nil
 }
+
+// setReservation registers a reservation record on the local chain for tests.
+func (lc *localChain) setReservation(
+	reservationKey *big.Int,
+	reservation *tbtc.Reservation,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.reservations == nil {
+		lc.reservations = make(map[string]*tbtc.Reservation)
+	}
+	lc.reservations[reservationKey.String()] = reservation
+}
+
+// setReservationAction registers a reservation action record on the local
+// chain for tests.
+func (lc *localChain) setReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+	action *tbtc.ReservationAction,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.reservationActions == nil {
+		lc.reservationActions = make(map[string]*tbtc.ReservationAction)
+	}
+	lc.reservationActions[fmt.Sprintf("%s/%d", reservationKey.String(), requestNonce)] = action
+}
+
+// submitReservationProofHook, when non-nil, overrides the default panic
+// stub and gives the test full control over SubmitReservationProof behavior.
+var _ = func() bool {
+	_ = bytes.Equal
+	return true
+}()
 
 func (lc *localChain) PastReservationReanchoredEvents(
 	filter *tbtc.ReservationReanchoredEventFilter,
