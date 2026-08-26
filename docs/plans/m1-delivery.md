@@ -64,6 +64,12 @@ working scratchpad.
    `Bridge.ReservationCaps`) — 28/28 still passing; Bridge bytecode size unaffected. (A stray
    `solidity/node_modules` dev symlink got picked up by `git add -A` while committing this and was
    un-staged before commit — local machine artifact, not repo content.)
+8. **PR #G and PR #H description files written.** `agent-docs/m1/pr-{G,H}-description.md` were
+   missing (A-F had them; G and H did not, since both were built after the description-writing
+   convention started with the earlier PRs). Written to the same standard as A-F: exact diffstat
+   re-derived from `git diff --stat` against each PR's actual base (not the doc's recollection),
+   full commit list, the two defects found and fixed during each build, and verification commands
+   with results. All eight PRs now have a ready-to-paste GitHub PR body.
 
 ## Resolved open items (carry-over from prior session, closed 2026-08-25)
 
