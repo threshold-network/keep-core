@@ -100,16 +100,18 @@ working scratchpad.
      Fixed: A's Head `78e6b607`→`e175092a`; C's Head `54124d8c`→`1f87f8d8`, Base(A)
      `78e6b607`→`e175092a`, Diff `+930`→`+932`; E's Head `aa91cd3d`→`2e63515f`, Base(D)
      `e2bdb3a5`→`08536cd4`. B, F, G, H's description files were already current.
-   - **PR D's real git fork point from PR C is `f1ede944`, not C's current tip `1f87f8d8`** — D
-     was forked two commits before C's later duplicate-guard-comment fix (`3419e475`,
-     `1f87f8d8`) landed, and was never rebased. D's own diff never touches that region (confirmed:
-     D's hunks land at lines ~281/~334/~536 relative to its base), so the eventual epic merge is
-     unaffected — verified below. The one real consequence: opening PR D on GitHub with base set
-     to `m1/acceptance-core` *before* PR C merges will show a spurious 2-line "revert" of PR C's
-     comment fix in D's diff. `pr-D-description.md` corrected to state the true fork point and
-     flag this; left as an open human decision (rebase D..G, or open D directly against the epic
-     branch instead of stacking it on C) rather than auto-rebased — a rebase cascades through
-     E/B/F/G and would need all five re-verified plus a fresh dry run.
+   - **PR D's git fork point from PR C, and a retracted finding.** PR D forked from PR C at
+     `f1ede944`, two commits before PR C's current tip `1f87f8d8` (the `3419e475`/`1f87f8d8`
+     comment-annotation fix). This session initially flagged that as a hazard — opening PR D
+     stacked on PR C's live branch would show a "spurious revert" of PR C's fix in the GitHub
+     diff — and recorded it as an open decision. **Retracted: tested and refuted.** GitHub PR
+     diffs use three-dot semantics (`base...head`, from the merge-base forward), not two-dot.
+     `git diff --stat m1/acceptance-core...m1/reanchor-core` shows exactly PR D's own 144
+     insertions / 0 deletions, with zero trace of PR C's fix region. The original claim used
+     two-dot semantics (`base..head`), which isn't what GitHub renders, and manufactured an
+     artifact that doesn't exist under the diff GitHub actually shows. No action needed; PR D
+     can be opened stacked on PR C's live branch as originally planned. `pr-D-description.md`
+     corrected to retract the note.
    - **Two PR-strategy.md size-table figures are confirmed stale, both undershoots (not code
      defects — content is correct, verified complete against spec):** PR B measures 860
      production Solidity lines (1,160 with tests) against the doc's own corrected ~690 estimate;
@@ -139,10 +141,7 @@ working scratchpad.
   accept the gap for m1 and disclose it explicitly in the PR descriptions/review
   request so reviewers aren't relying on a false "9,908 lines of reservation
   tests" justification. Decision needed before opening PRs C, D, E, or B.
-- **PR D's stacked-base drift vs PR C** (item 9 above). Decision needed before
-  opening PR D: rebase D→G onto C's current tip (cascades, needs re-verification
-  of D/E/B/F/G plus a fresh dry run), or open D directly against the epic branch
-  rather than stacking it on C.
+  **Decided 2026-08-26: (a), write the tests now.**
 
 ## Open items (manager-not-actionable)
 
