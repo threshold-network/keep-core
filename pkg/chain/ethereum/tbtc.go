@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"time"
 
 	"github.com/keep-network/keep-common/pkg/cache"
@@ -25,12 +26,14 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	ecdsacontract "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/contract"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	tbtccontract "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
 	"github.com/keep-network/keep-core/pkg/internal/byteutils"
+	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
