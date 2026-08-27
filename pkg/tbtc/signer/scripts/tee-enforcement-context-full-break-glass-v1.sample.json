@@ -1,0 +1,30 @@
+{
+  "session_id": "phase-d-full-enforcement-session-1",
+  "canary_session": true,
+  "selected_operator_ids": ["operator-aws-us-east-1-1", "operator-gcp-europe-west1-1"],
+  "runtime_decision": {
+    "decision": "reject",
+    "reasons": [
+      {
+        "code": "selected_token_expired_for_session_start",
+        "detail": "selected token expired before session start"
+      }
+    ],
+    "validated_at_unix": 1700100000
+  },
+  "enforcement_mode": "full_enforcement",
+  "break_glass": {
+    "incident_ticket": "INC-2026-03-03-001",
+    "declared_at_unix": 1700099000,
+    "expires_at_unix": 1700107200,
+    "approver_quorum_bps": 7100,
+    "scope_operator_ids": ["operator-aws-us-east-1-1", "operator-gcp-europe-west1-1"],
+    "is_new_activation": true
+  },
+  "break_glass_history": [
+    {
+      "incident_ticket": "INC-2026-02-20-001",
+      "activated_at_unix": 1699200000
+    }
+  ]
+}

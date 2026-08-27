@@ -72,7 +72,8 @@ Each signer admission record should include:
 | `break_glass_max_activations_per_7d` | `2` | prevent break-glass chaining abuse |
 | `break_glass_cooldown_seconds` | `86400` | 24-hour cooldown between activations |
 | `break_glass_scope` | `named_operator_ids_only` | no global suspension in default policy |
-| `break_glass_quorum_bps` | `6700` | supermajority quorum for activation |
+| `break_glass_quorum_bps` | `6700` | supermajority quorum for emergency break-glass actions |
+| `activation_gate_required_quorum_bps` | `6700` | independent quorum threshold for `draft -> mandatory` activation gate; hard floor of 6700 bps enforced by checker |
 | `re_attestation_poll_interval_seconds` | `300` | signer refresh cadence |
 
 Values should be tuned with canary data and incident drills.
@@ -239,6 +240,56 @@ Requirements:
 4. full enforcement after gate pass
 5. enforce break-glass abuse controls (activation caps + cooldown + scope)
 
+### 10.2 Phase A Scaffold Artifacts
+
+Initial Phase A schema/workflow checks are implemented in:
+
+1. `tools/tbtc-signer/src/bin/tee_registry_checker.rs`
+2. `tools/tbtc-signer/scripts/tee-governance-registry-v1.sample.json`
+3. `tools/tbtc-signer/scripts/tee-governance-audit-events-v1.sample.json`
+
+### 10.3 Phase B Scaffold Artifacts
+
+Initial Phase B verifier/token checks are implemented in:
+
+1. `tools/tbtc-signer/src/bin/tee_token_checker.rs`
+2. `tools/tbtc-signer/scripts/tee-verifier-keyset-v1.sample.json`
+3. `tools/tbtc-signer/scripts/tee-admission-token.sample.json`
+4. `tools/tbtc-signer/scripts/tee-token-revocation-registry-v1.sample.json`
+
+### 10.4 Phase C Scaffold Artifacts
+
+Initial Phase C runtime selection/session checks are implemented in:
+
+1. `tools/tbtc-signer/src/bin/tee_runtime_checker.rs`
+2. `tools/tbtc-signer/scripts/tee-runtime-governance-registry-v1.sample.json`
+3. `tools/tbtc-signer/scripts/tee-runtime-session-start-v1.sample.json`
+4. `tools/tbtc-signer/scripts/tee-runtime-session-mid-session-grace-v1.sample.json`
+5. `tools/tbtc-signer/scripts/tee-runtime-session-vendor-outage-v1.sample.json`
+
+### 10.5 Phase D Scaffold Artifacts
+
+Initial Phase D canary/hard-enforcement checks are implemented in:
+
+1. `tools/tbtc-signer/src/bin/tee_enforcement_checker.rs`
+2. `tools/tbtc-signer/scripts/tee-enforcement-context-monitor-v1.sample.json`
+3. `tools/tbtc-signer/scripts/tee-enforcement-context-hard-canary-v1.sample.json`
+4. `tools/tbtc-signer/scripts/tee-enforcement-context-full-break-glass-v1.sample.json`
+
+Phase D final readiness outcome:
+
+- final review recommendation: `READY` for the scaffold branch,
+- prior Phase D enforcement-mode blockers resolved: `8/8`,
+- merge blockers remaining: `0`,
+- Phase D unit tests passing: `24/24`,
+- Phase A/B/C regression tests passing: `29/29`, `24/24`, `23/23`,
+- sample enforcement commands verified for monitor-only, hard-canary, and
+  full-enforcement break-glass contexts.
+
+Non-blocking future hardening items remain for additional break-glass edge
+cases, structural input validation, duplicate-history behavior, and
+`serde(deny_unknown_fields)` policy consistency.
+
 ### 10.1 Mapping To ROAST Phase 5 Stages
 
 1. ROAST Stage 1 (5% canary) requires TEE Phase C completed and TEE Phase D in
@@ -273,6 +324,8 @@ Before hard enforcement in production:
 4. policy and measurements approved by DAO governance process
 5. activation gate approved in governance record:
    - profile status transitions from `draft` to `mandatory`
+   - approval artifact:
+     `docs/frost-migration/tee-whitelisted-signer-activation-gate-record.md`
 
 ### 12.1 Activation Gate Record Requirements
 

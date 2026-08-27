@@ -1,0 +1,12 @@
+{
+  "session_id": "phase-d-hard-canary-session-1",
+  "canary_session": true,
+  "selected_operator_ids": ["operator-aws-us-east-1-1", "operator-gcp-europe-west1-1"],
+  "runtime_decision": {
+    "decision": "allow",
+    "reasons": [],
+    "validated_at_unix": 1700100000
+  },
+  "enforcement_mode": "hard_enforcement_canary",
+  "break_glass_history": []
+}

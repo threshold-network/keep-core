@@ -1,0 +1,36 @@
+{
+  "profile_status": "mandatory",
+  "enforcement": {
+    "attestation_max_age_seconds": 3600,
+    "grace_period_seconds": 900,
+    "min_attested_signers_per_cohort": 4,
+    "max_single_vendor_share_percent": 40,
+    "denylist_max_staleness_seconds": 60
+  },
+  "operators": [
+    {
+      "operator_id": "operator-a",
+      "signer_identifier": "signer-a",
+      "status": "active",
+      "effective_from": 1700000000
+    },
+    {
+      "operator_id": "operator-b",
+      "signer_identifier": "signer-b",
+      "status": "active",
+      "effective_from": 1700000000
+    },
+    {
+      "operator_id": "operator-c",
+      "signer_identifier": "signer-c",
+      "status": "active",
+      "effective_from": 1700000000
+    },
+    {
+      "operator_id": "operator-d",
+      "signer_identifier": "signer-d",
+      "status": "active",
+      "effective_from": 1700000000
+    }
+  ]
+}

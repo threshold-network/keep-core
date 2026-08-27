@@ -1,0 +1,6 @@
+{
+  "denylist_refreshed_at_unix": 1700100000,
+  "min_token_revocation_epoch": 0,
+  "revoked_token_ids": {},
+  "revoked_verifier_key_ids": {}
+}

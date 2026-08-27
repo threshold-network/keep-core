@@ -1,0 +1,85 @@
+{
+  "profile_status": "mandatory",
+  "enforcement": {
+    "attestation_max_age_seconds": 3600,
+    "grace_period_seconds": 900,
+    "min_attested_signers_per_cohort": 4,
+    "max_single_vendor_share_percent": 40,
+    "denylist_max_staleness_seconds": 60,
+    "break_glass_ttl_seconds": 21600,
+    "break_glass_max_activations_per_7d": 2,
+    "break_glass_cooldown_seconds": 86400,
+    "break_glass_scope": "named_operator_ids_only",
+    "break_glass_quorum_bps": 6700,
+    "activation_gate_required_quorum_bps": 6700,
+    "re_attestation_poll_interval_seconds": 300
+  },
+  "operators": [
+    {
+      "operator_id": "operator-aws-us-east-1-1",
+      "signer_identifier": "signer-aws-us-east-1-1",
+      "status": "active",
+      "allowed_tee_types": ["sgx", "tdx"],
+      "allowed_measurements": [
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      ],
+      "attestation_max_age_seconds": 3600,
+      "grace_period_seconds": 900,
+      "effective_from": 1700000010
+    },
+    {
+      "operator_id": "operator-gcp-europe-west1-1",
+      "signer_identifier": "signer-gcp-europe-west1-1",
+      "status": "suspended",
+      "allowed_tee_types": ["sev-snp"],
+      "allowed_measurements": [
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      ],
+      "attestation_max_age_seconds": 3600,
+      "grace_period_seconds": 900,
+      "effective_from": 1700000020
+    },
+    {
+      "operator_id": "operator-azure-eastus-1",
+      "signer_identifier": "signer-azure-eastus-1",
+      "status": "revoked",
+      "allowed_tee_types": ["sgx"],
+      "allowed_measurements": [
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      ],
+      "attestation_max_age_seconds": 3600,
+      "grace_period_seconds": 900,
+      "effective_from": 1700000030,
+      "effective_until": 1700000500
+    }
+  ],
+  "activation_gate": {
+    "governance_decision_id": "dao-proposal-tee-activation-001",
+    "effective_at_unix": 1700001000,
+    "quorum_denominator": 100000,
+    "achieved_quorum_bps": 7400,
+    "approvers": [
+      {
+        "approver_id": "security-owner-1",
+        "role": "security_owner",
+        "decision": "approved",
+        "decided_at_unix": 1700000950
+      },
+      {
+        "approver_id": "runtime-owner-1",
+        "role": "signer_runtime_owner",
+        "decision": "approved",
+        "decided_at_unix": 1700000960
+      },
+      {
+        "approver_id": "delegate-1",
+        "role": "governance_delegate",
+        "decision": "approved",
+        "decided_at_unix": 1700000970
+      }
+    ],
+    "profile_status_transition": "draft -> mandatory",
+    "rollback_condition": "critical verifier compromise",
+    "rollback_authority": "security-council-multisig"
+  }
+}

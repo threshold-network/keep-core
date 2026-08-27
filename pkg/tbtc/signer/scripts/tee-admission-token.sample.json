@@ -1,0 +1,13 @@
+{
+  "payload_json": "{\"token_id\":\"token-operator-1-0001\",\"operator_id\":\"operator-1\",\"signer_identifier\":\"signer-1\",\"tee_type\":\"sgx\",\"measurement_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"issued_at_unix\":1700100000,\"expires_at_unix\":1700100300,\"registry_snapshot_version\":1,\"verifier_key_ids\":[\"verifier-key-1\",\"verifier-key-2\"],\"token_revocation_epoch\":5}",
+  "signatures": [
+    {
+      "verifier_key_id": "verifier-key-1",
+      "signature_hex": "REPLACE_WITH_SCHNORR_SIGNATURE_HEX_OVER_SHA256_OF_PAYLOAD_JSON"
+    },
+    {
+      "verifier_key_id": "verifier-key-2",
+      "signature_hex": "REPLACE_WITH_SCHNORR_SIGNATURE_HEX_OVER_SHA256_OF_PAYLOAD_JSON"
+    }
+  ]
+}
