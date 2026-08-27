@@ -299,8 +299,8 @@ func (rats *ReservationAcceptanceTestScenario) UnmarshalJSON(
 				Age:                    rd.Age,
 				SweptAt:                rd.SweptAt,
 				Vault:                  rd.Vault,
-				parsedFundingTxHash:     fundingTxHash,
-				parsedFundingTx:         fundingTx,
+				parsedFundingTxHash:    fundingTxHash,
+				parsedFundingTx:        fundingTx,
 			},
 		)
 	}

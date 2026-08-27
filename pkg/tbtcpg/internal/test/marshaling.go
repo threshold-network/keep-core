@@ -383,12 +383,12 @@ func (rrts *ReservationReanchorTestScenario) UnmarshalJSON(data []byte) error {
 		ReservationKey      string
 		WalletPublicKeyHash string
 		AnchorTxHash        string
-		AnchorTxOutputIndex  uint32
+		AnchorTxOutputIndex uint32
 		AnchorValue         int64
 		State               string
 		RequestNonce        uint64
 		HasPendingAction    bool
-		PendingActionState string
+		PendingActionState  string
 	}
 	type reservationReanchorTestScenarioJSON struct {
 		Title string
@@ -402,7 +402,7 @@ func (rrts *ReservationReanchorTestScenario) UnmarshalJSON(data []byte) error {
 
 		TargetWalletPublicKeyHash string
 
-		LiveWalletsCount         uint32
+		LiveWalletsCount uint32
 
 		MovingFundsDustThreshold uint64
 		ReservationTxMaxFee      uint64
@@ -500,8 +500,8 @@ func (rj *reservationReanchorProposalJSON) convert() (*tbtc.ReservationReanchorP
 	}
 
 	result := &tbtc.ReservationReanchorProposal{
-		RequestNonce:              rj.RequestNonce,
-		ReanchorTxFee:             big.NewInt(rj.ReanchorTxFee),
+		RequestNonce:  rj.RequestNonce,
+		ReanchorTxFee: big.NewInt(rj.ReanchorTxFee),
 	}
 	if len(rj.ReservationKey) > 0 {
 		result.ReservationKey = new(big.Int).SetBytes(hexToSlice(rj.ReservationKey))

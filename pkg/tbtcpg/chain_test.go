@@ -65,16 +65,16 @@ type LocalChain struct {
 	redemptionDelays                         map[[32]byte]time.Duration
 	depositMinAge                            uint32
 
-	reservations                             map[*big.Int]*tbtc.Reservation
-	reservationActions                       map[string]*tbtc.ReservationAction
-	reservationParametersValue               tbtc.ReservationParameters
-	reservationParametersSet                 bool
-	reservationProposalValidations           map[[32]byte]bool
-	reservationReanchorRequestSubmissions    []*reservationReanchorRequestSubmission
-	reservationReanchoredEventEmissions      []*tbtc.ReservationReanchoredEvent
-	reservationWalletKeys                    map[[20]byte][]*big.Int
-	liveWalletsCountValue                    uint32
-	liveWalletsCountSet                      bool
+	reservations                          map[*big.Int]*tbtc.Reservation
+	reservationActions                    map[string]*tbtc.ReservationAction
+	reservationParametersValue            tbtc.ReservationParameters
+	reservationParametersSet              bool
+	reservationProposalValidations        map[[32]byte]bool
+	reservationReanchorRequestSubmissions []*reservationReanchorRequestSubmission
+	reservationReanchoredEventEmissions   []*tbtc.ReservationReanchoredEvent
+	reservationWalletKeys                 map[[20]byte][]*big.Int
+	liveWalletsCountValue                 uint32
+	liveWalletsCountSet                   bool
 }
 
 func NewLocalChain() *LocalChain {

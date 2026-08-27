@@ -149,15 +149,15 @@ func LoadFindPendingRedemptionsTestScenario() (
 // ReservationReanchorData holds the per-reservation data in a reservation
 // re-anchor test scenario.
 type ReservationReanchorData struct {
-	ReservationKey           *big.Int
-	WalletPublicKeyHash      [20]byte
-	AnchorTxHash             string
-	AnchorTxOutputIndex      uint32
-	AnchorValue              int64
-	State                    tbtc.ReservationState
-	RequestNonce             uint64
-	HasPendingAction         bool
-	PendingActionState       tbtc.ReservationActionState
+	ReservationKey      *big.Int
+	WalletPublicKeyHash [20]byte
+	AnchorTxHash        string
+	AnchorTxOutputIndex uint32
+	AnchorValue         int64
+	State               tbtc.ReservationState
+	RequestNonce        uint64
+	HasPendingAction    bool
+	PendingActionState  tbtc.ReservationActionState
 }
 
 // ReservationReanchorTestScenario represents a test scenario of preparing a
@@ -168,23 +168,23 @@ type ReservationReanchorTestScenario struct {
 	SourceWalletPublicKeyHash     [20]byte
 	SourceWalletState             tbtc.WalletState
 	SourceWalletMainUtxoHashBytes [32]byte
-	SourceWalletMainUtxoValue      int64
-	SourceWalletMainUtxoTxHash     string
-	SourceWalletMainUtxoTxIndex    uint32
+	SourceWalletMainUtxoValue     int64
+	SourceWalletMainUtxoTxHash    string
+	SourceWalletMainUtxoTxIndex   uint32
 
-	TargetWalletPublicKeyHash     [20]byte
+	TargetWalletPublicKeyHash [20]byte
 
-	LiveWalletsCount              uint32
+	LiveWalletsCount uint32
 
-	MovingFundsDustThreshold      uint64
-	ReservationTxMaxFee           uint64
-	EstimateSatPerVByteFee        int64
-	ReanchorTxFee                 int64
+	MovingFundsDustThreshold uint64
+	ReservationTxMaxFee      uint64
+	EstimateSatPerVByteFee   int64
+	ReanchorTxFee            int64
 
-	Reservations                  []*ReservationReanchorData
+	Reservations []*ReservationReanchorData
 
-	ExpectedProposal              *tbtc.ReservationReanchorProposal
-	ExpectedErr                   error
+	ExpectedProposal *tbtc.ReservationReanchorProposal
+	ExpectedErr      error
 }
 
 // LoadReservationReanchorTestScenario loads all scenarios related to

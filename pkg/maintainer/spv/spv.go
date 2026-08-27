@@ -505,7 +505,6 @@ type spvProofAssembler func(
 	btcChain bitcoin.Chain,
 ) (*bitcoin.Transaction, *bitcoin.SpvProof, error)
 
-
 // getUnprovenReservationAcceptanceTransactions is a placeholder for the
 // reservation acceptance proof task. The production wiring for reservation
 // acceptance proofs is delivered by the reservation watcher integration that

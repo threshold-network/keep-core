@@ -16,7 +16,7 @@ import (
 type recordingActionTimeoutMembers struct {
 	walletIDs map[[20]byte][]uint32
 	calls     [][20]byte
-	errByPKH map[[20]byte]error
+	errByPKH  map[[20]byte]error
 }
 
 func (r *recordingActionTimeoutMembers) ResolveWalletMembers(

@@ -102,10 +102,10 @@ type localChain struct {
 	submittedActionTimeouts []*submittedReservationActionTimeout
 	reservationParameters   *tbtc.ReservationParameters
 
-	txProofDifficultyFactor *big.Int
-	currentEpoch            uint64
-	currentEpochDifficulty  *big.Int
-	previousEpochDifficulty *big.Int
+	txProofDifficultyFactor    *big.Int
+	currentEpoch               uint64
+	currentEpochDifficulty     *big.Int
+	previousEpochDifficulty    *big.Int
 	submitReservationProofHook func(
 		proofType uint8,
 		txInfo *tbtc.BitcoinTxInfo,
@@ -1120,7 +1120,6 @@ func (lc *localChain) PastReservationAcceptedEvents(
 ) ([]*tbtc.ReservationAcceptedEvent, error) {
 	return nil, nil
 }
-
 
 // submitReservationProofHook, when non-nil, overrides the default panic
 // stub and gives the test full control over SubmitReservationProof behavior.

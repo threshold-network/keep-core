@@ -2697,16 +2697,16 @@ func convertReservationFromAbiType(
 	}
 
 	return &tbtc.Reservation{
-		Owner:                  chain.Address(abiReservation.Owner.String()),
-		MintedAmount:           abiReservation.MintedAmount,
-		AcceptedAt:             abiReservation.AcceptedAt,
-		WalletPublicKeyHash:    abiReservation.WalletPubKeyHash,
-		AnchorUtxo:             anchorUtxo,
-		ExpiresAt:              abiReservation.ExpiresAt,
-		State:                  state,
-		RequestNonce:           abiReservation.RequestNonce,
-		RetryCredit:            abiReservation.RetryCredit,
-		DissolutionEligibleAt:  abiReservation.DissolutionEligibleAt,
+		Owner:                 chain.Address(abiReservation.Owner.String()),
+		MintedAmount:          abiReservation.MintedAmount,
+		AcceptedAt:            abiReservation.AcceptedAt,
+		WalletPublicKeyHash:   abiReservation.WalletPubKeyHash,
+		AnchorUtxo:            anchorUtxo,
+		ExpiresAt:             abiReservation.ExpiresAt,
+		State:                 state,
+		RequestNonce:          abiReservation.RequestNonce,
+		RetryCredit:           abiReservation.RetryCredit,
+		DissolutionEligibleAt: abiReservation.DissolutionEligibleAt,
 	}, nil
 }
 
@@ -2791,15 +2791,15 @@ func convertReservationParametersFromAbiType(
 	},
 ) *tbtc.ReservationParameters {
 	return &tbtc.ReservationParameters{
-		ReservationVault:              chain.Address(abiParameters.ReservationVault.String()),
-		ReservationMinAmount:          abiParameters.ReservationMinAmount,
-		ReservationTxMaxFee:           abiParameters.ReservationTxMaxFee,
-		ReservationTermSeconds:        abiParameters.ReservationTermSeconds,
-		ReservationDissolutionDelay:   abiParameters.ReservationDissolutionDelay,
-		ReservationMaxTotalAmount:     abiParameters.ReservationMaxTotalAmount,
-		ReservationTotalAmount:        abiParameters.ReservationTotalAmount,
-		MaxReservationsPerWallet:      abiParameters.MaxReservationsPerWallet,
-		ReservationActionTimeout:      abiParameters.ReservationActionTimeout,
+		ReservationVault:                chain.Address(abiParameters.ReservationVault.String()),
+		ReservationMinAmount:            abiParameters.ReservationMinAmount,
+		ReservationTxMaxFee:             abiParameters.ReservationTxMaxFee,
+		ReservationTermSeconds:          abiParameters.ReservationTermSeconds,
+		ReservationDissolutionDelay:     abiParameters.ReservationDissolutionDelay,
+		ReservationMaxTotalAmount:       abiParameters.ReservationMaxTotalAmount,
+		ReservationTotalAmount:          abiParameters.ReservationTotalAmount,
+		MaxReservationsPerWallet:        abiParameters.MaxReservationsPerWallet,
+		ReservationActionTimeout:        abiParameters.ReservationActionTimeout,
 		ReservationRenewalWindowSeconds: abiParameters.ReservationRenewalWindowSeconds,
 	}
 }

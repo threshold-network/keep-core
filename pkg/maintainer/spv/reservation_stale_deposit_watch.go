@@ -115,8 +115,8 @@ func (rsdw *ReservationStaleDepositWatcher) OnDepositRevealed(
 // Parameters:
 //   - depositKey:  the deposit identifier reported by the Bridge.
 //   - now:        the UNIX timestamp against which the action timeout is
-//                 compared. Tests pass an explicit value; production passes
-//                 time.Now().Unix() cast to uint32.
+//     compared. Tests pass an explicit value; production passes
+//     time.Now().Unix() cast to uint32.
 func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	depositKey *big.Int,
 	now uint32,
