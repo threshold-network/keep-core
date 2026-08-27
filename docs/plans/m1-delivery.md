@@ -13,14 +13,14 @@ working scratchpad.
 
 | # | PR | tbtc-v2 branch | Status | What blocks |
 |---|----|---------------|--------|-------------|
-| 1 | A `storage-layout` | `m1/storage-layout` @ `e175092a` | Built, awaiting human to open | — |
-| 2 | C `acceptance-core` | `m1/acceptance-core` @ `1f87f8d8` | **Clean 2026-08-25, awaiting human to open** (line-numbers fix landed) | **Duplicate wallet-binding guard annotated per option (b).** Net `-8/+2` on `Reservation.sol:391-398`, no behavior change. Directive comment line-number refs corrected at `1f87f8d8`. |
-| 3 | D `reanchor-core` | `m1/reanchor-core` @ `08536cd4` | Built, awaiting human to open | — (`cumulativeReanchorFee += minerFee` confirmed at `ReservationProofs.sol:692`) |
-| 4 | E `timeout-and-stranding` | `m1/timeout-and-stranding` @ `0366836a` | **Built 2026-08-26, awaiting human to push** with 15-test stranding suite (real PR-E-local coverage via TestExecutor) | —
-| 5 | B `router-minimal` | `m1/router-minimal` @ `3156ed50` | **Clean 2026-08-25, awaiting human to open** | Bootstrap-ordering test split into two `it` blocks (hazard + safe order). 9/9 green with `FORKING_URL` unset. |
-| 6 | F `m1/vault-pause-flags` | `m1/vault-pause-flags` @ `941d79e9` | **Built 2026-08-25, awaiting human to push** (Option B scope) | Implementor may proceed to PR #G build brief |
-| 7 | G `m1/bridge-integration-seams` (deploy scripts + contract seams + tests) | `m1/bridge-integration-seams` @ `649b1062` | **Built 2026-08-25 (deploy scripts by implementor; contract seams by manager-orchestrated subagents after implementor agent retired); 2026-08-26 characterization test passing + 2026-08-26 reservation-lifecycle coverage suite (13 new tests in 3 new files: 2 AcceptanceAuthorization + 1 SourceAnchorBinding + 10 Stranding; plus 2 pre-existing Settlement tests) for 15/15 passing total across 4 reservation test files + 2026-08-26 deploy-script Bridge-dependency declaration fix, awaiting human to push** | ...
-| 8 | H `m1/keep-core-client` (keep-core repo) | `m1/keep-core-client` @ `48985451d` | **Built 2026-08-26, awaiting human to push** | Base PR #4238 (`b4f63944`), 62 files vs `main` merge-base, +23040/-50. Chain-interface writes/reads/events on `pkg/tbtc.Chain`, then `pkg/tbtcpg.Chain`/`pkg/maintainer/spv.Chain`; acceptance + re-anchor proposal/proof tasks; three watchers (stranding/stale-deposit/action-timeout); operator wiring in `pkg/tbtcpg/tbtcpg.go`, `pkg/maintainer/spv/spv.go`, `pkg/tbtc/tbtc.go` gated on `config.Reservations.Enabled`. `go build ./...` clean, 552 tests passing. Full detail: `agent-docs/m1/STATUS.md` row 11 and "PR H build completed 2026-08-26" session note. |
+| 1 | A `storage-layout` | `m1/storage-layout` @ `e175092a` | **OPEN: [tbtc-v2#1106](https://github.com/threshold-network/tbtc-v2/pull/1106)** (draft, base `reservations-upgrade`) | — |
+| 2 | C `acceptance-core` | `m1/acceptance-core` @ `1f87f8d8` | **OPEN: [tbtc-v2#1107](https://github.com/threshold-network/tbtc-v2/pull/1107)** (draft, base `reservations-upgrade`) | **Duplicate wallet-binding guard annotated per option (b).** Net `-8/+2` on `Reservation.sol:391-398`, no behavior change. Directive comment line-number refs corrected at `1f87f8d8`. |
+| 3 | D `reanchor-core` | `m1/reanchor-core` @ `08536cd4` | **OPEN: [tbtc-v2#1108](https://github.com/threshold-network/tbtc-v2/pull/1108)** (draft, base `reservations-upgrade`) | — (`cumulativeReanchorFee += minerFee` confirmed at `ReservationProofs.sol:692`) |
+| 4 | E `timeout-and-stranding` | `m1/timeout-and-stranding` @ `a5c7ef61` | **OPEN: [tbtc-v2#1109](https://github.com/threshold-network/tbtc-v2/pull/1109)** (draft, base `reservations-upgrade`) with 15-test stranding suite (real PR-E-local coverage via TestExecutor) | —
+| 5 | B `router-minimal` | `m1/router-minimal` @ `3156ed50` | **OPEN: [tbtc-v2#1110](https://github.com/threshold-network/tbtc-v2/pull/1110)** (draft, base `reservations-upgrade`) | Bootstrap-ordering test split into two `it` blocks (hazard + safe order). 9/9 green with `FORKING_URL` unset. |
+| 6 | F `m1/vault-pause-flags` | `m1/vault-pause-flags` @ `941d79e9` | **OPEN: [tbtc-v2#1111](https://github.com/threshold-network/tbtc-v2/pull/1111)** (draft, base `reservations-upgrade`) (Option B scope) | — |
+| 7 | G `m1/bridge-integration-seams` (deploy scripts + contract seams + tests) | `m1/bridge-integration-seams` @ `649b1062` | **OPEN: [tbtc-v2#1112](https://github.com/threshold-network/tbtc-v2/pull/1112)** (draft, base `reservations-upgrade`). 15/15 reservation-lifecycle tests passing across 4 test files (13 new + 2 pre-existing). | — |
+| 8 | H `m1/keep-core-client` (keep-core repo) | `m1/keep-core-client` @ `48985451d` | **OPEN: [keep-core#4274](https://github.com/threshold-network/keep-core/pull/4274)** (draft, base `reservations-epic`) | Base PR #4238 (`b4f63944`), 62 files vs `reservations-epic` merge-base, +23040/-50 (shrinks to 54 files, +21248/-82 once #4238 merges). Chain-interface writes/reads/events on `pkg/tbtc.Chain`, then `pkg/tbtcpg.Chain`/`pkg/maintainer/spv.Chain`; acceptance + re-anchor proposal/proof tasks; three watchers (stranding/stale-deposit/action-timeout); operator wiring in `pkg/tbtcpg/tbtcpg.go`, `pkg/maintainer/spv/spv.go`, `pkg/tbtc/tbtc.go` gated on `config.Reservations.Enabled`. `go build ./...` clean, 552 tests passing. |
 
 **Worktrees present** (`git worktree list`): `/tmp/m1-{a,b,c,d,e,f,g,h}` exist. `/tmp/m1-h-{a,r,w}` were transient parallel-builder worktrees for PR H's acceptance/re-anchor/watchers branches, merged into `m1-h` and safe to prune. `/tmp/src-{1091,1093,1094,1096,1102}` are read-only reference copies. (`m1-g2` worktree and `m1/bridge-integration-seams-g2` branch retired 2026-08-26 — fast-forward-merged into `m1/bridge-integration-seams`; single branch now carries all of PR #G.)
 
@@ -152,15 +152,21 @@ working scratchpad.
 
 ## Open items (manager-not-actionable)
 
-- **Human pushes/opens all eight PR branches on GitHub** — agent has no `gh` API access for
-  pushing or opening. All branches are local-only, built and green: `/tmp/m1-{a,b,c,d,e,f,g,h}`
-  (A `m1/storage-layout`, B `m1/router-minimal`, C `m1/acceptance-core`, D `m1/reanchor-core`,
-  E `m1/timeout-and-stranding`, F `m1/vault-pause-flags`, G `m1/bridge-integration-seams` — all
-  five tbtc-v2 branches stack in build order A→C→D→E→B→F→G onto `milestone/utxo-reservation-m1`;
-  H `m1/keep-core-client` in the keep-core repo, stacked on PR #4238). Full descriptions in
-  `agent-docs/m1/pr-*-description.md`.
-- **Epic integration (step map row 12-14: review/merge A-H onto `milestone/utxo-reservation-m1`,
-  full suite, final PR to `main`)** — gated on A-H being human-opened first; de-risked by the
+- ~~**Human pushes/opens all eight PR branches on GitHub**~~ **DONE 2026-08-27.** All 8 PRs pushed
+  and opened as drafts, flat-based per `pr-strategy.md` §5/§9 (not stacked — corrected from an
+  earlier stacked plan this session):
+  - tbtc-v2, base `reservations-upgrade`: [#1106](https://github.com/threshold-network/tbtc-v2/pull/1106) (A), [#1107](https://github.com/threshold-network/tbtc-v2/pull/1107) (C), [#1108](https://github.com/threshold-network/tbtc-v2/pull/1108) (D), [#1109](https://github.com/threshold-network/tbtc-v2/pull/1109) (E), [#1110](https://github.com/threshold-network/tbtc-v2/pull/1110) (B), [#1111](https://github.com/threshold-network/tbtc-v2/pull/1111) (F), [#1112](https://github.com/threshold-network/tbtc-v2/pull/1112) (G).
+  - keep-core, base `reservations-epic`: [#4274](https://github.com/threshold-network/keep-core/pull/4274) (H).
+  - Correction: the main session **does** have `gh` API/push access (contrary to an earlier note
+    that agent lacks it) — verified by these 8 successful `git push` + `gh pr create` calls.
+  - Because the branches are git-stacked (built serially A→C→D→E→B→F→G / #4238→H) but based flat
+    on the epic branch, downstream PRs render cumulative diffs today (e.g. G shows 30 files/+7549
+    vs its own ~665 lines) — expected per §5's flat + sequential-merge design, not a defect. Each
+    PR's diff shrinks automatically as its dependency merges. Review/merge in order A→C→D→E→B→F→G→H.
+  - Full descriptions (now reflecting flat bases): `agent-docs/m1/pr-*-description.md`.
+- **Epic integration (step map row 12-14: review/merge A-H onto `reservations-upgrade` /
+  `reservations-epic`, full suite, final PR to `main`)** — all 8 PRs now open (see above);
+  human review and merge in order A→C→D→E→B→F→G→H is the remaining step. De-risked by the
   2026-08-26 dry-run re-verification (all seven tbtc-v2 branches merge clean at current tips, no
   manual conflicts, 28/28 passing, Bridge bytecode 22,791 B — see item 9 above).
 - **Post-m1: structural bound on re-anchor fee ratio** — `roadmap.md` §7 item 5, committed for post-m1 work.
