@@ -26,7 +26,7 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 			tbtcChain.SetWallet(
 				scenario.SourceWalletPublicKeyHash,
 				&tbtc.WalletChainData{
-					State:       scenario.SourceWalletState,
+					State:        scenario.SourceWalletState,
 					MainUtxoHash: scenario.SourceWalletMainUtxoHashBytes,
 				},
 			)

@@ -219,9 +219,9 @@ func buildReservationProofMainUtxo(
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
 ) *tbtc.BitcoinTxUTXO {
 	var (
-		txHash      [32]byte
-		txOutIndex  uint32
-		txOutValue  uint64
+		txHash     [32]byte
+		txOutIndex uint32
+		txOutValue uint64
 	)
 
 	if anchorUtxo.Outpoint != nil {

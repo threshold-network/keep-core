@@ -229,7 +229,7 @@ func registerReservedDeposits(
 		} else {
 			dummyTx := &bitcoin.Transaction{
 				Outputs: []*bitcoin.TransactionOutput{{
-					Value: 0,
+					Value:           0,
 					PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
 				}},
 			}
