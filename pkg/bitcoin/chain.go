@@ -1,5 +1,7 @@
 package bitcoin
 
+import "context"
+
 // Chain defines an interface meant to be used for interaction with the
 // Bitcoin chain.
 type Chain interface {
@@ -11,7 +13,12 @@ type Chain interface {
 	// GetTransactionConfirmations gets the number of confirmations for the
 	// transaction with the given transaction hash. If the transaction with the
 	// given hash was not found on the chain, this function returns an error.
-	GetTransactionConfirmations(transactionHash Hash) (uint, error)
+	// The provided context bounds the lookup; implementations should abort the
+	// underlying call when it is cancelled.
+	GetTransactionConfirmations(
+		ctx context.Context,
+		transactionHash Hash,
+	) (uint, error)
 
 	// BroadcastTransaction broadcasts the given transaction over the
 	// network of the Bitcoin chain nodes. If the broadcast action could not be

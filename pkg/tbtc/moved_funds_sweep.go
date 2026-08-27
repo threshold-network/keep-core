@@ -107,6 +107,7 @@ func newMovedFundsSweepAction(
 	proposalProcessingStartBlock uint64,
 	proposalExpiryBlock uint64,
 	waitForBlockFn waitForBlockFn,
+	transactionMonitor *transactionMonitor,
 ) *movedFundsSweepAction {
 	transactionExecutor := newWalletTransactionExecutor(
 		btcChain,
@@ -114,6 +115,8 @@ func newMovedFundsSweepAction(
 		signingExecutor,
 		waitForBlockFn,
 	)
+
+	transactionExecutor.setTransactionMonitor(transactionMonitor)
 
 	return &movedFundsSweepAction{
 		logger:                           logger,

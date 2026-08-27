@@ -123,6 +123,8 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricWalletActionSuccessTotal,
 		MetricWalletActionFailedTotal,
 		MetricWalletHeartbeatFailuresTotal,
+		MetricStuckWalletTransactionsTotal,
+		MetricUnmonitoredWalletTransactionsTotal,
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
@@ -635,11 +637,13 @@ const (
 	MetricRedemptionProofSubmissionsFailedTotal  = "redemption_proof_submissions_failed_total"
 
 	// Wallet Action Metrics (aggregate)
-	MetricWalletActionsTotal           = "wallet_actions_total"
-	MetricWalletActionSuccessTotal     = "wallet_action_success_total"
-	MetricWalletActionFailedTotal      = "wallet_action_failed_total"
-	MetricWalletActionDurationSeconds  = "wallet_action_duration_seconds"
-	MetricWalletHeartbeatFailuresTotal = "wallet_heartbeat_failures_total"
+	MetricWalletActionsTotal                 = "wallet_actions_total"
+	MetricWalletActionSuccessTotal           = "wallet_action_success_total"
+	MetricWalletActionFailedTotal            = "wallet_action_failed_total"
+	MetricWalletActionDurationSeconds        = "wallet_action_duration_seconds"
+	MetricWalletHeartbeatFailuresTotal       = "wallet_heartbeat_failures_total"
+	MetricStuckWalletTransactionsTotal       = "stuck_wallet_transactions_total"
+	MetricUnmonitoredWalletTransactionsTotal = "unmonitored_wallet_transactions_total"
 
 	// Wallet Action Metrics (per-action type)
 	// These are generated dynamically using WalletActionMetricName helper function

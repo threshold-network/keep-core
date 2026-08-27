@@ -719,7 +719,7 @@ type noConfirmBtcChain struct {
 	*localBitcoinChain
 }
 
-func (c *noConfirmBtcChain) GetTransactionConfirmations(bitcoin.Hash) (uint, error) {
+func (c *noConfirmBtcChain) GetTransactionConfirmations(context.Context, bitcoin.Hash) (uint, error) {
 	return 0, fmt.Errorf("rpc unavailable")
 }
 
@@ -816,7 +816,7 @@ func (c *walletSyncBtcChain) GetTransaction(hash bitcoin.Hash) (*bitcoin.Transac
 	return nil, fmt.Errorf("tx not found: %s", hash.String())
 }
 
-func (c *walletSyncBtcChain) GetTransactionConfirmations(bitcoin.Hash) (uint, error) {
+func (c *walletSyncBtcChain) GetTransactionConfirmations(context.Context, bitcoin.Hash) (uint, error) {
 	panic("unused in wallet sync tests")
 }
 func (c *walletSyncBtcChain) BroadcastTransaction(*bitcoin.Transaction) error {
