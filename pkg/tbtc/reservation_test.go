@@ -7,7 +7,10 @@ import (
 	"reflect"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
 )
 
 func TestReservationActionTypes(t *testing.T) {
@@ -146,70 +149,126 @@ func TestReservationProposals_MarshalingRoundtrip(t *testing.T) {
 	roundtrip(dissolutionProposal, &ReservationDissolutionProposal{})
 }
 
-func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
+func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
+	// marshalPb encodes an arbitrary protobuf message the same way
+	// proto.Marshal would, for building deliberately incomplete/invalid
+	// wire payloads. mustMarshal panics on error since every message
+	// here is well-formed at the protobuf level - only the domain-level
+	// validation performed by each proposal's Unmarshal is under test.
+	marshalPb := func(msg proto.Message) []byte {
+		bytes, err := proto.Marshal(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes
+	}
+
+	validHash := make([]byte, 32)
+	validHash[0] = 0x01
+	validWalletHash := make([]byte, 20)
+	validWalletHash[0] = 0xaa
+
 	tests := map[string]struct {
 		actionType    WalletActionType
-		payload       string
+		payload       []byte
 		expectedError string
 	}{
-		"anchor empty object": {
+		// Proto3 scalar fields have no wire presence, so an entirely
+		// empty payload and one with every field explicitly zeroed are
+		// indistinguishable - a single "empty payload" case per type
+		// covers what the old JSON test split into "empty object" and
+		// "null payload" cases.
+		"anchor empty payload": {
 			actionType:    ActionReservationAnchor,
-			payload:       `{}`,
-			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
-		},
-		"anchor null payload": {
-			actionType:    ActionReservationAnchor,
-			payload:       `null`,
-			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
+			payload:       marshalPb(&pb.ReservationAnchorProposal{}),
+			expectedError: "cannot unmarshal proposal payload: [invalid deposit funding tx hash length: [0]]",
 		},
 		"anchor missing nonce": {
-			actionType:    ActionReservationAnchor,
-			payload:       `{"AnchorTxFee":1500}`,
+			actionType: ActionReservationAnchor,
+			payload: marshalPb(&pb.ReservationAnchorProposal{
+				DepositFundingTxHash: validHash,
+				AnchorTxFee:          big.NewInt(1500).Bytes(),
+			}),
 			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
 		},
-		"reserved redemption null payload": {
+		"anchor missing fee": {
+			actionType: ActionReservationAnchor,
+			payload: marshalPb(&pb.ReservationAnchorProposal{
+				DepositFundingTxHash: validHash,
+				RequestNonce:         1,
+			}),
+			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
+		},
+		"reserved redemption empty payload": {
 			actionType:    ActionReservedRedemption,
-			payload:       `null`,
+			payload:       marshalPb(&pb.ReservedRedemptionProposal{}),
 			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
 		},
 		"reserved redemption missing nonce": {
-			actionType:    ActionReservedRedemption,
-			payload:       `{"ReservationKey":12345,"RedemptionTxFee":1600}`,
+			actionType: ActionReservedRedemption,
+			payload: marshalPb(&pb.ReservedRedemptionProposal{
+				ReservationKey:  big.NewInt(12345).Bytes(),
+				RedemptionTxFee: big.NewInt(1600).Bytes(),
+			}),
 			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
 		},
 		"reserved redemption missing fee": {
-			actionType:    ActionReservedRedemption,
-			payload:       `{"ReservationKey":12345,"RequestNonce":2}`,
+			actionType: ActionReservedRedemption,
+			payload: marshalPb(&pb.ReservedRedemptionProposal{
+				ReservationKey: big.NewInt(12345).Bytes(),
+				RequestNonce:   2,
+			}),
 			expectedError: "cannot unmarshal proposal payload: [redemption transaction fee is required]",
 		},
-		"re-anchor null payload": {
+		"re-anchor empty payload": {
 			actionType:    ActionReservationReanchor,
-			payload:       `null`,
+			payload:       marshalPb(&pb.ReservationReanchorProposal{}),
 			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
 		},
+		"re-anchor invalid target wallet hash length": {
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(&pb.ReservationReanchorProposal{
+				ReservationKey: big.NewInt(54321).Bytes(),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [invalid target wallet public key hash length: [0]]",
+		},
 		"re-anchor missing nonce": {
-			actionType:    ActionReservationReanchor,
-			payload:       `{"ReservationKey":54321,"ReanchorTxFee":1700}`,
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(&pb.ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321).Bytes(),
+				TargetWalletPublicKeyHash: validWalletHash,
+				ReanchorTxFee:             big.NewInt(1700).Bytes(),
+			}),
 			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
 		},
 		"re-anchor missing fee": {
-			actionType:    ActionReservationReanchor,
-			payload:       `{"ReservationKey":54321,"RequestNonce":3}`,
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(&pb.ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321).Bytes(),
+				TargetWalletPublicKeyHash: validWalletHash,
+				RequestNonce:              3,
+			}),
 			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
 		},
-		"dissolution null payload": {
+		"dissolution empty payload": {
 			actionType:    ActionReservationDissolution,
-			payload:       `null`,
+			payload:       marshalPb(&pb.ReservationDissolutionProposal{}),
 			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
 		},
 		"dissolution missing nonce": {
-			actionType:    ActionReservationDissolution,
-			payload:       `{"ReservationKey":99999,"DissolutionTxFee":1800}`,
+			actionType: ActionReservationDissolution,
+			payload: marshalPb(&pb.ReservationDissolutionProposal{
+				ReservationKey:   big.NewInt(99999).Bytes(),
+				DissolutionTxFee: big.NewInt(1800).Bytes(),
+			}),
 			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
 		},
 		"dissolution missing fee": {
-			actionType:    ActionReservationDissolution,
-			payload:       `{"ReservationKey":99999,"RequestNonce":4}`,
+			actionType: ActionReservationDissolution,
+			payload: marshalPb(&pb.ReservationDissolutionProposal{
+				ReservationKey: big.NewInt(99999).Bytes(),
+				RequestNonce:   4,
+			}),
 			expectedError: "cannot unmarshal proposal payload: [dissolution transaction fee is required]",
 		},
 	}
@@ -218,7 +277,7 @@ func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
 		t.Run(testName, func(t *testing.T) {
 			_, err := unmarshalCoordinationProposal(
 				uint32(test.actionType),
-				[]byte(test.payload),
+				test.payload,
 			)
 			if err == nil || err.Error() != test.expectedError {
 				t.Errorf(
