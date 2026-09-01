@@ -1,7 +1,6 @@
 package spv
 
 import (
-	"fmt"
 	"math/big"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -71,39 +70,6 @@ func submitReservationAcceptanceProof(
 		ProofTypeReservationAcceptance,
 		"reservation_acceptance_proof",
 		tbtc.ReservationActionTypeAcceptance,
-		parseReservationAcceptanceTransactionInput,
+		"acceptance",
 	)
-}
-
-// parseReservationAcceptanceTransactionInput parses the single input and
-// single output of a reservation acceptance (anchor) transaction and
-// returns the deposit UTXO that was anchored and the wallet's public key
-// hash from the new anchor output script. Mirrors
-// parseReservationReanchorTransactionInput in reservation_reanchor_proof.go.
-func parseReservationAcceptanceTransactionInput(
-	btcChain bitcoin.Chain,
-	transaction *bitcoin.Transaction,
-) (*bitcoin.UnspentTransactionOutput, [20]byte, error) {
-	depositUtxo, err := spentOutputAsUtxo(btcChain, transaction)
-	if err != nil {
-		return nil, [20]byte{}, err
-	}
-
-	if len(transaction.Outputs) != 1 {
-		return nil, [20]byte{}, fmt.Errorf(
-			"reservation acceptance transaction must have exactly one output",
-		)
-	}
-
-	walletPublicKeyHash, err := bitcoin.ExtractPublicKeyHash(
-		transaction.Outputs[0].PublicKeyScript,
-	)
-	if err != nil {
-		return nil, [20]byte{}, fmt.Errorf(
-			"cannot extract wallet public key hash: [%v]",
-			err,
-		)
-	}
-
-	return depositUtxo, walletPublicKeyHash, nil
 }

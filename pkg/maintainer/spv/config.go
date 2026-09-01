@@ -2,6 +2,8 @@ package spv
 
 import (
 	"time"
+
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 const (
@@ -69,23 +71,8 @@ type Config struct {
 	// Reservations controls the SPV proof submission for reservation
 	// acceptance / re-anchor action generations. The reservation watchers are
 	// gated by the separate Tbtc.Reservations.Enabled flag.
-	Reservations ReservationsConfig
+	Reservations tbtc.ReservationsConfig
 }
 
-// ReservationsConfig holds the reservation-related spv.Config fields.
-//
-// This flag controls only SPV PROOF SUBMISSION for reservation acceptance /
-// re-anchor action generations (the `maintainer` command, config category
-// Maintainer). The `start` command runs as a separate process reading a
-// disjoint config category (see config.StartCmdCategories) and has its own
-// independent gate, tbtc.ReservationsConfig.Enabled, that controls
-// reservation proposal GENERATION. Neither command's config loading sees
-// the other's category, so this flag cannot be derived from or validated
-// against tbtc.ReservationsConfig.Enabled in code. An operator running both
-// `start` and `maintainer` for the reservation feature to work end-to-end
-// MUST enable both flags - normally the same [Maintainer.Spv.Reservations]
-// / [Tbtc.Reservations] TOML sections in one shared config file.
-type ReservationsConfig struct {
-	// Enabled toggles reservation plumbing in the SPV maintainer.
-	Enabled bool
-}
+// ReservationsConfig is deprecated and refers to tbtc.ReservationsConfig.
+type ReservationsConfig = tbtc.ReservationsConfig

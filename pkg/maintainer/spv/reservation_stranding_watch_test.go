@@ -79,7 +79,7 @@ func TestReservationStrandingWatcher_NotifiesActiveReservation(t *testing.T) {
 	}
 }
 
-func TestReservationStrandingWatcher_NotifiesClosedReservation(t *testing.T) {
+func TestReservationStrandingWatcher_SkipsClosedReservation(t *testing.T) {
 	spvChain := newLocalChain()
 
 	wallet := walletPKH()
@@ -95,8 +95,8 @@ func TestReservationStrandingWatcher_NotifiesClosedReservation(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 1 {
-		t.Fatalf("expected one notification, got %d", len(calls))
+	if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
+		t.Fatalf("expected no notifications, got %d", len(calls))
 	}
 }
 
@@ -156,17 +156,23 @@ func TestReservationStrandingWatcher_MultipleReservations(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// The watcher must notify for all reservations that are not in
-	// ActionPending. ReservationStateStranded is the natural re-notify case
-	// (the Bridge dedupes; the watcher does not).
+	// The watcher must notify only for reservations in the Active state
+	// (finding #27's allow-list fix): closed, pending, and stranded
+	// reservations must all be skipped - a stranded reservation has
+	// already been notified once and re-notifying it is redundant, and a
+	// closed reservation was already resolved through in-kind redemption
+	// or another terminal path, not stranding.
 	calls := spvChain.getSubmittedReservationStrandedKeys()
-	if len(calls) != 3 {
+	if len(calls) != 1 {
 		t.Fatalf(
-			"expected three notifications (active+closed+stranded), "+
+			"expected exactly one notification (active only), "+
 				"got %d: %v",
 			len(calls),
 			calls,
 		)
+	}
+	if diff := deep.Equal(active, calls[0]); diff != nil {
+		t.Errorf("unexpected notified key: %v", diff)
 	}
 }
 

@@ -119,6 +119,7 @@ func TestSubmitReservationAcceptanceProof(t *testing.T) {
 		return nil
 	}
 
+	metricsRecorder := &mockMetricsRecorder{counts: make(map[string]float64)}
 	if err := submitReservationAcceptanceProof(
 		anchorTx.Hash(),
 		requiredConfirmations,
@@ -127,9 +128,41 @@ func TestSubmitReservationAcceptanceProof(t *testing.T) {
 		btcChain,
 		spvChain,
 		mockSpvProofAssembler,
-		nil,
+		metricsRecorder,
 	); err != nil {
 		t.Fatal(err)
+	}
+	// Check metrics.
+	if count := metricsRecorder.counts["reservation_acceptance_proof_submissions_total"]; count != 1 {
+		t.Errorf("unexpected metrics count: got %f, want 1", count)
+	}
+
+	// Negative path: nil reservationKey.
+	if err := submitReservationAcceptanceProof(
+		anchorTx.Hash(),
+		requiredConfirmations,
+		nil,
+		requestNonce,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+		nil,
+	); err == nil {
+		t.Fatal("expected error for nil reservation key")
+	}
+
+	// Negative path: zero requestNonce.
+	if err := submitReservationAcceptanceProof(
+		anchorTx.Hash(),
+		requiredConfirmations,
+		reservationKey,
+		0,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+		nil,
+	); err == nil {
+		t.Fatal("expected error for zero request nonce")
 	}
 
 	// Negative path: action generation is not Pending.

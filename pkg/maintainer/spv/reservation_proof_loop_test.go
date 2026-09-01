@@ -9,26 +9,37 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// TestReservationProofScanStartBlock covers the bounded look-back arithmetic:
-// the very first scan (current block below the look-back window) starts at
-// block 0, while a later scan is bounded to exactly
-// reservationProofLookBackBlocks behind the current block.
-func TestReservationProofScanStartBlock(t *testing.T) {
+// TestReservationProofNextScanRange covers the incremental scan-range
+// arithmetic: the very first pass (lastScannedBlock == 0) is bounded to
+// reservationProofLookBackBlocks behind the current block (or 0 if the
+// chain is younger than that window); every later pass starts exactly one
+// block after the previous pass's cursor, so a steady-state loop never
+// rescans the full look-back window again.
+func TestReservationProofNextScanRange(t *testing.T) {
 	tests := map[string]struct {
-		currentBlock  uint64
-		expectedStart uint64
+		currentBlock     uint64
+		lastScannedBlock uint64
+		expectedStart    uint64
 	}{
-		"current block below the look-back window": {
-			currentBlock:  1000,
-			expectedStart: 0,
+		"first pass, current block below the look-back window": {
+			currentBlock:     1000,
+			lastScannedBlock: 0,
+			expectedStart:    0,
 		},
-		"current block at the look-back window boundary": {
-			currentBlock:  reservationProofLookBackBlocks,
-			expectedStart: 0,
+		"first pass, current block at the look-back window boundary": {
+			currentBlock:     reservationProofLookBackBlocks,
+			lastScannedBlock: 0,
+			expectedStart:    0,
 		},
-		"current block beyond the look-back window": {
-			currentBlock:  reservationProofLookBackBlocks + 500,
-			expectedStart: 500,
+		"first pass, current block beyond the look-back window": {
+			currentBlock:     reservationProofLookBackBlocks + 500,
+			lastScannedBlock: 0,
+			expectedStart:    500,
+		},
+		"later pass starts one block after the cursor, ignoring the look-back window": {
+			currentBlock:     reservationProofLookBackBlocks * 3,
+			lastScannedBlock: reservationProofLookBackBlocks * 2,
+			expectedStart:    reservationProofLookBackBlocks*2 + 1,
 		},
 	}
 
@@ -39,7 +50,10 @@ func TestReservationProofScanStartBlock(t *testing.T) {
 			blockCounter.SetCurrentBlock(test.currentBlock)
 			spvChain.setBlockCounter(blockCounter)
 
-			startBlock, err := reservationProofScanStartBlock(spvChain)
+			startBlock, currentBlock, err := reservationProofNextScanRange(
+				spvChain,
+				test.lastScannedBlock,
+			)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -48,6 +62,13 @@ func TestReservationProofScanStartBlock(t *testing.T) {
 					"unexpected start block\nexpected: %v\nactual:   %v",
 					test.expectedStart,
 					startBlock,
+				)
+			}
+			if currentBlock != test.currentBlock {
+				t.Errorf(
+					"unexpected current block\nexpected: %v\nactual:   %v",
+					test.currentBlock,
+					currentBlock,
 				)
 			}
 		})
@@ -344,4 +365,286 @@ func TestProveReservationTransaction(t *testing.T) {
 			t.Fatal("expected submit error to propagate")
 		}
 	})
+}
+
+// TestProveReservationAcceptanceActions is an end-to-end test of the
+// top-level orchestration function wired into production via
+// runReservationProofLoop: it seeds a requested event, a matching pending
+// action, and a matching wallet transaction, then asserts the submit hook
+// fires with the correct (reservationKey, requestNonce) pair. A
+// regression that swapped the acceptance and re-anchor submitters (or
+// mixed up their arguments) would show up here, not just in the
+// lower-level helper unit tests above.
+func TestProveReservationAcceptanceActions(t *testing.T) {
+	const proofStart = 790270
+	diff := func(d int64) *big.Int { return big.NewInt(d) }
+
+	spvChain := newLocalChain()
+	btcChain := newLocalBitcoinChain()
+
+	if err := populateBlockHeaders(
+		btcChain,
+		proofStart,
+		proofStart+19,
+		func(uint) *big.Int { return diff(32) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+	spvChain.setCurrentEpoch(392)
+	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
+
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	fundingTx := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{{Value: 150000}},
+	}
+	if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+		t.Fatal(err)
+	}
+	fundingTxHash := fundingTx.Hash()
+	reservationKey := spvChain.BuildDepositKey(fundingTxHash, 0)
+	const requestNonce = 1
+
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transaction := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTxHash,
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           100000,
+			PublicKeyScript: walletScript,
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(transaction); err != nil {
+		t.Fatal(err)
+	}
+	if err := btcChain.addTransactionConfirmations(
+		transaction.Hash(),
+		20,
+	); err != nil {
+		t.Fatal(err)
+	}
+	btcChain.setCoinbaseTxHash(transaction.Hash())
+
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      reservationKey,
+		RequestNonce:        requestNonce,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		BlockNumber:         500,
+	})
+	spvChain.setReservationAction(
+		reservationKey,
+		requestNonce,
+		&tbtc.ReservationAction{
+			State:                     tbtc.ReservationActionStatePending,
+			ActionType:                tbtc.ReservationActionTypeAcceptance,
+			TargetWalletPublicKeyHash: walletPublicKeyHash,
+		},
+	)
+
+	var submittedReservationKey *big.Int
+	var submittedRequestNonce uint64
+	submissions := 0
+	spvChain.submitReservationProofHook = func(
+		proofType uint8,
+		txInfo *tbtc.BitcoinTxInfo,
+		proof *tbtc.BitcoinTxProof,
+		mainUtxo *tbtc.BitcoinTxUTXO,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error {
+		submissions++
+		submittedReservationKey = reservationKey
+		submittedRequestNonce = requestNonce
+		return nil
+	}
+
+	config := Config{TransactionLimit: 100}
+
+	if err := proveReservationAcceptanceActions(
+		newReservationProofScanState(),
+		config,
+		spvChain,
+		spvChain,
+		btcChain,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if submissions != 1 {
+		t.Fatalf("expected exactly one proof submission, got %d", submissions)
+	}
+	if submittedReservationKey.Cmp(reservationKey) != 0 {
+		t.Errorf(
+			"unexpected submitted reservation key\nexpected: %v\nactual:   %v",
+			reservationKey,
+			submittedReservationKey,
+		)
+	}
+	if submittedRequestNonce != requestNonce {
+		t.Errorf(
+			"unexpected submitted request nonce\nexpected: %d\nactual:   %d",
+			requestNonce,
+			submittedRequestNonce,
+		)
+	}
+}
+
+// TestProveReservationReanchorActions is an end-to-end test of the
+// top-level orchestration function wired into production via
+// runReservationProofLoop: it seeds a requested event, a matching
+// reservation with an anchor UTXO, a matching pending action, and a
+// matching wallet transaction, then asserts the submit hook fires with the
+// correct (reservationKey, requestNonce) pair. A regression that swapped
+// the acceptance and re-anchor submitters (or mixed up their arguments)
+// would show up here, not just in the lower-level helper unit tests above.
+func TestProveReservationReanchorActions(t *testing.T) {
+	const proofStart = 790270
+	diff := func(d int64) *big.Int { return big.NewInt(d) }
+
+	spvChain := newLocalChain()
+	btcChain := newLocalBitcoinChain()
+
+	if err := populateBlockHeaders(
+		btcChain,
+		proofStart,
+		proofStart+19,
+		func(uint) *big.Int { return diff(32) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+	spvChain.setCurrentEpoch(392)
+	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
+
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	reservationKey := big.NewInt(424242)
+	const requestNonce = 2
+
+	priorAnchorTx := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 10000},
+			{Value: 600000},
+		},
+	}
+	if err := btcChain.BroadcastTransaction(priorAnchorTx); err != nil {
+		t.Fatal(err)
+	}
+	anchorTxHash := priorAnchorTx.Hash()
+	anchorUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: anchorTxHash,
+			OutputIndex:     1,
+		},
+		Value: 600000,
+	}
+
+	sourceWalletPublicKeyHash := [20]byte{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
+	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transaction := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           590000,
+			PublicKeyScript: walletScript,
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(transaction); err != nil {
+		t.Fatal(err)
+	}
+	if err := btcChain.addTransactionConfirmations(
+		transaction.Hash(),
+		20,
+	); err != nil {
+		t.Fatal(err)
+	}
+	btcChain.setCoinbaseTxHash(transaction.Hash())
+
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            reservationKey,
+		RequestNonce:              requestNonce,
+		SourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
+		BlockNumber:               500,
+	})
+	spvChain.setReservationAction(
+		reservationKey,
+		requestNonce,
+		&tbtc.ReservationAction{
+			State:                     tbtc.ReservationActionStatePending,
+			ActionType:                tbtc.ReservationActionTypeReanchor,
+			TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
+		},
+	)
+	spvChain.setReservation(reservationKey, &tbtc.Reservation{
+		AnchorUtxo: anchorUtxo,
+	})
+
+	var submittedReservationKey *big.Int
+	var submittedRequestNonce uint64
+	submissions := 0
+	spvChain.submitReservationProofHook = func(
+		proofType uint8,
+		txInfo *tbtc.BitcoinTxInfo,
+		proof *tbtc.BitcoinTxProof,
+		mainUtxo *tbtc.BitcoinTxUTXO,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error {
+		submissions++
+		submittedReservationKey = reservationKey
+		submittedRequestNonce = requestNonce
+		return nil
+	}
+
+	config := Config{TransactionLimit: 100}
+
+	if err := proveReservationReanchorActions(
+		newReservationProofScanState(),
+		config,
+		spvChain,
+		spvChain,
+		btcChain,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if submissions != 1 {
+		t.Fatalf("expected exactly one proof submission, got %d", submissions)
+	}
+	if submittedReservationKey.Cmp(reservationKey) != 0 {
+		t.Errorf(
+			"unexpected submitted reservation key\nexpected: %v\nactual:   %v",
+			reservationKey,
+			submittedReservationKey,
+		)
+	}
+	if submittedRequestNonce != requestNonce {
+		t.Errorf(
+			"unexpected submitted request nonce\nexpected: %d\nactual:   %d",
+			requestNonce,
+			submittedRequestNonce,
+		)
+	}
 }

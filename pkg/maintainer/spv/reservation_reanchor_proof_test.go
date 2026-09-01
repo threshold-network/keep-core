@@ -10,6 +10,14 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
+type mockMetricsRecorder struct {
+	counts map[string]float64
+}
+
+func (m *mockMetricsRecorder) IncrementCounter(name string, value float64) {
+	m.counts[name] += value
+}
+
 // TestSubmitReservationReanchorProof verifies that submitReservationReanchorProof
 // correctly parses a 1-input-1-output re-anchor transaction, looks up the
 // matching reservation action generation, and submits the SPV proof to the
@@ -133,6 +141,7 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 		return nil
 	}
 
+	metricsRecorder := &mockMetricsRecorder{counts: make(map[string]float64)}
 	if err := submitReservationReanchorProof(
 		reanchorTx.Hash(),
 		requiredConfirmations,
@@ -141,9 +150,41 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 		btcChain,
 		spvChain,
 		mockSpvProofAssembler,
-		nil,
+		metricsRecorder,
 	); err != nil {
 		t.Fatal(err)
+	}
+	// Check metrics.
+	if count := metricsRecorder.counts["reservation_reanchor_proof_submissions_total"]; count != 1 {
+		t.Errorf("unexpected metrics count: got %f, want 1", count)
+	}
+
+	// Negative path: nil reservationKey.
+	if err := submitReservationReanchorProof(
+		reanchorTx.Hash(),
+		requiredConfirmations,
+		nil,
+		requestNonce,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+		nil,
+	); err == nil {
+		t.Fatal("expected error for nil reservation key")
+	}
+
+	// Negative path: zero requestNonce.
+	if err := submitReservationReanchorProof(
+		reanchorTx.Hash(),
+		requiredConfirmations,
+		reservationKey,
+		0,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+		nil,
+	); err == nil {
+		t.Fatal("expected error for zero request nonce")
 	}
 
 	// Negative path: action generation is not Pending.

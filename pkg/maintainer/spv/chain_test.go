@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -1109,24 +1110,6 @@ func (lc *localChain) setReservedDeposit(
 		walletPublicKeyHash: walletPublicKeyHash,
 		isReserved:          isReserved,
 	}
-}
-
-func (lc *localChain) PastReservationAcceptedEvents(
-	filter *tbtc.ReservationAcceptedEventFilter,
-) ([]*tbtc.ReservationAcceptedEvent, error) {
-	return nil, nil
-}
-
-func (lc *localChain) PastReservationReanchoredEvents(
-	filter *tbtc.ReservationReanchoredEventFilter,
-) ([]*tbtc.ReservationReanchoredEvent, error) {
-	return nil, nil
-}
-
-func (lc *localChain) PastReservationActionTimedOutEvents(
-	filter *tbtc.ReservationActionTimedOutEventFilter,
-) ([]*tbtc.ReservationActionTimedOutEvent, error) {
-	return nil, nil
 }
 
 func (lc *localChain) PastReservationAcceptanceRequestedEvents(

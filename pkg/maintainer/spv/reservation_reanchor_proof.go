@@ -14,6 +14,7 @@ import (
 // Reanchor).
 const ProofTypeReservationReanchor uint8 = 3
 
+// SubmitReservationReanchorProof drives the SPV proof submission for a
 // reservation re-anchor action generation. The caller (the reservation
 // proof loop) supplies the (reservationKey, requestNonce)
 // pair of the on-chain action generation it is proving, plus the Bitcoin
@@ -70,16 +71,15 @@ func submitReservationReanchorProof(
 		ProofTypeReservationReanchor,
 		"reservation_reanchor_proof",
 		tbtc.ReservationActionTypeReanchor,
-		parseReservationReanchorTransactionInput,
+		"re-anchor",
 	)
 }
 
 // spentOutputAsUtxo fetches the single previous output spent by transaction's
 // sole input and returns it as an UnspentTransactionOutput. Shared by
-// parseReservationAcceptanceTransactionInput and
-// parseReservationReanchorTransactionInput, both of which parse a
-// 1-input-1-output reservation transaction and need the spent outpoint's
-// value to build the SPV proof's main UTXO.
+// parseReservationTransaction, which parses a 1-input-1-output reservation
+// transaction and needs the spent outpoint's value to build the SPV proof's
+// main UTXO.
 func spentOutputAsUtxo(
 	btcChain bitcoin.Chain,
 	transaction *bitcoin.Transaction,
@@ -119,36 +119,38 @@ func spentOutputAsUtxo(
 	}, nil
 }
 
-// parseReservationReanchorTransactionInput parses the single input and
-// single output of a reservation re-anchor transaction and returns the
-// anchor UTXO that was spent and the target wallet's public key hash from
-// the new anchor output script.
-func parseReservationReanchorTransactionInput(
+// parseReservationTransaction parses the single input and single output
+// of a reservation transaction and returns the UTXO that was spent and
+// the target wallet's public key hash from the new output script.
+func parseReservationTransaction(
 	btcChain bitcoin.Chain,
 	transaction *bitcoin.Transaction,
+	txType string,
 ) (*bitcoin.UnspentTransactionOutput, [20]byte, error) {
-	anchorUtxo, err := spentOutputAsUtxo(btcChain, transaction)
+	utxo, err := spentOutputAsUtxo(btcChain, transaction)
 	if err != nil {
 		return nil, [20]byte{}, err
 	}
 
 	if len(transaction.Outputs) != 1 {
 		return nil, [20]byte{}, fmt.Errorf(
-			"reservation re-anchor transaction must have exactly one output",
+			"reservation %v transaction must have exactly one output",
+			txType,
 		)
 	}
 
-	targetWalletPublicKeyHash, err := bitcoin.ExtractPublicKeyHash(
+	publicKeyHash, err := bitcoin.ExtractPublicKeyHash(
 		transaction.Outputs[0].PublicKeyScript,
 	)
 	if err != nil {
 		return nil, [20]byte{}, fmt.Errorf(
-			"cannot extract target wallet public key hash: [%v]",
+			"cannot extract %v public key hash: [%v]",
+			txType,
 			err,
 		)
 	}
 
-	return anchorUtxo, targetWalletPublicKeyHash, nil
+	return utxo, publicKeyHash, nil
 }
 
 // buildReservationProofTxInfo serializes the relevant parts of the
@@ -181,10 +183,10 @@ func buildReservationProofTxProof(
 	}
 }
 
-// buildReservationProofMainUtxo packages the spent anchor UTXO into the
-// BitcoinTxUTXO structure expected by SubmitReservationProof.
+// buildReservationProofMainUtxo packages the spent deposit or anchor UTXO
+// into the BitcoinTxUTXO structure expected by SubmitReservationProof.
 func buildReservationProofMainUtxo(
-	anchorUtxo *bitcoin.UnspentTransactionOutput,
+	spentUtxo *bitcoin.UnspentTransactionOutput,
 ) *tbtc.BitcoinTxUTXO {
 	var (
 		txHash     [32]byte
@@ -192,14 +194,14 @@ func buildReservationProofMainUtxo(
 		txOutValue uint64
 	)
 
-	if anchorUtxo.Outpoint != nil {
-		txHash = anchorUtxo.Outpoint.TransactionHash
-		txOutIndex = anchorUtxo.Outpoint.OutputIndex
+	if spentUtxo.Outpoint != nil {
+		txHash = spentUtxo.Outpoint.TransactionHash
+		txOutIndex = spentUtxo.Outpoint.OutputIndex
 	}
-	if anchorUtxo.Value < 0 {
+	if spentUtxo.Value < 0 {
 		txOutValue = 0
 	} else {
-		txOutValue = uint64(anchorUtxo.Value)
+		txOutValue = uint64(spentUtxo.Value)
 	}
 
 	return &tbtc.BitcoinTxUTXO{
@@ -223,10 +225,7 @@ func submitReservationActionProof(
 	proofType uint8,
 	metricsPrefix string,
 	expectedActionType tbtc.ReservationActionType,
-	inputParser func(
-		btcChain bitcoin.Chain,
-		transaction *bitcoin.Transaction,
-	) (*bitcoin.UnspentTransactionOutput, [20]byte, error),
+	txType string,
 ) error {
 	if metricsRecorder != nil {
 		metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_total", 1)
@@ -257,7 +256,7 @@ func submitReservationActionProof(
 		return fmt.Errorf("failed to assemble transaction spv proof: [%v]", err)
 	}
 
-	anchorUtxo, pkh, err := inputParser(btcChain, transaction)
+	utxo, pkh, err := parseReservationTransaction(btcChain, transaction, txType)
 	if err != nil {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
@@ -270,7 +269,7 @@ func submitReservationActionProof(
 		return fmt.Errorf("cannot fetch reservation action generation: [%v]", err)
 	}
 
-	// Fix 6: Check PKH match
+	// The action snapshot is the on-chain authorization for the destination, so verify the PKH match.
 	if pkh != action.TargetWalletPublicKeyHash {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
@@ -288,7 +287,7 @@ func submitReservationActionProof(
 
 	txInfo := buildReservationProofTxInfo(transaction)
 	txProof := buildReservationProofTxProof(proof)
-	mainUtxo := buildReservationProofMainUtxo(anchorUtxo)
+	mainUtxo := buildReservationProofMainUtxo(utxo)
 
 	if err := spvChain.SubmitReservationProof(
 		proofType,
@@ -298,14 +297,7 @@ func submitReservationActionProof(
 		reservationKey,
 		requestNonce,
 	); err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
-		}
 		return fmt.Errorf("failed to submit reservation proof: [%v]", err)
-	}
-
-	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_success_total", 1)
 	}
 
 	return nil
