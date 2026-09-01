@@ -1,8 +1,10 @@
 package spv
 
 import (
+	"context"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -43,6 +45,9 @@ type ReservationActionTimeoutWatcher struct {
 	// to look up operator addresses (the SPV maintainer chain interface
 	// does not expose GetOperatorID today).
 	membersResolver WalletMembersResolver
+
+	walletsMutex   sync.Mutex
+	watchedWallets map[[20]byte]struct{}
 }
 
 // WalletMembersResolver maps a wallet public key hash to the operator IDs
@@ -117,6 +122,7 @@ func NewReservationActionTimeoutWatcher(
 		nowFn:           defaultActionTimeoutNowFn,
 		interval:        pollInterval,
 		membersResolver: membersResolver,
+		watchedWallets:  make(map[[20]byte]struct{}),
 	}
 }
 
@@ -126,24 +132,47 @@ func defaultActionTimeoutNowFn() uint32 {
 	return uint32(time.Now().Unix())
 }
 
-// Run starts the background poll loop. It returns immediately and runs
-// until ctx is done.
+// WatchWallet registers a wallet public key hash for the background poll
+// loop started by Run: each iteration enumerates the reservations of every
+// watched wallet via WalletReservations and inspects their pending actions
+// for elapsed timeouts. Registering the same wallet twice is a no-op.
+func (ratw *ReservationActionTimeoutWatcher) WatchWallet(
+	walletPublicKeyHash [20]byte,
+) {
+	ratw.walletsMutex.Lock()
+	defer ratw.walletsMutex.Unlock()
+
+	ratw.watchedWallets[walletPublicKeyHash] = struct{}{}
+}
+
+// watchedWalletsSnapshot returns a copy of the currently registered wallet
+// set. Copying under the lock keeps the poll iteration itself lock-free, so
+// a slow chain call during one wallet's check does not block a concurrent
+// WatchWallet registration.
+func (ratw *ReservationActionTimeoutWatcher) watchedWalletsSnapshot() [][20]byte {
+	ratw.walletsMutex.Lock()
+	defer ratw.walletsMutex.Unlock()
+
+	wallets := make([][20]byte, 0, len(ratw.watchedWallets))
+	for walletPublicKeyHash := range ratw.watchedWallets {
+		wallets = append(wallets, walletPublicKeyHash)
+	}
+	return wallets
+}
+
+// Run starts the background poll loop and blocks until ctx is done or a
+// setup precondition fails. Callers that want a non-blocking start (the
+// production wiring does; see startActionTimeoutRun) invoke it inside their
+// own goroutine.
 //
 // Each iteration enumerates the reservations of every wallet registered
 // with the watcher (added via WatchWallet), inspects each nonce-keyed
 // action, and notifies the Bridge for those whose state is Pending and
-// whose TimeoutAt has elapsed.
-//
-// Integration code typically calls Run once at startup and WatchWallet per
-// discovered wallet. The loop is best-effort: errors are logged and the
-// next iteration retries.
-//
-// Note: Run is a placeholder for the integration wiring in this PR. The
-// per-wallet reservation enumeration rides on top of the stranding watcher's
-// discovery path; m1 ships the synchronous CheckReservationActionTimeouts
-// for one reservation key (tests + integration) and the interface surface
-// to wire the loop in a follow-up PR.
-func (ratw *ReservationActionTimeoutWatcher) Run() error {
+// whose TimeoutAt has elapsed. The first iteration runs immediately; later
+// iterations run every `interval`. The loop is best-effort: a failure
+// while checking one wallet is logged and does not abort the iteration or
+// stop the loop.
+func (ratw *ReservationActionTimeoutWatcher) Run(ctx context.Context) error {
 	if ratw.notifier == nil {
 		return fmt.Errorf(
 			"action-timeout watcher requires a non-nil notifier",
@@ -159,10 +188,56 @@ func (ratw *ReservationActionTimeoutWatcher) Run() error {
 			"action-timeout watcher requires a positive poll interval",
 		)
 	}
-	// The loop is owned by the integration step; the watcher itself
-	// exposes the synchronous CheckReservationActionTimeouts entry-point
-	// for tests and one-shot invocations.
-	return nil
+
+	ticker := time.NewTicker(ratw.interval)
+	defer ticker.Stop()
+
+	for {
+		ratw.checkWatchedWallets()
+
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// checkWatchedWallets runs one poll iteration over every registered wallet.
+// Errors resolving a wallet's reservation set are logged and do not abort
+// the iteration: a transient RPC failure on one wallet must not starve the
+// checks for the rest.
+func (ratw *ReservationActionTimeoutWatcher) checkWatchedWallets() {
+	now := ratw.nowFn()
+
+	for _, walletPublicKeyHash := range ratw.watchedWalletsSnapshot() {
+		reservationKeys, err := ratw.spvChain.WalletReservations(
+			walletPublicKeyHash,
+		)
+		if err != nil {
+			logger.Errorf(
+				"failed to list reservations for watched wallet [0x%x]: [%v]",
+				walletPublicKeyHash,
+				err,
+			)
+			continue
+		}
+
+		for _, reservationKey := range reservationKeys {
+			if err := ratw.CheckReservationActionTimeouts(
+				reservationKey,
+				now,
+			); err != nil {
+				logger.Errorf(
+					"failed to check action timeouts for reservation "+
+						"[%v] on watched wallet [0x%x]: [%v]",
+					reservationKey,
+					walletPublicKeyHash,
+					err,
+				)
+			}
+		}
+	}
 }
 
 // CheckReservationActionTimeouts inspects the action generations of a

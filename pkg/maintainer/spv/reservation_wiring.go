@@ -2,6 +2,7 @@ package spv
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"time"
 
@@ -193,15 +194,15 @@ func startStaleDepositPoll(
 }
 
 // startActionTimeoutRun starts the action-timeout watcher's Run loop in a
-// goroutine. The watcher exposes Run() as a guarded no-op (placeholder for
-// the integration step) and returns an error if its dependencies are not
-// provided; we've supplied them above so Run() returns nil cleanly.
+// goroutine bound to ctx, so the loop stops when the wiring caller cancels
+// ctx (e.g. on node shutdown). A context.Canceled error from Run is the
+// expected shutdown path and is not logged as a failure.
 func startActionTimeoutRun(
 	ctx context.Context,
 	watcher *ReservationActionTimeoutWatcher,
 ) {
 	go func() {
-		if err := watcher.Run(); err != nil {
+		if err := watcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			reservationWiringLogger.Errorf(
 				"failed to start reservation action-timeout watcher: [%v]",
 				err,
