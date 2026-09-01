@@ -434,3 +434,58 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithNoopProposal(t *testing
 func TestFuzzCoordinationMessage_Unmarshaler(t *testing.T) {
 	pbutils.FuzzUnmarshaler(&coordinationMessage{})
 }
+
+func FuzzReservationAnchorProposal_Unmarshal(f *testing.F) {
+	proposal := &ReservationAnchorProposal{
+		DepositFundingTxHash:      bitcoin.Hash{0x01},
+		DepositFundingOutputIndex: 1,
+		RequestNonce:              1,
+		AnchorTxFee:               big.NewInt(1000),
+	}
+	bytes, _ := proposal.Marshal()
+	f.Add(bytes)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_ = (&ReservationAnchorProposal{}).Unmarshal(data)
+	})
+}
+
+func FuzzReservedRedemptionProposal_Unmarshal(f *testing.F) {
+	proposal := &ReservedRedemptionProposal{
+		ReservationKey:       big.NewInt(12345),
+		RequestNonce:         1,
+		RedeemerOutputScript: bitcoin.Script{0x01},
+		RedemptionTxFee:      big.NewInt(1000),
+	}
+	bytes, _ := proposal.Marshal()
+	f.Add(bytes)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_ = (&ReservedRedemptionProposal{}).Unmarshal(data)
+	})
+}
+
+func FuzzReservationReanchorProposal_Unmarshal(f *testing.F) {
+	proposal := &ReservationReanchorProposal{
+		ReservationKey:            big.NewInt(12345),
+		RequestNonce:              1,
+		TargetWalletPublicKeyHash: [20]byte{0x01},
+		ReanchorTxFee:             big.NewInt(1000),
+	}
+	bytes, _ := proposal.Marshal()
+	f.Add(bytes)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_ = (&ReservationReanchorProposal{}).Unmarshal(data)
+	})
+}
+
+func FuzzReservationDissolutionProposal_Unmarshal(f *testing.F) {
+	proposal := &ReservationDissolutionProposal{
+		ReservationKey:   big.NewInt(12345),
+		RequestNonce:     1,
+		DissolutionTxFee: big.NewInt(1000),
+	}
+	bytes, _ := proposal.Marshal()
+	f.Add(bytes)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_ = (&ReservationDissolutionProposal{}).Unmarshal(data)
+	})
+}

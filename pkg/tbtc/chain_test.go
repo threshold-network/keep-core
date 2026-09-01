@@ -927,6 +927,26 @@ func (lc *localChain) ComputeMainUtxoHash(
 
 	return mainUtxoHash
 }
+func (lc *localChain) ComputeReservationRedeemerOutputScriptHash(
+	redeemerOutputScript bitcoin.Script,
+) ([32]byte, error) {
+	prefixedScript, err := redeemerOutputScript.ToVarLenData()
+	if err != nil {
+		return [32]byte{}, fmt.Errorf(
+			"cannot build prefixed redeemer output script: [%v]",
+			err,
+		)
+	}
+
+	return sha256.Sum256(prefixedScript), nil
+}
+
+func (lc *localChain) ValidateReservationDissolutionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *ReservationDissolutionProposal,
+) error {
+	panic("unsupported")
+}
 
 func (lc *localChain) ComputeMovingFundsCommitmentHash(targetWallets [][20]byte) [32]byte {
 	packedWallets := []byte{}
@@ -1489,13 +1509,6 @@ func (lc *localChain) ValidateReservedRedemptionProposal(
 func (lc *localChain) ValidateReservationReanchorProposal(
 	sourceWalletPublicKeyHash [20]byte,
 	proposal *ReservationReanchorProposal,
-) error {
-	panic("unsupported")
-}
-
-func (lc *localChain) ValidateReservationDissolutionProposal(
-	walletPubKeyHash [20]byte,
-	proposal *ReservationDissolutionProposal,
 ) error {
 	panic("unsupported")
 }

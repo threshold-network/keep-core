@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"crypto/ecdsa"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -492,5 +493,146 @@ func validateMemberIndex(protoIndex uint32) error {
 	if protoIndex > group.MaxMemberIndex {
 		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
 	}
+	return nil
+}
+
+// Marshal converts the reservationAnchorProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rap)
+}
+
+// Unmarshal converts a byte array back to the reservationAnchorProposal.
+func (rap *ReservationAnchorProposal) Unmarshal(bytes []byte) error {
+	var proposal ReservationAnchorProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if proposal.DepositFundingTxHash == (bitcoin.Hash{}) {
+		return fmt.Errorf("deposit funding transaction hash is required")
+	}
+	if proposal.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if proposal.AnchorTxFee == nil {
+		return fmt.Errorf("anchor transaction fee is required")
+	}
+	if proposal.AnchorTxFee.Sign() <= 0 {
+		return fmt.Errorf("anchor transaction fee must be positive")
+	}
+	if !proposal.AnchorTxFee.IsInt64() {
+		return fmt.Errorf("anchor transaction fee is out of range")
+	}
+	*rap = proposal
+	return nil
+}
+
+// Marshal converts the reservedRedemptionProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+func (rrp *ReservedRedemptionProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rrp)
+}
+
+// Unmarshal converts a byte array back to the reservedRedemptionProposal.
+func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
+	var proposal ReservedRedemptionProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if proposal.ReservationKey == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	if proposal.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if proposal.RedeemerOutputScript == nil || len(proposal.RedeemerOutputScript) == 0 {
+		return fmt.Errorf("redeemer output script is required")
+	}
+	if proposal.RedemptionTxFee == nil {
+		return fmt.Errorf("redemption transaction fee is required")
+	}
+	if proposal.RedemptionTxFee.Sign() <= 0 {
+		return fmt.Errorf("redemption transaction fee must be positive")
+	}
+	if !proposal.RedemptionTxFee.IsInt64() {
+		return fmt.Errorf("redemption transaction fee is out of range")
+	}
+	*rrp = proposal
+	return nil
+}
+
+// Marshal converts the reservationReanchorProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rrp)
+}
+
+// Unmarshal converts a byte array back to the reservationReanchorProposal.
+func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
+	var proposal ReservationReanchorProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if proposal.ReservationKey == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	if proposal.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if proposal.TargetWalletPublicKeyHash == [20]byte{} {
+		return fmt.Errorf("target wallet public key hash is required")
+	}
+	if proposal.ReanchorTxFee == nil {
+		return fmt.Errorf("re-anchor transaction fee is required")
+	}
+	if proposal.ReanchorTxFee.Sign() <= 0 {
+		return fmt.Errorf("re-anchor transaction fee must be positive")
+	}
+	if !proposal.ReanchorTxFee.IsInt64() {
+		return fmt.Errorf("re-anchor transaction fee is out of range")
+	}
+	*rrp = proposal
+	return nil
+}
+
+// Marshal converts the reservationDissolutionProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+func (rdp *ReservationDissolutionProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rdp)
+}
+
+// Unmarshal converts a byte array back to the reservationDissolutionProposal.
+func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
+	var proposal ReservationDissolutionProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if proposal.ReservationKey == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	if proposal.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if proposal.DissolutionTxFee == nil {
+		return fmt.Errorf("dissolution transaction fee is required")
+	}
+	if proposal.DissolutionTxFee.Sign() <= 0 {
+		return fmt.Errorf("dissolution transaction fee must be positive")
+	}
+	if !proposal.DissolutionTxFee.IsInt64() {
+		return fmt.Errorf("dissolution transaction fee is out of range")
+	}
+	if proposal.ReservationKey == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	*rdp = proposal
 	return nil
 }

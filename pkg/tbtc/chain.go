@@ -267,6 +267,27 @@ type BridgeChain interface {
 	// ComputeMainUtxoHash computes the hash of the provided main UTXO
 	// according to the on-chain Bridge rules.
 	ComputeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte
+	// ComputeReservationRedeemerOutputScriptHash computes the keccak256 hash of
+	// the length-prefixed redeemer output script, per the on-chain Bridge rules
+	// used to authorize a reserved redemption.
+	ComputeReservationRedeemerOutputScriptHash(redeemerOutputScript bitcoin.Script) ([32]byte, error)
+
+	// GetReservation gets the on-chain reservation record for the given
+	// reservation key. Returns a zero-valued record with State == ReservationStateUnknown
+	// if the reservation was not found.
+	GetReservation(reservationKey *big.Int) (*Reservation, error)
+
+	// GetReservationAction gets the on-chain action record for the given
+	// reservation key and request nonce. Returns an error if the action
+	// generation was not found.
+	GetReservationAction(
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) (*ReservationAction, error)
+
+	// ReservationParameters gets the current on-chain values of the Bridge
+	// reservation parameters.
+	ReservationParameters() (*ReservationParameters, error)
 
 	// PastDepositRevealedEvents fetches past deposit reveal events according
 	// to the provided filter or unfiltered if the filter is nil. Returned
@@ -426,22 +447,6 @@ type WalletProposalValidatorChain interface {
 			FundingTx *bitcoin.Transaction
 		},
 	) error
-
-	// GetReservation gets the on-chain reservation record for the given
-	// reservation key. Returns an error if the reservation was not found.
-	GetReservation(reservationKey *big.Int) (*Reservation, error)
-
-	// GetReservationAction gets the on-chain action record for the given
-	// reservation key and request nonce. Returns an error if the action
-	// generation was not found.
-	GetReservationAction(
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) (*ReservationAction, error)
-
-	// ReservationParameters gets the current on-chain values of the Bridge
-	// reservation parameters.
-	ReservationParameters() (*ReservationParameters, error)
 
 	// ValidateReservationAnchorProposal validates the given reservation
 	// anchor proposal against the chain. Returns an error if the proposal

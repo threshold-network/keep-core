@@ -1,28 +1,37 @@
 package tbtc
 
 import (
-	"encoding/json"
 	"fmt"
 	"math/big"
-
-	"golang.org/x/crypto/sha3"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 )
 
 const (
-	// reservationAnchorProposalValidityBlocks determines the reservation
-	// anchor proposal validity time expressed in blocks.
+	// reservationAnchorProposalValidityBlocks determines the reservation anchor
+	// proposal validity time expressed in blocks. In other words, this is the
+	// worst-case time for a reservation anchor during which the wallet is busy
+	// and cannot take another action. The value of 600 blocks is roughly 2
+	// hours, assuming 12 seconds per block.
 	reservationAnchorProposalValidityBlocks = 600
 	// reservedRedemptionProposalValidityBlocks determines the reserved
-	// redemption proposal validity time expressed in blocks.
+	// redemption proposal validity time expressed in blocks. In other words,
+	// this is the worst-case time for a reserved redemption during which the
+	// wallet is busy and cannot take another action. The value of 600 blocks
+	// is roughly 2 hours, assuming 12 seconds per block.
 	reservedRedemptionProposalValidityBlocks = 600
 	// reservationReanchorProposalValidityBlocks determines the reservation
-	// re-anchor proposal validity time expressed in blocks.
+	// re-anchor proposal validity time expressed in blocks. In other words,
+	// this is the worst-case time for a reservation re-anchor during which the
+	// wallet is busy and cannot take another action. The value of 600 blocks
+	// is roughly 2 hours, assuming 12 seconds per block.
 	reservationReanchorProposalValidityBlocks = 600
 	// reservationDissolutionProposalValidityBlocks determines the reservation
-	// dissolution proposal validity time expressed in blocks.
+	// dissolution proposal validity time expressed in blocks. In other words,
+	// this is the worst-case time for a reservation dissolution during which
+	// the wallet is busy and cannot take another action. The value of 600
+	// blocks is roughly 2 hours, assuming 12 seconds per block.
 	reservationDissolutionProposalValidityBlocks = 600
 )
 
@@ -52,7 +61,9 @@ const (
 // transaction into a fresh wallet-controlled output with no refund path -
 // instead of being swept into the wallet main UTXO. The anchor outpoint is
 // custodied without ever commingling with the pooled supply and is
-// redeemable in-kind by the reservation owner.
+// redeemable in-kind by the reservation owner. Dissolution is the sole
+// terminal exception: it returns the anchor value to the wallet's pooled
+// main UTXO, ending the reservation.
 type Reservation struct {
 	// Owner is the reservation owner's address on the host chain.
 	Owner chain.Address
@@ -86,11 +97,11 @@ type Reservation struct {
 type ReservationActionType uint8
 
 const (
-	ReservationActionTypeNone ReservationActionType = iota
-	ReservationActionTypeAcceptance
-	ReservationActionTypeRedemption
-	ReservationActionTypeReanchor
-	ReservationActionTypeDissolution
+	ReservationActionTypeNone        ReservationActionType = iota // No action in flight.
+	ReservationActionTypeAcceptance                               // The anchor/acceptance action.
+	ReservationActionTypeRedemption                               // A reserved redemption.
+	ReservationActionTypeReanchor                                 // A wallet-migration re-anchor.
+	ReservationActionTypeDissolution                              // The terminal dissolution.
 )
 
 // ReservationActionState represents the settlement state of a reservation
@@ -98,12 +109,12 @@ const (
 type ReservationActionState uint8
 
 const (
-	ReservationActionStateUnknown ReservationActionState = iota
-	ReservationActionStatePending
-	ReservationActionStateSettled
-	ReservationActionStateTimedOut
-	ReservationActionStateVetoed
-	ReservationActionStateSuperseded
+	ReservationActionStateUnknown    ReservationActionState = iota // No action generation exists yet.
+	ReservationActionStatePending                                  // Awaiting settlement.
+	ReservationActionStateSettled                                  // Confirmed on-chain.
+	ReservationActionStateTimedOut                                 // Expired without settlement.
+	ReservationActionStateVetoed                                   // Rejected.
+	ReservationActionStateSuperseded                               // Replaced by a later generation.
 )
 
 // ReservationAction represents one nonce-bound generation of a reservation
@@ -129,7 +140,9 @@ type ReservationAction struct {
 	// Redeemer is the address that can reclaim escrow after a redemption
 	// timeout. It is empty for other action types.
 	Redeemer chain.Address
-	// Amount is the satoshi amount associated with the action generation.
+	// Amount is the satoshi amount associated with the action generation - it
+	// tracks the current anchor value being acted on, not Reservation.MintedAmount's
+	// gross minted claim.
 	Amount uint64
 	// RedeemerOutputScriptHash is the keccak256 hash of the length-prefixed
 	// output script authorized for a redemption.
@@ -181,14 +194,14 @@ type ReservationParameters struct {
 type ReservationAnchorProposal struct {
 	// DepositFundingTxHash is the funding transaction hash of the reserved
 	// deposit to anchor.
-	DepositFundingTxHash bitcoin.Hash
+	DepositFundingTxHash bitcoin.Hash `json:"depositFundingTxHash"`
 	// DepositFundingOutputIndex is the funding output index of the reserved
 	// deposit to anchor.
-	DepositFundingOutputIndex uint32
-	// RequestNonce is the acceptance authorization generation being executed.
-	RequestNonce uint64
+	DepositFundingOutputIndex uint32 `json:"depositFundingOutputIndex"`
+	// RequestNonce is the anchor authorization generation being executed.
+	RequestNonce uint64 `json:"requestNonce"`
 	// AnchorTxFee is the proposed BTC fee for the anchor transaction.
-	AnchorTxFee *big.Int
+	AnchorTxFee *big.Int `json:"anchorTxFee"`
 }
 
 // ActionType returns the specific type of the walletAction being subject
@@ -202,43 +215,19 @@ func (rap *ReservationAnchorProposal) ValidityBlocks() uint64 {
 	return reservationAnchorProposalValidityBlocks
 }
 
-// Marshal converts the reservationAnchorProposal to a byte array.
-//
-// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
-// reservation message types are added to the coordination proto definition.
-func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
-	return json.Marshal(rap)
-}
-
-// Unmarshal converts a byte array back to the reservationAnchorProposal.
-func (rap *ReservationAnchorProposal) Unmarshal(bytes []byte) error {
-	var proposal ReservationAnchorProposal
-	if err := json.Unmarshal(bytes, &proposal); err != nil {
-		return err
-	}
-	if proposal.AnchorTxFee == nil {
-		return fmt.Errorf("anchor transaction fee is required")
-	}
-	if proposal.RequestNonce == 0 {
-		return fmt.Errorf("request nonce is required")
-	}
-
-	*rap = proposal
-
-	return nil
-}
-
 // ReservedRedemptionProposal represents a reserved redemption proposal
 // issued by a wallet's coordination leader.
 type ReservedRedemptionProposal struct {
 	// ReservationKey is the key of the reservation with the pending reserved
 	// redemption.
-	ReservationKey *big.Int
+	ReservationKey *big.Int `json:"reservationKey"`
 	// RequestNonce is the redemption request generation being executed.
-	RequestNonce uint64
+	RequestNonce uint64 `json:"requestNonce"`
+	// RedeemerOutputScript is the Bitcoin output script the redemption pays to.
+	RedeemerOutputScript bitcoin.Script `json:"redeemerOutputScript"`
 	// RedemptionTxFee is the proposed BTC fee for the reserved redemption
 	// transaction.
-	RedemptionTxFee *big.Int
+	RedemptionTxFee *big.Int `json:"redemptionTxFee"`
 }
 
 // ActionType returns the specific type of the walletAction being subject
@@ -252,48 +241,19 @@ func (rrp *ReservedRedemptionProposal) ValidityBlocks() uint64 {
 	return reservedRedemptionProposalValidityBlocks
 }
 
-// Marshal converts the reservedRedemptionProposal to a byte array.
-//
-// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
-// reservation message types are added to the coordination proto definition.
-func (rrp *ReservedRedemptionProposal) Marshal() ([]byte, error) {
-	return json.Marshal(rrp)
-}
-
-// Unmarshal converts a byte array back to the reservedRedemptionProposal.
-func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
-	var proposal ReservedRedemptionProposal
-	if err := json.Unmarshal(bytes, &proposal); err != nil {
-		return err
-	}
-	if proposal.ReservationKey == nil {
-		return fmt.Errorf("reservation key is required")
-	}
-	if proposal.RequestNonce == 0 {
-		return fmt.Errorf("request nonce is required")
-	}
-	if proposal.RedemptionTxFee == nil {
-		return fmt.Errorf("redemption transaction fee is required")
-	}
-
-	*rrp = proposal
-
-	return nil
-}
-
 // ReservationReanchorProposal represents a reservation re-anchor proposal
 // issued by a wallet's coordination leader, moving a reservation's anchor
 // outpoint to another wallet (e.g. during wallet migration).
 type ReservationReanchorProposal struct {
 	// ReservationKey is the key of the reservation to re-anchor.
-	ReservationKey *big.Int
+	ReservationKey *big.Int `json:"reservationKey"`
 	// RequestNonce is the re-anchor authorization generation being executed.
-	RequestNonce uint64
+	RequestNonce uint64 `json:"requestNonce"`
 	// TargetWalletPublicKeyHash is the 20-byte public key hash of the wallet
 	// receiving the anchor.
-	TargetWalletPublicKeyHash [20]byte
+	TargetWalletPublicKeyHash [20]byte `json:"targetWalletPublicKeyHash"`
 	// ReanchorTxFee is the proposed BTC fee for the re-anchor transaction.
-	ReanchorTxFee *big.Int
+	ReanchorTxFee *big.Int `json:"reanchorTxFee"`
 }
 
 // ActionType returns the specific type of the walletAction being subject
@@ -307,46 +267,17 @@ func (rrp *ReservationReanchorProposal) ValidityBlocks() uint64 {
 	return reservationReanchorProposalValidityBlocks
 }
 
-// Marshal converts the reservationReanchorProposal to a byte array.
-//
-// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
-// reservation message types are added to the coordination proto definition.
-func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
-	return json.Marshal(rrp)
-}
-
-// Unmarshal converts a byte array back to the reservationReanchorProposal.
-func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
-	var proposal ReservationReanchorProposal
-	if err := json.Unmarshal(bytes, &proposal); err != nil {
-		return err
-	}
-	if proposal.ReservationKey == nil {
-		return fmt.Errorf("reservation key is required")
-	}
-	if proposal.RequestNonce == 0 {
-		return fmt.Errorf("request nonce is required")
-	}
-	if proposal.ReanchorTxFee == nil {
-		return fmt.Errorf("re-anchor transaction fee is required")
-	}
-
-	*rrp = proposal
-
-	return nil
-}
-
 // ReservationDissolutionProposal represents a reservation dissolution
 // proposal issued by a wallet's coordination leader once the reservation's
 // custody term and grace period elapsed.
 type ReservationDissolutionProposal struct {
 	// ReservationKey is the key of the reservation to dissolve.
-	ReservationKey *big.Int
+	ReservationKey *big.Int `json:"reservationKey"`
 	// RequestNonce is the dissolution authorization generation being executed.
-	RequestNonce uint64
+	RequestNonce uint64 `json:"requestNonce"`
 	// DissolutionTxFee is the proposed BTC fee for the dissolution
 	// transaction.
-	DissolutionTxFee *big.Int
+	DissolutionTxFee *big.Int `json:"dissolutionTxFee"`
 }
 
 // ActionType returns the specific type of the walletAction being subject
@@ -360,35 +291,6 @@ func (rdp *ReservationDissolutionProposal) ValidityBlocks() uint64 {
 	return reservationDissolutionProposalValidityBlocks
 }
 
-// Marshal converts the reservationDissolutionProposal to a byte array.
-//
-// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
-// reservation message types are added to the coordination proto definition.
-func (rdp *ReservationDissolutionProposal) Marshal() ([]byte, error) {
-	return json.Marshal(rdp)
-}
-
-// Unmarshal converts a byte array back to the reservationDissolutionProposal.
-func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
-	var proposal ReservationDissolutionProposal
-	if err := json.Unmarshal(bytes, &proposal); err != nil {
-		return err
-	}
-	if proposal.ReservationKey == nil {
-		return fmt.Errorf("reservation key is required")
-	}
-	if proposal.RequestNonce == 0 {
-		return fmt.Errorf("request nonce is required")
-	}
-	if proposal.DissolutionTxFee == nil {
-		return fmt.Errorf("dissolution transaction fee is required")
-	}
-
-	*rdp = proposal
-
-	return nil
-}
-
 // assembleReservationAnchorTransaction constructs an unsigned reservation
 // anchor transaction: a 1-input-1-output spend of the given reserved deposit
 // into a fresh output controlled by the given wallet. The anchor mirrors the
@@ -399,8 +301,19 @@ func assembleReservationAnchorTransaction(
 	bitcoinChain bitcoin.Chain,
 	deposit *Deposit,
 	walletPublicKeyHash [20]byte,
+	action *ReservationAction,
+	reservationMinAmount uint64,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
+	if action == nil {
+		return nil, fmt.Errorf("reservation action is required")
+	}
+	if fee <= 0 {
+		return nil, fmt.Errorf("transaction fee must be positive")
+	}
+	if uint64(fee) > action.TxMaxFee {
+		return nil, fmt.Errorf("transaction fee exceeds the action fee limit")
+	}
 	if deposit == nil {
 		return nil, fmt.Errorf("deposit is required")
 	}
@@ -422,9 +335,10 @@ func assembleReservationAnchorTransaction(
 
 	anchorValue := deposit.Utxo.Value - fee
 	if anchorValue <= 0 {
-		return nil, fmt.Errorf(
-			"transaction fee exceeds the deposit value",
-		)
+		return nil, fmt.Errorf("transaction fee exceeds the deposit value")
+	}
+	if anchorValue < int64(reservationMinAmount) {
+		return nil, fmt.Errorf("anchor value is below the reservation minimum amount")
 	}
 
 	anchorScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
@@ -448,12 +362,17 @@ func assembleReservationAnchorTransaction(
 // remainder to the custodying wallet.
 func assembleReservedRedemptionTransaction(
 	bitcoinChain bitcoin.Chain,
+	bridgeChain BridgeChain,
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
 	walletPublicKeyHash [20]byte,
 	redeemerOutputScript bitcoin.Script,
 	action *ReservationAction,
+	reservationMinAmount uint64,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
+	if bridgeChain == nil {
+		return nil, fmt.Errorf("bridge chain is required")
+	}
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
 	}
@@ -485,12 +404,11 @@ func assembleReservedRedemptionTransaction(
 		return nil, fmt.Errorf("transaction fee exceeds the action fee limit")
 	}
 
-	redeemerOutputScriptHash, err := computeReservationRedeemerOutputScriptHash(
-		redeemerOutputScript,
-	)
+	redeemerOutputScriptHash, err := bridgeChain.ComputeReservationRedeemerOutputScriptHash(redeemerOutputScript)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot compute redeemer output script hash: [%v]", err)
 	}
+
 	if redeemerOutputScriptHash != action.RedeemerOutputScriptHash {
 		return nil, fmt.Errorf("redeemer output script is not authorized")
 	}
@@ -542,36 +460,18 @@ func assembleReservedRedemptionTransaction(
 			return nil, fmt.Errorf("cannot compute remainder script: [%v]", err)
 		}
 
+		remainderValue := anchorUtxo.Value - int64(action.Amount)
+		if remainderValue < int64(reservationMinAmount) {
+			return nil, fmt.Errorf("remainder value is below the reservation minimum amount")
+		}
+
 		builder.AddOutput(&bitcoin.TransactionOutput{
-			Value:           anchorUtxo.Value - int64(action.Amount),
+			Value:           remainderValue,
 			PublicKeyScript: remainderScript,
 		})
 	}
 
 	return builder, nil
-}
-
-// computeReservationRedeemerOutputScriptHash computes the authorization hash
-// stored in a reservation action. The Bridge hashes the Bitcoin output script
-// including its CompactSize length prefix.
-func computeReservationRedeemerOutputScriptHash(
-	redeemerOutputScript bitcoin.Script,
-) ([32]byte, error) {
-	prefixedScript, err := redeemerOutputScript.ToVarLenData()
-	if err != nil {
-		return [32]byte{}, fmt.Errorf(
-			"cannot build prefixed redeemer output script: [%v]",
-			err,
-		)
-	}
-
-	hasher := sha3.NewLegacyKeccak256()
-	_, _ = hasher.Write(prefixedScript)
-
-	var result [32]byte
-	copy(result[:], hasher.Sum(nil))
-
-	return result, nil
 }
 
 // assembleReservationReanchorTransaction constructs an unsigned reservation
@@ -582,12 +482,31 @@ func assembleReservationReanchorTransaction(
 	bitcoinChain bitcoin.Chain,
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
 	targetWalletPublicKeyHash [20]byte,
+	action *ReservationAction,
+	reservationMinAmount uint64,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
 	}
-
+	if action == nil {
+		return nil, fmt.Errorf("reservation action is required")
+	}
+	if action.ActionType != ReservationActionTypeReanchor {
+		return nil, fmt.Errorf("reservation action is not a re-anchor")
+	}
+	if action.State != ReservationActionStatePending {
+		return nil, fmt.Errorf("reservation action is not pending")
+	}
+	if action.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
+		return nil, fmt.Errorf("reanchor action targets a different wallet")
+	}
+	if fee <= 0 {
+		return nil, fmt.Errorf("transaction fee must be positive")
+	}
+	if uint64(fee) > action.TxMaxFee {
+		return nil, fmt.Errorf("transaction fee exceeds the action fee limit")
+	}
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
 
 	err := builder.AddPublicKeyHashInput(anchorUtxo)
@@ -600,9 +519,10 @@ func assembleReservationReanchorTransaction(
 
 	reanchorValue := anchorUtxo.Value - fee
 	if reanchorValue <= 0 {
-		return nil, fmt.Errorf(
-			"transaction fee exceeds the anchor value",
-		)
+		return nil, fmt.Errorf("transaction fee exceeds the anchor value")
+	}
+	if reanchorValue < int64(reservationMinAmount) {
+		return nil, fmt.Errorf("re-anchor value is below the reservation minimum amount")
 	}
 
 	reanchorScript, err := bitcoin.PayToWitnessPublicKeyHash(
@@ -627,13 +547,18 @@ func assembleReservationReanchorTransaction(
 // exactly. The single output pays back to the custodying wallet.
 func assembleReservationDissolutionTransaction(
 	bitcoinChain bitcoin.Chain,
-	bridgeChain BridgeChain,
+	bridgeChain interface {
+		ComputeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte
+	},
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
 	walletMainUtxo *bitcoin.UnspentTransactionOutput,
 	walletPublicKeyHash [20]byte,
 	action *ReservationAction,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
+	if bridgeChain == nil {
+		return nil, fmt.Errorf("bridge chain is required")
+	}
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
 	}
@@ -666,9 +591,6 @@ func assembleReservationDissolutionTransaction(
 
 	mainUtxoExpected := action.ExpectedMainUtxoHash != [32]byte{}
 	if mainUtxoExpected {
-		if bridgeChain == nil {
-			return nil, fmt.Errorf("bridge chain is required")
-		}
 		if walletMainUtxo == nil {
 			return nil, fmt.Errorf(
 				"wallet main UTXO is required by the dissolution action",
@@ -680,6 +602,8 @@ func assembleReservationDissolutionTransaction(
 				"wallet main UTXO does not match the dissolution action snapshot",
 			)
 		}
+	} else if walletMainUtxo != nil {
+		return nil, fmt.Errorf("wallet main UTXO must not be provided when the dissolution action has no expected main UTXO snapshot")
 	}
 
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)

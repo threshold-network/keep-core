@@ -50,6 +50,8 @@ const (
 	EcdsaDkgValidatorContractName = "EcdsaDkgValidator"
 )
 
+var errReservationsUnsupported = errors.New("reservations not supported yet by the Ethereum chain implementation")
+
 const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
 )
@@ -1544,6 +1546,35 @@ func (tc *TbtcChain) ComputeMainUtxoHash(
 ) [32]byte {
 	return computeMainUtxoHash(mainUtxo)
 }
+func (tc *TbtcChain) ComputeReservationRedeemerOutputScriptHash(
+	redeemerOutputScript bitcoin.Script,
+) ([32]byte, error) {
+	return reservationRedeemerOutputScriptHash(redeemerOutputScript)
+}
+
+func reservationRedeemerOutputScriptHash(redeemerOutputScript bitcoin.Script) ([32]byte, error) {
+	prefixedRedeemerOutputScript, err := redeemerOutputScript.ToVarLenData()
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("cannot build prefixed redeemer output script: [%v]", err)
+	}
+	return crypto.Keccak256Hash(prefixedRedeemerOutputScript), nil
+}
+
+func buildRedemptionKey(
+	walletPublicKeyHash [20]byte,
+	redeemerOutputScript bitcoin.Script,
+) (*big.Int, error) {
+	redeemerOutputScriptHash, err := reservationRedeemerOutputScriptHash(redeemerOutputScript)
+	if err != nil {
+		return nil, fmt.Errorf("cannot compute redeemer output script hash: [%v]", err)
+	}
+
+	redemptionKey := crypto.Keccak256Hash(
+		append(redeemerOutputScriptHash[:], walletPublicKeyHash[:]...),
+	)
+
+	return redemptionKey.Big(), nil
+}
 
 func computeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte {
 	outputIndexBytes := make([]byte, 4)
@@ -1696,26 +1727,6 @@ func (tc *TbtcChain) SubmitRedemptionProofWithReimbursement(
 	)
 
 	return err
-}
-
-func buildRedemptionKey(
-	walletPublicKeyHash [20]byte,
-	redeemerOutputScript bitcoin.Script,
-) (*big.Int, error) {
-	// The Bridge contract builds the redemption key using the length-prefixed
-	// redeemer output script.
-	prefixedRedeemerOutputScript, err := redeemerOutputScript.ToVarLenData()
-	if err != nil {
-		return nil, fmt.Errorf("cannot build prefixed redeemer output script: [%v]", err)
-	}
-
-	redeemerOutputScriptHash := crypto.Keccak256Hash(prefixedRedeemerOutputScript)
-
-	redemptionKey := crypto.Keccak256Hash(
-		append(redeemerOutputScriptHash[:], walletPublicKeyHash[:]...),
-	)
-
-	return redemptionKey.Big(), nil
 }
 
 func (tc *TbtcChain) TxProofDifficultyFactor() (*big.Int, error) {
@@ -2415,9 +2426,7 @@ func (tc *TbtcChain) GetDepositMinAge() (uint32, error) {
 func (tc *TbtcChain) GetReservation(
 	reservationKey *big.Int,
 ) (*tbtc.Reservation, error) {
-	return nil, fmt.Errorf(
-		"reservations not supported yet by the Ethereum chain implementation",
-	)
+	return nil, fmt.Errorf("%w", errReservationsUnsupported)
 }
 
 // GetReservationAction is not yet supported by the Ethereum chain
@@ -2428,9 +2437,7 @@ func (tc *TbtcChain) GetReservationAction(
 	reservationKey *big.Int,
 	requestNonce uint64,
 ) (*tbtc.ReservationAction, error) {
-	return nil, fmt.Errorf(
-		"reservations not supported yet by the Ethereum chain implementation",
-	)
+	return nil, fmt.Errorf("%w", errReservationsUnsupported)
 }
 
 // ReservationParameters is not yet supported by the Ethereum chain
@@ -2441,9 +2448,7 @@ func (tc *TbtcChain) ReservationParameters() (
 	*tbtc.ReservationParameters,
 	error,
 ) {
-	return nil, fmt.Errorf(
-		"reservations not supported yet by the Ethereum chain implementation",
-	)
+	return nil, fmt.Errorf("%w", errReservationsUnsupported)
 }
 
 // ValidateReservationAnchorProposal is not yet supported by the Ethereum
@@ -2458,9 +2463,7 @@ func (tc *TbtcChain) ValidateReservationAnchorProposal(
 		FundingTx *bitcoin.Transaction
 	},
 ) error {
-	return fmt.Errorf(
-		"reservations not supported yet by the Ethereum chain implementation",
-	)
+	return fmt.Errorf("%w", errReservationsUnsupported)
 }
 
 // ValidateReservedRedemptionProposal is not yet supported by the Ethereum
@@ -2471,9 +2474,7 @@ func (tc *TbtcChain) ValidateReservedRedemptionProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservedRedemptionProposal,
 ) error {
-	return fmt.Errorf(
-		"reservations not supported yet by the Ethereum chain implementation",
-	)
+	return fmt.Errorf("%w", errReservationsUnsupported)
 }
 
 // ValidateReservationReanchorProposal is not yet supported by the Ethereum
@@ -2484,9 +2485,7 @@ func (tc *TbtcChain) ValidateReservationReanchorProposal(
 	sourceWalletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationReanchorProposal,
 ) error {
-	return fmt.Errorf(
-		"reservations not supported yet by the Ethereum chain implementation",
-	)
+	return fmt.Errorf("%w", errReservationsUnsupported)
 }
 
 // ValidateReservationDissolutionProposal is not yet supported by the
@@ -2497,7 +2496,5 @@ func (tc *TbtcChain) ValidateReservationDissolutionProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationDissolutionProposal,
 ) error {
-	return fmt.Errorf(
-		"reservations not supported yet by the Ethereum chain implementation",
-	)
+	return fmt.Errorf("%w", errReservationsUnsupported)
 }
