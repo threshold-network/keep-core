@@ -261,10 +261,7 @@ func (rrp *ReservationReanchorProposal) ValidityBlocks() uint64 {
 	return reservationReanchorProposalValidityBlocks
 }
 
-// Marshal/Unmarshal for ReservationReanchorProposal live in marshaling.go,
-// alongside every other coordination proposal type's wire-format methods.
-
-// AssembleReservationAnchorTransaction constructs an unsigned reservation
+// assembleReservationAnchorTransaction constructs an unsigned reservation
 // anchor transaction: a 1-input-1-output spend of the given reserved deposit
 // into a fresh output controlled by the given wallet. The anchor mirrors the
 // sweep's refund-disabling role without its consolidating role: the Bridge
