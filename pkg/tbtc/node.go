@@ -117,6 +117,13 @@ type node struct {
 	// transactionMonitor watches broadcast wallet transactions and alerts on
 	// ones that remain unconfirmed long enough to be considered stuck.
 	transactionMonitor *transactionMonitor
+
+	// reservationsEnabled mirrors config.Reservations.Enabled. Threaded into
+	// each coordinationExecutor so the leader/follower actions checklist
+	// includes the reservation action types exactly when the reservation
+	// proposal generator tasks are wired in, keeping the two gates in
+	// lockstep (see coordinationExecutor.getActionsChecklist).
+	reservationsEnabled bool
 }
 
 func newNode(
@@ -155,6 +162,7 @@ func newNode(
 		coordinationExecutors:    make(map[string]*coordinationExecutor),
 		proposalGenerator:        proposalGenerator,
 		transactionMonitor:       newTransactionMonitor(btcChain),
+		reservationsEnabled:      config.Reservations.Enabled,
 	}
 
 	// Archive any wallets that might have been closed or terminated while the

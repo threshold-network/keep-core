@@ -209,6 +209,7 @@ func (n *node) getCoordinationExecutor(
 		membershipValidator,
 		n.protocolLatch,
 		n.waitForBlockHeight,
+		n.reservationsEnabled,
 	)
 
 	// Wire metrics recorder if available

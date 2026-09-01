@@ -49,7 +49,10 @@ func (r *recordingActionTimeoutNotifier) NotifyReservationActionTimeout(
 
 // seededReservation installs a reservation and (optionally) a list of
 // action generations under spvChain for use in the action-timeout watcher
-// tests. Helper reduces per-test noise.
+// tests. Helper reduces per-test noise. actions[0] is stored as generation
+// nonce 1, actions[1] as nonce 2, etc., matching the 1-based action
+// generation convention (a reservation has no generation 0; the first
+// ever-requested action is nonce 1).
 func seededReservation(
 	t *testing.T,
 	spvChain *localChain,
@@ -63,8 +66,8 @@ func seededReservation(
 		WalletPublicKeyHash: wallet,
 		RequestNonce:        requestNonce,
 	})
-	for nonce, action := range actions {
-		spvChain.setReservationAction(key, uint64(nonce), action)
+	for i, action := range actions {
+		spvChain.setReservationAction(key, uint64(i)+1, action)
 	}
 }
 
@@ -90,7 +93,7 @@ func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testin
 				TimeoutAt: 100,
 			},
 		},
-		0,
+		1,
 	)
 
 	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
@@ -136,7 +139,7 @@ func TestReservationActionTimeoutWatcher_DoesNotNotifyBeforeTimeout(t *testing.T
 				TimeoutAt: 10_000,
 			},
 		},
-		0,
+		1,
 	)
 
 	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
@@ -152,7 +155,7 @@ func TestReservationActionTimeoutWatcher_DoesNotNotifyBeforeTimeout(t *testing.T
 	}
 }
 
-func TestReservationActionTimeoutWatcher_StopsAtFirstNonPending(t *testing.T) {
+func TestReservationActionTimeoutWatcher_IgnoresSettledOlderGeneration(t *testing.T) {
 	spvChain := newLocalChain()
 	notifier := &recordingActionTimeoutNotifier{}
 
@@ -162,8 +165,12 @@ func TestReservationActionTimeoutWatcher_StopsAtFirstNonPending(t *testing.T) {
 	resolver := &recordingActionTimeoutMembers{
 		walletIDs: map[[20]byte][]uint32{wallet: {1, 2}},
 	}
-	// Nonce 0 is settled, nonce 1 is the latest pending and past deadline.
-	// The walker must stop at nonce 0 without notifying.
+	// Generation 1 (an old re-anchor, say) is already Settled; generation 2
+	// is the current pending generation and is past its deadline. The
+	// watcher must inspect only the current generation (RequestNonce = 2)
+	// and notify for it - this is the fix for the bug where an older
+	// walk-from-zero implementation stopped at the first non-pending
+	// generation and never reached the real timed-out one.
 	seededReservation(
 		t,
 		spvChain,
@@ -179,7 +186,7 @@ func TestReservationActionTimeoutWatcher_StopsAtFirstNonPending(t *testing.T) {
 				TimeoutAt: 100,
 			},
 		},
-		1,
+		2,
 	)
 
 	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
@@ -187,15 +194,16 @@ func TestReservationActionTimeoutWatcher_StopsAtFirstNonPending(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 0 {
+	if len(notifier.calls) != 1 {
 		t.Fatalf(
-			"first action is settled; walker must stop, got %d notifications",
+			"current generation is pending and past deadline; expected one "+
+				"notification, got %d",
 			len(notifier.calls),
 		)
 	}
 }
 
-func TestReservationActionTimeoutWatcher_NotifiesLatestNonce(t *testing.T) {
+func TestReservationActionTimeoutWatcher_NotifiesCurrentGenerationOnly(t *testing.T) {
 	spvChain := newLocalChain()
 	notifier := &recordingActionTimeoutNotifier{}
 
@@ -205,8 +213,10 @@ func TestReservationActionTimeoutWatcher_NotifiesLatestNonce(t *testing.T) {
 	resolver := &recordingActionTimeoutMembers{
 		walletIDs: map[[20]byte][]uint32{wallet: {7, 8, 9}},
 	}
-	// Nonce 0 pending past its deadline, nonce 1 pending past its deadline.
-	// Both must be notified (defensive walker continues past the first).
+	// Generation 1 is still pending and NOT past its deadline; generation 2
+	// is the current pending generation and IS past its deadline. Only
+	// generation 2 (RequestNonce) is ever inspected, so exactly one
+	// notification fires regardless of generation 1's state.
 	seededReservation(
 		t,
 		spvChain,
@@ -215,14 +225,14 @@ func TestReservationActionTimeoutWatcher_NotifiesLatestNonce(t *testing.T) {
 		[]*tbtc.ReservationAction{
 			{
 				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
+				TimeoutAt: 10_000,
 			},
 			{
 				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 200,
+				TimeoutAt: 100,
 			},
 		},
-		1,
+		2,
 	)
 
 	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
@@ -230,9 +240,9 @@ func TestReservationActionTimeoutWatcher_NotifiesLatestNonce(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 2 {
+	if len(notifier.calls) != 1 {
 		t.Fatalf(
-			"expected two notifications (nonce 0 and 1), got %d",
+			"expected exactly one notification for the current generation, got %d",
 			len(notifier.calls),
 		)
 	}
@@ -285,7 +295,7 @@ func TestReservationActionTimeoutWatcher_MembersResolverError(t *testing.T) {
 				TimeoutAt: 100,
 			},
 		},
-		0,
+		1,
 	)
 
 	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
@@ -360,7 +370,7 @@ func TestReservationActionTimeoutWatcher_NotifierFuncAdapter(t *testing.T) {
 				TimeoutAt: 100,
 			},
 		},
-		0,
+		1,
 	)
 
 	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
@@ -372,7 +382,7 @@ func TestReservationActionTimeoutWatcher_NotifierFuncAdapter(t *testing.T) {
 	}
 }
 
-func TestReservationActionTimeoutWatcher_NotifiesOncePerQualifyingNonce(t *testing.T) {
+func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 	spvChain := newLocalChain()
 	notifier := &recordingActionTimeoutNotifier{}
 	errFromNotifier := errors.New("downstream")
@@ -383,9 +393,12 @@ func TestReservationActionTimeoutWatcher_NotifiesOncePerQualifyingNonce(t *testi
 	resolver := &recordingActionTimeoutMembers{
 		walletIDs: map[[20]byte][]uint32{wallet: {1, 2, 3}},
 	}
-	// Two pending actions past their timeouts; the notifier fails for the
-	// first and succeeds for the second; the walker must continue past the
-	// first failure (defensive coverage).
+	// The current generation is pending and past its deadline, but the
+	// notifier fails. With only one generation ever inspected per Check
+	// call, the failure must surface as an error from
+	// CheckReservationActionTimeouts (not be silently swallowed), so a
+	// poll-loop caller logs and retries on the next tick instead of
+	// wrongly treating it as settled.
 	notifier.err = errFromNotifier
 	seededReservation(
 		t,
@@ -397,22 +410,17 @@ func TestReservationActionTimeoutWatcher_NotifiesOncePerQualifyingNonce(t *testi
 				State:     tbtc.ReservationActionStatePending,
 				TimeoutAt: 100,
 			},
-			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 200,
-			},
 		},
 		1,
 	)
 
 	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
-	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
-		t.Fatalf("unexpected error from the watcher itself: %v", err)
+	err := watcher.CheckReservationActionTimeouts(key, 5_000)
+	if err == nil {
+		t.Fatal("expected the notifier error to propagate, got nil")
 	}
 
-	// Both attempts are recorded even though the first returned an error:
-	// the walker never silently drops notifications.
-	if len(notifier.calls) != 2 {
-		t.Fatalf("expected two recorded notification attempts, got %d", len(notifier.calls))
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected exactly one notification attempt, got %d", len(notifier.calls))
 	}
 }

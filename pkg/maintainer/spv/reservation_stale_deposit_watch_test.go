@@ -1,6 +1,7 @@
 package spv
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -69,9 +70,9 @@ func TestReservationStaleDepositWatcher_NotifiesAfterTimeout(t *testing.T) {
 		State: tbtc.StateUnknown,
 	})
 
-	// Inject the acceptance (nonce 0) action with a deadline well below
+	// Inject the acceptance (nonce 1) action with a deadline well below
 	// `now`.
-	spvChain.setReservationAction(key, 0, &tbtc.ReservationAction{
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
 		State:     tbtc.ReservationActionStatePending,
 		TimeoutAt: 100,
 	})
@@ -106,7 +107,7 @@ func TestReservationStaleDepositWatcher_DoesNotNotifyBeforeTimeout(t *testing.T)
 
 	// Action has a deadline of 10_000; we ask the watcher to evaluate at
 	// now=5_000, which is before the deadline.
-	spvChain.setReservationAction(key, 0, &tbtc.ReservationAction{
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
 		State:     tbtc.ReservationActionStatePending,
 		TimeoutAt: 10_000,
 	})
@@ -138,7 +139,7 @@ func TestReservationStaleDepositWatcher_SettledActionIsSkipped(t *testing.T) {
 	// Action is already settled (no longer pending). The watcher must skip
 	// the stale notification even though the wall clock has passed the
 	// deadline.
-	spvChain.setReservationAction(key, 0, &tbtc.ReservationAction{
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
 		State:     tbtc.ReservationActionStateSettled,
 		TimeoutAt: 100,
 	})
@@ -180,7 +181,7 @@ func TestReservationStaleDepositWatcher_OnDepositRevealedDelegates(t *testing.T)
 	spvChain.setWallet(wallet, &tbtc.WalletChainData{
 		State: tbtc.StateUnknown,
 	})
-	spvChain.setReservationAction(key, 0, &tbtc.ReservationAction{
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
 		State:     tbtc.ReservationActionStatePending,
 		TimeoutAt: 100,
 	})
@@ -202,6 +203,169 @@ func TestReservationStaleDepositWatcher_NilDepositKeyError(t *testing.T) {
 	watcher := NewReservationStaleDepositWatcher(spvChain, notifier)
 	if err := watcher.CheckStaleReservedDeposit(nil, 5_000); err == nil {
 		t.Fatal("expected error for nil deposit key, got nil")
+	}
+}
+
+func TestReservationStaleDepositWatcher_IsReservedDepositChainError(t *testing.T) {
+	spvChain := newLocalChain()
+	notifier := &recordingStaleNotifier{}
+
+	spvChain.isReservedDepositErr = fmt.Errorf("rpc unavailable")
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, notifier)
+	err := watcher.CheckStaleReservedDeposit(reservationDepositKey(0xB010), 5_000)
+	if err == nil {
+		t.Fatal("expected error when IsReservedDeposit fails, got nil")
+	}
+
+	if len(notifier.calls) != 0 {
+		t.Fatalf("expected no notifications on chain error, got %d", len(notifier.calls))
+	}
+}
+
+func TestReservationStaleDepositWatcher_ReservedDepositWalletChainError(t *testing.T) {
+	spvChain := newLocalChain()
+	notifier := &recordingStaleNotifier{}
+
+	key := reservationDepositKey(0xB011)
+	spvChain.setReservedDeposit(key, walletPKH(), true)
+	spvChain.reservedDepositWalletErr = fmt.Errorf("rpc unavailable")
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, notifier)
+	if err := watcher.CheckStaleReservedDeposit(key, 5_000); err == nil {
+		t.Fatal("expected error when ReservedDepositWallet fails, got nil")
+	}
+
+	if len(notifier.calls) != 0 {
+		t.Fatalf("expected no notifications on chain error, got %d", len(notifier.calls))
+	}
+}
+
+// TestReservationStaleDepositWatcher_GetWalletChainError exercises the
+// error passthrough without any special chain-double wiring: the deposit's
+// assigned wallet is never registered via setWallet, so GetWallet fails
+// with its natural "no wallet for given PKH" error exactly as a real chain
+// would if the wallet were somehow unresolvable.
+func TestReservationStaleDepositWatcher_GetWalletChainError(t *testing.T) {
+	spvChain := newLocalChain()
+	notifier := &recordingStaleNotifier{}
+
+	key := reservationDepositKey(0xB012)
+	spvChain.setReservedDeposit(key, walletPKH(), true)
+	// No spvChain.setWallet call: GetWallet errors naturally.
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, notifier)
+	if err := watcher.CheckStaleReservedDeposit(key, 5_000); err == nil {
+		t.Fatal("expected error when GetWallet fails, got nil")
+	}
+
+	if len(notifier.calls) != 0 {
+		t.Fatalf("expected no notifications on chain error, got %d", len(notifier.calls))
+	}
+}
+
+// TestReservationStaleDepositWatcher_GetReservationActionChainError
+// exercises the error passthrough the same way: the acceptance action
+// (nonce 1) is never installed via setReservationAction, so
+// GetReservationAction fails with its natural "no action for given
+// reservation/nonce" error.
+func TestReservationStaleDepositWatcher_GetReservationActionChainError(t *testing.T) {
+	spvChain := newLocalChain()
+	notifier := &recordingStaleNotifier{}
+
+	key := reservationDepositKey(0xB013)
+	wallet := walletPKH()
+	spvChain.setReservedDeposit(key, wallet, true)
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{
+		State: tbtc.StateUnknown,
+	})
+	// No spvChain.setReservationAction call: GetReservationAction errors
+	// naturally.
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, notifier)
+	if err := watcher.CheckStaleReservedDeposit(key, 5_000); err == nil {
+		t.Fatal("expected error when GetReservationAction fails, got nil")
+	}
+
+	if len(notifier.calls) != 0 {
+		t.Fatalf("expected no notifications on chain error, got %d", len(notifier.calls))
+	}
+}
+
+// TestReservationStaleDepositWatcher_NotifierError verifies that, unlike
+// the stranding watcher (which continues past a notifier failure because
+// it processes a batch of reservations per call), the stale-deposit
+// watcher propagates a NotifyStaleReservedDeposit failure to its single
+// caller: CheckStaleReservedDeposit checks exactly one deposit per call, so
+// there is nothing else to "continue" to.
+func TestReservationStaleDepositWatcher_NotifierError(t *testing.T) {
+	spvChain := newLocalChain()
+
+	key := reservationDepositKey(0xB014)
+	wallet := walletPKH()
+	spvChain.setReservedDeposit(key, wallet, true)
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{
+		State: tbtc.StateUnknown,
+	})
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStatePending,
+		TimeoutAt: 100,
+	})
+
+	notifier := StaleReservedDepositNotifierFunc(func(*big.Int) error {
+		return fmt.Errorf("notifier unavailable")
+	})
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, notifier)
+	if err := watcher.CheckStaleReservedDeposit(key, 5_000); err == nil {
+		t.Fatal("expected error when the notifier fails, got nil")
+	}
+}
+
+// TestReservationStaleDepositWatcher_ExactTimeoutBoundaryDoesNotNotify
+// covers the `now == action.TimeoutAt` boundary explicitly: the watcher's
+// condition is `now <= action.TimeoutAt` (must NOT notify), so equality
+// must defer exactly like "before the deadline" does. Existing tests only
+// exercise now < TimeoutAt and now > TimeoutAt.
+func TestReservationStaleDepositWatcher_ExactTimeoutBoundaryDoesNotNotify(t *testing.T) {
+	spvChain := newLocalChain()
+	notifier := &recordingStaleNotifier{}
+
+	key := reservationDepositKey(0xB015)
+	wallet := walletPKH()
+	spvChain.setReservedDeposit(key, wallet, true)
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{
+		State: tbtc.StateUnknown,
+	})
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStatePending,
+		TimeoutAt: 5_000,
+	})
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, notifier)
+	if err := watcher.CheckStaleReservedDeposit(key, 5_000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(notifier.calls) != 0 {
+		t.Fatalf(
+			"now == action.TimeoutAt must not notify, got %d calls",
+			len(notifier.calls),
+		)
+	}
+}
+
+func TestReservationStaleDepositWatcher_NilNotifierError(t *testing.T) {
+	spvChain := newLocalChain()
+	watcher := NewReservationStaleDepositWatcher(spvChain, nil)
+
+	key := reservationDepositKey(0xB016)
+
+	if err := watcher.CheckStaleReservedDeposit(key, 5_000); err == nil {
+		t.Fatal("expected error for nil notifier via CheckStaleReservedDeposit, got nil")
+	}
+	if err := watcher.OnDepositRevealed(key, 5_000); err == nil {
+		t.Fatal("expected error for nil notifier via OnDepositRevealed, got nil")
 	}
 }
 

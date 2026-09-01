@@ -163,6 +163,15 @@ func parseReservationReanchorTransactionInput(
 		)
 	}
 
+	if int(input.Outpoint.OutputIndex) >= len(inputTx.Outputs) {
+		return nil, [20]byte{}, fmt.Errorf(
+			"input outpoint index [%d] out of range for transaction [%d] "+
+				"outputs",
+			input.Outpoint.OutputIndex,
+			len(inputTx.Outputs),
+		)
+	}
+
 	spentOutput := inputTx.Outputs[input.Outpoint.OutputIndex]
 
 	anchorUtxo := &bitcoin.UnspentTransactionOutput{

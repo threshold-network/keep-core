@@ -94,18 +94,35 @@ type localChain struct {
 	// derived from the relevant big.Int so they fit the map type without
 	// per-test marshalling.
 	walletReservations      map[[20]byte][]*big.Int
-	reservations            map[[16]byte]*tbtc.Reservation
-	reservationActions      map[[24]byte]*tbtc.ReservationAction
-	reservedDeposits        map[[16]byte]*reservedDepositRecord
+	reservations            map[string]*tbtc.Reservation
+	reservationActions      map[string]*tbtc.ReservationAction
+	reservedDeposits        map[string]*reservedDepositRecord
 	submittedStrandedKeys   []*big.Int
 	submittedStaleDeposits  []*big.Int
 	submittedActionTimeouts []*submittedReservationActionTimeout
 	reservationParameters   *tbtc.ReservationParameters
 
-	txProofDifficultyFactor    *big.Int
-	currentEpoch               uint64
-	currentEpochDifficulty     *big.Int
-	previousEpochDifficulty    *big.Int
+	// Error-injection fields for the reservation watcher chain-error
+	// passthrough tests: nil (the default) means the corresponding method
+	// falls through to its normal, table-driven behavior.
+	walletReservationsErr    error
+	isReservedDepositErr     error
+	reservedDepositWalletErr error
+
+	// Wallet registration and pending-action-request event state for the
+	// watcher dispatch and reservation proof loop tests.
+	newWalletRegisteredEvents            []*tbtc.NewWalletRegisteredEvent
+	reservationAcceptanceRequestedEvents []*tbtc.ReservationAcceptanceRequestedEvent
+	reservationReanchorRequestedEvents   []*tbtc.ReservationReanchorRequestedEvent
+
+	txProofDifficultyFactor *big.Int
+	currentEpoch            uint64
+	currentEpochDifficulty  *big.Int
+	previousEpochDifficulty *big.Int
+	// submitReservationProofHook, when non-nil, overrides the default
+	// success stub and gives the test full control over
+	// SubmitReservationProof behavior (e.g. to assert arguments or return
+	// an error).
 	submitReservationProofHook func(
 		proofType uint8,
 		txInfo *tbtc.BitcoinTxInfo,
@@ -130,9 +147,9 @@ func newLocalChain() *localChain {
 		pastDepositRevealedEvents:                make(map[[32]byte][]*tbtc.DepositRevealedEvent),
 		pastMovingFundsCommitmentSubmittedEvents: make(map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent),
 		walletReservations:                       make(map[[20]byte][]*big.Int),
-		reservations:                             make(map[[16]byte]*tbtc.Reservation),
-		reservationActions:                       make(map[[24]byte]*tbtc.ReservationAction),
-		reservedDeposits:                         make(map[[16]byte]*reservedDepositRecord),
+		reservations:                             make(map[string]*tbtc.Reservation),
+		reservationActions:                       make(map[string]*tbtc.ReservationAction),
+		reservedDeposits:                         make(map[string]*reservedDepositRecord),
 		submittedStrandedKeys:                    make([]*big.Int, 0),
 		submittedStaleDeposits:                   make([]*big.Int, 0),
 		submittedActionTimeouts:                  make([]*submittedReservationActionTimeout, 0),
@@ -898,7 +915,7 @@ func (lc *localChain) GetReservation(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	key := bigIntToKey16(reservationKey)
+	key := bigIntKey(reservationKey)
 	reservation, ok := lc.reservations[key]
 	if !ok {
 		return nil, fmt.Errorf("no reservation for given key")
@@ -914,7 +931,7 @@ func (lc *localChain) setReservation(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	lc.reservations[bigIntToKey16(reservationKey)] = reservation
+	lc.reservations[bigIntKey(reservationKey)] = reservation
 }
 
 // GetReservationAction returns the reservation action previously installed
@@ -947,50 +964,24 @@ func (lc *localChain) setReservationAction(
 	lc.reservationActions[buildReservationActionKey(reservationKey, requestNonce)] = action
 }
 
-// buildReservationActionKey produces a 24-byte map key encoding the
-// reservation identifier and the nonce. The reservation identifier is
-// truncated to its leading 16 bytes; tests are responsible for choosing
-// reservation keys that are unique in those leading bytes.
+// buildReservationActionKey produces a map key encoding the reservation
+// identifier and the nonce, using the big.Int's full base-16 text
+// representation so distinct reservation keys can never collide.
 func buildReservationActionKey(
 	reservationKey *big.Int,
 	requestNonce uint64,
-) [24]byte {
-	var out [24]byte
-	if reservationKey != nil {
-		fillBigInt16(reservationKey, out[:16])
-	}
-	binary.BigEndian.PutUint64(out[16:24], requestNonce)
-	return out
+) string {
+	return fmt.Sprintf("%s/%d", bigIntKey(reservationKey), requestNonce)
 }
 
-// fillBigInt16 writes the leading 16 bytes of the big-endian representation
-// of v into dst. The function is allocation-free so tests can use it inside
-// hot paths.
-func fillBigInt16(v *big.Int, dst []byte) {
+// bigIntKey returns a map key string from a big.Int using its full base-16
+// text representation, so distinct values can never collide. Returns the
+// empty string for nil.
+func bigIntKey(v *big.Int) string {
 	if v == nil {
-		return
+		return ""
 	}
-	bytes := v.Bytes()
-	offset := len(dst) - len(bytes)
-	if offset < 0 {
-		// Truncate to dst size; keeps the trailing high bytes of v.
-		bytes = bytes[len(bytes)-len(dst):]
-		offset = 0
-	}
-	for i, b := range bytes {
-		dst[offset+i] = b
-	}
-}
-
-// bigIntToKey16 returns a 16-byte map key from a big.Int by truncating to
-// the leading 16 bytes (right-aligned). Returns the zero key for nil.
-func bigIntToKey16(v *big.Int) [16]byte {
-	var out [16]byte
-	if v == nil {
-		return out
-	}
-	fillBigInt16(v, out[:])
-	return out
+	return v.Text(16)
 }
 
 // ReservationParameters returns the reservation parameters previously
@@ -1029,6 +1020,10 @@ func (lc *localChain) WalletReservations(
 ) ([]*big.Int, error) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
+
+	if lc.walletReservationsErr != nil {
+		return nil, lc.walletReservationsErr
+	}
 
 	keys := lc.walletReservations[walletPublicKeyHash]
 	out := make([]*big.Int, len(keys))
@@ -1077,7 +1072,11 @@ func (lc *localChain) IsReservedDeposit(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	record, ok := lc.reservedDeposits[bigIntToKey16(depositKey)]
+	if lc.isReservedDepositErr != nil {
+		return false, lc.isReservedDepositErr
+	}
+
+	record, ok := lc.reservedDeposits[bigIntKey(depositKey)]
 	if !ok {
 		return false, nil
 	}
@@ -1092,7 +1091,11 @@ func (lc *localChain) ReservedDepositWallet(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	record, ok := lc.reservedDeposits[bigIntToKey16(depositKey)]
+	if lc.reservedDepositWalletErr != nil {
+		return [20]byte{}, lc.reservedDepositWalletErr
+	}
+
+	record, ok := lc.reservedDeposits[bigIntKey(depositKey)]
 	if !ok {
 		return [20]byte{}, nil
 	}
@@ -1109,7 +1112,7 @@ func (lc *localChain) setReservedDeposit(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	lc.reservedDeposits[bigIntToKey16(depositKey)] = &reservedDepositRecord{
+	lc.reservedDeposits[bigIntKey(depositKey)] = &reservedDepositRecord{
 		walletPublicKeyHash: walletPublicKeyHash,
 		isReserved:          isReserved,
 	}
@@ -1121,13 +1124,6 @@ func (lc *localChain) PastReservationAcceptedEvents(
 	return nil, nil
 }
 
-// submitReservationProofHook, when non-nil, overrides the default panic
-// stub and gives the test full control over SubmitReservationProof behavior.
-var _ = func() bool {
-	_ = bytes.Equal
-	return true
-}()
-
 func (lc *localChain) PastReservationReanchoredEvents(
 	filter *tbtc.ReservationReanchoredEventFilter,
 ) ([]*tbtc.ReservationReanchoredEvent, error) {
@@ -1138,4 +1134,136 @@ func (lc *localChain) PastReservationActionTimedOutEvents(
 	filter *tbtc.ReservationActionTimedOutEventFilter,
 ) ([]*tbtc.ReservationActionTimedOutEvent, error) {
 	return nil, nil
+}
+
+func (lc *localChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	var result []*tbtc.ReservationAcceptanceRequestedEvent
+	for _, event := range lc.reservationAcceptanceRequestedEvents {
+		if filter != nil && event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter != nil && len(filter.ReservationKey) > 0 {
+			matched := false
+			for _, key := range filter.ReservationKey {
+				if key.Cmp(event.ReservationKey) == 0 {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		result = append(result, event)
+	}
+
+	return result, nil
+}
+
+func (lc *localChain) addReservationAcceptanceRequestedEvent(
+	event *tbtc.ReservationAcceptanceRequestedEvent,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationAcceptanceRequestedEvents = append(
+		lc.reservationAcceptanceRequestedEvents,
+		event,
+	)
+}
+
+func (lc *localChain) PastReservationReanchorRequestedEvents(
+	filter *tbtc.ReservationReanchorRequestedEventFilter,
+) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	var result []*tbtc.ReservationReanchorRequestedEvent
+	for _, event := range lc.reservationReanchorRequestedEvents {
+		if filter != nil && event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter != nil && len(filter.ReservationKey) > 0 {
+			matched := false
+			for _, key := range filter.ReservationKey {
+				if key.Cmp(event.ReservationKey) == 0 {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		result = append(result, event)
+	}
+
+	return result, nil
+}
+
+func (lc *localChain) addReservationReanchorRequestedEvent(
+	event *tbtc.ReservationReanchorRequestedEvent,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationReanchorRequestedEvents = append(
+		lc.reservationReanchorRequestedEvents,
+		event,
+	)
+}
+
+func (lc *localChain) PastNewWalletRegisteredEvents(
+	filter *tbtc.NewWalletRegisteredEventFilter,
+) ([]*tbtc.NewWalletRegisteredEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	var result []*tbtc.NewWalletRegisteredEvent
+	for _, event := range lc.newWalletRegisteredEvents {
+		if filter != nil && event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter != nil && len(filter.EcdsaWalletID) > 0 {
+			matched := false
+			for _, id := range filter.EcdsaWalletID {
+				if id == event.EcdsaWalletID {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		result = append(result, event)
+	}
+
+	return result, nil
+}
+
+func (lc *localChain) addNewWalletRegisteredEvent(
+	event *tbtc.NewWalletRegisteredEvent,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.newWalletRegisteredEvents = append(lc.newWalletRegisteredEvents, event)
+}
+
+// BuildDepositKey is a test-double implementation independent of the
+// production keccak256-based algorithm (pkg/chain/ethereum's unexported
+// buildDepositKey): only self-consistency within this fake chain matters
+// for unit tests, since nothing here cross-checks against a real contract.
+func (lc *localChain) BuildDepositKey(
+	fundingTxHash bitcoin.Hash,
+	fundingOutputIndex uint32,
+) *big.Int {
+	key := buildDepositRequestKey(fundingTxHash, fundingOutputIndex)
+	return new(big.Int).SetBytes(key[:])
 }
