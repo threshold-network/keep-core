@@ -150,43 +150,6 @@ type ReservationAction struct {
 	// ExpectedMainUtxoHash identifies the wallet main UTXO snapshotted for a
 	// dissolution. It is zero for other action types and no-main-UTXO wallets.
 	ExpectedMainUtxoHash [32]byte
-	// IsPartial indicates a redemption spends only Amount and must re-anchor
-	// the remaining reservation value back to the custodying wallet.
-	IsPartial bool
-}
-
-// ReservationParameters represents the on-chain values of the Bridge
-// reservation parameters.
-type ReservationParameters struct {
-	// ReservationVault is the address of the reservation vault. Deposits
-	// revealed with this vault address are treated as UTXO reservations.
-	ReservationVault chain.Address
-	// ReservationMinAmount is the minimal anchor output amount in satoshi
-	// accepted for a reservation.
-	ReservationMinAmount uint64
-	// ReservationTxMaxFee is the maximum transaction fee in satoshi for a
-	// single reservation lifecycle transaction.
-	ReservationTxMaxFee uint64
-	// ReservationTermSeconds is the custody term length in seconds.
-	ReservationTermSeconds uint32
-	// ReservationDissolutionDelay is the delay snapshotted after term expiry
-	// before a reservation becomes dissolvable.
-	ReservationDissolutionDelay uint32
-	// ReservationMaxTotalAmount is the maximum total amount of all active
-	// reservations in satoshi.
-	ReservationMaxTotalAmount uint64
-	// ReservationTotalAmount is the current total amount of all active
-	// reservations in satoshi.
-	ReservationTotalAmount uint64
-	// MaxReservationsPerWallet is the maximum number of reservations a wallet
-	// may custody.
-	MaxReservationsPerWallet uint32
-	// ReservationActionTimeout is the timeout for reservation actions in
-	// seconds.
-	ReservationActionTimeout uint32
-	// ReservationRenewalWindowSeconds is the period before expiry during which
-	// a reservation can be renewed.
-	ReservationRenewalWindowSeconds uint32
 }
 
 // ReservationAnchorProposal represents a reservation anchor proposal issued
@@ -204,13 +167,10 @@ type ReservationAnchorProposal struct {
 	AnchorTxFee *big.Int `json:"anchorTxFee"`
 }
 
-// ActionType returns the specific type of the walletAction being subject
-// of this proposal.
 func (rap *ReservationAnchorProposal) ActionType() WalletActionType {
 	return ActionReservationAnchor
 }
 
-// ValidityBlocks returns the number of blocks for which the proposal is valid.
 func (rap *ReservationAnchorProposal) ValidityBlocks() uint64 {
 	return reservationAnchorProposalValidityBlocks
 }
@@ -230,13 +190,10 @@ type ReservedRedemptionProposal struct {
 	RedemptionTxFee *big.Int `json:"redemptionTxFee"`
 }
 
-// ActionType returns the specific type of the walletAction being subject
-// of this proposal.
 func (rrp *ReservedRedemptionProposal) ActionType() WalletActionType {
 	return ActionReservedRedemption
 }
 
-// ValidityBlocks returns the number of blocks for which the proposal is valid.
 func (rrp *ReservedRedemptionProposal) ValidityBlocks() uint64 {
 	return reservedRedemptionProposalValidityBlocks
 }
@@ -256,13 +213,10 @@ type ReservationReanchorProposal struct {
 	ReanchorTxFee *big.Int `json:"reanchorTxFee"`
 }
 
-// ActionType returns the specific type of the walletAction being subject
-// of this proposal.
 func (rrp *ReservationReanchorProposal) ActionType() WalletActionType {
 	return ActionReservationReanchor
 }
 
-// ValidityBlocks returns the number of blocks for which the proposal is valid.
 func (rrp *ReservationReanchorProposal) ValidityBlocks() uint64 {
 	return reservationReanchorProposalValidityBlocks
 }
@@ -280,15 +234,35 @@ type ReservationDissolutionProposal struct {
 	DissolutionTxFee *big.Int `json:"dissolutionTxFee"`
 }
 
-// ActionType returns the specific type of the walletAction being subject
-// of this proposal.
 func (rdp *ReservationDissolutionProposal) ActionType() WalletActionType {
 	return ActionReservationDissolution
 }
 
-// ValidityBlocks returns the number of blocks for which the proposal is valid.
 func (rdp *ReservationDissolutionProposal) ValidityBlocks() uint64 {
 	return reservationDissolutionProposalValidityBlocks
+}
+
+func requireReservationAction(action *ReservationAction, expectedType ReservationActionType, label string) error {
+	if action == nil {
+		return fmt.Errorf("reservation action is required")
+	}
+	if action.ActionType != expectedType {
+		return fmt.Errorf("reservation action is not %s", label)
+	}
+	if action.State != ReservationActionStatePending {
+		return fmt.Errorf("reservation action is not pending")
+	}
+	return nil
+}
+
+func requireValidActionFee(fee int64, maxFee uint64) error {
+	if fee <= 0 {
+		return fmt.Errorf("transaction fee must be positive")
+	}
+	if uint64(fee) > maxFee {
+		return fmt.Errorf("transaction fee exceeds the action fee limit")
+	}
+	return nil
 }
 
 // assembleReservationAnchorTransaction constructs an unsigned reservation
@@ -305,20 +279,14 @@ func assembleReservationAnchorTransaction(
 	reservationMinAmount uint64,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
-	if action == nil {
-		return nil, fmt.Errorf("reservation action is required")
+	if err := requireReservationAction(action, ReservationActionTypeAcceptance, "an acceptance"); err != nil {
+		return nil, err
 	}
-	if action.ActionType != ReservationActionTypeAcceptance {
-		return nil, fmt.Errorf("reservation action is not an acceptance")
+	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
+		return nil, fmt.Errorf("acceptance action targets a different wallet")
 	}
-	if action.State != ReservationActionStatePending {
-		return nil, fmt.Errorf("reservation action is not pending")
-	}
-	if fee <= 0 {
-		return nil, fmt.Errorf("transaction fee must be positive")
-	}
-	if uint64(fee) > action.TxMaxFee {
-		return nil, fmt.Errorf("transaction fee exceeds the action fee limit")
+	if err := requireValidActionFee(fee, action.TxMaxFee); err != nil {
+		return nil, err
 	}
 	if deposit == nil {
 		return nil, fmt.Errorf("deposit is required")
@@ -361,19 +329,16 @@ func assembleReservationAnchorTransaction(
 }
 
 // assembleReservedRedemptionTransaction constructs an unsigned reserved
-// redemption transaction for the given nonce-bound action. A whole redemption
-// is a 1-input-1-output spend to the redeemer. A partial redemption is a
-// 1-input-2-output spend whose first output pays the authorized amount less
-// the miner fee to the redeemer and whose second output re-anchors the exact
-// remainder to the custodying wallet.
+// redemption transaction for the given nonce-bound action: a 1-input-1-output
+// spend of the anchor UTXO to the redeemer output script.
 func assembleReservedRedemptionTransaction(
 	bitcoinChain bitcoin.Chain,
-	bridgeChain BridgeChain,
+	bridgeChain interface {
+		ComputeReservationRedeemerOutputScriptHash(redeemerOutputScript bitcoin.Script) ([32]byte, error)
+	},
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
-	walletPublicKeyHash [20]byte,
 	redeemerOutputScript bitcoin.Script,
 	action *ReservationAction,
-	reservationMinAmount uint64,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
 	if bridgeChain == nil {
@@ -385,14 +350,8 @@ func assembleReservedRedemptionTransaction(
 	if len(redeemerOutputScript) == 0 {
 		return nil, fmt.Errorf("redeemer output script is required")
 	}
-	if action == nil {
-		return nil, fmt.Errorf("reservation action is required")
-	}
-	if action.ActionType != ReservationActionTypeRedemption {
-		return nil, fmt.Errorf("reservation action is not a redemption")
-	}
-	if action.State != ReservationActionStatePending {
-		return nil, fmt.Errorf("reservation action is not pending")
+	if err := requireReservationAction(action, ReservationActionTypeRedemption, "a redemption"); err != nil {
+		return nil, err
 	}
 	if anchorUtxo.Value <= 0 {
 		return nil, fmt.Errorf("anchor UTXO value must be positive")
@@ -403,11 +362,8 @@ func assembleReservedRedemptionTransaction(
 	if action.Amount > uint64(anchorUtxo.Value) {
 		return nil, fmt.Errorf("redemption amount exceeds the anchor value")
 	}
-	if fee <= 0 {
-		return nil, fmt.Errorf("transaction fee must be positive")
-	}
-	if uint64(fee) > action.TxMaxFee {
-		return nil, fmt.Errorf("transaction fee exceeds the action fee limit")
+	if err := requireValidActionFee(fee, action.TxMaxFee); err != nil {
+		return nil, err
 	}
 
 	redeemerOutputScriptHash, err := bridgeChain.ComputeReservationRedeemerOutputScriptHash(redeemerOutputScript)
@@ -419,13 +375,7 @@ func assembleReservedRedemptionTransaction(
 		return nil, fmt.Errorf("redeemer output script is not authorized")
 	}
 
-	if action.IsPartial {
-		if action.Amount == uint64(anchorUtxo.Value) {
-			return nil, fmt.Errorf(
-				"partial redemption amount must be less than the anchor value",
-			)
-		}
-	} else if action.Amount != uint64(anchorUtxo.Value) {
+	if action.Amount != uint64(anchorUtxo.Value) {
 		return nil, fmt.Errorf(
 			"whole redemption amount must equal the anchor value",
 		)
@@ -441,12 +391,7 @@ func assembleReservedRedemptionTransaction(
 		)
 	}
 
-	redemptionAmount := anchorUtxo.Value
-	if action.IsPartial {
-		redemptionAmount = int64(action.Amount)
-	}
-
-	redemptionValue := redemptionAmount - fee
+	redemptionValue := anchorUtxo.Value - fee
 	if redemptionValue <= 0 {
 		return nil, fmt.Errorf(
 			"transaction fee exceeds the redemption amount",
@@ -457,25 +402,6 @@ func assembleReservedRedemptionTransaction(
 		Value:           redemptionValue,
 		PublicKeyScript: redeemerOutputScript,
 	})
-
-	if action.IsPartial {
-		remainderScript, err := bitcoin.PayToWitnessPublicKeyHash(
-			walletPublicKeyHash,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("cannot compute remainder script: [%v]", err)
-		}
-
-		remainderValue := anchorUtxo.Value - int64(action.Amount)
-		if remainderValue < int64(reservationMinAmount) {
-			return nil, fmt.Errorf("remainder value is below the reservation minimum amount")
-		}
-
-		builder.AddOutput(&bitcoin.TransactionOutput{
-			Value:           remainderValue,
-			PublicKeyScript: remainderScript,
-		})
-	}
 
 	return builder, nil
 }
@@ -495,23 +421,14 @@ func assembleReservationReanchorTransaction(
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
 	}
-	if action == nil {
-		return nil, fmt.Errorf("reservation action is required")
-	}
-	if action.ActionType != ReservationActionTypeReanchor {
-		return nil, fmt.Errorf("reservation action is not a re-anchor")
-	}
-	if action.State != ReservationActionStatePending {
-		return nil, fmt.Errorf("reservation action is not pending")
+	if err := requireReservationAction(action, ReservationActionTypeReanchor, "a re-anchor"); err != nil {
+		return nil, err
 	}
 	if action.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
 		return nil, fmt.Errorf("reanchor action targets a different wallet")
 	}
-	if fee <= 0 {
-		return nil, fmt.Errorf("transaction fee must be positive")
-	}
-	if uint64(fee) > action.TxMaxFee {
-		return nil, fmt.Errorf("transaction fee exceeds the action fee limit")
+	if err := requireValidActionFee(fee, action.TxMaxFee); err != nil {
+		return nil, err
 	}
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
 
@@ -568,14 +485,8 @@ func assembleReservationDissolutionTransaction(
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
 	}
-	if action == nil {
-		return nil, fmt.Errorf("reservation action is required")
-	}
-	if action.ActionType != ReservationActionTypeDissolution {
-		return nil, fmt.Errorf("reservation action is not a dissolution")
-	}
-	if action.State != ReservationActionStatePending {
-		return nil, fmt.Errorf("reservation action is not pending")
+	if err := requireReservationAction(action, ReservationActionTypeDissolution, "a dissolution"); err != nil {
+		return nil, err
 	}
 	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
 		return nil, fmt.Errorf("dissolution action targets a different wallet")
@@ -588,11 +499,8 @@ func assembleReservationDissolutionTransaction(
 			"dissolution action amount does not match the anchor value",
 		)
 	}
-	if fee <= 0 {
-		return nil, fmt.Errorf("transaction fee must be positive")
-	}
-	if uint64(fee) > action.TxMaxFee {
-		return nil, fmt.Errorf("transaction fee exceeds the action fee limit")
+	if err := requireValidActionFee(fee, action.TxMaxFee); err != nil {
+		return nil, err
 	}
 
 	mainUtxoExpected := action.ExpectedMainUtxoHash != [32]byte{}

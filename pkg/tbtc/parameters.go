@@ -1,6 +1,10 @@
 package tbtc
 
-import "math/big"
+import (
+	"math/big"
+
+	"github.com/keep-network/keep-core/pkg/chain"
+)
 
 // MovingFundsParameters holds the current value of the on-chain parameters
 // relevant to the moving funds and moved funds sweep processes. It replaces a
@@ -50,4 +54,34 @@ type RedemptionParameters struct {
 	Timeout                         uint32
 	TimeoutSlashingAmount           *big.Int
 	TimeoutNotifierRewardMultiplier uint32
+}
+
+// ReservationParameters holds the current value of the on-chain parameters
+// relevant to UTXO reservations.
+type ReservationParameters struct {
+	// Vault is the address of the reservation vault. Deposits revealed with
+	// this vault address are treated as UTXO reservations.
+	Vault chain.Address
+	// MinAmount is the minimal anchor output amount in satoshi accepted for
+	// a reservation.
+	MinAmount uint64
+	// TxMaxFee is the maximum transaction fee in satoshi for a single
+	// reservation lifecycle transaction.
+	TxMaxFee uint64
+	// TermSeconds is the custody term length in seconds.
+	TermSeconds uint32
+	// DissolutionDelay is the delay snapshotted after term expiry before a
+	// reservation becomes dissolvable.
+	DissolutionDelay uint32
+	// MaxTotalAmount is the maximum total amount of all active reservations
+	// in satoshi.
+	MaxTotalAmount uint64
+	// MaxReservationsPerWallet is the maximum number of reservations a
+	// wallet may custody.
+	MaxReservationsPerWallet uint32
+	// ActionTimeout is the timeout for reservation actions in seconds.
+	ActionTimeout uint32
+	// RenewalWindowSeconds is the period before expiry during which a
+	// reservation can be renewed.
+	RenewalWindowSeconds uint32
 }
