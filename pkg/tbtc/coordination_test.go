@@ -546,7 +546,7 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		// Non-4th-window: only Redemption.
 		"block 900": {
 			coordinationBlock: 900,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		// Incorrect coordination window (windowIndex == 0, returns nil).
 		"block 901": {
@@ -556,11 +556,11 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		// Non-4th-window: only Redemption.
 		"block 1800": {
 			coordinationBlock: 1800,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		"block 2700": {
 			coordinationBlock: 2700,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		// 4th-window (window 4): all actions present. Heartbeat randomly
 		// selected for this specific seed.
@@ -568,6 +568,8 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 			coordinationBlock: 3600,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -576,21 +578,23 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 		"block 4500": {
 			coordinationBlock: 4500,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		"block 5400": {
 			coordinationBlock: 5400,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		"block 6300": {
 			coordinationBlock: 6300,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		// 4th-window (window 8): all actions present except heartbeat.
 		"block 7200": {
 			coordinationBlock: 7200,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -598,21 +602,23 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 		"block 8100": {
 			coordinationBlock: 8100,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		"block 9000": {
 			coordinationBlock: 9000,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		"block 9900": {
 			coordinationBlock: 9900,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		// 4th-window (window 12): all actions present except heartbeat.
 		"block 10800": {
 			coordinationBlock: 10800,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -620,23 +626,27 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 		"block 11700": {
 			coordinationBlock: 11700,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		"block 12600": {
 			coordinationBlock: 12600,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 			},
 		},
 		"block 13500": {
 			coordinationBlock: 13500,
-			expectedChecklist: []WalletActionType{ActionRedemption},
+			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 		// 4th-window (window 16): all actions present except heartbeat.
 		"block 14400": {
 			coordinationBlock: 14400,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -701,6 +711,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24560100,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 			},
@@ -710,6 +722,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24561000,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 			},
@@ -719,6 +733,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24561900,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 			},
@@ -730,6 +746,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24562800,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -740,6 +758,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24563700,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 			},
@@ -752,6 +772,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24579000,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionHeartbeat,
@@ -764,6 +786,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24588000,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -778,6 +802,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24566400,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -838,6 +864,57 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 	}
 }
 
+// TestCoordinationExecutor_GetActionsChecklist_ReservationActionsAlwaysPresent
+// is a dedicated regression guard for the reservation-checklist wiring gap:
+// pkg/tbtcpg.ProposalGenerator.Generate only ever runs a task whose
+// ActionType appears in this checklist, so ReservationAcceptanceTask and
+// ReservationReanchorTask were structurally unreachable in production until
+// ActionReservationAnchor/ActionReservationReanchor were added here. Unlike
+// DepositSweep/MovedFundsSweep/MovingFunds, these are never frequency-gated
+// - like Redemption, they are checked on every non-zero-index window,
+// across every activation state and window-index parity.
+func TestCoordinationExecutor_GetActionsChecklist_ReservationActionsAlwaysPresent(t *testing.T) {
+	// Cover both pre- and post-activation code paths, and both 4th and
+	// non-4th windows, across several distinct block/seed combinations.
+	coordinationBlocks := []uint64{
+		900,      // pre-activation, non-4th window
+		3600,     // pre-activation, 4th window
+		24560100, // post-activation, non-4th window
+		24562800, // post-activation, 4th window
+	}
+
+	executor := &coordinationExecutor{}
+
+	for _, coordinationBlock := range coordinationBlocks {
+		window := newCoordinationWindow(coordinationBlock)
+		seed := sha256.Sum256(
+			big.NewInt(int64(window.coordinationBlock) + 2).Bytes(),
+		)
+
+		checklist := executor.getActionsChecklist(
+			window.index(),
+			seed,
+			window.coordinationBlock,
+		)
+
+		if !slices.Contains(checklist, ActionReservationAnchor) {
+			t.Errorf(
+				"block %d: ActionReservationAnchor must be present "+
+					"in every coordination window's checklist",
+				coordinationBlock,
+			)
+		}
+
+		if !slices.Contains(checklist, ActionReservationReanchor) {
+			t.Errorf(
+				"block %d: ActionReservationReanchor must be present "+
+					"in every coordination window's checklist",
+				coordinationBlock,
+			)
+		}
+	}
+}
+
 // assertPostActivationSafety verifies the safety invariants that must hold
 // for every non-nil post-activation checklist:
 //   - ActionRedemption is at index 0.
@@ -883,9 +960,9 @@ func assertPostActivationSafety(
 }
 
 // assertChecklistOrdering verifies that actions appear in canonical priority
-// order: Redemption < DepositSweep < MovedFundsSweep < MovingFunds <
-// Heartbeat. Each consecutive pair of actions must have strictly increasing
-// priority values.
+// order: Redemption < ReservationAnchor < ReservationReanchor < DepositSweep
+// < MovedFundsSweep < MovingFunds < Heartbeat. Each consecutive pair of
+// actions must have strictly increasing priority values.
 func assertChecklistOrdering(
 	t *testing.T,
 	checklist []WalletActionType,
@@ -893,11 +970,13 @@ func assertChecklistOrdering(
 	t.Helper()
 
 	actionPriority := map[WalletActionType]int{
-		ActionRedemption:      0,
-		ActionDepositSweep:    1,
-		ActionMovedFundsSweep: 2,
-		ActionMovingFunds:     3,
-		ActionHeartbeat:       4,
+		ActionRedemption:          0,
+		ActionReservationAnchor:   1,
+		ActionReservationReanchor: 2,
+		ActionDepositSweep:        3,
+		ActionMovedFundsSweep:     4,
+		ActionMovingFunds:         5,
+		ActionHeartbeat:           6,
 	}
 
 	for i := 1; i < len(checklist); i++ {
