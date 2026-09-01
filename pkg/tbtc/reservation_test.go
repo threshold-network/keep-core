@@ -646,13 +646,43 @@ func TestAssembleReservationTransactions_InputValidation(t *testing.T) {
 		}
 	}
 
-	_, err = assembleReservationAnchorTransaction(
+	_, err = AssembleReservationAnchorTransaction(
 		bitcoinChain,
 		nil,
 		walletPublicKeyHash,
+		nil,
 		1500,
 	)
 	assertError(err, "deposit is required")
+
+	deposit := &Deposit{Utxo: anchorUtxo}
+
+	_, err = AssembleReservationAnchorTransaction(
+		bitcoinChain,
+		deposit,
+		walletPublicKeyHash,
+		nil,
+		1500,
+	)
+	assertError(err, "reservation action is required")
+
+	_, err = AssembleReservationAnchorTransaction(
+		bitcoinChain,
+		deposit,
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 2000},
+		0,
+	)
+	assertError(err, "fee must be positive")
+
+	_, err = AssembleReservationAnchorTransaction(
+		bitcoinChain,
+		deposit,
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 1000},
+		1500,
+	)
+	assertError(err, "fee exceeds the maximum allowed fee")
 
 	_, err = assembleReservedRedemptionTransaction(
 		bitcoinChain,
@@ -757,13 +787,41 @@ func TestAssembleReservationTransactions_InputValidation(t *testing.T) {
 	)
 	assertError(err, "transaction fee exceeds the action fee limit")
 
-	_, err = assembleReservationReanchorTransaction(
+	_, err = AssembleReservationReanchorTransaction(
 		bitcoinChain,
 		nil,
 		walletPublicKeyHash,
+		nil,
 		1500,
 	)
 	assertError(err, "anchor UTXO is required")
+
+	_, err = AssembleReservationReanchorTransaction(
+		bitcoinChain,
+		anchorUtxo,
+		walletPublicKeyHash,
+		nil,
+		1500,
+	)
+	assertError(err, "reservation action is required")
+
+	_, err = AssembleReservationReanchorTransaction(
+		bitcoinChain,
+		anchorUtxo,
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 2000},
+		0,
+	)
+	assertError(err, "fee must be positive")
+
+	_, err = AssembleReservationReanchorTransaction(
+		bitcoinChain,
+		anchorUtxo,
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 1000},
+		1500,
+	)
+	assertError(err, "fee exceeds the maximum allowed fee")
 
 	_, err = assembleReservationDissolutionTransaction(
 		bitcoinChain,
@@ -909,10 +967,11 @@ func TestAssembleReservationAnchorTransaction(t *testing.T) {
 		Value: 100000,
 	}
 
-	builder, err := assembleReservationAnchorTransaction(
+	builder, err := AssembleReservationAnchorTransaction(
 		bitcoinChain,
 		deposit,
 		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 2000},
 		1500,
 	)
 	if err != nil {
@@ -1000,10 +1059,11 @@ func TestAssembleReservationReanchorTransaction(t *testing.T) {
 		Value: 100000,
 	}
 
-	builder, err := assembleReservationReanchorTransaction(
+	builder, err := AssembleReservationReanchorTransaction(
 		bitcoinChain,
 		anchorUtxo,
 		targetWalletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 2000},
 		1500,
 	)
 	if err != nil {

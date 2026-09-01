@@ -66,6 +66,10 @@ const (
 	// upgrade to a binary containing this constant before the activation block
 	// is reached.
 	DepositSweepEveryWindowActivationBlock = uint64(24559289)
+	// ReservationsActivationBlock is the Ethereum block height at which
+	// reservation actions (anchor, re-anchor) become available in the
+	// coordination checklist.
+	ReservationsActivationBlock = DepositSweepEveryWindowActivationBlock
 )
 
 // errCoordinationExecutorBusy is an error returned when the coordination
@@ -592,21 +596,7 @@ func (ce *coordinationExecutor) getActionsChecklist(
 
 	var actions []WalletActionType
 
-	// Redemption, reservation anchor, and reservation reanchor are priority
-	// actions and should be checked on every coordination window: like
-	// Redemption, they are custody-critical (an unaccepted reservation or a
-	// stale re-anchor risks reservation stranding, not just throughput), not
-	// throughput-heavy scans like the sweep/moving-funds actions gated below.
-	//
-	// A node that has not enabled the reservation feature
-	// (config.Reservations.Enabled=false) never registers a matching
-	// ProposalTask for these action types; pkg/tbtcpg.ProposalGenerator.
-	// Generate already treats a checklist action with no registered task as
-	// "unsupported" and skips it, so listing these unconditionally here is
-	// safe on non-reservation deployments.
 	actions = append(actions, ActionRedemption)
-	actions = append(actions, ActionReservationAnchor)
-	actions = append(actions, ActionReservationReanchor)
 
 	// Other actions should be checked with a lower frequency. The default
 	// frequency is every 4 coordination windows.
@@ -651,7 +641,9 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// checklist. Frequency-gated like DepositSweep/MovingFunds below the
 	// activation block: reservation acceptance/re-anchor windows are not
 	// as time-critical as redemption.
-	if ce.reservationsEnabled && windowIndex%frequencyWindows == 0 {
+	if ce.reservationsEnabled &&
+		coordinationBlock >= ReservationsActivationBlock &&
+		windowIndex%frequencyWindows == 0 {
 		actions = append(actions, ActionReservationAnchor)
 		actions = append(actions, ActionReservationReanchor)
 	}

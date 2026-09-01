@@ -736,6 +736,7 @@ func TestReservationAcceptanceTask_ReservationParametersFetchedLive(t *testing.T
 		}},
 	}
 	btcChain.SetTransaction(fundingTxHash, dummyTx)
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
 	btcChain.SetTransactionConfirmations(
 		fundingTxHash,
 		tbtc.DepositSweepRequiredFundingTxConfirmations,
@@ -766,6 +767,9 @@ func TestReservationAcceptanceTask_ReservationParametersFetchedLive(t *testing.T
 			WalletPublicKeyHash: walletPublicKeyHash,
 			FundingTxHash:       fundingTxHash,
 			FundingOutputIndex:  0,
+			Vault: &[]chain.Address{chain.Address(
+				"0xReservationVaultAddress1234567890abcdef12345678",
+			)}[0],
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -842,7 +846,15 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 			expectAccept:             false,
 		},
 		"ReservationMinAmount: exactly at minimum accepts": {
-			depositAmount:            100000,
+			// checkReservationAcceptanceEligibility's cheap gross check only
+			// requires depositAmount >= reservationMinAmount, but the
+			// authoritative check in proposeReservationAcceptance compares
+			// the NET anchor value (deposit minus the estimated 710 sat fee,
+			// deterministic given the 1 sat/vByte rate and fixed tx shape
+			// below) against ReservationMinAmount. depositAmount here is
+			// therefore reservationMinAmount plus that fee so the boundary
+			// is exactly at the minimum net anchor value.
+			depositAmount:            100710,
 			maxReservationsPerWallet: 5,
 			reservationMinAmount:     100000,
 			expectAccept:             true,
@@ -920,6 +932,7 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 				}},
 			}
 			btcChain.SetTransaction(fundingTxHash, dummyTx)
+			btcChain.SetEstimateSatPerVByteFee(1, 1)
 			btcChain.SetTransactionConfirmations(
 				fundingTxHash,
 				tbtc.DepositSweepRequiredFundingTxConfirmations,
@@ -950,6 +963,9 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 					WalletPublicKeyHash: walletPublicKeyHash,
 					FundingTxHash:       fundingTxHash,
 					FundingOutputIndex:  0,
+					Vault: &[]chain.Address{chain.Address(
+						"0xReservationVaultAddress1234567890abcdef12345678",
+					)}[0],
 				},
 			); err != nil {
 				t.Fatal(err)

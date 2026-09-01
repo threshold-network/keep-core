@@ -1657,22 +1657,6 @@ func (lc *LocalChain) PendingReservedDeposits() (uint64, error) {
 	return 0, nil
 }
 
-// Reservations is a stub mirroring the Bridge view. Tests that need this
-// data should populate it explicitly via custom extensions.
-func (lc *LocalChain) Reservations(
-	reservationKey *big.Int,
-) (*tbtc.ReservationRequest, error) {
-	return nil, fmt.Errorf("unsupported")
-}
-
-// ReservationActions mirrors the Bridge view.
-func (lc *LocalChain) ReservationActions(
-	reservationKey *big.Int,
-	requestNonce uint64,
-) (*tbtc.ReservationActionRecord, error) {
-	return nil, fmt.Errorf("unsupported")
-}
-
 // ActiveReservationsCount reports zero active reservations by default.
 func (lc *LocalChain) ActiveReservationsCount() (
 	count uint32,

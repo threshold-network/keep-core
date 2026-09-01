@@ -309,6 +309,24 @@ func processCoordinationResult(node *node, result *coordinationResult) {
 				expiryBlock,
 			)
 		}
+	case ActionReservationAnchor:
+		if proposal, ok := result.proposal.(*ReservationAnchorProposal); ok {
+			node.handleReservationAnchorProposal(
+				result.wallet,
+				proposal,
+				startBlock,
+				expiryBlock,
+			)
+		}
+	case ActionReservationReanchor:
+		if proposal, ok := result.proposal.(*ReservationReanchorProposal); ok {
+			node.handleReservationReanchorProposal(
+				result.wallet,
+				proposal,
+				startBlock,
+				expiryBlock,
+			)
+		}
 	default:
 		logger.Errorf("no handler for coordination result [%s]", result)
 	}

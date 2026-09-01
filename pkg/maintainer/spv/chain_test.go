@@ -1090,25 +1090,6 @@ func (lc *localChain) setWalletReservations(
 	)
 }
 
-// Reservations is a stub matching the reservation additions on the
-// production Chain interface. The reservation-side builder replaces this
-// stub with the production contract call; the watchers do not need it.
-func (lc *localChain) Reservations(
-	reservationKey *big.Int,
-) (*tbtc.ReservationRequest, error) {
-	panic("unsupported")
-}
-
-// ReservationActions is a stub matching the reservation additions on the
-// production Chain interface. The watchers use GetReservationAction
-// instead; this stub exists only to satisfy the interface.
-func (lc *localChain) ReservationActions(
-	reservationKey *big.Int,
-	requestNonce uint64,
-) (*tbtc.ReservationActionRecord, error) {
-	panic("unsupported")
-}
-
 // IsReservedDeposit returns whether the deposit was previously booked via
 // setReservedDeposit.
 func (lc *localChain) IsReservedDeposit(

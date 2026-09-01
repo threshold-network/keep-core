@@ -802,6 +802,15 @@ func (lc *localChain) GetDepositRequest(
 	return request, true, nil
 }
 
+func (lc *localChain) BuildDepositKey(
+	fundingTxHash bitcoin.Hash,
+	fundingOutputIndex uint32,
+) *big.Int {
+	depositKeyBytes := buildDepositRequestKey(fundingTxHash, fundingOutputIndex)
+
+	return new(big.Int).SetBytes(depositKeyBytes[:])
+}
+
 func (lc *localChain) setDepositRequest(
 	fundingTxHash bitcoin.Hash,
 	fundingOutputIndex uint32,
@@ -1584,19 +1593,6 @@ func (lc *localChain) ReservedDepositWallet(
 
 func (lc *localChain) PendingReservedDeposits() (uint64, error) {
 	return 0, fmt.Errorf("unsupported")
-}
-
-func (lc *localChain) Reservations(
-	reservationKey *big.Int,
-) (*ReservationRequest, error) {
-	return nil, fmt.Errorf("unsupported")
-}
-
-func (lc *localChain) ReservationActions(
-	reservationKey *big.Int,
-	requestNonce uint64,
-) (*ReservationActionRecord, error) {
-	return nil, fmt.Errorf("unsupported")
 }
 
 func (lc *localChain) ActiveReservationsCount() (uint32, uint32, error) {
