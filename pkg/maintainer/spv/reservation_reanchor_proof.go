@@ -439,7 +439,9 @@ func reservationReanchorTransactionProofSubmitter(
 // propagate out of proveTransactions (spv.go:292-293) and abort the entire
 // proving round for every other in-flight transaction across every proof
 // type this tick, which is disproportionate for what is an expected, if
-// rare, race outcome rather than an infrastructure failure.
+// rare, race outcome rather than an infrastructure failure. See the
+// per-branch comments below for why this skip is not guaranteed to be a
+// one-time event for a given transaction.
 func submitDiscoveredReservationReanchorProof(
 	transactionHash bitcoin.Hash,
 	requiredConfirmations uint,
@@ -507,10 +509,22 @@ func submitDiscoveredReservationReanchorProof(
 		// then restart the whole SPV maintainer after the backoff. That is
 		// disproportionate for what is an expected, if rare, outcome of the
 		// narrow same-tick race described above, so this case is logged and
-		// skipped instead: the transaction is left unproven and will simply
-		// not be rediscovered by getUnprovenReservationReanchorTransactions
-		// on the next tick, since its action generation is no longer
-		// Pending.
+		// skipped instead.
+		//
+		// This transaction may be rediscovered and re-warned on subsequent
+		// ticks too: whether getUnprovenReservationReanchorTransactions
+		// stops returning it depends on the Bridge guaranteeing at most one
+		// Pending action per reservation at a time, which is NOT asserted
+		// anywhere in this Go client and was not available to verify
+		// against the on-chain source for this action-generation model.
+		// The termination condition that IS guaranteed: once the
+		// reservation's current generation lands its own correct re-anchor
+		// proof, the Bridge clears this outpoint's anchor registration,
+		// ReservationByAnchorUtxo stops matching this transaction, and it
+		// falls into the "no reservation is anchored at the spent
+		// outpoint" error path above instead - so the repetition is
+		// bounded, just not by the mechanism the original version of this
+		// comment claimed.
 		logger.Warnf(
 			"skipping reservation re-anchor proof submission for "+
 				"transaction [%s]: reservation [%v]'s current action "+
@@ -524,7 +538,10 @@ func submitDiscoveredReservationReanchorProof(
 	}
 
 	if action.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
-		// See the comment above: skipped, not erred, for the same reason.
+		// Same reasoning as the branch above: skipped rather than erred to
+		// avoid aborting the round, and may recur on subsequent ticks
+		// under the same unverified-invariant caveat until the current
+		// generation's own proof lands and clears the anchor registration.
 		logger.Warnf(
 			"skipping reservation re-anchor proof submission for "+
 				"transaction [%s]: reservation [%v]'s current action "+
