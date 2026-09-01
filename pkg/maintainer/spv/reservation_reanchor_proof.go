@@ -418,18 +418,25 @@ func reservationReanchorTransactionProofSubmitter(
 //
 // Deriving the request nonce is not as simple as reading the reservation's
 // current RequestNonce: that field tracks the reservation's live action
-// generation, which can have moved on since this transaction was discovered
-// (e.g. the original re-anchor action timed out and a new action generation,
-// possibly with a different target wallet, was requested while this
-// function's caller was waiting out requiredConfirmations). Submitting the
-// live nonce for a stale transaction would pair an old, unrelated re-anchor
-// transaction with the wrong action generation. To guard against that, this
-// function fetches the action generation at the reservation's current nonce
-// and requires it to still be a Pending Reanchor action targeting the exact
-// wallet this transaction actually pays before treating the current nonce as
-// correct for this transaction; any mismatch is reported as an error so the
-// proof loop treats the transaction as not-yet-submittable rather than
-// silently misattributing the proof.
+// generation, which can have moved on since this transaction was
+// discovered. proveTransactions (spv.go) calls the getter and, moments
+// later in the same call, the submitter for each sufficiently-confirmed
+// transaction it found - a narrow same-tick window, not a wait across
+// confirmations (under-confirmed transactions are skipped outright and
+// re-discovered, not held, on the next tick). Within that window it is
+// still possible for the reservation's action generation to advance (e.g.
+// the re-anchor action this transaction belongs to times out and a new,
+// unrelated action generation - possibly targeting a different wallet - is
+// requested before the submitter call for this transaction runs).
+// Submitting the live nonce for a stale transaction would pair an old,
+// unrelated re-anchor transaction with the wrong action generation. To
+// guard against that, this function fetches the action generation at the
+// reservation's current nonce and requires it to still be a Pending
+// Reanchor action targeting the exact wallet this transaction actually
+// pays before treating the current nonce as correct for this transaction;
+// any mismatch is reported as an error so the proof loop treats the
+// transaction as not-yet-submittable rather than silently misattributing
+// the proof.
 func submitDiscoveredReservationReanchorProof(
 	transactionHash bitcoin.Hash,
 	requiredConfirmations uint,
