@@ -3,6 +3,7 @@ package tbtcpg
 import (
 	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/ipfs/go-log/v2"
 	"go.uber.org/zap"
@@ -24,8 +25,11 @@ const ReservationReanchorLookBackBlocks = uint64(216000)
 // task picks a destination wallet and assembles a 1-input-1-output re-anchor
 // transaction moving the anchor outpoint into that destination wallet.
 type ReservationReanchorTask struct {
-	chain    Chain
-	btcChain bitcoin.Chain
+	chain                   Chain
+	btcChain                bitcoin.Chain
+	targetWalletCache       [20]byte
+	targetWalletInitialized bool
+	targetWalletMutex       sync.RWMutex
 }
 
 // NewReservationReanchorTask returns a new ReservationReanchorTask bound to
@@ -173,10 +177,11 @@ func (rrt *ReservationReanchorTask) Run(
 			0,
 		)
 		if err != nil {
-			return nil, false, fmt.Errorf(
+			taskLogger.Errorf(
 				"cannot prepare reservation re-anchor proposal: [%v]",
 				err,
 			)
+			continue
 		}
 
 		return proposal, true, nil
@@ -304,6 +309,18 @@ func (rrt *ReservationReanchorTask) findTargetWallet(
 	taskLogger log.StandardLogger,
 	sourceWalletPublicKeyHash [20]byte,
 ) ([20]byte, error) {
+	rrt.targetWalletMutex.RLock()
+	if rrt.targetWalletInitialized {
+		cache := rrt.targetWalletCache
+		rrt.targetWalletMutex.RUnlock()
+
+		wallet, err := rrt.chain.GetWallet(cache)
+		if err == nil && wallet.State == tbtc.StateLive {
+			return cache, nil
+		}
+	} else {
+		rrt.targetWalletMutex.RUnlock()
+	}
 	blockCounter, err := rrt.chain.BlockCounter()
 	if err != nil {
 		return [20]byte{}, fmt.Errorf("failed to get block counter: [%v]", err)
@@ -346,6 +363,10 @@ func (rrt *ReservationReanchorTask) findTargetWallet(
 		}
 
 		if wallet.State == tbtc.StateLive {
+			rrt.targetWalletMutex.Lock()
+			rrt.targetWalletCache = walletPubKeyHash
+			rrt.targetWalletInitialized = true
+			rrt.targetWalletMutex.Unlock()
 			return walletPubKeyHash, nil
 		}
 	}
