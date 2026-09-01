@@ -65,7 +65,7 @@ type LocalChain struct {
 	redemptionDelays                         map[[32]byte]time.Duration
 	depositMinAge                            uint32
 
-	reservations                          map[*big.Int]*tbtc.Reservation
+	reservations                          map[string]*tbtc.Reservation
 	reservationActions                    map[string]*tbtc.ReservationAction
 	reservationParametersValue            tbtc.ReservationParameters
 	reservationParametersSet              bool
@@ -97,7 +97,7 @@ func NewLocalChain() *LocalChain {
 		operatorIDs:                              make(map[chain.Address]uint32),
 		redemptionDelays:                         make(map[[32]byte]time.Duration),
 
-		reservations:                          make(map[*big.Int]*tbtc.Reservation),
+		reservations:                          make(map[string]*tbtc.Reservation),
 		reservationActions:                    make(map[string]*tbtc.ReservationAction),
 		reservationProposalValidations:        make(map[[32]byte]bool),
 		reservationReanchorRequestSubmissions: make([]*reservationReanchorRequestSubmission, 0),
@@ -1466,13 +1466,8 @@ func (lc *LocalChain) GetReservation(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	if reservation, ok := lc.reservations[reservationKey]; ok {
+	if reservation, ok := lc.reservations[reservationKey.Text(16)]; ok {
 		return reservation, nil
-	}
-	for k, r := range lc.reservations {
-		if k.Cmp(reservationKey) == 0 {
-			return r, nil
-		}
 	}
 	return nil, fmt.Errorf("reservation not found")
 }
@@ -1485,7 +1480,7 @@ func (lc *LocalChain) SetReservation(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	lc.reservations[new(big.Int).Set(reservationKey)] = reservation
+	lc.reservations[reservationKey.Text(16)] = reservation
 }
 
 // GetReservationAction returns the configured reservation action record.
@@ -1579,7 +1574,7 @@ func (lc *LocalChain) WalletReservationsAmount(
 
 	var total uint64
 	for _, reservationKey := range lc.reservationWalletKeys[walletPublicKeyHash] {
-		if r, ok := lc.reservations[reservationKey]; ok && r != nil && r.AnchorUtxo != nil {
+		if r, ok := lc.reservations[reservationKey.Text(16)]; ok && r != nil && r.AnchorUtxo != nil {
 			total += uint64(r.AnchorUtxo.Value)
 		}
 	}

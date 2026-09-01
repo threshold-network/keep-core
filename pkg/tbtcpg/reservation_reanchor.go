@@ -16,17 +16,6 @@ import (
 // 30 days assuming 12 seconds per block.
 const ReservationReanchorLookBackBlocks = uint64(216000)
 
-// ErrNoReservationToReanchor is returned when the wallet has no reservations
-// that are eligible for a re-anchor proposal.
-var ErrNoReservationToReanchor = fmt.Errorf("no reservation eligible for re-anchor")
-
-// ErrReservationReanchorTxMaxFeeTooLow is returned when the on-chain maximum
-// fee allowed for a reservation re-anchor transaction is too low to build a
-// safe non-RBF transaction at the minimum fee rate.
-var ErrReservationReanchorTxMaxFeeTooLow = fmt.Errorf(
-	"reservation re-anchor minimum safe transaction fee exceeds the maximum fee",
-)
-
 // ErrReservationReanchorTxFeeTooHigh is returned when the estimated fee for a
 // reservation re-anchor transaction exceeds the on-chain maximum.
 var ErrReservationReanchorTxFeeTooHigh = fmt.Errorf(
@@ -165,7 +154,7 @@ func (rrt *ReservationReanchorTask) Run(
 			continue
 		}
 
-		if hasPendingAction(reservationKey, request, rrt.chain, taskLogger) {
+		if hasPendingAction(reservationKey, reservation, rrt.chain, taskLogger) {
 			continue
 		}
 
@@ -239,7 +228,14 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 		)
 	}
 
-	if reservation.AnchorUtxo == nil {
+	// convertReservationFromAbiType (the Go-side chain adapter) always
+	// allocates a non-nil AnchorUtxo, populated with zero hash/value when
+	// no anchor exists on-chain, so a bare nil check can never fire against
+	// the production chain. Detect the unset case by value instead.
+	if reservation.AnchorUtxo == nil ||
+		reservation.AnchorUtxo.Value == 0 ||
+		reservation.AnchorUtxo.Outpoint == nil ||
+		reservation.AnchorUtxo.Outpoint.TransactionHash == (bitcoin.Hash{}) {
 		return nil, fmt.Errorf(
 			"reservation [0x%x] has no anchor UTXO",
 			reservationKey,
@@ -297,12 +293,33 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 
 // findTargetWallet picks a live destination wallet from the on-chain wallet
 // registry, mirroring the moving funds target selection. The new wallet must
-// be in StateLive and must not be the source wallet itself.
+// be in StateLive and must not be the source wallet itself. The registration
+// scan is bounded to ReservationReanchorLookBackBlocks (mirroring the other
+// look-back scans in this package) rather than the full chain history: a
+// live wallet must have registered recently, and an unbounded eth_getLogs
+// scan on every re-anchor attempt does not.
 func (rrt *ReservationReanchorTask) findTargetWallet(
 	taskLogger log.StandardLogger,
 	sourceWalletPublicKeyHash [20]byte,
 ) ([20]byte, error) {
-	events, err := rrt.chain.PastNewWalletRegisteredEvents(nil)
+	blockCounter, err := rrt.chain.BlockCounter()
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("failed to get block counter: [%v]", err)
+	}
+
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("failed to get current block: [%v]", err)
+	}
+
+	startBlock := uint64(0)
+	if currentBlock > ReservationReanchorLookBackBlocks {
+		startBlock = currentBlock - ReservationReanchorLookBackBlocks
+	}
+
+	events, err := rrt.chain.PastNewWalletRegisteredEvents(
+		&tbtc.NewWalletRegisteredEventFilter{StartBlock: startBlock},
+	)
 	if err != nil {
 		return [20]byte{}, fmt.Errorf(
 			"failed to get past new wallet registered events: [%v]",
@@ -394,25 +411,17 @@ func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 }
 
 // hasPendingAction reports whether the on-chain reservation action
-// generation at the wallet's current request nonce (if any) is in a pending
-// state. This guards against duplicate re-anchor requests: the Bridge rejects
-// a new request while the previous generation is still in flight.
+// generation at the reservation's current request nonce (if any) is in a
+// pending state. This guards against duplicate re-anchor requests: the
+// Bridge rejects a new request while the previous generation is still in
+// flight. The caller supplies the reservation record it already fetched
+// (see Run) rather than this function re-reading it.
 func hasPendingAction(
 	reservationKey *big.Int,
-	request *tbtc.CoordinationProposalRequest,
+	reservation *tbtc.Reservation,
 	chain Chain,
 	taskLogger log.StandardLogger,
 ) bool {
-	reservation, err := chain.GetReservation(reservationKey)
-	if err != nil {
-		taskLogger.Errorf(
-			"cannot re-read reservation [0x%x] for action state check: [%v]",
-			reservationKey,
-			err,
-		)
-		return false
-	}
-
 	if reservation.RequestNonce == 0 {
 		return false
 	}
@@ -422,18 +431,20 @@ func hasPendingAction(
 		reservation.RequestNonce,
 	)
 	if err != nil {
+		// Fail safe: a lookup error is indistinguishable from "still
+		// pending" here, and treating it as not-pending would let the
+		// caller send a duplicate re-anchor request that the Bridge
+		// rejects while a real pending generation is in flight. Skip this
+		// reservation for the current coordination window instead; the
+		// next window retries.
 		taskLogger.Errorf(
 			"cannot get reservation action for [0x%x] nonce [%d]: [%v]",
 			reservationKey,
 			reservation.RequestNonce,
 			err,
 		)
-		return false
+		return true
 	}
-
-	// Suppress unused-parameter lint while keeping request available for
-	// future filtering against the executing operator's wallet membership.
-	_ = request
 
 	return action.State == tbtc.ReservationActionStatePending
 }

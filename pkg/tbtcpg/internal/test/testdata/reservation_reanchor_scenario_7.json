@@ -1,0 +1,30 @@
+{
+  "Title": "skip: reservation not in Active state is excluded from re-anchor",
+  "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+  "SourceWalletState": "MovingFunds",
+  "SourceWalletMainUtxoHash": "6666666666666666666666666666666666666666666666666666666666666666",
+  "SourceWalletMainUtxoValue": 500000,
+  "SourceWalletMainUtxoTxHash": "7777777777777777777777777777777777777777777777777777777777777777",
+  "SourceWalletMainUtxoTxIndex": 0,
+  "TargetWalletPublicKeyHash": "",
+  "LiveWalletsCount": 4,
+  "MovingFundsDustThreshold": 1000000,
+  "ReservationTxMaxFee": 100000,
+  "EstimateSatPerVByteFee": 1,
+  "ReanchorTxFee": 0,
+  "Reservations": [
+    {
+      "ReservationKey": "0000000000000000000000000000000000000000000000000000000000111107",
+      "WalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+      "AnchorTxHash": "8888888888888888888888888888888888888888888888888888888888888888",
+      "AnchorTxOutputIndex": 1,
+      "AnchorValue": 500000,
+      "State": "Stranded",
+      "RequestNonce": 0,
+      "HasPendingAction": false,
+      "PendingActionState": "Unknown"
+    }
+  ],
+  "ExpectedProposal": null,
+  "ExpectedErr": ""
+}
