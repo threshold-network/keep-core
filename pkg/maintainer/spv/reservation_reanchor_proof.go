@@ -434,9 +434,12 @@ func reservationReanchorTransactionProofSubmitter(
 // reservation's current nonce and requires it to still be a Pending
 // Reanchor action targeting the exact wallet this transaction actually
 // pays before treating the current nonce as correct for this transaction;
-// any mismatch is reported as an error so the proof loop treats the
-// transaction as not-yet-submittable rather than silently misattributing
-// the proof.
+// any mismatch is logged and the transaction is skipped (nil error) rather
+// than submitted with the wrong nonce - returning an error here would
+// propagate out of proveTransactions (spv.go:292-293) and abort the entire
+// proving round for every other in-flight transaction across every proof
+// type this tick, which is disproportionate for what is an expected, if
+// rare, race outcome rather than an infrastructure failure.
 func submitDiscoveredReservationReanchorProof(
 	transactionHash bitcoin.Hash,
 	requiredConfirmations uint,
@@ -498,25 +501,41 @@ func submitDiscoveredReservationReanchorProof(
 
 	if action.ActionType != tbtc.ReservationActionTypeReanchor ||
 		action.State != tbtc.ReservationActionStatePending {
-		return fmt.Errorf(
-			"reservation [%v]'s current action generation [%d] is no "+
-				"longer a pending re-anchor; the discovered transaction "+
-				"[%s] belongs to a superseded generation",
+		// A returned error here would propagate out of proveTransactions
+		// (spv.go:292-293) and abort the entire proving round for every
+		// other in-flight transaction across every proof type this tick,
+		// then restart the whole SPV maintainer after the backoff. That is
+		// disproportionate for what is an expected, if rare, outcome of the
+		// narrow same-tick race described above, so this case is logged and
+		// skipped instead: the transaction is left unproven and will simply
+		// not be rediscovered by getUnprovenReservationReanchorTransactions
+		// on the next tick, since its action generation is no longer
+		// Pending.
+		logger.Warnf(
+			"skipping reservation re-anchor proof submission for "+
+				"transaction [%s]: reservation [%v]'s current action "+
+				"generation [%d] is no longer a pending re-anchor; the "+
+				"transaction belongs to a superseded generation",
+			transactionHash.Hex(bitcoin.ReversedByteOrder),
 			reservationKey,
 			reservation.RequestNonce,
-			transactionHash.Hex(bitcoin.ReversedByteOrder),
 		)
+		return nil
 	}
 
 	if action.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
-		return fmt.Errorf(
-			"reservation [%v]'s current action generation [%d] targets a "+
-				"different wallet than the discovered transaction [%s]; "+
-				"the transaction belongs to a superseded generation",
+		// See the comment above: skipped, not erred, for the same reason.
+		logger.Warnf(
+			"skipping reservation re-anchor proof submission for "+
+				"transaction [%s]: reservation [%v]'s current action "+
+				"generation [%d] targets a different wallet than the "+
+				"transaction actually pays; the transaction belongs to a "+
+				"superseded generation",
+			transactionHash.Hex(bitcoin.ReversedByteOrder),
 			reservationKey,
 			reservation.RequestNonce,
-			transactionHash.Hex(bitcoin.ReversedByteOrder),
 		)
+		return nil
 	}
 
 	return submitReservationReanchorProof(
