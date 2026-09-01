@@ -28,11 +28,49 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 			blockCounter.SetCurrentBlock(1000)
 			tbtcChain.SetBlockCounter(blockCounter)
 
+			mainUtxoHash := scenario.SourceWalletMainUtxoHashBytes
+			if scenario.SourceWalletMainUtxoTxHash != "" &&
+				scenario.SourceWalletMainUtxoTxHash != "0000000000000000000000000000000000000000000000000000000000000000" {
+				walletScript, err := bitcoin.PayToWitnessPublicKeyHash(
+					scenario.SourceWalletPublicKeyHash,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				mainUtxoTx := &bitcoin.Transaction{
+					Version: 1,
+					Outputs: []*bitcoin.TransactionOutput{{
+						Value:           scenario.SourceWalletMainUtxoValue,
+						PublicKeyScript: walletScript,
+					}},
+				}
+				// DetermineWalletMainUtxo builds the candidate outpoint from
+				// transaction.Hash() (the tx's own computed hash), not from
+				// whatever key it happens to be stored under - both must
+				// agree, so derive the storage key from the same call.
+				mainUtxoTxHash := mainUtxoTx.Hash()
+				btcChain.SetTransaction(mainUtxoTxHash, mainUtxoTx)
+				btcChain.SetTxHashesForPublicKeyHash(
+					scenario.SourceWalletPublicKeyHash,
+					[]bitcoin.Hash{mainUtxoTxHash},
+				)
+
+				mainUtxo := &bitcoin.UnspentTransactionOutput{
+					Outpoint: &bitcoin.TransactionOutpoint{
+						TransactionHash: mainUtxoTxHash,
+						OutputIndex:     scenario.SourceWalletMainUtxoTxIndex,
+					},
+					Value: scenario.SourceWalletMainUtxoValue,
+				}
+				mainUtxoHash = tbtcChain.ComputeMainUtxoHash(mainUtxo)
+			}
+
 			tbtcChain.SetWallet(
 				scenario.SourceWalletPublicKeyHash,
 				&tbtc.WalletChainData{
 					State:        scenario.SourceWalletState,
-					MainUtxoHash: scenario.SourceWalletMainUtxoHashBytes,
+					MainUtxoHash: mainUtxoHash,
 				},
 			)
 

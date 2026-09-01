@@ -230,12 +230,17 @@ func TestNewProposalGenerator_ReservationsEnabled(t *testing.T) {
 			true,
 		)
 
-		_, err := generator.Generate(request)
-		if err == nil {
-			t.Fatal(
-				"expected an error from the wired-in reservation tasks " +
-					"running against the unconfigured chain, got nil",
-			)
+		for _, action := range []tbtc.WalletActionType{
+			tbtc.ActionReservationAnchor,
+			tbtc.ActionReservationReanchor,
+		} {
+			_, err := generator.Generate(&tbtc.CoordinationProposalRequest{
+				WalletPublicKeyHash: walletPublicKeyHash,
+				ActionsChecklist:    []tbtc.WalletActionType{action},
+			})
+			if err == nil {
+				t.Errorf("expected error for action %v, got nil", action)
+			}
 		}
 	})
 
