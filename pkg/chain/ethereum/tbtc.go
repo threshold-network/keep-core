@@ -3068,16 +3068,6 @@ func (tc *TbtcChain) NotifyReservationStranded(
 	return err
 }
 
-// ReservationParametersFull is an alias for ReservationParameters; both
-// return the same tbtc.ReservationParameters struct that already carries
-// the full 10-tuple.
-func (tc *TbtcChain) ReservationParametersFull() (
-	*tbtc.ReservationParameters,
-	error,
-) {
-	return tc.ReservationParameters()
-}
-
 // ReservationCaps returns the cap parameters that gate reservation
 // acceptance. The reservationRouter binding is bound to the Bridge
 // address; the call routes through Bridge.fallback into the router's
