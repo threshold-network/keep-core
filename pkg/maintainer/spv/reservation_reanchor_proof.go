@@ -413,10 +413,23 @@ func reservationReanchorTransactionProofSubmitter(
 // signature only carries the transaction hash, so this function looks up
 // which reservation is still registered against the transaction's spent
 // anchor outpoint (ReservationByAnchorUtxo - the Bridge only clears that
-// registration once the proof is accepted, so a match here is conclusive),
-// then reads that reservation's current request nonce (the nonce of its
-// in-flight action generation, since m1 allows at most one pending action
-// per reservation at a time).
+// registration once the proof is accepted, so a match on the outpoint is
+// conclusive that this reservation's re-anchor has not yet landed).
+//
+// Deriving the request nonce is not as simple as reading the reservation's
+// current RequestNonce: that field tracks the reservation's live action
+// generation, which can have moved on since this transaction was discovered
+// (e.g. the original re-anchor action timed out and a new action generation,
+// possibly with a different target wallet, was requested while this
+// function's caller was waiting out requiredConfirmations). Submitting the
+// live nonce for a stale transaction would pair an old, unrelated re-anchor
+// transaction with the wrong action generation. To guard against that, this
+// function fetches the action generation at the reservation's current nonce
+// and requires it to still be a Pending Reanchor action targeting the exact
+// wallet this transaction actually pays before treating the current nonce as
+// correct for this transaction; any mismatch is reported as an error so the
+// proof loop treats the transaction as not-yet-submittable rather than
+// silently misattributing the proof.
 func submitDiscoveredReservationReanchorProof(
 	transactionHash bitcoin.Hash,
 	requiredConfirmations uint,
@@ -432,10 +445,8 @@ func submitDiscoveredReservationReanchorProof(
 		)
 	}
 
-	anchorUtxo, _, err := parseReservationReanchorTransactionInput(
-		btcChain,
-		transaction,
-	)
+	anchorUtxo, targetWalletPublicKeyHash, err :=
+		parseReservationReanchorTransactionInput(btcChain, transaction)
 	if err != nil {
 		return fmt.Errorf(
 			"failed to parse reservation re-anchor transaction input: [%v]",
@@ -465,6 +476,40 @@ func submitDiscoveredReservationReanchorProof(
 	reservation, err := spvChain.GetReservation(reservationKey)
 	if err != nil {
 		return fmt.Errorf("failed to get reservation: [%v]", err)
+	}
+
+	action, err := spvChain.GetReservationAction(
+		reservationKey,
+		reservation.RequestNonce,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to get reservation's current action generation: [%v]",
+			err,
+		)
+	}
+
+	if action.ActionType != tbtc.ReservationActionTypeReanchor ||
+		action.State != tbtc.ReservationActionStatePending {
+		return fmt.Errorf(
+			"reservation [%v]'s current action generation [%d] is no "+
+				"longer a pending re-anchor; the discovered transaction "+
+				"[%s] belongs to a superseded generation",
+			reservationKey,
+			reservation.RequestNonce,
+			transactionHash.Hex(bitcoin.ReversedByteOrder),
+		)
+	}
+
+	if action.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
+		return fmt.Errorf(
+			"reservation [%v]'s current action generation [%d] targets a "+
+				"different wallet than the discovered transaction [%s]; "+
+				"the transaction belongs to a superseded generation",
+			reservationKey,
+			reservation.RequestNonce,
+			transactionHash.Hex(bitcoin.ReversedByteOrder),
+		)
 	}
 
 	return submitReservationReanchorProof(

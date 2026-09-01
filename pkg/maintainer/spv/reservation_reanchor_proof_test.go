@@ -452,8 +452,9 @@ func TestSubmitDiscoveredReservationReanchorProof(t *testing.T) {
 		RequestNonce: requestNonce,
 	})
 	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-		ActionType: tbtc.ReservationActionTypeReanchor,
-		State:      tbtc.ReservationActionStatePending,
+		ActionType:                tbtc.ReservationActionTypeReanchor,
+		State:                     tbtc.ReservationActionStatePending,
+		TargetWalletPublicKeyHash: targetWalletPKH,
 	})
 
 	var capturedReservationKey *big.Int
@@ -547,5 +548,241 @@ func TestSubmitDiscoveredReservationReanchorProof(t *testing.T) {
 		mockSpvProofAssembler2,
 	); err == nil {
 		t.Fatal("expected error for unanchored outpoint")
+	}
+}
+
+// TestSubmitDiscoveredReservationReanchorProof_StaleActionGeneration verifies
+// that submission is rejected, not misattributed, when the reservation's
+// current action generation has moved past the one that produced the
+// discovered transaction (e.g. the original re-anchor action timed out and a
+// new, unrelated action generation is now current).
+func TestSubmitDiscoveredReservationReanchorProof_StaleActionGeneration(t *testing.T) {
+	requiredConfirmations := uint(6)
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	anchorTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: bitcoin.Hash{},
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           600000,
+			PublicKeyScript: []byte{},
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(anchorTx); err != nil {
+		t.Fatal(err)
+	}
+
+	targetWalletPKH := [20]byte{0x92, 0xa6, 0xec, 0x88, 0x9a, 0x8f, 0xa3, 0x4f, 0x73, 0x1e, 0x63, 0x9e, 0xde, 0xde, 0x4c, 0x75, 0xe1, 0x84, 0x30, 0x7c}
+	targetScript, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPKH)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reanchorTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTx.Hash(),
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           590000,
+			PublicKeyScript: targetScript,
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(reanchorTx); err != nil {
+		t.Fatal(err)
+	}
+
+	proof := &bitcoin.SpvProof{
+		MerkleProof:    []byte{0x01},
+		TxIndexInBlock: 2,
+		BitcoinHeaders: []byte{0x03},
+	}
+	mockSpvProofAssembler := func(
+		hash bitcoin.Hash,
+		confirmations uint,
+		btcChain bitcoin.Chain,
+	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
+		return reanchorTx, proof, nil
+	}
+
+	reservationKey := big.NewInt(99)
+	staleNonce := uint64(7)
+	currentNonce := uint64(8)
+
+	spvChain.setReservationByAnchorUtxo(anchorTx.Hash(), 0, reservationKey)
+	spvChain.setReservation(reservationKey, &tbtc.Reservation{
+		WalletPublicKeyHash: targetWalletPKH,
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: reanchorTx.Inputs[0].Outpoint,
+			Value:    600000,
+		},
+		State:        tbtc.ReservationStateActive,
+		RequestNonce: currentNonce,
+	})
+	// The action generation that actually produced reanchorTx (staleNonce)
+	// timed out; a new, unrelated action generation (currentNonce) is now
+	// pending. The reservation's RequestNonce always points at the latest
+	// generation, so the discovered transaction must not be paired with it.
+	spvChain.setReservationAction(reservationKey, staleNonce, &tbtc.ReservationAction{
+		ActionType:                tbtc.ReservationActionTypeReanchor,
+		State:                     tbtc.ReservationActionStateTimedOut,
+		TargetWalletPublicKeyHash: targetWalletPKH,
+	})
+	spvChain.setReservationAction(reservationKey, currentNonce, &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeDissolution,
+		State:      tbtc.ReservationActionStatePending,
+	})
+
+	hookCalled := false
+	spvChain.submitReservationProofHook = func(
+		proofType uint8,
+		txInfo *tbtc.BitcoinTxInfo,
+		txProof *tbtc.BitcoinTxProof,
+		mainUtxo *tbtc.BitcoinTxUTXO,
+		rk *big.Int,
+		rn uint64,
+	) error {
+		hookCalled = true
+		return nil
+	}
+
+	err = submitDiscoveredReservationReanchorProof(
+		reanchorTx.Hash(),
+		requiredConfirmations,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+	)
+	if err == nil {
+		t.Fatal("expected error for stale action generation, got nil")
+	}
+	if hookCalled {
+		t.Fatal("proof must not be submitted for a stale action generation")
+	}
+}
+
+// TestSubmitDiscoveredReservationReanchorProof_MismatchedTargetWallet
+// verifies that submission is rejected when the reservation's current
+// pending re-anchor action generation targets a different wallet than the
+// one the discovered transaction actually pays - evidence the transaction
+// belongs to a superseded generation even though the current generation is
+// also, coincidentally, a pending re-anchor.
+func TestSubmitDiscoveredReservationReanchorProof_MismatchedTargetWallet(t *testing.T) {
+	requiredConfirmations := uint(6)
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	anchorTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: bitcoin.Hash{},
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           600000,
+			PublicKeyScript: []byte{},
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(anchorTx); err != nil {
+		t.Fatal(err)
+	}
+
+	oldTargetWalletPKH := [20]byte{0x92, 0xa6, 0xec, 0x88, 0x9a, 0x8f, 0xa3, 0x4f, 0x73, 0x1e, 0x63, 0x9e, 0xde, 0xde, 0x4c, 0x75, 0xe1, 0x84, 0x30, 0x7c}
+	oldTargetScript, err := bitcoin.PayToWitnessPublicKeyHash(oldTargetWalletPKH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTargetWalletPKH := [20]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x12, 0x34, 0x56, 0x78}
+
+	reanchorTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTx.Hash(),
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           590000,
+			PublicKeyScript: oldTargetScript,
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(reanchorTx); err != nil {
+		t.Fatal(err)
+	}
+
+	proof := &bitcoin.SpvProof{
+		MerkleProof:    []byte{0x01},
+		TxIndexInBlock: 2,
+		BitcoinHeaders: []byte{0x03},
+	}
+	mockSpvProofAssembler := func(
+		hash bitcoin.Hash,
+		confirmations uint,
+		btcChain bitcoin.Chain,
+	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
+		return reanchorTx, proof, nil
+	}
+
+	reservationKey := big.NewInt(100)
+	requestNonce := uint64(3)
+
+	spvChain.setReservationByAnchorUtxo(anchorTx.Hash(), 0, reservationKey)
+	spvChain.setReservation(reservationKey, &tbtc.Reservation{
+		WalletPublicKeyHash: oldTargetWalletPKH,
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: reanchorTx.Inputs[0].Outpoint,
+			Value:    600000,
+		},
+		State:        tbtc.ReservationStateActive,
+		RequestNonce: requestNonce,
+	})
+	// A new re-anchor request superseded the one that produced reanchorTx,
+	// this time targeting a different wallet, before reanchorTx's proof was
+	// submitted.
+	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
+		ActionType:                tbtc.ReservationActionTypeReanchor,
+		State:                     tbtc.ReservationActionStatePending,
+		TargetWalletPublicKeyHash: newTargetWalletPKH,
+	})
+
+	hookCalled := false
+	spvChain.submitReservationProofHook = func(
+		proofType uint8,
+		txInfo *tbtc.BitcoinTxInfo,
+		txProof *tbtc.BitcoinTxProof,
+		mainUtxo *tbtc.BitcoinTxUTXO,
+		rk *big.Int,
+		rn uint64,
+	) error {
+		hookCalled = true
+		return nil
+	}
+
+	err = submitDiscoveredReservationReanchorProof(
+		reanchorTx.Hash(),
+		requiredConfirmations,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+	)
+	if err == nil {
+		t.Fatal("expected error for mismatched target wallet, got nil")
+	}
+	if hookCalled {
+		t.Fatal("proof must not be submitted for a mismatched action generation")
 	}
 }
