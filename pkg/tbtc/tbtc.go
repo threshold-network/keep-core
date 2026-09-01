@@ -288,6 +288,7 @@ func Initialize(
 			perfMetrics = clientinfo.NewPerformanceMetrics(
 				ctx,
 				clientInfo,
+				config.Reservations.Enabled,
 			)
 		}
 		node.setPerformanceMetrics(perfMetrics)

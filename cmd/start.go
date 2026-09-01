@@ -96,6 +96,7 @@ func start(cmd *cobra.Command) error {
 		perfMetrics = clientinfo.NewPerformanceMetrics(
 			ctx,
 			clientInfoRegistry,
+			clientConfig.Tbtc.Reservations.Enabled,
 		)
 		// Type assert to libp2p provider to set metrics recorder
 		// The provider struct is not exported, so we use interface assertion
