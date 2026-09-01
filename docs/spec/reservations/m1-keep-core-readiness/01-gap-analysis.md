@@ -3,7 +3,7 @@
 ## Summary
 M1 is decided variant B scope: **creation, custody and re-anchor only** — redemption, dissolution, renewal and the watchtower veto are M2 and their Bridge-side code is absent from M1 by design, not deployed-and-gated (`feature-spec.md:9-15`, `milestone-inventory.md:7`, `roadmap.md` §0.1-0.2). keep-core's PR #4274 declares the full `ReservationActionType` enum (redemption/dissolution included) only because the storage/enum-positional rule requires every variant to keep its numeric position (`milestone-inventory.md` rule #5) — this is expected, not partial redemption/dissolution support. Findings below are scoped strictly to acceptance, re-anchor, action-timeout, and stranding — the four M1-reachable paths (`roadmap.md` §0.2). Out-of-scope code (redemption/dissolution executor absence, unenforced watchtower delay) is listed in `## Out of M1 scope` for audit-trail completeness, not as gaps.
 
-- **Blocker:** 1
+- **Blocker:** 2
 - **Major:** 2
 - **Minor:** 6
 
@@ -12,6 +12,7 @@ M1 is decided variant B scope: **creation, custody and re-anchor only** — rede
 | Gap | Severity | Evidence | Spec/PR ref |
 | :--- | :--- | :--- | :--- |
 | CI `make generate` fails for generated bindings | Blocker | `client-build-test-publish` CI job error: `No rule to make target '_address/ReservationRouter'`. | Verified fact #2 / PR #4274 CI |
+| Reservation acceptance/re-anchor proposal tasks structurally unreachable - never included in the coordination checklist | Blocker | `pkg/tbtc/coordination.go`'s `getActionsChecklist` (which decides which `WalletActionType`s a coordination round even considers) never emitted `ActionReservationAnchor`/`ActionReservationReanchor`. `pkg/tbtcpg.ProposalGenerator.Generate` (`tbtcpg.go:124-135`) only runs a task whose `ActionType()` appears in the checklist it's handed - it never iterates the full `pg.tasks` slice directly. `NewReservationAcceptanceTask`/`NewReservationReanchorTask` (`tbtcpg.go:88-92`) were registered when `config.Reservations.Enabled=true`, but with no checklist entry, `Generate`'s per-window loop never selected them - both tasks were dead code in production regardless of every other M1 wire-up (PR #4276, #4277). Every existing unit test for these tasks calls `task.Run(request)` directly, bypassing `getActionsChecklist`/`Generate` entirely, which is why this was never caught - found while building the M3 multi-signer coordination-round integration test, which is the first test to exercise the real production call path. Fixed: `ActionReservationAnchor`/`ActionReservationReanchor` added unconditionally, checked every window like `ActionRedemption` (custody-critical, not throughput-heavy like the frequency-gated sweep/moving-funds actions); a non-reservation-enabled node safely skips them via `Generate`'s existing "unsupported action" no-op path. | Found and fixed this session; see `pkg/tbtc/coordination.go`'s `getActionsChecklist` and `TestCoordinationExecutor_GetActionsChecklist_ReservationActionsAlwaysPresent` |
 
 ## Major
 
