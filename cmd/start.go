@@ -197,10 +197,24 @@ func start(cmd *cobra.Command) error {
 		// fatal: the operator opted into reservations, so a missing
 		// watcher would silently strand anchors.
 		if clientConfig.Tbtc.Reservations.Enabled {
+			// TODO: thread the real resolver from tbtc.Initialize once it
+			// is wired through; until then use a permanent-error stub so a
+			// misconfigured resolver fails loudly on first use instead of
+			// silently fabricating empty member data.
+			membersResolver := spv.WalletMembersResolverFunc(
+				func(walletPublicKeyHash [20]byte) ([]uint32, error) {
+					return nil, fmt.Errorf(
+						"wallet members resolver not wired: no on-chain " +
+							"accessor available for this operator's " +
+							"member indexes yet",
+					)
+				},
+			)
 			if err := spv.WireReservationWatchers(
 				ctx,
 				tbtcChain,
 				tbtcChain,
+				membersResolver,
 			); err != nil {
 				return fmt.Errorf(
 					"failed to wire reservation watchers: [%v]",

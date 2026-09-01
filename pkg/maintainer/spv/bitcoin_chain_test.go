@@ -47,6 +47,7 @@ type localBitcoinChain struct {
 	transactions             []*bitcoin.Transaction
 	transactionConfirmations map[bitcoin.Hash]uint
 	blockHeaders             map[uint]*bitcoin.BlockHeader
+	coinbaseTxHash           *bitcoin.Hash
 }
 
 func newLocalBitcoinChain() *localBitcoinChain {
@@ -138,11 +139,20 @@ func (lbc *localBitcoinChain) GetBlockHeader(blockHeight uint) (
 	return nil, fmt.Errorf("block header does not exist")
 }
 
+// GetTransactionMerkleProof returns a trivial, always-valid proof: an empty
+// merkle-node list means the given transaction hash is treated as the
+// block's merkle root directly, at position 0. Sufficient to let
+// bitcoin.AssembleSpvProof complete against this fake chain without a real
+// merkle-tree fixture.
 func (lbc *localBitcoinChain) GetTransactionMerkleProof(
 	transactionHash bitcoin.Hash,
 	blockHeight uint,
 ) (*bitcoin.TransactionMerkleProof, error) {
-	panic("unsupported")
+	return &bitcoin.TransactionMerkleProof{
+		BlockHeight: blockHeight,
+		MerkleNodes: nil,
+		Position:    0,
+	}, nil
 }
 
 func (lbc *localBitcoinChain) GetTransactionsForPublicKeyHash(
@@ -213,11 +223,31 @@ func (lbc *localBitcoinChain) EstimateSatPerVByteFee(blocks uint32) (
 	panic("unsupported")
 }
 
+// GetCoinbaseTxHash returns the hash previously installed via
+// setCoinbaseTxHash. Panics if never set, matching this fake chain's
+// convention for exercising an unconfigured dependency.
 func (lbc *localBitcoinChain) GetCoinbaseTxHash(blockHeight uint) (
 	bitcoin.Hash,
 	error,
 ) {
+	lbc.mutex.Lock()
+	defer lbc.mutex.Unlock()
+
+	if lbc.coinbaseTxHash != nil {
+		return *lbc.coinbaseTxHash, nil
+	}
 	panic("unsupported")
+}
+
+// setCoinbaseTxHash installs the hash GetCoinbaseTxHash returns for every
+// block height. The hash must belong to a transaction already known to
+// GetTransaction (e.g. via BroadcastTransaction) since AssembleSpvProof
+// looks the coinbase transaction up by this hash immediately after.
+func (lbc *localBitcoinChain) setCoinbaseTxHash(hash bitcoin.Hash) {
+	lbc.mutex.Lock()
+	defer lbc.mutex.Unlock()
+
+	lbc.coinbaseTxHash = &hash
 }
 
 func (lbc *localBitcoinChain) addBlockHeader(

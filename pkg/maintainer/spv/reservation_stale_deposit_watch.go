@@ -29,6 +29,7 @@ const reservationAcceptanceActionNonce uint64 = 1
 // flips the deposit's bookkeeping when the wallet never shows up.
 type ReservationStaleDepositWatcher struct {
 	spvChain Chain
+	notified map[string]struct{}
 }
 
 // NewReservationStaleDepositWatcher constructs a stale-deposit watcher
@@ -38,6 +39,7 @@ func NewReservationStaleDepositWatcher(
 ) *ReservationStaleDepositWatcher {
 	return &ReservationStaleDepositWatcher{
 		spvChain: spvChain,
+		notified: make(map[string]struct{}),
 	}
 }
 
@@ -105,6 +107,9 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	depositKey *big.Int,
 	now uint32,
 ) error {
+	if _, ok := rsdw.notified[depositKey.String()]; ok {
+		return nil
+	}
 	if depositKey == nil {
 		return fmt.Errorf("deposit key must not be nil")
 	}
@@ -285,6 +290,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 			err,
 		)
 	}
+	rsdw.notified[depositKey.String()] = struct{}{}
 
 	logger.Infof(
 		"notified stale reserved deposit [%v] "+

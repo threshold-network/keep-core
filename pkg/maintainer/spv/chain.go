@@ -4,6 +4,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -172,27 +173,6 @@ type Chain interface {
 	PastMovingFundsCommitmentSubmittedEvents(
 		filter *tbtc.MovingFundsCommitmentSubmittedEventFilter,
 	) ([]*tbtc.MovingFundsCommitmentSubmittedEvent, error)
-
-	// PastReservationAcceptedEvents fetches past ReservationAccepted events
-	// according to the provided filter or unfiltered if the filter is nil.
-	// Returned events are sorted by the block number in the ascending order.
-	PastReservationAcceptedEvents(
-		filter *tbtc.ReservationAcceptedEventFilter,
-	) ([]*tbtc.ReservationAcceptedEvent, error)
-
-	// PastReservationReanchoredEvents fetches past ReservationReanchored
-	// events according to the provided filter or unfiltered if the filter is
-	// nil. Returned events are sorted by the block number in the ascending order.
-	PastReservationReanchoredEvents(
-		filter *tbtc.ReservationReanchoredEventFilter,
-	) ([]*tbtc.ReservationReanchoredEvent, error)
-
-	// PastReservationActionTimedOutEvents fetches past ReservationActionTimedOut
-	// events according to the provided filter or unfiltered if the filter is nil.
-	// Returned events are sorted by the block number in the ascending order.
-	PastReservationActionTimedOutEvents(
-		filter *tbtc.ReservationActionTimedOutEventFilter,
-	) ([]*tbtc.ReservationActionTimedOutEvent, error)
 
 	// PastReservationAcceptanceRequestedEvents fetches past
 	// ReservationAcceptanceRequested events according to the provided filter

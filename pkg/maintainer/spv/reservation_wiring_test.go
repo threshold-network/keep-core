@@ -1,9 +1,11 @@
 package spv
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
+	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -140,5 +142,51 @@ func TestIsPendingStaleDepositResolved(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+type mockWalletMembersResolver struct {
+	resolveFn func(walletPublicKeyHash [20]byte) ([]uint32, error)
+}
+
+func (m *mockWalletMembersResolver) ResolveWalletMembers(walletPublicKeyHash [20]byte) ([]uint32, error) {
+	return m.resolveFn(walletPublicKeyHash)
+}
+
+// stubTbtcChain implements only the tbtc.Chain methods
+// WireReservationWatchers's synchronous startup path actually calls
+// (OnWalletClosed, to register the stranding watcher's live subscription).
+// Every other tbtc.Chain method is unreachable from that synchronous path
+// within this test's lifetime and is left to the embedded nil interface,
+// which would panic if ever invoked - an intentional signal that the test
+// has started exercising a code path it does not yet stub.
+type stubTbtcChain struct {
+	tbtc.Chain
+}
+
+func (s *stubTbtcChain) OnWalletClosed(
+	handler func(event *tbtc.WalletClosedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func TestWireReservationWatchers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tbtcChain := &stubTbtcChain{}
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	resolver := &mockWalletMembersResolver{
+		resolveFn: func(walletPublicKeyHash [20]byte) ([]uint32, error) {
+			return []uint32{1, 2, 3}, nil
+		},
+	}
+
+	if err := WireReservationWatchers(ctx, tbtcChain, spvChain, resolver); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

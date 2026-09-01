@@ -1,9 +1,11 @@
 package spv
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -372,5 +374,72 @@ func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 
 	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
 		t.Fatalf("expected exactly one notification attempt, got %d", len(calls))
+	}
+}
+
+func TestReservationActionTimeoutWatcher_RunLoop(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	resolver := &recordingActionTimeoutMembers{
+		walletIDs: map[[20]byte][]uint32{},
+	}
+
+	pollInterval := 10 * time.Millisecond
+	ratw := NewReservationActionTimeoutWatcher(
+		spvChain,
+		resolver,
+		pollInterval,
+	)
+	ratw.nowFn = func() uint32 { return 100 }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Tick 1: register wallet 1, within the first scan window.
+	wallet1 := [20]byte{1}
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		WalletPublicKeyHash: wallet1,
+		BlockNumber:         500,
+	})
+	spvChain.setWallet(wallet1, &tbtc.WalletChainData{State: tbtc.StateLive})
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ratw.Run(ctx)
+	}()
+
+	// Wait for tick 1 to run discoverWallets and pick up wallet 1.
+	time.Sleep(50 * time.Millisecond)
+
+	// Tick 2: register wallet 2 (block number past the tick-1 cursor, so
+	// the incremental scan actually picks it up) and close wallet 1, which
+	// must be evicted from knownWallets on this pass.
+	blockCounter.SetCurrentBlock(2000)
+	wallet2 := [20]byte{2}
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		WalletPublicKeyHash: wallet2,
+		BlockNumber:         1500,
+	})
+	spvChain.setWallet(wallet2, &tbtc.WalletChainData{State: tbtc.StateLive})
+	spvChain.setWallet(wallet1, &tbtc.WalletChainData{State: tbtc.StateClosed})
+
+	// Wait for tick 2 to observe the new wallet and the eviction.
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	if err := <-errChan; err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Assertions run only after Run has fully returned, so knownWallets is
+	// no longer being mutated concurrently by the background goroutine.
+	if _, ok := ratw.knownWallets[wallet1]; ok {
+		t.Errorf("wallet 1 should have been evicted after being observed Closed")
+	}
+	if _, ok := ratw.knownWallets[wallet2]; !ok {
+		t.Errorf("wallet 2 should have been discovered")
 	}
 }

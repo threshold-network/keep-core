@@ -33,9 +33,9 @@ type ReservationActionTimeoutWatcher struct {
 	// deadline forward; production wires it to time.Now in UTC.
 	nowFn func() uint32
 	// interval is how often the background poll loop re-checks pending
-	// actions. A zero value disables the background loop; tests and the
-	// synchronously driven integration code path will use a positive
-	// duration.
+	// actions. The interval must be positive whenever Run is used to drive
+	// the background loop; tests and the synchronously driven integration
+	// code path use a positive duration.
 	interval time.Duration
 	// membersResolver turns a wallet public key hash into the operator IDs
 	// the Bridge expects for the slashing argument. The resolver is
@@ -114,8 +114,9 @@ func (f ReservationActionTimeoutNotifierFunc) NotifyReservationActionTimeout(
 // without it because emitting NotifyReservationActionTimeout with a nil
 // or empty member slice would be ill-formed on the Bridge side.
 //
-// A zero pollInterval disables the background loop; the watcher must then
-// be driven by CheckReservationActionTimeouts calls from the integration.
+// The pollInterval must be positive whenever Run is used to drive the
+// background loop; the watcher can otherwise be driven by
+// CheckReservationActionTimeouts calls from the integration.
 func NewReservationActionTimeoutWatcher(
 	spvChain Chain,
 	membersResolver WalletMembersResolver,
@@ -218,13 +219,10 @@ func (ratw *ReservationActionTimeoutWatcher) Run(ctx context.Context) error {
 }
 
 // discoverWallets returns the public key hashes of every wallet registered
-// on-chain since the last call, plus every wallet seen by a prior call.
-// Callers must retain the returned slice's wallets across iterations
-// themselves if they need the full set; discoverWallets itself only
-// accumulates the incremental scan cursor (lastWalletScanBlock) - the
-// caller (Run) re-derives the full wallet set from WalletReservations,
-// which is authoritative regardless of when the wallet was registered, so
-// discoverWallets does not need to cache the wallet list itself.
+// on-chain, minus those that have been observed Closed or Terminated.
+// The wallet list is incrementally updated across calls; the watcher
+// maintains the knownWallets set, which is periodically pruned of
+// closed or terminated wallets to keep the discovery loop efficient.
 func (ratw *ReservationActionTimeoutWatcher) discoverWallets() ([][20]byte, error) {
 	blockCounter, err := ratw.spvChain.BlockCounter()
 	if err != nil {
@@ -237,9 +235,7 @@ func (ratw *ReservationActionTimeoutWatcher) discoverWallets() ([][20]byte, erro
 	}
 
 	startBlock := ratw.lastWalletScanBlock
-	if startBlock == 0 && currentBlock > reservationActionTimeoutWalletScanLookBackBlocks {
-		startBlock = currentBlock - reservationActionTimeoutWalletScanLookBackBlocks
-	}
+	// If lastWalletScanBlock is 0, we scan from block 0.
 
 	events, err := ratw.spvChain.PastNewWalletRegisteredEvents(
 		&tbtc.NewWalletRegisteredEventFilter{
@@ -265,12 +261,28 @@ func (ratw *ReservationActionTimeoutWatcher) discoverWallets() ([][20]byte, erro
 		ratw.knownWallets[event.WalletPublicKeyHash] = struct{}{}
 	}
 
+	ratw.evictTerminatedWallets()
 	wallets := make([][20]byte, 0, len(ratw.knownWallets))
 	for wallet := range ratw.knownWallets {
 		wallets = append(wallets, wallet)
 	}
 
 	return wallets, nil
+}
+
+// evictTerminatedWallets evicts wallets that have been closed or terminated
+// from the knownWallets map to keep the memory footprint and the number of
+// RPC calls per poll iteration bounded to active wallets.
+func (ratw *ReservationActionTimeoutWatcher) evictTerminatedWallets() {
+	for walletPublicKeyHash := range ratw.knownWallets {
+		walletData, err := ratw.spvChain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			continue
+		}
+		if walletData.State == tbtc.StateClosed || walletData.State == tbtc.StateTerminated {
+			delete(ratw.knownWallets, walletPublicKeyHash)
+		}
+	}
 }
 
 // CheckReservationActionTimeouts inspects the current action generation of a
@@ -322,43 +334,11 @@ func (ratw *ReservationActionTimeoutWatcher) CheckReservationActionTimeouts(
 
 	walletPublicKeyHash := reservation.WalletPublicKeyHash
 	if walletPublicKeyHash == ([20]byte{}) {
-		// Reservation exists but has no wallet assigned (e.g. the
-		// acceptance has not progressed yet). Without a wallet we cannot
-		// resolve members, so the watcher skips silently: the stranding
-		// watcher will eventually catch this case.
-		logger.Debugf(
-			"reservation [%v] has no wallet assigned; "+
-				"action-timeout watcher skipping",
-			reservationKey,
-		)
+		// finding #22: A reservation with no assigned wallet is structurally
+		// unreachable by the stranding watcher; we skip it until its chain
+		// state supplies a wallet, with no other component providing recovery.
+		logger.Debugf("reservation [%v] has no wallet; skipping", reservationKey)
 		return nil
-	}
-
-	// Resolve the wallet members exactly once per Check call: the Bridge
-	// requires the member IDs to be consistent across all notifications
-	// issued in response to a single reservation.
-	memberIDs, err := ratw.membersResolver.ResolveWalletMembers(
-		walletPublicKeyHash,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to resolve wallet member IDs for "+
-				"wallet [0x%x]: [%v]",
-			walletPublicKeyHash,
-			err,
-		)
-	}
-	if len(memberIDs) == 0 {
-		// Emitting NotifyReservationActionTimeout with a nil/empty member
-		// slice is ill-formed on the Bridge side (see
-		// NewReservationActionTimeoutWatcher's doc). Refuse rather than
-		// notify on partial information: a misconfigured members resolver
-		// must fail loud, not silently strand the slashing attribution.
-		return fmt.Errorf(
-			"wallet [0x%x] members resolver returned an empty set; "+
-				"refusing to notify with no attributable members",
-			walletPublicKeyHash,
-		)
 	}
 
 	nonce := reservation.RequestNonce
@@ -394,6 +374,24 @@ func (ratw *ReservationActionTimeoutWatcher) CheckReservationActionTimeouts(
 			now,
 		)
 		return nil
+	}
+
+	memberIDs, err := ratw.membersResolver.ResolveWalletMembers(walletPublicKeyHash)
+	if err != nil {
+		return fmt.Errorf("could not resolve wallet members [%x]: %w", walletPublicKeyHash, err)
+	}
+
+	if len(memberIDs) == 0 {
+		// Emitting NotifyReservationActionTimeout with a nil/empty member
+		// slice is ill-formed on the Bridge side (see
+		// NewReservationActionTimeoutWatcher's doc). Refuse rather than
+		// notify on partial information: a misconfigured members resolver
+		// must fail loud, not silently strand the slashing attribution.
+		return fmt.Errorf(
+			"wallet [0x%x] members resolver returned an empty set; "+
+				"refusing to notify with no attributable members",
+			walletPublicKeyHash,
+		)
 	}
 
 	if err := ratw.spvChain.NotifyReservationActionTimeout(
