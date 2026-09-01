@@ -488,8 +488,21 @@ func unmarshalPublicKey(bytes []byte) (*ecdsa.PublicKey, error) {
 }
 
 func validateMemberIndex(protoIndex uint32) error {
-	if protoIndex == 0 {
-		return fmt.Errorf("member index must be greater than 0")
+	// Protobuf does not have uint8 type, so we are using uint32. When
+	// unmarshalling message, we need to make sure we do not overflow,
+	// and that a valid (non-zero) member index was provided.
+	if protoIndex == 0 || protoIndex > uint32(group.MaxMemberIndex) {
+		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
+	}
+	return nil
+}
+
+func validateReservationKey(key *big.Int) error {
+	if key == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	if key.Sign() <= 0 || key.BitLen() > 256 {
+		return fmt.Errorf("reservation key is out of range")
 	}
 	return nil
 }
@@ -549,10 +562,10 @@ func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
 	if err := json.Unmarshal(bytes, &proposal); err != nil {
 		return err
 	}
-	if proposal.ReservationKey == nil {
-		return fmt.Errorf("reservation key is required")
+	if err := validateReservationKey(proposal.ReservationKey); err != nil {
+		return err
 	}
-	if proposal.RedeemerOutputScript == nil || len(proposal.RedeemerOutputScript) == 0 {
+	if len(proposal.RedeemerOutputScript) == 0 {
 		return fmt.Errorf("redeemer output script is required")
 	}
 	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.RedemptionTxFee, "redemption transaction fee"); err != nil {
@@ -577,8 +590,8 @@ func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
 	if err := json.Unmarshal(bytes, &proposal); err != nil {
 		return err
 	}
-	if proposal.ReservationKey == nil {
-		return fmt.Errorf("reservation key is required")
+	if err := validateReservationKey(proposal.ReservationKey); err != nil {
+		return err
 	}
 	if proposal.TargetWalletPublicKeyHash == [20]byte{} {
 		return fmt.Errorf("target wallet public key hash is required")
@@ -605,8 +618,8 @@ func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
 	if err := json.Unmarshal(bytes, &proposal); err != nil {
 		return err
 	}
-	if proposal.ReservationKey == nil {
-		return fmt.Errorf("reservation key is required")
+	if err := validateReservationKey(proposal.ReservationKey); err != nil {
+		return err
 	}
 	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.DissolutionTxFee, "dissolution transaction fee"); err != nil {
 		return err

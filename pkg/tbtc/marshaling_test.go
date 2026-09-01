@@ -20,6 +20,42 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestValidateMemberIndex(t *testing.T) {
+	tests := map[string]struct {
+		protoIndex uint32
+		wantErr    bool
+	}{
+		"valid index 1": {
+			protoIndex: 1,
+			wantErr:    false,
+		},
+		"valid index 255": {
+			protoIndex: 255,
+			wantErr:    false,
+		},
+		"invalid index 0": {
+			protoIndex: 0,
+			wantErr:    true,
+		},
+		"invalid index 256": {
+			protoIndex: 256,
+			wantErr:    true,
+		},
+		"invalid index 300": {
+			protoIndex: 300,
+			wantErr:    true,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			err := validateMemberIndex(test.protoIndex)
+			if (err != nil) != test.wantErr {
+				t.Errorf("validateMemberIndex() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
 func TestSignerMarshalling(t *testing.T) {
 	marshaled := createMockSigner(t)
 
@@ -546,6 +582,27 @@ func TestReservedRedemptionProposal_UnmarshalRejectsMalformedInput(t *testing.T)
 			t.Fatal("expected error for negative fee")
 		}
 	})
+	t.Run("negative reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservedRedemptionProposal{
+			ReservationKey:  big.NewInt(-1),
+			RequestNonce:    1,
+			RedemptionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservedRedemptionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative reservation key")
+		}
+	})
+
+	t.Run("oversized reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservedRedemptionProposal{
+			ReservationKey:  new(big.Int).Lsh(big.NewInt(1), 256), // > 256 bits
+			RequestNonce:    1,
+			RedemptionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservedRedemptionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized reservation key")
+		}
+	})
 }
 
 func TestReservationReanchorProposal_UnmarshalRejectsMalformedInput(t *testing.T) {
@@ -576,6 +633,27 @@ func TestReservationReanchorProposal_UnmarshalRejectsMalformedInput(t *testing.T
 			t.Fatal("expected error for negative fee")
 		}
 	})
+	t.Run("negative reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationReanchorProposal{
+			ReservationKey: big.NewInt(-1),
+			RequestNonce:   1,
+			ReanchorTxFee:  big.NewInt(100),
+		})
+		if err := (&ReservationReanchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative reservation key")
+		}
+	})
+
+	t.Run("oversized reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationReanchorProposal{
+			ReservationKey: new(big.Int).Lsh(big.NewInt(1), 256), // > 256 bits
+			RequestNonce:   1,
+			ReanchorTxFee:  big.NewInt(100),
+		})
+		if err := (&ReservationReanchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized reservation key")
+		}
+	})
 }
 
 func TestReservationDissolutionProposal_UnmarshalRejectsMalformedInput(t *testing.T) {
@@ -604,6 +682,27 @@ func TestReservationDissolutionProposal_UnmarshalRejectsMalformedInput(t *testin
 		})
 		if err := (&ReservationDissolutionProposal{}).Unmarshal(data); err == nil {
 			t.Fatal("expected error for negative fee")
+		}
+	})
+	t.Run("negative reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationDissolutionProposal{
+			ReservationKey:   big.NewInt(-1),
+			RequestNonce:     1,
+			DissolutionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservationDissolutionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative reservation key")
+		}
+	})
+
+	t.Run("oversized reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationDissolutionProposal{
+			ReservationKey:   new(big.Int).Lsh(big.NewInt(1), 256), // > 256 bits
+			RequestNonce:     1,
+			DissolutionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservationDissolutionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized reservation key")
 		}
 	})
 }

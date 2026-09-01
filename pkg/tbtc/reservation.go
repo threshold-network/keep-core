@@ -1,6 +1,7 @@
 package tbtc
 
 import (
+	"crypto/ecdsa"
 	"fmt"
 	"math/big"
 
@@ -242,7 +243,12 @@ func (rdp *ReservationDissolutionProposal) ValidityBlocks() uint64 {
 	return reservationDissolutionProposalValidityBlocks
 }
 
-func requireReservationAction(action *ReservationAction, expectedType ReservationActionType, label string) error {
+func requireReservationAction(
+	action *ReservationAction,
+	expectedType ReservationActionType,
+	now uint32,
+	label string,
+) error {
 	if action == nil {
 		return fmt.Errorf("reservation action is required")
 	}
@@ -250,7 +256,10 @@ func requireReservationAction(action *ReservationAction, expectedType Reservatio
 		return fmt.Errorf("reservation action is not %s", label)
 	}
 	if action.State != ReservationActionStatePending {
-		return fmt.Errorf("reservation action is not pending")
+		return fmt.Errorf("reservation action has already been settled")
+	}
+	if action.TimeoutAt != 0 && now >= action.TimeoutAt {
+		return fmt.Errorf("reservation action has timed out")
 	}
 	return nil
 }
@@ -274,16 +283,24 @@ func requireValidActionFee(fee int64, maxFee uint64) error {
 func assembleReservationAnchorTransaction(
 	bitcoinChain bitcoin.Chain,
 	deposit *Deposit,
-	walletPublicKeyHash [20]byte,
+	walletPublicKey *ecdsa.PublicKey,
 	action *ReservationAction,
 	reservationMinAmount uint64,
 	fee int64,
+	now uint32,
 ) (*bitcoin.TransactionBuilder, error) {
-	if err := requireReservationAction(action, ReservationActionTypeAcceptance, "an acceptance"); err != nil {
+	if walletPublicKey == nil {
+		return nil, fmt.Errorf("wallet public key is required")
+	}
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+	if err := requireReservationAction(action, ReservationActionTypeAcceptance, now, "an acceptance"); err != nil {
 		return nil, err
 	}
 	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
 		return nil, fmt.Errorf("acceptance action targets a different wallet")
+	}
+	if action.TargetWalletPublicKeyHash == [20]byte{} {
+		return nil, fmt.Errorf("target wallet public key hash is required")
 	}
 	if err := requireValidActionFee(fee, action.TxMaxFee); err != nil {
 		return nil, err
@@ -340,6 +357,8 @@ func assembleReservedRedemptionTransaction(
 	redeemerOutputScript bitcoin.Script,
 	action *ReservationAction,
 	fee int64,
+	now uint32,
+	expectedAnchorOutpoint *bitcoin.TransactionOutpoint,
 ) (*bitcoin.TransactionBuilder, error) {
 	if bridgeChain == nil {
 		return nil, fmt.Errorf("bridge chain is required")
@@ -347,10 +366,19 @@ func assembleReservedRedemptionTransaction(
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
 	}
+	if expectedAnchorOutpoint == nil {
+		return nil, fmt.Errorf("expected anchor outpoint is required")
+	}
+	if anchorUtxo.Outpoint == nil {
+		return nil, fmt.Errorf("anchor UTXO outpoint is required")
+	}
+	if *anchorUtxo.Outpoint != *expectedAnchorOutpoint {
+		return nil, fmt.Errorf("anchor UTXO outpoint does not match the action snapshot")
+	}
 	if len(redeemerOutputScript) == 0 {
 		return nil, fmt.Errorf("redeemer output script is required")
 	}
-	if err := requireReservationAction(action, ReservationActionTypeRedemption, "a redemption"); err != nil {
+	if err := requireReservationAction(action, ReservationActionTypeRedemption, now, "a redemption"); err != nil {
 		return nil, err
 	}
 	if anchorUtxo.Value <= 0 {
@@ -417,19 +445,41 @@ func assembleReservationReanchorTransaction(
 	action *ReservationAction,
 	reservationMinAmount uint64,
 	fee int64,
+	now uint32,
+	expectedAnchorOutpoint *bitcoin.TransactionOutpoint,
 ) (*bitcoin.TransactionBuilder, error) {
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
 	}
-	if err := requireReservationAction(action, ReservationActionTypeReanchor, "a re-anchor"); err != nil {
+	if expectedAnchorOutpoint == nil {
+		return nil, fmt.Errorf("expected anchor outpoint is required")
+	}
+	if anchorUtxo.Outpoint == nil {
+		return nil, fmt.Errorf("anchor UTXO outpoint is required")
+	}
+	if *anchorUtxo.Outpoint != *expectedAnchorOutpoint {
+		return nil, fmt.Errorf("anchor UTXO outpoint does not match the action snapshot")
+	}
+	if err := requireReservationAction(action, ReservationActionTypeReanchor, now, "a re-anchor"); err != nil {
 		return nil, err
 	}
 	if action.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
 		return nil, fmt.Errorf("reanchor action targets a different wallet")
 	}
+	if action.TargetWalletPublicKeyHash == [20]byte{} {
+		return nil, fmt.Errorf("target wallet public key hash is required")
+	}
 	if err := requireValidActionFee(fee, action.TxMaxFee); err != nil {
 		return nil, err
 	}
+
+	if anchorUtxo.Value <= 0 {
+		return nil, fmt.Errorf("anchor UTXO value must be positive")
+	}
+	if action.Amount != uint64(anchorUtxo.Value) {
+		return nil, fmt.Errorf("reanchor action amount does not match the anchor value")
+	}
+
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
 
 	err := builder.AddPublicKeyHashInput(anchorUtxo)
@@ -468,6 +518,16 @@ func assembleReservationReanchorTransaction(
 // anchor outpoint is the first input. The wallet main UTXO is the second input
 // only when it is present in the action snapshot and matches that snapshot
 // exactly. The single output pays back to the custodying wallet.
+//
+// TODO: the anchor-first, main-UTXO-second input ordering below is a
+// load-bearing assumption about the reservation Bridge contract's SPV proof
+// validation (see the companion contracts PR, threshold-network/tbtc-v2#1088,
+// for the authoritative rule). This is not independently verified from this
+// repo. If the merged Bridge contract requires a different order, a broadcast
+// dissolution transaction here would be irreversible and unrecognized by the
+// Bridge. Confirm the exact input-order clause in tbtc-v2#1088 before this
+// assembler is wired into the coordination executor, and remove this TODO
+// once confirmed (or fix the ordering if it turns out to be wrong).
 func assembleReservationDissolutionTransaction(
 	bitcoinChain bitcoin.Chain,
 	bridgeChain interface {
@@ -475,21 +535,39 @@ func assembleReservationDissolutionTransaction(
 	},
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
 	walletMainUtxo *bitcoin.UnspentTransactionOutput,
-	walletPublicKeyHash [20]byte,
+	walletPublicKey *ecdsa.PublicKey,
 	action *ReservationAction,
 	fee int64,
+	now uint32,
+	expectedAnchorOutpoint *bitcoin.TransactionOutpoint,
 ) (*bitcoin.TransactionBuilder, error) {
+	if walletPublicKey == nil {
+		return nil, fmt.Errorf("wallet public key is required")
+	}
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
 	if bridgeChain == nil {
 		return nil, fmt.Errorf("bridge chain is required")
 	}
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
 	}
-	if err := requireReservationAction(action, ReservationActionTypeDissolution, "a dissolution"); err != nil {
+	if expectedAnchorOutpoint == nil {
+		return nil, fmt.Errorf("expected anchor outpoint is required")
+	}
+	if anchorUtxo.Outpoint == nil {
+		return nil, fmt.Errorf("anchor UTXO outpoint is required")
+	}
+	if *anchorUtxo.Outpoint != *expectedAnchorOutpoint {
+		return nil, fmt.Errorf("anchor UTXO outpoint does not match the action snapshot")
+	}
+	if err := requireReservationAction(action, ReservationActionTypeDissolution, now, "a dissolution"); err != nil {
 		return nil, err
 	}
 	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
 		return nil, fmt.Errorf("dissolution action targets a different wallet")
+	}
+	if action.TargetWalletPublicKeyHash == [20]byte{} {
+		return nil, fmt.Errorf("target wallet public key hash is required")
 	}
 	if anchorUtxo.Value <= 0 {
 		return nil, fmt.Errorf("anchor UTXO value must be positive")
@@ -531,8 +609,6 @@ func assembleReservationDissolutionTransaction(
 		)
 	}
 
-	totalInputsValue := anchorUtxo.Value
-
 	if mainUtxoExpected {
 		err = builder.AddPublicKeyHashInput(walletMainUtxo)
 		if err != nil {
@@ -541,10 +617,9 @@ func assembleReservationDissolutionTransaction(
 				err,
 			)
 		}
-		totalInputsValue += walletMainUtxo.Value
 	}
 
-	dissolutionValue := totalInputsValue - fee
+	dissolutionValue := builder.TotalInputsValue() - fee
 	if dissolutionValue <= 0 {
 		return nil, fmt.Errorf(
 			"transaction fee exceeds the total inputs value",

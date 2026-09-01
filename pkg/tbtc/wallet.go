@@ -23,6 +23,10 @@ import (
 )
 
 // WalletActionType represents actions types that can be performed by a wallet.
+//
+// Append-only: values are part of the wire-serialized wallet action
+// protocol. Do not reorder or insert new values in the middle of the
+// existing block; always append new action types at the end.
 type WalletActionType uint8
 
 const (
