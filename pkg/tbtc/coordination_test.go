@@ -440,6 +440,420 @@ loop:
 	)
 }
 
+// reservationCoordinationOperatorFixture bundles the per-operator state
+// needed to run coordinationExecutor.coordinate as an independent
+// in-process simulated node, sharing a local chain and broadcast channel
+// with its peers the same way pkg/tbtc/node wires a real operator.
+type reservationCoordinationOperatorFixture struct {
+	chain              Chain
+	address            chain.Address
+	channel            net.BroadcastChannel
+	waitForBlockHeight func(ctx context.Context, blockHeight uint64) error
+}
+
+// newReservationCoordinationOperator builds one simulated operator for the
+// reservation multi-signer coordination tests below: a deterministic
+// keypair (so leader election is reproducible across runs), a local chain
+// fake wired to that keypair, and a broadcast channel joined to a local
+// network shared by every operator in the same test so they exchange real
+// coordinationMessage wire traffic - the same netlocal package
+// TestCoordinationExecutor_Coordinate uses. channelName must be unique per
+// test function: getBroadcastChannel's registry is keyed by name and never
+// releases old channels, so two tests sharing a name can cross-deliver
+// leftover broadcasts from one into the other's followers.
+func newReservationCoordinationOperator(
+	t *testing.T,
+	privateKey int64,
+	coordinationBlock uint64,
+	channelName string,
+) *reservationCoordinationOperatorFixture {
+	t.Helper()
+
+	privateKeyBigInt := big.NewInt(privateKey)
+	x, y := local_v1.DefaultCurve.ScalarBaseMult(privateKeyBigInt.Bytes())
+
+	localChain := ConnectWithKey(
+		&operator.PrivateKey{
+			PublicKey: operator.PublicKey{
+				Curve: operator.Secp256k1,
+				X:     x,
+				Y:     y,
+			},
+			D: privateKeyBigInt,
+		},
+		100*time.Millisecond,
+	)
+
+	localChain.setBlockHashByNumber(
+		coordinationBlock-32,
+		"1422996cbcbc38fc924a46f4df5f9064279d3ab43396e58386dac9b87440d64f",
+	)
+
+	operatorAddress, err := localChain.operatorAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, operatorPublicKey, err := localChain.OperatorKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broadcastChannel, err := netlocal.ConnectWithKey(operatorPublicKey).
+		BroadcastChannelFor(channelName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
+		return &coordinationMessage{}
+	})
+
+	waitForBlockHeight := func(ctx context.Context, blockHeight uint64) error {
+		blockCounter, err := localChain.BlockCounter()
+		if err != nil {
+			return err
+		}
+
+		wait, err := blockCounter.BlockHeightWaiter(blockHeight)
+		if err != nil {
+			return err
+		}
+
+		select {
+		case <-wait:
+		case <-ctx.Done():
+		}
+
+		return nil
+	}
+
+	return &reservationCoordinationOperatorFixture{
+		chain:              localChain,
+		address:            operatorAddress,
+		channel:            broadcastChannel,
+		waitForBlockHeight: waitForBlockHeight,
+	}
+}
+
+// reservationCoordinationReport captures one simulated operator's outcome
+// from a single coordination round.
+type reservationCoordinationReport struct {
+	operatorIndex int
+	result        *coordinationResult
+	err           error
+}
+
+// runReservationCoordinationRound runs coordinationExecutor.coordinate
+// concurrently for every given operator against the same window - one
+// goroutine per operator, no shared mutable state beyond the local network
+// fake - the same way pkg/tbtc/node's real coordination layer drives each
+// node's own executor. Returns each operator's result sorted by operator
+// index for deterministic assertions.
+func runReservationCoordinationRound(
+	t *testing.T,
+	operators []*reservationCoordinationOperatorFixture,
+	coordinatedWallet wallet,
+	proposalGenerator CoordinationProposalGenerator,
+	membershipValidator *group.MembershipValidator,
+	protocolLatch *generator.ProtocolLatch,
+	window *coordinationWindow,
+) []*reservationCoordinationReport {
+	t.Helper()
+
+	reportChan := make(chan *reservationCoordinationReport, len(operators))
+
+	for i, currentOperator := range operators {
+		go func(operatorIndex int, op *reservationCoordinationOperatorFixture) {
+			executor := newCoordinationExecutor(
+				op.chain,
+				coordinatedWallet,
+				coordinatedWallet.membersByOperator(op.address),
+				op.address,
+				proposalGenerator,
+				op.channel,
+				membershipValidator,
+				protocolLatch,
+				op.waitForBlockHeight,
+			)
+
+			result, err := executor.coordinate(window)
+
+			reportChan <- &reservationCoordinationReport{
+				operatorIndex: operatorIndex,
+				result:        result,
+				err:           err,
+			}
+		}(i+1, currentOperator)
+	}
+
+	reports := make([]*reservationCoordinationReport, 0, len(operators))
+	for len(reports) < len(operators) {
+		reports = append(reports, <-reportChan)
+	}
+
+	slices.SortFunc(reports, func(a, b *reservationCoordinationReport) int {
+		return a.operatorIndex - b.operatorIndex
+	})
+
+	return reports
+}
+
+// newReservationCoordinationWallet returns the 3-operator wallet fixture
+// shared by TestCoordinationExecutor_Coordinate_ReservationAnchor and
+// TestCoordinationExecutor_Coordinate_ReservationReanchor: same wallet
+// public key hash and operator-to-member-index layout as
+// TestCoordinationExecutor_Coordinate, so leader election (operator2 wins
+// at coordination block 900) is proven identical to that already-passing
+// test rather than asserted freshly here.
+func newReservationCoordinationWallet(
+	t *testing.T,
+	operators []*reservationCoordinationOperatorFixture,
+) (wallet, [20]byte) {
+	t.Helper()
+
+	// Uncompressed public key corresponding to the 20-byte public key hash:
+	// aa768412ceed10bd423c025542ca90071f9fb62d.
+	publicKeyHex, err := hex.DecodeString(
+		"0471e30bca60f6548d7b42582a478ea37ada63b402af7b3ddd57f0c95bb6843175" +
+			"aa0d2053a91a050a6797d85c38f2909cb7027f2344a01986aa2f9f8ca7a0c289",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buffer, err := hex.DecodeString("aa768412ceed10bd423c025542ca90071f9fb62d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var publicKeyHash [20]byte
+	copy(publicKeyHash[:], buffer)
+
+	operator1, operator2, operator3 := operators[0], operators[1], operators[2]
+
+	coordinatedWallet := wallet{
+		publicKey: mustUnmarshalPublicKey(t, publicKeyHex),
+		signingGroupOperators: []chain.Address{
+			operator2.address,
+			operator3.address,
+			operator1.address,
+			operator1.address,
+			operator3.address,
+			operator2.address,
+			operator2.address,
+			operator3.address,
+			operator1.address,
+			operator1.address,
+		},
+	}
+
+	return coordinatedWallet, publicKeyHash
+}
+
+// TestCoordinationExecutor_Coordinate_ReservationAnchor is the M1
+// acceptance-side leg of the Milestone 3 multi-signer simulated
+// integration test: it scales TestCoordinationExecutor_Coordinate's
+// 3-operator, real-broadcast-channel, real-leader-election harness to a
+// ReservationAnchorProposal, proving the leader/follower coordination
+// round-trip that no mocked unit test in pkg/tbtcpg (which calls
+// task.Run(request) directly, never coordinationExecutor.coordinate) can
+// cover. It also exercises PR #4277's protobuf marshaling of
+// ReservationAnchorProposal over a real wire round-trip, since every
+// follower unmarshals the leader's broadcast coordinationMessage.
+//
+// This test requires ActionReservationAnchor to actually appear in
+// getActionsChecklist's output (fixed on this branch) - before that fix,
+// every operator's checklist search below would fall through to
+// NoopProposal and the assertion would fail.
+func TestCoordinationExecutor_Coordinate_ReservationAnchor(t *testing.T) {
+	coordinationBlock := uint64(900)
+
+	operator1 := newReservationCoordinationOperator(t, 1, coordinationBlock, "reservation-coordination-test-anchor")
+	operator2 := newReservationCoordinationOperator(t, 2, coordinationBlock, "reservation-coordination-test-anchor")
+	operator3 := newReservationCoordinationOperator(t, 3, coordinationBlock, "reservation-coordination-test-anchor")
+	operators := []*reservationCoordinationOperatorFixture{
+		operator1, operator2, operator3,
+	}
+
+	coordinatedWallet, publicKeyHash := newReservationCoordinationWallet(t, operators)
+
+	expectedProposal := &ReservationAnchorProposal{
+		DepositFundingTxHash:      bitcoin.Hash{0x01, 0x02, 0x03},
+		DepositFundingOutputIndex: 1,
+		RequestNonce:              7,
+		AnchorTxFee:               big.NewInt(1500),
+	}
+
+	proposalGenerator := newMockCoordinationProposalGenerator(
+		func(
+			walletPublicKeyHash [20]byte,
+			actionsChecklist []WalletActionType,
+			_ uint,
+		) (CoordinationProposal, error) {
+			for _, action := range actionsChecklist {
+				if walletPublicKeyHash == publicKeyHash && action == ActionReservationAnchor {
+					return expectedProposal, nil
+				}
+			}
+
+			return &NoopProposal{}, nil
+		},
+	)
+
+	membershipValidator := group.NewMembershipValidator(
+		&testutils.MockLogger{},
+		coordinatedWallet.signingGroupOperators,
+		Connect().Signing(),
+	)
+
+	protocolLatch := generator.NewProtocolLatch()
+
+	window := newCoordinationWindow(coordinationBlock)
+
+	reports := runReservationCoordinationRound(
+		t,
+		operators,
+		coordinatedWallet,
+		proposalGenerator,
+		membershipValidator,
+		protocolLatch,
+		window,
+	)
+
+	testutils.AssertIntsEqual(t, "reports count", 3, len(reports))
+
+	expectedResult := &coordinationResult{
+		wallet:   coordinatedWallet,
+		window:   window,
+		leader:   operator2.address,
+		proposal: expectedProposal,
+		faults:   nil,
+	}
+
+	for _, report := range reports {
+		if report.err != nil {
+			t.Fatalf(
+				"operator %d: unexpected error: %v",
+				report.operatorIndex,
+				report.err,
+			)
+		}
+		if !reflect.DeepEqual(expectedResult, report.result) {
+			t.Errorf(
+				"operator %d: unexpected result\nexpected: %+v\nactual:   %+v",
+				report.operatorIndex,
+				expectedResult,
+				report.result,
+			)
+		}
+	}
+
+	testutils.AssertBoolsEqual(
+		t,
+		"protocol latch state",
+		false,
+		protocolLatch.IsExecuting(),
+	)
+}
+
+// TestCoordinationExecutor_Coordinate_ReservationReanchor is the M1
+// re-anchor-side leg of the same Milestone 3 integration test: same
+// 3-operator harness, wallet, and proven leader (operator2) as
+// TestCoordinationExecutor_Coordinate_ReservationAnchor above - simulating
+// the next coordination round in a reservation's lifecycle after its
+// source wallet begins moving funds, this time converging on a
+// ReservationReanchorProposal.
+func TestCoordinationExecutor_Coordinate_ReservationReanchor(t *testing.T) {
+	coordinationBlock := uint64(900)
+
+	operator1 := newReservationCoordinationOperator(t, 1, coordinationBlock, "reservation-coordination-test-reanchor")
+	operator2 := newReservationCoordinationOperator(t, 2, coordinationBlock, "reservation-coordination-test-reanchor")
+	operator3 := newReservationCoordinationOperator(t, 3, coordinationBlock, "reservation-coordination-test-reanchor")
+	operators := []*reservationCoordinationOperatorFixture{
+		operator1, operator2, operator3,
+	}
+
+	coordinatedWallet, publicKeyHash := newReservationCoordinationWallet(t, operators)
+
+	expectedProposal := &ReservationReanchorProposal{
+		ReservationKey:            big.NewInt(424242),
+		RequestNonce:              4,
+		TargetWalletPublicKeyHash: [20]byte{0xf8, 0x7e, 0xb7},
+		ReanchorTxFee:             big.NewInt(1200),
+	}
+
+	proposalGenerator := newMockCoordinationProposalGenerator(
+		func(
+			walletPublicKeyHash [20]byte,
+			actionsChecklist []WalletActionType,
+			_ uint,
+		) (CoordinationProposal, error) {
+			for _, action := range actionsChecklist {
+				if walletPublicKeyHash == publicKeyHash && action == ActionReservationReanchor {
+					return expectedProposal, nil
+				}
+			}
+
+			return &NoopProposal{}, nil
+		},
+	)
+
+	membershipValidator := group.NewMembershipValidator(
+		&testutils.MockLogger{},
+		coordinatedWallet.signingGroupOperators,
+		Connect().Signing(),
+	)
+
+	protocolLatch := generator.NewProtocolLatch()
+
+	window := newCoordinationWindow(coordinationBlock)
+
+	reports := runReservationCoordinationRound(
+		t,
+		operators,
+		coordinatedWallet,
+		proposalGenerator,
+		membershipValidator,
+		protocolLatch,
+		window,
+	)
+
+	testutils.AssertIntsEqual(t, "reports count", 3, len(reports))
+
+	expectedResult := &coordinationResult{
+		wallet:   coordinatedWallet,
+		window:   window,
+		leader:   operator2.address,
+		proposal: expectedProposal,
+		faults:   nil,
+	}
+
+	for _, report := range reports {
+		if report.err != nil {
+			t.Fatalf(
+				"operator %d: unexpected error: %v",
+				report.operatorIndex,
+				report.err,
+			)
+		}
+		if !reflect.DeepEqual(expectedResult, report.result) {
+			t.Errorf(
+				"operator %d: unexpected result\nexpected: %+v\nactual:   %+v",
+				report.operatorIndex,
+				expectedResult,
+				report.result,
+			)
+		}
+	}
+
+	testutils.AssertBoolsEqual(
+		t,
+		"protocol latch state",
+		false,
+		protocolLatch.IsExecuting(),
+	)
+}
+
 func TestCoordinationExecutor_GetSeed(t *testing.T) {
 	coordinationBlock := uint64(900)
 
