@@ -59,169 +59,51 @@ func submitReservationAcceptanceProof(
 		IncrementCounter(name string, value float64)
 	},
 ) error {
-	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter(
-			"reservation_acceptance_proof_submissions_total",
-			1,
-		)
-	}
-
-	if requiredConfirmations == 0 {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(
-				"reservation_acceptance_proof_submissions_failed_total",
-				1,
-			)
-		}
-		return fmt.Errorf(
-			"provided required confirmations count must be greater than 0",
-		)
-	}
-	if reservationKey == nil {
-		return fmt.Errorf("reservation key is required")
-	}
-	if requestNonce == 0 {
-		return fmt.Errorf("request nonce must be > 0")
-	}
-
-	transaction, proof, err := spvProofAssembler(
+	return submitReservationActionProof(
 		transactionHash,
 		requiredConfirmations,
-		btcChain,
-	)
-	if err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(
-				"reservation_acceptance_proof_submissions_failed_total",
-				1,
-			)
-		}
-		return fmt.Errorf(
-			"failed to assemble transaction spv proof: [%v]",
-			err,
-		)
-	}
-
-	depositUtxo, err := parseReservationAcceptanceTransactionInput(
-		btcChain,
-		transaction,
-	)
-	if err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(
-				"reservation_acceptance_proof_submissions_failed_total",
-				1,
-			)
-		}
-		return fmt.Errorf(
-			"error while parsing reservation acceptance transaction "+
-				"inputs: [%v]",
-			err,
-		)
-	}
-
-	action, err := spvChain.GetReservationAction(reservationKey, requestNonce)
-	if err != nil {
-		return fmt.Errorf(
-			"cannot fetch reservation action generation: [%v]",
-			err,
-		)
-	}
-
-	if action.ActionType != tbtc.ReservationActionTypeAcceptance {
-		return fmt.Errorf(
-			"reservation action generation is not an acceptance (got %v)",
-			action.ActionType,
-		)
-	}
-
-	if action.State != tbtc.ReservationActionStatePending {
-		return fmt.Errorf(
-			"reservation acceptance action generation is not pending "+
-				"(state=%v)",
-			action.State,
-		)
-	}
-
-	txInfo := buildReservationProofTxInfo(transaction)
-	txProof := buildReservationProofTxProof(proof)
-	mainUtxo := buildReservationProofMainUtxo(depositUtxo)
-
-	if err := spvChain.SubmitReservationProof(
-		ProofTypeReservationAcceptance,
-		txInfo,
-		txProof,
-		mainUtxo,
 		reservationKey,
 		requestNonce,
-	); err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(
-				"reservation_acceptance_proof_submissions_failed_total",
-				1,
-			)
-		}
-		return fmt.Errorf(
-			"failed to submit reservation acceptance proof: [%v]",
-			err,
-		)
-	}
-
-	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter(
-			"reservation_acceptance_proof_submissions_success_total",
-			1,
-		)
-	}
-
-	return nil
+		btcChain,
+		spvChain,
+		spvProofAssembler,
+		metricsRecorder,
+		ProofTypeReservationAcceptance,
+		"reservation_acceptance_proof",
+		tbtc.ReservationActionTypeAcceptance,
+		parseReservationAcceptanceTransactionInput,
+	)
 }
 
-// parseReservationAcceptanceTransactionInput parses the single input of a
-// reservation acceptance (anchor) transaction and returns the deposit UTXO
-// that was anchored. Mirrors parseReservationReanchorTransactionInput in
-// reservation_reanchor_proof.go.
+// parseReservationAcceptanceTransactionInput parses the single input and
+// single output of a reservation acceptance (anchor) transaction and
+// returns the deposit UTXO that was anchored and the wallet's public key
+// hash from the new anchor output script. Mirrors
+// parseReservationReanchorTransactionInput in reservation_reanchor_proof.go.
 func parseReservationAcceptanceTransactionInput(
 	btcChain bitcoin.Chain,
 	transaction *bitcoin.Transaction,
-) (*bitcoin.UnspentTransactionOutput, error) {
-	if len(transaction.Inputs) != 1 {
-		return nil, fmt.Errorf(
-			"reservation acceptance transaction must have exactly one input",
-		)
+) (*bitcoin.UnspentTransactionOutput, [20]byte, error) {
+	depositUtxo, err := spentOutputAsUtxo(btcChain, transaction)
+	if err != nil {
+		return nil, [20]byte{}, err
 	}
 
 	if len(transaction.Outputs) != 1 {
-		return nil, fmt.Errorf(
+		return nil, [20]byte{}, fmt.Errorf(
 			"reservation acceptance transaction must have exactly one output",
 		)
 	}
 
-	input := transaction.Inputs[0]
-
-	inputTx, err := btcChain.GetTransaction(input.Outpoint.TransactionHash)
+	walletPublicKeyHash, err := bitcoin.ExtractPublicKeyHash(
+		transaction.Outputs[0].PublicKeyScript,
+	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get input transaction data: [%v]",
+		return nil, [20]byte{}, fmt.Errorf(
+			"cannot extract wallet public key hash: [%v]",
 			err,
 		)
 	}
 
-	if int(input.Outpoint.OutputIndex) >= len(inputTx.Outputs) {
-		return nil, fmt.Errorf(
-			"input outpoint index [%d] out of range for transaction [%d] "+
-				"outputs",
-			input.Outpoint.OutputIndex,
-			len(inputTx.Outputs),
-		)
-	}
-
-	spentOutput := inputTx.Outputs[input.Outpoint.OutputIndex]
-
-	depositUtxo := &bitcoin.UnspentTransactionOutput{
-		Outpoint: input.Outpoint,
-		Value:    spentOutput.Value,
-	}
-
-	return depositUtxo, nil
+	return depositUtxo, walletPublicKeyHash, nil
 }

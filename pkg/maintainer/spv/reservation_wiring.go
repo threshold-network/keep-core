@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
 	"github.com/ipfs/go-log/v2"
@@ -46,58 +47,112 @@ func WireReservationWatchers(
 	tbtcChain tbtc.Chain,
 	spvChain Chain,
 ) error {
-	chain := spvChain
-	strandingWatcher := NewReservationStrandingWatcher(
-		chain,
-		ReservationStrandingNotifierFunc(
-			func(reservationKey *big.Int) error {
-				return chain.NotifyReservationStranded(reservationKey)
-			},
-		),
-	)
+	strandingWatcher := NewReservationStrandingWatcher(spvChain)
 
-	staleDepositWatcher := NewReservationStaleDepositWatcher(
-		chain,
-		StaleReservedDepositNotifierFunc(
-			func(depositKey *big.Int) error {
-				return chain.NotifyStaleReservedDeposit(depositKey)
-			},
-		),
-	)
+	// Startup catch-up scan: a wallet closed/terminated while this
+	// maintainer was down would otherwise never notify, since the live
+	// OnWalletClosed subscription only sees events from this point forward.
+	// Look back the same bounded window the other two watchers use, find
+	// wallets registered in that window, and check the ones already
+	// Closed/Terminated now.
+	if lastSeenBlock, err := spvChain.BlockCounter(); err != nil {
+		reservationWiringLogger.Errorf(
+			"stranding startup scan failed to get block counter: [%v]",
+			err,
+		)
+	} else if currentBlock, err := lastSeenBlock.CurrentBlock(); err != nil {
+		reservationWiringLogger.Errorf(
+			"stranding startup scan failed to get current block: [%v]",
+			err,
+		)
+	} else {
+		var startBlock uint64
+		if currentBlock > reservationStaleDepositLookBackBlocks {
+			startBlock = currentBlock - reservationStaleDepositLookBackBlocks
+		}
 
-	// The action-timeout watcher requires a wallet members resolver backed
-	// by the sortition pool / operator registry. No such lookup is wired
-	// into the SPV maintainer chain interface yet (it does not expose
-	// GetOperatorID), so the resolver here is a documented gap that fails
-	// loud rather than silently succeeding with an empty member set: every
-	// call errors, which CheckReservationActionTimeouts propagates as a
-	// per-reservation error (logged, does not abort the poll loop) instead
-	// of ever calling NotifyReservationActionTimeout with no attributable
-	// members. Wire a real resolver here once the sortition backend
-	// integration lands.
+		registeredEvents, err := spvChain.PastNewWalletRegisteredEvents(
+			&tbtc.NewWalletRegisteredEventFilter{StartBlock: startBlock},
+		)
+		if err != nil {
+			reservationWiringLogger.Errorf(
+				"stranding startup scan failed to fetch wallet "+
+					"registration events: [%v]",
+				err,
+			)
+		} else {
+			for _, event := range registeredEvents {
+				wallet, err := spvChain.GetWallet(event.WalletPublicKeyHash)
+				if err != nil {
+					reservationWiringLogger.Errorf(
+						"stranding startup scan failed to fetch wallet "+
+							"[0x%x]: [%v]",
+						event.WalletPublicKeyHash,
+						err,
+					)
+					continue
+				}
+				if wallet.State != tbtc.StateClosed &&
+					wallet.State != tbtc.StateTerminated {
+					continue
+				}
+				if err := strandingWatcher.CheckReservationStrandingForWallet(
+					event.WalletPublicKeyHash,
+				); err != nil {
+					reservationWiringLogger.Errorf(
+						"stranding startup scan failed to check wallet "+
+							"[0x%x]: [%v]",
+						event.WalletPublicKeyHash,
+						err,
+					)
+				}
+			}
+		}
+	}
+
+	staleDepositWatcher := NewReservationStaleDepositWatcher(spvChain)
+
+	// NOTE: the SPV maintainer runs as a standalone process/service with
+	// only on-chain Chain-interface reads - it has no access to the
+	// coordinating node's in-memory wallet registry
+	// (pkg/tbtc.wallet.signingGroupOperators), which is the only place a
+	// wallet's signing-group operator addresses are held; there is no
+	// on-chain accessor for them (verified: no method on tbtc.Chain,
+	// sortition.Chain, or the ethereum concrete chain exposes a wallet's
+	// group member list). The resolver therefore cannot be correctly
+	// implemented from this package as originally proposed. Per the
+	// fallback this finding's own fix text offered, the watcher stays
+	// wired but the resolver fails loud with an accurate reason instead of
+	// silently notifying with fabricated/empty member data.
 	membersResolver := WalletMembersResolverFunc(
 		func(walletPublicKeyHash [20]byte) ([]uint32, error) {
 			return nil, fmt.Errorf(
-				"wallet members resolver not wired: sortition pool " +
-					"integration for the SPV maintainer is pending",
+				"wallet members resolver not wired: no on-chain accessor " +
+					"exposes a wallet's signing-group operator addresses " +
+					"to the standalone SPV maintainer process; resolving " +
+					"this requires either a new on-chain accessor or " +
+					"running this watcher in-process with the node's " +
+					"wallet registry",
 			)
 		},
 	)
+	reservationWiringLogger.Warnf(
+		"reservation action-timeout watcher's wallet members resolver is " +
+			"not wired; timeout notifications will fail until a wallet " +
+			"member resolution path is added",
+	)
+
 	actionTimeoutWatcher := NewReservationActionTimeoutWatcher(
-		chain,
-		ReservationActionTimeoutNotifierFunc(
-			func(reservationKey *big.Int, walletMembersIDs []uint32) error {
-				return chain.NotifyReservationActionTimeout(
-					reservationKey,
-					walletMembersIDs,
-				)
-			},
-		),
+		spvChain,
 		membersResolver,
 		DefaultReservationActionTimeoutPollInterval,
 	)
 
-	subscribeReservationWalletClosed(tbtcChain, spvChain, strandingWatcher)
+	subscription := subscribeReservationWalletClosed(ctx, tbtcChain, spvChain, strandingWatcher)
+	go func() {
+		<-ctx.Done()
+		subscription.Unsubscribe()
+	}()
 	startStaleDepositPoll(ctx, tbtcChain, spvChain, staleDepositWatcher)
 	startActionTimeoutRun(ctx, actionTimeoutWatcher)
 
@@ -110,12 +165,18 @@ func WireReservationWatchers(
 // only identifier WalletClosedEvent carries) to its public key hash and
 // runs the watcher's stranding check for that wallet.
 func subscribeReservationWalletClosed(
+	ctx context.Context,
 	tbtcChain tbtc.Chain,
 	spvChain Chain,
 	watcher *ReservationStrandingWatcher,
-) {
-	_ = tbtcChain.OnWalletClosed(func(event *tbtc.WalletClosedEvent) {
+) subscription.EventSubscription {
+	return tbtcChain.OnWalletClosed(func(event *tbtc.WalletClosedEvent) {
 		go func() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			walletPublicKeyHash, err := resolveWalletPublicKeyHash(
 				spvChain,
 				event.WalletID,
@@ -123,7 +184,7 @@ func subscribeReservationWalletClosed(
 			if err != nil {
 				reservationWiringLogger.Errorf(
 					"failed to resolve public key hash for closed "+
-						"wallet [0x%x]: [%v]",
+						"wallet ID [0x%x]: [%v]",
 					event.WalletID,
 					err,
 				)
@@ -238,7 +299,10 @@ func startStaleDepositPoll(
 			}
 
 			events, err := tbtcChain.PastDepositRevealedEvents(
-				&tbtc.DepositRevealedEventFilter{StartBlock: startBlock},
+				&tbtc.DepositRevealedEventFilter{
+					StartBlock: startBlock + 1,
+					EndBlock:   &currentBlock,
+				},
 			)
 			if err != nil {
 				reservationWiringLogger.Errorf(
@@ -289,7 +353,30 @@ func startStaleDepositPoll(
 					continue
 				}
 
-				if isPendingStaleDepositResolved(spvChain, depositKey) {
+				isReserved, err := spvChain.IsReservedDeposit(depositKey)
+				if err != nil {
+					reservationWiringLogger.Errorf(
+						"stale-deposit poll failed to check if deposit [%v] is reserved: [%v]",
+						depositKey,
+						err,
+					)
+					continue
+				}
+
+				var walletState tbtc.WalletState
+				if isReserved {
+					walletPublicKeyHash, err := spvChain.ReservedDepositWallet(depositKey)
+					if err != nil || walletPublicKeyHash == ([20]byte{}) {
+						// treat as not resolved
+					} else {
+						wallet, err := spvChain.GetWallet(walletPublicKeyHash)
+						if err == nil {
+							walletState = wallet.State
+						}
+					}
+				}
+
+				if isPendingStaleDepositResolved(isReserved, walletState) {
 					delete(pending, key)
 				}
 			}
@@ -303,28 +390,14 @@ func startStaleDepositPoll(
 // read errors are treated as unresolved so a transient RPC failure does not
 // silently drop a deposit that might still need the stale check.
 func isPendingStaleDepositResolved(
-	spvChain Chain,
-	depositKey *big.Int,
+	isReserved bool,
+	walletState tbtc.WalletState,
 ) bool {
-	isReserved, err := spvChain.IsReservedDeposit(depositKey)
-	if err != nil {
-		return false
-	}
 	if !isReserved {
 		return true
 	}
 
-	walletPublicKeyHash, err := spvChain.ReservedDepositWallet(depositKey)
-	if err != nil || walletPublicKeyHash == ([20]byte{}) {
-		return false
-	}
-
-	wallet, err := spvChain.GetWallet(walletPublicKeyHash)
-	if err != nil {
-		return false
-	}
-
-	return wallet.State == tbtc.StateLive
+	return walletState == tbtc.StateLive
 }
 
 // startActionTimeoutRun starts the action-timeout watcher's Run loop in a

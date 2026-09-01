@@ -10,58 +10,54 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// TestSubmitReservationReanchorProof verifies that submitReservationReanchorProof
-// correctly parses a 1-input-1-output re-anchor transaction, looks up the
-// matching reservation action generation, and submits the SPV proof to the
-// chain. It also covers the failure paths for missing action and mismatched
-// action type.
-func TestSubmitReservationReanchorProof(t *testing.T) {
+// TestSubmitReservationAcceptanceProof verifies that
+// submitReservationAcceptanceProof correctly parses a 1-input-1-output
+// reservation acceptance (anchor) transaction, looks up the matching
+// reservation action generation, and submits the SPV proof to the chain.
+// It also covers the failure paths for missing action, mismatched action
+// type, and wrong target wallet.
+func TestSubmitReservationAcceptanceProof(t *testing.T) {
 	requiredConfirmations := uint(6)
 
 	btcChain := newLocalBitcoinChain()
 	spvChain := newLocalChain()
 
-	// Anchor transaction that the re-anchor spends.
-	anchorTx := &bitcoin.Transaction{
+	// Funding transaction that the anchor transaction spends (the reserved
+	// deposit's own UTXO).
+	fundingTx := &bitcoin.Transaction{
 		Version: 1,
-		Inputs: []*bitcoin.TransactionInput{{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: bitcoin.Hash{},
-				OutputIndex:     0,
-			},
-		}},
 		Outputs: []*bitcoin.TransactionOutput{{
 			Value:           600000,
 			PublicKeyScript: []byte{},
 		}},
 	}
-	if err := btcChain.BroadcastTransaction(anchorTx); err != nil {
+	if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
 		t.Fatal(err)
 	}
-	anchorTxHash := anchorTx.Hash()
+	fundingTxHash := fundingTx.Hash()
 
-	// Re-anchor transaction: 1 input spending anchorTx output 0, 1 output
-	// paying to the target wallet.
-	targetWalletPKH := [20]byte{0x92, 0xa6, 0xec, 0x88, 0x9a, 0x8f, 0xa3, 0x4f, 0x73, 0x1e, 0x63, 0x9e, 0xde, 0xde, 0x4c, 0x75, 0xe1, 0x84, 0x30, 0x7c}
-	targetScript, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPKH)
+	// Anchor transaction: 1 input spending the deposit's funding UTXO, 1
+	// output paying the accepting wallet.
+	walletPKH := [20]byte{0x92, 0xa6, 0xec, 0x88, 0x9a, 0x8f, 0xa3, 0x4f, 0x73, 0x1e, 0x63, 0x9e, 0xde, 0xde, 0x4c, 0x75, 0xe1, 0x84, 0x30, 0x7c}
+	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPKH)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	reanchorTx := &bitcoin.Transaction{
+	anchorTx := &bitcoin.Transaction{
 		Version: 1,
 		Inputs: []*bitcoin.TransactionInput{{
 			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: anchorTxHash,
+				TransactionHash: fundingTxHash,
 				OutputIndex:     0,
 			},
 		}},
 		Outputs: []*bitcoin.TransactionOutput{{
 			Value:           590000,
-			PublicKeyScript: targetScript,
+			PublicKeyScript: walletScript,
 		}},
 	}
-	if err := btcChain.BroadcastTransaction(reanchorTx); err != nil {
+	if err := btcChain.BroadcastTransaction(anchorTx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,31 +72,21 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 		confirmations uint,
 		btcChain bitcoin.Chain,
 	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
-		if hash == reanchorTx.Hash() && confirmations == requiredConfirmations {
-			return reanchorTx, proof, nil
+		if hash == anchorTx.Hash() && confirmations == requiredConfirmations {
+			return anchorTx, proof, nil
 		}
 		return nil, nil, fmt.Errorf("unexpected proof assembly request")
 	}
 
-	reservationKey := big.NewInt(42)
-	requestNonce := uint64(7)
+	reservationKey := big.NewInt(43)
+	requestNonce := uint64(1)
 
-	spvChain.setReservation(reservationKey, &tbtc.Reservation{
-		WalletPublicKeyHash: targetWalletPKH,
-		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
-			Outpoint: reanchorTx.Inputs[0].Outpoint,
-			Value:    600000,
-		},
-		State:        tbtc.ReservationStateActive,
-		RequestNonce: requestNonce,
-	})
 	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeReanchor,
+		ActionType:                tbtc.ReservationActionTypeAcceptance,
 		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: targetWalletPKH,
+		TargetWalletPublicKeyHash: walletPKH,
 	})
 
-	// Override SubmitReservationProof on the localChain to capture the call.
 	spvChain.submitReservationProofHook = func(
 		proofType uint8,
 		txInfo *tbtc.BitcoinTxInfo,
@@ -109,8 +95,8 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 		rk *big.Int,
 		rn uint64,
 	) error {
-		if proofType != ProofTypeReservationReanchor {
-			t.Errorf("unexpected proof type: got %d, want %d", proofType, ProofTypeReservationReanchor)
+		if proofType != ProofTypeReservationAcceptance {
+			t.Errorf("unexpected proof type: got %d, want %d", proofType, ProofTypeReservationAcceptance)
 		}
 		if rk == nil || rk.Cmp(reservationKey) != 0 {
 			t.Errorf("unexpected reservation key: got %v, want %v", rk, reservationKey)
@@ -133,8 +119,8 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 		return nil
 	}
 
-	if err := submitReservationReanchorProof(
-		reanchorTx.Hash(),
+	if err := submitReservationAcceptanceProof(
+		anchorTx.Hash(),
 		requiredConfirmations,
 		reservationKey,
 		requestNonce,
@@ -148,12 +134,12 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 
 	// Negative path: action generation is not Pending.
 	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeReanchor,
+		ActionType:                tbtc.ReservationActionTypeAcceptance,
 		State:                     tbtc.ReservationActionStateSettled,
-		TargetWalletPublicKeyHash: targetWalletPKH,
+		TargetWalletPublicKeyHash: walletPKH,
 	})
-	if err := submitReservationReanchorProof(
-		reanchorTx.Hash(),
+	if err := submitReservationAcceptanceProof(
+		anchorTx.Hash(),
 		requiredConfirmations,
 		reservationKey,
 		requestNonce,
@@ -167,12 +153,12 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 
 	// Negative path: action generation is the wrong type.
 	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeAcceptance,
+		ActionType:                tbtc.ReservationActionTypeReanchor,
 		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: targetWalletPKH,
+		TargetWalletPublicKeyHash: walletPKH,
 	})
-	if err := submitReservationReanchorProof(
-		reanchorTx.Hash(),
+	if err := submitReservationAcceptanceProof(
+		anchorTx.Hash(),
 		requiredConfirmations,
 		reservationKey,
 		requestNonce,
@@ -184,9 +170,29 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 		t.Fatal("expected error for wrong action type")
 	}
 
+	// Negative path: target wallet public key hash mismatch - the anchor
+	// output pays a different wallet than the action authorized.
+	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
+		ActionType:                tbtc.ReservationActionTypeAcceptance,
+		State:                     tbtc.ReservationActionStatePending,
+		TargetWalletPublicKeyHash: [20]byte{0xff},
+	})
+	if err := submitReservationAcceptanceProof(
+		anchorTx.Hash(),
+		requiredConfirmations,
+		reservationKey,
+		requestNonce,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+		nil,
+	); err == nil {
+		t.Fatal("expected error for target wallet public key hash mismatch")
+	}
+
 	// Negative path: zero requiredConfirmations.
-	if err := submitReservationReanchorProof(
-		reanchorTx.Hash(),
+	if err := submitReservationAcceptanceProof(
+		anchorTx.Hash(),
 		0,
 		reservationKey,
 		requestNonce,

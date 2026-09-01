@@ -66,10 +66,9 @@ type Config struct {
 	// more transaction proofs to submit.
 	IdleBackoffTime time.Duration
 
-	// Reservations gates the m1 reservation feature within the SPV maintainer:
-	// reservation acceptance / re-anchor proof tasks and the stranding /
-	// stale-deposit / action-timeout watchers. When disabled the SPV maintainer
-	// constructs without any reservation plumbing.
+	// Reservations controls the SPV proof submission for reservation
+	// acceptance / re-anchor action generations. The reservation watchers are
+	// gated by the separate Tbtc.Reservations.Enabled flag.
 	Reservations ReservationsConfig
 }
 

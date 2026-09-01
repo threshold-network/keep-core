@@ -28,7 +28,6 @@ import (
 // logic without changing the call shape.
 type ReservationActionTimeoutWatcher struct {
 	spvChain Chain
-	notifier ReservationActionTimeoutNotifier
 	// nowFn returns the current UNIX timestamp the watcher treats as "now"
 	// for `now > timeoutAt` comparisons. Tests override it to drive the
 	// deadline forward; production wires it to time.Now in UTC.
@@ -51,6 +50,10 @@ type ReservationActionTimeoutWatcher struct {
 	// CheckReservationActionTimeouts (the synchronous, test/integration
 	// entry point) never touches it.
 	lastWalletScanBlock uint64
+	// knownWallets tracks the full history of registered wallets so that
+	// every action timeout check iterates the entire set of wallets ever
+	// discovered, not just those registered in the most recent poll interval.
+	knownWallets map[[20]byte]struct{}
 }
 
 // WalletMembersResolver maps a wallet public key hash to the operator IDs
@@ -115,16 +118,15 @@ func (f ReservationActionTimeoutNotifierFunc) NotifyReservationActionTimeout(
 // be driven by CheckReservationActionTimeouts calls from the integration.
 func NewReservationActionTimeoutWatcher(
 	spvChain Chain,
-	notifier ReservationActionTimeoutNotifier,
 	membersResolver WalletMembersResolver,
 	pollInterval time.Duration,
 ) *ReservationActionTimeoutWatcher {
 	return &ReservationActionTimeoutWatcher{
 		spvChain:        spvChain,
-		notifier:        notifier,
 		nowFn:           defaultActionTimeoutNowFn,
 		interval:        pollInterval,
 		membersResolver: membersResolver,
+		knownWallets:    make(map[[20]byte]struct{}),
 	}
 }
 
@@ -150,13 +152,8 @@ const reservationActionTimeoutWalletScanLookBackBlocks = uint64(216000)
 // CheckReservationActionTimeouts for each one. The loop is best-effort for
 // per-reservation failures: a single reservation's error is logged and the
 // walk continues with the next one; only a startup configuration error
-// (nil notifier/resolver, non-positive interval) aborts the loop.
+// (nil resolver, non-positive interval) aborts the loop.
 func (ratw *ReservationActionTimeoutWatcher) Run(ctx context.Context) error {
-	if ratw.notifier == nil {
-		return fmt.Errorf(
-			"action-timeout watcher requires a non-nil notifier",
-		)
-	}
 	if ratw.membersResolver == nil {
 		return fmt.Errorf(
 			"action-timeout watcher requires a non-nil members resolver",
@@ -245,7 +242,15 @@ func (ratw *ReservationActionTimeoutWatcher) discoverWallets() ([][20]byte, erro
 	}
 
 	events, err := ratw.spvChain.PastNewWalletRegisteredEvents(
-		&tbtc.NewWalletRegisteredEventFilter{StartBlock: startBlock},
+		&tbtc.NewWalletRegisteredEventFilter{
+			StartBlock: func() uint64 {
+				if ratw.lastWalletScanBlock != 0 {
+					return ratw.lastWalletScanBlock + 1
+				}
+				return startBlock
+			}(),
+			EndBlock: &currentBlock,
+		},
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -256,9 +261,13 @@ func (ratw *ReservationActionTimeoutWatcher) discoverWallets() ([][20]byte, erro
 
 	ratw.lastWalletScanBlock = currentBlock
 
-	wallets := make([][20]byte, len(events))
-	for i, event := range events {
-		wallets[i] = event.WalletPublicKeyHash
+	for _, event := range events {
+		ratw.knownWallets[event.WalletPublicKeyHash] = struct{}{}
+	}
+
+	wallets := make([][20]byte, 0, len(ratw.knownWallets))
+	for wallet := range ratw.knownWallets {
+		wallets = append(wallets, wallet)
 	}
 
 	return wallets, nil
@@ -288,11 +297,6 @@ func (ratw *ReservationActionTimeoutWatcher) CheckReservationActionTimeouts(
 	reservationKey *big.Int,
 	now uint32,
 ) error {
-	if ratw.notifier == nil {
-		return fmt.Errorf(
-			"action-timeout watcher requires a non-nil notifier",
-		)
-	}
 	if ratw.membersResolver == nil {
 		return fmt.Errorf(
 			"action-timeout watcher requires a non-nil members resolver",
@@ -392,7 +396,7 @@ func (ratw *ReservationActionTimeoutWatcher) CheckReservationActionTimeouts(
 		return nil
 	}
 
-	if err := ratw.notifier.NotifyReservationActionTimeout(
+	if err := ratw.spvChain.NotifyReservationActionTimeout(
 		reservationKey,
 		memberIDs,
 	); err != nil {
