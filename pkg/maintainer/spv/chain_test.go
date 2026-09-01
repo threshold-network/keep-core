@@ -93,14 +93,16 @@ type localChain struct {
 	// Reservation watcher state. Indexed by [16]byte / [24]byte map keys
 	// derived from the relevant big.Int so they fit the map type without
 	// per-test marshalling.
-	walletReservations      map[[20]byte][]*big.Int
-	reservations            map[[16]byte]*tbtc.Reservation
-	reservationActions      map[[24]byte]*tbtc.ReservationAction
-	reservedDeposits        map[[16]byte]*reservedDepositRecord
-	submittedStrandedKeys   []*big.Int
-	submittedStaleDeposits  []*big.Int
-	submittedActionTimeouts []*submittedReservationActionTimeout
-	reservationParameters   *tbtc.ReservationParameters
+	walletReservations               map[[20]byte][]*big.Int
+	reservations                     map[[16]byte]*tbtc.Reservation
+	reservationActions               map[[24]byte]*tbtc.ReservationAction
+	reservedDeposits                 map[[16]byte]*reservedDepositRecord
+	submittedStrandedKeys            []*big.Int
+	submittedStaleDeposits           []*big.Int
+	submittedActionTimeouts          []*submittedReservationActionTimeout
+	reservationParameters            *tbtc.ReservationParameters
+	reservationReanchorRequestEvents []*tbtc.ReservationReanchorRequestedEvent
+	reservationAnchorUtxoIndex       map[[36]byte]*big.Int
 
 	txProofDifficultyFactor    *big.Int
 	currentEpoch               uint64
@@ -136,6 +138,8 @@ func newLocalChain() *localChain {
 		submittedStrandedKeys:                    make([]*big.Int, 0),
 		submittedStaleDeposits:                   make([]*big.Int, 0),
 		submittedActionTimeouts:                  make([]*submittedReservationActionTimeout, 0),
+		reservationReanchorRequestEvents:         make([]*tbtc.ReservationReanchorRequestedEvent, 0),
+		reservationAnchorUtxoIndex:               make(map[[36]byte]*big.Int),
 	}
 }
 
@@ -1138,4 +1142,69 @@ func (lc *localChain) PastReservationActionTimedOutEvents(
 	filter *tbtc.ReservationActionTimedOutEventFilter,
 ) ([]*tbtc.ReservationActionTimedOutEvent, error) {
 	return nil, nil
+}
+
+// PastReservationReanchorRequestedEvents returns the events previously
+// installed via setReservationReanchorRequestedEvents, ignoring the filter
+// (tests install exactly the events they want returned).
+func (lc *localChain) PastReservationReanchorRequestedEvents(
+	filter *tbtc.ReservationReanchorRequestedEventFilter,
+) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	out := make([]*tbtc.ReservationReanchorRequestedEvent, len(lc.reservationReanchorRequestEvents))
+	copy(out, lc.reservationReanchorRequestEvents)
+	return out, nil
+}
+
+// setReservationReanchorRequestedEvents installs the events
+// PastReservationReanchorRequestedEvents returns.
+func (lc *localChain) setReservationReanchorRequestedEvents(
+	events []*tbtc.ReservationReanchorRequestedEvent,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationReanchorRequestEvents = events
+}
+
+// anchorUtxoIndexKey builds the map key ReservationByAnchorUtxo and
+// setReservationByAnchorUtxo use to index a Bitcoin outpoint.
+func anchorUtxoIndexKey(txHash [32]byte, outputIndex uint32) [36]byte {
+	var key [36]byte
+	copy(key[:32], txHash[:])
+	binary.BigEndian.PutUint32(key[32:36], outputIndex)
+	return key
+}
+
+// ReservationByAnchorUtxo returns the reservation key previously installed
+// via setReservationByAnchorUtxo for the given outpoint, or zero if none was
+// installed - mirroring the production contract's "empty value" semantics
+// for an unanchored outpoint rather than returning an error.
+func (lc *localChain) ReservationByAnchorUtxo(
+	anchorTxHash [32]byte,
+	anchorTxOutputIndex uint32,
+) (*big.Int, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	key := anchorUtxoIndexKey(anchorTxHash, anchorTxOutputIndex)
+	if reservationKey, ok := lc.reservationAnchorUtxoIndex[key]; ok {
+		return reservationKey, nil
+	}
+	return big.NewInt(0), nil
+}
+
+// setReservationByAnchorUtxo installs the reservation key
+// ReservationByAnchorUtxo returns for the given outpoint.
+func (lc *localChain) setReservationByAnchorUtxo(
+	anchorTxHash [32]byte,
+	anchorTxOutputIndex uint32,
+	reservationKey *big.Int,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationAnchorUtxoIndex[anchorUtxoIndexKey(anchorTxHash, anchorTxOutputIndex)] = reservationKey
 }

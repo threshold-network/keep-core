@@ -53,12 +53,17 @@ func Initialize(
 
 	if config.Reservations.Enabled {
 		// PR H: register reservation acceptance / re-anchor proof tasks in
-		// the proof loop. The getter functions are placeholders that return
-		// no transactions today; the production wiring that drives them
-		// arrives once the watcher integration ships. Adding the tasks to
-		// `proofTypes` even when the wiring is a placeholder keeps the
-		// gating uniform: Reservations.Enabled is the single switch for the
-		// reservation plumbing in the SPV maintainer.
+		// the proof loop. Reservation acceptance still uses a placeholder
+		// getter/submitter pending its own watcher integration (see
+		// reservation_acceptance_proof.go); reservation re-anchor has a real
+		// getter/submitter pair (see reservation_reanchor_proof.go) that
+		// discovers unproven re-anchor transactions via
+		// ReservationReanchorRequested events and ReservationByAnchorUtxo,
+		// then re-derives the (reservationKey, requestNonce) pair the
+		// generic proof loop signature cannot carry. Adding both tasks to
+		// `proofTypes` even while acceptance is still a placeholder keeps
+		// the gating uniform: Reservations.Enabled is the single switch for
+		// the reservation plumbing in the SPV maintainer.
 		proofTypes[tbtc.ActionReservationAnchor] = struct {
 			unprovenTransactionsGetter unprovenTransactionsGetter
 			transactionProofSubmitter  transactionProofSubmitter
@@ -71,12 +76,7 @@ func Initialize(
 			transactionProofSubmitter  transactionProofSubmitter
 		}{
 			unprovenTransactionsGetter: getUnprovenReservationReanchorTransactions,
-			// SubmitReservationReanchorProof requires the (reservationKey,
-			// requestNonce) pair that the generic proof loop cannot supply.
-			// Until the production wiring delivers that context the adapter
-			// is a clean no-op so the proof loop runs without producing
-			// malformed calls into the underlying submitter.
-			transactionProofSubmitter: noopReanchorProofSubmitter,
+			transactionProofSubmitter:  reservationReanchorTransactionProofSubmitter,
 		}
 	}
 
@@ -522,37 +522,4 @@ func getUnprovenReservationAcceptanceTransactions(
 	spvChain Chain,
 ) ([]*bitcoin.Transaction, error) {
 	return nil, nil
-}
-
-// getUnprovenReservationReanchorTransactions is a placeholder for the
-// reservation re-anchor proof task. The production wiring for reservation
-// re-anchor proofs is delivered by the reservation re-anchor watcher
-// integration that translates wallet-side re-anchor events into SPV proof
-// submissions; until that wiring lands this getter returns no transactions
-// so the generic proof loop skips reservation re-anchor cleanly.
-//
-// Marked by PR H; the gate on config.Reservations.Enabled ensures the task is
-// only attached to proofTypes when reservations are enabled.
-func getUnprovenReservationReanchorTransactions(
-	historyDepth uint64,
-	transactionLimit int,
-	btcChain bitcoin.Chain,
-	spvChain Chain,
-) ([]*bitcoin.Transaction, error) {
-	return nil, nil
-}
-
-// noopReanchorProofSubmitter is the placeholder submitter paired with
-// getUnprovenReservationReanchorTransactions. SubmitReservationReanchorProof
-// requires (reservationKey, requestNonce) which the generic proof loop does
-// not carry; calling it with zero values would trip the input validators and
-// produce repeated error logs. Until the production wiring supplies the
-// missing context this submitter returns nil so the loop completes cleanly.
-func noopReanchorProofSubmitter(
-	transactionHash bitcoin.Hash,
-	requiredConfirmations uint,
-	btcChain bitcoin.Chain,
-	spvChain Chain,
-) error {
-	return nil
 }
