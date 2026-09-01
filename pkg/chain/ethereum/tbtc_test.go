@@ -192,37 +192,32 @@ func TestConvertReservationFromAbiType(t *testing.T) {
 		CumulativeReanchorFee: 12345,
 	}
 
-	t.Run("valid state", func(t *testing.T) {
-		reservation, err := convertReservationFromAbiType(validAbiReservation)
-		if err != nil {
-			t.Fatalf("unexpected error: [%v]", err)
+	t.Run("valid states", func(t *testing.T) {
+		var tests = map[string]struct {
+			abiState      uint8
+			expectedState tbtc.ReservationState
+		}{
+			"unknown":  {0, tbtc.ReservationStateUnknown},
+			"active":   {1, tbtc.ReservationStateActive},
+			"pending":  {2, tbtc.ReservationStateActionPending},
+			"closed":   {3, tbtc.ReservationStateClosed},
+			"stranded": {4, tbtc.ReservationStateStranded},
 		}
 
-		expected := &tbtc.Reservation{
-			Owner:               chain.Address(ownerAddress.String()),
-			MintedAmount:        100000,
-			AcceptedAt:          1700000000,
-			WalletPublicKeyHash: [20]byte{0xaa, 0xbb, 0xcc},
-			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: anchorTxHash,
-					OutputIndex:     1,
-				},
-				Value: 99000,
-			},
-			ExpiresAt:             1700100000,
-			State:                 tbtc.ReservationStateActive,
-			RequestNonce:          7,
-			RetryCredit:           true,
-			DissolutionEligibleAt: 1700200000,
-		}
+		for testName, test := range tests {
+			t.Run(testName, func(t *testing.T) {
+				abiReservation := validAbiReservation
+				abiReservation.State = test.abiState
 
-		if !reflect.DeepEqual(expected, reservation) {
-			t.Errorf(
-				"unexpected reservation\nexpected: [%+v]\nactual:   [%+v]\n",
-				expected,
-				reservation,
-			)
+				reservation, err := convertReservationFromAbiType(abiReservation)
+				if err != nil {
+					t.Fatalf("unexpected error: [%v]", err)
+				}
+
+				if reservation.State != test.expectedState {
+					t.Errorf("expected state [%v], got [%v]", test.expectedState, reservation.State)
+				}
+			})
 		}
 	})
 
@@ -349,6 +344,37 @@ func TestConvertReservationActionFromAbiType(t *testing.T) {
 		}
 		if err == nil {
 			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("valid action states", func(t *testing.T) {
+		var tests = map[string]struct {
+			abiState      uint8
+			expectedState tbtc.ReservationActionState
+		}{
+			"unknown":    {0, tbtc.ReservationActionStateUnknown},
+			"pending":    {1, tbtc.ReservationActionStatePending},
+			"settled":    {2, tbtc.ReservationActionStateSettled},
+			"timed out":  {3, tbtc.ReservationActionStateTimedOut},
+			"vetoed":     {4, tbtc.ReservationActionStateVetoed},
+			"superseded": {5, tbtc.ReservationActionStateSuperseded},
+		}
+
+		for testName, test := range tests {
+			t.Run(testName, func(t *testing.T) {
+				abiAction := baseAbiAction
+				abiAction.ActionType = 1
+				abiAction.State = test.abiState
+
+				action, err := convertReservationActionFromAbiType(abiAction)
+				if err != nil {
+					t.Fatalf("unexpected error: [%v]", err)
+				}
+
+				if action.State != test.expectedState {
+					t.Errorf("expected state [%v], got [%v]", test.expectedState, action.State)
+				}
+			})
 		}
 	})
 }

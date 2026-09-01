@@ -1546,10 +1546,11 @@ func (tc *TbtcChain) PastReservationActionTimedOutEvents(
 	for _, event := range events {
 		parsedActionType, err := parseReservationActionType(event.ActionType)
 		if err != nil {
-			return nil, fmt.Errorf(
+			logger.Errorf(
 				"unexpected reservation action type on past ReservationActionTimedOut event: [%v]",
 				err,
 			)
+			continue
 		}
 
 		convertedEvents = append(convertedEvents, &tbtc.ReservationActionTimedOutEvent{
