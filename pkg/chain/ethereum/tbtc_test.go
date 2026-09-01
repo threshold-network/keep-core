@@ -1,18 +1,17 @@
 package ethereum
 
 import (
-	"testing"
 	"bytes"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
-	"errors"
+	"testing"
 
-	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-
+	"github.com/keep-network/keep-core/pkg/chain"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -562,7 +561,7 @@ func TestTbtcChainReservationStubs(t *testing.T) {
 	}
 
 	var wpkHash [20]byte
-	
+
 	err = tc.ValidateReservationAnchorProposal(wpkHash, &tbtc.ReservationAnchorProposal{}, struct {
 		*tbtc.Deposit
 		FundingTx *bitcoin.Transaction
@@ -590,12 +589,12 @@ func TestTbtcChainReservationStubs(t *testing.T) {
 func TestRedeemerOutputScriptHash(t *testing.T) {
 	// Example script: "76a9144130879211c54df460e484ddf9aac009cb38ee7488ac"
 	script := bitcoin.Script{0x76, 0xa9, 0x14, 0x41, 0x30, 0x87, 0x92, 0x11, 0xc5, 0x4d, 0xf4, 0x60, 0xe, 0x48, 0x4d, 0xdf, 0xf9, 0xaa, 0xc0, 0x09, 0xcb, 0x38, 0xee, 0x74, 0x88, 0xac}
-	
+
 	hash, err := redeemerOutputScriptHash(script)
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Known hash
 	expectedHash := "b04b97d4aaec109acf3af12994b0c088d2cbb96d3cdb8cdfba66c5a1cf9ca86f"
 	if hex.EncodeToString(hash[:]) != expectedHash {

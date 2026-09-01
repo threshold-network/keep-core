@@ -510,7 +510,6 @@ func validateProposalNonceAndFee(nonce uint64, fee *big.Int, label string) error
 	return nil
 }
 
-
 // Marshal converts the reservationAnchorProposal to a byte array.
 //
 // TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
