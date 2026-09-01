@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-test/deep"
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -194,6 +193,12 @@ func registerReservedDeposits(
 ) {
 	t.Helper()
 
+	// Configure the fee oracle rate. proposeReservationAcceptance now
+	// estimates the anchor fee dynamically (see estimateReservationAcceptanceFee);
+	// 1 sat/vByte hits the applyWalletTxFeeFloor minimum, matching the
+	// convention used by the sibling reservation re-anchor test fixtures.
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
+
 	filterStartBlock := uint64(0)
 	if scenario.ChainParameters.CurrentBlock > tbtcpg.ReservationAcceptanceLookBackBlocks {
 		filterStartBlock = scenario.ChainParameters.CurrentBlock -
@@ -253,6 +258,7 @@ func registerReservedDeposits(
 				WalletPublicKeyHash: materialized.WalletPublicKeyHash,
 				FundingTxHash:       materialized.FundingTxHash,
 				FundingOutputIndex:  materialized.FundingOutputIndex,
+				Vault:               materialized.Vault,
 			},
 		)
 		if err != nil {
@@ -271,6 +277,10 @@ func registerReservedDeposits(
 }
 
 // expectedAnchorsEqual compares two proposal objects field-by-field.
+// deep.Equal cannot be used for this: by default it does not descend into
+// unexported fields, and *big.Int's representation is entirely unexported,
+// so it silently reports "no difference" for any two distinct AnchorTxFee
+// values. AnchorTxFee therefore needs an explicit .Cmp().
 func expectedAnchorsEqual(
 	expected, actual *tbtc.ReservationAnchorProposal,
 ) bool {
@@ -285,6 +295,9 @@ func expectedAnchorsEqual(
 		return false
 	}
 	if expected.DepositFundingOutputIndex != actual.DepositFundingOutputIndex {
+		return false
+	}
+	if expected.RequestNonce != actual.RequestNonce {
 		return false
 	}
 	if expected.AnchorTxFee == nil || actual.AnchorTxFee == nil {
@@ -395,12 +408,11 @@ func TestReservationAcceptanceTask_Run(t *testing.T) {
 			}
 
 			if !expectedAnchorsEqual(expectedProposal, actualProposal) {
-				if diff := deep.Equal(
-					[]*tbtc.ReservationAnchorProposal{expectedProposal},
-					[]*tbtc.ReservationAnchorProposal{actualProposal},
-				); diff != nil {
-					t.Errorf("invalid anchor proposal: %v", diff)
-				}
+				t.Errorf(
+					"invalid anchor proposal\nexpected: %+v\nactual:   %+v",
+					expectedProposal,
+					actualProposal,
+				)
 			}
 		})
 	}
@@ -520,6 +532,7 @@ func TestReservationAcceptanceTask_BoundedLookback(t *testing.T) {
 		}},
 	}
 	btcChain.SetTransaction(fundingTxHash, dummyTx)
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
 	btcChain.SetTransactionConfirmations(
 		fundingTxHash,
 		tbtc.DepositSweepRequiredFundingTxConfirmations,
@@ -550,6 +563,9 @@ func TestReservationAcceptanceTask_BoundedLookback(t *testing.T) {
 			WalletPublicKeyHash: walletPublicKeyHash,
 			FundingTxHash:       fundingTxHash,
 			FundingOutputIndex:  0,
+			Vault: &[]chain.Address{chain.Address(
+				"0xReservationVaultAddress1234567890abcdef12345678",
+			)}[0],
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -643,6 +659,9 @@ func TestReservationAcceptanceTask_DepositNotReserved(t *testing.T) {
 			WalletPublicKeyHash: walletPublicKeyHash,
 			FundingTxHash:       fundingTxHash,
 			FundingOutputIndex:  0,
+			Vault: &[]chain.Address{chain.Address(
+				"0xReservationVaultAddress1234567890abcdef12345678",
+			)}[0],
 		},
 	); err != nil {
 		t.Fatal(err)

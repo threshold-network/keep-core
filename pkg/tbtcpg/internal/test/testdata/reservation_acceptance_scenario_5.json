@@ -1,5 +1,5 @@
 {
-  "Title": "happy path - one reserved deposit eligible for acceptance",
+  "Title": "cap rejection - deposit amount exceeds ReservationMaxSingleAmount",
   "ChainParameters": {
     "AverageBlockTime": 12,
     "CurrentBlock": 300000,
@@ -19,10 +19,10 @@
   },
   "Caps": {
     "MaxReservationsAmountPerWallet": 50000000,
-    "ReservationMaxSingleAmount": 5000000
+    "ReservationMaxSingleAmount": 1000000
   },
   "WalletCustody": {
-    "Count": 0,
+    "Count": 1,
     "Amount": 0
   },
   "Global": {
@@ -32,12 +32,12 @@
   "PendingReservedDeposits": 0,
   "ReservedDeposits": [
     {
-      "FundingTxHash": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f00",
+      "FundingTxHash": "f1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f00",
       "FundingOutputIndex": 0,
       "FundingTxConfirmations": 6,
       "WalletPublicKeyHash": "8db50eb52063ea9d98b3eac91489a90f738986f6",
       "Depositor": "934b98637ca318a4d6e7ca6ffd1690b8e77df637",
-      "BlindingFactor": "f9f0c90d00039523",
+      "BlindingFactor": "f9f0c90d00039525",
       "RefundPublicKeyHash": "e257eccafbc07c381642ce6e7e55120fb077fbed",
       "RefundLocktime": "e0250162",
       "Amount": 2000000,
@@ -47,11 +47,6 @@
       "Vault": "0xReservationVaultAddress1234567890abcdef12345678"
     }
   ],
-  "ExpectedAnchorProposal": {
-    "DepositFundingTxHash": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f00",
-    "DepositFundingOutputIndex": 0,
-    "RequestNonce": 1,
-    "AnchorTxFee": 710
-  },
+  "ExpectedAnchorProposal": null,
   "ExpectedErr": ""
 }

@@ -1,0 +1,29 @@
+{
+  "Title": "cap rejection: minimum safe re-anchor fee exceeds ReservationTxMaxFee",
+  "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+  "SourceWalletState": "MovingFunds",
+  "SourceWalletMainUtxoHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "SourceWalletMainUtxoValue": 500000,
+  "SourceWalletMainUtxoTxHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "SourceWalletMainUtxoTxIndex": 0,
+  "TargetWalletPublicKeyHash": "0x92a6ec889a8fa34f731e639edede4c75e184307c",
+  "LiveWalletsCount": 4,
+  "MovingFundsDustThreshold": 1000000,
+  "ReservationTxMaxFee": 500,
+  "EstimateSatPerVByteFee": 1,
+  "ReanchorTxFee": 0,
+  "Reservations": [
+    {
+      "ReservationKey": "0000000000000000000000000000000000000000000000000000000000eeee05",
+      "WalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+      "AnchorTxHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "AnchorTxOutputIndex": 1,
+      "AnchorValue": 500000,
+      "State": "Active",
+      "RequestNonce": 0,
+      "HasPendingAction": false,
+      "PendingActionState": "Unknown"
+    }
+  ],
+  "ExpectedErr": "cannot prepare reservation re-anchor proposal: [cannot estimate reservation re-anchor transaction fee: [minimum safe transaction fee exceeds the maximum fee: minimum fee [550], maximum fee [500]]]"
+}

@@ -96,6 +96,7 @@ type ReservationAcceptanceTestScenario struct {
 type reservationAnchorProposalScenario struct {
 	DepositFundingTxHash      string
 	DepositFundingOutputIndex uint32
+	RequestNonce              uint64
 	AnchorTxFee               int64
 }
 
@@ -120,6 +121,7 @@ func (ras *reservationAnchorProposalScenario) convert() *tbtc.ReservationAnchorP
 	return &tbtc.ReservationAnchorProposal{
 		DepositFundingTxHash:      fundingTxHash,
 		DepositFundingOutputIndex: ras.DepositFundingOutputIndex,
+		RequestNonce:              ras.RequestNonce,
 		AnchorTxFee:               big.NewInt(ras.AnchorTxFee),
 	}
 }
