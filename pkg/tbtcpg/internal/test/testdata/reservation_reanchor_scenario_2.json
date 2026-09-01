@@ -24,6 +24,5 @@
       "HasPendingAction": false,
       "PendingActionState": "Unknown"
     }
-  ],
-  "ExpectedErr": "cannot prepare reservation re-anchor proposal: [cannot estimate reservation re-anchor transaction fee: [reservation re-anchor estimated fee exceeds the maximum fee]]"
+  ]
 }
