@@ -2427,6 +2427,10 @@ func (tc *TbtcChain) GetRedemptionDelay(
 	return time.Duration(delay) * time.Second, nil
 }
 
+func (tc *TbtcChain) GetDepositMinAge() (uint32, error) {
+	return tc.walletProposalValidator.DEPOSITMINAGE()
+}
+
 // GetReservation is not yet supported by the Ethereum chain implementation:
 // the reservation contract bindings will be regenerated once the reservation
 // Bridge API is published with the @keep-network/tbtc-v2 package.
