@@ -552,10 +552,13 @@ func TestSubmitDiscoveredReservationReanchorProof(t *testing.T) {
 }
 
 // TestSubmitDiscoveredReservationReanchorProof_StaleActionGeneration verifies
-// that submission is rejected, not misattributed, when the reservation's
+// that submission is skipped, not misattributed, when the reservation's
 // current action generation has moved past the one that produced the
 // discovered transaction (e.g. the original re-anchor action timed out and a
-// new, unrelated action generation is now current).
+// new, unrelated action generation is now current). This must return a nil
+// error (not an error) since an error here would abort the entire
+// proveTransactions round for every other in-flight transaction across
+// every proof type this tick (spv.go:292-293).
 func TestSubmitDiscoveredReservationReanchorProof_StaleActionGeneration(t *testing.T) {
 	requiredConfirmations := uint(6)
 
@@ -663,8 +666,13 @@ func TestSubmitDiscoveredReservationReanchorProof_StaleActionGeneration(t *testi
 		spvChain,
 		mockSpvProofAssembler,
 	)
-	if err == nil {
-		t.Fatal("expected error for stale action generation, got nil")
+	if err != nil {
+		t.Fatalf(
+			"expected nil error for a stale action generation (the "+
+				"caller must not abort the whole proving round for a "+
+				"skip), got: %v",
+			err,
+		)
 	}
 	if hookCalled {
 		t.Fatal("proof must not be submitted for a stale action generation")
@@ -672,11 +680,14 @@ func TestSubmitDiscoveredReservationReanchorProof_StaleActionGeneration(t *testi
 }
 
 // TestSubmitDiscoveredReservationReanchorProof_MismatchedTargetWallet
-// verifies that submission is rejected when the reservation's current
+// verifies that submission is skipped when the reservation's current
 // pending re-anchor action generation targets a different wallet than the
 // one the discovered transaction actually pays - evidence the transaction
 // belongs to a superseded generation even though the current generation is
-// also, coincidentally, a pending re-anchor.
+// also, coincidentally, a pending re-anchor. This must return a nil error
+// (not an error) since an error here would abort the entire
+// proveTransactions round for every other in-flight transaction across
+// every proof type this tick (spv.go:292-293).
 func TestSubmitDiscoveredReservationReanchorProof_MismatchedTargetWallet(t *testing.T) {
 	requiredConfirmations := uint(6)
 
@@ -779,8 +790,13 @@ func TestSubmitDiscoveredReservationReanchorProof_MismatchedTargetWallet(t *test
 		spvChain,
 		mockSpvProofAssembler,
 	)
-	if err == nil {
-		t.Fatal("expected error for mismatched target wallet, got nil")
+	if err != nil {
+		t.Fatalf(
+			"expected nil error for a mismatched target wallet (the "+
+				"caller must not abort the whole proving round for a "+
+				"skip), got: %v",
+			err,
+		)
 	}
 	if hookCalled {
 		t.Fatal("proof must not be submitted for a mismatched action generation")
