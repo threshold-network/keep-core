@@ -488,13 +488,28 @@ func unmarshalPublicKey(bytes []byte) (*ecdsa.PublicKey, error) {
 }
 
 func validateMemberIndex(protoIndex uint32) error {
-	// Protobuf does not have uint8 type, so we are using uint32. When
-	// unmarshalling message, we need to make sure we do not overflow.
-	if protoIndex > group.MaxMemberIndex {
-		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
+	if protoIndex == 0 {
+		return fmt.Errorf("member index must be greater than 0")
 	}
 	return nil
 }
+
+func validateProposalNonceAndFee(nonce uint64, fee *big.Int, label string) error {
+	if nonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if fee == nil {
+		return fmt.Errorf("%s is required", label)
+	}
+	if fee.Sign() <= 0 {
+		return fmt.Errorf("%s must be positive", label)
+	}
+	if !fee.IsInt64() {
+		return fmt.Errorf("%s is out of range", label)
+	}
+	return nil
+}
+
 
 // Marshal converts the reservationAnchorProposal to a byte array.
 //
@@ -513,18 +528,10 @@ func (rap *ReservationAnchorProposal) Unmarshal(bytes []byte) error {
 	if proposal.DepositFundingTxHash == (bitcoin.Hash{}) {
 		return fmt.Errorf("deposit funding transaction hash is required")
 	}
-	if proposal.RequestNonce == 0 {
-		return fmt.Errorf("request nonce is required")
+	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.AnchorTxFee, "anchor transaction fee"); err != nil {
+		return err
 	}
-	if proposal.AnchorTxFee == nil {
-		return fmt.Errorf("anchor transaction fee is required")
-	}
-	if proposal.AnchorTxFee.Sign() <= 0 {
-		return fmt.Errorf("anchor transaction fee must be positive")
-	}
-	if !proposal.AnchorTxFee.IsInt64() {
-		return fmt.Errorf("anchor transaction fee is out of range")
-	}
+
 	*rap = proposal
 	return nil
 }
@@ -546,21 +553,13 @@ func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
 	if proposal.ReservationKey == nil {
 		return fmt.Errorf("reservation key is required")
 	}
-	if proposal.RequestNonce == 0 {
-		return fmt.Errorf("request nonce is required")
-	}
 	if proposal.RedeemerOutputScript == nil || len(proposal.RedeemerOutputScript) == 0 {
 		return fmt.Errorf("redeemer output script is required")
 	}
-	if proposal.RedemptionTxFee == nil {
-		return fmt.Errorf("redemption transaction fee is required")
+	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.RedemptionTxFee, "redemption transaction fee"); err != nil {
+		return err
 	}
-	if proposal.RedemptionTxFee.Sign() <= 0 {
-		return fmt.Errorf("redemption transaction fee must be positive")
-	}
-	if !proposal.RedemptionTxFee.IsInt64() {
-		return fmt.Errorf("redemption transaction fee is out of range")
-	}
+
 	*rrp = proposal
 	return nil
 }
@@ -582,21 +581,13 @@ func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
 	if proposal.ReservationKey == nil {
 		return fmt.Errorf("reservation key is required")
 	}
-	if proposal.RequestNonce == 0 {
-		return fmt.Errorf("request nonce is required")
-	}
 	if proposal.TargetWalletPublicKeyHash == [20]byte{} {
 		return fmt.Errorf("target wallet public key hash is required")
 	}
-	if proposal.ReanchorTxFee == nil {
-		return fmt.Errorf("re-anchor transaction fee is required")
+	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.ReanchorTxFee, "re-anchor transaction fee"); err != nil {
+		return err
 	}
-	if proposal.ReanchorTxFee.Sign() <= 0 {
-		return fmt.Errorf("re-anchor transaction fee must be positive")
-	}
-	if !proposal.ReanchorTxFee.IsInt64() {
-		return fmt.Errorf("re-anchor transaction fee is out of range")
-	}
+
 	*rrp = proposal
 	return nil
 }
@@ -618,21 +609,10 @@ func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
 	if proposal.ReservationKey == nil {
 		return fmt.Errorf("reservation key is required")
 	}
-	if proposal.RequestNonce == 0 {
-		return fmt.Errorf("request nonce is required")
+	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.DissolutionTxFee, "dissolution transaction fee"); err != nil {
+		return err
 	}
-	if proposal.DissolutionTxFee == nil {
-		return fmt.Errorf("dissolution transaction fee is required")
-	}
-	if proposal.DissolutionTxFee.Sign() <= 0 {
-		return fmt.Errorf("dissolution transaction fee must be positive")
-	}
-	if !proposal.DissolutionTxFee.IsInt64() {
-		return fmt.Errorf("dissolution transaction fee is out of range")
-	}
-	if proposal.ReservationKey == nil {
-		return fmt.Errorf("reservation key is required")
-	}
+
 	*rdp = proposal
 	return nil
 }
