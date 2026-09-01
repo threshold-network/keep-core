@@ -66,6 +66,10 @@ const (
 	// upgrade to a binary containing this constant before the activation block
 	// is reached.
 	DepositSweepEveryWindowActivationBlock = uint64(24559289)
+	// ReservationsActivationBlock is the Ethereum block height at which
+	// reservation actions (anchor, re-anchor) become available in the
+	// coordination checklist.
+	ReservationsActivationBlock = DepositSweepEveryWindowActivationBlock
 )
 
 // errCoordinationExecutorBusy is an error returned when the coordination
@@ -647,7 +651,9 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// checklist. Frequency-gated like DepositSweep/MovingFunds below the
 	// activation block: reservation acceptance/re-anchor windows are not
 	// as time-critical as redemption.
-	if ce.reservationsEnabled && windowIndex%frequencyWindows == 0 {
+	if ce.reservationsEnabled &&
+		coordinationBlock >= ReservationsActivationBlock &&
+		windowIndex%frequencyWindows == 0 {
 		actions = append(actions, ActionReservationAnchor)
 		actions = append(actions, ActionReservationReanchor)
 	}

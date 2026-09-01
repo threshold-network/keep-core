@@ -292,6 +292,13 @@ type BridgeChain interface {
 		fundingOutputIndex uint32,
 	) (*DepositChainRequest, bool, error)
 
+	// BuildDepositKey calculates a deposit key for the given funding
+	// transaction hash and output index. Mirrors tbtcpg.Chain's identical
+	// method - the reservation anchor wallet action needs it to derive the
+	// m1 reservation key (reservationKey == depositKey) without depending
+	// on the tbtcpg package.
+	BuildDepositKey(fundingTxHash bitcoin.Hash, fundingOutputIndex uint32) *big.Int
+
 	// GetMovedFundsSweepRequest gets the on-chain moved funds sweep request for
 	// the given moving funds transaction hash and output index.
 	// The returned bool value indicates whether the request was found or not.
@@ -697,22 +704,6 @@ type ReservationChain interface {
 	// to gate new deposits.
 	PendingReservedDeposits() (uint64, error)
 
-	// Reservations returns the on-chain reservation request record for the
-	// given reservation key, including the cumulative re-anchor fee that
-	// the existing GetReservation representation drops. Mirrors the
-	// ReservationRouter.reservations view verbatim.
-	Reservations(reservationKey *big.Int) (*ReservationRequest, error)
-
-	// ReservationActions returns the on-chain reservation action record
-	// for the given reservation key and request nonce, including the
-	// late-settlement / retry-credit fields that the existing
-	// GetReservationAction representation drops. Mirrors the
-	// ReservationRouter.reservationActions view verbatim.
-	ReservationActions(
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) (*ReservationActionRecord, error)
-
 	// ActiveReservationsCount returns the current count of active
 	// reservations across all wallets and the cap on that count.
 	ActiveReservationsCount() (count uint32, maxActive uint32, err error)
@@ -876,48 +867,6 @@ type BitcoinTxUTXO struct {
 	TxHash        [32]byte
 	TxOutputIndex uint32
 	TxOutputValue uint64
-}
-
-// ReservationRequest represents the on-chain reservation request record
-// returned by ReservationRouter.reservations. It mirrors the Solidity
-// Reservation.ReservationRequest struct field-for-field.
-type ReservationRequest struct {
-	Owner                 chain.Address
-	MintedAmount          uint64
-	AcceptedAt            uint32
-	WalletPublicKeyHash   [20]byte
-	AnchorAmount          uint64
-	ExpiresAt             uint32
-	AnchorTxHash          [32]byte
-	AnchorTxOutputIndex   uint32
-	State                 ReservationState
-	RequestNonce          uint64
-	RetryCredit           bool
-	DissolutionEligibleAt uint32
-	CumulativeReanchorFee uint64
-}
-
-// ReservationActionRecord represents the on-chain reservation action record
-// returned by ReservationRouter.reservationActions. It mirrors the Solidity
-// Reservation.ReservationAction struct field-for-field.
-type ReservationActionRecord struct {
-	TargetWalletPublicKeyHash [20]byte
-	RequestedAt               uint32
-	TimeoutAt                 uint32
-	TxMaxFee                  uint64
-	ActionType                ReservationActionType
-	State                     ReservationActionState
-	FeePaid                   bool
-	Redeemer                  chain.Address
-	Amount                    uint64
-	ActionDataHash            [32]byte
-	SourceAnchorUtxoHash      [32]byte
-	UsedRetryCredit           bool
-	WatchtowerDefaultDelay    uint32
-	WatchtowerLevelOneDelay   uint32
-	WatchtowerLevelTwoDelay   uint32
-	IsPartial                 bool
-	RetryCreditSourceNonce    uint64
 }
 
 // ReservationAcceptanceRequestedEvent represents a reservation acceptance

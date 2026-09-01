@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"time"
 
+	"go.uber.org/zap"
 	"golang.org/x/crypto/sha3"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -389,20 +391,34 @@ func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
 	return nil
 }
 
-// assembleReservationAnchorTransaction constructs an unsigned reservation
+// AssembleReservationAnchorTransaction constructs an unsigned reservation
 // anchor transaction: a 1-input-1-output spend of the given reserved deposit
 // into a fresh output controlled by the given wallet. The anchor mirrors the
 // sweep's refund-disabling role without its consolidating role: the Bridge
 // credits the reservation owner only against the SPV proof of this
 // transaction.
-func assembleReservationAnchorTransaction(
+func AssembleReservationAnchorTransaction(
 	bitcoinChain bitcoin.Chain,
 	deposit *Deposit,
 	walletPublicKeyHash [20]byte,
+	action *ReservationAction,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
 	if deposit == nil {
 		return nil, fmt.Errorf("deposit is required")
+	}
+	if action == nil {
+		return nil, fmt.Errorf("reservation action is required")
+	}
+	if fee <= 0 {
+		return nil, fmt.Errorf("fee must be positive")
+	}
+	if uint64(fee) > action.TxMaxFee {
+		return nil, fmt.Errorf("fee exceeds the maximum allowed fee")
+	}
+	anchorValue := deposit.Utxo.Value - fee
+	if anchorValue <= 0 {
+		return nil, fmt.Errorf("transaction fee exceeds the deposit amount")
 	}
 
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
@@ -414,27 +430,19 @@ func assembleReservationAnchorTransaction(
 
 	err = builder.AddScriptHashInput(deposit.Utxo, depositScript)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot add input pointing to deposit UTXO: [%v]",
-			err,
-		)
+		return nil, fmt.Errorf("cannot add input pointing to deposit UTXO: [%v]", err)
 	}
 
-	anchorValue := deposit.Utxo.Value - fee
-	if anchorValue <= 0 {
-		return nil, fmt.Errorf(
-			"transaction fee exceeds the deposit value",
-		)
-	}
-
-	anchorScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	outputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		walletPublicKeyHash,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot compute anchor script: [%v]", err)
 	}
 
 	builder.AddOutput(&bitcoin.TransactionOutput{
 		Value:           anchorValue,
-		PublicKeyScript: anchorScript,
+		PublicKeyScript: outputScript,
 	})
 
 	return builder, nil
@@ -574,18 +582,33 @@ func computeReservationRedeemerOutputScriptHash(
 	return result, nil
 }
 
-// assembleReservationReanchorTransaction constructs an unsigned reservation
+// AssembleReservationReanchorTransaction constructs an unsigned reservation
 // re-anchor transaction: a 1-input-1-output spend of the reservation's
 // anchor outpoint into a fresh output controlled by the target wallet. Used
 // during wallet migration so reservations never pin retiring wallets.
-func assembleReservationReanchorTransaction(
+func AssembleReservationReanchorTransaction(
 	bitcoinChain bitcoin.Chain,
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
 	targetWalletPublicKeyHash [20]byte,
+	action *ReservationAction,
 	fee int64,
 ) (*bitcoin.TransactionBuilder, error) {
 	if anchorUtxo == nil {
 		return nil, fmt.Errorf("anchor UTXO is required")
+	}
+	if action == nil {
+		return nil, fmt.Errorf("reservation action is required")
+	}
+	if fee <= 0 {
+		return nil, fmt.Errorf("fee must be positive")
+	}
+	if uint64(fee) > action.TxMaxFee {
+		return nil, fmt.Errorf("fee exceeds the maximum allowed fee")
+	}
+
+	anchorValue := anchorUtxo.Value - fee
+	if anchorValue <= 0 {
+		return nil, fmt.Errorf("transaction fee exceeds the anchor value")
 	}
 
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
@@ -598,23 +621,16 @@ func assembleReservationReanchorTransaction(
 		)
 	}
 
-	reanchorValue := anchorUtxo.Value - fee
-	if reanchorValue <= 0 {
-		return nil, fmt.Errorf(
-			"transaction fee exceeds the anchor value",
-		)
-	}
-
-	reanchorScript, err := bitcoin.PayToWitnessPublicKeyHash(
+	outputScript, err := bitcoin.PayToWitnessPublicKeyHash(
 		targetWalletPublicKeyHash,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("cannot compute re-anchor script: [%v]", err)
+		return nil, fmt.Errorf("cannot compute anchor script: [%v]", err)
 	}
 
 	builder.AddOutput(&bitcoin.TransactionOutput{
-		Value:           reanchorValue,
-		PublicKeyScript: reanchorScript,
+		Value:           anchorValue,
+		PublicKeyScript: outputScript,
 	})
 
 	return builder, nil
@@ -726,4 +742,291 @@ func assembleReservationDissolutionTransaction(
 	})
 
 	return builder, nil
+}
+
+// reservationActionSigningTimeoutSafetyMarginBlocks is the duration, in
+// blocks, that must remain before the proposal's expiry block for signing
+// to be attempted. Mirrors redemptionSigningTimeoutSafetyMarginBlocks.
+const reservationActionSigningTimeoutSafetyMarginBlocks = 300
+
+// reservationActionBroadcastTimeout is the timeout applied while
+// broadcasting a reservation anchor/re-anchor transaction. Mirrors
+// redemptionBroadcastTimeout.
+const reservationActionBroadcastTimeout = 15 * time.Minute
+
+// reservationActionBroadcastCheckDelay is the delay between broadcast
+// attempts of a reservation anchor/re-anchor transaction. Mirrors
+// redemptionBroadcastCheckDelay.
+const reservationActionBroadcastCheckDelay = 1 * time.Minute
+
+// reservationAnchorAction is a walletAction implementation handling reservation
+// anchor requests from the wallet coordinator.
+type reservationAnchorAction struct {
+	logger              *zap.SugaredLogger
+	chain               Chain
+	btcChain            bitcoin.Chain
+	custodyWallet       wallet
+	transactionExecutor *walletTransactionExecutor
+	proposal            *ReservationAnchorProposal
+	startBlock          uint64
+	expiryBlock         uint64
+}
+
+func newReservationAnchorAction(
+	logger *zap.SugaredLogger,
+	chain Chain,
+	btcChain bitcoin.Chain,
+	custodyWallet wallet,
+	signingExecutor walletSigningExecutor,
+	proposal *ReservationAnchorProposal,
+	startBlock uint64,
+	expiryBlock uint64,
+	waitForBlockHeight waitForBlockFn,
+	transactionMonitor *transactionMonitor,
+) *reservationAnchorAction {
+	transactionExecutor := newWalletTransactionExecutor(
+		btcChain,
+		custodyWallet,
+		signingExecutor,
+		waitForBlockHeight,
+	)
+	transactionExecutor.setTransactionMonitor(transactionMonitor)
+	return &reservationAnchorAction{
+		logger:              logger,
+		chain:               chain,
+		btcChain:            btcChain,
+		custodyWallet:       custodyWallet,
+		transactionExecutor: transactionExecutor,
+		proposal:            proposal,
+		startBlock:          startBlock,
+		expiryBlock:         expiryBlock,
+	}
+}
+
+func (raa *reservationAnchorAction) execute() error {
+	walletPublicKeyHash := bitcoin.PublicKeyHash(raa.custodyWallet.publicKey)
+
+	fundingTx, err := raa.btcChain.GetTransaction(raa.proposal.DepositFundingTxHash)
+	if err != nil {
+		return fmt.Errorf("cannot fetch funding transaction: [%v]", err)
+	}
+
+	// The proposal carries only the deposit's funding outpoint, not the
+	// block it was revealed at, so the DepositRevealed event lookup cannot
+	// be block-range narrowed the way the deposit sweep validation path
+	// narrows it via DepositsRevealBlocks. Narrow by wallet PKH instead and
+	// match the exact funding outpoint among the returned events.
+	events, err := raa.chain.PastDepositRevealedEvents(&DepositRevealedEventFilter{
+		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	})
+	if err != nil {
+		return fmt.Errorf("cannot fetch deposit revealed events: [%v]", err)
+	}
+
+	var matchingEvent *DepositRevealedEvent
+	for _, event := range events {
+		if event.FundingTxHash == raa.proposal.DepositFundingTxHash &&
+			event.FundingOutputIndex == raa.proposal.DepositFundingOutputIndex {
+			matchingEvent = event
+			break
+		}
+	}
+	if matchingEvent == nil {
+		return fmt.Errorf("no matching DepositRevealed event for deposit")
+	}
+
+	depositRequest, found, err := raa.chain.GetDepositRequest(
+		raa.proposal.DepositFundingTxHash,
+		raa.proposal.DepositFundingOutputIndex,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot fetch deposit request: [%v]", err)
+	}
+	if !found {
+		return fmt.Errorf("deposit request not found")
+	}
+
+	deposit := matchingEvent.unpack(depositRequest.ExtraData)
+
+	// m1 identity: the reservation key is the deposit key, mirroring the
+	// convention documented in pkg/maintainer/spv/reservation_stale_deposit_watch.go.
+	reservationKey := raa.chain.BuildDepositKey(
+		raa.proposal.DepositFundingTxHash,
+		raa.proposal.DepositFundingOutputIndex,
+	)
+
+	action, err := raa.chain.GetReservationAction(reservationKey, raa.proposal.RequestNonce)
+	if err != nil {
+		return fmt.Errorf("cannot get reservation action: [%v]", err)
+	}
+
+	err = raa.chain.ValidateReservationAnchorProposal(
+		walletPublicKeyHash,
+		raa.proposal,
+		struct {
+			*Deposit
+			FundingTx *bitcoin.Transaction
+		}{Deposit: deposit, FundingTx: fundingTx},
+	)
+	if err != nil {
+		return fmt.Errorf("cannot validate reservation anchor proposal: [%v]", err)
+	}
+
+	unsignedTx, err := AssembleReservationAnchorTransaction(
+		raa.btcChain,
+		deposit,
+		walletPublicKeyHash,
+		action,
+		raa.proposal.AnchorTxFee.Int64(),
+	)
+	if err != nil {
+		return fmt.Errorf("cannot assemble reservation anchor transaction: [%v]", err)
+	}
+
+	// Just in case. This should never happen.
+	if raa.expiryBlock < reservationActionSigningTimeoutSafetyMarginBlocks {
+		return fmt.Errorf("invalid proposal expiry block")
+	}
+
+	signedTx, err := raa.transactionExecutor.signTransaction(
+		raa.logger,
+		unsignedTx,
+		raa.startBlock,
+		raa.expiryBlock-reservationActionSigningTimeoutSafetyMarginBlocks,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot sign reservation anchor transaction: [%v]", err)
+	}
+
+	err = raa.transactionExecutor.broadcastTransaction(
+		raa.logger,
+		signedTx,
+		reservationActionBroadcastTimeout,
+		reservationActionBroadcastCheckDelay,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot broadcast reservation anchor transaction: [%v]", err)
+	}
+
+	return nil
+}
+
+func (raa *reservationAnchorAction) wallet() wallet {
+	return raa.custodyWallet
+}
+
+func (raa *reservationAnchorAction) actionType() WalletActionType {
+	return ActionReservationAnchor
+}
+
+// reservationReanchorAction is a walletAction implementation handling
+// reservation re-anchor requests from the wallet coordinator.
+type reservationReanchorAction struct {
+	logger              *zap.SugaredLogger
+	chain               Chain
+	btcChain            bitcoin.Chain
+	custodyWallet       wallet
+	transactionExecutor *walletTransactionExecutor
+	proposal            *ReservationReanchorProposal
+	startBlock          uint64
+	expiryBlock         uint64
+}
+
+func newReservationReanchorAction(
+	logger *zap.SugaredLogger,
+	chain Chain,
+	btcChain bitcoin.Chain,
+	custodyWallet wallet,
+	signingExecutor walletSigningExecutor,
+	proposal *ReservationReanchorProposal,
+	startBlock uint64,
+	expiryBlock uint64,
+	waitForBlockHeight waitForBlockFn,
+	transactionMonitor *transactionMonitor,
+) *reservationReanchorAction {
+	transactionExecutor := newWalletTransactionExecutor(
+		btcChain,
+		custodyWallet,
+		signingExecutor,
+		waitForBlockHeight,
+	)
+	transactionExecutor.setTransactionMonitor(transactionMonitor)
+	return &reservationReanchorAction{
+		logger:              logger,
+		chain:               chain,
+		btcChain:            btcChain,
+		custodyWallet:       custodyWallet,
+		transactionExecutor: transactionExecutor,
+		proposal:            proposal,
+		startBlock:          startBlock,
+		expiryBlock:         expiryBlock,
+	}
+}
+
+func (rra *reservationReanchorAction) execute() error {
+	walletPublicKeyHash := bitcoin.PublicKeyHash(rra.custodyWallet.publicKey)
+
+	reservation, err := rra.chain.GetReservation(rra.proposal.ReservationKey)
+	if err != nil {
+		return fmt.Errorf("cannot get reservation: [%v]", err)
+	}
+
+	action, err := rra.chain.GetReservationAction(rra.proposal.ReservationKey, rra.proposal.RequestNonce)
+	if err != nil {
+		return fmt.Errorf("cannot get reservation action: [%v]", err)
+	}
+
+	err = rra.chain.ValidateReservationReanchorProposal(
+		walletPublicKeyHash,
+		rra.proposal,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot validate reservation reanchor proposal: [%v]", err)
+	}
+
+	unsignedTx, err := AssembleReservationReanchorTransaction(
+		rra.btcChain,
+		reservation.AnchorUtxo,
+		rra.proposal.TargetWalletPublicKeyHash,
+		action,
+		rra.proposal.ReanchorTxFee.Int64(),
+	)
+	if err != nil {
+		return fmt.Errorf("cannot assemble reservation reanchor transaction: [%v]", err)
+	}
+
+	// Just in case. This should never happen.
+	if rra.expiryBlock < reservationActionSigningTimeoutSafetyMarginBlocks {
+		return fmt.Errorf("invalid proposal expiry block")
+	}
+
+	signedTx, err := rra.transactionExecutor.signTransaction(
+		rra.logger,
+		unsignedTx,
+		rra.startBlock,
+		rra.expiryBlock-reservationActionSigningTimeoutSafetyMarginBlocks,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot sign reservation reanchor transaction: [%v]", err)
+	}
+
+	err = rra.transactionExecutor.broadcastTransaction(
+		rra.logger,
+		signedTx,
+		reservationActionBroadcastTimeout,
+		reservationActionBroadcastCheckDelay,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot broadcast reservation reanchor transaction: [%v]", err)
+	}
+
+	return nil
+}
+
+func (rra *reservationReanchorAction) wallet() wallet {
+	return rra.custodyWallet
+}
+
+func (rra *reservationReanchorAction) actionType() WalletActionType {
+	return ActionReservationReanchor
 }
