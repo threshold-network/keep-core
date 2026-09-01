@@ -158,9 +158,26 @@ func init() {
 	}
 }
 
+func TestConfigsCarryNetwork_Integration(t *testing.T) {
+	for name, testConfig := range testConfigs {
+		t.Run(name, func(t *testing.T) {
+			if testConfig.network == bitcoin.Unknown {
+				t.Fatal("test network must be explicit")
+			}
+			if testConfig.clientConfig.Network != testConfig.network {
+				t.Fatalf(
+					"unexpected client network [%v]; expected [%v]",
+					testConfig.clientConfig.Network,
+					testConfig.network,
+				)
+			}
+		})
+	}
+}
+
 func TestConnect_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		_, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		_, cancelCtx := newRequiredTestConnection(t, testConfig.clientConfig)
 		defer cancelCtx()
 	})
 }
@@ -640,9 +657,32 @@ func runParallel(t *testing.T, runFunc func(t *testing.T, testConfig testConfig)
 }
 
 func newTestConnection(t *testing.T, config electrum.Config) (bitcoin.Chain, context.CancelFunc) {
+	t.Helper()
+
+	return connectTestConnection(t, config, true)
+}
+
+func newRequiredTestConnection(t *testing.T, config electrum.Config) (bitcoin.Chain, context.CancelFunc) {
+	t.Helper()
+
+	return connectTestConnection(t, config, false)
+}
+
+func connectTestConnection(
+	t *testing.T,
+	config electrum.Config,
+	skipTransientConnectionError bool,
+) (bitcoin.Chain, context.CancelFunc) {
+	t.Helper()
+
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	electrum, err := electrum.Connect(ctx, config)
 	if err != nil {
+		cancelCtx()
+		if skipTransientConnectionError && shouldSkipElectrumIntegrationError(err) {
+			t.Skipf("skipping due to transient electrum connection error: %v", err)
+		}
+
 		t.Fatal(err)
 	}
 

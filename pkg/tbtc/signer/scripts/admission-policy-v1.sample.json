@@ -1,0 +1,10 @@
+{
+  "max_operators_per_provider": 2,
+  "max_operators_per_region": 2,
+  "allowed_custody_classes": ["hsm", "kms"],
+  "required_attestation_status": "approved",
+  "min_patch_sla_days_remaining": 14,
+  "require_incident_response_contact": true,
+  "dao_override_trust_root_pubkey_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "dao_override_max_ttl_seconds": 604800
+}
