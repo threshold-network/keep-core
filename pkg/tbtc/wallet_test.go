@@ -130,10 +130,10 @@ func TestWalletActionType_MetricNameConsistency(t *testing.T) {
 	expected := clientinfo.GetAllWalletActionTypes()
 
 	actual := make([]string, 0)
-	for i := uint8(0); i <= 9; i++ {
+	for i := uint8(0); ; i++ {
 		wat, err := ParseWalletActionType(i)
 		if err != nil {
-			t.Fatalf("failed to parse wallet action type [%v]: %v", i, err)
+			break
 		}
 
 		if wat == ActionNoop {

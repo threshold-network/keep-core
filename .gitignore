@@ -82,4 +82,3 @@ dist/
 
 # Yarn 4 local state (not for zero-installs)
 .yarn/install-state.gz
-agent-docs/
