@@ -206,4 +206,20 @@ type Chain interface {
 	PastReservationActionTimedOutEvents(
 		filter *tbtc.ReservationActionTimedOutEventFilter,
 	) ([]*tbtc.ReservationActionTimedOutEvent, error)
+
+	// PastReservationReanchorRequestedEvents fetches past
+	// ReservationReanchorRequested events according to the provided filter
+	// or unfiltered if the filter is nil. Returned events are sorted by the
+	// block number in the ascending order.
+	PastReservationReanchorRequestedEvents(
+		filter *tbtc.ReservationReanchorRequestedEventFilter,
+	) ([]*tbtc.ReservationReanchorRequestedEvent, error)
+
+	// ReservationByAnchorUtxo returns the reservation key whose anchor
+	// outpoint is the given Bitcoin transaction output, or a zero value if
+	// no reservation is anchored there.
+	ReservationByAnchorUtxo(
+		anchorTxHash [32]byte,
+		anchorTxOutputIndex uint32,
+	) (*big.Int, error)
 }
