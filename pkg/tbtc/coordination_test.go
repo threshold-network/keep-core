@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/go-test/deep"
+	"golang.org/x/exp/slices"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
@@ -20,7 +22,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"golang.org/x/exp/slices"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 )
@@ -340,7 +341,6 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 			membershipValidator,
 			protocolLatch,
 			operator.waitForBlockHeight,
-			false,
 		)
 	}
 
@@ -734,6 +734,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 			},
 			is4thWindow: true,
 		},
@@ -768,6 +770,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionHeartbeat,
 			},
 			is4thWindow: true,
@@ -782,6 +786,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 			},
 			is4thWindow: true,
 		},
@@ -839,44 +845,39 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 	}
 }
 
+// TestCoordinationExecutor_GetActionsChecklist_Reservations verifies the
+// reservation actions checklist gate depends solely on the activation
+// block and the frequency window, never on a local per-operator
+// configuration flag - see coordinationExecutor.getActionsChecklist's
+// comment for why: a follower gating checklist validation on its own
+// local flag would wrongly fault an honest leader whenever the two
+// operators' local configs diverge.
 func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 	tests := map[string]struct {
-		reservationsEnabled bool
-		coordinationBlock   uint64
-		windowIndex         uint64
-		expectedActions     []WalletActionType
+		coordinationBlock uint64
+		windowIndex       uint64
+		expectedActions   []WalletActionType
 	}{
-		"reservations disabled": {
-			reservationsEnabled: false,
-			coordinationBlock:   ReservationsActivationBlock,
-			windowIndex:         4,
-			expectedActions:     []WalletActionType{ActionRedemption},
+		"below activation": {
+			coordinationBlock: ReservationsActivationBlock - 1,
+			windowIndex:       4,
+			expectedActions:   []WalletActionType{ActionRedemption},
 		},
-		"reservations enabled below activation": {
-			reservationsEnabled: true,
-			coordinationBlock:   ReservationsActivationBlock - 1,
-			windowIndex:         4,
-			expectedActions:     []WalletActionType{ActionRedemption},
+		"at activation, non-4th window": {
+			coordinationBlock: ReservationsActivationBlock,
+			windowIndex:       5,
+			expectedActions:   []WalletActionType{ActionRedemption},
 		},
-		"reservations enabled at activation, non-4th window": {
-			reservationsEnabled: true,
-			coordinationBlock:   ReservationsActivationBlock,
-			windowIndex:         5,
-			expectedActions:     []WalletActionType{ActionRedemption},
-		},
-		"reservations enabled at activation, 4th window": {
-			reservationsEnabled: true,
-			coordinationBlock:   ReservationsActivationBlock,
-			windowIndex:         4,
-			expectedActions:     []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+		"at activation, 4th window": {
+			coordinationBlock: ReservationsActivationBlock,
+			windowIndex:       4,
+			expectedActions:   []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
 	}
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
-			executor := &coordinationExecutor{
-				reservationsEnabled: test.reservationsEnabled,
-			}
+			executor := &coordinationExecutor{}
 
 			// We don't care about the seed for this test, as it only affects
 			// the ActionHeartbeat which is not the focus here.
@@ -965,11 +966,13 @@ func assertChecklistOrdering(
 	t.Helper()
 
 	actionPriority := map[WalletActionType]int{
-		ActionRedemption:      0,
-		ActionDepositSweep:    1,
-		ActionMovedFundsSweep: 2,
-		ActionMovingFunds:     3,
-		ActionHeartbeat:       4,
+		ActionRedemption:          0,
+		ActionDepositSweep:        1,
+		ActionMovedFundsSweep:     2,
+		ActionMovingFunds:         3,
+		ActionReservationAnchor:   4,
+		ActionReservationReanchor: 5,
+		ActionHeartbeat:           6,
 	}
 
 	for i := 1; i < len(checklist); i++ {
