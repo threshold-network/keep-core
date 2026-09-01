@@ -1,9 +1,11 @@
 package spv
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -414,5 +416,145 @@ func TestReservationActionTimeoutWatcher_NotifiesOncePerQualifyingNonce(t *testi
 	// the walker never silently drops notifications.
 	if len(notifier.calls) != 2 {
 		t.Fatalf("expected two recorded notification attempts, got %d", len(notifier.calls))
+	}
+}
+
+// TestReservationActionTimeoutWatcher_WatchWallet_Deduplicates verifies that
+// registering the same wallet more than once does not grow the watched set.
+func TestReservationActionTimeoutWatcher_WatchWallet_Deduplicates(t *testing.T) {
+	spvChain := newLocalChain()
+	notifier := &recordingActionTimeoutNotifier{}
+	resolver := &recordingActionTimeoutMembers{}
+
+	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+
+	wallet := walletPKH()
+	watcher.WatchWallet(wallet)
+	watcher.WatchWallet(wallet)
+
+	wallets := watcher.watchedWalletsSnapshot()
+	if len(wallets) != 1 {
+		t.Fatalf("expected 1 watched wallet after duplicate registration, got %d", len(wallets))
+	}
+	if wallets[0] != wallet {
+		t.Errorf("unexpected watched wallet: got %x, want %x", wallets[0], wallet)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_Run_NilNotifierError verifies Run
+// fails its precondition check synchronously (does not block on ctx) when
+// the notifier is nil.
+func TestReservationActionTimeoutWatcher_Run_NilNotifierError(t *testing.T) {
+	spvChain := newLocalChain()
+	resolver := &recordingActionTimeoutMembers{}
+
+	watcher := NewReservationActionTimeoutWatcher(spvChain, nil, resolver, time.Millisecond)
+	if err := watcher.Run(context.Background()); err == nil {
+		t.Fatal("expected error for nil notifier, got nil")
+	}
+}
+
+// TestReservationActionTimeoutWatcher_Run_NilResolverError mirrors the nil
+// notifier case for the members resolver precondition.
+func TestReservationActionTimeoutWatcher_Run_NilResolverError(t *testing.T) {
+	spvChain := newLocalChain()
+	notifier := &recordingActionTimeoutNotifier{}
+
+	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, nil, time.Millisecond)
+	if err := watcher.Run(context.Background()); err == nil {
+		t.Fatal("expected error for nil resolver, got nil")
+	}
+}
+
+// TestReservationActionTimeoutWatcher_Run_ZeroIntervalError verifies Run
+// refuses to start its poll loop with a non-positive interval, matching the
+// documented NewReservationActionTimeoutWatcher contract (a zero interval
+// means "synchronous CheckReservationActionTimeouts only").
+func TestReservationActionTimeoutWatcher_Run_ZeroIntervalError(t *testing.T) {
+	spvChain := newLocalChain()
+	notifier := &recordingActionTimeoutNotifier{}
+	resolver := &recordingActionTimeoutMembers{}
+
+	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	if err := watcher.Run(context.Background()); err == nil {
+		t.Fatal("expected error for zero poll interval, got nil")
+	}
+}
+
+// TestReservationActionTimeoutWatcher_Run_ChecksWatchedWalletsAndStopsOnCancel
+// is the end-to-end coverage for the polling loop this task adds: it
+// verifies Run (a) immediately checks every wallet registered via
+// WatchWallet without waiting a full interval first, (b) notifies the
+// Bridge for a reservation whose pending action has timed out, and (c)
+// returns promptly once ctx is canceled rather than running forever.
+func TestReservationActionTimeoutWatcher_Run_ChecksWatchedWalletsAndStopsOnCancel(t *testing.T) {
+	spvChain := newLocalChain()
+
+	notified := make(chan *big.Int, 4)
+	notifier := ReservationActionTimeoutNotifierFunc(func(
+		reservationKey *big.Int,
+		walletMembersIDs []uint32,
+	) error {
+		notified <- reservationKey
+		return nil
+	})
+
+	wallet := walletPKH()
+	key := reservationKey(0xC00B)
+	resolver := &recordingActionTimeoutMembers{
+		walletIDs: map[[20]byte][]uint32{wallet: {7}},
+	}
+
+	// now() is fixed far past the seeded action's TimeoutAt so the very
+	// first poll iteration (which runs immediately, before any ticker
+	// fires) already finds a timed-out action.
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				State:     tbtc.ReservationActionStatePending,
+				TimeoutAt: 100,
+			},
+		},
+		0,
+	)
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+
+	watcher := NewReservationActionTimeoutWatcher(
+		spvChain,
+		notifier,
+		resolver,
+		time.Millisecond,
+	)
+	watcher.nowFn = func() uint32 { return 5_000 }
+	watcher.WatchWallet(wallet)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- watcher.Run(ctx)
+	}()
+
+	select {
+	case notifiedKey := <-notified:
+		if notifiedKey.Cmp(key) != 0 {
+			t.Errorf("unexpected notified reservation key: got %v, want %v", notifiedKey, key)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to notify the timed-out action")
+	}
+
+	cancel()
+
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled from Run, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to return after ctx cancellation")
 	}
 }
