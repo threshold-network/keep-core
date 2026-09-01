@@ -3,6 +3,7 @@ package tbtcpg
 import (
 	"errors"
 	"fmt"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 )
 
 // ErrMaxFeeTooLow indicates that the Bridge maximum total fee is too low to
@@ -100,6 +101,45 @@ func applyWalletTxFeeFloor(
 	totalFee := rate * txVsize
 	if uint64(totalFee) > maxTotalFee {
 		totalFee = int64(maxTotalFee)
+	}
+
+	return totalFee, nil
+}
+
+// estimateReservationFixedSizeTxFee estimates the fee for a reservation
+// transaction with a fixed virtual size. It mirrors the fee estimation
+// logic in acceptance and re-anchor tasks, including fee flooring and
+// max-fee clamping. exceedsMaxErrMsg is the caller-specific message used
+// when the raw estimate already exceeds txMaxFee (acceptance and re-anchor
+// use distinct action-named messages here, matching their pre-existing
+// fixture expectations).
+func estimateReservationFixedSizeTxFee(
+	btcChain bitcoin.Chain,
+	sizeEstimator *bitcoin.TransactionSizeEstimator,
+	txMaxFee uint64,
+	exceedsMaxErrMsg string,
+) (int64, error) {
+	transactionSize, err := sizeEstimator.VirtualSize()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot estimate transaction virtual size: [%v]",
+			err,
+		)
+	}
+
+	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
+	totalFee, err := feeEstimator.EstimateFee(transactionSize)
+	if err != nil {
+		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
+	}
+
+	if uint64(totalFee) > txMaxFee {
+		return 0, fmt.Errorf("%s", exceedsMaxErrMsg)
+	}
+
+	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, txMaxFee)
+	if err != nil {
+		return 0, err
 	}
 
 	return totalFee, nil

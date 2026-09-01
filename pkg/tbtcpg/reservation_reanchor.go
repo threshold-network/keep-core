@@ -16,12 +16,6 @@ import (
 // 30 days assuming 12 seconds per block.
 const ReservationReanchorLookBackBlocks = uint64(216000)
 
-// ErrReservationReanchorTxFeeTooHigh is returned when the estimated fee for a
-// reservation re-anchor transaction exceeds the on-chain maximum.
-var ErrReservationReanchorTxFeeTooHigh = fmt.Errorf(
-	"reservation re-anchor estimated fee exceeds the maximum fee",
-)
-
 // ReservationReanchorTask is a task that may produce a reservation re-anchor
 // proposal. The wallet enters this task when the source wallet has begun a
 // move to a new wallet (state StateMovingFunds) or when the source wallet's
@@ -163,10 +157,11 @@ func (rrt *ReservationReanchorTask) Run(
 			walletPublicKeyHash,
 		)
 		if err != nil {
-			return nil, false, fmt.Errorf(
-				"cannot pick re-anchor target wallet: [%w]",
+			taskLogger.Errorf(
+				"cannot pick re-anchor target wallet: [%v]",
 				err,
 			)
+			continue
 		}
 
 		proposal, err := rrt.ProposeReservationReanchor(
@@ -179,7 +174,7 @@ func (rrt *ReservationReanchorTask) Run(
 		)
 		if err != nil {
 			return nil, false, fmt.Errorf(
-				"cannot prepare reservation re-anchor proposal: [%w]",
+				"cannot prepare reservation re-anchor proposal: [%v]",
 				err,
 			)
 		}
@@ -286,6 +281,13 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 			"failed to verify reservation re-anchor proposal: [%w]",
 			err,
 		)
+	}
+	// The re-anchor request generation must be authorized on-chain.
+	if err := rrt.chain.RequestReservationReanchor(
+		reservationKey,
+		targetWalletPublicKeyHash,
+	); err != nil {
+		return nil, fmt.Errorf("cannot request reservation re-anchor: [%v]", err)
 	}
 
 	return proposal, nil
@@ -461,31 +463,10 @@ func estimateReservationReanchorFee(
 		AddPublicKeyHashInputs(1, true).
 		AddPublicKeyHashOutputs(1, true)
 
-	transactionSize, err := sizeEstimator.VirtualSize()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"cannot estimate transaction virtual size: [%v]",
-			err,
-		)
-	}
-
-	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
-	totalFee, err := feeEstimator.EstimateFee(transactionSize)
-	if err != nil {
-		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
-	}
-
-	if uint64(totalFee) > txMaxFee {
-		return 0, ErrReservationReanchorTxFeeTooHigh
-	}
-
-	// Enforce the safe minimum fee rate and buffer so a non-RBF
-	// reservation re-anchor transaction is never broadcast below the
-	// floor where it could get stuck and jam the wallet.
-	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, txMaxFee)
-	if err != nil {
-		return 0, err
-	}
-
-	return totalFee, nil
+	return estimateReservationFixedSizeTxFee(
+		btcChain,
+		sizeEstimator,
+		txMaxFee,
+		"reservation re-anchor estimated fee exceeds the maximum fee",
+	)
 }

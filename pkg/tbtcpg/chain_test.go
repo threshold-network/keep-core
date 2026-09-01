@@ -1054,7 +1054,20 @@ func (lc *LocalChain) SetLiveWalletsCount(count uint32) {
 }
 
 func (lc *LocalChain) ComputeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte {
-	panic("unsupported")
+	outputIndexBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(outputIndexBytes, mainUtxo.Outpoint.OutputIndex)
+
+	valueBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(valueBytes, uint64(mainUtxo.Value))
+
+	return crypto.Keccak256Hash(
+		append(
+			append(
+				mainUtxo.Outpoint.TransactionHash[:],
+				outputIndexBytes...,
+			), valueBytes...,
+		),
+	)
 }
 
 func (lc *LocalChain) ComputeMovingFundsCommitmentHash(targetWallets [][20]byte) [32]byte {
@@ -1641,19 +1654,6 @@ func (lc *LocalChain) PendingReservedDeposits() (uint64, error) {
 
 // Reservations is a stub mirroring the Bridge view. Tests that need this
 // data should populate it explicitly via custom extensions.
-func (lc *LocalChain) Reservations(
-	reservationKey *big.Int,
-) (*tbtc.ReservationRequest, error) {
-	return nil, fmt.Errorf("unsupported")
-}
-
-// ReservationActions mirrors the Bridge view.
-func (lc *LocalChain) ReservationActions(
-	reservationKey *big.Int,
-	requestNonce uint64,
-) (*tbtc.ReservationActionRecord, error) {
-	return nil, fmt.Errorf("unsupported")
-}
 
 // ActiveReservationsCount reports zero active reservations by default.
 func (lc *LocalChain) ActiveReservationsCount() (

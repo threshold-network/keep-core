@@ -248,19 +248,6 @@ type Chain interface {
 	// have been revealed to the Bridge but not yet accepted by a wallet.
 	PendingReservedDeposits() (uint64, error)
 
-	// Reservations returns the on-chain reservation request record for the
-	// given reservation key. Mirrors the ReservationRouter.reservations
-	// view verbatim.
-	Reservations(reservationKey *big.Int) (*tbtc.ReservationRequest, error)
-
-	// ReservationActions returns the on-chain reservation action record
-	// for the given reservation key and request nonce. Mirrors the
-	// ReservationRouter.reservationActions view verbatim.
-	ReservationActions(
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) (*tbtc.ReservationActionRecord, error)
-
 	// ActiveReservationsCount returns the current count of active
 	// reservations across all wallets and the cap on that count.
 	ActiveReservationsCount() (count uint32, maxActive uint32, err error)

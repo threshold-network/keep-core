@@ -1,0 +1,17 @@
+{
+  "Title": "eligibility gate: Live wallet above dust threshold, no proposal",
+  "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+  "SourceWalletState": "Live",
+  "SourceWalletMainUtxoHash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "SourceWalletMainUtxoValue": 2000000,
+  "SourceWalletMainUtxoTxHash": "2222222222222222222222222222222222222222222222222222222222222222",
+  "SourceWalletMainUtxoTxIndex": 0,
+  "TargetWalletPublicKeyHash": "0x0000000000000000000000000000000000000000",
+  "LiveWalletsCount": 4,
+  "MovingFundsDustThreshold": 1000000,
+  "ReservationTxMaxFee": 100000,
+  "EstimateSatPerVByteFee": 1,
+  "ReanchorTxFee": 0,
+  "Reservations": [],
+  "ExpectedProposal": null
+}
