@@ -608,9 +608,7 @@ func TestWalletActionMetricsRegistered(t *testing.T) {
 		"moving_funds",
 		"moved_funds_sweep",
 		"reservation_anchor",
-		"reserved_redemption",
 		"reservation_reanchor",
-		"reservation_dissolution",
 	}
 
 	for _, actionType := range expectedActionTypes {
@@ -661,9 +659,7 @@ func TestWalletActionMetricsNotRegisteredWhenReservationsDisabled(t *testing.T) 
 	}
 	reservationActionTypes := []string{
 		"reservation_anchor",
-		"reserved_redemption",
 		"reservation_reanchor",
-		"reservation_dissolution",
 	}
 
 	for _, actionType := range nonReservationActionTypes {

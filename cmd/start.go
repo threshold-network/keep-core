@@ -8,6 +8,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtcpg"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
+
 	"github.com/keep-network/keep-core/build"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	"github.com/keep-network/keep-core/pkg/operator"
@@ -170,7 +171,7 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Tbtc.Reservations.Enabled,
 		)
 
-		_, err = tbtc.Initialize(
+		resolver, err := tbtc.Initialize(
 			ctx,
 			tbtcChain,
 			btcChain,
@@ -185,7 +186,7 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Ethereum.Network,
 		)
 		if err != nil {
-			return fmt.Errorf("error initializing TBTC: [%v]", err)
+			return fmt.Errorf("cannot initialize TBTC: [%v]", err)
 		}
 
 		// Wire the reservation watchers (stranding, stale-deposit,
@@ -197,24 +198,11 @@ func start(cmd *cobra.Command) error {
 		// fatal: the operator opted into reservations, so a missing
 		// watcher would silently strand anchors.
 		if clientConfig.Tbtc.Reservations.Enabled {
-			// TODO: thread the real resolver from tbtc.Initialize once it
-			// is wired through; until then use a permanent-error stub so a
-			// misconfigured resolver fails loudly on first use instead of
-			// silently fabricating empty member data.
-			membersResolver := spv.WalletMembersResolverFunc(
-				func(walletPublicKeyHash [20]byte) ([]uint32, error) {
-					return nil, fmt.Errorf(
-						"wallet members resolver not wired: no on-chain " +
-							"accessor available for this operator's " +
-							"member indexes yet",
-					)
-				},
-			)
 			if err := spv.WireReservationWatchers(
 				ctx,
 				tbtcChain,
 				tbtcChain,
-				membersResolver,
+				resolver,
 			); err != nil {
 				return fmt.Errorf(
 					"failed to wire reservation watchers: [%v]",
