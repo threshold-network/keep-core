@@ -50,10 +50,10 @@ This document enumerates the M1 reservation scenarios keep-core's client must ha
 ### Story 6: Re-anchor on Wallet Rotation
 - Actor: Client
 - Precondition: Wallet rotation triggered; new wallet is assigned.
-- Trigger: `WalletMovingFunds` event (should invoke `pkg/maintainer/spv/reservation_reanchor_proof.go:30` `SubmitReservationReanchorProof`, but per `01-gap-analysis.md`'s Major finding, `reservation_wiring.go` never calls it on that event)
-- Expected keep-core behavior: Client constructs and submits `ReservationReanchorProposal` promptly (`pkg/tbtc/reservation.go:284-337`).
-- Current status: partial (`pkg/maintainer/spv/reservation_reanchor_proof.go:30-48` proof submission exists; wallet-rotation trigger wiring missing, see `01-gap-analysis.md` Major row)
-- Test level needed: integration
+- Trigger: `WalletMovingFunds` state transition. `ReservationReanchorTask` (`pkg/tbtcpg/reservation_reanchor.go:65-83`) already generates and broadcasts the re-anchor proposal on this trigger; the gap was downstream, in SPV proof submission (`pkg/maintainer/spv/spv.go`'s generic proof loop could not supply the `(reservationKey, requestNonce)` pair `SubmitReservationReanchorProof` needs - see `01-gap-analysis.md` Major row 2), not in the trigger/proposal path itself.
+- Expected keep-core behavior: Client constructs and submits `ReservationReanchorProposal` promptly (`pkg/tbtc/reservation.go:284-337`), then the SPV maintainer submits the re-anchor proof once the transaction confirms.
+- Current status: implemented (`pkg/maintainer/spv/reservation_reanchor_proof.go`: `getUnprovenReservationReanchorTransactions` discovers the unproven transaction via `ReservationReanchorRequested` events + `ReservationByAnchorUtxo`; `reservationReanchorTransactionProofSubmitter` re-derives the key/nonce pair and submits - PR #4276)
+- Test level needed: unit
 - Why: Promptness is critical during rotation to avoid stranding anchors on retiring wallets.
 
 ### Story 7: Cap enforcement awareness
@@ -99,12 +99,12 @@ These scenarios are real and eventually need coverage, but are M2 per the settle
 
 | Status | Count |
 | :--- | :--- |
-| Implemented | 8 |
-| Partial | 1 |
+| Implemented | 9 |
+| Partial | 0 |
 | Missing | 0 |
 
 | Test level | Count |
 | :--- | :--- |
-| Unit | 8 |
-| Integration | 1 |
+| Unit | 9 |
+| Integration | 0 |
 | E2E | 0 |

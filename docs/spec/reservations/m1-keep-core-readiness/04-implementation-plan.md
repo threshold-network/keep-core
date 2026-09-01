@@ -24,10 +24,12 @@ CI-verified confidence in every ABI-touching task below.
 
 ## Milestone 1: Close the functional gaps (Blocker + Major rows)
 
+**Status: done, PR [#4276](https://github.com/threshold-network/keep-core/pull/4276)** (both non-blocked rows below; branch `m1/reservation-readiness-fixes` on top of `m1/keep-core-client`).
+
 | File | Task | Traces to | Effort | Test-acceptance criteria |
 | :--- | :--- | :--- | :--- | :--- |
-| `pkg/maintainer/spv/reservation_wiring.go` | Wire `submitReservationReanchorProof` (`reservation_reanchor_proof.go:49`) to the `WalletMovingFunds` wallet-state-change event, following the existing `WatchWallet` registration pattern | Gap-analysis Major row 2 / Story S6 | S (0.5 day) | **S6:** integration test simulating a `WalletMovingFunds` event; assert `SubmitReservationReanchorProof` is invoked exactly once per open reservation anchored to the rotating wallet, and not invoked for reservations on unrelated wallets |
-| `pkg/maintainer/spv/reservation_action_timeout_watch.go` | Replace `Run()`'s admitted placeholder (`:141-144`) with a real polling loop that calls `CheckReservationActionTimeouts` (`:186`) per registered wallet, per the file's own doc-comment-stated follow-up | Gap-analysis Minor row 1 | M (0.5-1 day) | **Gap row 1:** unit test asserting the loop invokes `CheckReservationActionTimeouts` on every registered wallet at each tick, and that a newly `WatchWallet`-registered wallet is picked up without a restart |
+| `pkg/maintainer/spv/reservation_reanchor_proof.go` + `pkg/maintainer/spv/spv.go` | ~~Wire `submitReservationReanchorProof` to `WalletMovingFunds` in `reservation_wiring.go`~~ **Corrected during implementation**: the trigger/proposal path (`ReservationReanchorTask`, registered in `tbtcpg.NewProposalGenerator`) already existed - `reservation_wiring.go` was never the right file. The actual gap was SPV proof submission: `spv.go`'s generic proof-loop signature can't carry `(reservationKey, requestNonce)`. Fix: real `getUnprovenReservationReanchorTransactions` getter (matches candidate transactions via `ReservationByAnchorUtxo`) and `reservationReanchorTransactionProofSubmitter` (re-derives the key/nonce pair, then calls `SubmitReservationReanchorProof`) | Gap-analysis Major row 2 / Story S6 | **Actual: ~1 day** (original 0.5-day estimate assumed the wrong, smaller fix; discovering the real SPV-side gap and its correct fix took materially longer) | **Done:** unit tests cover discovery precision (shape mismatch, anchor mismatch, settled-action skip) and submitter key/nonce derivation - see `reservation_reanchor_proof_test.go` |
+| `pkg/maintainer/spv/reservation_action_timeout_watch.go` | Replace `Run()`'s admitted placeholder (`:141-144`) with a real polling loop that calls `CheckReservationActionTimeouts` (`:186`) per registered wallet, per the file's own doc-comment-stated follow-up | Gap-analysis Minor row 1 | M (0.5-1 day) | **Done:** unit tests cover `WatchWallet` dedup, all three `Run` precondition guards, and an end-to-end test that `Run` notifies a timed-out action on its first iteration and returns promptly on `ctx` cancellation - see `reservation_action_timeout_watch_test.go` |
 | `pkg/tbtc/reservation.go` | Switch the four `CoordinationProposal.Marshal()`/`Unmarshal()` implementations (`:210`, `:260`, `:315`, `:368`) from JSON to protobuf | Gap-analysis Major row 1 | **Blocked** — requires a `pkg/tbtc/gen/pb` message-type schema change first, which is a separate cross-cutting task outside this plan's file scope. Once the schema lands: M-L (0.5-2 days) for the four swaps + roundtrip tests | Roundtrip test per proposal type asserting `Unmarshal(Marshal(x)) == x` field-for-field; existing JSON roundtrip tests (if any) must be ported, not silently dropped |
 
 ## Milestone 2: Test-coverage backfill (Minor rows + Stories S7-S9)
@@ -78,7 +80,8 @@ flowchart LR
 - Milestone 1's two wiring tasks are prerequisites for Milestone 3's multi-signer test to exercise
   real re-anchor and timeout behavior rather than a hand-invoked code path.
 - Milestone 2 is fully parallelizable across files/engineers; no task depends on another within it.
-- Total keep-core engineering effort, Milestones 1-2 only: **1 wiring task (S) + 1 wiring task
-  (M) + 7 test tasks (mostly S, one M) + 1 dedup task (M/L) ≈ 4-6 engineer-days**, excluding the
-  protobuf-schema-blocked task and excluding Milestone 0 (release coordination, not engineering)
-  and Milestone 3 (5-7 days + ~2 weeks, previously scoped).
+- Total keep-core engineering effort, Milestones 1-2: Milestone 1 actual (done, PR #4276) - 1
+  SPV proof-loop task (~1 day) + 1 polling-loop task (M, 0.5-1 day) ≈ **1.5-2 days**. Milestone 2
+  remaining: 7 test tasks (mostly S, one M) + 1 dedup task (M/L) ≈ **3-4 engineer-days**,
+  excluding the protobuf-schema-blocked task, Milestone 0 (release coordination, not
+  engineering), and Milestone 3 (5-7 days + ~2 weeks, previously scoped).
