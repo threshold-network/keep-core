@@ -16,7 +16,7 @@ This document enumerates the M1 reservation scenarios keep-core's client must ha
 - Precondition: `ReservationAnchorProposal` issued and received (`pkg/tbtc/reservation.go:179-192`).
 - Trigger: `ValidityBlocks` (`pkg/tbtc/reservation.go:200-203`) elapsed before proposal is submitted.
 - Expected keep-core behavior: Client aborts acceptance; reservation state remains `ReservationStatePending` or transitions to `ReservationStateTerminated` if anchor is abandoned.
-- Current status: implemented (`pkg/maintainer/spv/reservation_action_timeout_watch.go:186` `CheckReservationActionTimeouts`)
+- Current status: implemented and unit-tested (`pkg/maintainer/spv/reservation_action_timeout_watch.go:186` `CheckReservationActionTimeouts`; polling loop in `Run` - PR #4276). **Caveat:** the loop's `WatchWallet` registration has zero production callers under `pkg/` - `WireReservationWatchers` starts `Run` but never registers a wallet, since the wallet-ID -> public-key-hash discovery step is a pre-existing gap shared by all three reservation watchers ("PR H placeholder" in `reservation_wiring.go`). Until that follow-up lands, this path is inert in production.
 - Test level needed: unit
 - Why: Action timeout monitoring ensures proposals don't linger beyond their expiry.
 
