@@ -3200,57 +3200,10 @@ func (tc *TbtcChain) PendingReservedDeposits() (uint64, error) {
 // verbatim-on-chain conversion; callers that want a slightly-shrunk Go
 // representation use GetReservation, which drops CumulativeReanchorFee
 // because m1 has no fee-ceiling enforcement.
-func convertReservationRequestFromAbiType(
-	abiReservation tbtcabi.ReservationReservationRequest,
-) (*tbtc.ReservationRequest, error) {
-	state, err := parseReservationState(abiReservation.State)
-	if err != nil {
-		return nil, fmt.Errorf("cannot parse reservation state: [%v]", err)
-	}
-
-	return &tbtc.ReservationRequest{
-		Owner:                 chain.Address(abiReservation.Owner.String()),
-		MintedAmount:          abiReservation.MintedAmount,
-		AcceptedAt:            abiReservation.AcceptedAt,
-		WalletPublicKeyHash:   abiReservation.WalletPubKeyHash,
-		AnchorAmount:          abiReservation.AnchorAmount,
-		ExpiresAt:             abiReservation.ExpiresAt,
-		AnchorTxHash:          abiReservation.AnchorTxHash,
-		AnchorTxOutputIndex:   abiReservation.AnchorTxOutputIndex,
-		State:                 state,
-		RequestNonce:          abiReservation.RequestNonce,
-		RetryCredit:           abiReservation.RetryCredit,
-		DissolutionEligibleAt: abiReservation.DissolutionEligibleAt,
-		CumulativeReanchorFee: abiReservation.CumulativeReanchorFee,
-	}, nil
-}
 
 // Reservations returns the on-chain reservation request record for the
 // given reservation key, including the cumulative re-anchor fee that the
 // existing GetReservation representation drops.
-func (tc *TbtcChain) Reservations(
-	reservationKey *big.Int,
-) (*tbtc.ReservationRequest, error) {
-	abiReservation, err := tc.reservationRouter.Reservations(reservationKey)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get reservation [0x%x]: [%v]",
-			reservationKey,
-			err,
-		)
-	}
-
-	reservation, err := convertReservationRequestFromAbiType(abiReservation)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot convert reservation [0x%x] from abi type: [%v]",
-			reservationKey,
-			err,
-		)
-	}
-
-	return reservation, nil
-}
 
 // convertReservationActionRecordFromAbiType converts the ReservationRouter-
 // specific Reservation.ReservationAction ABI struct to the TBTC
@@ -3258,79 +3211,11 @@ func (tc *TbtcChain) Reservations(
 // verbatim-on-chain conversion; callers that want a slightly-shrunk Go
 // representation use GetReservationAction, which drops the late-settlement
 // and retry-credit fields because m1 does not consume them.
-func convertReservationActionRecordFromAbiType(
-	abiAction tbtcabi.ReservationReservationAction,
-) (*tbtc.ReservationActionRecord, error) {
-	actionType, err := parseReservationActionType(abiAction.ActionType)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot parse reservation action type: [%v]",
-			err,
-		)
-	}
-
-	state, err := parseReservationActionState(abiAction.State)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot parse reservation action state: [%v]",
-			err,
-		)
-	}
-
-	return &tbtc.ReservationActionRecord{
-		TargetWalletPublicKeyHash: abiAction.TargetWalletPubKeyHash,
-		RequestedAt:               abiAction.RequestedAt,
-		TimeoutAt:                 abiAction.TimeoutAt,
-		TxMaxFee:                  abiAction.TxMaxFee,
-		ActionType:                actionType,
-		State:                     state,
-		FeePaid:                   abiAction.FeePaid,
-		Redeemer:                  chain.Address(abiAction.Redeemer.String()),
-		Amount:                    abiAction.Amount,
-		ActionDataHash:            abiAction.ActionDataHash,
-		SourceAnchorUtxoHash:      abiAction.SourceAnchorUtxoHash,
-		UsedRetryCredit:           abiAction.UsedRetryCredit,
-		WatchtowerDefaultDelay:    abiAction.WatchtowerDefaultDelay,
-		WatchtowerLevelOneDelay:   abiAction.WatchtowerLevelOneDelay,
-		WatchtowerLevelTwoDelay:   abiAction.WatchtowerLevelTwoDelay,
-		IsPartial:                 abiAction.IsPartial,
-		RetryCreditSourceNonce:    abiAction.RetryCreditSourceNonce,
-	}, nil
-}
 
 // ReservationActions returns the on-chain reservation action record for the
 // given reservation key and request nonce, including the late-settlement
 // and retry-credit fields that the existing GetReservationAction
 // representation drops.
-func (tc *TbtcChain) ReservationActions(
-	reservationKey *big.Int,
-	requestNonce uint64,
-) (*tbtc.ReservationActionRecord, error) {
-	abiAction, err := tc.reservationRouter.ReservationActions(
-		reservationKey,
-		requestNonce,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get reservation action [0x%x:%d]: [%v]",
-			reservationKey,
-			requestNonce,
-			err,
-		)
-	}
-
-	action, err := convertReservationActionRecordFromAbiType(abiAction)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot convert reservation action [0x%x:%d] from abi type: [%v]",
-			reservationKey,
-			requestNonce,
-			err,
-		)
-	}
-
-	return action, nil
-}
 
 // ActiveReservationsCount returns the current count of active reservations
 // across all wallets and the cap on that count.
@@ -3775,10 +3660,11 @@ func (tc *TbtcChain) PastReservationActionTimedOutEvents(
 	for _, event := range events {
 		parsedActionType, err := parseReservationActionType(event.ActionType)
 		if err != nil {
-			return nil, fmt.Errorf(
+			logger.Errorf(
 				"unexpected reservation action type on past ReservationActionTimedOut event: [%v]",
 				err,
 			)
+			continue
 		}
 
 		convertedEvents = append(convertedEvents, &tbtc.ReservationActionTimedOutEvent{
