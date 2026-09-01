@@ -193,10 +193,12 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 
 	// Register per-action type wallet metrics
 	// For each action type, register: total, success_total, failed_total, duration_seconds
-	for _, actionType := range GetAllWalletActionTypes() {
-		if isReservationWalletActionType(actionType) && !pm.reservationsEnabled {
-			continue
-		}
+	actionTypes := GetAllWalletActionTypes()
+	if pm.reservationsEnabled {
+		actionTypes = append(actionTypes, GetReservationWalletActionTypes()...)
+	}
+
+	for _, actionType := range actionTypes {
 
 		actionCounters := []string{
 			WalletActionMetricName(actionType, "total"),
@@ -764,8 +766,8 @@ func GetAllNetworkJoinFailureReasons() []string {
 	}
 }
 
-// GetAllWalletActionTypes returns all wallet action types that should be tracked.
-// ActionNoop is excluded as it's a no-op action.
+// GetAllWalletActionTypes returns all non-reservation wallet action types that
+// should be tracked. ActionNoop is excluded as it's a no-op action.
 func GetAllWalletActionTypes() []string {
 	return []string{
 		"heartbeat",
@@ -773,6 +775,13 @@ func GetAllWalletActionTypes() []string {
 		"redemption",
 		"moving_funds",
 		"moved_funds_sweep",
+	}
+}
+
+// GetReservationWalletActionTypes returns all reservation-specific wallet
+// action types that should be tracked.
+func GetReservationWalletActionTypes() []string {
+	return []string{
 		"reservation_anchor",
 		"reserved_redemption",
 		"reservation_reanchor",
