@@ -53,3 +53,29 @@ message MovedFundsSweepProposal {
     uint32 movingFundsTxOutputIndex = 2;
     bytes sweepTxFee = 3;
 }
+
+message ReservationAnchorProposal {
+    bytes depositFundingTxHash = 1;
+    uint32 depositFundingOutputIndex = 2;
+    uint64 requestNonce = 3;
+    bytes anchorTxFee = 4;
+}
+
+message ReservedRedemptionProposal {
+    bytes reservationKey = 1;
+    uint64 requestNonce = 2;
+    bytes redemptionTxFee = 3;
+}
+
+message ReservationReanchorProposal {
+    bytes reservationKey = 1;
+    uint64 requestNonce = 2;
+    bytes targetWalletPublicKeyHash = 3;
+    bytes reanchorTxFee = 4;
+}
+
+message ReservationDissolutionProposal {
+    bytes reservationKey = 1;
+    uint64 requestNonce = 2;
+    bytes dissolutionTxFee = 3;
+}

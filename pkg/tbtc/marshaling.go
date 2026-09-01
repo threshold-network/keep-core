@@ -470,6 +470,186 @@ func (mfsp *MovedFundsSweepProposal) Unmarshal(data []byte) error {
 	return nil
 }
 
+// Marshal converts the reservationAnchorProposal to a byte array.
+func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
+	return proto.Marshal(
+		&pb.ReservationAnchorProposal{
+			DepositFundingTxHash:      rap.DepositFundingTxHash[:],
+			DepositFundingOutputIndex: rap.DepositFundingOutputIndex,
+			RequestNonce:              rap.RequestNonce,
+			AnchorTxFee:               rap.AnchorTxFee.Bytes(),
+		},
+	)
+}
+
+// Unmarshal converts a byte array back to the reservationAnchorProposal.
+func (rap *ReservationAnchorProposal) Unmarshal(bytes []byte) error {
+	pbMsg := pb.ReservationAnchorProposal{}
+	if err := proto.Unmarshal(bytes, &pbMsg); err != nil {
+		return fmt.Errorf("failed to unmarshal ReservationAnchorProposal: [%v]", err)
+	}
+
+	if len(pbMsg.DepositFundingTxHash) != 32 {
+		return fmt.Errorf(
+			"invalid deposit funding tx hash length: [%v]",
+			len(pbMsg.DepositFundingTxHash),
+		)
+	}
+	// RequestNonce identifies the acceptance authorization generation this
+	// proposal targets; 0 is the reservation's default zero-value meaning
+	// "no action requested", so a proposal must never carry it.
+	if pbMsg.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	// Proto3 scalar fields have no wire presence: an omitted AnchorTxFee
+	// and an explicit zero-value one are indistinguishable on the wire.
+	// A zero fee is never valid for a real anchor transaction, so treat
+	// it the same as "missing" - this mirrors the original JSON-based
+	// Unmarshal's "anchor transaction fee is required" guard.
+	if len(pbMsg.AnchorTxFee) == 0 {
+		return fmt.Errorf("anchor transaction fee is required")
+	}
+
+	var depositFundingTxHash bitcoin.Hash
+	copy(depositFundingTxHash[:], pbMsg.DepositFundingTxHash)
+
+	rap.DepositFundingTxHash = depositFundingTxHash
+	rap.DepositFundingOutputIndex = pbMsg.DepositFundingOutputIndex
+	rap.RequestNonce = pbMsg.RequestNonce
+	rap.AnchorTxFee = new(big.Int).SetBytes(pbMsg.AnchorTxFee)
+
+	return nil
+}
+
+// Marshal converts the reservedRedemptionProposal to a byte array.
+func (rrp *ReservedRedemptionProposal) Marshal() ([]byte, error) {
+	return proto.Marshal(
+		&pb.ReservedRedemptionProposal{
+			ReservationKey:  rrp.ReservationKey.Bytes(),
+			RequestNonce:    rrp.RequestNonce,
+			RedemptionTxFee: rrp.RedemptionTxFee.Bytes(),
+		},
+	)
+}
+
+// Unmarshal converts a byte array back to the reservedRedemptionProposal.
+func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
+	pbMsg := pb.ReservedRedemptionProposal{}
+	if err := proto.Unmarshal(bytes, &pbMsg); err != nil {
+		return fmt.Errorf("failed to unmarshal ReservedRedemptionProposal: [%v]", err)
+	}
+
+	// See ReservationAnchorProposal.Unmarshal: proto3 zero-value fields
+	// are indistinguishable from omitted ones, so a zero reservation key
+	// (never legitimate - keys are derived hashes) is treated as missing,
+	// mirroring the original JSON-based Unmarshal's guard.
+	if len(pbMsg.ReservationKey) == 0 {
+		return fmt.Errorf("reservation key is required")
+	}
+	// See the comment in ReservationAnchorProposal.Unmarshal: nonce 0 is
+	// the reservation's "no action requested" zero-value.
+	if pbMsg.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if len(pbMsg.RedemptionTxFee) == 0 {
+		return fmt.Errorf("redemption transaction fee is required")
+	}
+
+	rrp.ReservationKey = new(big.Int).SetBytes(pbMsg.ReservationKey)
+	rrp.RequestNonce = pbMsg.RequestNonce
+	rrp.RedemptionTxFee = new(big.Int).SetBytes(pbMsg.RedemptionTxFee)
+
+	return nil
+}
+
+// Marshal converts the reservationReanchorProposal to a byte array.
+func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
+	return proto.Marshal(
+		&pb.ReservationReanchorProposal{
+			ReservationKey:            rrp.ReservationKey.Bytes(),
+			RequestNonce:              rrp.RequestNonce,
+			TargetWalletPublicKeyHash: rrp.TargetWalletPublicKeyHash[:],
+			ReanchorTxFee:             rrp.ReanchorTxFee.Bytes(),
+		},
+	)
+}
+
+// Unmarshal converts a byte array back to the reservationReanchorProposal.
+func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
+	pbMsg := pb.ReservationReanchorProposal{}
+	if err := proto.Unmarshal(bytes, &pbMsg); err != nil {
+		return fmt.Errorf("failed to unmarshal ReservationReanchorProposal: [%v]", err)
+	}
+
+	if len(pbMsg.ReservationKey) == 0 {
+		return fmt.Errorf("reservation key is required")
+	}
+	if len(pbMsg.TargetWalletPublicKeyHash) != 20 {
+		return fmt.Errorf(
+			"invalid target wallet public key hash length: [%v]",
+			len(pbMsg.TargetWalletPublicKeyHash),
+		)
+	}
+	// See the comment in ReservationAnchorProposal.Unmarshal: nonce 0 is
+	// the reservation's "no action requested" zero-value.
+	if pbMsg.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if len(pbMsg.ReanchorTxFee) == 0 {
+		return fmt.Errorf("re-anchor transaction fee is required")
+	}
+
+	var targetWalletPublicKeyHash [20]byte
+	copy(targetWalletPublicKeyHash[:], pbMsg.TargetWalletPublicKeyHash)
+
+	rrp.ReservationKey = new(big.Int).SetBytes(pbMsg.ReservationKey)
+	rrp.RequestNonce = pbMsg.RequestNonce
+	rrp.TargetWalletPublicKeyHash = targetWalletPublicKeyHash
+	rrp.ReanchorTxFee = new(big.Int).SetBytes(pbMsg.ReanchorTxFee)
+
+	return nil
+}
+
+// Marshal converts the reservationDissolutionProposal to a byte array.
+func (rdp *ReservationDissolutionProposal) Marshal() ([]byte, error) {
+	return proto.Marshal(
+		&pb.ReservationDissolutionProposal{
+			ReservationKey:   rdp.ReservationKey.Bytes(),
+			RequestNonce:     rdp.RequestNonce,
+			DissolutionTxFee: rdp.DissolutionTxFee.Bytes(),
+		},
+	)
+}
+
+// Unmarshal converts a byte array back to the reservationDissolutionProposal.
+func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
+	pbMsg := pb.ReservationDissolutionProposal{}
+	if err := proto.Unmarshal(bytes, &pbMsg); err != nil {
+		return fmt.Errorf(
+			"failed to unmarshal ReservationDissolutionProposal: [%v]",
+			err,
+		)
+	}
+
+	if len(pbMsg.ReservationKey) == 0 {
+		return fmt.Errorf("reservation key is required")
+	}
+	// See the comment in ReservationAnchorProposal.Unmarshal: nonce 0 is
+	// the reservation's "no action requested" zero-value.
+	if pbMsg.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if len(pbMsg.DissolutionTxFee) == 0 {
+		return fmt.Errorf("dissolution transaction fee is required")
+	}
+
+	rdp.ReservationKey = new(big.Int).SetBytes(pbMsg.ReservationKey)
+	rdp.RequestNonce = pbMsg.RequestNonce
+	rdp.DissolutionTxFee = new(big.Int).SetBytes(pbMsg.DissolutionTxFee)
+
+	return nil
+}
+
 // marshalPublicKey converts an ECDSA public key to a byte
 // array (uncompressed).
 func marshalPublicKey(publicKey *ecdsa.PublicKey) ([]byte, error) {
