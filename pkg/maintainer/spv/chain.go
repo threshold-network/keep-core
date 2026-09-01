@@ -207,6 +207,13 @@ type Chain interface {
 		filter *tbtc.ReservationActionTimedOutEventFilter,
 	) ([]*tbtc.ReservationActionTimedOutEvent, error)
 
+	// PastReservationAcceptanceRequestedEvents fetches past
+	// ReservationAcceptanceRequested events according to the provided filter
+	// or unfiltered if the filter is nil. Returned events are sorted by the
+	// block number in the ascending order.
+	PastReservationAcceptanceRequestedEvents(
+		filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+	) ([]*tbtc.ReservationAcceptanceRequestedEvent, error)
 	// PastReservationReanchorRequestedEvents fetches past
 	// ReservationReanchorRequested events according to the provided filter
 	// or unfiltered if the filter is nil. Returned events are sorted by the
@@ -222,4 +229,14 @@ type Chain interface {
 		anchorTxHash [32]byte,
 		anchorTxOutputIndex uint32,
 	) (*big.Int, error)
+	// PastNewWalletRegisteredEvents fetches past NewWalletRegistered events
+	// according to the provided filter or unfiltered if the filter is nil.
+	// Returned events are sorted by the block number in the ascending order.
+	PastNewWalletRegisteredEvents(
+		filter *tbtc.NewWalletRegisteredEventFilter,
+	) ([]*tbtc.NewWalletRegisteredEvent, error)
+
+	// BuildDepositKey calculates the key used by the Bridge to store a
+	// deposit request, which is a unique identifier for a deposit on-chain.
+	BuildDepositKey(fundingTxHash bitcoin.Hash, fundingOutputIndex uint32) *big.Int
 }

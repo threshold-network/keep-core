@@ -427,22 +427,6 @@ type WalletProposalValidatorChain interface {
 		},
 	) error
 
-	// GetReservation gets the on-chain reservation record for the given
-	// reservation key. Returns an error if the reservation was not found.
-	GetReservation(reservationKey *big.Int) (*Reservation, error)
-
-	// GetReservationAction gets the on-chain action record for the given
-	// reservation key and request nonce. Returns an error if the action
-	// generation was not found.
-	GetReservationAction(
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) (*ReservationAction, error)
-
-	// ReservationParameters gets the current on-chain values of the Bridge
-	// reservation parameters.
-	ReservationParameters() (*ReservationParameters, error)
-
 	// ValidateReservationAnchorProposal validates the given reservation
 	// anchor proposal against the chain. Returns an error if the proposal
 	// is not valid or nil otherwise.
@@ -674,13 +658,6 @@ type ReservationChain interface {
 	// ReservationParameters gets the current on-chain values of the Bridge
 	// reservation parameters.
 	ReservationParameters() (*ReservationParameters, error)
-
-	// ReservationParametersFull is an alias for ReservationParameters
-	// retained for callers that want a name indicating the full 10-tuple
-	// on-chain layout. The on-chain reservation parameters tuple and the
-	// tbtc.ReservationParameters Go type carry the same 10 fields, so this
-	// returns the same struct.
-	ReservationParametersFull() (*ReservationParameters, error)
 
 	// ReservationCaps returns the cap parameters that gate reservation
 	// acceptance: the maximum aggregate satoshi amount a single wallet may

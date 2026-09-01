@@ -341,6 +341,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 			membershipValidator,
 			protocolLatch,
 			operator.waitForBlockHeight,
+			false,
 		)
 	}
 
@@ -575,6 +576,7 @@ func runReservationCoordinationRound(
 				membershipValidator,
 				protocolLatch,
 				op.waitForBlockHeight,
+				true,
 			)
 
 			result, err := executor.coordinate(window)

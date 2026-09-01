@@ -7,6 +7,15 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
+// reservationAcceptanceActionNonce is the acceptance action generation
+// nonce. A reservation does not exist on-chain before its first acceptance
+// settles, so the acceptance is always the first action generation
+// authorized against a not-yet-created reservation, mirroring
+// tbtcpg.reservationAcceptanceRequestNonce. ReservationAnchorProposal's
+// Unmarshal rejects a zero RequestNonce, which is the on-chain confirmation
+// of this 1-based convention.
+const reservationAcceptanceActionNonce uint64 = 1
+
 // ReservationStaleDepositWatcher observes deposit-revealed events and
 // notifies the Bridge when a reserved deposit's acceptance window expired
 // without the assigned wallet becoming live.
@@ -189,18 +198,18 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 
 	// The action timeout is the deadline bound to the reservation action
 	// generation. Reserved deposits carry exactly one action generation
-	// (the acceptance) so we look it up via the reservation key.
-	reservationKey := depositToReservationKey(depositKey)
-	if reservationKey == nil {
-		logger.Warnf(
-			"could not derive reservation key from deposit key [%v]; "+
-				"skipping stale notification",
-			depositKey,
-		)
-		return nil
-	}
+	// (the acceptance). In m1 the reservation key and deposit key share the
+	// same identifier space exposed by the Bridge (ReservedDepositWallet
+	// and Reservation are both keyed by the same value); future revisions
+	// of the Bridge may introduce disjoint identifiers, in which case this
+	// direct use of depositKey as reservationKey must be replaced with a
+	// real lookup.
+	reservationKey := depositKey
 
-	action, err := rsdw.spvChain.GetReservationAction(reservationKey, 0)
+	action, err := rsdw.spvChain.GetReservationAction(
+		reservationKey,
+		reservationAcceptanceActionNonce,
+	)
 	if err != nil {
 		return fmt.Errorf(
 			"failed to load acceptance action for reservation [%v]: [%v]",
@@ -251,20 +260,4 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	)
 
 	return nil
-}
-
-// depositToReservationKey maps a deposit identifier to the reservation key
-// the action is filed under. In m1 the mapping is identical because
-// ReservedDepositWallet and Reservation share the same identifier space
-// exposed by the Bridge; future revisions of the Bridge may introduce
-// disjoint identifiers, in which case the mapping is filled in by the
-// integration layer.
-//
-// Returning nil here signals "unknown mapping"; the caller treats nil as a
-// soft skip, not an error.
-func depositToReservationKey(depositKey *big.Int) *big.Int {
-	if depositKey == nil {
-		return nil
-	}
-	return new(big.Int).Set(depositKey)
 }

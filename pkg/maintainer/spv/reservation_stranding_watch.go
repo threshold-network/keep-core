@@ -152,6 +152,7 @@ func (rsw *ReservationStrandingWatcher) CheckReservationStrandingForWallet(
 			logger.Errorf(
 				"failed to notify stranded reservation [%v]: [%v]",
 				key,
+				err,
 			)
 			// Continue with the remaining reservations: a single failure
 			// must not starve the others.

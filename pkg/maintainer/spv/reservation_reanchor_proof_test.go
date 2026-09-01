@@ -314,13 +314,12 @@ func TestGetUnprovenReservationReanchorTransactions(t *testing.T) {
 	sourceWalletPKH := [20]byte{0xaa}
 
 	spvChain.setReservationByAnchorUtxo(anchorTx.Hash(), 0, reservationKey)
-	spvChain.setReservationReanchorRequestedEvents([]*tbtc.ReservationReanchorRequestedEvent{
-		{
-			ReservationKey:            reservationKey,
-			RequestNonce:              requestNonce,
-			SourceWalletPublicKeyHash: sourceWalletPKH,
-			TargetWalletPublicKeyHash: targetWalletPKH,
-		},
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		BlockNumber:               currentBlock,
+		ReservationKey:            reservationKey,
+		RequestNonce:              requestNonce,
+		SourceWalletPublicKeyHash: sourceWalletPKH,
+		TargetWalletPublicKeyHash: targetWalletPKH,
 	})
 	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
 		ActionType: tbtc.ReservationActionTypeReanchor,
