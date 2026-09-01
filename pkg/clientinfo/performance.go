@@ -783,20 +783,6 @@ func GetAllWalletActionTypes() []string {
 func GetReservationWalletActionTypes() []string {
 	return []string{
 		"reservation_anchor",
-		"reserved_redemption",
 		"reservation_reanchor",
-		"reservation_dissolution",
-	}
-}
-
-// isReservationWalletActionType reports whether actionType is one of the
-// reservation-specific action types gated by
-// PerformanceMetrics.reservationsEnabled.
-func isReservationWalletActionType(actionType string) bool {
-	switch actionType {
-	case "reservation_anchor", "reserved_redemption", "reservation_reanchor", "reservation_dissolution":
-		return true
-	default:
-		return false
 	}
 }

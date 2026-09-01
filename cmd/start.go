@@ -8,6 +8,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtcpg"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
+
 	"github.com/keep-network/keep-core/build"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	"github.com/keep-network/keep-core/pkg/operator"
@@ -168,7 +169,7 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Tbtc.Reservations.Enabled,
 		)
 
-		err = tbtc.Initialize(
+		resolver, err := tbtc.Initialize(
 			ctx,
 			tbtcChain,
 			btcChain,
@@ -183,7 +184,7 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Ethereum.Network,
 		)
 		if err != nil {
-			return fmt.Errorf("error initializing TBTC: [%v]", err)
+			return fmt.Errorf("cannot initialize TBTC: [%v]", err)
 		}
 
 		// Wire the reservation watchers (stranding, stale-deposit,
@@ -199,6 +200,7 @@ func start(cmd *cobra.Command) error {
 				ctx,
 				tbtcChain,
 				tbtcChain,
+				resolver,
 			); err != nil {
 				return fmt.Errorf(
 					"failed to wire reservation watchers: [%v]",
