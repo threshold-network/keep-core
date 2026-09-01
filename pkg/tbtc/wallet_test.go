@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
@@ -121,6 +123,31 @@ func TestWalletActionType_MetricName(t *testing.T) {
 				actual,
 			)
 		}
+	}
+}
+
+func TestWalletActionType_MetricNameConsistency(t *testing.T) {
+	expected := clientinfo.GetAllWalletActionTypes()
+
+	actual := make([]string, 0)
+	for i := uint8(0); i <= 9; i++ {
+		wat, err := ParseWalletActionType(i)
+		if err != nil {
+			t.Fatalf("failed to parse wallet action type [%v]: %v", i, err)
+		}
+
+		if wat == ActionNoop {
+			continue
+		}
+
+		actual = append(actual, wat.MetricName())
+	}
+
+	sort.Strings(expected)
+	sort.Strings(actual)
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Errorf("Metric names mismatch between WalletActionType and clientinfo.GetAllWalletActionTypes\nexpected: %v\nactual: %v", expected, actual)
 	}
 }
 
@@ -996,5 +1023,27 @@ func TestEnsureWalletSyncedBetweenChains_MainUtxoSpent(t *testing.T) {
 
 	if err == nil {
 		t.Error("expected error when main UTXO has been spent on Bitcoin, got nil")
+	}
+}
+func TestWalletActionType_String(t *testing.T) {
+	tests := map[WalletActionType]string{
+		ActionNoop:                   "Noop",
+		ActionHeartbeat:              "Heartbeat",
+		ActionDepositSweep:           "DepositSweep",
+		ActionRedemption:             "Redemption",
+		ActionMovingFunds:            "MovingFunds",
+		ActionMovedFundsSweep:        "MovedFundsSweep",
+		ActionReservationAnchor:      "ReservationAnchor",
+		ActionReservedRedemption:     "ReservedRedemption",
+		ActionReservationReanchor:    "ReservationReanchor",
+		ActionReservationDissolution: "ReservationDissolution",
+	}
+
+	for actionType, expected := range tests {
+		t.Run(expected, func(t *testing.T) {
+			if actionType.String() != expected {
+				t.Errorf("expected string [%s], got [%s]", expected, actionType.String())
+			}
+		})
 	}
 }
