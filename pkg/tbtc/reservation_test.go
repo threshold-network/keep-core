@@ -1114,6 +1114,35 @@ func TestAssembleReservationAnchorTransaction(t *testing.T) {
 		t.Fatalf("expected no error, got: [%v]", err)
 	}
 
+	// (a1) action type not acceptance
+	invalidTypeAction := *anchorAction
+	invalidTypeAction.ActionType = ReservationActionTypeRedemption
+	_, err = assembleReservationAnchorTransaction(
+		bitcoinChain,
+		deposit,
+		walletPublicKeyHash,
+		&invalidTypeAction,
+		0,
+		1500,
+	)
+	if err == nil || err.Error() != "reservation action is not an acceptance" {
+		t.Fatalf("expected error, got: [%v]", err)
+	}
+
+	// (a2) action state not pending
+	invalidStateAction := *anchorAction
+	invalidStateAction.State = ReservationActionStateTimedOut
+	_, err = assembleReservationAnchorTransaction(
+		bitcoinChain,
+		deposit,
+		walletPublicKeyHash,
+		&invalidStateAction,
+		0,
+		1500,
+	)
+	if err == nil || err.Error() != "reservation action is not pending" {
+		t.Fatalf("expected error, got: [%v]", err)
+	}
 	// (b) fee > TxMaxFee
 	_, err = assembleReservationAnchorTransaction(
 		bitcoinChain,

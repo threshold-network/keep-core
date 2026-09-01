@@ -308,6 +308,12 @@ func assembleReservationAnchorTransaction(
 	if action == nil {
 		return nil, fmt.Errorf("reservation action is required")
 	}
+	if action.ActionType != ReservationActionTypeAcceptance {
+		return nil, fmt.Errorf("reservation action is not an acceptance")
+	}
+	if action.State != ReservationActionStatePending {
+		return nil, fmt.Errorf("reservation action is not pending")
+	}
 	if fee <= 0 {
 		return nil, fmt.Errorf("transaction fee must be positive")
 	}
