@@ -16,8 +16,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 func TestComputeOperatorsIDsHash(t *testing.T) {
@@ -532,4 +534,120 @@ func TestBuildMovedFundsKey(t *testing.T) {
 		expectedMovedFundsKey,
 		movedFundsKey.Text(16),
 	)
+}
+
+// TestConvertReservationParametersFromAbiType verifies the full 10-tuple
+// field mapping performed by convertReservationParametersFromAbiType.
+// Gap-analysis Minor row: field count/order was not yet cross-checked
+// against the live Solidity struct; every field below is set to a distinct
+// non-zero value so a swapped or dropped field is caught, not masked by a
+// shared zero-value default.
+func TestConvertReservationParametersFromAbiType(t *testing.T) {
+	abiParameters := struct {
+		ReservationVault                common.Address
+		ReservationMinAmount            uint64
+		ReservationTxMaxFee             uint64
+		ReservationTermSeconds          uint32
+		ReservationDissolutionDelay     uint32
+		ReservationMaxTotalAmount       uint64
+		ReservationTotalAmount          uint64
+		MaxReservationsPerWallet        uint32
+		ReservationActionTimeout        uint32
+		ReservationRenewalWindowSeconds uint32
+	}{
+		ReservationVault:                common.HexToAddress("0x1111111111111111111111111111111111111a"),
+		ReservationMinAmount:            10000,
+		ReservationTxMaxFee:             20000,
+		ReservationTermSeconds:          30000,
+		ReservationDissolutionDelay:     40000,
+		ReservationMaxTotalAmount:       50000,
+		ReservationTotalAmount:          60000,
+		MaxReservationsPerWallet:        70000,
+		ReservationActionTimeout:        80000,
+		ReservationRenewalWindowSeconds: 90000,
+	}
+
+	expected := &tbtc.ReservationParameters{
+		ReservationVault:                chain.Address(common.HexToAddress("0x1111111111111111111111111111111111111a").String()),
+		ReservationMinAmount:            10000,
+		ReservationTxMaxFee:             20000,
+		ReservationTermSeconds:          30000,
+		ReservationDissolutionDelay:     40000,
+		ReservationMaxTotalAmount:       50000,
+		ReservationTotalAmount:          60000,
+		MaxReservationsPerWallet:        70000,
+		ReservationActionTimeout:        80000,
+		ReservationRenewalWindowSeconds: 90000,
+	}
+
+	actual := convertReservationParametersFromAbiType(abiParameters)
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Errorf(
+			"unexpected reservation parameters\nexpected: [%+v]\nactual:   [%+v]",
+			expected,
+			actual,
+		)
+	}
+}
+
+// TestConvertReservationFromAbiType_DropsCumulativeReanchorFee documents
+// the intentional CumulativeReanchorFee drop performed by
+// convertReservationFromAbiType: the field is written on-chain by every
+// re-anchor hop but is not exposed on tbtc.Reservation because m1 has no
+// fee-ceiling enforcement (own comment, tbtc.go:2672-2676). This test both
+// pins that intentional omission and verifies every other field maps
+// correctly - each field below is a distinct value so a future accidental
+// restoration of CumulativeReanchorFee, or a swapped adjacent field, does
+// not go unnoticed.
+func TestConvertReservationFromAbiType_DropsCumulativeReanchorFee(t *testing.T) {
+	abiReservation := tbtcabi.ReservationReservationRequest{
+		Owner:                 common.HexToAddress("0x1111111111111111111111111111111111111b"),
+		MintedAmount:          111,
+		AcceptedAt:            222,
+		WalletPubKeyHash:      [20]byte{0x01, 0x02, 0x03},
+		AnchorAmount:          333,
+		ExpiresAt:             444,
+		AnchorTxHash:          [32]byte{0x04, 0x05, 0x06},
+		AnchorTxOutputIndex:   555,
+		State:                 1, // ReservationStateActive
+		RequestNonce:          666,
+		RetryCredit:           true,
+		DissolutionEligibleAt: 777,
+		CumulativeReanchorFee: 888, // must not appear anywhere in the output
+	}
+
+	expected := &tbtc.Reservation{
+		Owner:        chain.Address(common.HexToAddress("0x1111111111111111111111111111111111111b").String()),
+		MintedAmount: 111,
+		AcceptedAt:   222,
+		WalletPublicKeyHash: [20]byte{
+			0x01, 0x02, 0x03,
+		},
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: bitcoin.Hash{0x04, 0x05, 0x06},
+				OutputIndex:     555,
+			},
+			Value: 333,
+		},
+		ExpiresAt:             444,
+		State:                 tbtc.ReservationStateActive,
+		RequestNonce:          666,
+		RetryCredit:           true,
+		DissolutionEligibleAt: 777,
+	}
+
+	actual, err := convertReservationFromAbiType(abiReservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Errorf(
+			"unexpected reservation\nexpected: [%+v]\nactual:   [%+v]",
+			expected,
+			actual,
+		)
+	}
 }
