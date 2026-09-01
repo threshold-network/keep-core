@@ -1016,7 +1016,7 @@ func (lc *LocalChain) ComputeReservationRedeemerOutputScriptHash(
 	panic("unsupported")
 }
 
-func (lc *LocalChain) GetReservation(reservationKey *big.Int) (*tbtc.Reservation, error) {
+func (lc *LocalChain) GetReservation(reservationKey *big.Int) (*tbtc.Reservation, bool, error) {
 	panic("unsupported")
 }
 
@@ -1027,7 +1027,11 @@ func (lc *LocalChain) GetReservationAction(
 	panic("unsupported")
 }
 
-func (lc *LocalChain) ReservationParameters() (*tbtc.ReservationParameters, error) {
+func (lc *LocalChain) GetReservationParameters() (tbtc.ReservationParameters, error) {
+	panic("unsupported")
+}
+
+func (lc *LocalChain) GetReservationTotalAmount() (uint64, error) {
 	panic("unsupported")
 }
 

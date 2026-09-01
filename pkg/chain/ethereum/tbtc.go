@@ -1549,10 +1549,12 @@ func (tc *TbtcChain) ComputeMainUtxoHash(
 func (tc *TbtcChain) ComputeReservationRedeemerOutputScriptHash(
 	redeemerOutputScript bitcoin.Script,
 ) ([32]byte, error) {
-	return reservationRedeemerOutputScriptHash(redeemerOutputScript)
+	return redeemerOutputScriptHash(redeemerOutputScript)
 }
 
-func reservationRedeemerOutputScriptHash(redeemerOutputScript bitcoin.Script) ([32]byte, error) {
+// The Bridge contract builds the redemption key using the length-prefixed
+// redeemer output script.
+func redeemerOutputScriptHash(redeemerOutputScript bitcoin.Script) ([32]byte, error) {
 	prefixedRedeemerOutputScript, err := redeemerOutputScript.ToVarLenData()
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("cannot build prefixed redeemer output script: [%v]", err)
@@ -1564,7 +1566,7 @@ func buildRedemptionKey(
 	walletPublicKeyHash [20]byte,
 	redeemerOutputScript bitcoin.Script,
 ) (*big.Int, error) {
-	redeemerOutputScriptHash, err := reservationRedeemerOutputScriptHash(redeemerOutputScript)
+	redeemerOutputScriptHash, err := redeemerOutputScriptHash(redeemerOutputScript)
 	if err != nil {
 		return nil, fmt.Errorf("cannot compute redeemer output script hash: [%v]", err)
 	}
@@ -2421,40 +2423,36 @@ func (tc *TbtcChain) GetDepositMinAge() (uint32, error) {
 }
 
 // GetReservation is not yet supported by the Ethereum chain implementation:
-// the reservation contract bindings will be regenerated once the reservation
-// Bridge API is published with the @keep-network/tbtc-v2 package.
 func (tc *TbtcChain) GetReservation(
 	reservationKey *big.Int,
-) (*tbtc.Reservation, error) {
-	return nil, fmt.Errorf("%w", errReservationsUnsupported)
+) (*tbtc.Reservation, bool, error) {
+	return nil, false, errReservationsUnsupported
 }
 
 // GetReservationAction is not yet supported by the Ethereum chain
 // implementation: the reservation contract bindings will be regenerated once
-// the reservation Bridge API is published with the @keep-network/tbtc-v2
-// package.
 func (tc *TbtcChain) GetReservationAction(
 	reservationKey *big.Int,
 	requestNonce uint64,
 ) (*tbtc.ReservationAction, error) {
-	return nil, fmt.Errorf("%w", errReservationsUnsupported)
+	return nil, errReservationsUnsupported
 }
 
 // ReservationParameters is not yet supported by the Ethereum chain
 // implementation: the reservation contract bindings will be regenerated once
-// the reservation Bridge API is published with the @keep-network/tbtc-v2
-// package.
-func (tc *TbtcChain) ReservationParameters() (
-	*tbtc.ReservationParameters,
+func (tc *TbtcChain) GetReservationParameters() (
+	tbtc.ReservationParameters,
 	error,
 ) {
-	return nil, fmt.Errorf("%w", errReservationsUnsupported)
+	return tbtc.ReservationParameters{}, errReservationsUnsupported
+}
+
+func (tc *TbtcChain) GetReservationTotalAmount() (uint64, error) {
+	return 0, errReservationsUnsupported
 }
 
 // ValidateReservationAnchorProposal is not yet supported by the Ethereum
 // chain implementation: the reservation contract bindings will be
-// regenerated once the reservation Bridge API is published with the
-// @keep-network/tbtc-v2 package.
 func (tc *TbtcChain) ValidateReservationAnchorProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationAnchorProposal,
@@ -2463,7 +2461,7 @@ func (tc *TbtcChain) ValidateReservationAnchorProposal(
 		FundingTx *bitcoin.Transaction
 	},
 ) error {
-	return fmt.Errorf("%w", errReservationsUnsupported)
+	return errReservationsUnsupported
 }
 
 // ValidateReservedRedemptionProposal is not yet supported by the Ethereum
@@ -2474,27 +2472,23 @@ func (tc *TbtcChain) ValidateReservedRedemptionProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservedRedemptionProposal,
 ) error {
-	return fmt.Errorf("%w", errReservationsUnsupported)
+	return errReservationsUnsupported
 }
 
 // ValidateReservationReanchorProposal is not yet supported by the Ethereum
 // chain implementation: the reservation contract bindings will be
-// regenerated once the reservation Bridge API is published with the
-// @keep-network/tbtc-v2 package.
 func (tc *TbtcChain) ValidateReservationReanchorProposal(
 	sourceWalletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationReanchorProposal,
 ) error {
-	return fmt.Errorf("%w", errReservationsUnsupported)
+	return errReservationsUnsupported
 }
 
 // ValidateReservationDissolutionProposal is not yet supported by the
 // Ethereum chain implementation: the reservation contract bindings will be
-// regenerated once the reservation Bridge API is published with the
-// @keep-network/tbtc-v2 package.
 func (tc *TbtcChain) ValidateReservationDissolutionProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationDissolutionProposal,
 ) error {
-	return fmt.Errorf("%w", errReservationsUnsupported)
+	return errReservationsUnsupported
 }

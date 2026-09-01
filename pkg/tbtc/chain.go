@@ -267,15 +267,16 @@ type BridgeChain interface {
 	// ComputeMainUtxoHash computes the hash of the provided main UTXO
 	// according to the on-chain Bridge rules.
 	ComputeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte
+
 	// ComputeReservationRedeemerOutputScriptHash computes the keccak256 hash of
 	// the length-prefixed redeemer output script, per the on-chain Bridge rules
 	// used to authorize a reserved redemption.
 	ComputeReservationRedeemerOutputScriptHash(redeemerOutputScript bitcoin.Script) ([32]byte, error)
 
 	// GetReservation gets the on-chain reservation record for the given
-	// reservation key. Returns a zero-valued record with State == ReservationStateUnknown
-	// if the reservation was not found.
-	GetReservation(reservationKey *big.Int) (*Reservation, error)
+	// reservation key. The returned bool value indicates whether the
+	// reservation was found or not.
+	GetReservation(reservationKey *big.Int) (*Reservation, bool, error)
 
 	// GetReservationAction gets the on-chain action record for the given
 	// reservation key and request nonce. Returns an error if the action
@@ -285,9 +286,13 @@ type BridgeChain interface {
 		requestNonce uint64,
 	) (*ReservationAction, error)
 
-	// ReservationParameters gets the current on-chain values of the Bridge
+	// GetReservationParameters gets the current on-chain value of the
 	// reservation parameters.
-	ReservationParameters() (*ReservationParameters, error)
+	GetReservationParameters() (ReservationParameters, error)
+
+	// GetReservationTotalAmount gets the current total amount of all active
+	// reservations in satoshi.
+	GetReservationTotalAmount() (uint64, error)
 
 	// PastDepositRevealedEvents fetches past deposit reveal events according
 	// to the provided filter or unfiltered if the filter is nil. Returned
@@ -471,6 +476,10 @@ type WalletProposalValidatorChain interface {
 	// ValidateReservationReanchorProposal validates the given reservation
 	// re-anchor proposal against the chain. Returns an error if the
 	// proposal is not valid or nil otherwise.
+	//
+	// sourceWalletPublicKeyHash identifies the wallet currently custodying
+	// the reservation being moved; the destination wallet is given by
+	// proposal.TargetWalletPublicKeyHash.
 	ValidateReservationReanchorProposal(
 		sourceWalletPublicKeyHash [20]byte,
 		proposal *ReservationReanchorProposal,

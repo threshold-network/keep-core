@@ -1473,7 +1473,7 @@ func generateHandlerID() int {
 
 func (lc *localChain) GetReservation(
 	reservationKey *big.Int,
-) (*Reservation, error) {
+) (*Reservation, bool, error) {
 	panic("unsupported")
 }
 
@@ -1484,7 +1484,11 @@ func (lc *localChain) GetReservationAction(
 	panic("unsupported")
 }
 
-func (lc *localChain) ReservationParameters() (*ReservationParameters, error) {
+func (lc *localChain) GetReservationParameters() (ReservationParameters, error) {
+	panic("unsupported")
+}
+
+func (lc *localChain) GetReservationTotalAmount() (uint64, error) {
 	panic("unsupported")
 }
 
