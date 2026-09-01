@@ -13,13 +13,14 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/ipfs/go-log/v2"
+	"go.uber.org/zap"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"go.uber.org/zap"
 )
 
 // WalletActionType represents actions types that can be performed by a wallet.
@@ -33,9 +34,9 @@ const (
 	ActionMovingFunds
 	ActionMovedFundsSweep
 	ActionReservationAnchor
-	ActionReservedRedemption
+	_ // reserved: formerly ActionReservedRedemption (wire value 7); client-side scaffolding removed, wire slot retained
 	ActionReservationReanchor
-	ActionReservationDissolution
+	_ // reserved: formerly ActionReservationDissolution (wire value 9); client-side scaffolding removed, wire slot retained
 )
 
 // ParseWalletActionType parses the given value into a WalletActionType.
@@ -55,12 +56,8 @@ func ParseWalletActionType(value uint8) (WalletActionType, error) {
 		return ActionMovedFundsSweep, nil
 	case 6:
 		return ActionReservationAnchor, nil
-	case 7:
-		return ActionReservedRedemption, nil
 	case 8:
 		return ActionReservationReanchor, nil
-	case 9:
-		return ActionReservationDissolution, nil
 	default:
 		return 0, fmt.Errorf("unknown wallet action type [%v]", value)
 	}
@@ -82,12 +79,8 @@ func (wat WalletActionType) String() string {
 		return "MovedFundsSweep"
 	case ActionReservationAnchor:
 		return "ReservationAnchor"
-	case ActionReservedRedemption:
-		return "ReservedRedemption"
 	case ActionReservationReanchor:
 		return "ReservationReanchor"
-	case ActionReservationDissolution:
-		return "ReservationDissolution"
 	default:
 		panic("unknown wallet action type")
 	}
@@ -111,12 +104,8 @@ func (wat WalletActionType) MetricName() string {
 		return "moved_funds_sweep"
 	case ActionReservationAnchor:
 		return "reservation_anchor"
-	case ActionReservedRedemption:
-		return "reserved_redemption"
 	case ActionReservationReanchor:
 		return "reservation_reanchor"
-	case ActionReservationDissolution:
-		return "reservation_dissolution"
 	default:
 		panic("unknown wallet action type")
 	}

@@ -170,7 +170,7 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Tbtc.Reservations.Enabled,
 		)
 
-		err = tbtc.Initialize(
+		_, err = tbtc.Initialize(
 			ctx,
 			tbtcChain,
 			btcChain,

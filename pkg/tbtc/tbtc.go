@@ -12,6 +12,7 @@ import (
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/persistence"
+
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -198,6 +199,11 @@ type ReservationsConfig struct {
 	Enabled bool
 }
 
+// WalletMembersResolver defines the interface for resolving wallet members.
+type WalletMembersResolver interface {
+	ResolveWalletMembers(walletPublicKeyHash [20]byte) ([]uint32, error)
+}
+
 // Initialize kicks off the TBTC by initializing internal state, ensuring
 // preconditions like staking are met, and then kicking off the internal TBTC
 // implementation. Returns an error if this failed.
@@ -223,9 +229,8 @@ func Initialize(
 	clientInfo *clientinfo.Registry,
 	perfMetrics *clientinfo.PerformanceMetrics,
 	ethereumNetwork ethereum.Network,
-) error {
+) (WalletMembersResolver, error) {
 	applyWalletTxFeePolicy(config)
-
 	groupParameters := defaultGroupParameters(ethereumNetwork)
 
 	if ethChain, ok := chain.(interface {
@@ -233,7 +238,7 @@ func Initialize(
 	}); ok {
 		gp, err := ethChain.EcdsaWalletGroupParametersFromChain(ctx)
 		if err != nil {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"cannot read TBTC group sizing from ECDSA validator: [%w]",
 				err,
 			)
@@ -263,12 +268,12 @@ func Initialize(
 		config,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
+		return nil, fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
 
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
-		return fmt.Errorf("cannot run coordination layer: [%w]", err)
+		return nil, fmt.Errorf("cannot run coordination layer: [%w]", err)
 	}
 
 	deduplicator := newDeduplicator()
@@ -327,7 +332,7 @@ func Initialize(
 		),
 	)
 	if err != nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"could not set up sortition pool monitoring: [%v]",
 			err,
 		)
@@ -489,7 +494,7 @@ func Initialize(
 		}()
 	})
 
-	return nil
+	return node, nil
 }
 
 // enoughPreParamsInPoolPolicy is a policy that enforces the sufficient size

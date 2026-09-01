@@ -505,24 +505,6 @@ func (tc *TbtcChain) ValidateReservationAnchorProposal(
 	return nil
 }
 
-// ValidateReservedRedemptionProposal asks the WalletProposalValidator
-// whether the given reserved redemption proposal is valid for the given
-// wallet. The m1 bridge-integration surface does not expose a
-// `validateReservedRedemptionProposal` entry on the WalletProposalValidator
-// (only anchor and re-anchor validators are present at this milestone), so
-// the interface stub returns an explicit error rather than calling a
-// non-existent binding. Downstream tasks replacing this body will receive
-// the bridge-integration Solidity once that validator lands.
-func (tc *TbtcChain) ValidateReservedRedemptionProposal(
-	walletPublicKeyHash [20]byte,
-	proposal *tbtc.ReservedRedemptionProposal,
-) error {
-	return fmt.Errorf(
-		"reserved redemption proposal validator is not exposed on " +
-			"the m1 bridge-integration surface",
-	)
-}
-
 // ValidateReservationReanchorProposal asks the WalletProposalValidator
 // whether the given re-anchor proposal is valid for the given source
 // wallet. The validator is a separate contract reached at its own deployed
@@ -553,23 +535,6 @@ func (tc *TbtcChain) ValidateReservationReanchorProposal(
 	}
 
 	return nil
-}
-
-// ValidateReservationDissolutionProposal asks the WalletProposalValidator
-// whether the given dissolution proposal is valid for the given wallet.
-// The m1 bridge-integration surface does not expose a
-// `validateReservationDissolutionProposal` entry on the
-// WalletProposalValidator (only anchor and re-anchor validators are present
-// at this milestone), so the interface stub returns an explicit error
-// rather than calling a non-existent binding.
-func (tc *TbtcChain) ValidateReservationDissolutionProposal(
-	walletPublicKeyHash [20]byte,
-	proposal *tbtc.ReservationDissolutionProposal,
-) error {
-	return fmt.Errorf(
-		"reservation dissolution proposal validator is not exposed on " +
-			"the m1 bridge-integration surface",
-	)
 }
 
 // convertReservationFromAbiType converts the ReservationRouter-specific
