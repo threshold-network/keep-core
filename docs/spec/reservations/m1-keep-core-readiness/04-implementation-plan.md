@@ -24,42 +24,64 @@ CI-verified confidence in every ABI-touching task below.
 
 ## Milestone 1: Close the functional gaps (Blocker + Major rows)
 
-**Status: rows 1-2 implemented and tested, PR [#4276](https://github.com/threshold-network/keep-core/pull/4276)** (branch `m1/reservation-readiness-fixes` on top of `m1/keep-core-client`). Row 2's production trigger is not yet live - see its caveat below; this is a pre-existing gap, not new scope creep from this PR.
+**Status: DONE.** Rows 1-2: implemented and tested, PR [#4276](https://github.com/threshold-network/keep-core/pull/4276)
+(branch `m1/reservation-readiness-fixes` on top of `m1/keep-core-client`). Row 2's production
+trigger is not yet live - see its caveat below; this is a pre-existing gap, not new scope creep
+from that PR. Row 3: implemented and tested, PR [#4277](https://github.com/threshold-network/keep-core/pull/4277)
+(branch `m1/reservation-protobuf-marshaling`, stacked on #4276).
+
+**Blocker found and fixed this session, outside this milestone's original three rows:**
+`pkg/tbtc/coordination.go`'s `getActionsChecklist` never included `ActionReservationAnchor`/
+`ActionReservationReanchor`, so the reservation acceptance/re-anchor proposal tasks registered in
+`pkg/tbtcpg.NewProposalGenerator` were structurally unreachable in production regardless of rows
+1-3 landing - see `01-gap-analysis.md` Blocker row 2. Fixed and tested, PR [#4278](https://github.com/threshold-network/keep-core/pull/4278)
+(stacked on #4277).
 
 | File | Task | Traces to | Effort | Test-acceptance criteria |
 | :--- | :--- | :--- | :--- | :--- |
-| `pkg/maintainer/spv/reservation_reanchor_proof.go` + `pkg/maintainer/spv/spv.go` | ~~Wire `submitReservationReanchorProof` to `WalletMovingFunds` in `reservation_wiring.go`~~ **Corrected during implementation**: the trigger/proposal path (`ReservationReanchorTask`, registered in `tbtcpg.NewProposalGenerator`) already existed - `reservation_wiring.go` was never the right file. The actual gap was SPV proof submission: `spv.go`'s generic proof-loop signature can't carry `(reservationKey, requestNonce)`. Fix: real `getUnprovenReservationReanchorTransactions` getter (matches candidate transactions via `ReservationByAnchorUtxo`) and `reservationReanchorTransactionProofSubmitter` (re-derives the key/nonce pair, then calls `SubmitReservationReanchorProof`) | Gap-analysis Major row 2 / Story S6 | **Actual: ~1 day** (original 0.5-day estimate assumed the wrong, smaller fix; discovering the real SPV-side gap and its correct fix took materially longer) | **Done:** unit tests cover discovery precision (shape mismatch, anchor mismatch, settled-action skip) and submitter key/nonce derivation - see `reservation_reanchor_proof_test.go`. Also fixes a nonce-staleness defect found in review: the initial submitter derivation read the reservation's live `RequestNonce`, which can have moved past the action generation that produced the discovered transaction; the submitter now verifies the current action generation is still Pending Reanchor and targets the same wallet before submitting; a mismatch is logged and the transaction is skipped (not submitted, and not returned as an error - an error here would abort the whole tick's proving round across every proof type, not just this transaction), avoiding misattribution without that blast radius. Caveat: whether a given mismatch stops recurring on later ticks depends on an unverified Bridge invariant (at most one Pending action per reservation at a time - not asserted in this Go client, not confirmed against the on-chain source); the guaranteed termination condition is the current generation's own proof landing and clearing the anchor registration, so repeated per-tick warnings for the same stale transaction are possible until then (regression tests: `TestSubmitDiscoveredReservationReanchorProof_StaleActionGeneration`, `..._MismatchedTargetWallet`) |
-| `pkg/maintainer/spv/reservation_action_timeout_watch.go` | Replace `Run()`'s admitted placeholder (`:141-144`) with a real polling loop that calls `CheckReservationActionTimeouts` (`:186`) per registered wallet, per the file's own doc-comment-stated follow-up | Gap-analysis Minor row 1 | M (0.5-1 day) | **Loop logic done and tested:** unit tests cover `WatchWallet` dedup, all three `Run` precondition guards, and an end-to-end test that `Run` notifies a timed-out action on its first iteration and returns promptly on `ctx` cancellation - see `reservation_action_timeout_watch_test.go`. **Caveat:** `WatchWallet` has zero production callers under `pkg/` - `WireReservationWatchers` starts `Run`'s loop but never registers a wallet with it, because the wallet-ID -> public-key-hash discovery step is a pre-existing gap shared by all three reservation watchers, explicitly marked "PR H placeholder" in `reservation_wiring.go`'s own comments (not introduced by this PR, and out of this PR's file scope to close). Until that follow-up lands, `Run`'s loop iterates an empty wallet set in production - correct and inert, not yet load-bearing. |
-| `pkg/tbtc/reservation.go` | Switch the four `CoordinationProposal.Marshal()`/`Unmarshal()` implementations (`:210`, `:260`, `:315`, `:368`) from JSON to protobuf | Gap-analysis Major row 1 | **Blocked** — requires a `pkg/tbtc/gen/pb` message-type schema change first, which is a separate cross-cutting task outside this plan's file scope. Once the schema lands: M-L (0.5-2 days) for the four swaps + roundtrip tests | Roundtrip test per proposal type asserting `Unmarshal(Marshal(x)) == x` field-for-field; existing JSON roundtrip tests (if any) must be ported, not silently dropped |
+| `pkg/maintainer/spv/reservation_reanchor_proof.go` + `pkg/maintainer/spv/spv.go` | ~~Wire `submitReservationReanchorProof` to `WalletMovingFunds` in `reservation_wiring.go`~~ **Corrected during implementation**: the trigger/proposal path (`ReservationReanchorTask`, registered in `tbtcpg.NewProposalGenerator`) already existed - `reservation_wiring.go` was never the right file. The actual gap was SPV proof submission: `spv.go`'s generic proof-loop signature can't carry `(reservationKey, requestNonce)`. Fix: real `getUnprovenReservationReanchorTransactions` getter (matches candidate transactions via `ReservationByAnchorUtxo`) and `reservationReanchorTransactionProofSubmitter` (re-derives the key/nonce pair, then calls `SubmitReservationReanchorProof`) | Gap-analysis Major row 2 | S (0.5 day) | **Done.** New unit tests for discovery precision (shape mismatch, anchor mismatch, settled-action skip) and submitter key/nonce derivation, plus two regression tests added later this session for a nonce-staleness fix (stale action generation, mismatched target wallet) - see `reservation_reanchor_proof_test.go` |
+| `pkg/maintainer/spv/reservation_action_timeout_watch.go` | Replace `Run()`'s admitted placeholder (`:141-144`) with a real polling loop that calls `CheckReservationActionTimeouts` (`:186`) per registered wallet, per the file's own doc-comment-stated follow-up | Gap-analysis Minor row 1 | M (0.5-1 day) | **Loop logic done and tested:** unit tests cover `WatchWallet` dedup, all three `Run` precondition guards, and an end-to-end test that `Run` notifies a timed-out action on its first iteration and returns promptly on `ctx` cancellation - see `reservation_action_timeout_watch_test.go`. **Caveat:** `WatchWallet` has zero production callers under `pkg/` - `WireReservationWatchers` starts `Run`'s loop but never registers a wallet with it, because the wallet-ID -> public-key-hash discovery step is a pre-existing gap shared by all three reservation watchers (stranding, stale-deposit, action-timeout) - see the "PR H placeholder" comments in `reservation_wiring.go`. Not touched here. |
+| `pkg/tbtc/reservation.go` + `pkg/tbtc/marshaling.go` + `pkg/tbtc/gen/pb/message.proto` | Switch the four `CoordinationProposal.Marshal()`/`Unmarshal()` implementations from JSON to protobuf | Gap-analysis Major row 1 | **Done.** Added the four message types to `message.proto`, regenerated `message.pb.go` (`protoc` installed for this), moved Marshal/Unmarshal into `marshaling.go` matching the existing proto-based proposals' pattern | Roundtrip test per proposal type asserting `Unmarshal(Marshal(x)) == x` field-for-field (`TestCoordinationMessage_MarshalingRoundtrip`, extended); the pre-existing JSON-payload rejection test was ported to real protobuf payloads (`TestReservationProposals_UnmarshalRejectsInvalidFields`), not silently dropped |
 
 ## Milestone 2: Test-coverage backfill (Minor rows + Stories S7-S9)
 
-All items are new tests only — no production-code changes required (confirmed by spot-checking
-existing test files in Phase 2; see `03-delta-changes.md` rows 15 and 17 for the two rows where
-this was explicitly verified against current test content, not assumed).
+**Status: DONE, 7 of 8 items.** PR [#4280](https://github.com/threshold-network/keep-core/pull/4280)
+(branch `m1/reservation-test-coverage-backfill`, stacked on #4279). All items are new tests only —
+no production-code changes required (confirmed by spot-checking existing test files in Phase 2;
+see `03-delta-changes.md` rows 15 and 17 for the two rows where this was explicitly verified
+against current test content, not assumed). The one deferred item (Story S8) needs
+simulated-backend test infrastructure this repository doesn't have; see `01-gap-analysis.md`'s
+new Minor row.
 
 | File | Task | Traces to | Effort |
 | :--- | :--- | :--- | :--- |
-| `pkg/tbtc/reservation_test.go` | Add a happy-path shape test for `assembleReservationAnchorTransaction` — current test (`:587`) only covers the nil-deposit error path | Gap-analysis Minor "ReservationAnchorProposal assembler logic" | S (0.25 day) |
-| `pkg/tbtc/reservation_test.go` | Add a happy-path shape test for `assembleReservationReanchorTransaction` (`:698` call site is also error-path only) | Gap-analysis Minor "ReservationReanchorProposal assembler logic" | S (0.25 day) |
-| `pkg/chain/ethereum/tbtc_test.go` | Add a field-mapping test for `convertReservationParametersFromAbiType` (`tbtc.go:2779-2793`) asserting the full 10-tuple maps correctly | Gap-analysis Minor "ReservationParameters converter mapping" | S (0.25 day) |
-| `pkg/chain/ethereum/tbtc_test.go` | Add a test documenting the intentional `CumulativeReanchorFee` drop in the `GetReservation` converter (`tbtc.go:3211`) so a future accidental field restoration doesn't go unnoticed | Gap-analysis Minor "GetReservation converter fee field drop" | S (0.25 day) |
-| `pkg/tbtcpg/reservation_acceptance_test.go` | Add explicit at-limit/one-over-limit boundary tests for `MaxReservationsPerWallet` (`:424`), `ReservationMinAmount` (`:443`), `ReservationMaxTotalAmount` (`:475-478`) — existing `TestReservationAcceptanceTask_BoundedLookback` (`:458-530`) uses these fields as fixture data but does not exercise boundary crossing | Story S7 | M (0.5 day, 3 boundary cases) |
-| `pkg/chain/ethereum/tbtc_test.go` | Add tests for `ValidateReservationAnchorProposal` (`:2541-2597`) and `ValidateReservationReanchorProposal` (`:2617-2647`) covering both the valid-proposal and validator-reverts-false paths | Story S8 | M (0.5 day) |
-| `pkg/tbtcpg/reservation_acceptance_test.go` | Add a test asserting `ReservationParameters()` is fetched live (not cached) across two sequential proposal generations with an intervening parameter change (`:133`) | Story S9 | S (0.25 day) |
-| `pkg/tbtcpg/reservation_acceptance.go` + `pkg/tbtc/reservation.go` | Resolve the `buildReservationAnchorTransaction` duplication (`reservation_acceptance.go:578-582`) — either extract a shared helper or add a byte-identical-output cross-reference test between the two independent implementations | Gap-analysis Minor "Redundant anchor assembly code" | M (0.5 day for the cross-reference test; L, 1-2 days, if extracting a shared helper across the package boundary) |
+| `pkg/tbtc/reservation_test.go` | **Done.** Added a happy-path shape test for `assembleReservationAnchorTransaction` — the prior test only covered the nil-deposit error path | Gap-analysis Minor "ReservationAnchorProposal assembler logic" | S (0.25 day) |
+| `pkg/tbtc/reservation_test.go` | **Done.** Added a happy-path shape test for `assembleReservationReanchorTransaction` | Gap-analysis Minor "ReservationReanchorProposal assembler logic" | S (0.25 day) |
+| `pkg/chain/ethereum/tbtc_test.go` | **Done.** Added a field-mapping test for `convertReservationParametersFromAbiType` asserting the full 10-tuple maps correctly | Gap-analysis Minor "ReservationParameters converter mapping" | S (0.25 day) |
+| `pkg/chain/ethereum/tbtc_test.go` | **Done.** Added a test documenting the intentional `CumulativeReanchorFee` drop in the `GetReservation` converter so a future accidental field restoration doesn't go unnoticed | Gap-analysis Minor "GetReservation converter fee field drop" | S (0.25 day) |
+| `pkg/tbtcpg/reservation_acceptance_test.go` | **Done.** Added explicit at-limit/one-over-limit boundary tests (6 cases) for `MaxReservationsPerWallet`, `ReservationMinAmount`, `ReservationMaxTotalAmount` — the prior `TestReservationAcceptanceTask_BoundedLookback` used these fields as fixture data only, never at the boundary | Story S7 | M (0.5 day, 3 boundary cases) |
+| `pkg/chain/ethereum/tbtc_test.go` | **Deferred.** `ValidateReservationAnchorProposal`/`ValidateReservationReanchorProposal` both call a real generated contract binding, not a pure function; `pkg/chain/ethereum` has no simulated-backend test infrastructure to reuse, and building it is well beyond this row's 0.5-day estimate. Explicitly investigated and not built this session; see `01-gap-analysis.md`'s new Minor row | Story S8 | M (0.5 day) — **infeasible at this effort; real cost is building simulated-backend infra from scratch** |
+| `pkg/tbtcpg/reservation_acceptance_test.go` | **Done.** Added a test running the same task twice against the same deposit, mutating `ReservationMinAmount` between calls, proving `ReservationParameters()` is fetched live, not cached | Story S9 | S (0.25 day) |
+| `pkg/tbtcpg/reservation_acceptance.go` + `pkg/tbtc/reservation.go` | **Done, via the cheaper option.** `buildReservationAnchorTransaction`/`assembleReservationAnchorTransaction` are both unexported in different packages, so a true cross-reference test calling both is not mechanically possible without a production-code change. Added independent golden-value tests in each package pinning identical input/output values instead; the underlying duplication remains, extracting a shared helper is still the real fix | Gap-analysis Minor "Redundant anchor assembly code" | M (0.5 day for the cross-reference test; L, 1-2 days, if extracting a shared helper across the package boundary) |
 
 ## Milestone 3: Coordination-level verification (not file-level tasks — carried over, not net-new)
 
 These were established earlier in this engagement as launch gates independent of PR #4238/#4274
 merging; listed here only to show how Milestones 1-2 feed into them, not re-specified.
 
-- **Multi-signer simulated integration test** (5-7 days) — exercises Story S1's "integration"
+- **Multi-signer simulated integration test** — **Done**, PR [#4279](https://github.com/threshold-network/keep-core/pull/4279)
+  (branch `m1/reservation-multisigner-integration-test`, stacked on #4278). Scales
+  `TestCoordinationExecutor_Coordinate`'s existing 3-operator harness to
+  `ReservationAnchorProposal`/`ReservationReanchorProposal`, exercising Story S1's "integration"
   test level and the M1 acceptance/re-anchor coordination-leader/follower round-trip that no
-  mocked unit test in Milestone 1-2 can cover.
+  mocked unit test in Milestone 1-2 can cover. Depended on the Milestone 1 checklist-gap fix
+  (#4278) to be reachable at all; verified by temporarily reverting that fix and confirming the
+  new tests fail as expected, then restoring it.
 - **Testnet round with a forced liveness/stranding drill** (~2 weeks) — exercises Stories S3-S5
   (stranding via all three termination causes) under real wallet-lifecycle timing, not simulated
-  state transitions.
+  state transitions. **Not started** — operational (live testnet deployment, real multi-operator
+  calendar time), not a code task; explicitly out of scope for this engagement per decision this
+  session. Remains agent-not-actionable.
 
 ## Sequencing
 
@@ -80,8 +102,11 @@ flowchart LR
 - Milestone 1's two wiring tasks are prerequisites for Milestone 3's multi-signer test to exercise
   real re-anchor and timeout behavior rather than a hand-invoked code path.
 - Milestone 2 is fully parallelizable across files/engineers; no task depends on another within it.
-- Total keep-core engineering effort, Milestones 1-2: Milestone 1 actual (done, PR #4276) - 1
-  SPV proof-loop task (~1 day) + 1 polling-loop task (M, 0.5-1 day) ≈ **1.5-2 days**. Milestone 2
-  remaining: 7 test tasks (mostly S, one M) + 1 dedup task (M/L) ≈ **3-4 engineer-days**,
-  excluding the protobuf-schema-blocked task, Milestone 0 (release coordination, not
-  engineering), and Milestone 3 (5-7 days + ~2 weeks, previously scoped).
+- **Final state (this session): Milestones 1-3 done except two explicitly deferred items** -
+  Milestone 1 row 3's protobuf switch (#4277), the checklist-wiring blocker found and fixed
+  outside the original three rows (#4278), Milestone 2's 7/8 test-coverage items (#4280, one
+  deferred - Story S8 needs simulated-backend infra this repo doesn't have), and Milestone 3's
+  multi-signer integration test (#4279, one item - the testnet drill - out of scope, operational
+  not code). PR chain: #4276 → #4277 → #4278 → #4279 → #4280, all draft, awaiting human
+  review/merge in that order. Milestone 0 remains an external tbtc-v2 release-coordination
+  dependency, not keep-core engineering.
