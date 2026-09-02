@@ -44,24 +44,20 @@ type submittedMovedFundsSweepProof struct {
 	mainUTXO    bitcoin.UnspentTransactionOutput
 }
 
-// submittedReservationStranded records a NotifyReservationStranded call.
-// The stranding watcher builder replaces this stub with the call path
-// that records a stray notification for assertion in tests.
+// submittedReservationStranded records a NotifyReservationStranded call for
+// assertion in tests.
 type submittedReservationStranded struct {
 	reservationKey *big.Int
 }
 
-// submittedStaleReservedDeposit records a NotifyStaleReservedDeposit call.
-// The stale-deposit watcher builder replaces this stub with the call path
-// that records a stale-deposit notification for assertion in tests.
+// submittedStaleReservedDeposit records a NotifyStaleReservedDeposit call for
+// assertion in tests.
 type submittedStaleReservedDeposit struct {
 	depositKey *big.Int
 }
 
-// submittedReservationActionTimeout records a
-// NotifyReservationActionTimeout call. The action-timeout watcher builder
-// replaces this stub with the call path that records a timeout notification
-// for assertion in tests.
+// submittedReservationActionTimeout records a NotifyReservationActionTimeout
+// call for assertion in tests.
 type submittedReservationActionTimeout struct {
 	reservationKey   *big.Int
 	walletMembersIDs []uint32
@@ -803,9 +799,7 @@ func (mbc *mockBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
 }
 
 // SubmitReservationProof is a stub matching the reservation additions on
-// the production Chain interface. The reservation acceptance and re-anchor
-// proposal builders replace this stub with the call path that records a
-// submitted proof for assertion in tests.
+// the production Chain interface.
 func (lc *localChain) SubmitReservationProof(
 	proofType uint8,
 	txInfo *tbtc.BitcoinTxInfo,
@@ -1053,10 +1047,6 @@ func (lc *localChain) setWalletReservations(
 		keys...,
 	)
 }
-
-// Reservations is a stub matching the reservation additions on the
-// production Chain interface. The reservation-side builder replaces this
-// stub with the production contract call; the watchers do not need it.
 
 // IsReservedDeposit returns whether the deposit was previously booked via
 // setReservedDeposit.

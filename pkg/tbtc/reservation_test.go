@@ -181,6 +181,26 @@ func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
 			}),
 			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
 		},
+		"anchor fee exceeds 8 bytes": {
+			actionType: ActionReservationAnchor,
+			payload: marshalPb(t, &pb.ReservationAnchorProposal{
+				AnchorTxFee:               []byte{1, 2, 3, 4, 5, 6, 7, 8, 9},
+				RequestNonce:              1,
+				DepositFundingTxHash:      make([]byte, 32),
+				DepositFundingOutputIndex: 0,
+			}),
+			expectedError: "cannot unmarshal proposal payload: [invalid anchor transaction fee byte length: [9]]",
+		},
+		"re-anchor fee exceeds 8 bytes": {
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321).Bytes(),
+				RequestNonce:              3,
+				ReanchorTxFee:             []byte{1, 2, 3, 4, 5, 6, 7, 8, 9},
+				TargetWalletPublicKeyHash: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
+			}),
+			expectedError: "cannot unmarshal proposal payload: [invalid re-anchor transaction fee byte length: [9]]",
+		},
 	}
 
 	for testName, test := range tests {
