@@ -63,7 +63,7 @@ type ReservationParameters struct {
 	// this vault address are treated as UTXO reservations.
 	Vault chain.Address
 	// MinAmount is the minimal anchor output amount in satoshi accepted for
-	// a reservation.
+	// a reservation. A value of 0 means the check is disabled.
 	MinAmount uint64
 	// TxMaxFee is the maximum transaction fee in satoshi for a single
 	// reservation lifecycle transaction.
@@ -74,10 +74,10 @@ type ReservationParameters struct {
 	// reservation becomes dissolvable.
 	DissolutionDelay uint32
 	// MaxTotalAmount is the maximum total amount of all active reservations
-	// in satoshi.
+	// in satoshi. A value of 0 means the check is disabled.
 	MaxTotalAmount uint64
 	// MaxReservationsPerWallet is the maximum number of reservations a
-	// wallet may custody.
+	// wallet may custody. A value of 0 means the check is disabled.
 	MaxReservationsPerWallet uint32
 	// ActionTimeout is the timeout for reservation actions in seconds.
 	ActionTimeout uint32
