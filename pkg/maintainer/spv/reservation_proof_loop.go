@@ -12,7 +12,8 @@ import (
 )
 
 // reservationProofLookBackBlocks bounds the pending-action-request event
-// scan. Mirrors ReservationAcceptanceLookBackBlocks /
+// scan performed on the very first pass, before an incremental cursor
+// exists. Mirrors ReservationAcceptanceLookBackBlocks /
 // ReservationReanchorLookBackBlocks in pkg/tbtcpg: 30 days at 12s/block.
 const reservationProofLookBackBlocks = uint64(216000)
 
@@ -78,6 +79,110 @@ func verifyReservationActionStillProvable(
 	return true, nil
 }
 
+// reservationAcceptanceWalletEvent adapts
+// *tbtc.ReservationAcceptanceRequestedEvent to the walletEvent interface
+// (see spv.go) so uniqueWalletPublicKeyHashes can be reused here instead of
+// a reservation-specific duplicate of the same dedup logic.
+type reservationAcceptanceWalletEvent struct {
+	*tbtc.ReservationAcceptanceRequestedEvent
+}
+
+// GetWalletPublicKeyHash implements walletEvent.
+func (e reservationAcceptanceWalletEvent) GetWalletPublicKeyHash() [20]byte {
+	return e.WalletPublicKeyHash
+}
+
+// reservationReanchorWalletEvent adapts
+// *tbtc.ReservationReanchorRequestedEvent to the walletEvent interface (see
+// spv.go) so uniqueWalletPublicKeyHashes can be reused here instead of a
+// reservation-specific duplicate of the same dedup logic.
+type reservationReanchorWalletEvent struct {
+	*tbtc.ReservationReanchorRequestedEvent
+}
+
+// GetWalletPublicKeyHash implements walletEvent.
+func (e reservationReanchorWalletEvent) GetWalletPublicKeyHash() [20]byte {
+	return e.SourceWalletPublicKeyHash
+}
+
+func wrapReservationAcceptanceEvents(
+	events []*tbtc.ReservationAcceptanceRequestedEvent,
+) []reservationAcceptanceWalletEvent {
+	wrapped := make([]reservationAcceptanceWalletEvent, len(events))
+	for i, event := range events {
+		wrapped[i] = reservationAcceptanceWalletEvent{event}
+	}
+	return wrapped
+}
+
+func wrapReservationReanchorEvents(
+	events []*tbtc.ReservationReanchorRequestedEvent,
+) []reservationReanchorWalletEvent {
+	wrapped := make([]reservationReanchorWalletEvent, len(events))
+	for i, event := range events {
+		wrapped[i] = reservationReanchorWalletEvent{event}
+	}
+	return wrapped
+}
+
+// reservationProofScanState persists the incremental event-scan cursor and
+// the set of still-pending action-request events across successive passes
+// of runReservationProofLoop, so proveReservationAcceptanceActions and
+// proveReservationReanchorActions scan only the event/Bitcoin history that
+// has appeared since the previous pass instead of rescanning the full
+// reservationProofLookBackBlocks window - and refetching Bitcoin history
+// for every wallet in it - every config.IdleBackoffTime.
+type reservationProofScanState struct {
+	acceptanceLastScannedBlock uint64
+	pendingAcceptanceEvents    map[string]*tbtc.ReservationAcceptanceRequestedEvent
+
+	reanchorLastScannedBlock uint64
+	pendingReanchorEvents    map[string]*tbtc.ReservationReanchorRequestedEvent
+}
+
+func newReservationProofScanState() *reservationProofScanState {
+	return &reservationProofScanState{
+		pendingAcceptanceEvents: make(map[string]*tbtc.ReservationAcceptanceRequestedEvent),
+		pendingReanchorEvents:   make(map[string]*tbtc.ReservationReanchorRequestedEvent),
+	}
+}
+
+// reservationEventKey identifies one reservation action generation, unique
+// across both the acceptance and re-anchor pending-event maps.
+func reservationEventKey(reservationKey *big.Int, requestNonce uint64) string {
+	return fmt.Sprintf("%s:%d", reservationKey.String(), requestNonce)
+}
+
+// reservationProofNextScanRange returns the block range to scan for new
+// pending-action-request events this pass: the bounded
+// reservationProofLookBackBlocks catch-up window on the very first pass
+// (lastScannedBlock == 0), or just the delta since the previous pass's
+// cursor on every pass thereafter, so a steady-state loop no longer
+// re-fetches the full ~30-day window on every config.IdleBackoffTime tick.
+func reservationProofNextScanRange(
+	spvChain Chain,
+	lastScannedBlock uint64,
+) (startBlock uint64, currentBlock uint64, err error) {
+	blockCounter, err := spvChain.BlockCounter()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get block counter: [%v]", err)
+	}
+
+	currentBlock, err = blockCounter.CurrentBlock()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get current block: [%v]", err)
+	}
+
+	if lastScannedBlock == 0 {
+		if currentBlock > reservationProofLookBackBlocks {
+			return currentBlock - reservationProofLookBackBlocks, currentBlock, nil
+		}
+		return 0, currentBlock, nil
+	}
+
+	return lastScannedBlock + 1, currentBlock, nil
+}
+
 // maintainReservationProofs runs the SPV proof submission loop for
 // reservation acceptance and re-anchor action generations. It is a
 // dedicated loop, separate from spvMaintainer's generic proofTypes-driven
@@ -130,6 +235,10 @@ func maintainReservationProofs(
 // bad action generation does not block the rest; only a chain-wide failure
 // (e.g. cannot read the current block) aborts the pass and triggers the
 // outer restart backoff.
+//
+// A single reservationProofScanState is created once and threaded through
+// every pass for the lifetime of the loop, carrying the incremental event
+// cursor and pending-action set described on that type.
 func runReservationProofLoop(
 	ctx context.Context,
 	config Config,
@@ -137,8 +246,11 @@ func runReservationProofLoop(
 	btcDiffChain btcdiff.Chain,
 	btcChain bitcoin.Chain,
 ) error {
+	state := newReservationProofScanState()
+
 	for {
 		if err := proveReservationAcceptanceActions(
+			state,
 			config,
 			spvChain,
 			btcDiffChain,
@@ -151,6 +263,7 @@ func runReservationProofLoop(
 		}
 
 		if err := proveReservationReanchorActions(
+			state,
 			config,
 			spvChain,
 			btcDiffChain,
@@ -175,17 +288,21 @@ func runReservationProofLoop(
 // transaction on the Bitcoin chain (if any), and submits its SPV proof once
 // it has accumulated enough confirmations.
 func proveReservationAcceptanceActions(
+	state *reservationProofScanState,
 	config Config,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
 	btcChain bitcoin.Chain,
 ) error {
-	startBlock, err := reservationProofScanStartBlock(spvChain)
+	startBlock, currentBlock, err := reservationProofNextScanRange(
+		spvChain,
+		state.acceptanceLastScannedBlock,
+	)
 	if err != nil {
 		return err
 	}
 
-	events, err := spvChain.PastReservationAcceptanceRequestedEvents(
+	newEvents, err := spvChain.PastReservationAcceptanceRequestedEvents(
 		&tbtc.ReservationAcceptanceRequestedEventFilter{StartBlock: startBlock},
 	)
 	if err != nil {
@@ -196,7 +313,16 @@ func proveReservationAcceptanceActions(
 		)
 	}
 
-	for _, event := range events {
+	for _, event := range newEvents {
+		key := reservationEventKey(event.ReservationKey, event.RequestNonce)
+		state.pendingAcceptanceEvents[key] = event
+	}
+
+	// Re-check every tracked event's on-chain action state and drop the
+	// ones that are no longer pending, so the pending set does not grow
+	// without bound.
+	var pending []*tbtc.ReservationAcceptanceRequestedEvent
+	for key, event := range state.pendingAcceptanceEvents {
 		action, err := spvChain.GetReservationAction(
 			event.ReservationKey,
 			event.RequestNonce,
@@ -208,74 +334,99 @@ func proveReservationAcceptanceActions(
 				event.RequestNonce,
 				err,
 			)
+			// Keep tracking; retry on the next pass.
 			continue
 		}
 		if action.State != tbtc.ReservationActionStatePending {
-			// Already proven (Settled), or no longer provable
-			// (TimedOut/Superseded/Vetoed).
+			delete(state.pendingAcceptanceEvents, key)
 			continue
 		}
+		pending = append(pending, event)
+	}
 
-		transaction, err := findReservationAcceptanceTransaction(
-			spvChain,
-			btcChain,
-			event,
+	// There will often be multiple pending events for a single wallet.
+	// Fetch that wallet's Bitcoin transaction history once, not once per
+	// event.
+	walletPublicKeyHashes := uniqueWalletPublicKeyHashes(
+		wrapReservationAcceptanceEvents(pending),
+	)
+
+	for _, walletPublicKeyHash := range walletPublicKeyHashes {
+		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+			walletPublicKeyHash,
 			config.TransactionLimit,
 		)
 		if err != nil {
-			logger.Errorf(
-				"failed to search for reservation acceptance transaction "+
-					"for reservation [%v]: [%v]",
-				event.ReservationKey,
-				err,
-			)
-			continue
-		}
-		if transaction == nil {
-			// The wallet has not broadcast the anchor transaction yet.
+			logger.Errorf("failed to get transactions for wallet: [%v]", err)
 			continue
 		}
 
-		if err := proveReservationTransaction(
-			transaction,
-			btcChain,
-			spvChain,
-			btcDiffChain,
-			func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
-				stillProvable, err := verifyReservationActionStillProvable(
-					spvChain,
-					event.ReservationKey,
-					event.RequestNonce,
-					tbtc.ReservationActionTypeAcceptance,
-					event.WalletPublicKeyHash,
-				)
-				if err != nil {
-					return err
-				}
-				if !stillProvable {
-					return nil
-				}
+		for _, event := range pending {
+			if event.WalletPublicKeyHash != walletPublicKeyHash {
+				continue
+			}
 
-				return SubmitReservationAcceptanceProof(
-					transactionHash,
-					requiredConfirmations,
-					event.ReservationKey,
-					event.RequestNonce,
-					btcChain,
-					spvChain,
-				)
-			},
-		); err != nil {
-			logger.Errorf(
-				"failed to prove reservation acceptance transaction [%s] "+
-					"for reservation [%v]: [%v]",
-				transaction.Hash().Hex(bitcoin.ReversedByteOrder),
-				event.ReservationKey,
-				err,
+			transaction, err := findReservationAcceptanceTransaction(
+				spvChain,
+				event,
+				walletTransactions,
 			)
-			continue
+			if err != nil {
+				logger.Errorf(
+					"failed to search for reservation acceptance transaction "+
+						"for reservation [%v]: [%v]",
+					event.ReservationKey,
+					err,
+				)
+				continue
+			}
+			if transaction == nil {
+				continue
+			}
+
+			if err := proveReservationTransaction(
+				transaction,
+				btcChain,
+				spvChain,
+				btcDiffChain,
+				func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
+					stillProvable, err := verifyReservationActionStillProvable(
+						spvChain,
+						event.ReservationKey,
+						event.RequestNonce,
+						tbtc.ReservationActionTypeAcceptance,
+						event.WalletPublicKeyHash,
+					)
+					if err != nil {
+						return err
+					}
+					if !stillProvable {
+						return nil
+					}
+
+					return SubmitReservationAcceptanceProof(
+						transactionHash,
+						requiredConfirmations,
+						event.ReservationKey,
+						event.RequestNonce,
+						btcChain,
+						spvChain,
+					)
+				},
+			); err != nil {
+				logger.Errorf(
+					"failed to prove reservation acceptance transaction [%s] "+
+						"for reservation [%v]: [%v]",
+					transaction.Hash().Hex(bitcoin.ReversedByteOrder),
+					event.ReservationKey,
+					err,
+				)
+				continue
+			}
 		}
 	}
+
+	state.acceptanceLastScannedBlock = currentBlock
 
 	return nil
 }
@@ -288,21 +439,9 @@ func proveReservationAcceptanceActions(
 // matching transaction has been broadcast yet.
 func findReservationAcceptanceTransaction(
 	spvChain Chain,
-	btcChain bitcoin.Chain,
 	event *tbtc.ReservationAcceptanceRequestedEvent,
-	transactionLimit int,
+	walletTransactions []*bitcoin.Transaction,
 ) (*bitcoin.Transaction, error) {
-	walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
-		event.WalletPublicKeyHash,
-		transactionLimit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get transactions for wallet: [%v]",
-			err,
-		)
-	}
-
 	for _, transaction := range walletTransactions {
 		if len(transaction.Inputs) != 1 || len(transaction.Outputs) != 1 {
 			continue
@@ -327,17 +466,21 @@ func findReservationAcceptanceTransaction(
 // on the Bitcoin chain (if any), and submits its SPV proof once it has
 // accumulated enough confirmations.
 func proveReservationReanchorActions(
+	state *reservationProofScanState,
 	config Config,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
 	btcChain bitcoin.Chain,
 ) error {
-	startBlock, err := reservationProofScanStartBlock(spvChain)
+	startBlock, currentBlock, err := reservationProofNextScanRange(
+		spvChain,
+		state.reanchorLastScannedBlock,
+	)
 	if err != nil {
 		return err
 	}
 
-	events, err := spvChain.PastReservationReanchorRequestedEvents(
+	newEvents, err := spvChain.PastReservationReanchorRequestedEvents(
 		&tbtc.ReservationReanchorRequestedEventFilter{StartBlock: startBlock},
 	)
 	if err != nil {
@@ -347,7 +490,16 @@ func proveReservationReanchorActions(
 		)
 	}
 
-	for _, event := range events {
+	for _, event := range newEvents {
+		key := reservationEventKey(event.ReservationKey, event.RequestNonce)
+		state.pendingReanchorEvents[key] = event
+	}
+
+	// Re-check every tracked event's on-chain action state and drop the
+	// ones that are no longer pending, so the pending set does not grow
+	// without bound.
+	var pending []*tbtc.ReservationReanchorRequestedEvent
+	for key, event := range state.pendingReanchorEvents {
 		action, err := spvChain.GetReservationAction(
 			event.ReservationKey,
 			event.RequestNonce,
@@ -359,88 +511,119 @@ func proveReservationReanchorActions(
 				event.RequestNonce,
 				err,
 			)
+			// Keep tracking; retry on the next pass.
 			continue
 		}
 		if action.State != tbtc.ReservationActionStatePending {
+			delete(state.pendingReanchorEvents, key)
 			continue
 		}
+		pending = append(pending, event)
+	}
 
-		reservation, err := spvChain.GetReservation(event.ReservationKey)
-		if err != nil {
-			logger.Errorf(
-				"failed to load reservation [%v]: [%v]",
-				event.ReservationKey,
-				err,
-			)
-			continue
-		}
-		if reservation.AnchorUtxo == nil || reservation.AnchorUtxo.Outpoint == nil {
-			logger.Errorf(
-				"reservation [%v] has no anchor UTXO to re-anchor from",
-				event.ReservationKey,
-			)
-			continue
-		}
+	// There will often be multiple pending events for a single source
+	// wallet. Fetch that wallet's Bitcoin transaction history once, not
+	// once per event.
+	walletPublicKeyHashes := uniqueWalletPublicKeyHashes(
+		wrapReservationReanchorEvents(pending),
+	)
 
-		transaction, err := findReservationReanchorTransaction(
-			btcChain,
-			event,
-			reservation.AnchorUtxo,
+	for _, walletPublicKeyHash := range walletPublicKeyHashes {
+		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+			walletPublicKeyHash,
 			config.TransactionLimit,
 		)
 		if err != nil {
-			logger.Errorf(
-				"failed to search for reservation re-anchor transaction "+
-					"for reservation [%v]: [%v]",
-				event.ReservationKey,
-				err,
-			)
-			continue
-		}
-		if transaction == nil {
+			logger.Errorf("failed to get transactions for wallet: [%v]", err)
 			continue
 		}
 
-		if err := proveReservationTransaction(
-			transaction,
-			btcChain,
-			spvChain,
-			btcDiffChain,
-			func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
-				stillProvable, err := verifyReservationActionStillProvable(
-					spvChain,
-					event.ReservationKey,
-					event.RequestNonce,
-					tbtc.ReservationActionTypeReanchor,
-					event.TargetWalletPublicKeyHash,
-				)
-				if err != nil {
-					return err
-				}
-				if !stillProvable {
-					return nil
-				}
+		for _, event := range pending {
+			if event.SourceWalletPublicKeyHash != walletPublicKeyHash {
+				continue
+			}
 
-				return SubmitReservationReanchorProof(
-					transactionHash,
-					requiredConfirmations,
+			reservation, err := spvChain.GetReservation(event.ReservationKey)
+			if err != nil {
+				logger.Errorf(
+					"failed to load reservation [%v]: [%v]",
 					event.ReservationKey,
-					event.RequestNonce,
-					btcChain,
-					spvChain,
+					err,
 				)
-			},
-		); err != nil {
-			logger.Errorf(
-				"failed to prove reservation re-anchor transaction [%s] "+
-					"for reservation [%v]: [%v]",
-				transaction.Hash().Hex(bitcoin.ReversedByteOrder),
-				event.ReservationKey,
-				err,
+				continue
+			}
+			if reservation.AnchorUtxo == nil ||
+				reservation.AnchorUtxo.Value == 0 ||
+				reservation.AnchorUtxo.Outpoint == nil ||
+				reservation.AnchorUtxo.Outpoint.TransactionHash == (bitcoin.Hash{}) {
+				logger.Errorf(
+					"reservation [%v] has no anchor UTXO to re-anchor from",
+					event.ReservationKey,
+				)
+				continue
+			}
+
+			transaction, err := findReservationReanchorTransaction(
+				event,
+				reservation.AnchorUtxo,
+				walletTransactions,
 			)
-			continue
+			if err != nil {
+				logger.Errorf(
+					"failed to search for reservation re-anchor transaction "+
+						"for reservation [%v]: [%v]",
+					event.ReservationKey,
+					err,
+				)
+				continue
+			}
+			if transaction == nil {
+				continue
+			}
+
+			if err := proveReservationTransaction(
+				transaction,
+				btcChain,
+				spvChain,
+				btcDiffChain,
+				func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
+					stillProvable, err := verifyReservationActionStillProvable(
+						spvChain,
+						event.ReservationKey,
+						event.RequestNonce,
+						tbtc.ReservationActionTypeReanchor,
+						event.TargetWalletPublicKeyHash,
+					)
+					if err != nil {
+						return err
+					}
+					if !stillProvable {
+						return nil
+					}
+
+					return SubmitReservationReanchorProof(
+						transactionHash,
+						requiredConfirmations,
+						event.ReservationKey,
+						event.RequestNonce,
+						btcChain,
+						spvChain,
+					)
+				},
+			); err != nil {
+				logger.Errorf(
+					"failed to prove reservation re-anchor transaction [%s] "+
+						"for reservation [%v]: [%v]",
+					transaction.Hash().Hex(bitcoin.ReversedByteOrder),
+					event.ReservationKey,
+					err,
+				)
+				continue
+			}
 		}
 	}
+
+	state.reanchorLastScannedBlock = currentBlock
 
 	return nil
 }
@@ -450,22 +633,10 @@ func proveReservationReanchorActions(
 // sole input spends the reservation's current anchor UTXO. Returns nil, nil
 // if no matching transaction has been broadcast yet.
 func findReservationReanchorTransaction(
-	btcChain bitcoin.Chain,
 	event *tbtc.ReservationReanchorRequestedEvent,
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
-	transactionLimit int,
+	walletTransactions []*bitcoin.Transaction,
 ) (*bitcoin.Transaction, error) {
-	walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
-		event.SourceWalletPublicKeyHash,
-		transactionLimit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get transactions for wallet: [%v]",
-			err,
-		)
-	}
-
 	for _, transaction := range walletTransactions {
 		if len(transaction.Inputs) != 1 || len(transaction.Outputs) != 1 {
 			continue
@@ -481,10 +652,10 @@ func findReservationReanchorTransaction(
 	return nil, nil
 }
 
-// proveReservationTransaction checks the given transaction's confirmation
-// and relay-range status via the shared getProofInfo helper (also used by
-// the generic proof loop in spv.go) and, once ready, invokes submit with
-// the transaction hash and required confirmations.
+// proveReservationTransaction assembles and submits the SPV proof for a
+// single reservation acceptance or re-anchor transaction, once it has
+// accumulated enough confirmations and its proof falls within the relay's
+// difficulty range.
 func proveReservationTransaction(
 	transaction *bitcoin.Transaction,
 	btcChain bitcoin.Chain,
@@ -531,24 +702,4 @@ func proveReservationTransaction(
 	)
 
 	return nil
-}
-
-// reservationProofScanStartBlock returns the start block for a bounded,
-// look-back-limited scan of pending-action-request events.
-func reservationProofScanStartBlock(spvChain Chain) (uint64, error) {
-	blockCounter, err := spvChain.BlockCounter()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get block counter: [%v]", err)
-	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	if currentBlock > reservationProofLookBackBlocks {
-		return currentBlock - reservationProofLookBackBlocks, nil
-	}
-
-	return 0, nil
 }

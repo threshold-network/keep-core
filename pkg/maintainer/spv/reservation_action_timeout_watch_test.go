@@ -1,9 +1,11 @@
 package spv
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -27,24 +29,6 @@ func (r *recordingActionTimeoutMembers) ResolveWalletMembers(
 		return nil, err
 	}
 	return r.walletIDs[walletPublicKeyHash], nil
-}
-
-// recordingActionTimeoutNotifier captures every
-// NotifyReservationActionTimeout call for assertion in tests.
-type recordingActionTimeoutNotifier struct {
-	calls []*submittedReservationActionTimeout
-	err   error
-}
-
-func (r *recordingActionTimeoutNotifier) NotifyReservationActionTimeout(
-	reservationKey *big.Int,
-	walletMembersIDs []uint32,
-) error {
-	r.calls = append(r.calls, &submittedReservationActionTimeout{
-		reservationKey:   reservationKey,
-		walletMembersIDs: walletMembersIDs,
-	})
-	return r.err
 }
 
 // seededReservation installs a reservation and (optionally) a list of
@@ -73,7 +57,6 @@ func seededReservation(
 
 func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingActionTimeoutNotifier{}
 
 	wallet := walletPKH()
 	key := reservationKey(0xC001)
@@ -96,18 +79,19 @@ func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testin
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 1 {
-		t.Fatalf("expected one timeout notification, got %d", len(notifier.calls))
+	calls := spvChain.getSubmittedReservationActionTimeouts()
+	if len(calls) != 1 {
+		t.Fatalf("expected one timeout notification, got %d", len(calls))
 	}
-	if diff := deep.Equal(key, notifier.calls[0].reservationKey); diff != nil {
+	if diff := deep.Equal(key, calls[0].reservationKey); diff != nil {
 		t.Errorf("unexpected notified key: %v", diff)
 	}
-	if diff := deep.Equal(members, notifier.calls[0].walletMembersIDs); diff != nil {
+	if diff := deep.Equal(members, calls[0].walletMembersIDs); diff != nil {
 		t.Errorf("unexpected notified members: %v", diff)
 	}
 	// The resolver must be consulted exactly once per Check call, not per
@@ -120,7 +104,6 @@ func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testin
 
 func TestReservationActionTimeoutWatcher_DoesNotNotifyBeforeTimeout(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingActionTimeoutNotifier{}
 
 	wallet := walletPKH()
 	key := reservationKey(0xC002)
@@ -142,22 +125,21 @@ func TestReservationActionTimeoutWatcher_DoesNotNotifyBeforeTimeout(t *testing.T
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 0 {
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
 		t.Fatalf(
 			"action not yet timed out; expected zero notifications, got %d",
-			len(notifier.calls),
+			len(calls),
 		)
 	}
 }
 
 func TestReservationActionTimeoutWatcher_IgnoresSettledOlderGeneration(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingActionTimeoutNotifier{}
 
 	wallet := walletPKH()
 	key := reservationKey(0xC003)
@@ -189,23 +171,22 @@ func TestReservationActionTimeoutWatcher_IgnoresSettledOlderGeneration(t *testin
 		2,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 1 {
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
 		t.Fatalf(
 			"current generation is pending and past deadline; expected one "+
 				"notification, got %d",
-			len(notifier.calls),
+			len(calls),
 		)
 	}
 }
 
 func TestReservationActionTimeoutWatcher_NotifiesCurrentGenerationOnly(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingActionTimeoutNotifier{}
 
 	wallet := walletPKH()
 	key := reservationKey(0xC004)
@@ -235,22 +216,21 @@ func TestReservationActionTimeoutWatcher_NotifiesCurrentGenerationOnly(t *testin
 		2,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 1 {
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
 		t.Fatalf(
 			"expected exactly one notification for the current generation, got %d",
-			len(notifier.calls),
+			len(calls),
 		)
 	}
 }
 
 func TestReservationActionTimeoutWatcher_SkipsReservationWithoutWallet(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingActionTimeoutNotifier{}
 
 	key := reservationKey(0xC005)
 	// No wallet PKH assigned.
@@ -261,13 +241,13 @@ func TestReservationActionTimeoutWatcher_SkipsReservationWithoutWallet(t *testin
 		RequestNonce:        0,
 	})
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 0 {
-		t.Fatalf("zero-wallet reservation must skip, got %d notifications", len(notifier.calls))
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
+		t.Fatalf("zero-wallet reservation must skip, got %d notifications", len(calls))
 	}
 	if len(resolver.calls) != 0 {
 		t.Fatalf("resolver must not be called for zero-wallet reservation, got %d calls", len(resolver.calls))
@@ -276,7 +256,6 @@ func TestReservationActionTimeoutWatcher_SkipsReservationWithoutWallet(t *testin
 
 func TestReservationActionTimeoutWatcher_MembersResolverError(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingActionTimeoutNotifier{}
 
 	wallet := walletPKH()
 	key := reservationKey(0xC006)
@@ -298,30 +277,19 @@ func TestReservationActionTimeoutWatcher_MembersResolverError(t *testing.T) {
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err == nil {
 		t.Fatal("expected error from resolver, got nil")
 	}
-	if len(notifier.calls) != 0 {
-		t.Fatalf("no notifications should fire on resolver error, got %d", len(notifier.calls))
-	}
-}
-
-func TestReservationActionTimeoutWatcher_NilNotifierError(t *testing.T) {
-	spvChain := newLocalChain()
-	resolver := &recordingActionTimeoutMembers{}
-
-	watcher := NewReservationActionTimeoutWatcher(spvChain, nil, resolver, 0)
-	if err := watcher.CheckReservationActionTimeouts(reservationKey(0xC007), 5_000); err == nil {
-		t.Fatal("expected error for nil notifier, got nil")
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
+		t.Fatalf("no notifications should fire on resolver error, got %d", len(calls))
 	}
 }
 
 func TestReservationActionTimeoutWatcher_NilResolverError(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingActionTimeoutNotifier{}
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, nil, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, nil, 0)
 	if err := watcher.CheckReservationActionTimeouts(reservationKey(0xC008), 5_000); err == nil {
 		t.Fatal("expected error for nil resolver, got nil")
 	}
@@ -329,62 +297,46 @@ func TestReservationActionTimeoutWatcher_NilResolverError(t *testing.T) {
 
 func TestReservationActionTimeoutWatcher_NilKeyError(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingActionTimeoutNotifier{}
 	resolver := &recordingActionTimeoutMembers{}
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
 	if err := watcher.CheckReservationActionTimeouts(nil, 5_000); err == nil {
 		t.Fatal("expected error for nil reservation key, got nil")
 	}
 }
 
-func TestReservationActionTimeoutWatcher_NotifierFuncAdapter(t *testing.T) {
-	var captured []*submittedReservationActionTimeout
-	notifier := ReservationActionTimeoutNotifierFunc(func(
-		reservationKey *big.Int,
-		walletMembersIDs []uint32,
-	) error {
-		captured = append(captured, &submittedReservationActionTimeout{
-			reservationKey:   reservationKey,
-			walletMembersIDs: walletMembersIDs,
-		})
-		return nil
+func TestReservationActionTimeoutWatcher_SkipsWalletZeroBranch(t *testing.T) {
+	// Isolates the wallet-zero skip branch from the RequestNonce == 0 skip
+	// branch: RequestNonce is nonzero (a real action generation exists) but
+	// WalletPublicKeyHash is zero, so the reservation exists yet has no
+	// wallet assigned. This must skip via the wallet-zero check, not be
+	// short-circuited by the (separate) RequestNonce == 0 check that an
+	// earlier version of this test file conflated by zeroing both fields
+	// together.
+	spvChain := newLocalChain()
+	resolver := &recordingActionTimeoutMembers{}
+
+	key := reservationKey(0xC00B)
+	spvChain.setReservation(key, &tbtc.Reservation{
+		WalletPublicKeyHash: [20]byte{},
+		RequestNonce:        1,
 	})
 
-	spvChain := newLocalChain()
-
-	wallet := walletPKH()
-	key := reservationKey(0xC009)
-
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet: {42}},
-	}
-	seededReservation(
-		t,
-		spvChain,
-		key,
-		wallet,
-		[]*tbtc.ReservationAction{
-			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
-			},
-		},
-		1,
-	)
-
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(captured) != 1 {
-		t.Fatalf("expected one captured notification, got %d", len(captured))
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
+		t.Fatalf("zero-wallet reservation must skip, got %d notifications", len(calls))
+	}
+	if len(resolver.calls) != 0 {
+		t.Fatalf("resolver must not be called for zero-wallet reservation, got %d calls", len(resolver.calls))
 	}
 }
 
 func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingActionTimeoutNotifier{}
 	errFromNotifier := errors.New("downstream")
 
 	wallet := walletPKH()
@@ -394,12 +346,12 @@ func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 		walletIDs: map[[20]byte][]uint32{wallet: {1, 2, 3}},
 	}
 	// The current generation is pending and past its deadline, but the
-	// notifier fails. With only one generation ever inspected per Check
-	// call, the failure must surface as an error from
+	// Bridge notify call fails. With only one generation ever inspected per
+	// Check call, the failure must surface as an error from
 	// CheckReservationActionTimeouts (not be silently swallowed), so a
 	// poll-loop caller logs and retries on the next tick instead of
 	// wrongly treating it as settled.
-	notifier.err = errFromNotifier
+	spvChain.notifyReservationActionTimeoutErr = errFromNotifier
 	seededReservation(
 		t,
 		spvChain,
@@ -414,13 +366,80 @@ func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, notifier, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
 	err := watcher.CheckReservationActionTimeouts(key, 5_000)
 	if err == nil {
 		t.Fatal("expected the notifier error to propagate, got nil")
 	}
 
-	if len(notifier.calls) != 1 {
-		t.Fatalf("expected exactly one notification attempt, got %d", len(notifier.calls))
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
+		t.Fatalf("expected exactly one notification attempt, got %d", len(calls))
+	}
+}
+
+func TestReservationActionTimeoutWatcher_RunLoop(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	resolver := &recordingActionTimeoutMembers{
+		walletIDs: map[[20]byte][]uint32{},
+	}
+
+	pollInterval := 10 * time.Millisecond
+	ratw := NewReservationActionTimeoutWatcher(
+		spvChain,
+		resolver,
+		pollInterval,
+	)
+	ratw.nowFn = func() uint32 { return 100 }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Tick 1: register wallet 1, within the first scan window.
+	wallet1 := [20]byte{1}
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		WalletPublicKeyHash: wallet1,
+		BlockNumber:         500,
+	})
+	spvChain.setWallet(wallet1, &tbtc.WalletChainData{State: tbtc.StateLive})
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ratw.Run(ctx)
+	}()
+
+	// Wait for tick 1 to run discoverWallets and pick up wallet 1.
+	time.Sleep(50 * time.Millisecond)
+
+	// Tick 2: register wallet 2 (block number past the tick-1 cursor, so
+	// the incremental scan actually picks it up) and close wallet 1, which
+	// must be evicted from knownWallets on this pass.
+	blockCounter.SetCurrentBlock(2000)
+	wallet2 := [20]byte{2}
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		WalletPublicKeyHash: wallet2,
+		BlockNumber:         1500,
+	})
+	spvChain.setWallet(wallet2, &tbtc.WalletChainData{State: tbtc.StateLive})
+	spvChain.setWallet(wallet1, &tbtc.WalletChainData{State: tbtc.StateClosed})
+
+	// Wait for tick 2 to observe the new wallet and the eviction.
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	if err := <-errChan; err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Assertions run only after Run has fully returned, so knownWallets is
+	// no longer being mutated concurrently by the background goroutine.
+	if _, ok := ratw.knownWallets[wallet1]; ok {
+		t.Errorf("wallet 1 should have been evicted after being observed Closed")
+	}
+	if _, ok := ratw.knownWallets[wallet2]; !ok {
+		t.Errorf("wallet 2 should have been discovered")
 	}
 }

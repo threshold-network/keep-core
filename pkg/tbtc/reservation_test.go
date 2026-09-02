@@ -3,19 +3,24 @@ package tbtc
 import (
 	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"math/big"
 	"reflect"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
 )
 
 func TestReservationActionTypes(t *testing.T) {
 	for value, expected := range map[uint8]WalletActionType{
 		6: ActionReservationAnchor,
-		7: ActionReservedRedemption,
 		8: ActionReservationReanchor,
-		9: ActionReservationDissolution,
 	} {
 		parsed, err := ParseWalletActionType(value)
 		if err != nil {
@@ -101,23 +106,11 @@ func TestReservationProposals_MarshalingRoundtrip(t *testing.T) {
 		AnchorTxFee:               big.NewInt(1500),
 	}
 
-	redemptionProposal := &ReservedRedemptionProposal{
-		ReservationKey:  big.NewInt(12345),
-		RequestNonce:    2,
-		RedemptionTxFee: big.NewInt(1600),
-	}
-
 	reanchorProposal := &ReservationReanchorProposal{
 		ReservationKey:            big.NewInt(54321),
 		RequestNonce:              3,
 		TargetWalletPublicKeyHash: [20]byte{0xaa, 0xbb},
 		ReanchorTxFee:             big.NewInt(1700),
-	}
-
-	dissolutionProposal := &ReservationDissolutionProposal{
-		ReservationKey:   big.NewInt(99999),
-		RequestNonce:     4,
-		DissolutionTxFee: big.NewInt(1800),
 	}
 
 	roundtrip := func(
@@ -141,76 +134,52 @@ func TestReservationProposals_MarshalingRoundtrip(t *testing.T) {
 	}
 
 	roundtrip(anchorProposal, &ReservationAnchorProposal{})
-	roundtrip(redemptionProposal, &ReservedRedemptionProposal{})
 	roundtrip(reanchorProposal, &ReservationReanchorProposal{})
-	roundtrip(dissolutionProposal, &ReservationDissolutionProposal{})
 }
 
 func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
 	tests := map[string]struct {
 		actionType    WalletActionType
-		payload       string
+		payload       []byte
 		expectedError string
 	}{
 		"anchor empty object": {
 			actionType:    ActionReservationAnchor,
-			payload:       `{}`,
+			payload:       marshalPb(t, &pb.ReservationAnchorProposal{}),
 			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
 		},
 		"anchor null payload": {
 			actionType:    ActionReservationAnchor,
-			payload:       `null`,
+			payload:       nil,
 			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
 		},
 		"anchor missing nonce": {
-			actionType:    ActionReservationAnchor,
-			payload:       `{"AnchorTxFee":1500}`,
+			actionType: ActionReservationAnchor,
+			payload: marshalPb(t, &pb.ReservationAnchorProposal{
+				AnchorTxFee: big.NewInt(1500).Bytes(),
+			}),
 			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
-		},
-		"reserved redemption null payload": {
-			actionType:    ActionReservedRedemption,
-			payload:       `null`,
-			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
-		},
-		"reserved redemption missing nonce": {
-			actionType:    ActionReservedRedemption,
-			payload:       `{"ReservationKey":12345,"RedemptionTxFee":1600}`,
-			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
-		},
-		"reserved redemption missing fee": {
-			actionType:    ActionReservedRedemption,
-			payload:       `{"ReservationKey":12345,"RequestNonce":2}`,
-			expectedError: "cannot unmarshal proposal payload: [redemption transaction fee is required]",
 		},
 		"re-anchor null payload": {
 			actionType:    ActionReservationReanchor,
-			payload:       `null`,
+			payload:       nil,
 			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
 		},
 		"re-anchor missing nonce": {
-			actionType:    ActionReservationReanchor,
-			payload:       `{"ReservationKey":54321,"ReanchorTxFee":1700}`,
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+				ReservationKey: big.NewInt(54321).Bytes(),
+				ReanchorTxFee:  big.NewInt(1700).Bytes(),
+			}),
 			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
 		},
 		"re-anchor missing fee": {
-			actionType:    ActionReservationReanchor,
-			payload:       `{"ReservationKey":54321,"RequestNonce":3}`,
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+				ReservationKey: big.NewInt(54321).Bytes(),
+				RequestNonce:   3,
+			}),
 			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
-		},
-		"dissolution null payload": {
-			actionType:    ActionReservationDissolution,
-			payload:       `null`,
-			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
-		},
-		"dissolution missing nonce": {
-			actionType:    ActionReservationDissolution,
-			payload:       `{"ReservationKey":99999,"DissolutionTxFee":1800}`,
-			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
-		},
-		"dissolution missing fee": {
-			actionType:    ActionReservationDissolution,
-			payload:       `{"ReservationKey":99999,"RequestNonce":4}`,
-			expectedError: "cannot unmarshal proposal payload: [dissolution transaction fee is required]",
 		},
 	}
 
@@ -218,7 +187,7 @@ func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
 		t.Run(testName, func(t *testing.T) {
 			_, err := unmarshalCoordinationProposal(
 				uint32(test.actionType),
-				[]byte(test.payload),
+				test.payload,
 			)
 			if err == nil || err.Error() != test.expectedError {
 				t.Errorf(
@@ -231,279 +200,14 @@ func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
 	}
 }
 
-func TestAssembleReservedRedemptionTransaction(t *testing.T) {
-	bitcoinChain := newLocalBitcoinChain()
-
-	privateKeyValue := big.NewInt(100)
-	wallet := generateWallet(privateKeyValue)
-	walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
-	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+// marshalPb marshals a protobuf message for use as a test fixture payload.
+func marshalPb(t *testing.T, msg proto.Message) []byte {
+	t.Helper()
+	data, err := proto.Marshal(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	redeemerScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{0x01})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fundingTransaction := &bitcoin.Transaction{
-		Version: 1,
-		Inputs: []*bitcoin.TransactionInput{
-			{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: bitcoin.Hash{0x01},
-					OutputIndex:     0,
-				},
-				Sequence: 0xffffffff,
-			},
-		},
-		Outputs: []*bitcoin.TransactionOutput{
-			{
-				Value:           100000,
-				PublicKeyScript: walletScript,
-			},
-		},
-	}
-	if err := bitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
-		t.Fatal(err)
-	}
-
-	anchorUtxo := &bitcoin.UnspentTransactionOutput{
-		Outpoint: &bitcoin.TransactionOutpoint{
-			TransactionHash: fundingTransaction.Hash(),
-			OutputIndex:     0,
-		},
-		Value: 100000,
-	}
-
-	redeemerOutputScriptHash, err := computeReservationRedeemerOutputScriptHash(
-		redeemerScript,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tests := map[string]struct {
-		action          *ReservationAction
-		expectedOutputs []*bitcoin.TransactionOutput
-	}{
-		"whole redemption": {
-			action: &ReservationAction{
-				TxMaxFee:                 2000,
-				ActionType:               ReservationActionTypeRedemption,
-				State:                    ReservationActionStatePending,
-				Amount:                   100000,
-				RedeemerOutputScriptHash: redeemerOutputScriptHash,
-			},
-			expectedOutputs: []*bitcoin.TransactionOutput{
-				{
-					Value:           98500,
-					PublicKeyScript: redeemerScript,
-				},
-			},
-		},
-		"partial redemption": {
-			action: &ReservationAction{
-				TxMaxFee:                 2000,
-				ActionType:               ReservationActionTypeRedemption,
-				State:                    ReservationActionStatePending,
-				Amount:                   40000,
-				RedeemerOutputScriptHash: redeemerOutputScriptHash,
-				IsPartial:                true,
-			},
-			expectedOutputs: []*bitcoin.TransactionOutput{
-				{
-					Value:           38500,
-					PublicKeyScript: redeemerScript,
-				},
-				{
-					Value:           60000,
-					PublicKeyScript: walletScript,
-				},
-			},
-		},
-	}
-
-	for testName, test := range tests {
-		t.Run(testName, func(t *testing.T) {
-			builder, err := assembleReservedRedemptionTransaction(
-				bitcoinChain,
-				anchorUtxo,
-				walletPublicKeyHash,
-				redeemerScript,
-				test.action,
-				1500,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			transaction := signReservationTransaction(
-				t,
-				builder,
-				wallet.publicKey,
-				privateKeyValue,
-			)
-
-			if !reflect.DeepEqual(test.expectedOutputs, transaction.Outputs) {
-				t.Errorf(
-					"unexpected outputs\nexpected: [%+v]\nactual:   [%+v]",
-					test.expectedOutputs,
-					transaction.Outputs,
-				)
-			}
-		})
-	}
-}
-
-func TestAssembleReservationDissolutionTransaction(t *testing.T) {
-	bitcoinChain := newLocalBitcoinChain()
-	bridgeChain := Connect()
-
-	privateKeyValue := big.NewInt(100)
-	wallet := generateWallet(privateKeyValue)
-	walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
-	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fundingTransaction := &bitcoin.Transaction{
-		Version: 1,
-		Inputs: []*bitcoin.TransactionInput{
-			{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: bitcoin.Hash{0x01},
-					OutputIndex:     0,
-				},
-				Sequence: 0xffffffff,
-			},
-		},
-		Outputs: []*bitcoin.TransactionOutput{
-			{
-				Value:           100000,
-				PublicKeyScript: walletScript,
-			},
-			{
-				Value:           200000,
-				PublicKeyScript: walletScript,
-			},
-		},
-	}
-	if err := bitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
-		t.Fatal(err)
-	}
-
-	anchorUtxo := &bitcoin.UnspentTransactionOutput{
-		Outpoint: &bitcoin.TransactionOutpoint{
-			TransactionHash: fundingTransaction.Hash(),
-			OutputIndex:     0,
-		},
-		Value: 100000,
-	}
-	walletMainUtxo := &bitcoin.UnspentTransactionOutput{
-		Outpoint: &bitcoin.TransactionOutpoint{
-			TransactionHash: fundingTransaction.Hash(),
-			OutputIndex:     1,
-		},
-		Value: 200000,
-	}
-
-	baseAction := ReservationAction{
-		TargetWalletPublicKeyHash: walletPublicKeyHash,
-		TxMaxFee:                  2000,
-		ActionType:                ReservationActionTypeDissolution,
-		State:                     ReservationActionStatePending,
-		Amount:                    100000,
-	}
-
-	tests := map[string]struct {
-		action              *ReservationAction
-		expectedInputUtxos  []*bitcoin.UnspentTransactionOutput
-		expectedOutputValue int64
-	}{
-		"snapshotted main UTXO": {
-			action: func() *ReservationAction {
-				action := baseAction
-				action.ExpectedMainUtxoHash = bridgeChain.ComputeMainUtxoHash(
-					walletMainUtxo,
-				)
-				return &action
-			}(),
-			expectedInputUtxos: []*bitcoin.UnspentTransactionOutput{
-				anchorUtxo,
-				walletMainUtxo,
-			},
-			expectedOutputValue: 298500,
-		},
-		"no-main-UTXO snapshot with newly current main UTXO": {
-			action: &baseAction,
-			expectedInputUtxos: []*bitcoin.UnspentTransactionOutput{
-				anchorUtxo,
-			},
-			expectedOutputValue: 98500,
-		},
-	}
-
-	for testName, test := range tests {
-		t.Run(testName, func(t *testing.T) {
-			builder, err := assembleReservationDissolutionTransaction(
-				bitcoinChain,
-				bridgeChain,
-				anchorUtxo,
-				walletMainUtxo,
-				walletPublicKeyHash,
-				test.action,
-				1500,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			transaction := signReservationTransaction(
-				t,
-				builder,
-				wallet.publicKey,
-				privateKeyValue,
-			)
-
-			if len(transaction.Inputs) != len(test.expectedInputUtxos) {
-				t.Fatalf(
-					"unexpected input count\nexpected: [%v]\nactual:   [%v]",
-					len(test.expectedInputUtxos),
-					len(transaction.Inputs),
-				)
-			}
-			for i, expectedInputUtxo := range test.expectedInputUtxos {
-				if !reflect.DeepEqual(
-					expectedInputUtxo.Outpoint,
-					transaction.Inputs[i].Outpoint,
-				) {
-					t.Errorf(
-						"unexpected input at index [%v]\nexpected: [%+v]\nactual:   [%+v]",
-						i,
-						expectedInputUtxo.Outpoint,
-						transaction.Inputs[i].Outpoint,
-					)
-				}
-			}
-
-			expectedOutputs := []*bitcoin.TransactionOutput{
-				{
-					Value:           test.expectedOutputValue,
-					PublicKeyScript: walletScript,
-				},
-			}
-			if !reflect.DeepEqual(expectedOutputs, transaction.Outputs) {
-				t.Errorf(
-					"unexpected outputs\nexpected: [%+v]\nactual:   [%+v]",
-					expectedOutputs,
-					transaction.Outputs,
-				)
-			}
-		})
-	}
+	return data
 }
 
 func signReservationTransaction(
@@ -546,9 +250,7 @@ func signReservationTransaction(
 
 func TestAssembleReservationTransactions_InputValidation(t *testing.T) {
 	bitcoinChain := newLocalBitcoinChain()
-	bridgeChain := Connect()
 	walletPublicKeyHash := [20]byte{0x01}
-	redeemerScript := bitcoin.Script{0x00, 0x14, 0x02}
 
 	anchorUtxo := &bitcoin.UnspentTransactionOutput{
 		Outpoint: &bitcoin.TransactionOutpoint{
@@ -557,26 +259,6 @@ func TestAssembleReservationTransactions_InputValidation(t *testing.T) {
 		},
 		Value: 100000,
 	}
-	redeemerOutputScriptHash, err := computeReservationRedeemerOutputScriptHash(
-		redeemerScript,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	redemptionAction := &ReservationAction{
-		TxMaxFee:                 2000,
-		ActionType:               ReservationActionTypeRedemption,
-		State:                    ReservationActionStatePending,
-		Amount:                   100000,
-		RedeemerOutputScriptHash: redeemerOutputScriptHash,
-	}
-	dissolutionAction := &ReservationAction{
-		TargetWalletPublicKeyHash: walletPublicKeyHash,
-		TxMaxFee:                  2000,
-		ActionType:                ReservationActionTypeDissolution,
-		State:                     ReservationActionStatePending,
-		Amount:                    100000,
-	}
 
 	assertError := func(err error, expected string) {
 		if err == nil || err.Error() != expected {
@@ -584,187 +266,411 @@ func TestAssembleReservationTransactions_InputValidation(t *testing.T) {
 		}
 	}
 
-	_, err = assembleReservationAnchorTransaction(
+	var err error
+	_, err = AssembleReservationAnchorTransaction(
 		bitcoinChain,
 		nil,
 		walletPublicKeyHash,
+		nil,
 		1500,
 	)
 	assertError(err, "deposit is required")
 
-	_, err = assembleReservedRedemptionTransaction(
-		bitcoinChain,
-		nil,
-		walletPublicKeyHash,
-		redeemerScript,
-		redemptionAction,
-		1500,
-	)
-	assertError(err, "anchor UTXO is required")
+	deposit := &Deposit{Utxo: anchorUtxo}
 
-	_, err = assembleReservedRedemptionTransaction(
+	_, err = AssembleReservationAnchorTransaction(
 		bitcoinChain,
-		anchorUtxo,
-		walletPublicKeyHash,
-		bitcoin.Script{},
-		redemptionAction,
-		1500,
-	)
-	assertError(err, "redeemer output script is required")
-
-	_, err = assembleReservedRedemptionTransaction(
-		bitcoinChain,
-		anchorUtxo,
-		walletPublicKeyHash,
-		redeemerScript,
-		nil,
-		1500,
-	)
-	assertError(err, "reservation action is required")
-
-	nonRedemptionAction := *redemptionAction
-	nonRedemptionAction.ActionType = ReservationActionTypeReanchor
-	_, err = assembleReservedRedemptionTransaction(
-		bitcoinChain,
-		anchorUtxo,
-		walletPublicKeyHash,
-		redeemerScript,
-		&nonRedemptionAction,
-		1500,
-	)
-	assertError(err, "reservation action is not a redemption")
-
-	nonPendingAction := *redemptionAction
-	nonPendingAction.State = ReservationActionStateTimedOut
-	_, err = assembleReservedRedemptionTransaction(
-		bitcoinChain,
-		anchorUtxo,
-		walletPublicKeyHash,
-		redeemerScript,
-		&nonPendingAction,
-		1500,
-	)
-	assertError(err, "reservation action is not pending")
-
-	wrongScriptAction := *redemptionAction
-	wrongScriptAction.RedeemerOutputScriptHash = [32]byte{0x01}
-	_, err = assembleReservedRedemptionTransaction(
-		bitcoinChain,
-		anchorUtxo,
-		walletPublicKeyHash,
-		redeemerScript,
-		&wrongScriptAction,
-		1500,
-	)
-	assertError(err, "redeemer output script is not authorized")
-
-	partialWholeAmountAction := *redemptionAction
-	partialWholeAmountAction.IsPartial = true
-	_, err = assembleReservedRedemptionTransaction(
-		bitcoinChain,
-		anchorUtxo,
-		walletPublicKeyHash,
-		redeemerScript,
-		&partialWholeAmountAction,
-		1500,
-	)
-	assertError(
-		err,
-		"partial redemption amount must be less than the anchor value",
-	)
-
-	partialAmountAction := *redemptionAction
-	partialAmountAction.Amount = 40000
-	_, err = assembleReservedRedemptionTransaction(
-		bitcoinChain,
-		anchorUtxo,
-		walletPublicKeyHash,
-		redeemerScript,
-		&partialAmountAction,
-		1500,
-	)
-	assertError(err, "whole redemption amount must equal the anchor value")
-
-	_, err = assembleReservedRedemptionTransaction(
-		bitcoinChain,
-		anchorUtxo,
-		walletPublicKeyHash,
-		redeemerScript,
-		redemptionAction,
-		2500,
-	)
-	assertError(err, "transaction fee exceeds the action fee limit")
-
-	_, err = assembleReservationReanchorTransaction(
-		bitcoinChain,
-		nil,
-		walletPublicKeyHash,
-		1500,
-	)
-	assertError(err, "anchor UTXO is required")
-
-	_, err = assembleReservationDissolutionTransaction(
-		bitcoinChain,
-		bridgeChain,
-		nil,
-		nil,
-		walletPublicKeyHash,
-		dissolutionAction,
-		1500,
-	)
-	assertError(err, "anchor UTXO is required")
-
-	_, err = assembleReservationDissolutionTransaction(
-		bitcoinChain,
-		bridgeChain,
-		anchorUtxo,
-		nil,
+		deposit,
 		walletPublicKeyHash,
 		nil,
 		1500,
 	)
 	assertError(err, "reservation action is required")
 
-	snapshottedMainUtxo := &bitcoin.UnspentTransactionOutput{
-		Outpoint: &bitcoin.TransactionOutpoint{
-			TransactionHash: bitcoin.Hash{0x04},
-			OutputIndex:     1,
-		},
-		Value: 200000,
-	}
-	actionWithMainUtxo := *dissolutionAction
-	actionWithMainUtxo.ExpectedMainUtxoHash = bridgeChain.ComputeMainUtxoHash(
-		snapshottedMainUtxo,
-	)
-	_, err = assembleReservationDissolutionTransaction(
+	_, err = AssembleReservationAnchorTransaction(
 		bitcoinChain,
-		bridgeChain,
-		anchorUtxo,
+		deposit,
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 2000},
+		0,
+	)
+	assertError(err, "fee must be positive")
+
+	_, err = AssembleReservationAnchorTransaction(
+		bitcoinChain,
+		deposit,
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 1000},
+		1500,
+	)
+	assertError(err, "fee exceeds the maximum allowed fee")
+
+	_, err = AssembleReservationReanchorTransaction(
+		bitcoinChain,
 		nil,
 		walletPublicKeyHash,
-		&actionWithMainUtxo,
+		nil,
 		1500,
 	)
-	assertError(err, "wallet main UTXO is required by the dissolution action")
+	assertError(err, "anchor UTXO is required")
 
-	currentMainUtxo := &bitcoin.UnspentTransactionOutput{
-		Outpoint: &bitcoin.TransactionOutpoint{
-			TransactionHash: bitcoin.Hash{0x05},
-			OutputIndex:     2,
-		},
-		Value: 300000,
-	}
-	_, err = assembleReservationDissolutionTransaction(
+	_, err = AssembleReservationReanchorTransaction(
 		bitcoinChain,
-		bridgeChain,
 		anchorUtxo,
-		currentMainUtxo,
 		walletPublicKeyHash,
-		&actionWithMainUtxo,
+		nil,
 		1500,
 	)
-	assertError(
-		err,
-		"wallet main UTXO does not match the dissolution action snapshot",
+	assertError(err, "reservation action is required")
+
+	_, err = AssembleReservationReanchorTransaction(
+		bitcoinChain,
+		anchorUtxo,
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 2000},
+		0,
 	)
+	assertError(err, "fee must be positive")
+
+	_, err = AssembleReservationReanchorTransaction(
+		bitcoinChain,
+		anchorUtxo,
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 1000},
+		1500,
+	)
+	assertError(err, "fee exceeds the maximum allowed fee")
+}
+
+func TestAssembleReservationTransactions_FeeBoundaries(t *testing.T) {
+	bitcoinChain := newLocalBitcoinChain()
+	walletPublicKeyHash := [20]byte{0x01}
+
+	// Anchor boundary
+	_, err := AssembleReservationAnchorTransaction(
+		bitcoinChain,
+		&Deposit{Utxo: &bitcoin.UnspentTransactionOutput{Value: 100000}},
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 200000},
+		100000,
+	)
+	if err == nil || err.Error() != "transaction fee exceeds the deposit amount" {
+		t.Errorf("expected error [transaction fee exceeds the deposit amount], got [%v]", err)
+	}
+
+	// Reanchor boundary
+	_, err = AssembleReservationReanchorTransaction(
+		bitcoinChain,
+		&bitcoin.UnspentTransactionOutput{Value: 100000},
+		walletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 200000},
+		100000,
+	)
+	if err == nil || err.Error() != "transaction fee exceeds the anchor value" {
+		t.Errorf("expected error [transaction fee exceeds the anchor value], got [%v]", err)
+	}
+}
+
+// reservationTestWallet returns a wallet with a real ECDSA public key so
+// bitcoin.PublicKeyHash (called at the top of both execute() methods)
+// doesn't panic on a nil key.
+func reservationTestWallet(t *testing.T) wallet {
+	t.Helper()
+
+	publicKeyBytes, err := hex.DecodeString(
+		"0471e30bca60f6548d7b42582a478ea37ada63b402af7b3ddd57f0c95bb6843175" +
+			"aa0d2053a91a050a6797d85c38f2909cb7027f2344a01986aa2f9f8ca7a0c289",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return wallet{publicKey: mustUnmarshalPublicKey(t, publicKeyBytes)}
+}
+
+func TestReservationAnchorAction_Execute(t *testing.T) {
+	const fundingOutputIndex = 0
+
+	custodyWallet := reservationTestWallet(t)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(custodyWallet.publicKey)
+
+	newAction := func(
+		chain Chain,
+		btcChain bitcoin.Chain,
+		fundingTxHash bitcoin.Hash,
+	) *reservationAnchorAction {
+		return newReservationAnchorAction(
+			zap.NewNop().Sugar(),
+			chain,
+			btcChain,
+			custodyWallet,
+			nil, // signing executor unreached by these negative-path cases
+			&ReservationAnchorProposal{
+				DepositFundingTxHash:      fundingTxHash,
+				DepositFundingOutputIndex: fundingOutputIndex,
+				RequestNonce:              1,
+				AnchorTxFee:               big.NewInt(1500),
+			},
+			300000,
+			300000+600,
+			nil,
+			nil,
+		)
+	}
+
+	t.Run("no matching DepositRevealed event", func(t *testing.T) {
+		chain := Connect()
+		btcChain := newLocalBitcoinChain()
+
+		fundingTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{{Value: 100000}},
+		}
+		if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+			t.Fatal(err)
+		}
+		fundingTxHash := fundingTx.Hash()
+
+		// A DepositRevealed event exists for this wallet, but for a
+		// different funding outpoint - the matching loop must walk past
+		// it and still report no match, not silently accept it.
+		if err := chain.setPastDepositRevealedEvents(
+			&DepositRevealedEventFilter{
+				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				StartBlock:          300000 - reservationLookBackBlocks,
+			},
+			[]*DepositRevealedEvent{{
+				FundingTxHash:       bitcoin.Hash{0x99},
+				FundingOutputIndex:  0,
+				WalletPublicKeyHash: walletPublicKeyHash,
+			}},
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		err := newAction(chain, btcChain, fundingTxHash).execute()
+		if err == nil || err.Error() != "no matching DepositRevealed event for deposit" {
+			t.Errorf(
+				"unexpected error\nexpected: [no matching DepositRevealed event for deposit]\nactual:   [%v]",
+				err,
+			)
+		}
+	})
+
+	t.Run("deposit request not found", func(t *testing.T) {
+		chain := Connect()
+		btcChain := newLocalBitcoinChain()
+
+		fundingTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{{Value: 100000}},
+		}
+		if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+			t.Fatal(err)
+		}
+		fundingTxHash := fundingTx.Hash()
+
+		if err := chain.setPastDepositRevealedEvents(
+			&DepositRevealedEventFilter{
+				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				StartBlock:          300000 - reservationLookBackBlocks,
+			},
+			[]*DepositRevealedEvent{{
+				FundingTxHash:       fundingTxHash,
+				FundingOutputIndex:  fundingOutputIndex,
+				WalletPublicKeyHash: walletPublicKeyHash,
+			}},
+		); err != nil {
+			t.Fatal(err)
+		}
+		// Deliberately no setDepositRequest call: the Bridge has no
+		// request record for this funding outpoint.
+
+		err := newAction(chain, btcChain, fundingTxHash).execute()
+		if err == nil || err.Error() != "deposit request not found" {
+			t.Errorf(
+				"unexpected error\nexpected: [deposit request not found]\nactual:   [%v]",
+				err,
+			)
+		}
+	})
+
+	t.Run("full happy path up to the signing boundary", func(t *testing.T) {
+		chain := Connect()
+		btcChain := newLocalBitcoinChain()
+
+		depositForScript := &Deposit{
+			Depositor:           "0x0000000000000000000000000000000000000001",
+			WalletPublicKeyHash: walletPublicKeyHash,
+		}
+		depositScript, err := depositForScript.Script()
+		if err != nil {
+			t.Fatal(err)
+		}
+		scriptHash := sha256.Sum256(depositScript)
+		fundingOutputScript, err := bitcoin.PayToWitnessScriptHash(scriptHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fundingTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           100000,
+				PublicKeyScript: fundingOutputScript,
+			}},
+		}
+		if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+			t.Fatal(err)
+		}
+		fundingTxHash := fundingTx.Hash()
+
+		if err := chain.setPastDepositRevealedEvents(
+			&DepositRevealedEventFilter{
+				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				StartBlock:          300000 - reservationLookBackBlocks,
+			},
+			[]*DepositRevealedEvent{{
+				FundingTxHash:       fundingTxHash,
+				FundingOutputIndex:  fundingOutputIndex,
+				WalletPublicKeyHash: walletPublicKeyHash,
+				Amount:              100000,
+				Depositor:           "0x0000000000000000000000000000000000000001",
+			}},
+		); err != nil {
+			t.Fatal(err)
+		}
+		chain.setDepositRequest(fundingTxHash, fundingOutputIndex, &DepositChainRequest{
+			Amount:     100000,
+			RevealedAt: time.Now(),
+		})
+		chain.setReservationAction(&ReservationAction{
+			ActionType: ReservationActionTypeAcceptance,
+			State:      ReservationActionStatePending,
+			TxMaxFee:   2000,
+		})
+
+		action := newAction(chain, btcChain, fundingTxHash)
+		// Below reservationActionSigningTimeoutSafetyMarginBlocks (300):
+		// every real upstream step (event match, deposit request fetch,
+		// reservation key derivation, action load, on-chain validation,
+		// transaction assembly) must succeed before this guard is
+		// reached and rejects the proposal - reaching this exact error
+		// is the test's proof that all of it worked.
+		action.expiryBlock = 100
+
+		err = action.execute()
+		if err == nil || err.Error() != "invalid proposal expiry block" {
+			t.Errorf(
+				"unexpected error\nexpected: [invalid proposal expiry block]\nactual:   [%v]",
+				err,
+			)
+		}
+	})
+}
+
+func TestReservationReanchorAction_Execute(t *testing.T) {
+	custodyWallet := reservationTestWallet(t)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(custodyWallet.publicKey)
+
+	reservationKey := big.NewInt(777)
+
+	newAction := func(
+		chain Chain,
+		btcChain bitcoin.Chain,
+	) *reservationReanchorAction {
+		return newReservationReanchorAction(
+			zap.NewNop().Sugar(),
+			chain,
+			btcChain,
+			custodyWallet,
+			nil, // signing executor unreached by these negative-path cases
+			&ReservationReanchorProposal{
+				ReservationKey:            reservationKey,
+				RequestNonce:              1,
+				TargetWalletPublicKeyHash: walletPublicKeyHash,
+				ReanchorTxFee:             big.NewInt(1500),
+			},
+			300000,
+			100, // below reservationActionSigningTimeoutSafetyMarginBlocks
+			nil,
+			nil,
+		)
+	}
+
+	t.Run("full happy path up to the signing boundary", func(t *testing.T) {
+		chain := Connect()
+		btcChain := newLocalBitcoinChain()
+
+		anchorOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		priorAnchorTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{
+				{Value: 10000},
+				{Value: 100000, PublicKeyScript: anchorOutputScript},
+			},
+		}
+		if err := btcChain.BroadcastTransaction(priorAnchorTx); err != nil {
+			t.Fatal(err)
+		}
+
+		chain.setReservation(&Reservation{
+			WalletPublicKeyHash: walletPublicKeyHash,
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: priorAnchorTx.Hash(),
+					OutputIndex:     1,
+				},
+				Value: 100000,
+			},
+		})
+		chain.setReservationAction(&ReservationAction{
+			ActionType:                ReservationActionTypeReanchor,
+			State:                     ReservationActionStatePending,
+			TargetWalletPublicKeyHash: walletPublicKeyHash,
+			TxMaxFee:                  2000,
+		})
+
+		// Every real upstream step (reservation load, action load,
+		// type/state check, target wallet match, on-chain validation,
+		// transaction assembly) must succeed before the expiry-block
+		// guard is reached and rejects the proposal - reaching this
+		// exact error is the test's proof that all of it worked.
+		err = newAction(chain, btcChain).execute()
+		if err == nil || err.Error() != "invalid proposal expiry block" {
+			t.Errorf(
+				"unexpected error\nexpected: [invalid proposal expiry block]\nactual:   [%v]",
+				err,
+			)
+		}
+	})
+
+	t.Run("target wallet mismatch is rejected before signing", func(t *testing.T) {
+		chain := Connect()
+		btcChain := newLocalBitcoinChain()
+
+		chain.setReservation(&Reservation{
+			WalletPublicKeyHash: walletPublicKeyHash,
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x01},
+					OutputIndex:     0,
+				},
+				Value: 100000,
+			},
+		})
+		chain.setReservationAction(&ReservationAction{
+			ActionType:                ReservationActionTypeReanchor,
+			State:                     ReservationActionStatePending,
+			TargetWalletPublicKeyHash: [20]byte{0xff}, // does not match the proposal's target
+			TxMaxFee:                  2000,
+		})
+
+		err := newAction(chain, btcChain).execute()
+		if err == nil || err.Error() != "reservation action targets a different wallet" {
+			t.Errorf(
+				"unexpected error\nexpected: [reservation action targets a different wallet]\nactual:   [%v]",
+				err,
+			)
+		}
+	})
 }

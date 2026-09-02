@@ -229,16 +229,14 @@ func unmarshalCoordinationProposal(actionType uint32, payload []byte) (
 	}
 
 	proposal, ok := map[WalletActionType]CoordinationProposal{
-		ActionNoop:                   &NoopProposal{},
-		ActionHeartbeat:              &HeartbeatProposal{},
-		ActionDepositSweep:           &DepositSweepProposal{},
-		ActionRedemption:             &RedemptionProposal{},
-		ActionMovingFunds:            &MovingFundsProposal{},
-		ActionMovedFundsSweep:        &MovedFundsSweepProposal{},
-		ActionReservationAnchor:      &ReservationAnchorProposal{},
-		ActionReservedRedemption:     &ReservedRedemptionProposal{},
-		ActionReservationReanchor:    &ReservationReanchorProposal{},
-		ActionReservationDissolution: &ReservationDissolutionProposal{},
+		ActionNoop:                &NoopProposal{},
+		ActionHeartbeat:           &HeartbeatProposal{},
+		ActionDepositSweep:        &DepositSweepProposal{},
+		ActionRedemption:          &RedemptionProposal{},
+		ActionMovingFunds:         &MovingFundsProposal{},
+		ActionMovedFundsSweep:     &MovedFundsSweepProposal{},
+		ActionReservationAnchor:   &ReservationAnchorProposal{},
+		ActionReservationReanchor: &ReservationReanchorProposal{},
 	}[parsedActionType]
 	if !ok {
 		return nil, fmt.Errorf(
@@ -492,5 +490,84 @@ func validateMemberIndex(protoIndex uint32) error {
 	if protoIndex > group.MaxMemberIndex {
 		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
 	}
+	return nil
+}
+
+func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
+	return proto.Marshal(
+		&pb.ReservationAnchorProposal{
+			DepositFundingTxHash:      rap.DepositFundingTxHash[:],
+			DepositFundingOutputIndex: rap.DepositFundingOutputIndex,
+			RequestNonce:              rap.RequestNonce,
+			AnchorTxFee:               rap.AnchorTxFee.Bytes(),
+		})
+}
+
+func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
+	pbMsg := pb.ReservationAnchorProposal{}
+	if err := proto.Unmarshal(data, &pbMsg); err != nil {
+		return fmt.Errorf("failed to unmarshal ReservationAnchorProposal: [%v]", err)
+	}
+
+	if len(pbMsg.AnchorTxFee) == 0 {
+		return fmt.Errorf("anchor transaction fee is required")
+	}
+	if pbMsg.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if len(pbMsg.DepositFundingTxHash) != 32 {
+		return fmt.Errorf(
+			"invalid deposit funding tx hash length: [%v]",
+			len(pbMsg.DepositFundingTxHash),
+		)
+	}
+
+	copy(rap.DepositFundingTxHash[:], pbMsg.DepositFundingTxHash)
+	rap.DepositFundingOutputIndex = pbMsg.DepositFundingOutputIndex
+	rap.RequestNonce = pbMsg.RequestNonce
+	rap.AnchorTxFee = new(big.Int).SetBytes(pbMsg.AnchorTxFee)
+
+	return nil
+}
+
+func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
+	return proto.Marshal(
+		&pb.ReservationReanchorProposal{
+			ReservationKey:            rrp.ReservationKey.Bytes(),
+			RequestNonce:              rrp.RequestNonce,
+			TargetWalletPublicKeyHash: append([]byte{}, rrp.TargetWalletPublicKeyHash[:]...),
+			ReanchorTxFee:             rrp.ReanchorTxFee.Bytes(),
+		})
+}
+
+func (rrp *ReservationReanchorProposal) Unmarshal(data []byte) error {
+	pbMsg := pb.ReservationReanchorProposal{}
+	if err := proto.Unmarshal(data, &pbMsg); err != nil {
+		return fmt.Errorf("failed to unmarshal ReservationReanchorProposal: [%v]", err)
+	}
+
+	if len(pbMsg.ReservationKey) == 0 {
+		return fmt.Errorf("reservation key is required")
+	}
+	if pbMsg.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if len(pbMsg.ReanchorTxFee) == 0 {
+		return fmt.Errorf("re-anchor transaction fee is required")
+	}
+	if len(pbMsg.TargetWalletPublicKeyHash) != 20 {
+		return fmt.Errorf(
+			"invalid target wallet public key hash length: [%v]",
+			len(pbMsg.TargetWalletPublicKeyHash),
+		)
+	}
+	if copy(rrp.TargetWalletPublicKeyHash[:], pbMsg.TargetWalletPublicKeyHash) == 0 || rrp.TargetWalletPublicKeyHash == [20]byte{} {
+		return fmt.Errorf("target wallet public key hash is required")
+	}
+
+	rrp.ReservationKey = new(big.Int).SetBytes(pbMsg.ReservationKey)
+	rrp.RequestNonce = pbMsg.RequestNonce
+	rrp.ReanchorTxFee = new(big.Int).SetBytes(pbMsg.ReanchorTxFee)
+
 	return nil
 }

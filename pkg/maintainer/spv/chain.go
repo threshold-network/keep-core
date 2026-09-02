@@ -4,6 +4,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -138,19 +139,6 @@ type Chain interface {
 	// currently custodied by the given wallet.
 	WalletReservations(walletPublicKeyHash [20]byte) ([]*big.Int, error)
 
-	// Reservations returns the on-chain reservation request record for the
-	// given reservation key. Mirrors the ReservationRouter.reservations
-	// view verbatim.
-	Reservations(reservationKey *big.Int) (*tbtc.ReservationRequest, error)
-
-	// ReservationActions returns the on-chain reservation action record
-	// for the given reservation key and request nonce. Mirrors the
-	// ReservationRouter.reservationActions view verbatim.
-	ReservationActions(
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) (*tbtc.ReservationActionRecord, error)
-
 	// IsReservedDeposit returns true if the given deposit was revealed
 	// with the reservation vault address and is therefore a reservation
 	// rather than a default deposit.
@@ -185,27 +173,6 @@ type Chain interface {
 	PastMovingFundsCommitmentSubmittedEvents(
 		filter *tbtc.MovingFundsCommitmentSubmittedEventFilter,
 	) ([]*tbtc.MovingFundsCommitmentSubmittedEvent, error)
-
-	// PastReservationAcceptedEvents fetches past ReservationAccepted events
-	// according to the provided filter or unfiltered if the filter is nil.
-	// Returned events are sorted by the block number in the ascending order.
-	PastReservationAcceptedEvents(
-		filter *tbtc.ReservationAcceptedEventFilter,
-	) ([]*tbtc.ReservationAcceptedEvent, error)
-
-	// PastReservationReanchoredEvents fetches past ReservationReanchored
-	// events according to the provided filter or unfiltered if the filter is
-	// nil. Returned events are sorted by the block number in the ascending order.
-	PastReservationReanchoredEvents(
-		filter *tbtc.ReservationReanchoredEventFilter,
-	) ([]*tbtc.ReservationReanchoredEvent, error)
-
-	// PastReservationActionTimedOutEvents fetches past ReservationActionTimedOut
-	// events according to the provided filter or unfiltered if the filter is nil.
-	// Returned events are sorted by the block number in the ascending order.
-	PastReservationActionTimedOutEvents(
-		filter *tbtc.ReservationActionTimedOutEventFilter,
-	) ([]*tbtc.ReservationActionTimedOutEvent, error)
 
 	// PastReservationAcceptanceRequestedEvents fetches past
 	// ReservationAcceptanceRequested events according to the provided filter

@@ -3,6 +3,7 @@ package tbtcpg
 import (
 	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/ipfs/go-log/v2"
 	"go.uber.org/zap"
@@ -16,12 +17,6 @@ import (
 // 30 days assuming 12 seconds per block.
 const ReservationReanchorLookBackBlocks = uint64(216000)
 
-// ErrReservationReanchorTxFeeTooHigh is returned when the estimated fee for a
-// reservation re-anchor transaction exceeds the on-chain maximum.
-var ErrReservationReanchorTxFeeTooHigh = fmt.Errorf(
-	"reservation re-anchor estimated fee exceeds the maximum fee",
-)
-
 // ReservationReanchorTask is a task that may produce a reservation re-anchor
 // proposal. The wallet enters this task when the source wallet has begun a
 // move to a new wallet (state StateMovingFunds) or when the source wallet's
@@ -30,8 +25,11 @@ var ErrReservationReanchorTxFeeTooHigh = fmt.Errorf(
 // task picks a destination wallet and assembles a 1-input-1-output re-anchor
 // transaction moving the anchor outpoint into that destination wallet.
 type ReservationReanchorTask struct {
-	chain    Chain
-	btcChain bitcoin.Chain
+	chain                   Chain
+	btcChain                bitcoin.Chain
+	targetWalletCache       [20]byte
+	targetWalletInitialized bool
+	targetWalletMutex       sync.RWMutex
 }
 
 // NewReservationReanchorTask returns a new ReservationReanchorTask bound to
@@ -163,10 +161,11 @@ func (rrt *ReservationReanchorTask) Run(
 			walletPublicKeyHash,
 		)
 		if err != nil {
-			return nil, false, fmt.Errorf(
-				"cannot pick re-anchor target wallet: [%w]",
+			taskLogger.Errorf(
+				"cannot pick re-anchor target wallet: [%v]",
 				err,
 			)
+			continue
 		}
 
 		proposal, err := rrt.ProposeReservationReanchor(
@@ -178,10 +177,11 @@ func (rrt *ReservationReanchorTask) Run(
 			0,
 		)
 		if err != nil {
-			return nil, false, fmt.Errorf(
-				"cannot prepare reservation re-anchor proposal: [%w]",
+			taskLogger.Errorf(
+				"cannot prepare reservation re-anchor proposal: [%v]",
 				err,
 			)
+			continue
 		}
 
 		return proposal, true, nil
@@ -287,6 +287,13 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 			err,
 		)
 	}
+	// The re-anchor request generation must be authorized on-chain.
+	if err := rrt.chain.RequestReservationReanchor(
+		reservationKey,
+		targetWalletPublicKeyHash,
+	); err != nil {
+		return nil, fmt.Errorf("cannot request reservation re-anchor: [%v]", err)
+	}
 
 	return proposal, nil
 }
@@ -302,6 +309,18 @@ func (rrt *ReservationReanchorTask) findTargetWallet(
 	taskLogger log.StandardLogger,
 	sourceWalletPublicKeyHash [20]byte,
 ) ([20]byte, error) {
+	rrt.targetWalletMutex.RLock()
+	if rrt.targetWalletInitialized {
+		cache := rrt.targetWalletCache
+		rrt.targetWalletMutex.RUnlock()
+
+		wallet, err := rrt.chain.GetWallet(cache)
+		if err == nil && wallet.State == tbtc.StateLive {
+			return cache, nil
+		}
+	} else {
+		rrt.targetWalletMutex.RUnlock()
+	}
 	blockCounter, err := rrt.chain.BlockCounter()
 	if err != nil {
 		return [20]byte{}, fmt.Errorf("failed to get block counter: [%v]", err)
@@ -344,6 +363,10 @@ func (rrt *ReservationReanchorTask) findTargetWallet(
 		}
 
 		if wallet.State == tbtc.StateLive {
+			rrt.targetWalletMutex.Lock()
+			rrt.targetWalletCache = walletPubKeyHash
+			rrt.targetWalletInitialized = true
+			rrt.targetWalletMutex.Unlock()
 			return walletPubKeyHash, nil
 		}
 	}
@@ -461,31 +484,10 @@ func estimateReservationReanchorFee(
 		AddPublicKeyHashInputs(1, true).
 		AddPublicKeyHashOutputs(1, true)
 
-	transactionSize, err := sizeEstimator.VirtualSize()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"cannot estimate transaction virtual size: [%v]",
-			err,
-		)
-	}
-
-	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
-	totalFee, err := feeEstimator.EstimateFee(transactionSize)
-	if err != nil {
-		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
-	}
-
-	if uint64(totalFee) > txMaxFee {
-		return 0, ErrReservationReanchorTxFeeTooHigh
-	}
-
-	// Enforce the safe minimum fee rate and buffer so a non-RBF
-	// reservation re-anchor transaction is never broadcast below the
-	// floor where it could get stuck and jam the wallet.
-	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, txMaxFee)
-	if err != nil {
-		return 0, err
-	}
-
-	return totalFee, nil
+	return estimateReservationFixedSizeTxFee(
+		btcChain,
+		sizeEstimator,
+		txMaxFee,
+		"reservation re-anchor estimated fee exceeds the maximum fee",
+	)
 }

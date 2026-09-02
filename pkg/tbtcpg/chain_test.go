@@ -71,7 +71,6 @@ type LocalChain struct {
 	reservationParametersSet              bool
 	reservationProposalValidations        map[[32]byte]bool
 	reservationReanchorRequestSubmissions []*reservationReanchorRequestSubmission
-	reservationReanchoredEventEmissions   []*tbtc.ReservationReanchoredEvent
 	reservationWalletKeys                 map[[20]byte][]*big.Int
 	liveWalletsCountValue                 uint32
 	liveWalletsCountSet                   bool
@@ -101,7 +100,6 @@ func NewLocalChain() *LocalChain {
 		reservationActions:                    make(map[string]*tbtc.ReservationAction),
 		reservationProposalValidations:        make(map[[32]byte]bool),
 		reservationReanchorRequestSubmissions: make([]*reservationReanchorRequestSubmission, 0),
-		reservationReanchoredEventEmissions:   make([]*tbtc.ReservationReanchoredEvent, 0),
 		reservationWalletKeys:                 make(map[[20]byte][]*big.Int),
 	}
 }
@@ -1054,7 +1052,20 @@ func (lc *LocalChain) SetLiveWalletsCount(count uint32) {
 }
 
 func (lc *LocalChain) ComputeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte {
-	panic("unsupported")
+	outputIndexBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(outputIndexBytes, mainUtxo.Outpoint.OutputIndex)
+
+	valueBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(valueBytes, uint64(mainUtxo.Value))
+
+	return crypto.Keccak256Hash(
+		append(
+			append(
+				mainUtxo.Outpoint.TransactionHash[:],
+				outputIndexBytes...,
+			), valueBytes...,
+		),
+	)
 }
 
 func (lc *LocalChain) ComputeMovingFundsCommitmentHash(targetWallets [][20]byte) [32]byte {
@@ -1621,39 +1632,8 @@ func (lc *LocalChain) SetWalletReservations(
 	lc.reservationWalletKeys[walletPublicKeyHash] = copy
 }
 
-// ReservationByAnchorUtxo returns an empty reservation key (no lookup).
-func (lc *LocalChain) ReservationByAnchorUtxo(
-	anchorTxHash [32]byte,
-	anchorTxOutputIndex uint32,
-) (*big.Int, error) {
-	lc.mutex.Lock()
-	defer lc.mutex.Unlock()
-
-	_ = anchorTxHash
-	_ = anchorTxOutputIndex
-	return new(big.Int), nil
-}
-
-// PendingReservedDeposits reports zero pending reserved deposits.
-func (lc *LocalChain) PendingReservedDeposits() (uint64, error) {
-	return 0, nil
-}
-
 // Reservations is a stub mirroring the Bridge view. Tests that need this
 // data should populate it explicitly via custom extensions.
-func (lc *LocalChain) Reservations(
-	reservationKey *big.Int,
-) (*tbtc.ReservationRequest, error) {
-	return nil, fmt.Errorf("unsupported")
-}
-
-// ReservationActions mirrors the Bridge view.
-func (lc *LocalChain) ReservationActions(
-	reservationKey *big.Int,
-	requestNonce uint64,
-) (*tbtc.ReservationActionRecord, error) {
-	return nil, fmt.Errorf("unsupported")
-}
 
 // ActiveReservationsCount reports zero active reservations by default.
 func (lc *LocalChain) ActiveReservationsCount() (
@@ -1675,13 +1655,6 @@ func (lc *LocalChain) IsReservedDeposit(
 func (lc *LocalChain) PastReservationAcceptanceRequestedEvents(
 	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
 ) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
-	return nil, nil
-}
-
-// PastReservationAcceptedEvents returns no events by default.
-func (lc *LocalChain) PastReservationAcceptedEvents(
-	filter *tbtc.ReservationAcceptedEventFilter,
-) ([]*tbtc.ReservationAcceptedEvent, error) {
 	return nil, nil
 }
 
@@ -1734,22 +1707,4 @@ func (lc *LocalChain) GetReservationReanchorRequestSubmissions() []*reservationR
 		}
 	}
 	return copy
-}
-
-// PastReservationReanchoredEvents returns the recorded re-anchor settlement
-// events that match the filter.
-func (lc *LocalChain) PastReservationReanchoredEvents(
-	filter *tbtc.ReservationReanchoredEventFilter,
-) ([]*tbtc.ReservationReanchoredEvent, error) {
-	lc.mutex.Lock()
-	defer lc.mutex.Unlock()
-
-	if len(lc.reservationReanchoredEventEmissions) == 0 {
-		return nil, nil
-	}
-	results := make([]*tbtc.ReservationReanchoredEvent, 0, len(lc.reservationReanchoredEventEmissions))
-	for _, ev := range lc.reservationReanchoredEventEmissions {
-		results = append(results, ev)
-	}
-	return results, nil
 }

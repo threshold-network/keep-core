@@ -10,9 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/internal/pb"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
+
+	"github.com/keep-network/keep-core/pkg/internal/pb"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -20,7 +23,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -66,6 +68,10 @@ const (
 	// upgrade to a binary containing this constant before the activation block
 	// is reached.
 	DepositSweepEveryWindowActivationBlock = uint64(24559289)
+	// ReservationsActivationBlock is the Ethereum block height at which
+	// reservation actions (anchor, re-anchor) become available in the
+	// coordination checklist.
+	ReservationsActivationBlock = uint64(24559289)
 )
 
 // errCoordinationExecutorBusy is an error returned when the coordination
@@ -304,10 +310,6 @@ type coordinationExecutor struct {
 
 	waitForBlockFn waitForBlockFn
 
-	// reservationsEnabled mirrors config.Reservations.Enabled. Determines
-	// whether the actions checklist includes the reservation action types.
-	reservationsEnabled bool
-
 	// metricsRecorder is optional and used for recording performance metrics
 	metricsRecorder interface {
 		IncrementCounter(name string, value float64)
@@ -328,7 +330,6 @@ func newCoordinationExecutor(
 	membershipValidator *group.MembershipValidator,
 	protocolLatch *generator.ProtocolLatch,
 	waitForBlockFn waitForBlockFn,
-	reservationsEnabled bool,
 ) *coordinationExecutor {
 	return &coordinationExecutor{
 		lock:                semaphore.NewWeighted(1),
@@ -341,7 +342,6 @@ func newCoordinationExecutor(
 		membershipValidator: membershipValidator,
 		protocolLatch:       protocolLatch,
 		waitForBlockFn:      waitForBlockFn,
-		reservationsEnabled: reservationsEnabled,
 	}
 }
 
@@ -647,7 +647,8 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// checklist. Frequency-gated like DepositSweep/MovingFunds below the
 	// activation block: reservation acceptance/re-anchor windows are not
 	// as time-critical as redemption.
-	if ce.reservationsEnabled && windowIndex%frequencyWindows == 0 {
+	if coordinationBlock >= ReservationsActivationBlock &&
+		windowIndex%frequencyWindows == 0 {
 		actions = append(actions, ActionReservationAnchor)
 		actions = append(actions, ActionReservationReanchor)
 	}

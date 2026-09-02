@@ -29,37 +29,17 @@ const reservationAcceptanceActionNonce uint64 = 1
 // flips the deposit's bookkeeping when the wallet never shows up.
 type ReservationStaleDepositWatcher struct {
 	spvChain Chain
-	notifier StaleReservedDepositNotifier
-}
-
-// StaleReservedDepositNotifier is the Bridge-facing contract for releasing a
-// reserved deposit back to the default sweep path. It mirrors
-// `Chain.NotifyStaleReservedDeposit` but is interface-typed to enable
-// in-memory recorders during tests.
-type StaleReservedDepositNotifier interface {
-	NotifyStaleReservedDeposit(depositKey *big.Int) error
-}
-
-// StaleReservedDepositNotifierFunc adapts a function to the
-// StaleReservedDepositNotifier interface.
-type StaleReservedDepositNotifierFunc func(depositKey *big.Int) error
-
-// NotifyStaleReservedDeposit forwards the call to the wrapped function.
-func (f StaleReservedDepositNotifierFunc) NotifyStaleReservedDeposit(
-	depositKey *big.Int,
-) error {
-	return f(depositKey)
+	notified map[string]struct{}
 }
 
 // NewReservationStaleDepositWatcher constructs a stale-deposit watcher
-// bound to the given chain and notifier.
+// bound to the given chain.
 func NewReservationStaleDepositWatcher(
 	spvChain Chain,
-	notifier StaleReservedDepositNotifier,
 ) *ReservationStaleDepositWatcher {
 	return &ReservationStaleDepositWatcher{
 		spvChain: spvChain,
-		notifier: notifier,
+		notified: make(map[string]struct{}),
 	}
 }
 
@@ -87,9 +67,6 @@ func (rsdw *ReservationStaleDepositWatcher) OnDepositRevealed(
 	depositKey *big.Int,
 	now uint32,
 ) error {
-	if rsdw.notifier == nil {
-		return fmt.Errorf("stale-deposit watcher requires a non-nil notifier")
-	}
 	if depositKey == nil {
 		return fmt.Errorf("deposit key must not be nil")
 	}
@@ -130,8 +107,8 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	depositKey *big.Int,
 	now uint32,
 ) error {
-	if rsdw.notifier == nil {
-		return fmt.Errorf("stale-deposit watcher requires a non-nil notifier")
+	if _, ok := rsdw.notified[depositKey.String()]; ok {
+		return nil
 	}
 	if depositKey == nil {
 		return fmt.Errorf("deposit key must not be nil")
@@ -210,45 +187,110 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 		reservationKey,
 		reservationAcceptanceActionNonce,
 	)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to load acceptance action for reservation [%v]: [%v]",
-			reservationKey,
-			err,
+
+	var timeoutAt uint32
+	// A raw contract-mapping read for a nonce that was never requested
+	// returns no error, just the zero-value struct (State ==
+	// ReservationActionStateUnknown) - a genuine chain RPC failure is the
+	// only case err is non-nil. Both mean "no action generation exists".
+	if err != nil || action.State == tbtc.ReservationActionStateUnknown {
+		// No acceptance action generation exists yet on-chain for this
+		// reservation (ReservationActionStateUnknown / not found). Derive
+		// the staleness deadline from the deposit's own reveal timestamp
+		// instead of the (nonexistent) action's TimeoutAt: find the
+		// DepositRevealed event for this deposit key among the wallet's
+		// events, then load the deposit request's RevealedAt.
+		events, eventsErr := rsdw.spvChain.PastDepositRevealedEvents(
+			&tbtc.DepositRevealedEventFilter{
+				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+			},
 		)
+		if eventsErr != nil {
+			return fmt.Errorf(
+				"failed to fetch deposit revealed events for staleness "+
+					"deadline derivation: [%v]",
+				eventsErr,
+			)
+		}
+
+		var matchingEvent *tbtc.DepositRevealedEvent
+		for _, event := range events {
+			if rsdw.spvChain.BuildDepositKey(
+				event.FundingTxHash,
+				event.FundingOutputIndex,
+			).Cmp(depositKey) == 0 {
+				matchingEvent = event
+				break
+			}
+		}
+		if matchingEvent == nil {
+			return fmt.Errorf(
+				"no matching DepositRevealed event for deposit [%v]",
+				depositKey,
+			)
+		}
+
+		depositRequest, found, requestErr := rsdw.spvChain.GetDepositRequest(
+			matchingEvent.FundingTxHash,
+			matchingEvent.FundingOutputIndex,
+		)
+		if requestErr != nil {
+			return fmt.Errorf(
+				"failed to load deposit request for staleness deadline "+
+					"derivation: [%v]",
+				requestErr,
+			)
+		}
+		if !found {
+			return fmt.Errorf(
+				"deposit request not found for deposit [%v]",
+				depositKey,
+			)
+		}
+
+		params, paramsErr := rsdw.spvChain.ReservationParameters()
+		if paramsErr != nil {
+			return fmt.Errorf(
+				"failed to load reservation parameters for staleness "+
+					"deadline derivation: [%v]",
+				paramsErr,
+			)
+		}
+		timeoutAt = uint32(depositRequest.RevealedAt.Unix()) +
+			params.ReservationActionTimeout
+	} else {
+		if action.State != tbtc.ReservationActionStatePending {
+			logger.Debugf(
+				"reservation [%v] acceptance action state=%s; "+
+					"deposit [%v] is no longer pending-stale; skipping",
+				reservationKey,
+				action.State,
+				depositKey,
+			)
+			return nil
+		}
+		timeoutAt = action.TimeoutAt
 	}
 
-	// A non-pending action means the acceptance already progressed past the
-	// timeout-eligible window. Skip without notifying.
-	if action.State != tbtc.ReservationActionStatePending {
-		logger.Debugf(
-			"reservation [%v] acceptance action state=%s; "+
-				"deposit [%v] is no longer pending-stale; skipping",
-			reservationKey,
-			action.State,
-			depositKey,
-		)
-		return nil
-	}
-
-	if now <= action.TimeoutAt {
+	if now <= timeoutAt {
 		logger.Debugf(
 			"reserved deposit [%v] action timeout at [%d] not yet reached "+
 				"(now=%d); deferring stale notification",
 			depositKey,
-			action.TimeoutAt,
+			timeoutAt,
 			now,
 		)
 		return nil
 	}
 
-	if err := rsdw.notifier.NotifyStaleReservedDeposit(depositKey); err != nil {
+	if err := rsdw.spvChain.NotifyStaleReservedDeposit(depositKey); err != nil {
 		return fmt.Errorf(
 			"failed to notify stale reserved deposit [%v]: [%v]",
 			depositKey,
 			err,
 		)
 	}
+	rsdw.notified[depositKey.String()] = struct{}{}
 
 	logger.Infof(
 		"notified stale reserved deposit [%v] "+
@@ -256,7 +298,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 		depositKey,
 		walletPublicKeyHash,
 		wallet.State,
-		action.TimeoutAt,
+		timeoutAt,
 	)
 
 	return nil

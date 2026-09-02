@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -105,9 +106,13 @@ type localChain struct {
 	// Error-injection fields for the reservation watcher chain-error
 	// passthrough tests: nil (the default) means the corresponding method
 	// falls through to its normal, table-driven behavior.
-	walletReservationsErr    error
-	isReservedDepositErr     error
-	reservedDepositWalletErr error
+	walletReservationsErr             error
+	isReservedDepositErr              error
+	reservedDepositWalletErr          error
+	notifyReservationActionTimeoutErr error
+	notifyStaleReservedDepositErr     error
+	pastNewWalletRegisteredEventsErr  error
+	notifyReservationStrandedErrByKey map[string]error
 
 	// Wallet registration and pending-action-request event state for the
 	// watcher dispatch and reservation proof loop tests.
@@ -840,7 +845,7 @@ func (lc *localChain) NotifyReservationActionTimeout(
 		},
 	)
 
-	return nil
+	return lc.notifyReservationActionTimeoutErr
 }
 
 // getSubmittedReservationActionTimeouts returns the recorded action-timeout
@@ -866,7 +871,7 @@ func (lc *localChain) NotifyStaleReservedDeposit(depositKey *big.Int) error {
 		depositKey,
 	)
 
-	return nil
+	return lc.notifyStaleReservedDepositErr
 }
 
 // getSubmittedStaleReservedDeposits returns the recorded stale-deposit
@@ -886,6 +891,10 @@ func (lc *localChain) getSubmittedStaleReservedDeposits() []*big.Int {
 func (lc *localChain) NotifyReservationStranded(reservationKey *big.Int) error {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
+
+	if err, ok := lc.notifyReservationStrandedErrByKey[reservationKey.String()]; ok {
+		return err
+	}
 
 	lc.submittedStrandedKeys = append(
 		lc.submittedStrandedKeys,
@@ -1048,21 +1057,6 @@ func (lc *localChain) setWalletReservations(
 // Reservations is a stub matching the reservation additions on the
 // production Chain interface. The reservation-side builder replaces this
 // stub with the production contract call; the watchers do not need it.
-func (lc *localChain) Reservations(
-	reservationKey *big.Int,
-) (*tbtc.ReservationRequest, error) {
-	panic("unsupported")
-}
-
-// ReservationActions is a stub matching the reservation additions on the
-// production Chain interface. The watchers use GetReservationAction
-// instead; this stub exists only to satisfy the interface.
-func (lc *localChain) ReservationActions(
-	reservationKey *big.Int,
-	requestNonce uint64,
-) (*tbtc.ReservationActionRecord, error) {
-	panic("unsupported")
-}
 
 // IsReservedDeposit returns whether the deposit was previously booked via
 // setReservedDeposit.
@@ -1116,24 +1110,6 @@ func (lc *localChain) setReservedDeposit(
 		walletPublicKeyHash: walletPublicKeyHash,
 		isReserved:          isReserved,
 	}
-}
-
-func (lc *localChain) PastReservationAcceptedEvents(
-	filter *tbtc.ReservationAcceptedEventFilter,
-) ([]*tbtc.ReservationAcceptedEvent, error) {
-	return nil, nil
-}
-
-func (lc *localChain) PastReservationReanchoredEvents(
-	filter *tbtc.ReservationReanchoredEventFilter,
-) ([]*tbtc.ReservationReanchoredEvent, error) {
-	return nil, nil
-}
-
-func (lc *localChain) PastReservationActionTimedOutEvents(
-	filter *tbtc.ReservationActionTimedOutEventFilter,
-) ([]*tbtc.ReservationActionTimedOutEvent, error) {
-	return nil, nil
 }
 
 func (lc *localChain) PastReservationAcceptanceRequestedEvents(
@@ -1224,6 +1200,10 @@ func (lc *localChain) PastNewWalletRegisteredEvents(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
+	if lc.pastNewWalletRegisteredEventsErr != nil {
+		return nil, lc.pastNewWalletRegisteredEventsErr
+	}
+
 	var result []*tbtc.NewWalletRegisteredEvent
 	for _, event := range lc.newWalletRegisteredEvents {
 		if filter != nil && event.BlockNumber < filter.StartBlock {
@@ -1254,6 +1234,13 @@ func (lc *localChain) addNewWalletRegisteredEvent(
 	defer lc.mutex.Unlock()
 
 	lc.newWalletRegisteredEvents = append(lc.newWalletRegisteredEvents, event)
+}
+
+func (lc *localChain) setPastNewWalletRegisteredEventsErr(err error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.pastNewWalletRegisteredEventsErr = err
 }
 
 // BuildDepositKey is a test-double implementation independent of the

@@ -31,6 +31,14 @@ const ReservationAcceptanceLookBackBlocks = uint64(216000)
 // RequestNonce == 0, which is the on-chain confirmation of this convention.
 const reservationAcceptanceRequestNonce uint64 = 1
 
+// pendingCandidate holds a candidate deposit event and its
+// already-fetched request data.
+type pendingCandidate struct {
+	Event                 *tbtc.DepositRevealedEvent
+	DepositRequest        *tbtc.DepositChainRequest
+	ReservationParameters *tbtc.ReservationParameters
+}
+
 // ReservationAcceptanceTask is a task that may produce a reservation
 // acceptance (anchor) proposal. It scans the chain for reserved deposits
 // revealed to the operator's wallet, validates the wallet's eligibility
@@ -59,7 +67,7 @@ type ReservationAcceptanceTask struct {
 	// must still be reconsidered on a later call even though its block
 	// falls before the cursor above; keeping it here is what makes the
 	// cursor safe to advance without losing it.
-	pendingCandidates map[[20]byte][]*tbtc.DepositRevealedEvent
+	pendingCandidates map[[20]byte][]*pendingCandidate
 }
 
 // NewReservationAcceptanceTask constructs a ReservationAcceptanceTask.
@@ -71,7 +79,7 @@ func NewReservationAcceptanceTask(
 		chain:             chain,
 		btcChain:          btcChain,
 		lastScannedBlock:  make(map[[20]byte]uint64),
-		pendingCandidates: make(map[[20]byte][]*tbtc.DepositRevealedEvent),
+		pendingCandidates: make(map[[20]byte][]*pendingCandidate),
 	}
 }
 
@@ -106,7 +114,7 @@ func (rat *ReservationAcceptanceTask) Run(request *tbtc.CoordinationProposalRequ
 		return nil, false, nil
 	}
 
-	proposal, err := rat.proposeReservationAcceptance(
+	proposal, shouldExecute, err := rat.proposeReservationAcceptance(
 		taskLogger,
 		walletPublicKeyHash,
 		candidate,
@@ -118,7 +126,7 @@ func (rat *ReservationAcceptanceTask) Run(request *tbtc.CoordinationProposalRequ
 		)
 	}
 
-	return proposal, true, nil
+	return proposal, shouldExecute, nil
 }
 
 // ActionType returns the wallet action type this task proposes.
@@ -138,17 +146,6 @@ type reservationAcceptanceCandidate struct {
 
 // findReservationAcceptanceCandidate returns the first reserved deposit
 // that the operator's wallet may accept, or nil when none qualifies.
-//
-// Discovery is bounded and incremental: PastDepositRevealedEvents is only
-// queried for blocks since this wallet's last scan (falling back to
-// ReservationAcceptanceLookBackBlocks on the first call), and every
-// vault-targeting event found is cached in rat.pendingCandidates so a
-// deposit that isn't mature yet, or is briefly blocked by a full cap, is
-// still reconsidered on a later call without re-fetching its (already
-// past) block range. The vault check runs against event.Vault - already
-// present on the DepositRevealedEvent for free - before either
-// IsReservedDeposit or GetDepositRequest, so the two RPCs are skipped
-// entirely for the common case of a deposit that isn't a reservation.
 func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	taskLogger log.StandardLogger,
 	walletPublicKeyHash [20]byte,
@@ -166,8 +163,33 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	}
 	reservationVault := reservationParameters.ReservationVault
 	if reservationVault == "" {
-		// Reservation subsystem not active; no acceptance candidates.
 		taskLogger.Info("reservation vault not configured")
+		return nil, nil
+	}
+
+	blockCounter, err := rat.chain.BlockCounter()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block counter: [%w]", err)
+	}
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get current block: [%w]",
+			err,
+		)
+	}
+
+	candidateEvents, err := rat.scanForCandidateEvents(
+		walletPublicKeyHash,
+		currentBlock,
+		reservationVault,
+		reservationParameters,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(candidateEvents) == 0 {
 		return nil, nil
 	}
 
@@ -209,27 +231,6 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		)
 	}
 
-	blockCounter, err := rat.chain.BlockCounter()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get block counter: [%w]", err)
-	}
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get current block: [%w]",
-			err,
-		)
-	}
-
-	candidateEvents, err := rat.scanForCandidateEvents(
-		walletPublicKeyHash,
-		currentBlock,
-		reservationVault,
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	depositMinAgeSeconds, err := rat.chain.GetDepositMinAge()
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -243,51 +244,54 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 
 	var (
 		found           *reservationAcceptanceCandidate
-		stillUnresolved []*tbtc.DepositRevealedEvent
+		stillUnresolved []*pendingCandidate
 	)
 
-	for _, event := range candidateEvents {
+	for _, p := range candidateEvents {
+		if found != nil {
+			stillUnresolved = append(stillUnresolved, p)
+			continue
+		}
+		event := p.Event
+
 		depositKey := rat.chain.BuildDepositKey(
 			event.FundingTxHash,
 			event.FundingOutputIndex,
 		)
 
-		isReserved, err := rat.chain.IsReservedDeposit(depositKey)
-		if err != nil {
-			taskLogger.Errorf(
-				"failed to check if deposit [%v] is reserved: [%v]",
-				depositKey,
-				err,
+		var depositRequest *tbtc.DepositChainRequest
+		if p.DepositRequest != nil {
+			depositRequest = p.DepositRequest
+		} else {
+			var foundRequest bool
+			var err error
+			depositRequest, foundRequest, err = rat.chain.GetDepositRequest(
+				event.FundingTxHash,
+				event.FundingOutputIndex,
 			)
-			stillUnresolved = append(stillUnresolved, event)
-			continue
-		}
-		if !isReserved {
-			taskLogger.Infof("not reserved deposit [%v]", depositKey)
-			// A vault-targeting reveal that the Bridge never marked
-			// reserved will never become reserved later; drop it.
-			continue
+			if err != nil {
+				taskLogger.Errorf(
+					"failed to get deposit request for [%v]: [%v]",
+					depositKey,
+					err,
+				)
+				stillUnresolved = append(stillUnresolved, p)
+				continue
+			}
+			if !foundRequest {
+				taskLogger.Warnf(
+					"no deposit request for reserved deposit [%v]",
+					depositKey,
+				)
+				stillUnresolved = append(stillUnresolved, p)
+				continue
+			}
+			p.DepositRequest = depositRequest
 		}
 
-		depositRequest, foundRequest, err := rat.chain.GetDepositRequest(
-			event.FundingTxHash,
-			event.FundingOutputIndex,
-		)
-		if err != nil {
-			taskLogger.Errorf(
-				"failed to get deposit request for [%v]: [%v]",
-				depositKey,
-				err,
-			)
-			stillUnresolved = append(stillUnresolved, event)
-			continue
-		}
-		if !foundRequest {
-			taskLogger.Warnf(
-				"no deposit request for reserved deposit [%v]",
-				depositKey,
-			)
-			stillUnresolved = append(stillUnresolved, event)
+		// #6: Permanently drop candidate if amount is below minimum.
+		if depositRequest.Amount < p.ReservationParameters.ReservationMinAmount {
+			taskLogger.Infof("deposit [%v] amount [%d] below minimum; dropping", depositKey, depositRequest.Amount)
 			continue
 		}
 
@@ -298,7 +302,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 				depositKey,
 				now, matureAt,
 			)
-			stillUnresolved = append(stillUnresolved, event)
+			stillUnresolved = append(stillUnresolved, p)
 			continue
 		}
 
@@ -307,14 +311,6 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 				"reserved deposit [%v] is already swept",
 				depositKey,
 			)
-			// Already settled one way or another; never a candidate again.
-			continue
-		}
-
-		if found != nil {
-			// Already have this call's candidate; keep the rest pending
-			// for the next call rather than dropping or re-fetching them.
-			stillUnresolved = append(stillUnresolved, event)
 			continue
 		}
 
@@ -336,8 +332,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			reservationParameters,
 		) {
 			taskLogger.Infof("not eligible: [%v]", depositKey)
-			// Caps/state can free up later; keep it pending.
-			stillUnresolved = append(stillUnresolved, event)
+			stillUnresolved = append(stillUnresolved, p)
 			continue
 		}
 
@@ -348,7 +343,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 				depositKey,
 				err,
 			)
-			stillUnresolved = append(stillUnresolved, event)
+			stillUnresolved = append(stillUnresolved, p)
 			continue
 		}
 
@@ -362,7 +357,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 				depositKey,
 				err,
 			)
-			stillUnresolved = append(stillUnresolved, event)
+			stillUnresolved = append(stillUnresolved, p)
 			continue
 		}
 		if confirmations < tbtc.DepositSweepRequiredFundingTxConfirmations {
@@ -372,7 +367,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 				confirmations,
 				tbtc.DepositSweepRequiredFundingTxConfirmations,
 			)
-			stillUnresolved = append(stillUnresolved, event)
+			stillUnresolved = append(stillUnresolved, p)
 			continue
 		}
 
@@ -400,33 +395,23 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		)
 
 		found = candidate
-		// Keep the resolved-to-a-proposal event out of the pending set:
-		// if this proposal round doesn't settle, the deposit is still
-		// IsReservedDeposit and not yet SweptAt, so the next call's fresh
-		// pending set naturally would not include it either - it can only
-		// be rediscovered by staying in stillUnresolved. Re-add it so a
-		// failed round doesn't lose the candidate.
-		stillUnresolved = append(stillUnresolved, event)
+		stillUnresolved = append(stillUnresolved, p)
 	}
 
 	rat.scanState.Lock()
 	rat.pendingCandidates[walletPublicKeyHash] = stillUnresolved
+	rat.lastScannedBlock[walletPublicKeyHash] = currentBlock
 	rat.scanState.Unlock()
 
 	return found, nil
 }
 
-// scanForCandidateEvents returns every reservation-vault-targeting
-// DepositRevealed event known for walletPublicKeyHash: the wallet's cached
-// pending candidates from previous calls, plus any newly revealed events
-// since the last scan. It also advances the wallet's scan cursor to
-// currentBlock and merges the new matches into rat.pendingCandidates so a
-// later call resumes from here instead of rescanning.
 func (rat *ReservationAcceptanceTask) scanForCandidateEvents(
 	walletPublicKeyHash [20]byte,
 	currentBlock uint64,
 	reservationVault chain.Address,
-) ([]*tbtc.DepositRevealedEvent, error) {
+	reservationParameters *tbtc.ReservationParameters,
+) ([]*pendingCandidate, error) {
 	rat.scanState.Lock()
 	lastScanned := rat.lastScannedBlock[walletPublicKeyHash]
 	pending := rat.pendingCandidates[walletPublicKeyHash]
@@ -439,9 +424,9 @@ func (rat *ReservationAcceptanceTask) scanForCandidateEvents(
 			startBlock = currentBlock - ReservationAcceptanceLookBackBlocks
 		}
 	}
-
 	filter := &tbtc.DepositRevealedEventFilter{
 		StartBlock:          startBlock,
+		EndBlock:            &currentBlock,
 		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
 	}
 
@@ -452,27 +437,23 @@ func (rat *ReservationAcceptanceTask) scanForCandidateEvents(
 			err,
 		)
 	}
-
-	candidates := pending
+	candidates := make([]*pendingCandidate, 0, len(pending)+len(revealedEvents))
+	for _, p := range pending {
+		candidates = append(candidates, p)
+	}
 	for _, event := range revealedEvents {
 		if !depositTargetsReservationVault(event.Vault, reservationVault) {
 			continue
 		}
-		candidates = append(candidates, event)
+		candidates = append(candidates, &pendingCandidate{
+			Event:                 event,
+			ReservationParameters: reservationParameters,
+		})
 	}
-
-	rat.scanState.Lock()
-	rat.lastScannedBlock[walletPublicKeyHash] = currentBlock
-	rat.scanState.Unlock()
 
 	return candidates, nil
 }
 
-// checkReservationAcceptanceEligibility returns true iff the wallet may
-// accept a new reserved deposit given the current cap snapshot. The
-// predicate is intentionally strict: a single failing rule rejects the
-// candidate so the wallet never publishes a proposal that the Bridge would
-// reject.
 func (rat *ReservationAcceptanceTask) checkReservationAcceptanceEligibility(
 	taskLogger log.StandardLogger,
 	walletPublicKeyHash [20]byte,
@@ -501,7 +482,8 @@ func (rat *ReservationAcceptanceTask) checkReservationAcceptanceEligibility(
 		return false
 	}
 
-	if walletReservationsCount >= reservationParameters.MaxReservationsPerWallet {
+	if reservationParameters.MaxReservationsPerWallet > 0 &&
+		walletReservationsCount >= reservationParameters.MaxReservationsPerWallet {
 		taskLogger.Infof(
 			"wallet reservations count [%d] already at max [%d]",
 			walletReservationsCount,
@@ -570,15 +552,13 @@ func (rat *ReservationAcceptanceTask) checkReservationAcceptanceEligibility(
 	return true
 }
 
-// proposeReservationAcceptance assembles the anchor transaction for the
-// candidate reserved deposit and returns the on-chain proposal.
 func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 	taskLogger log.StandardLogger,
 	walletPublicKeyHash [20]byte,
 	candidate *reservationAcceptanceCandidate,
-) (*tbtc.ReservationAnchorProposal, error) {
+) (*tbtc.ReservationAnchorProposal, bool, error) {
 	if candidate == nil || candidate.Deposit == nil {
-		return nil, fmt.Errorf("candidate is required")
+		return nil, false, fmt.Errorf("candidate is required")
 	}
 
 	taskLogger.Infof("preparing a reservation acceptance proposal")
@@ -588,7 +568,7 @@ func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 		candidate.TxMaxFee,
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"cannot estimate reservation acceptance transaction fee: [%v]",
 			err,
 		)
@@ -596,40 +576,37 @@ func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 
 	anchorValue := candidate.Deposit.Utxo.Value - anchorFee
 	if anchorValue <= 0 {
-		return nil, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"deposit value [%d] does not cover anchor fee [%d]",
 			candidate.Deposit.Utxo.Value,
 			anchorFee,
 		)
 	}
 
-	// ReservationParameters.ReservationMinAmount documents itself as "the
-	// minimal anchor output amount", i.e. the net value after the anchor
-	// fee - not the gross deposit value checked cheaply during eligibility
-	// filtering. The fee is only known here, once estimated, so this is the
-	// authoritative gate; the eligibility-time gross check is a valid but
-	// non-authoritative early filter (gross < min implies net < min too).
 	if candidate.ReservationParameters != nil &&
 		uint64(anchorValue) < candidate.ReservationParameters.ReservationMinAmount {
-		return nil, fmt.Errorf(
-			"anchor value [%d] (deposit [%d] minus fee [%d]) is below "+
-				"the reservation minimum [%d]",
-			anchorValue,
-			candidate.Deposit.Utxo.Value,
-			anchorFee,
-			candidate.ReservationParameters.ReservationMinAmount,
-		)
+		return nil, false, nil
 	}
 
 	taskLogger.Infof("anchor transaction fee: [%d]", anchorFee)
 
-	if _, err := buildReservationAnchorTransaction(
+	reservationKey := rat.chain.BuildDepositKey(
+		candidate.Deposit.Utxo.Outpoint.TransactionHash,
+		candidate.Deposit.Utxo.Outpoint.OutputIndex,
+	)
+
+	feeBoundAction := &tbtc.ReservationAction{
+		TxMaxFee: candidate.TxMaxFee,
+	}
+
+	if _, err := tbtc.AssembleReservationAnchorTransaction(
 		rat.btcChain,
 		candidate.Deposit,
 		walletPublicKeyHash,
+		feeBoundAction,
 		anchorFee,
 	); err != nil {
-		return nil, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"cannot assemble reservation anchor transaction: [%v]",
 			err,
 		)
@@ -655,73 +632,30 @@ func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 			FundingTx: candidate.FundingTx,
 		},
 	); err != nil {
-		return nil, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"failed to verify reservation anchor proposal: %v",
 			err,
 		)
 	}
 
-	return proposal, nil
-}
-
-// buildReservationAnchorTransaction constructs the unsigned reservation
-// anchor transaction: a 1-input-1-output spend of the reserved deposit
-// into a fresh output controlled by the given wallet. Mirrors the private
-// helper in pkg/tbtc/reservation.go; the tbtcpg package cannot call the
-// helper directly because it lives in a different package, so the assembly
-// logic is duplicated here. Any change to the anchor transaction shape
-// must be applied to both sites.
-func buildReservationAnchorTransaction(
-	bitcoinChain bitcoin.Chain,
-	deposit *tbtc.Deposit,
-	walletPublicKeyHash [20]byte,
-	fee int64,
-) (*bitcoin.TransactionBuilder, error) {
-	if deposit == nil {
-		return nil, fmt.Errorf("deposit is required")
-	}
-
-	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
-
-	depositScript, err := deposit.Script()
+	reservation, err := rat.chain.GetReservation(reservationKey)
 	if err != nil {
-		return nil, fmt.Errorf("cannot get deposit script: [%v]", err)
+		taskLogger.Errorf("cannot get reservation [0x%x]: [%v]", reservationKey, err)
+	} else if hasPendingAction(reservationKey, reservation, rat.chain, taskLogger) {
+		taskLogger.Infof("reservation [0x%x] has pending action, skipping", reservationKey)
+		return nil, false, nil
 	}
 
-	err = builder.AddScriptHashInput(deposit.Utxo, depositScript)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot add input pointing to deposit UTXO: [%v]",
-			err,
-		)
-	}
-
-	anchorValue := deposit.Utxo.Value - fee
-	if anchorValue <= 0 {
-		return nil, fmt.Errorf(
-			"transaction fee exceeds the deposit value",
-		)
-	}
-
-	anchorScript, err := bitcoin.PayToWitnessPublicKeyHash(
+	if err := rat.chain.RequestReservationAcceptance(
+		reservationKey,
 		walletPublicKeyHash,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("cannot compute anchor script: [%v]", err)
+	); err != nil {
+		return nil, false, fmt.Errorf("cannot request reservation acceptance: [%v]", err)
 	}
 
-	builder.AddOutput(&bitcoin.TransactionOutput{
-		Value:           anchorValue,
-		PublicKeyScript: anchorScript,
-	})
-
-	return builder, nil
+	return proposal, true, nil
 }
 
-// estimateReservationAcceptanceFee estimates the fee for a reservation
-// acceptance (anchor) transaction. The transaction has one P2WSH deposit
-// input and one P2WPKH output, so its virtual size is fixed for any single
-// acceptance. Mirrors ReservationReanchorTask's estimateReservationReanchorFee.
 func estimateReservationAcceptanceFee(
 	btcChain bitcoin.Chain,
 	txMaxFee uint64,
@@ -730,42 +664,14 @@ func estimateReservationAcceptanceFee(
 		AddScriptHashInputs(1, depositScriptByteSize, true).
 		AddPublicKeyHashOutputs(1, true)
 
-	transactionSize, err := sizeEstimator.VirtualSize()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"cannot estimate transaction virtual size: [%v]",
-			err,
-		)
-	}
-
-	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
-	totalFee, err := feeEstimator.EstimateFee(transactionSize)
-	if err != nil {
-		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
-	}
-
-	if uint64(totalFee) > txMaxFee {
-		return 0, fmt.Errorf(
-			"estimated fee [%d] exceeds the configured max [%d]",
-			totalFee,
-			txMaxFee,
-		)
-	}
-
-	// Enforce the safe minimum fee rate and buffer so a non-RBF reservation
-	// acceptance transaction is never broadcast below the floor where it
-	// could get stuck and jam the wallet.
-	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, txMaxFee)
-	if err != nil {
-		return 0, err
-	}
-
-	return totalFee, nil
+	return estimateReservationFixedSizeTxFee(
+		btcChain,
+		sizeEstimator,
+		txMaxFee,
+		"reservation acceptance estimated fee exceeds the maximum fee",
+	)
 }
 
-// depositTargetsReservationVault returns true iff the deposit's vault field
-// (nil when not set, or pointer to an address) matches the configured
-// reservation vault. Address comparison is case-insensitive.
 func depositTargetsReservationVault(
 	depositVault *chain.Address,
 	reservationVault chain.Address,

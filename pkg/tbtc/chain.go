@@ -292,6 +292,13 @@ type BridgeChain interface {
 		fundingOutputIndex uint32,
 	) (*DepositChainRequest, bool, error)
 
+	// BuildDepositKey calculates a deposit key for the given funding
+	// transaction hash and output index. Mirrors tbtcpg.Chain's identical
+	// method - the reservation anchor wallet action needs it to derive the
+	// m1 reservation key (reservationKey == depositKey) without depending
+	// on the tbtcpg package.
+	BuildDepositKey(fundingTxHash bitcoin.Hash, fundingOutputIndex uint32) *big.Int
+
 	// GetMovedFundsSweepRequest gets the on-chain moved funds sweep request for
 	// the given moving funds transaction hash and output index.
 	// The returned bool value indicates whether the request was found or not.
@@ -439,28 +446,12 @@ type WalletProposalValidatorChain interface {
 		},
 	) error
 
-	// ValidateReservedRedemptionProposal validates the given reserved
-	// redemption proposal against the chain. Returns an error if the
-	// proposal is not valid or nil otherwise.
-	ValidateReservedRedemptionProposal(
-		walletPublicKeyHash [20]byte,
-		proposal *ReservedRedemptionProposal,
-	) error
-
 	// ValidateReservationReanchorProposal validates the given reservation
 	// re-anchor proposal against the chain. Returns an error if the
 	// proposal is not valid or nil otherwise.
 	ValidateReservationReanchorProposal(
 		sourceWalletPublicKeyHash [20]byte,
 		proposal *ReservationReanchorProposal,
-	) error
-
-	// ValidateReservationDissolutionProposal validates the given reservation
-	// dissolution proposal against the chain. Returns an error if the
-	// proposal is not valid or nil otherwise.
-	ValidateReservationDissolutionProposal(
-		walletPublicKeyHash [20]byte,
-		proposal *ReservationDissolutionProposal,
 	) error
 
 	// ValidateRedemptionProposal validates the given redemption proposal
@@ -678,52 +669,14 @@ type ReservationChain interface {
 	// currently custodied by the given wallet.
 	WalletReservations(walletPublicKeyHash [20]byte) ([]*big.Int, error)
 
-	// ReservationByAnchorUtxo returns the reservation key whose anchor
-	// outpoint is the given Bitcoin transaction output, or an empty value
-	// if no reservation is anchored there.
-	ReservationByAnchorUtxo(
-		anchorTxHash [32]byte,
-		anchorTxOutputIndex uint32,
-	) (*big.Int, error)
-
 	// ReservedDepositWallet returns the wallet public key hash to which
 	// the given reserved deposit was revealed. Returns the zero hash if the
 	// deposit is not a reserved deposit.
 	ReservedDepositWallet(depositKey *big.Int) ([20]byte, error)
 
-	// PendingReservedDeposits returns the number of reserved deposits that
-	// have been revealed to the Bridge but not yet accepted by a wallet.
-	// The value is consumed by the vault-repoint and pre-acceptance paths
-	// to gate new deposits.
-	PendingReservedDeposits() (uint64, error)
-
-	// Reservations returns the on-chain reservation request record for the
-	// given reservation key, including the cumulative re-anchor fee that
-	// the existing GetReservation representation drops. Mirrors the
-	// ReservationRouter.reservations view verbatim.
-	Reservations(reservationKey *big.Int) (*ReservationRequest, error)
-
-	// ReservationActions returns the on-chain reservation action record
-	// for the given reservation key and request nonce, including the
-	// late-settlement / retry-credit fields that the existing
-	// GetReservationAction representation drops. Mirrors the
-	// ReservationRouter.reservationActions view verbatim.
-	ReservationActions(
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) (*ReservationActionRecord, error)
-
 	// ActiveReservationsCount returns the current count of active
 	// reservations across all wallets and the cap on that count.
 	ActiveReservationsCount() (count uint32, maxActive uint32, err error)
-
-	// ReservationRouter returns the address of the ReservationRouter
-	// contract as stored on the Bridge. This is the one place where the
-	// chain handle reads a router address value rather than binding a call
-	// to it: the router holds its own empty storage and only ever executes
-	// via Bridge.fallback's delegatecall, so any actual reservation call
-	// goes through the Bridge binding.
-	ReservationRouter() (chain.Address, error)
 
 	// IsReservedDeposit returns true if the given deposit was revealed
 	// with the reservation vault address and is therefore a reservation
@@ -745,18 +698,6 @@ type ReservationChain interface {
 		filter *ReservationAcceptanceRequestedEventFilter,
 	) ([]*ReservationAcceptanceRequestedEvent, error)
 
-	// OnReservationAccepted registers a callback that is invoked when an
-	// on-chain ReservationAccepted event is seen.
-	OnReservationAccepted(
-		handler func(event *ReservationAcceptedEvent),
-	) subscription.EventSubscription
-
-	// PastReservationAcceptedEvents fetches past ReservationAccepted events
-	// according to the provided filter or unfiltered if the filter is nil.
-	PastReservationAcceptedEvents(
-		filter *ReservationAcceptedEventFilter,
-	) ([]*ReservationAcceptedEvent, error)
-
 	// OnReservationReanchorRequested registers a callback that is invoked
 	// when an on-chain ReservationReanchorRequested event is seen.
 	OnReservationReanchorRequested(
@@ -769,86 +710,6 @@ type ReservationChain interface {
 	PastReservationReanchorRequestedEvents(
 		filter *ReservationReanchorRequestedEventFilter,
 	) ([]*ReservationReanchorRequestedEvent, error)
-
-	// OnReservationReanchored registers a callback that is invoked when an
-	// on-chain ReservationReanchored event is seen.
-	OnReservationReanchored(
-		handler func(event *ReservationReanchoredEvent),
-	) subscription.EventSubscription
-
-	// PastReservationReanchoredEvents fetches past ReservationReanchored
-	// events according to the provided filter or unfiltered if the filter
-	// is nil.
-	PastReservationReanchoredEvents(
-		filter *ReservationReanchoredEventFilter,
-	) ([]*ReservationReanchoredEvent, error)
-
-	// OnReservationActionTimedOut registers a callback that is invoked
-	// when an on-chain ReservationActionTimedOut event is seen. The
-	// timeout watcher fires the notification that triggers this event.
-	OnReservationActionTimedOut(
-		handler func(event *ReservationActionTimedOutEvent),
-	) subscription.EventSubscription
-
-	// PastReservationActionTimedOutEvents fetches past
-	// ReservationActionTimedOut events according to the provided filter or
-	// unfiltered if the filter is nil.
-	PastReservationActionTimedOutEvents(
-		filter *ReservationActionTimedOutEventFilter,
-	) ([]*ReservationActionTimedOutEvent, error)
-
-	// OnReservationActionSuperseded registers a callback that is invoked
-	// when an on-chain ReservationActionSuperseded event is seen.
-	OnReservationActionSuperseded(
-		handler func(event *ReservationActionSupersededEvent),
-	) subscription.EventSubscription
-
-	// OnReservationLateSettled registers a callback that is invoked when
-	// an on-chain ReservationLateSettled event is seen.
-	OnReservationLateSettled(
-		handler func(event *ReservationLateSettledEvent),
-	) subscription.EventSubscription
-
-	// OnReservationRetryCreditMinted registers a callback that is invoked
-	// when an on-chain ReservationRetryCreditMinted event is seen. m1
-	// records no such events because the on-chain mint path is unreachable
-	// on m1-era records; the subscription is still wired for forward
-	// compatibility with m2.
-	OnReservationRetryCreditMinted(
-		handler func(event *ReservationRetryCreditMintedEvent),
-	) subscription.EventSubscription
-
-	// OnReservedDepositMarkedStale registers a callback that is invoked
-	// when an on-chain ReservedDepositMarkedStale event is seen.
-	OnReservedDepositMarkedStale(
-		handler func(event *ReservedDepositMarkedStaleEvent),
-	) subscription.EventSubscription
-
-	// OnReservationStranded registers a callback that is invoked when an
-	// on-chain ReservationStranded event is seen. Stranding is the m1
-	// close path for reservations whose custodying wallet has been closed
-	// or terminated.
-	OnReservationStranded(
-		handler func(event *ReservationStrandedEvent),
-	) subscription.EventSubscription
-
-	// OnReservationParametersUpdated registers a callback that is invoked
-	// when an on-chain ReservationParametersUpdated event is seen.
-	OnReservationParametersUpdated(
-		handler func(event *ReservationParametersUpdatedEvent),
-	) subscription.EventSubscription
-
-	// OnReservationVaultUpdated registers a callback that is invoked when
-	// an on-chain ReservationVaultUpdated event is seen.
-	OnReservationVaultUpdated(
-		handler func(event *ReservationVaultUpdatedEvent),
-	) subscription.EventSubscription
-
-	// OnReservationCapsUpdated registers a callback that is invoked when
-	// an on-chain ReservationCapsUpdated event is seen.
-	OnReservationCapsUpdated(
-		handler func(event *ReservationCapsUpdatedEvent),
-	) subscription.EventSubscription
 }
 
 // BitcoinTxInfo represents the on-chain BitcoinTx.Info struct used by
@@ -876,48 +737,6 @@ type BitcoinTxUTXO struct {
 	TxHash        [32]byte
 	TxOutputIndex uint32
 	TxOutputValue uint64
-}
-
-// ReservationRequest represents the on-chain reservation request record
-// returned by ReservationRouter.reservations. It mirrors the Solidity
-// Reservation.ReservationRequest struct field-for-field.
-type ReservationRequest struct {
-	Owner                 chain.Address
-	MintedAmount          uint64
-	AcceptedAt            uint32
-	WalletPublicKeyHash   [20]byte
-	AnchorAmount          uint64
-	ExpiresAt             uint32
-	AnchorTxHash          [32]byte
-	AnchorTxOutputIndex   uint32
-	State                 ReservationState
-	RequestNonce          uint64
-	RetryCredit           bool
-	DissolutionEligibleAt uint32
-	CumulativeReanchorFee uint64
-}
-
-// ReservationActionRecord represents the on-chain reservation action record
-// returned by ReservationRouter.reservationActions. It mirrors the Solidity
-// Reservation.ReservationAction struct field-for-field.
-type ReservationActionRecord struct {
-	TargetWalletPublicKeyHash [20]byte
-	RequestedAt               uint32
-	TimeoutAt                 uint32
-	TxMaxFee                  uint64
-	ActionType                ReservationActionType
-	State                     ReservationActionState
-	FeePaid                   bool
-	Redeemer                  chain.Address
-	Amount                    uint64
-	ActionDataHash            [32]byte
-	SourceAnchorUtxoHash      [32]byte
-	UsedRetryCredit           bool
-	WatchtowerDefaultDelay    uint32
-	WatchtowerLevelOneDelay   uint32
-	WatchtowerLevelTwoDelay   uint32
-	IsPartial                 bool
-	RetryCreditSourceNonce    uint64
 }
 
 // ReservationAcceptanceRequestedEvent represents a reservation acceptance
