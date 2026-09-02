@@ -75,8 +75,8 @@ RUN make get_artifacts environment=$ENVIRONMENT
 # `development` npm tag. Until then, `get_artifacts` fetches a tbtc-v2 package whose
 # Bridge/WalletProposalValidator/RedemptionWatchtower don't yet expose the reservation
 # methods this PR binds against, and has no ReservationRouter artifact at all. The
-# `client.yml` workflow locally builds and deploys tbtc-v2 PR #1112 (pinned SHA) and
-# drops its deployment artifacts for the tbtc module's required_contracts at
+# `client.yml` workflow locally compiles tbtc-v2 PR #1112 (pinned SHA) and drops its
+# compiled ABI artifacts for the tbtc module's required_contracts at
 # ./ci-shims/tbtc-artifacts/*.json when it runs; this only overrides the tbtc module's
 # artifacts, and only for `environment=development` (PR CI) builds - sepolia/mainnet
 # builds and the beacon/ecdsa/threshold modules are untouched.
