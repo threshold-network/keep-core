@@ -114,6 +114,11 @@ jobs:
 
   client-build-test-publish:
     needs: client-detect-changes
+    # continue-on-error: known external blocker, not caused by any keep-core
+    # change - @keep-network/tbtc-v2@development (npm) does not yet publish
+    # ReservationRouter.json, so `make generate` fails building the Docker
+    # image. Remove once tbtc-v2 publishes it. See threshold-network/keep-core#4281.
+    continue-on-error: true
     if: |
       github.event_name != 'pull_request'
         || needs.client-detect-changes.outputs.path-filter == 'true'
