@@ -139,9 +139,13 @@ jobs:
       # @keep-network/tbtc-v2 publishes the reservation-router surface (Bridge,
       # WalletProposalValidator, RedemptionWatchtower, ReservationRouter, and the
       # rest of the tbtc module's required_contracts) under the `development` npm
-      # tag. Until then, PRs targeting `reservations-epic` build and deploy tbtc-v2
-      # PR #1112 (pinned SHA, not a moving branch ref) locally to produce the
-      # artifacts `make get_artifacts` can't fetch from npm yet. See
+      # tag. Until then, PRs targeting `reservations-epic` compile tbtc-v2 PR #1112
+      # (pinned SHA, not a moving branch ref) locally to produce the artifacts
+      # `make get_artifacts` can't fetch from npm yet. `environment=development`
+      # only ever reads the `.abi` field off these files (the gen Makefile writes
+      # a hardcoded zero address rather than reading one - see
+      # pkg/chain/ethereum/common/gen/Makefile's `_address/%` rule), so a plain
+      # `hardhat compile` artifact is sufficient; no local deployment needed. See
       # ./ci-shims/tbtc-artifacts and the matching Dockerfile step.
       - name: Prepare tbtc-v2 artifact shim directory
         run: mkdir -p ci-shims/tbtc-artifacts
@@ -164,12 +168,10 @@ jobs:
           git config --global url."https://".insteadOf git://
           yarn install --immutable
           yarn build
-          USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_TBTC=true \
-            npx hardhat deploy --network hardhat --write true
           for contract in Bridge MaintainerProxy LightRelay LightRelayMaintainerProxy \
             WalletProposalValidator RedemptionWatchtower ReservationRouter; do
-            cp "deployments/hardhat/$contract.json" \
-              "$GITHUB_WORKSPACE/ci-shims/tbtc-artifacts/$contract.json"
+            artifact="$(find build/contracts -iname "$contract.json" -path "*/$contract.sol/*")"
+            cp "$artifact" "$GITHUB_WORKSPACE/ci-shims/tbtc-artifacts/$contract.json"
           done
 
       - name: Set up Docker Buildx
