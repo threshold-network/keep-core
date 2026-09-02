@@ -340,6 +340,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 			membershipValidator,
 			protocolLatch,
 			operator.waitForBlockHeight,
+			false,
 		)
 	}
 

@@ -16,8 +16,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 func TestComputeOperatorsIDsHash(t *testing.T) {
@@ -532,4 +534,243 @@ func TestBuildMovedFundsKey(t *testing.T) {
 		expectedMovedFundsKey,
 		movedFundsKey.Text(16),
 	)
+}
+
+func TestConvertReservationFromAbiType(t *testing.T) {
+	ownerAddress := common.HexToAddress(
+		"0x1234567890AbcdEF1234567890aBcdef12345678",
+	)
+	anchorTxHash := [32]byte{0x01, 0x02, 0x03, 0x04}
+
+	validAbiReservation := tbtcabi.ReservationReservationRequest{
+		Owner:                 ownerAddress,
+		MintedAmount:          100000,
+		AcceptedAt:            1700000000,
+		WalletPubKeyHash:      [20]byte{0xaa, 0xbb, 0xcc},
+		AnchorAmount:          99000,
+		ExpiresAt:             1700100000,
+		AnchorTxHash:          anchorTxHash,
+		AnchorTxOutputIndex:   1,
+		State:                 1, // Active
+		RequestNonce:          7,
+		RetryCredit:           true,
+		DissolutionEligibleAt: 1700200000,
+		// CumulativeReanchorFee is intentionally dropped on the Go
+		// boundary (see the function doc comment); set it to a nonzero
+		// value to prove it never leaks into tbtc.Reservation.
+		CumulativeReanchorFee: 12345,
+	}
+
+	t.Run("valid state", func(t *testing.T) {
+		reservation, err := convertReservationFromAbiType(validAbiReservation)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+
+		expected := &tbtc.Reservation{
+			Owner:               chain.Address(ownerAddress.String()),
+			MintedAmount:        100000,
+			AcceptedAt:          1700000000,
+			WalletPublicKeyHash: [20]byte{0xaa, 0xbb, 0xcc},
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     1,
+				},
+				Value: 99000,
+			},
+			ExpiresAt:             1700100000,
+			State:                 tbtc.ReservationStateActive,
+			RequestNonce:          7,
+			RetryCredit:           true,
+			DissolutionEligibleAt: 1700200000,
+		}
+
+		if !reflect.DeepEqual(expected, reservation) {
+			t.Errorf(
+				"unexpected reservation\nexpected: [%+v]\nactual:   [%+v]\n",
+				expected,
+				reservation,
+			)
+		}
+	})
+
+	t.Run("invalid state", func(t *testing.T) {
+		invalidAbiReservation := validAbiReservation
+		invalidAbiReservation.State = 255
+
+		reservation, err := convertReservationFromAbiType(invalidAbiReservation)
+		if reservation != nil {
+			t.Errorf("expected nil reservation, got [%+v]", reservation)
+		}
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
+func TestConvertReservationActionFromAbiType(t *testing.T) {
+	targetWalletPKH := [20]byte{0x11, 0x22, 0x33}
+	redeemerAddress := common.HexToAddress(
+		"0xAbCdEf1234567890abcDef1234567890AbCdEf12",
+	)
+	actionDataHash := [32]byte{0xde, 0xad, 0xbe, 0xef}
+
+	baseAbiAction := tbtcabi.ReservationReservationAction{
+		TargetWalletPubKeyHash: targetWalletPKH,
+		RequestedAt:            1700000000,
+		TimeoutAt:              1700003600,
+		TxMaxFee:               5000,
+		State:                  1, // Pending
+		FeePaid:                true,
+		Redeemer:               redeemerAddress,
+		Amount:                 50000,
+		ActionDataHash:         actionDataHash,
+		IsPartial:              true,
+	}
+
+	// The action-type-to-hash-field routing (redemption -> redeemer output
+	// script hash, dissolution -> expected main UTXO hash, everything else
+	// -> neither) is the one non-trivial branch in this converter; exercise
+	// all three shapes.
+	var tests = map[string]struct {
+		abiActionType                    uint8
+		expectedActionType               tbtc.ReservationActionType
+		expectedRedeemerOutputScriptHash [32]byte
+		expectedExpectedMainUtxoHash     [32]byte
+	}{
+		"redemption routes hash to redeemer output script": {
+			abiActionType:                    2,
+			expectedActionType:               tbtc.ReservationActionTypeRedemption,
+			expectedRedeemerOutputScriptHash: actionDataHash,
+			expectedExpectedMainUtxoHash:     [32]byte{},
+		},
+		"dissolution routes hash to expected main utxo": {
+			abiActionType:                    4,
+			expectedActionType:               tbtc.ReservationActionTypeDissolution,
+			expectedRedeemerOutputScriptHash: [32]byte{},
+			expectedExpectedMainUtxoHash:     actionDataHash,
+		},
+		"acceptance leaves both hash fields zero": {
+			abiActionType:                    1,
+			expectedActionType:               tbtc.ReservationActionTypeAcceptance,
+			expectedRedeemerOutputScriptHash: [32]byte{},
+			expectedExpectedMainUtxoHash:     [32]byte{},
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			abiAction := baseAbiAction
+			abiAction.ActionType = test.abiActionType
+
+			action, err := convertReservationActionFromAbiType(abiAction)
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+
+			expected := &tbtc.ReservationAction{
+				TargetWalletPublicKeyHash: targetWalletPKH,
+				RequestedAt:               1700000000,
+				TimeoutAt:                 1700003600,
+				TxMaxFee:                  5000,
+				ActionType:                test.expectedActionType,
+				State:                     tbtc.ReservationActionStatePending,
+				FeePaid:                   true,
+				Redeemer:                  chain.Address(redeemerAddress.String()),
+				Amount:                    50000,
+				RedeemerOutputScriptHash:  test.expectedRedeemerOutputScriptHash,
+				ExpectedMainUtxoHash:      test.expectedExpectedMainUtxoHash,
+				IsPartial:                 true,
+			}
+
+			if !reflect.DeepEqual(expected, action) {
+				t.Errorf(
+					"unexpected action\nexpected: [%+v]\nactual:   [%+v]\n",
+					expected,
+					action,
+				)
+			}
+		})
+	}
+
+	t.Run("invalid action type", func(t *testing.T) {
+		abiAction := baseAbiAction
+		abiAction.ActionType = 255
+
+		action, err := convertReservationActionFromAbiType(abiAction)
+		if action != nil {
+			t.Errorf("expected nil action, got [%+v]", action)
+		}
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("invalid action state", func(t *testing.T) {
+		abiAction := baseAbiAction
+		abiAction.ActionType = 1
+		abiAction.State = 255
+
+		action, err := convertReservationActionFromAbiType(abiAction)
+		if action != nil {
+			t.Errorf("expected nil action, got [%+v]", action)
+		}
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
+func TestConvertReservationParametersFromAbiType(t *testing.T) {
+	vaultAddress := common.HexToAddress(
+		"0x9876543210FedCbA9876543210FedcbA98765432",
+	)
+
+	abiParameters := struct {
+		ReservationVault                common.Address
+		ReservationMinAmount            uint64
+		ReservationTxMaxFee             uint64
+		ReservationTermSeconds          uint32
+		ReservationDissolutionDelay     uint32
+		ReservationMaxTotalAmount       uint64
+		ReservationTotalAmount          uint64
+		MaxReservationsPerWallet        uint32
+		ReservationActionTimeout        uint32
+		ReservationRenewalWindowSeconds uint32
+	}{
+		ReservationVault:                vaultAddress,
+		ReservationMinAmount:            1000,
+		ReservationTxMaxFee:             5000,
+		ReservationTermSeconds:          1209600,
+		ReservationDissolutionDelay:     3600,
+		ReservationMaxTotalAmount:       10000000,
+		ReservationTotalAmount:          2500000,
+		MaxReservationsPerWallet:        5,
+		ReservationActionTimeout:        86400,
+		ReservationRenewalWindowSeconds: 604800,
+	}
+
+	parameters := convertReservationParametersFromAbiType(abiParameters)
+
+	expected := &tbtc.ReservationParameters{
+		ReservationVault:                chain.Address(vaultAddress.String()),
+		ReservationMinAmount:            1000,
+		ReservationTxMaxFee:             5000,
+		ReservationTermSeconds:          1209600,
+		ReservationDissolutionDelay:     3600,
+		ReservationMaxTotalAmount:       10000000,
+		ReservationTotalAmount:          2500000,
+		MaxReservationsPerWallet:        5,
+		ReservationActionTimeout:        86400,
+		ReservationRenewalWindowSeconds: 604800,
+	}
+
+	if !reflect.DeepEqual(expected, parameters) {
+		t.Errorf(
+			"unexpected parameters\nexpected: [%+v]\nactual:   [%+v]\n",
+			expected,
+			parameters,
+		)
+	}
 }

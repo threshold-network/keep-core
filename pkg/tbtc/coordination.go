@@ -304,6 +304,10 @@ type coordinationExecutor struct {
 
 	waitForBlockFn waitForBlockFn
 
+	// reservationsEnabled mirrors config.Reservations.Enabled. Determines
+	// whether the actions checklist includes the reservation action types.
+	reservationsEnabled bool
+
 	// metricsRecorder is optional and used for recording performance metrics
 	metricsRecorder interface {
 		IncrementCounter(name string, value float64)
@@ -324,6 +328,7 @@ func newCoordinationExecutor(
 	membershipValidator *group.MembershipValidator,
 	protocolLatch *generator.ProtocolLatch,
 	waitForBlockFn waitForBlockFn,
+	reservationsEnabled bool,
 ) *coordinationExecutor {
 	return &coordinationExecutor{
 		lock:                semaphore.NewWeighted(1),
@@ -336,6 +341,7 @@ func newCoordinationExecutor(
 		membershipValidator: membershipValidator,
 		protocolLatch:       protocolLatch,
 		waitForBlockFn:      waitForBlockFn,
+		reservationsEnabled: reservationsEnabled,
 	}
 }
 
@@ -629,6 +635,21 @@ func (ce *coordinationExecutor) getActionsChecklist(
 		if windowIndex%frequencyWindows == 0 {
 			actions = append(actions, ActionMovingFunds)
 		}
+	}
+
+	// Reservation actions (acceptance, re-anchor) are only checked when the
+	// operator has enabled the reservation subsystem. Gating the checklist
+	// entry on the same flag that gates the reservation proposal generator
+	// tasks (see tbtcpg.NewProposalGenerator) keeps leader and follower
+	// checklists in agreement: a follower that never enters this branch
+	// would otherwise fault a leader's reservation proposal as
+	// FaultLeaderMistake because the action would not appear in its own
+	// checklist. Frequency-gated like DepositSweep/MovingFunds below the
+	// activation block: reservation acceptance/re-anchor windows are not
+	// as time-critical as redemption.
+	if ce.reservationsEnabled && windowIndex%frequencyWindows == 0 {
+		actions = append(actions, ActionReservationAnchor)
+		actions = append(actions, ActionReservationReanchor)
 	}
 
 	// #nosec G404 (insecure random number source (rand))

@@ -73,9 +73,19 @@ type Config struct {
 	Reservations ReservationsConfig
 }
 
-// ReservationsConfig holds the reservation-related spv.Config fields. The
-// structure mirrors tbtc.ReservationsConfig so an operator can keep the two
-// flags in lockstep via configuration.
+// ReservationsConfig holds the reservation-related spv.Config fields.
+//
+// This flag controls only SPV PROOF SUBMISSION for reservation acceptance /
+// re-anchor action generations (the `maintainer` command, config category
+// Maintainer). The `start` command runs as a separate process reading a
+// disjoint config category (see config.StartCmdCategories) and has its own
+// independent gate, tbtc.ReservationsConfig.Enabled, that controls
+// reservation proposal GENERATION. Neither command's config loading sees
+// the other's category, so this flag cannot be derived from or validated
+// against tbtc.ReservationsConfig.Enabled in code. An operator running both
+// `start` and `maintainer` for the reservation feature to work end-to-end
+// MUST enable both flags - normally the same [Maintainer.Spv.Reservations]
+// / [Tbtc.Reservations] TOML sections in one shared config file.
 type ReservationsConfig struct {
 	// Enabled toggles reservation plumbing in the SPV maintainer.
 	Enabled bool

@@ -233,6 +233,10 @@ func TestReadConfigFromFile(t *testing.T) {
 			readValueFunc: func(c *Config) interface{} { return c.Maintainer.Spv.IdleBackoffTime },
 			expectedValue: 15 * time.Minute,
 		},
+		"Maintainer.Spv.Reservations.Enabled": {
+			readValueFunc: func(c *Config) interface{} { return c.Maintainer.Spv.Reservations.Enabled },
+			expectedValue: true,
+		},
 	}
 
 	for _, filePath := range filePaths {

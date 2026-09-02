@@ -37,6 +37,13 @@ type PerformanceMetrics struct {
 	registry *Registry
 	cancel   context.CancelFunc
 
+	// reservationsEnabled mirrors tbtc.Config.Reservations.Enabled. Gates
+	// registration of the reservation-specific wallet action metrics
+	// (reservation_anchor, reserved_redemption, reservation_reanchor,
+	// reservation_dissolution) so a non-reservation deployment's metric
+	// surface does not change - see GetAllWalletActionTypes.
+	reservationsEnabled bool
+
 	// Counters track cumulative counts of events
 	countersMutex sync.RWMutex
 	counters      map[string]*counter
@@ -75,14 +82,21 @@ const (
 )
 
 // NewPerformanceMetrics creates a new performance metrics instance.
-func NewPerformanceMetrics(ctx context.Context, registry *Registry) *PerformanceMetrics {
+// reservationsEnabled gates registration of the reservation-specific wallet
+// action metrics (see GetAllWalletActionTypes / registerAllMetrics).
+func NewPerformanceMetrics(
+	ctx context.Context,
+	registry *Registry,
+	reservationsEnabled bool,
+) *PerformanceMetrics {
 	ctx, cancel := context.WithCancel(ctx)
 	pm := &PerformanceMetrics{
-		registry:   registry,
-		cancel:     cancel,
-		counters:   make(map[string]*counter),
-		histograms: make(map[string]*histogram),
-		gauges:     make(map[string]*gauge),
+		registry:            registry,
+		cancel:              cancel,
+		reservationsEnabled: reservationsEnabled,
+		counters:            make(map[string]*counter),
+		histograms:          make(map[string]*histogram),
+		gauges:              make(map[string]*gauge),
 	}
 
 	// Register all metrics upfront with 0 values so they appear in /metrics endpoint
@@ -180,6 +194,10 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	// Register per-action type wallet metrics
 	// For each action type, register: total, success_total, failed_total, duration_seconds
 	for _, actionType := range GetAllWalletActionTypes() {
+		if isReservationWalletActionType(actionType) && !pm.reservationsEnabled {
+			continue
+		}
+
 		actionCounters := []string{
 			WalletActionMetricName(actionType, "total"),
 			WalletActionMetricName(actionType, "success_total"),
@@ -759,5 +777,17 @@ func GetAllWalletActionTypes() []string {
 		"reserved_redemption",
 		"reservation_reanchor",
 		"reservation_dissolution",
+	}
+}
+
+// isReservationWalletActionType reports whether actionType is one of the
+// reservation-specific action types gated by
+// PerformanceMetrics.reservationsEnabled.
+func isReservationWalletActionType(actionType string) bool {
+	switch actionType {
+	case "reservation_anchor", "reserved_redemption", "reservation_reanchor", "reservation_dissolution":
+		return true
+	default:
+		return false
 	}
 }

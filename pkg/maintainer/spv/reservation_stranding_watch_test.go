@@ -1,6 +1,7 @@
 package spv
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -222,6 +223,77 @@ func TestReservationStrandingWatcher_WalletChainError(t *testing.T) {
 	if len(notifier.calls) != 0 {
 		t.Fatalf(
 			"expected zero notifications on empty wallet list, got %d",
+			len(notifier.calls),
+		)
+	}
+}
+
+// TestReservationStrandingWatcher_NotifierErrorContinuesProcessing mirrors
+// TestReservationActionTimeoutWatcher_NotifiesOncePerQualifyingNonce's
+// resilience property for the sibling action-timeout watcher: a single
+// NotifyReservationStranded failure must not starve the remaining
+// reservations in the same wallet.
+func TestReservationStrandingWatcher_NotifierErrorContinuesProcessing(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	failing := reservationKey(0xAA40)
+	succeeding := reservationKey(0xAA41)
+
+	spvChain.setWalletReservations(wallet, []*big.Int{failing, succeeding})
+	spvChain.setReservation(failing, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+	spvChain.setReservation(succeeding, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+
+	var notified []*big.Int
+	notifier := ReservationStrandingNotifierFunc(func(key *big.Int) error {
+		if key.Cmp(failing) == 0 {
+			return fmt.Errorf("notifier unavailable")
+		}
+		notified = append(notified, key)
+		return nil
+	})
+
+	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
+		t.Fatalf(
+			"a single notifier failure must not fail the whole check: %v",
+			err,
+		)
+	}
+
+	if len(notified) != 1 {
+		t.Fatalf(
+			"expected the remaining reservation to still be notified, got %d",
+			len(notified),
+		)
+	}
+	if diff := deep.Equal(succeeding, notified[0]); diff != nil {
+		t.Errorf("unexpected notified key: %v", diff)
+	}
+}
+
+// TestReservationStrandingWatcher_WalletReservationsChainError covers the
+// case TestReservationStrandingWatcher_WalletChainError's comment
+// explicitly calls out as unreserved: WalletReservations itself failing
+// (as opposed to returning an empty list for an unknown wallet).
+func TestReservationStrandingWatcher_WalletReservationsChainError(t *testing.T) {
+	spvChain := newLocalChain()
+	notifier := &recordingStrandingNotifier{}
+
+	spvChain.walletReservationsErr = fmt.Errorf("rpc unavailable")
+
+	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	if err := watcher.CheckReservationStrandingForWallet(walletPKH()); err == nil {
+		t.Fatal("expected error when WalletReservations fails, got nil")
+	}
+
+	if len(notifier.calls) != 0 {
+		t.Fatalf(
+			"expected no notifications on chain error, got %d",
 			len(notifier.calls),
 		)
 	}

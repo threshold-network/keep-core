@@ -50,7 +50,10 @@
             "HistoryDepth": 25000,
             "TransactionLimit": 80,
             "RestartBackoffTime": "2h",
-            "IdleBackoffTime": "15m"
+            "IdleBackoffTime": "15m",
+            "Reservations": {
+                "Enabled": true
+            }
         }
     },
     "Developer": {

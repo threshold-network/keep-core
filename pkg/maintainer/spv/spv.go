@@ -52,32 +52,15 @@ func Initialize(
 	}
 
 	if config.Reservations.Enabled {
-		// PR H: register reservation acceptance / re-anchor proof tasks in
-		// the proof loop. Reservation acceptance still uses a placeholder
-		// getter/submitter pending its own watcher integration (see
-		// reservation_acceptance_proof.go); reservation re-anchor has a real
-		// getter/submitter pair (see reservation_reanchor_proof.go) that
-		// discovers unproven re-anchor transactions via
-		// ReservationReanchorRequested events and ReservationByAnchorUtxo,
-		// then re-derives the (reservationKey, requestNonce) pair the
-		// generic proof loop signature cannot carry. Adding both tasks to
-		// `proofTypes` even while acceptance is still a placeholder keeps
-		// the gating uniform: Reservations.Enabled is the single switch for
-		// the reservation plumbing in the SPV maintainer.
-		proofTypes[tbtc.ActionReservationAnchor] = struct {
-			unprovenTransactionsGetter unprovenTransactionsGetter
-			transactionProofSubmitter  transactionProofSubmitter
-		}{
-			unprovenTransactionsGetter: getUnprovenReservationAcceptanceTransactions,
-			transactionProofSubmitter:  SubmitReservationAcceptanceProof,
-		}
-		proofTypes[tbtc.ActionReservationReanchor] = struct {
-			unprovenTransactionsGetter unprovenTransactionsGetter
-			transactionProofSubmitter  transactionProofSubmitter
-		}{
-			unprovenTransactionsGetter: getUnprovenReservationReanchorTransactions,
-			transactionProofSubmitter:  reservationReanchorTransactionProofSubmitter,
-		}
+		// Reservation acceptance/re-anchor proofs run on a dedicated loop,
+		// not through the generic proofTypes map: SubmitReservationProof
+		// requires the (reservationKey, requestNonce) pair of the action
+		// generation being proven, which the generic
+		// unprovenTransactionsGetter/transactionProofSubmitter signatures
+		// (shared by deposit sweep, redemption, moving funds, and moved
+		// funds sweep, none of which need that pair) cannot carry. See
+		// reservation_proof_loop.go.
+		go maintainReservationProofs(ctx, config, spvChain, btcDiffChain, btcChain)
 	}
 
 	go spvMaintainer.startControlLoop(ctx)
@@ -505,21 +488,3 @@ type spvProofAssembler func(
 	requiredConfirmations uint,
 	btcChain bitcoin.Chain,
 ) (*bitcoin.Transaction, *bitcoin.SpvProof, error)
-
-// getUnprovenReservationAcceptanceTransactions is a placeholder for the
-// reservation acceptance proof task. The production wiring for reservation
-// acceptance proofs is delivered by the reservation watcher integration that
-// translates wallet-side acceptance events into SPV proof submissions; until
-// that wiring lands this getter returns no transactions so the generic proof
-// loop skips reservation acceptance cleanly.
-//
-// Marked by PR H; the gate on config.Reservations.Enabled ensures the task is
-// only attached to proofTypes when reservations are enabled.
-func getUnprovenReservationAcceptanceTransactions(
-	historyDepth uint64,
-	transactionLimit int,
-	btcChain bitcoin.Chain,
-	spvChain Chain,
-) ([]*bitcoin.Transaction, error) {
-	return nil, nil
-}

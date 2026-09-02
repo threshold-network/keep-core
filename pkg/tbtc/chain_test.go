@@ -1543,10 +1543,6 @@ func (lc *localChain) NotifyReservationStranded(
 	panic("unsupported")
 }
 
-func (lc *localChain) ReservationParametersFull() (*ReservationParameters, error) {
-	return nil, fmt.Errorf("unsupported")
-}
-
 func (lc *localChain) ReservationCaps() (
 	uint64,
 	uint64,

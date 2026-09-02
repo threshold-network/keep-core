@@ -202,6 +202,64 @@ func TestProposalGenerator_Generate(t *testing.T) {
 	}
 }
 
+// TestNewProposalGenerator_ReservationsEnabled verifies the constructor's
+// reservationsEnabled gate: when true, the reservation acceptance and
+// re-anchor tasks must be wired into the generator's task list; when false,
+// they must be entirely absent so the coordination loop never attempts
+// them. Presence/absence is observed indirectly through Generate(), since
+// pg.tasks is unexported: a checklist made up solely of reservation action
+// types is either dispatched to a real task (which fails deterministically
+// against the unconfigured chain double, proving the task was found) or
+// falls through as unsupported to a nil-error no-op proposal (proving no
+// task claims that action type).
+func TestNewProposalGenerator_ReservationsEnabled(t *testing.T) {
+	walletPublicKeyHash := [20]byte{1, 2, 3}
+
+	request := &tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+		ActionsChecklist: []tbtc.WalletActionType{
+			tbtc.ActionReservationAnchor,
+			tbtc.ActionReservationReanchor,
+		},
+	}
+
+	t.Run("enabled: reservation tasks are wired in", func(t *testing.T) {
+		generator := NewProposalGenerator(
+			NewLocalChain(),
+			NewLocalBitcoinChain(),
+			true,
+		)
+
+		_, err := generator.Generate(request)
+		if err == nil {
+			t.Fatal(
+				"expected an error from the wired-in reservation tasks " +
+					"running against the unconfigured chain, got nil",
+			)
+		}
+	})
+
+	t.Run("disabled: reservation tasks are absent", func(t *testing.T) {
+		generator := NewProposalGenerator(
+			NewLocalChain(),
+			NewLocalBitcoinChain(),
+			false,
+		)
+
+		proposal, err := generator.Generate(request)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if !reflect.DeepEqual(&tbtc.NoopProposal{}, proposal) {
+			t.Fatalf(
+				"expected a no-op proposal since no task should claim "+
+					"either reservation action type, got [%+v]",
+				proposal,
+			)
+		}
+	})
+}
+
 type mockProposalTaskResult uint8
 
 const (
