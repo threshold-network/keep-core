@@ -1010,6 +1010,63 @@ func (lc *LocalChain) ComputeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOu
 	panic("unsupported")
 }
 
+func (lc *LocalChain) ComputeReservationRedeemerOutputScriptHash(
+	redeemerOutputScript bitcoin.Script,
+) ([32]byte, error) {
+	panic("unsupported")
+}
+
+func (lc *LocalChain) GetReservation(reservationKey *big.Int) (*tbtc.Reservation, bool, error) {
+	panic("unsupported")
+}
+
+func (lc *LocalChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationAction, error) {
+	panic("unsupported")
+}
+
+func (lc *LocalChain) GetReservationParameters() (tbtc.ReservationParameters, error) {
+	panic("unsupported")
+}
+
+func (lc *LocalChain) GetReservationTotalAmount() (uint64, error) {
+	panic("unsupported")
+}
+
+func (lc *LocalChain) ValidateReservationAnchorProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	panic("unsupported")
+}
+
+func (lc *LocalChain) ValidateReservedRedemptionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservedRedemptionProposal,
+) error {
+	panic("unsupported")
+}
+
+func (lc *LocalChain) ValidateReservationReanchorProposal(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationReanchorProposal,
+) error {
+	panic("unsupported")
+}
+
+func (lc *LocalChain) ValidateReservationDissolutionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationDissolutionProposal,
+) error {
+	panic("unsupported")
+}
+
 func (lc *LocalChain) ComputeMovingFundsCommitmentHash(targetWallets [][20]byte) [32]byte {
 	packedWallets := []byte{}
 

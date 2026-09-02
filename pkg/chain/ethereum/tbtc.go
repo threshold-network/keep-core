@@ -50,6 +50,8 @@ const (
 	EcdsaDkgValidatorContractName = "EcdsaDkgValidator"
 )
 
+var errReservationsUnsupported = errors.New("reservations not supported yet by the Ethereum chain implementation")
+
 const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
 )
@@ -1545,6 +1547,46 @@ func (tc *TbtcChain) ComputeMainUtxoHash(
 	return computeMainUtxoHash(mainUtxo)
 }
 
+// ComputeReservationRedeemerOutputScriptHash computes the keccak256 hash of the
+// length-prefixed redeemer output script, as required by the on-chain Bridge
+// rules. See also redeemerOutputScriptHash.
+func (tc *TbtcChain) ComputeReservationRedeemerOutputScriptHash(
+	redeemerOutputScript bitcoin.Script,
+) ([32]byte, error) {
+	return redeemerOutputScriptHash(redeemerOutputScript)
+}
+
+// redeemerOutputScriptHash computes the keccak256 hash of the length-prefixed
+// redeemer output script, as required by the on-chain Bridge rules. It is a
+// building block for both the legacy redemption key (see buildRedemptionKey)
+// and reservation redemption authorization (see
+// ComputeReservationRedeemerOutputScriptHash).
+func redeemerOutputScriptHash(redeemerOutputScript bitcoin.Script) ([32]byte, error) {
+	prefixedRedeemerOutputScript, err := redeemerOutputScript.ToVarLenData()
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("cannot build prefixed redeemer output script: [%v]", err)
+	}
+	return crypto.Keccak256Hash(prefixedRedeemerOutputScript), nil
+}
+
+// buildRedemptionKey builds the redemption key by hashing the concatenation
+// of the redeemer output script hash and the wallet public key hash.
+func buildRedemptionKey(
+	walletPublicKeyHash [20]byte,
+	redeemerOutputScript bitcoin.Script,
+) (*big.Int, error) {
+	redeemerOutputScriptHash, err := redeemerOutputScriptHash(redeemerOutputScript)
+	if err != nil {
+		return nil, fmt.Errorf("cannot compute redeemer output script hash: [%v]", err)
+	}
+
+	redemptionKey := crypto.Keccak256Hash(
+		append(redeemerOutputScriptHash[:], walletPublicKeyHash[:]...),
+	)
+
+	return redemptionKey.Big(), nil
+}
+
 func computeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte {
 	outputIndexBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(outputIndexBytes, mainUtxo.Outpoint.OutputIndex)
@@ -1696,26 +1738,6 @@ func (tc *TbtcChain) SubmitRedemptionProofWithReimbursement(
 	)
 
 	return err
-}
-
-func buildRedemptionKey(
-	walletPublicKeyHash [20]byte,
-	redeemerOutputScript bitcoin.Script,
-) (*big.Int, error) {
-	// The Bridge contract builds the redemption key using the length-prefixed
-	// redeemer output script.
-	prefixedRedeemerOutputScript, err := redeemerOutputScript.ToVarLenData()
-	if err != nil {
-		return nil, fmt.Errorf("cannot build prefixed redeemer output script: [%v]", err)
-	}
-
-	redeemerOutputScriptHash := crypto.Keccak256Hash(prefixedRedeemerOutputScript)
-
-	redemptionKey := crypto.Keccak256Hash(
-		append(redeemerOutputScriptHash[:], walletPublicKeyHash[:]...),
-	)
-
-	return redemptionKey.Big(), nil
 }
 
 func (tc *TbtcChain) TxProofDifficultyFactor() (*big.Int, error) {
@@ -2407,4 +2429,80 @@ func (tc *TbtcChain) GetRedemptionDelay(
 
 func (tc *TbtcChain) GetDepositMinAge() (uint32, error) {
 	return tc.walletProposalValidator.DEPOSITMINAGE()
+}
+
+// GetReservation returns errReservationsUnsupported because the generated
+// Ethereum bindings do not yet expose the reservation Bridge API.
+func (tc *TbtcChain) GetReservation(
+	reservationKey *big.Int,
+) (*tbtc.Reservation, bool, error) {
+	return nil, false, errReservationsUnsupported
+}
+
+// GetReservationAction returns errReservationsUnsupported because the
+// generated Ethereum bindings do not yet expose the reservation Bridge API.
+func (tc *TbtcChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationAction, error) {
+	return nil, errReservationsUnsupported
+}
+
+// GetReservationParameters returns errReservationsUnsupported because the
+// generated Ethereum bindings do not yet expose the reservation Bridge API.
+func (tc *TbtcChain) GetReservationParameters() (
+	tbtc.ReservationParameters,
+	error,
+) {
+	return tbtc.ReservationParameters{}, errReservationsUnsupported
+}
+
+// GetReservationTotalAmount returns errReservationsUnsupported because the
+// generated Ethereum bindings do not yet expose the reservation Bridge API.
+func (tc *TbtcChain) GetReservationTotalAmount() (uint64, error) {
+	return 0, errReservationsUnsupported
+}
+
+// ValidateReservationAnchorProposal returns errReservationsUnsupported
+// because the generated Ethereum bindings do not yet expose the reservation
+// Bridge API.
+func (tc *TbtcChain) ValidateReservationAnchorProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return errReservationsUnsupported
+}
+
+// ValidateReservedRedemptionProposal returns errReservationsUnsupported
+// because the generated Ethereum bindings do not yet expose the reservation
+// Bridge API.
+func (tc *TbtcChain) ValidateReservedRedemptionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservedRedemptionProposal,
+) error {
+	return errReservationsUnsupported
+}
+
+// ValidateReservationReanchorProposal returns errReservationsUnsupported
+// because the generated Ethereum bindings do not yet expose the reservation
+// Bridge API.
+func (tc *TbtcChain) ValidateReservationReanchorProposal(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationReanchorProposal,
+) error {
+	return errReservationsUnsupported
+}
+
+// ValidateReservationDissolutionProposal returns errReservationsUnsupported
+// because the generated Ethereum bindings do not yet expose the reservation
+// Bridge API.
+func (tc *TbtcChain) ValidateReservationDissolutionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationDissolutionProposal,
+) error {
+	return errReservationsUnsupported
 }

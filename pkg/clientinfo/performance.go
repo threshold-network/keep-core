@@ -755,5 +755,9 @@ func GetAllWalletActionTypes() []string {
 		"redemption",
 		"moving_funds",
 		"moved_funds_sweep",
+		"reservation_anchor",
+		"reserved_redemption",
+		"reservation_reanchor",
+		"reservation_dissolution",
 	}
 }

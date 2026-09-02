@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"crypto/ecdsa"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -229,12 +230,16 @@ func unmarshalCoordinationProposal(actionType uint32, payload []byte) (
 	}
 
 	proposal, ok := map[WalletActionType]CoordinationProposal{
-		ActionNoop:            &NoopProposal{},
-		ActionHeartbeat:       &HeartbeatProposal{},
-		ActionDepositSweep:    &DepositSweepProposal{},
-		ActionRedemption:      &RedemptionProposal{},
-		ActionMovingFunds:     &MovingFundsProposal{},
-		ActionMovedFundsSweep: &MovedFundsSweepProposal{},
+		ActionNoop:                   &NoopProposal{},
+		ActionHeartbeat:              &HeartbeatProposal{},
+		ActionDepositSweep:           &DepositSweepProposal{},
+		ActionRedemption:             &RedemptionProposal{},
+		ActionMovingFunds:            &MovingFundsProposal{},
+		ActionMovedFundsSweep:        &MovedFundsSweepProposal{},
+		ActionReservationAnchor:      &ReservationAnchorProposal{},
+		ActionReservedRedemption:     &ReservedRedemptionProposal{},
+		ActionReservationReanchor:    &ReservationReanchorProposal{},
+		ActionReservationDissolution: &ReservationDissolutionProposal{},
 	}[parsedActionType]
 	if !ok {
 		return nil, fmt.Errorf(
@@ -484,9 +489,192 @@ func unmarshalPublicKey(bytes []byte) (*ecdsa.PublicKey, error) {
 
 func validateMemberIndex(protoIndex uint32) error {
 	// Protobuf does not have uint8 type, so we are using uint32. When
-	// unmarshalling message, we need to make sure we do not overflow.
-	if protoIndex > group.MaxMemberIndex {
+	// unmarshalling message, we need to make sure we do not overflow,
+	// and that a valid (non-zero) member index was provided.
+	if protoIndex == 0 || protoIndex > uint32(group.MaxMemberIndex) {
 		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
 	}
+	return nil
+}
+
+func validateReservationKey(key *big.Int) error {
+	if key == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	if key.Sign() <= 0 || key.BitLen() > 256 {
+		return fmt.Errorf("reservation key is out of range")
+	}
+	return nil
+}
+
+func validateProposalNonceAndFee(nonce uint64, fee *big.Int, label string) error {
+	if nonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if fee == nil {
+		return fmt.Errorf("%s is required", label)
+	}
+	if fee.Sign() <= 0 {
+		return fmt.Errorf("%s must be positive", label)
+	}
+	if !fee.IsInt64() {
+		return fmt.Errorf("%s is out of range", label)
+	}
+	return nil
+}
+
+// Marshal converts the reservationAnchorProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+// This protobuf migration MUST land before (or in the same release as) any
+// code that generates these proposals on the wire, i.e. before the deferred
+// coordination-executor wiring activates these action types.
+func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rap)
+}
+
+// Unmarshal converts a byte array back to the reservationAnchorProposal.
+func (rap *ReservationAnchorProposal) Unmarshal(bytes []byte) error {
+	var proposal struct {
+		DepositFundingTxHash      []byte   `json:"depositFundingTxHash"`
+		DepositFundingOutputIndex uint32   `json:"depositFundingOutputIndex"`
+		RequestNonce              uint64   `json:"requestNonce"`
+		AnchorTxFee               *big.Int `json:"anchorTxFee"`
+	}
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if len(proposal.DepositFundingTxHash) != 0 &&
+		len(proposal.DepositFundingTxHash) != bitcoin.HashByteLength {
+		return fmt.Errorf(
+			"invalid deposit funding transaction hash length: [%v]",
+			len(proposal.DepositFundingTxHash),
+		)
+	}
+
+	var depositFundingTxHash bitcoin.Hash
+	copy(depositFundingTxHash[:], proposal.DepositFundingTxHash)
+
+	if depositFundingTxHash == (bitcoin.Hash{}) {
+		return fmt.Errorf("deposit funding transaction hash is required")
+	}
+	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.AnchorTxFee, "anchor transaction fee"); err != nil {
+		return err
+	}
+
+	rap.DepositFundingTxHash = depositFundingTxHash
+	rap.DepositFundingOutputIndex = proposal.DepositFundingOutputIndex
+	rap.RequestNonce = proposal.RequestNonce
+	rap.AnchorTxFee = proposal.AnchorTxFee
+	return nil
+}
+
+// Marshal converts the reservedRedemptionProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+// This protobuf migration MUST land before (or in the same release as) any
+// code that generates these proposals on the wire, i.e. before the deferred
+// coordination-executor wiring activates these action types.
+func (rrp *ReservedRedemptionProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rrp)
+}
+
+// Unmarshal converts a byte array back to the reservedRedemptionProposal.
+func (rrp *ReservedRedemptionProposal) Unmarshal(bytes []byte) error {
+	var proposal ReservedRedemptionProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if err := validateReservationKey(proposal.ReservationKey); err != nil {
+		return err
+	}
+	if len(proposal.RedeemerOutputScript) == 0 {
+		return fmt.Errorf("redeemer output script is required")
+	}
+	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.RedemptionTxFee, "redemption transaction fee"); err != nil {
+		return err
+	}
+
+	*rrp = proposal
+	return nil
+}
+
+// Marshal converts the reservationReanchorProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+// This protobuf migration MUST land before (or in the same release as) any
+// code that generates these proposals on the wire, i.e. before the deferred
+// coordination-executor wiring activates these action types.
+func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rrp)
+}
+
+// Unmarshal converts a byte array back to the reservationReanchorProposal.
+func (rrp *ReservationReanchorProposal) Unmarshal(bytes []byte) error {
+	var proposal struct {
+		ReservationKey            *big.Int `json:"reservationKey"`
+		RequestNonce              uint64   `json:"requestNonce"`
+		TargetWalletPublicKeyHash []byte   `json:"targetWalletPublicKeyHash"`
+		ReanchorTxFee             *big.Int `json:"reanchorTxFee"`
+	}
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if len(proposal.TargetWalletPublicKeyHash) != 0 &&
+		len(proposal.TargetWalletPublicKeyHash) != 20 {
+		return fmt.Errorf(
+			"invalid target wallet public key hash length: [%v]",
+			len(proposal.TargetWalletPublicKeyHash),
+		)
+	}
+	if err := validateReservationKey(proposal.ReservationKey); err != nil {
+		return err
+	}
+
+	var targetWalletPublicKeyHash [20]byte
+	copy(targetWalletPublicKeyHash[:], proposal.TargetWalletPublicKeyHash)
+
+	if targetWalletPublicKeyHash == [20]byte{} {
+		return fmt.Errorf("target wallet public key hash is required")
+	}
+	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.ReanchorTxFee, "re-anchor transaction fee"); err != nil {
+		return err
+	}
+
+	rrp.ReservationKey = proposal.ReservationKey
+	rrp.RequestNonce = proposal.RequestNonce
+	rrp.TargetWalletPublicKeyHash = targetWalletPublicKeyHash
+	rrp.ReanchorTxFee = proposal.ReanchorTxFee
+	return nil
+}
+
+// Marshal converts the reservationDissolutionProposal to a byte array.
+//
+// TODO: Switch to protobuf-based marshaling (see pkg/tbtc/gen/pb) once the
+// reservation message types are added to the coordination proto definition.
+// This protobuf migration MUST land before (or in the same release as) any
+// code that generates these proposals on the wire, i.e. before the deferred
+// coordination-executor wiring activates these action types.
+func (rdp *ReservationDissolutionProposal) Marshal() ([]byte, error) {
+	return json.Marshal(rdp)
+}
+
+// Unmarshal converts a byte array back to the reservationDissolutionProposal.
+func (rdp *ReservationDissolutionProposal) Unmarshal(bytes []byte) error {
+	var proposal ReservationDissolutionProposal
+	if err := json.Unmarshal(bytes, &proposal); err != nil {
+		return err
+	}
+	if err := validateReservationKey(proposal.ReservationKey); err != nil {
+		return err
+	}
+	if err := validateProposalNonceAndFee(proposal.RequestNonce, proposal.DissolutionTxFee, "dissolution transaction fee"); err != nil {
+		return err
+	}
+
+	*rdp = proposal
 	return nil
 }

@@ -4,14 +4,16 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-
 	"github.com/keep-network/keep-core/pkg/chain"
+
+	"github.com/keep-network/keep-core/pkg/tbtc"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -532,4 +534,70 @@ func TestBuildMovedFundsKey(t *testing.T) {
 		expectedMovedFundsKey,
 		movedFundsKey.Text(16),
 	)
+}
+
+func TestTbtcChainReservationStubs(t *testing.T) {
+	tc := &TbtcChain{}
+
+	reservationKey := big.NewInt(1)
+	_, _, err := tc.GetReservation(reservationKey)
+	if !errors.Is(err, errReservationsUnsupported) {
+		t.Errorf("GetReservation: expected errReservationsUnsupported, got %v", err)
+	}
+
+	_, err = tc.GetReservationAction(reservationKey, 1)
+	if !errors.Is(err, errReservationsUnsupported) {
+		t.Errorf("GetReservationAction: expected errReservationsUnsupported, got %v", err)
+	}
+
+	_, err = tc.GetReservationParameters()
+	if !errors.Is(err, errReservationsUnsupported) {
+		t.Errorf("GetReservationParameters: expected errReservationsUnsupported, got %v", err)
+	}
+
+	_, err = tc.GetReservationTotalAmount()
+	if !errors.Is(err, errReservationsUnsupported) {
+		t.Errorf("GetReservationTotalAmount: expected errReservationsUnsupported, got %v", err)
+	}
+
+	var wpkHash [20]byte
+
+	err = tc.ValidateReservationAnchorProposal(wpkHash, &tbtc.ReservationAnchorProposal{}, struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	}{})
+	if !errors.Is(err, errReservationsUnsupported) {
+		t.Errorf("ValidateReservationAnchorProposal: expected errReservationsUnsupported, got %v", err)
+	}
+
+	err = tc.ValidateReservedRedemptionProposal(wpkHash, &tbtc.ReservedRedemptionProposal{})
+	if !errors.Is(err, errReservationsUnsupported) {
+		t.Errorf("ValidateReservedRedemptionProposal: expected errReservationsUnsupported, got %v", err)
+	}
+
+	err = tc.ValidateReservationReanchorProposal(wpkHash, &tbtc.ReservationReanchorProposal{})
+	if !errors.Is(err, errReservationsUnsupported) {
+		t.Errorf("ValidateReservationReanchorProposal: expected errReservationsUnsupported, got %v", err)
+	}
+
+	err = tc.ValidateReservationDissolutionProposal(wpkHash, &tbtc.ReservationDissolutionProposal{})
+	if !errors.Is(err, errReservationsUnsupported) {
+		t.Errorf("ValidateReservationDissolutionProposal: expected errReservationsUnsupported, got %v", err)
+	}
+}
+
+func TestRedeemerOutputScriptHash(t *testing.T) {
+	// Example script: "76a9144130879211c54df460e484ddf9aac009cb38ee7488ac"
+	script := bitcoin.Script{0x76, 0xa9, 0x14, 0x41, 0x30, 0x87, 0x92, 0x11, 0xc5, 0x4d, 0xf4, 0x60, 0xe, 0x48, 0x4d, 0xdf, 0xf9, 0xaa, 0xc0, 0x09, 0xcb, 0x38, 0xee, 0x74, 0x88, 0xac}
+
+	hash, err := redeemerOutputScriptHash(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Known hash
+	expectedHash := "b04b97d4aaec109acf3af12994b0c088d2cbb96d3cdb8cdfba66c5a1cf9ca86f"
+	if hex.EncodeToString(hash[:]) != expectedHash {
+		t.Errorf("expected hash %s, got %s", expectedHash, hex.EncodeToString(hash[:]))
+	}
 }

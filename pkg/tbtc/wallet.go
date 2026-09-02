@@ -23,6 +23,10 @@ import (
 )
 
 // WalletActionType represents actions types that can be performed by a wallet.
+//
+// Append-only: values are part of the wire-serialized wallet action
+// protocol. Do not reorder or insert new values in the middle of the
+// existing block; always append new action types at the end.
 type WalletActionType uint8
 
 const (
@@ -32,6 +36,10 @@ const (
 	ActionRedemption
 	ActionMovingFunds
 	ActionMovedFundsSweep
+	ActionReservationAnchor
+	ActionReservedRedemption
+	ActionReservationReanchor
+	ActionReservationDissolution
 )
 
 // ParseWalletActionType parses the given value into a WalletActionType.
@@ -49,6 +57,14 @@ func ParseWalletActionType(value uint8) (WalletActionType, error) {
 		return ActionMovingFunds, nil
 	case 5:
 		return ActionMovedFundsSweep, nil
+	case 6:
+		return ActionReservationAnchor, nil
+	case 7:
+		return ActionReservedRedemption, nil
+	case 8:
+		return ActionReservationReanchor, nil
+	case 9:
+		return ActionReservationDissolution, nil
 	default:
 		return 0, fmt.Errorf("unknown wallet action type [%v]", value)
 	}
@@ -68,6 +84,14 @@ func (wat WalletActionType) String() string {
 		return "MovingFunds"
 	case ActionMovedFundsSweep:
 		return "MovedFundsSweep"
+	case ActionReservationAnchor:
+		return "ReservationAnchor"
+	case ActionReservedRedemption:
+		return "ReservedRedemption"
+	case ActionReservationReanchor:
+		return "ReservationReanchor"
+	case ActionReservationDissolution:
+		return "ReservationDissolution"
 	default:
 		panic("unknown wallet action type")
 	}
@@ -89,6 +113,14 @@ func (wat WalletActionType) MetricName() string {
 		return "moving_funds"
 	case ActionMovedFundsSweep:
 		return "moved_funds_sweep"
+	case ActionReservationAnchor:
+		return "reservation_anchor"
+	case ActionReservedRedemption:
+		return "reserved_redemption"
+	case ActionReservationReanchor:
+		return "reservation_reanchor"
+	case ActionReservationDissolution:
+		return "reservation_dissolution"
 	default:
 		panic("unknown wallet action type")
 	}
@@ -740,7 +772,7 @@ func EnsureWalletSyncedBetweenChains(
 				)
 			}
 			input := transaction.Inputs[0]
-			_, isDeposit, err := bridgeChain.GetDepositRequest(
+			depositRequest, isDeposit, err := bridgeChain.GetDepositRequest(
 				input.Outpoint.TransactionHash,
 				input.Outpoint.OutputIndex,
 			)
@@ -758,6 +790,27 @@ func EnsureWalletSyncedBetweenChains(
 				// If that's the case, the wallet has already created a deposit
 				// sweep as their first Bitcoin transaction and the Bridge is
 				// awaiting the SPV proof.
+				//
+				// A reservation anchor transaction spends a revealed deposit
+				// too, matching this exact 1-in-1-out shape, but it targets
+				// the reservation vault and deliberately never becomes the
+				// wallet's main UTXO. Treat that case as a legitimate
+				// terminal wallet output instead of an unproven sweep.
+				if depositRequest.Vault != nil {
+					// GetReservationParameters is not yet implemented on
+					// every chain backend (see errReservationsUnsupported);
+					// treat that, or an unset reservation vault, as "this
+					// deposit is not a reservation anchor" and fall through
+					// to the unproven-sweep error below, rather than failing
+					// wallet sync for ordinary (non-reservation) deposits.
+					reservationParameters, err := bridgeChain.GetReservationParameters()
+					if err == nil &&
+						reservationParameters.Vault != "" &&
+						*depositRequest.Vault == reservationParameters.Vault {
+						continue
+					}
+				}
+
 				return fmt.Errorf("wallet already produced their first " +
 					"Bitcoin transaction (deposit sweep); Bridge is probably " +
 					"awaiting the SPV proof",

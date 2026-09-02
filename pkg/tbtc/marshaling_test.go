@@ -4,16 +4,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"encoding/hex"
+	"encoding/json"
 	"math/big"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/keep-network/keep-core/pkg/bitcoin"
-
 	fuzz "github.com/google/gofuzz"
-
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/internal/pbutils"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
@@ -21,6 +20,42 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestValidateMemberIndex(t *testing.T) {
+	tests := map[string]struct {
+		protoIndex uint32
+		wantErr    bool
+	}{
+		"valid index 1": {
+			protoIndex: 1,
+			wantErr:    false,
+		},
+		"valid index 255": {
+			protoIndex: 255,
+			wantErr:    false,
+		},
+		"invalid index 0": {
+			protoIndex: 0,
+			wantErr:    true,
+		},
+		"invalid index 256": {
+			protoIndex: 256,
+			wantErr:    true,
+		},
+		"invalid index 300": {
+			protoIndex: 300,
+			wantErr:    true,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			err := validateMemberIndex(test.protoIndex)
+			if (err != nil) != test.wantErr {
+				t.Errorf("validateMemberIndex() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
 func TestSignerMarshalling(t *testing.T) {
 	marshaled := createMockSigner(t)
 
@@ -433,4 +468,354 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithNoopProposal(t *testing
 
 func TestFuzzCoordinationMessage_Unmarshaler(t *testing.T) {
 	pbutils.FuzzUnmarshaler(&coordinationMessage{})
+}
+
+func FuzzReservationAnchorProposal_Unmarshal(f *testing.F) {
+	proposal := &ReservationAnchorProposal{
+		DepositFundingTxHash:      bitcoin.Hash{0x01},
+		DepositFundingOutputIndex: 1,
+		RequestNonce:              1,
+		AnchorTxFee:               big.NewInt(1000),
+	}
+	bytes, _ := proposal.Marshal()
+	f.Add(bytes)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_ = (&ReservationAnchorProposal{}).Unmarshal(data)
+	})
+}
+
+func FuzzReservedRedemptionProposal_Unmarshal(f *testing.F) {
+	proposal := &ReservedRedemptionProposal{
+		ReservationKey:       big.NewInt(12345),
+		RequestNonce:         1,
+		RedeemerOutputScript: bitcoin.Script{0x01},
+		RedemptionTxFee:      big.NewInt(1000),
+	}
+	bytes, _ := proposal.Marshal()
+	f.Add(bytes)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_ = (&ReservedRedemptionProposal{}).Unmarshal(data)
+	})
+}
+
+func FuzzReservationReanchorProposal_Unmarshal(f *testing.F) {
+	proposal := &ReservationReanchorProposal{
+		ReservationKey:            big.NewInt(12345),
+		RequestNonce:              1,
+		TargetWalletPublicKeyHash: [20]byte{0x01},
+		ReanchorTxFee:             big.NewInt(1000),
+	}
+	bytes, _ := proposal.Marshal()
+	f.Add(bytes)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_ = (&ReservationReanchorProposal{}).Unmarshal(data)
+	})
+}
+
+func FuzzReservationDissolutionProposal_Unmarshal(f *testing.F) {
+	proposal := &ReservationDissolutionProposal{
+		ReservationKey:   big.NewInt(12345),
+		RequestNonce:     1,
+		DissolutionTxFee: big.NewInt(1000),
+	}
+	bytes, _ := proposal.Marshal()
+	f.Add(bytes)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_ = (&ReservationDissolutionProposal{}).Unmarshal(data)
+	})
+}
+func TestReservationAnchorProposal_UnmarshalRejectsMalformedInput(t *testing.T) {
+	t.Run("truncated json", func(t *testing.T) {
+		if err := (&ReservationAnchorProposal{}).Unmarshal([]byte(`{"depositFundingTxHash":`)); err == nil {
+			t.Fatal("expected error for truncated json")
+		}
+	})
+
+	t.Run("zero request nonce", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationAnchorProposal{
+			DepositFundingTxHash: bitcoin.Hash{0x01},
+			RequestNonce:         0,
+			AnchorTxFee:          big.NewInt(100),
+		})
+		if err := (&ReservationAnchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for zero request nonce")
+		}
+	})
+
+	t.Run("negative fee", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationAnchorProposal{
+			DepositFundingTxHash: bitcoin.Hash{0x01},
+			RequestNonce:         1,
+			AnchorTxFee:          big.NewInt(-100),
+		})
+		if err := (&ReservationAnchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative fee")
+		}
+	})
+	t.Run("oversized fee", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationAnchorProposal{
+			DepositFundingTxHash: bitcoin.Hash{0x01},
+			RequestNonce:         1,
+			AnchorTxFee:          new(big.Int).Lsh(big.NewInt(1), 64),
+		})
+		if err := (&ReservationAnchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized fee")
+		}
+	})
+
+	t.Run("wrong-length deposit funding transaction hash", func(t *testing.T) {
+		// Real wire format (see Marshal, which json.Marshals the [32]byte
+		// field directly): a JSON array of byte values, not a base64
+		// string. Length 3 instead of 32 must be rejected explicitly,
+		// not silently zero-filled the way [32]byte unmarshal would.
+		data, err := json.Marshal(map[string]interface{}{
+			"depositFundingTxHash":      []int{0x01, 0x02, 0x03},
+			"depositFundingOutputIndex": 0,
+			"requestNonce":              1,
+			"anchorTxFee":               100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = (&ReservationAnchorProposal{}).Unmarshal(data)
+		if err == nil || err.Error() != "invalid deposit funding transaction hash length: [3]" {
+			t.Fatalf("expected wrong-length error, got [%v]", err)
+		}
+	})
+
+	t.Run("full-length deposit funding transaction hash round-trips", func(t *testing.T) {
+		data, err := (&ReservationAnchorProposal{
+			DepositFundingTxHash: bitcoin.Hash{0x01},
+			RequestNonce:         1,
+			AnchorTxFee:          big.NewInt(100),
+		}).Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var proposal ReservationAnchorProposal
+		if err := proposal.Unmarshal(data); err != nil {
+			t.Fatalf("expected no error, got [%v]", err)
+		}
+		if proposal.DepositFundingTxHash != (bitcoin.Hash{0x01}) {
+			t.Fatalf("unexpected hash: [%v]", proposal.DepositFundingTxHash)
+		}
+	})
+}
+
+func TestReservedRedemptionProposal_UnmarshalRejectsMalformedInput(t *testing.T) {
+	t.Run("truncated json", func(t *testing.T) {
+		if err := (&ReservedRedemptionProposal{}).Unmarshal([]byte(`{"reservationKey":`)); err == nil {
+			t.Fatal("expected error for truncated json")
+		}
+	})
+
+	t.Run("zero request nonce", func(t *testing.T) {
+		data, _ := json.Marshal(ReservedRedemptionProposal{
+			ReservationKey:  big.NewInt(12345),
+			RequestNonce:    0,
+			RedemptionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservedRedemptionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for zero request nonce")
+		}
+	})
+
+	t.Run("negative fee", func(t *testing.T) {
+		data, _ := json.Marshal(ReservedRedemptionProposal{
+			ReservationKey:  big.NewInt(12345),
+			RequestNonce:    1,
+			RedemptionTxFee: big.NewInt(-100),
+		})
+		if err := (&ReservedRedemptionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative fee")
+		}
+	})
+	t.Run("negative reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservedRedemptionProposal{
+			ReservationKey:  big.NewInt(-1),
+			RequestNonce:    1,
+			RedemptionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservedRedemptionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative reservation key")
+		}
+	})
+
+	t.Run("oversized reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservedRedemptionProposal{
+			ReservationKey:  new(big.Int).Lsh(big.NewInt(1), 256), // > 256 bits
+			RequestNonce:    1,
+			RedemptionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservedRedemptionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized reservation key")
+		}
+	})
+	t.Run("oversized fee", func(t *testing.T) {
+		data, _ := json.Marshal(ReservedRedemptionProposal{
+			ReservationKey:  big.NewInt(12345),
+			RequestNonce:    1,
+			RedemptionTxFee: new(big.Int).Lsh(big.NewInt(1), 64),
+		})
+		if err := (&ReservedRedemptionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized fee")
+		}
+	})
+}
+
+func TestReservationReanchorProposal_UnmarshalRejectsMalformedInput(t *testing.T) {
+	t.Run("truncated json", func(t *testing.T) {
+		if err := (&ReservationReanchorProposal{}).Unmarshal([]byte(`{"reservationKey":`)); err == nil {
+			t.Fatal("expected error for truncated json")
+		}
+	})
+
+	t.Run("zero request nonce", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationReanchorProposal{
+			ReservationKey: big.NewInt(12345),
+			RequestNonce:   0,
+			ReanchorTxFee:  big.NewInt(100),
+		})
+		if err := (&ReservationReanchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for zero request nonce")
+		}
+	})
+
+	t.Run("negative fee", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationReanchorProposal{
+			ReservationKey: big.NewInt(12345),
+			RequestNonce:   1,
+			ReanchorTxFee:  big.NewInt(-100),
+		})
+		if err := (&ReservationReanchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative fee")
+		}
+	})
+	t.Run("negative reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationReanchorProposal{
+			ReservationKey: big.NewInt(-1),
+			RequestNonce:   1,
+			ReanchorTxFee:  big.NewInt(100),
+		})
+		if err := (&ReservationReanchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative reservation key")
+		}
+	})
+
+	t.Run("oversized reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationReanchorProposal{
+			ReservationKey: new(big.Int).Lsh(big.NewInt(1), 256), // > 256 bits
+			RequestNonce:   1,
+			ReanchorTxFee:  big.NewInt(100),
+		})
+		if err := (&ReservationReanchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized reservation key")
+		}
+	})
+	t.Run("oversized fee", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationReanchorProposal{
+			ReservationKey: big.NewInt(12345),
+			RequestNonce:   1,
+			ReanchorTxFee:  new(big.Int).Lsh(big.NewInt(1), 64),
+		})
+		if err := (&ReservationReanchorProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized fee")
+		}
+	})
+
+	t.Run("wrong-length target wallet public key hash", func(t *testing.T) {
+		data, err := json.Marshal(map[string]interface{}{
+			"reservationKey":            12345,
+			"requestNonce":              1,
+			"targetWalletPublicKeyHash": []int{0x01, 0x02, 0x03},
+			"reanchorTxFee":             100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = (&ReservationReanchorProposal{}).Unmarshal(data)
+		if err == nil || err.Error() != "invalid target wallet public key hash length: [3]" {
+			t.Fatalf("expected wrong-length error, got [%v]", err)
+		}
+	})
+
+	t.Run("full-length target wallet public key hash round-trips", func(t *testing.T) {
+		data, err := (&ReservationReanchorProposal{
+			ReservationKey:            big.NewInt(12345),
+			RequestNonce:              1,
+			TargetWalletPublicKeyHash: [20]byte{0x01},
+			ReanchorTxFee:             big.NewInt(100),
+		}).Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var proposal ReservationReanchorProposal
+		if err := proposal.Unmarshal(data); err != nil {
+			t.Fatalf("expected no error, got [%v]", err)
+		}
+		if proposal.TargetWalletPublicKeyHash != ([20]byte{0x01}) {
+			t.Fatalf("unexpected hash: [%v]", proposal.TargetWalletPublicKeyHash)
+		}
+	})
+}
+
+func TestReservationDissolutionProposal_UnmarshalRejectsMalformedInput(t *testing.T) {
+	t.Run("truncated json", func(t *testing.T) {
+		if err := (&ReservationDissolutionProposal{}).Unmarshal([]byte(`{"reservationKey":`)); err == nil {
+			t.Fatal("expected error for truncated json")
+		}
+	})
+
+	t.Run("zero request nonce", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationDissolutionProposal{
+			ReservationKey:   big.NewInt(12345),
+			RequestNonce:     0,
+			DissolutionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservationDissolutionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for zero request nonce")
+		}
+	})
+
+	t.Run("negative fee", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationDissolutionProposal{
+			ReservationKey:   big.NewInt(12345),
+			RequestNonce:     1,
+			DissolutionTxFee: big.NewInt(-100),
+		})
+		if err := (&ReservationDissolutionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative fee")
+		}
+	})
+	t.Run("negative reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationDissolutionProposal{
+			ReservationKey:   big.NewInt(-1),
+			RequestNonce:     1,
+			DissolutionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservationDissolutionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for negative reservation key")
+		}
+	})
+
+	t.Run("oversized reservation key", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationDissolutionProposal{
+			ReservationKey:   new(big.Int).Lsh(big.NewInt(1), 256), // > 256 bits
+			RequestNonce:     1,
+			DissolutionTxFee: big.NewInt(100),
+		})
+		if err := (&ReservationDissolutionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized reservation key")
+		}
+	})
+	t.Run("oversized fee", func(t *testing.T) {
+		data, _ := json.Marshal(ReservationDissolutionProposal{
+			ReservationKey:   big.NewInt(12345),
+			RequestNonce:     1,
+			DissolutionTxFee: new(big.Int).Lsh(big.NewInt(1), 64),
+		})
+		if err := (&ReservationDissolutionProposal{}).Unmarshal(data); err == nil {
+			t.Fatal("expected error for oversized fee")
+		}
+	})
 }

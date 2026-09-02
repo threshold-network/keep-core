@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
@@ -53,9 +55,25 @@ func TestParseWalletActionType(t *testing.T) {
 			value:          5,
 			expectedAction: ActionMovedFundsSweep,
 		},
+		"reservation anchor": {
+			value:          6,
+			expectedAction: ActionReservationAnchor,
+		},
+		"reserved redemption": {
+			value:          7,
+			expectedAction: ActionReservedRedemption,
+		},
+		"reservation re-anchor": {
+			value:          8,
+			expectedAction: ActionReservationReanchor,
+		},
+		"reservation dissolution": {
+			value:          9,
+			expectedAction: ActionReservationDissolution,
+		},
 		"unknown": {
-			value:       6,
-			expectedErr: fmt.Errorf("unknown wallet action type [6]"),
+			value:       10,
+			expectedErr: fmt.Errorf("unknown wallet action type [10]"),
 		},
 	}
 
@@ -79,6 +97,57 @@ func TestParseWalletActionType(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestWalletActionType_MetricName(t *testing.T) {
+	tests := map[WalletActionType]string{
+		ActionNoop:                   "noop",
+		ActionHeartbeat:              "heartbeat",
+		ActionDepositSweep:           "deposit_sweep",
+		ActionRedemption:             "redemption",
+		ActionMovingFunds:            "moving_funds",
+		ActionMovedFundsSweep:        "moved_funds_sweep",
+		ActionReservationAnchor:      "reservation_anchor",
+		ActionReservedRedemption:     "reserved_redemption",
+		ActionReservationReanchor:    "reservation_reanchor",
+		ActionReservationDissolution: "reservation_dissolution",
+	}
+
+	for actionType, expected := range tests {
+		if actual := actionType.MetricName(); actual != expected {
+			t.Errorf(
+				"unexpected metric name for action type [%v]\nexpected: [%v]\nactual:   [%v]",
+				actionType,
+				expected,
+				actual,
+			)
+		}
+	}
+}
+
+func TestWalletActionType_MetricNameConsistency(t *testing.T) {
+	expected := clientinfo.GetAllWalletActionTypes()
+
+	actual := make([]string, 0)
+	for i := uint8(0); ; i++ {
+		wat, err := ParseWalletActionType(i)
+		if err != nil {
+			break
+		}
+
+		if wat == ActionNoop {
+			continue
+		}
+
+		actual = append(actual, wat.MetricName())
+	}
+
+	sort.Strings(expected)
+	sort.Strings(actual)
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Errorf("Metric names mismatch between WalletActionType and clientinfo.GetAllWalletActionTypes\nexpected: %v\nactual: %v", expected, actual)
 	}
 }
 
@@ -901,6 +970,134 @@ func TestEnsureWalletSyncedBetweenChains_FreshWalletDepositSweepFirstTx(t *testi
 	}
 }
 
+func TestEnsureWalletSyncedBetweenChains_FreshWalletReservationAnchorFirstTx(t *testing.T) {
+	var walletPKH [20]byte
+	walletPKH[0] = 0xaa
+
+	depositFundingTxHash := bitcoin.Hash{0xdd}
+	var depositFundingOutputIndex uint32 = 0
+
+	// A reservation anchor transaction. Its single input spends a deposit
+	// revealed with the reservation vault; its single output pays the
+	// wallet and deliberately never becomes the main UTXO.
+	anchorTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: depositFundingTxHash,
+					OutputIndex:     depositFundingOutputIndex,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 9000, PublicKeyScript: []byte{0x51}},
+		},
+	}
+
+	anchorUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: anchorTx.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 9000,
+	}
+
+	reservationVault := chain.Address("0x2222222222222222222222222222222222222222")
+
+	localChain := Connect()
+	localChain.SetReservationParameters(ReservationParameters{
+		Vault: reservationVault,
+	})
+	localChain.setDepositRequest(
+		depositFundingTxHash,
+		depositFundingOutputIndex,
+		&DepositChainRequest{
+			Vault: &reservationVault,
+		},
+	)
+
+	btcChain := &walletSyncBtcChain{
+		utxos:   []*bitcoin.UnspentTransactionOutput{anchorUtxo},
+		mempool: []*bitcoin.UnspentTransactionOutput{},
+		txs:     map[bitcoin.Hash]*bitcoin.Transaction{anchorTx.Hash(): anchorTx},
+	}
+
+	// EnsureWalletSyncedBetweenChains should NOT return an error for a
+	// reservation anchor: it spends a deposit revealed with the reservation
+	// vault, so it is a legitimate terminal wallet output rather than an
+	// unproven deposit sweep.
+	err := EnsureWalletSyncedBetweenChains(walletPKH, nil, localChain, btcChain)
+
+	if err != nil {
+		t.Errorf("expected no error for reservation anchor, got [%v]", err)
+	}
+}
+
+func TestEnsureWalletSyncedBetweenChains_FreshWalletDepositVaultMismatchFirstTx(t *testing.T) {
+	var walletPKH [20]byte
+	walletPKH[0] = 0xaa
+
+	depositFundingTxHash := bitcoin.Hash{0xdd}
+	var depositFundingOutputIndex uint32 = 0
+
+	// Same 1-in-1-out shape as a reservation anchor, but the deposit's
+	// vault does not match the reservation vault (e.g. an ordinary
+	// TBTCVault deposit). This must still be treated as an unproven
+	// deposit sweep, not silently accepted as a reservation anchor.
+	sweepTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: depositFundingTxHash,
+					OutputIndex:     depositFundingOutputIndex,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 9000, PublicKeyScript: []byte{0x51}},
+		},
+	}
+
+	sweepUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: sweepTx.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 9000,
+	}
+
+	reservationVault := chain.Address("0x2222222222222222222222222222222222222222")
+	ordinaryVault := chain.Address("0x3333333333333333333333333333333333333333")
+
+	localChain := Connect()
+	localChain.SetReservationParameters(ReservationParameters{
+		Vault: reservationVault,
+	})
+	localChain.setDepositRequest(
+		depositFundingTxHash,
+		depositFundingOutputIndex,
+		&DepositChainRequest{
+			Vault: &ordinaryVault,
+		},
+	)
+
+	btcChain := &walletSyncBtcChain{
+		utxos:   []*bitcoin.UnspentTransactionOutput{sweepUtxo},
+		mempool: []*bitcoin.UnspentTransactionOutput{},
+		txs:     map[bitcoin.Hash]*bitcoin.Transaction{sweepTx.Hash(): sweepTx},
+	}
+
+	err := EnsureWalletSyncedBetweenChains(walletPKH, nil, localChain, btcChain)
+
+	if err == nil {
+		t.Error("expected error for a non-reservation deposit sweep, got nil")
+	}
+}
+
 func TestEnsureWalletSyncedBetweenChains_MainUtxoInSync(t *testing.T) {
 	var walletPKH [20]byte
 	walletPKH[0] = 0xbb
@@ -954,5 +1151,27 @@ func TestEnsureWalletSyncedBetweenChains_MainUtxoSpent(t *testing.T) {
 
 	if err == nil {
 		t.Error("expected error when main UTXO has been spent on Bitcoin, got nil")
+	}
+}
+func TestWalletActionType_String(t *testing.T) {
+	tests := map[WalletActionType]string{
+		ActionNoop:                   "Noop",
+		ActionHeartbeat:              "Heartbeat",
+		ActionDepositSweep:           "DepositSweep",
+		ActionRedemption:             "Redemption",
+		ActionMovingFunds:            "MovingFunds",
+		ActionMovedFundsSweep:        "MovedFundsSweep",
+		ActionReservationAnchor:      "ReservationAnchor",
+		ActionReservedRedemption:     "ReservedRedemption",
+		ActionReservationReanchor:    "ReservationReanchor",
+		ActionReservationDissolution: "ReservationDissolution",
+	}
+
+	for actionType, expected := range tests {
+		t.Run(expected, func(t *testing.T) {
+			if actionType.String() != expected {
+				t.Errorf("expected string [%s], got [%s]", expected, actionType.String())
+			}
+		})
 	}
 }

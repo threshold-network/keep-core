@@ -97,6 +97,9 @@ type localChain struct {
 	movingFundsParametersMutex sync.Mutex
 	movingFundsParameters      MovingFundsParameters
 
+	reservationParametersMutex sync.Mutex
+	reservationParameters      ReservationParameters
+
 	eligibleStakesMutex sync.Mutex
 	eligibleStakes      map[chain.Address]*big.Int
 
@@ -927,6 +930,26 @@ func (lc *localChain) ComputeMainUtxoHash(
 
 	return mainUtxoHash
 }
+func (lc *localChain) ComputeReservationRedeemerOutputScriptHash(
+	redeemerOutputScript bitcoin.Script,
+) ([32]byte, error) {
+	prefixedScript, err := redeemerOutputScript.ToVarLenData()
+	if err != nil {
+		return [32]byte{}, fmt.Errorf(
+			"cannot build prefixed redeemer output script: [%v]",
+			err,
+		)
+	}
+
+	return sha256.Sum256(prefixedScript), nil
+}
+
+func (lc *localChain) ValidateReservationDissolutionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *ReservationDissolutionProposal,
+) error {
+	panic("unsupported")
+}
 
 func (lc *localChain) ComputeMovingFundsCommitmentHash(targetWallets [][20]byte) [32]byte {
 	packedWallets := []byte{}
@@ -1449,4 +1472,60 @@ func generateHandlerID() int {
 	// #nosec G404 (insecure random number source (rand))
 	// Local chain implementation doesn't require secure randomness.
 	return rand.Int()
+}
+
+func (lc *localChain) GetReservation(
+	reservationKey *big.Int,
+) (*Reservation, bool, error) {
+	panic("unsupported")
+}
+
+func (lc *localChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*ReservationAction, error) {
+	panic("unsupported")
+}
+
+func (lc *localChain) GetReservationParameters() (ReservationParameters, error) {
+	lc.reservationParametersMutex.Lock()
+	defer lc.reservationParametersMutex.Unlock()
+
+	return lc.reservationParameters, nil
+}
+
+func (lc *localChain) SetReservationParameters(params ReservationParameters) {
+	lc.reservationParametersMutex.Lock()
+	defer lc.reservationParametersMutex.Unlock()
+
+	lc.reservationParameters = params
+}
+
+func (lc *localChain) GetReservationTotalAmount() (uint64, error) {
+	panic("unsupported")
+}
+
+func (lc *localChain) ValidateReservationAnchorProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) ValidateReservedRedemptionProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *ReservedRedemptionProposal,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) ValidateReservationReanchorProposal(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *ReservationReanchorProposal,
+) error {
+	panic("unsupported")
 }
