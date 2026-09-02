@@ -734,7 +734,7 @@ func EnsureWalletSyncedBetweenChains(
 				)
 			}
 			input := transaction.Inputs[0]
-			_, isDeposit, err := bridgeChain.GetDepositRequest(
+			depositRequest, isDeposit, err := bridgeChain.GetDepositRequest(
 				input.Outpoint.TransactionHash,
 				input.Outpoint.OutputIndex,
 			)
@@ -752,6 +752,27 @@ func EnsureWalletSyncedBetweenChains(
 				// If that's the case, the wallet has already created a deposit
 				// sweep as their first Bitcoin transaction and the Bridge is
 				// awaiting the SPV proof.
+				//
+				// A reservation anchor transaction spends a revealed deposit
+				// too, matching this exact 1-in-1-out shape, but it targets
+				// the reservation vault and deliberately never becomes the
+				// wallet's main UTXO. Treat that case as a legitimate
+				// terminal wallet output instead of an unproven sweep.
+				if depositRequest.Vault != nil {
+					// GetReservationParameters is not yet implemented on
+					// every chain backend (see errReservationsUnsupported);
+					// treat that, or an unset reservation vault, as "this
+					// deposit is not a reservation anchor" and fall through
+					// to the unproven-sweep error below, rather than failing
+					// wallet sync for ordinary (non-reservation) deposits.
+					reservationParameters, err := bridgeChain.GetReservationParameters()
+					if err == nil &&
+						reservationParameters.Vault != "" &&
+						*depositRequest.Vault == reservationParameters.Vault {
+						continue
+					}
+				}
+
 				return fmt.Errorf("wallet already produced their first " +
 					"Bitcoin transaction (deposit sweep); Bridge is probably " +
 					"awaiting the SPV proof",

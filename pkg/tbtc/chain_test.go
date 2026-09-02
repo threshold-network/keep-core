@@ -97,6 +97,9 @@ type localChain struct {
 	movingFundsParametersMutex sync.Mutex
 	movingFundsParameters      MovingFundsParameters
 
+	reservationParametersMutex sync.Mutex
+	reservationParameters      ReservationParameters
+
 	eligibleStakesMutex sync.Mutex
 	eligibleStakes      map[chain.Address]*big.Int
 
@@ -1485,7 +1488,17 @@ func (lc *localChain) GetReservationAction(
 }
 
 func (lc *localChain) GetReservationParameters() (ReservationParameters, error) {
-	panic("unsupported")
+	lc.reservationParametersMutex.Lock()
+	defer lc.reservationParametersMutex.Unlock()
+
+	return lc.reservationParameters, nil
+}
+
+func (lc *localChain) SetReservationParameters(params ReservationParameters) {
+	lc.reservationParametersMutex.Lock()
+	defer lc.reservationParametersMutex.Unlock()
+
+	lc.reservationParameters = params
 }
 
 func (lc *localChain) GetReservationTotalAmount() (uint64, error) {

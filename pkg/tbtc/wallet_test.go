@@ -970,6 +970,134 @@ func TestEnsureWalletSyncedBetweenChains_FreshWalletDepositSweepFirstTx(t *testi
 	}
 }
 
+func TestEnsureWalletSyncedBetweenChains_FreshWalletReservationAnchorFirstTx(t *testing.T) {
+	var walletPKH [20]byte
+	walletPKH[0] = 0xaa
+
+	depositFundingTxHash := bitcoin.Hash{0xdd}
+	var depositFundingOutputIndex uint32 = 0
+
+	// A reservation anchor transaction. Its single input spends a deposit
+	// revealed with the reservation vault; its single output pays the
+	// wallet and deliberately never becomes the main UTXO.
+	anchorTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: depositFundingTxHash,
+					OutputIndex:     depositFundingOutputIndex,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 9000, PublicKeyScript: []byte{0x51}},
+		},
+	}
+
+	anchorUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: anchorTx.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 9000,
+	}
+
+	reservationVault := chain.Address("0x2222222222222222222222222222222222222222")
+
+	localChain := Connect()
+	localChain.SetReservationParameters(ReservationParameters{
+		Vault: reservationVault,
+	})
+	localChain.setDepositRequest(
+		depositFundingTxHash,
+		depositFundingOutputIndex,
+		&DepositChainRequest{
+			Vault: &reservationVault,
+		},
+	)
+
+	btcChain := &walletSyncBtcChain{
+		utxos:   []*bitcoin.UnspentTransactionOutput{anchorUtxo},
+		mempool: []*bitcoin.UnspentTransactionOutput{},
+		txs:     map[bitcoin.Hash]*bitcoin.Transaction{anchorTx.Hash(): anchorTx},
+	}
+
+	// EnsureWalletSyncedBetweenChains should NOT return an error for a
+	// reservation anchor: it spends a deposit revealed with the reservation
+	// vault, so it is a legitimate terminal wallet output rather than an
+	// unproven deposit sweep.
+	err := EnsureWalletSyncedBetweenChains(walletPKH, nil, localChain, btcChain)
+
+	if err != nil {
+		t.Errorf("expected no error for reservation anchor, got [%v]", err)
+	}
+}
+
+func TestEnsureWalletSyncedBetweenChains_FreshWalletDepositVaultMismatchFirstTx(t *testing.T) {
+	var walletPKH [20]byte
+	walletPKH[0] = 0xaa
+
+	depositFundingTxHash := bitcoin.Hash{0xdd}
+	var depositFundingOutputIndex uint32 = 0
+
+	// Same 1-in-1-out shape as a reservation anchor, but the deposit's
+	// vault does not match the reservation vault (e.g. an ordinary
+	// TBTCVault deposit). This must still be treated as an unproven
+	// deposit sweep, not silently accepted as a reservation anchor.
+	sweepTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: depositFundingTxHash,
+					OutputIndex:     depositFundingOutputIndex,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 9000, PublicKeyScript: []byte{0x51}},
+		},
+	}
+
+	sweepUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: sweepTx.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 9000,
+	}
+
+	reservationVault := chain.Address("0x2222222222222222222222222222222222222222")
+	ordinaryVault := chain.Address("0x3333333333333333333333333333333333333333")
+
+	localChain := Connect()
+	localChain.SetReservationParameters(ReservationParameters{
+		Vault: reservationVault,
+	})
+	localChain.setDepositRequest(
+		depositFundingTxHash,
+		depositFundingOutputIndex,
+		&DepositChainRequest{
+			Vault: &ordinaryVault,
+		},
+	)
+
+	btcChain := &walletSyncBtcChain{
+		utxos:   []*bitcoin.UnspentTransactionOutput{sweepUtxo},
+		mempool: []*bitcoin.UnspentTransactionOutput{},
+		txs:     map[bitcoin.Hash]*bitcoin.Transaction{sweepTx.Hash(): sweepTx},
+	}
+
+	err := EnsureWalletSyncedBetweenChains(walletPKH, nil, localChain, btcChain)
+
+	if err == nil {
+		t.Error("expected error for a non-reservation deposit sweep, got nil")
+	}
+}
+
 func TestEnsureWalletSyncedBetweenChains_MainUtxoInSync(t *testing.T) {
 	var walletPKH [20]byte
 	walletPKH[0] = 0xbb
