@@ -322,6 +322,7 @@ func (n *node) handleReservationAnchorProposal(
 ) {
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
 	if err != nil {
+		logger.Errorf("cannot marshal wallet public key: [%v]", err)
 		return
 	}
 
@@ -386,6 +387,7 @@ func (n *node) handleReservationReanchorProposal(
 ) {
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
 	if err != nil {
+		logger.Errorf("cannot marshal wallet public key: [%v]", err)
 		return
 	}
 

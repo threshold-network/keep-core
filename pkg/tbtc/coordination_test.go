@@ -1149,8 +1149,6 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 			},
 			is4thWindow: true,
 		},
@@ -1185,8 +1183,6 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionHeartbeat,
 			},
 			is4thWindow: true,
@@ -1201,8 +1197,6 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 			},
 			is4thWindow: true,
 		},
@@ -1323,6 +1317,22 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 				t.Errorf("reservation actions mismatch: %v", diff)
 			}
 		})
+	}
+}
+
+func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
+	// Reference Ethereum mainnet block height as of 2026-09-02 (~25,880,000).
+	// ReservationsActivationBlock must be set to a future block height ahead
+	// of chain tip before release. If this test fails, both the reference
+	// height and ReservationsActivationBlock must be updated.
+	const referenceMainnetBlockHeight = uint64(25880000)
+
+	if ReservationsActivationBlock <= referenceMainnetBlockHeight {
+		t.Errorf(
+			"ReservationsActivationBlock [%d] must be ahead of the reference mainnet block height [%d]",
+			ReservationsActivationBlock,
+			referenceMainnetBlockHeight,
+		)
 	}
 }
 
