@@ -3,7 +3,6 @@ package tbtcpg
 import (
 	"fmt"
 	"math/big"
-	"sync"
 
 	"github.com/ipfs/go-log/v2"
 	"go.uber.org/zap"
@@ -25,11 +24,8 @@ const ReservationReanchorLookBackBlocks = uint64(216000)
 // task picks a destination wallet and assembles a 1-input-1-output re-anchor
 // transaction moving the anchor outpoint into that destination wallet.
 type ReservationReanchorTask struct {
-	chain                   Chain
-	btcChain                bitcoin.Chain
-	targetWalletCache       [20]byte
-	targetWalletInitialized bool
-	targetWalletMutex       sync.RWMutex
+	chain    Chain
+	btcChain bitcoin.Chain
 }
 
 // NewReservationReanchorTask returns a new ReservationReanchorTask bound to
@@ -129,10 +125,19 @@ func (rrt *ReservationReanchorTask) Run(
 		return nil, false, nil
 	}
 
+	targetWalletPublicKeyHash, err := rrt.findTargetWallet(
+		taskLogger,
+		walletPublicKeyHash,
+	)
+	if err != nil {
+		taskLogger.Errorf(
+			"cannot pick re-anchor target wallet: [%v]",
+			err,
+		)
+		return nil, false, nil
+	}
+
 	for _, reservationKey := range reservationKeys {
-		// Filter out reservations that already have a pending action: the
-		// Bridge will reject a duplicate re-anchor request while one is
-		// already in flight.
 		reservation, err := rrt.chain.GetReservation(reservationKey)
 		if err != nil {
 			taskLogger.Errorf(
@@ -143,27 +148,14 @@ func (rrt *ReservationReanchorTask) Run(
 			continue
 		}
 
+		// Filter out reservations that are not in the Active state.
+		// Note: Checking Active state already covers pending actions,
+		// because a reservation with a pending action is in ActionPending state.
 		if reservation.State != tbtc.ReservationStateActive {
 			taskLogger.Infof(
 				"reservation [0x%x] not in Active state (state=%v), skipping",
 				reservationKey,
 				reservation.State,
-			)
-			continue
-		}
-
-		if hasPendingAction(reservationKey, reservation, rrt.chain, taskLogger) {
-			continue
-		}
-
-		targetWalletPublicKeyHash, err := rrt.findTargetWallet(
-			taskLogger,
-			walletPublicKeyHash,
-		)
-		if err != nil {
-			taskLogger.Errorf(
-				"cannot pick re-anchor target wallet: [%v]",
-				err,
 			)
 			continue
 		}
@@ -288,6 +280,9 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 		)
 	}
 	// The re-anchor request generation must be authorized on-chain.
+	// Note: Calling RequestReservationReanchor during proposal generation is an
+	// accepted deviation from the read-only-during-generation pattern, with
+	// precedent in MovingFundsTask's SubmitMovingFundsCommitment.
 	if err := rrt.chain.RequestReservationReanchor(
 		reservationKey,
 		targetWalletPublicKeyHash,
@@ -309,18 +304,6 @@ func (rrt *ReservationReanchorTask) findTargetWallet(
 	taskLogger log.StandardLogger,
 	sourceWalletPublicKeyHash [20]byte,
 ) ([20]byte, error) {
-	rrt.targetWalletMutex.RLock()
-	if rrt.targetWalletInitialized {
-		cache := rrt.targetWalletCache
-		rrt.targetWalletMutex.RUnlock()
-
-		wallet, err := rrt.chain.GetWallet(cache)
-		if err == nil && wallet.State == tbtc.StateLive {
-			return cache, nil
-		}
-	} else {
-		rrt.targetWalletMutex.RUnlock()
-	}
 	blockCounter, err := rrt.chain.BlockCounter()
 	if err != nil {
 		return [20]byte{}, fmt.Errorf("failed to get block counter: [%v]", err)
@@ -363,10 +346,6 @@ func (rrt *ReservationReanchorTask) findTargetWallet(
 		}
 
 		if wallet.State == tbtc.StateLive {
-			rrt.targetWalletMutex.Lock()
-			rrt.targetWalletCache = walletPubKeyHash
-			rrt.targetWalletInitialized = true
-			rrt.targetWalletMutex.Unlock()
 			return walletPubKeyHash, nil
 		}
 	}
