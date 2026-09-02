@@ -236,31 +236,6 @@ type Chain interface {
 	// currently custodied by the given wallet.
 	WalletReservations(walletPublicKeyHash [20]byte) ([]*big.Int, error)
 
-	// ReservationByAnchorUtxo returns the reservation key whose anchor
-	// outpoint is the given Bitcoin transaction output, or an empty value
-	// if no reservation is anchored there.
-	ReservationByAnchorUtxo(
-		anchorTxHash [32]byte,
-		anchorTxOutputIndex uint32,
-	) (*big.Int, error)
-
-	// PendingReservedDeposits returns the number of reserved deposits that
-	// have been revealed to the Bridge but not yet accepted by a wallet.
-	PendingReservedDeposits() (uint64, error)
-
-	// Reservations returns the on-chain reservation request record for the
-	// given reservation key. Mirrors the ReservationRouter.reservations
-	// view verbatim.
-	Reservations(reservationKey *big.Int) (*tbtc.ReservationRequest, error)
-
-	// ReservationActions returns the on-chain reservation action record
-	// for the given reservation key and request nonce. Mirrors the
-	// ReservationRouter.reservationActions view verbatim.
-	ReservationActions(
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) (*tbtc.ReservationActionRecord, error)
-
 	// ActiveReservationsCount returns the current count of active
 	// reservations across all wallets and the cap on that count.
 	ActiveReservationsCount() (count uint32, maxActive uint32, err error)
@@ -278,14 +253,6 @@ type Chain interface {
 		filter *tbtc.ReservationAcceptanceRequestedEventFilter,
 	) ([]*tbtc.ReservationAcceptanceRequestedEvent, error)
 
-	// PastReservationAcceptedEvents fetches past ReservationAccepted
-	// events according to the provided filter or unfiltered if the filter
-	// is nil. Returned events are sorted by the block number in the
-	// ascending order.
-	PastReservationAcceptedEvents(
-		filter *tbtc.ReservationAcceptedEventFilter,
-	) ([]*tbtc.ReservationAcceptedEvent, error)
-
 	// PastReservationReanchorRequestedEvents fetches past
 	// ReservationReanchorRequested events according to the provided
 	// filter or unfiltered if the filter is nil. Returned events are
@@ -293,12 +260,4 @@ type Chain interface {
 	PastReservationReanchorRequestedEvents(
 		filter *tbtc.ReservationReanchorRequestedEventFilter,
 	) ([]*tbtc.ReservationReanchorRequestedEvent, error)
-
-	// PastReservationReanchoredEvents fetches past ReservationReanchored
-	// events according to the provided filter or unfiltered if the filter
-	// is nil. Returned events are sorted by the block number in the
-	// ascending order.
-	PastReservationReanchoredEvents(
-		filter *tbtc.ReservationReanchoredEventFilter,
-	) ([]*tbtc.ReservationReanchoredEvent, error)
 }

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/go-test/deep"
+	"golang.org/x/exp/slices"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
@@ -20,7 +22,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"golang.org/x/exp/slices"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 )
@@ -602,9 +603,12 @@ func runReservationCoordinationRound(
 // shared by TestCoordinationExecutor_Coordinate_ReservationAnchor and
 // TestCoordinationExecutor_Coordinate_ReservationReanchor: same wallet
 // public key hash and operator-to-member-index layout as
-// TestCoordinationExecutor_Coordinate, so leader election (operator2 wins
-// at coordination block 900) is proven identical to that already-passing
-// test rather than asserted freshly here.
+// TestCoordinationExecutor_Coordinate, so leader election (operator2
+// wins) is proven identical to that already-passing test's fixture -
+// the seed depends only on the wallet public key hash and the injected
+// safe-block hash (both unchanged here), not on the raw coordination
+// block number, so this holds regardless of which block the caller
+// passes in.
 func newReservationCoordinationWallet(
 	t *testing.T,
 	operators []*reservationCoordinationOperatorFixture,
@@ -665,7 +669,7 @@ func newReservationCoordinationWallet(
 // every operator's checklist search below would fall through to
 // NoopProposal and the assertion would fail.
 func TestCoordinationExecutor_Coordinate_ReservationAnchor(t *testing.T) {
-	coordinationBlock := uint64(900)
+	coordinationBlock := uint64(24562800)
 
 	operator1 := newReservationCoordinationOperator(t, 1, coordinationBlock, "reservation-coordination-test-anchor")
 	operator2 := newReservationCoordinationOperator(t, 2, coordinationBlock, "reservation-coordination-test-anchor")
@@ -763,7 +767,7 @@ func TestCoordinationExecutor_Coordinate_ReservationAnchor(t *testing.T) {
 // source wallet begins moving funds, this time converging on a
 // ReservationReanchorProposal.
 func TestCoordinationExecutor_Coordinate_ReservationReanchor(t *testing.T) {
-	coordinationBlock := uint64(900)
+	coordinationBlock := uint64(24562800)
 
 	operator1 := newReservationCoordinationOperator(t, 1, coordinationBlock, "reservation-coordination-test-reanchor")
 	operator2 := newReservationCoordinationOperator(t, 2, coordinationBlock, "reservation-coordination-test-reanchor")
@@ -944,10 +948,13 @@ func TestCoordinationExecutor_GetLeader(t *testing.T) {
 
 func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 	// All test cases below exercise the pre-activation code path because
-	// their coordination blocks are below
-	// DepositSweepEveryWindowActivationBlock. In this mode, all three
-	// actions (DepositSweep, MovedFundsSweep, MovingFunds) are gated to
-	// every 4th coordination window.
+	// their coordination blocks are below both
+	// DepositSweepEveryWindowActivationBlock and
+	// ReservationsActivationBlock. In this mode, DepositSweep,
+	// MovedFundsSweep, and MovingFunds are all gated to every 4th
+	// coordination window, and reservation actions never appear at all
+	// (see TestCoordinationExecutor_GetActionsChecklist_Reservations for
+	// the activation-block gate itself).
 	tests := map[string]struct {
 		coordinationBlock uint64
 		expectedChecklist []WalletActionType
@@ -960,7 +967,7 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		// Non-4th-window: only Redemption.
 		"block 900": {
 			coordinationBlock: 900,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		// Incorrect coordination window (windowIndex == 0, returns nil).
 		"block 901": {
@@ -970,20 +977,18 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		// Non-4th-window: only Redemption.
 		"block 1800": {
 			coordinationBlock: 1800,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		"block 2700": {
 			coordinationBlock: 2700,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 4): all actions present. Heartbeat randomly
-		// selected for this specific seed.
+		// 4th-window (window 4): sweep/moving-funds actions present.
+		// Heartbeat randomly selected for this specific seed.
 		"block 3600": {
 			coordinationBlock: 3600,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -992,23 +997,22 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 		"block 4500": {
 			coordinationBlock: 4500,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		"block 5400": {
 			coordinationBlock: 5400,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		"block 6300": {
 			coordinationBlock: 6300,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 8): all actions present except heartbeat.
+		// 4th-window (window 8): sweep/moving-funds actions present,
+		// no heartbeat for this seed.
 		"block 7200": {
 			coordinationBlock: 7200,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -1016,23 +1020,22 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 		"block 8100": {
 			coordinationBlock: 8100,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		"block 9000": {
 			coordinationBlock: 9000,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		"block 9900": {
 			coordinationBlock: 9900,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 12): all actions present except heartbeat.
+		// 4th-window (window 12): sweep/moving-funds actions present,
+		// no heartbeat for this seed.
 		"block 10800": {
 			coordinationBlock: 10800,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -1040,27 +1043,22 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 		"block 11700": {
 			coordinationBlock: 11700,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		"block 12600": {
 			coordinationBlock: 12600,
-			expectedChecklist: []WalletActionType{
-				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
-			},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		"block 13500": {
 			coordinationBlock: 13500,
-			expectedChecklist: []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 16): all actions present except heartbeat.
+		// 4th-window (window 16): sweep/moving-funds actions present,
+		// no heartbeat for this seed.
 		"block 14400": {
 			coordinationBlock: 14400,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
@@ -1120,13 +1118,12 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 		is4thWindow       bool
 	}{
 		// Non-4th window (window 27289): DepositSweep and
-		// MovedFundsSweep present, MovingFunds absent.
+		// MovedFundsSweep present, MovingFunds and reservation actions
+		// absent (reservations also require the 4th-window gate).
 		"post-activation non-4th window 27289": {
 			coordinationBlock: 24560100,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 			},
@@ -1136,8 +1133,6 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24561000,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 			},
@@ -1147,24 +1142,23 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24561900,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 			},
 			is4thWindow: false,
 		},
-		// 4th window (window 27292, divisible by 4): MovingFunds
-		// appears. Heartbeat is NOT triggered for this seed.
+		// 4th window (window 27292, divisible by 4): MovingFunds and
+		// reservation actions appear. Heartbeat is NOT triggered for
+		// this seed.
 		"post-activation 4th window 27292 no heartbeat": {
 			coordinationBlock: 24562800,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 			},
 			is4thWindow: true,
 		},
@@ -1172,8 +1166,6 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24563700,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 			},
@@ -1186,41 +1178,41 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			coordinationBlock: 24579000,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionHeartbeat,
 			},
 			is4thWindow: false,
 		},
-		// 4th window (window 27320, divisible by 4): MovingFunds
-		// appears. Heartbeat is also triggered for this seed.
+		// 4th window (window 27320, divisible by 4): MovingFunds and
+		// reservation actions appear. Heartbeat is also triggered for
+		// this seed.
 		"post-activation 4th window 27320 with heartbeat": {
 			coordinationBlock: 24588000,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 				ActionHeartbeat,
 			},
 			is4thWindow: true,
 		},
-		// 4th window (window 27296, divisible by 4): MovingFunds
-		// appears. Heartbeat is NOT triggered, verifying that
-		// 4th-window behavior works independently of heartbeat.
+		// 4th window (window 27296, divisible by 4): MovingFunds and
+		// reservation actions appear. Heartbeat is NOT triggered,
+		// verifying that 4th-window behavior works independently of
+		// heartbeat.
 		"post-activation 4th window 27296 no heartbeat": {
 			coordinationBlock: 24566400,
 			expectedChecklist: []WalletActionType{
 				ActionRedemption,
-				ActionReservationAnchor,
-				ActionReservationReanchor,
 				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
+				ActionReservationAnchor,
+				ActionReservationReanchor,
 			},
 			is4thWindow: true,
 		},
@@ -1278,54 +1270,69 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 	}
 }
 
-// TestCoordinationExecutor_GetActionsChecklist_ReservationActionsAlwaysPresent
-// is a dedicated regression guard for the reservation-checklist wiring gap:
-// pkg/tbtcpg.ProposalGenerator.Generate only ever runs a task whose
-// ActionType appears in this checklist, so ReservationAcceptanceTask and
-// ReservationReanchorTask were structurally unreachable in production until
-// ActionReservationAnchor/ActionReservationReanchor were added here. Unlike
-// DepositSweep/MovedFundsSweep/MovingFunds, these are never frequency-gated
-// - like Redemption, they are checked on every non-zero-index window,
-// across every activation state and window-index parity.
-func TestCoordinationExecutor_GetActionsChecklist_ReservationActionsAlwaysPresent(t *testing.T) {
-	// Cover both pre- and post-activation code paths, and both 4th and
-	// non-4th windows, across several distinct block/seed combinations.
-	coordinationBlocks := []uint64{
-		900,      // pre-activation, non-4th window
-		3600,     // pre-activation, 4th window
-		24560100, // post-activation, non-4th window
-		24562800, // post-activation, 4th window
+// TestCoordinationExecutor_GetActionsChecklist_Reservations verifies the
+// reservation actions checklist gate depends solely on the activation
+// block and the frequency window, never on a local per-operator
+// configuration flag - see coordinationExecutor.getActionsChecklist's
+// comment for why: a follower gating checklist validation on its own
+// local flag would wrongly fault an honest leader whenever the two
+// operators' local configs diverge.
+func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
+	tests := map[string]struct {
+		coordinationBlock uint64
+		windowIndex       uint64
+		expectedActions   []WalletActionType
+	}{
+		"below activation": {
+			coordinationBlock: ReservationsActivationBlock - 1,
+			windowIndex:       4,
+			expectedActions:   []WalletActionType{ActionRedemption},
+		},
+		"at activation, non-4th window": {
+			coordinationBlock: ReservationsActivationBlock,
+			windowIndex:       5,
+			expectedActions:   []WalletActionType{ActionRedemption},
+		},
+		"at activation, 4th window": {
+			coordinationBlock: ReservationsActivationBlock,
+			windowIndex:       4,
+			expectedActions:   []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+		},
 	}
 
-	executor := &coordinationExecutor{}
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			executor := &coordinationExecutor{}
 
-	for _, coordinationBlock := range coordinationBlocks {
-		window := newCoordinationWindow(coordinationBlock)
-		seed := sha256.Sum256(
-			big.NewInt(int64(window.coordinationBlock) + 2).Bytes(),
-		)
+			// We don't care about the seed for this test, as it only affects
+			// the ActionHeartbeat which is not the focus here.
+			seed := [32]byte{}
 
-		checklist := executor.getActionsChecklist(
-			window.index(),
-			seed,
-			window.coordinationBlock,
-		)
-
-		if !slices.Contains(checklist, ActionReservationAnchor) {
-			t.Errorf(
-				"block %d: ActionReservationAnchor must be present "+
-					"in every coordination window's checklist",
-				coordinationBlock,
+			checklist := executor.getActionsChecklist(
+				test.windowIndex,
+				seed,
+				test.coordinationBlock,
 			)
-		}
 
-		if !slices.Contains(checklist, ActionReservationReanchor) {
-			t.Errorf(
-				"block %d: ActionReservationReanchor must be present "+
-					"in every coordination window's checklist",
-				coordinationBlock,
-			)
-		}
+			// We only care about reservation actions.
+			var actualReservationActions []WalletActionType
+			for _, action := range checklist {
+				if action == ActionReservationAnchor || action == ActionReservationReanchor {
+					actualReservationActions = append(actualReservationActions, action)
+				}
+			}
+
+			var expectedReservationActions []WalletActionType
+			for _, action := range test.expectedActions {
+				if action == ActionReservationAnchor || action == ActionReservationReanchor {
+					expectedReservationActions = append(expectedReservationActions, action)
+				}
+			}
+
+			if diff := deep.Equal(actualReservationActions, expectedReservationActions); diff != nil {
+				t.Errorf("reservation actions mismatch: %v", diff)
+			}
+		})
 	}
 }
 
@@ -1385,11 +1392,11 @@ func assertChecklistOrdering(
 
 	actionPriority := map[WalletActionType]int{
 		ActionRedemption:          0,
-		ActionReservationAnchor:   1,
-		ActionReservationReanchor: 2,
-		ActionDepositSweep:        3,
-		ActionMovedFundsSweep:     4,
-		ActionMovingFunds:         5,
+		ActionDepositSweep:        1,
+		ActionMovedFundsSweep:     2,
+		ActionMovingFunds:         3,
+		ActionReservationAnchor:   4,
+		ActionReservationReanchor: 5,
 		ActionHeartbeat:           6,
 	}
 

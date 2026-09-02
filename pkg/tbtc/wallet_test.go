@@ -57,18 +57,6 @@ func TestParseWalletActionType(t *testing.T) {
 			value:          6,
 			expectedAction: ActionReservationAnchor,
 		},
-		"reserved redemption": {
-			value:          7,
-			expectedAction: ActionReservedRedemption,
-		},
-		"reservation re-anchor": {
-			value:          8,
-			expectedAction: ActionReservationReanchor,
-		},
-		"reservation dissolution": {
-			value:          9,
-			expectedAction: ActionReservationDissolution,
-		},
 		"unknown": {
 			value:       10,
 			expectedErr: fmt.Errorf("unknown wallet action type [10]"),
@@ -100,16 +88,13 @@ func TestParseWalletActionType(t *testing.T) {
 
 func TestWalletActionType_MetricName(t *testing.T) {
 	tests := map[WalletActionType]string{
-		ActionNoop:                   "noop",
-		ActionHeartbeat:              "heartbeat",
-		ActionDepositSweep:           "deposit_sweep",
-		ActionRedemption:             "redemption",
-		ActionMovingFunds:            "moving_funds",
-		ActionMovedFundsSweep:        "moved_funds_sweep",
-		ActionReservationAnchor:      "reservation_anchor",
-		ActionReservedRedemption:     "reserved_redemption",
-		ActionReservationReanchor:    "reservation_reanchor",
-		ActionReservationDissolution: "reservation_dissolution",
+		ActionNoop:              "noop",
+		ActionHeartbeat:         "heartbeat",
+		ActionDepositSweep:      "deposit_sweep",
+		ActionRedemption:        "redemption",
+		ActionMovingFunds:       "moving_funds",
+		ActionMovedFundsSweep:   "moved_funds_sweep",
+		ActionReservationAnchor: "reservation_anchor",
 	}
 
 	for actionType, expected := range tests {

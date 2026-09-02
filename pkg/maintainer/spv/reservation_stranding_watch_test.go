@@ -1,6 +1,7 @@
 package spv
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -35,9 +36,8 @@ func walletPKHAt(b byte) [20]byte {
 
 func TestReservationStrandingWatcher_NoReservations(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingStrandingNotifier{}
 
-	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	watcher := NewReservationStrandingWatcher(spvChain)
 	if watcher == nil {
 		t.Fatal("expected non-nil watcher")
 	}
@@ -46,17 +46,16 @@ func TestReservationStrandingWatcher_NoReservations(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 0 {
+	if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
 		t.Fatalf(
 			"expected no notifications, got %d",
-			len(notifier.calls),
+			len(calls),
 		)
 	}
 }
 
 func TestReservationStrandingWatcher_NotifiesActiveReservation(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingStrandingNotifier{}
 
 	wallet := walletPKH()
 	key := reservationKey(0xAA01)
@@ -66,22 +65,22 @@ func TestReservationStrandingWatcher_NotifiesActiveReservation(t *testing.T) {
 		State: tbtc.ReservationStateActive,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	watcher := NewReservationStrandingWatcher(spvChain)
 	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 1 {
-		t.Fatalf("expected one notification, got %d", len(notifier.calls))
+	calls := spvChain.getSubmittedReservationStrandedKeys()
+	if len(calls) != 1 {
+		t.Fatalf("expected one notification, got %d", len(calls))
 	}
-	if diff := deep.Equal(key, notifier.calls[0]); diff != nil {
+	if diff := deep.Equal(key, calls[0]); diff != nil {
 		t.Errorf("unexpected notified key: %v", diff)
 	}
 }
 
-func TestReservationStrandingWatcher_NotifiesClosedReservation(t *testing.T) {
+func TestReservationStrandingWatcher_SkipsClosedReservation(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingStrandingNotifier{}
 
 	wallet := walletPKH()
 	key := reservationKey(0xAA02)
@@ -91,19 +90,18 @@ func TestReservationStrandingWatcher_NotifiesClosedReservation(t *testing.T) {
 		State: tbtc.ReservationStateClosed,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	watcher := NewReservationStrandingWatcher(spvChain)
 	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 1 {
-		t.Fatalf("expected one notification, got %d", len(notifier.calls))
+	if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
+		t.Fatalf("expected no notifications, got %d", len(calls))
 	}
 }
 
 func TestReservationStrandingWatcher_SkipsPendingReservation(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingStrandingNotifier{}
 
 	wallet := walletPKH()
 	key := reservationKey(0xAA03)
@@ -113,23 +111,22 @@ func TestReservationStrandingWatcher_SkipsPendingReservation(t *testing.T) {
 		State: tbtc.ReservationStateActionPending,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	watcher := NewReservationStrandingWatcher(spvChain)
 	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 0 {
+	if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
 		t.Fatalf(
 			"expected pending reservation to defer to action-timeout, "+
 				"got %d notifications",
-			len(notifier.calls),
+			len(calls),
 		)
 	}
 }
 
 func TestReservationStrandingWatcher_MultipleReservations(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingStrandingNotifier{}
 
 	wallet := walletPKH()
 	active := reservationKey(0xAA10)
@@ -154,27 +151,33 @@ func TestReservationStrandingWatcher_MultipleReservations(t *testing.T) {
 		State: tbtc.ReservationStateStranded,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	watcher := NewReservationStrandingWatcher(spvChain)
 	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// The watcher must notify for all reservations that are not in
-	// ActionPending. ReservationStateStranded is the natural re-notify case
-	// (the Bridge dedupes; the watcher does not).
-	if len(notifier.calls) != 3 {
+	// The watcher must notify only for reservations in the Active state
+	// (finding #27's allow-list fix): closed, pending, and stranded
+	// reservations must all be skipped - a stranded reservation has
+	// already been notified once and re-notifying it is redundant, and a
+	// closed reservation was already resolved through in-kind redemption
+	// or another terminal path, not stranding.
+	calls := spvChain.getSubmittedReservationStrandedKeys()
+	if len(calls) != 1 {
 		t.Fatalf(
-			"expected three notifications (active+closed+stranded), "+
+			"expected exactly one notification (active only), "+
 				"got %d: %v",
-			len(notifier.calls),
-			notifier.calls,
+			len(calls),
+			calls,
 		)
+	}
+	if diff := deep.Equal(active, calls[0]); diff != nil {
+		t.Errorf("unexpected notified key: %v", diff)
 	}
 }
 
 func TestReservationStrandingWatcher_UnknownReservationIsSkipped(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingStrandingNotifier{}
 
 	wallet := walletPKH()
 	staleKey := reservationKey(0xAA20)
@@ -190,22 +193,22 @@ func TestReservationStrandingWatcher_UnknownReservationIsSkipped(t *testing.T) {
 		State: tbtc.ReservationStateActive,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	watcher := NewReservationStrandingWatcher(spvChain)
 	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(notifier.calls) != 1 {
-		t.Fatalf("expected one notification (freshKey), got %d", len(notifier.calls))
+	calls := spvChain.getSubmittedReservationStrandedKeys()
+	if len(calls) != 1 {
+		t.Fatalf("expected one notification (freshKey), got %d", len(calls))
 	}
-	if diff := deep.Equal(freshKey, notifier.calls[0]); diff != nil {
+	if diff := deep.Equal(freshKey, calls[0]); diff != nil {
 		t.Errorf("unexpected notified key: %v", diff)
 	}
 }
 
 func TestReservationStrandingWatcher_WalletChainError(t *testing.T) {
 	spvChain := newLocalChain()
-	notifier := &recordingStrandingNotifier{}
 
 	// No walletReservations entry: WalletReservations returns (nil, nil) for
 	// unknown wallets; the watcher iterates over a nil slice and exits
@@ -214,53 +217,80 @@ func TestReservationStrandingWatcher_WalletChainError(t *testing.T) {
 	wallet := walletPKH()
 	spvChain.setWalletReservations(wallet, nil)
 
-	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	watcher := NewReservationStrandingWatcher(spvChain)
 	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error for empty wallet: %v", err)
 	}
 
-	if len(notifier.calls) != 0 {
+	if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
 		t.Fatalf(
 			"expected zero notifications on empty wallet list, got %d",
-			len(notifier.calls),
+			len(calls),
 		)
 	}
 }
 
-func TestReservationStrandingWatcher_NotifierFuncAdapter(t *testing.T) {
-	var captured []*big.Int
-	notifier := ReservationStrandingNotifierFunc(func(key *big.Int) error {
-		captured = append(captured, key)
-		return nil
-	})
-
+// TestReservationStrandingWatcher_NotifierErrorContinuesProcessing mirrors
+// TestReservationActionTimeoutWatcher_NotifiesOncePerQualifyingNonce's
+// resilience property for the sibling action-timeout watcher: a single
+// NotifyReservationStranded failure must not starve the remaining
+// reservations in the same wallet.
+func TestReservationStrandingWatcher_NotifierErrorContinuesProcessing(t *testing.T) {
 	spvChain := newLocalChain()
-	wallet := walletPKHAt(0x01)
-	key := reservationKey(0xAA30)
-	spvChain.setWalletReservations(wallet, []*big.Int{key})
-	spvChain.setReservation(key, &tbtc.Reservation{
+
+	wallet := walletPKH()
+	failing := reservationKey(0xAA40)
+	succeeding := reservationKey(0xAA41)
+
+	spvChain.setWalletReservations(wallet, []*big.Int{failing, succeeding})
+	spvChain.setReservation(failing, &tbtc.Reservation{
 		State: tbtc.ReservationStateActive,
 	})
+	spvChain.setReservation(succeeding, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+	spvChain.notifyReservationStrandedErrByKey = map[string]error{
+		failing.String(): fmt.Errorf("notifier unavailable"),
+	}
 
-	watcher := NewReservationStrandingWatcher(spvChain, notifier)
+	watcher := NewReservationStrandingWatcher(spvChain)
 	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf(
+			"a single notifier failure must not fail the whole check: %v",
+			err,
+		)
 	}
-	if len(captured) != 1 {
-		t.Fatalf("expected one captured key, got %d", len(captured))
+
+	notified := spvChain.getSubmittedReservationStrandedKeys()
+	if len(notified) != 1 {
+		t.Fatalf(
+			"expected the remaining reservation to still be notified, got %d",
+			len(notified),
+		)
+	}
+	if diff := deep.Equal(succeeding, notified[0]); diff != nil {
+		t.Errorf("unexpected notified key: %v", diff)
 	}
 }
 
-// recordingStrandingNotifier is a test double that captures every
-// NotifyReservationStranded call. It is used to assert the watcher fires
-// the expected notifications in the expected order.
-type recordingStrandingNotifier struct {
-	calls []*big.Int
-}
+// TestReservationStrandingWatcher_WalletReservationsChainError covers the
+// case TestReservationStrandingWatcher_WalletChainError's comment
+// explicitly calls out as unreserved: WalletReservations itself failing
+// (as opposed to returning an empty list for an unknown wallet).
+func TestReservationStrandingWatcher_WalletReservationsChainError(t *testing.T) {
+	spvChain := newLocalChain()
 
-func (r *recordingStrandingNotifier) NotifyReservationStranded(
-	reservationKey *big.Int,
-) error {
-	r.calls = append(r.calls, reservationKey)
-	return nil
+	spvChain.walletReservationsErr = fmt.Errorf("rpc unavailable")
+
+	watcher := NewReservationStrandingWatcher(spvChain)
+	if err := watcher.CheckReservationStrandingForWallet(walletPKH()); err == nil {
+		t.Fatal("expected error when WalletReservations fails, got nil")
+	}
+
+	if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
+		t.Fatalf(
+			"expected no notifications on chain error, got %d",
+			len(calls),
+		)
+	}
 }

@@ -1,5 +1,5 @@
 {
-  "Title": "wallet-migration trigger: emits re-anchor proposal for first active reservation",
+  "Title": "findTargetWallet: source wallet is excluded from targets",
   "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
   "SourceWalletState": "MovingFunds",
   "SourceWalletMainUtxoHash": "1111111111111111111111111111111111111111111111111111111111111111",

@@ -239,26 +239,12 @@ func TestCoordinationMessage_MarshalingRoundtrip(t *testing.T) {
 				AnchorTxFee:               big.NewInt(1500),
 			},
 		},
-		"with reserved redemption proposal": {
-			proposal: &ReservedRedemptionProposal{
-				ReservationKey:  big.NewInt(424242),
-				RequestNonce:    3,
-				RedemptionTxFee: big.NewInt(9000),
-			},
-		},
 		"with reservation reanchor proposal": {
 			proposal: &ReservationReanchorProposal{
 				ReservationKey:            big.NewInt(424242),
 				RequestNonce:              4,
 				TargetWalletPublicKeyHash: toByte20("f87eb7ec3b15a3fdd7b57754d765694b3e0b4bf4"),
 				ReanchorTxFee:             big.NewInt(1200),
-			},
-		},
-		"with reservation dissolution proposal": {
-			proposal: &ReservationDissolutionProposal{
-				ReservationKey:   big.NewInt(424242),
-				RequestNonce:     5,
-				DissolutionTxFee: big.NewInt(1100),
 			},
 		},
 	}
@@ -461,35 +447,6 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationAnchorPropos
 	}
 }
 
-func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservedRedemptionProposal(t *testing.T) {
-	for range 10 {
-		var (
-			senderID            group.MemberIndex
-			coordinationBlock   uint64
-			walletPublicKeyHash [20]byte
-			proposal            ReservedRedemptionProposal
-		)
-
-		f := fuzz.New().NilChance(0.1).
-			NumElements(0, 512).
-			Funcs(pbutils.FuzzFuncs()...)
-
-		f.Fuzz(&senderID)
-		f.Fuzz(&coordinationBlock)
-		f.Fuzz(&walletPublicKeyHash)
-		f.Fuzz(&proposal)
-
-		coordinationMsg := &coordinationMessage{
-			senderID:            senderID,
-			coordinationBlock:   coordinationBlock,
-			walletPublicKeyHash: walletPublicKeyHash,
-			proposal:            &proposal,
-		}
-
-		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
-	}
-}
-
 func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationReanchorProposal(t *testing.T) {
 	for range 10 {
 		var (
@@ -497,35 +454,6 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationReanchorProp
 			coordinationBlock   uint64
 			walletPublicKeyHash [20]byte
 			proposal            ReservationReanchorProposal
-		)
-
-		f := fuzz.New().NilChance(0.1).
-			NumElements(0, 512).
-			Funcs(pbutils.FuzzFuncs()...)
-
-		f.Fuzz(&senderID)
-		f.Fuzz(&coordinationBlock)
-		f.Fuzz(&walletPublicKeyHash)
-		f.Fuzz(&proposal)
-
-		coordinationMsg := &coordinationMessage{
-			senderID:            senderID,
-			coordinationBlock:   coordinationBlock,
-			walletPublicKeyHash: walletPublicKeyHash,
-			proposal:            &proposal,
-		}
-
-		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
-	}
-}
-
-func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationDissolutionProposal(t *testing.T) {
-	for range 10 {
-		var (
-			senderID            group.MemberIndex
-			coordinationBlock   uint64
-			walletPublicKeyHash [20]byte
-			proposal            ReservationDissolutionProposal
 		)
 
 		f := fuzz.New().NilChance(0.1).

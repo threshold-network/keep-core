@@ -15,8 +15,8 @@ import (
 const ProofTypeReservationReanchor uint8 = 3
 
 // SubmitReservationReanchorProof drives the SPV proof submission for a
-// reservation re-anchor action generation. The caller (typically the
-// reservation re-anchor watcher) supplies the (reservationKey, requestNonce)
+// reservation re-anchor action generation. The caller (the reservation
+// proof loop) supplies the (reservationKey, requestNonce)
 // pair of the on-chain action generation it is proving, plus the Bitcoin
 // transaction hash of the re-anchor transaction already signed and
 // broadcast by the wallet coordinator. The proof is fetched from btcChain,
@@ -43,6 +43,7 @@ func SubmitReservationReanchorProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
+		getGlobalMetricsRecorder(),
 	)
 }
 
@@ -54,133 +55,102 @@ func submitReservationReanchorProof(
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	spvProofAssembler spvProofAssembler,
+	metricsRecorder interface {
+		IncrementCounter(name string, value float64)
+	},
 ) error {
-	if requiredConfirmations == 0 {
-		return fmt.Errorf(
-			"provided required confirmations count must be greater than 0",
-		)
-	}
-	if reservationKey == nil {
-		return fmt.Errorf("reservation key is required")
-	}
-	if requestNonce == 0 {
-		return fmt.Errorf("request nonce must be > 0")
-	}
-
-	transaction, proof, err := spvProofAssembler(
+	return submitReservationActionProof(
 		transactionHash,
 		requiredConfirmations,
-		btcChain,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to assemble transaction spv proof: [%v]",
-			err,
-		)
-	}
-
-	anchorUtxo, _, err := parseReservationReanchorTransactionInput(
-		btcChain,
-		transaction,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"error while parsing reservation re-anchor transaction inputs: [%v]",
-			err,
-		)
-	}
-
-	action, err := spvChain.GetReservationAction(reservationKey, requestNonce)
-	if err != nil {
-		return fmt.Errorf(
-			"cannot fetch reservation action generation: [%v]",
-			err,
-		)
-	}
-
-	if action.ActionType != tbtc.ReservationActionTypeReanchor {
-		return fmt.Errorf(
-			"reservation action generation is not a re-anchor (got %v)",
-			action.ActionType,
-		)
-	}
-
-	if action.State != tbtc.ReservationActionStatePending {
-		return fmt.Errorf(
-			"reservation re-anchor action generation is not pending (state=%v)",
-			action.State,
-		)
-	}
-
-	txInfo := buildReservationProofTxInfo(transaction)
-	txProof := buildReservationProofTxProof(proof)
-	mainUtxo := buildReservationProofMainUtxo(anchorUtxo)
-
-	if err := spvChain.SubmitReservationProof(
-		ProofTypeReservationReanchor,
-		txInfo,
-		txProof,
-		mainUtxo,
 		reservationKey,
 		requestNonce,
-	); err != nil {
-		return fmt.Errorf(
-			"failed to submit reservation re-anchor proof: [%v]",
+		btcChain,
+		spvChain,
+		spvProofAssembler,
+		metricsRecorder,
+		ProofTypeReservationReanchor,
+		"reservation_reanchor_proof",
+		tbtc.ReservationActionTypeReanchor,
+		"re-anchor",
+	)
+}
+
+// spentOutputAsUtxo fetches the single previous output spent by transaction's
+// sole input and returns it as an UnspentTransactionOutput. Shared by
+// parseReservationTransaction, which parses a 1-input-1-output reservation
+// transaction and needs the spent outpoint's value to build the SPV proof's
+// main UTXO.
+func spentOutputAsUtxo(
+	btcChain bitcoin.Chain,
+	transaction *bitcoin.Transaction,
+) (*bitcoin.UnspentTransactionOutput, error) {
+	if len(transaction.Inputs) != 1 {
+		return nil, fmt.Errorf(
+			"reservation transaction must have exactly one input",
+		)
+	}
+
+	spentOutpoint := transaction.Inputs[0].Outpoint
+
+	previousTransaction, err := btcChain.GetTransaction(
+		spentOutpoint.TransactionHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot fetch previous transaction: [%v]",
 			err,
 		)
 	}
 
-	return nil
+	if int(spentOutpoint.OutputIndex) >= len(previousTransaction.Outputs) {
+		return nil, fmt.Errorf(
+			"spent output index [%v] out of bounds for previous "+
+				"transaction with [%v] outputs",
+			spentOutpoint.OutputIndex,
+			len(previousTransaction.Outputs),
+		)
+	}
+
+	spentOutput := previousTransaction.Outputs[spentOutpoint.OutputIndex]
+
+	return &bitcoin.UnspentTransactionOutput{
+		Outpoint: spentOutpoint,
+		Value:    spentOutput.Value,
+	}, nil
 }
 
-// parseReservationReanchorTransactionInput parses the single input and
-// single output of a reservation re-anchor transaction and returns the
-// anchor UTXO that was spent and the target wallet's public key hash from
-// the new anchor output script.
-func parseReservationReanchorTransactionInput(
+// parseReservationTransaction parses the single input and single output
+// of a reservation transaction and returns the UTXO that was spent and
+// the target wallet's public key hash from the new output script.
+func parseReservationTransaction(
 	btcChain bitcoin.Chain,
 	transaction *bitcoin.Transaction,
+	txType string,
 ) (*bitcoin.UnspentTransactionOutput, [20]byte, error) {
-	if len(transaction.Inputs) != 1 {
-		return nil, [20]byte{}, fmt.Errorf(
-			"reservation re-anchor transaction must have exactly one input",
-		)
+	utxo, err := spentOutputAsUtxo(btcChain, transaction)
+	if err != nil {
+		return nil, [20]byte{}, err
 	}
 
 	if len(transaction.Outputs) != 1 {
 		return nil, [20]byte{}, fmt.Errorf(
-			"reservation re-anchor transaction must have exactly one output",
+			"reservation %v transaction must have exactly one output",
+			txType,
 		)
 	}
 
-	input := transaction.Inputs[0]
-
-	inputTx, err := btcChain.GetTransaction(input.Outpoint.TransactionHash)
-	if err != nil {
-		return nil, [20]byte{}, fmt.Errorf(
-			"cannot get input transaction data: [%v]",
-			err,
-		)
-	}
-
-	spentOutput := inputTx.Outputs[input.Outpoint.OutputIndex]
-
-	anchorUtxo := &bitcoin.UnspentTransactionOutput{
-		Outpoint: input.Outpoint,
-		Value:    spentOutput.Value,
-	}
-
-	targetWalletPublicKeyHash, err := bitcoin.ExtractPublicKeyHash(
+	publicKeyHash, err := bitcoin.ExtractPublicKeyHash(
 		transaction.Outputs[0].PublicKeyScript,
 	)
 	if err != nil {
 		return nil, [20]byte{}, fmt.Errorf(
-			"cannot extract target wallet public key hash: [%v]",
+			"cannot extract %v public key hash: [%v]",
+			txType,
 			err,
 		)
 	}
 
-	return anchorUtxo, targetWalletPublicKeyHash, nil
+	return utxo, publicKeyHash, nil
 }
 
 // buildReservationProofTxInfo serializes the relevant parts of the
@@ -213,10 +183,10 @@ func buildReservationProofTxProof(
 	}
 }
 
-// buildReservationProofMainUtxo packages the spent anchor UTXO into the
-// BitcoinTxUTXO structure expected by SubmitReservationProof.
+// buildReservationProofMainUtxo packages the spent deposit or anchor UTXO
+// into the BitcoinTxUTXO structure expected by SubmitReservationProof.
 func buildReservationProofMainUtxo(
-	anchorUtxo *bitcoin.UnspentTransactionOutput,
+	spentUtxo *bitcoin.UnspentTransactionOutput,
 ) *tbtc.BitcoinTxUTXO {
 	var (
 		txHash     [32]byte
@@ -224,14 +194,14 @@ func buildReservationProofMainUtxo(
 		txOutValue uint64
 	)
 
-	if anchorUtxo.Outpoint != nil {
-		txHash = anchorUtxo.Outpoint.TransactionHash
-		txOutIndex = anchorUtxo.Outpoint.OutputIndex
+	if spentUtxo.Outpoint != nil {
+		txHash = spentUtxo.Outpoint.TransactionHash
+		txOutIndex = spentUtxo.Outpoint.OutputIndex
 	}
-	if anchorUtxo.Value < 0 {
+	if spentUtxo.Value < 0 {
 		txOutValue = 0
 	} else {
-		txOutValue = uint64(anchorUtxo.Value)
+		txOutValue = uint64(spentUtxo.Value)
 	}
 
 	return &tbtc.BitcoinTxUTXO{
@@ -241,327 +211,94 @@ func buildReservationProofMainUtxo(
 	}
 }
 
-// getUnprovenReservationReanchorTransactions discovers reservation
-// re-anchor Bitcoin transactions that have not yet had their SPV proof
-// accepted by the Bridge. It walks ReservationReanchorRequested events in
-// the look-back window, skips any whose action generation has already
-// settled or timed out, and for the remainder scans the target wallet's
-// recent transactions for the one-input-one-output re-anchor transaction
-// whose spent input is still registered on-chain as that reservation's
-// anchor outpoint.
-func getUnprovenReservationReanchorTransactions(
-	historyDepth uint64,
-	transactionLimit int,
-	btcChain bitcoin.Chain,
-	spvChain Chain,
-) ([]*bitcoin.Transaction, error) {
-	blockCounter, err := spvChain.BlockCounter()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get block counter: [%v]", err)
-	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	// Calculate the starting block of the range in which the events will be
-	// searched for.
-	startBlock := currentBlock - historyDepth
-
-	events, err := spvChain.PastReservationReanchorRequestedEvents(
-		&tbtc.ReservationReanchorRequestedEventFilter{
-			StartBlock: startBlock,
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get past reservation re-anchor requested events: [%v]",
-			err,
-		)
-	}
-
-	unprovenReservationReanchorTransactions := []*bitcoin.Transaction{}
-
-	for _, event := range events {
-		action, err := spvChain.GetReservationAction(
-			event.ReservationKey,
-			event.RequestNonce,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get reservation action generation: [%v]",
-				err,
-			)
-		}
-
-		if action.State != tbtc.ReservationActionStatePending {
-			// The action generation already settled (proof accepted) or
-			// timed out; there is nothing left to prove for this event.
-			continue
-		}
-
-		// The re-anchor transaction pays the target wallet, not the source
-		// wallet: none of the transaction's outputs transfer funds back to
-		// the source wallet, so searching the source wallet's transaction
-		// history would never find it. Mirrors the same reasoning
-		// getUnprovenMovingFundsTransactions applies for its target wallets.
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
-			event.TargetWalletPublicKeyHash,
-			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for target wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err := isUnprovenReservationReanchorTransaction(
-				transaction,
-				event.ReservationKey,
-				btcChain,
-				spvChain,
-			)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven "+
-						"reservation re-anchor transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenReservationReanchorTransactions = append(
-					unprovenReservationReanchorTransactions,
-					transaction,
-				)
-			}
-		}
-	}
-
-	return unprovenReservationReanchorTransactions, nil
-}
-
-// isUnprovenReservationReanchorTransaction reports whether the given
-// transaction is the still-unproven re-anchor transaction for the given
-// reservation. A transaction qualifies when it has the
-// one-input-one-output re-anchor shape and its spent input is still
-// registered on-chain as reservationKey's anchor outpoint. The Bridge
-// clears that registration only once the re-anchor proof is accepted, so a
-// match here is conclusive evidence the proof has not landed yet.
-//
-// Transactions that do not have the re-anchor shape (e.g. unrelated
-// payments to the same wallet) are reported as non-matches rather than
-// errors so a single unrelated transaction does not abort the discovery
-// round.
-func isUnprovenReservationReanchorTransaction(
-	transaction *bitcoin.Transaction,
+func submitReservationActionProof(
+	transactionHash bitcoin.Hash,
+	requiredConfirmations uint,
 	reservationKey *big.Int,
-	btcChain bitcoin.Chain,
-	spvChain Chain,
-) (bool, error) {
-	anchorUtxo, _, err := parseReservationReanchorTransactionInput(
-		btcChain,
-		transaction,
-	)
-	if err != nil {
-		return false, nil
-	}
-
-	matchedReservationKey, err := spvChain.ReservationByAnchorUtxo(
-		anchorUtxo.Outpoint.TransactionHash,
-		anchorUtxo.Outpoint.OutputIndex,
-	)
-	if err != nil {
-		return false, fmt.Errorf(
-			"failed to look up reservation by anchor utxo: [%v]",
-			err,
-		)
-	}
-
-	return matchedReservationKey != nil &&
-		matchedReservationKey.Sign() != 0 &&
-		matchedReservationKey.Cmp(reservationKey) == 0, nil
-}
-
-// reservationReanchorTransactionProofSubmitter adapts the reservation
-// re-anchor proof submission to the generic transactionProofSubmitter
-// signature used by the SPV maintainer's proof loop. It is a thin wrapper
-// around submitDiscoveredReservationReanchorProof that plugs in the real
-// SPV proof assembler; kept separate so tests can inject a mock assembler
-// without needing a real Bitcoin merkle proof chain.
-func reservationReanchorTransactionProofSubmitter(
-	transactionHash bitcoin.Hash,
-	requiredConfirmations uint,
-	btcChain bitcoin.Chain,
-	spvChain Chain,
-) error {
-	return submitDiscoveredReservationReanchorProof(
-		transactionHash,
-		requiredConfirmations,
-		btcChain,
-		spvChain,
-		bitcoin.AssembleSpvProof,
-	)
-}
-
-// submitDiscoveredReservationReanchorProof re-derives the
-// (reservationKey, requestNonce) pair a discovered re-anchor transaction
-// belongs to and submits its SPV proof. The generic transactionProofSubmitter
-// signature only carries the transaction hash, so this function looks up
-// which reservation is still registered against the transaction's spent
-// anchor outpoint (ReservationByAnchorUtxo - the Bridge only clears that
-// registration once the proof is accepted, so a match on the outpoint is
-// conclusive that this reservation's re-anchor has not yet landed).
-//
-// Deriving the request nonce is not as simple as reading the reservation's
-// current RequestNonce: that field tracks the reservation's live action
-// generation, which can have moved on since this transaction was
-// discovered. proveTransactions (spv.go) calls the getter and, moments
-// later in the same call, the submitter for each sufficiently-confirmed
-// transaction it found - a narrow same-tick window, not a wait across
-// confirmations (under-confirmed transactions are skipped outright and
-// re-discovered, not held, on the next tick). Within that window it is
-// still possible for the reservation's action generation to advance (e.g.
-// the re-anchor action this transaction belongs to times out and a new,
-// unrelated action generation - possibly targeting a different wallet - is
-// requested before the submitter call for this transaction runs).
-// Submitting the live nonce for a stale transaction would pair an old,
-// unrelated re-anchor transaction with the wrong action generation. To
-// guard against that, this function fetches the action generation at the
-// reservation's current nonce and requires it to still be a Pending
-// Reanchor action targeting the exact wallet this transaction actually
-// pays before treating the current nonce as correct for this transaction;
-// any mismatch is logged and the transaction is skipped (nil error) rather
-// than submitted with the wrong nonce - returning an error here would
-// propagate out of proveTransactions (spv.go:292-293) and abort the entire
-// proving round for every other in-flight transaction across every proof
-// type this tick, which is disproportionate for what is an expected, if
-// rare, race outcome rather than an infrastructure failure. See the
-// per-branch comments below for why this skip is not guaranteed to be a
-// one-time event for a given transaction.
-func submitDiscoveredReservationReanchorProof(
-	transactionHash bitcoin.Hash,
-	requiredConfirmations uint,
+	requestNonce uint64,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	spvProofAssembler spvProofAssembler,
+	metricsRecorder interface {
+		IncrementCounter(name string, value float64)
+	},
+	proofType uint8,
+	metricsPrefix string,
+	expectedActionType tbtc.ReservationActionType,
+	txType string,
 ) error {
-	transaction, err := btcChain.GetTransaction(transactionHash)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to get reservation re-anchor transaction: [%v]",
-			err,
-		)
+	if metricsRecorder != nil {
+		metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_total", 1)
 	}
 
-	anchorUtxo, targetWalletPublicKeyHash, err :=
-		parseReservationReanchorTransactionInput(btcChain, transaction)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to parse reservation re-anchor transaction input: [%v]",
-			err,
-		)
+	if requiredConfirmations == 0 {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
+		return fmt.Errorf("provided required confirmations count must be greater than 0")
+	}
+	if reservationKey == nil {
+		return fmt.Errorf("reservation key is required")
+	}
+	if requestNonce == 0 {
+		return fmt.Errorf("request nonce must be > 0")
 	}
 
-	reservationKey, err := spvChain.ReservationByAnchorUtxo(
-		anchorUtxo.Outpoint.TransactionHash,
-		anchorUtxo.Outpoint.OutputIndex,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to look up reservation by anchor utxo: [%v]",
-			err,
-		)
-	}
-
-	if reservationKey == nil || reservationKey.Sign() == 0 {
-		return fmt.Errorf(
-			"no reservation is anchored at the spent outpoint of "+
-				"transaction [%s]",
-			transactionHash.Hex(bitcoin.ReversedByteOrder),
-		)
-	}
-
-	reservation, err := spvChain.GetReservation(reservationKey)
-	if err != nil {
-		return fmt.Errorf("failed to get reservation: [%v]", err)
-	}
-
-	action, err := spvChain.GetReservationAction(
-		reservationKey,
-		reservation.RequestNonce,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to get reservation's current action generation: [%v]",
-			err,
-		)
-	}
-
-	if action.ActionType != tbtc.ReservationActionTypeReanchor ||
-		action.State != tbtc.ReservationActionStatePending {
-		// A returned error here would propagate out of proveTransactions
-		// (spv.go:292-293) and abort the entire proving round for every
-		// other in-flight transaction across every proof type this tick,
-		// then restart the whole SPV maintainer after the backoff. That is
-		// disproportionate for what is an expected, if rare, outcome of the
-		// narrow same-tick race described above, so this case is logged and
-		// skipped instead.
-		//
-		// This transaction may be rediscovered and re-warned on subsequent
-		// ticks too: whether getUnprovenReservationReanchorTransactions
-		// stops returning it depends on the Bridge guaranteeing at most one
-		// Pending action per reservation at a time, which is NOT asserted
-		// anywhere in this Go client and was not available to verify
-		// against the on-chain source for this action-generation model.
-		// The termination condition that IS guaranteed: once the
-		// reservation's current generation lands its own correct re-anchor
-		// proof, the Bridge clears this outpoint's anchor registration,
-		// ReservationByAnchorUtxo stops matching this transaction, and it
-		// falls into the "no reservation is anchored at the spent
-		// outpoint" error path above instead - so the repetition is
-		// bounded, just not by the mechanism the original version of this
-		// comment claimed.
-		logger.Warnf(
-			"skipping reservation re-anchor proof submission for "+
-				"transaction [%s]: reservation [%v]'s current action "+
-				"generation [%d] is no longer a pending re-anchor; the "+
-				"transaction belongs to a superseded generation",
-			transactionHash.Hex(bitcoin.ReversedByteOrder),
-			reservationKey,
-			reservation.RequestNonce,
-		)
-		return nil
-	}
-
-	if action.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
-		// Same reasoning as the branch above: skipped rather than erred to
-		// avoid aborting the round, and may recur on subsequent ticks
-		// under the same unverified-invariant caveat until the current
-		// generation's own proof lands and clears the anchor registration.
-		logger.Warnf(
-			"skipping reservation re-anchor proof submission for "+
-				"transaction [%s]: reservation [%v]'s current action "+
-				"generation [%d] targets a different wallet than the "+
-				"transaction actually pays; the transaction belongs to a "+
-				"superseded generation",
-			transactionHash.Hex(bitcoin.ReversedByteOrder),
-			reservationKey,
-			reservation.RequestNonce,
-		)
-		return nil
-	}
-
-	return submitReservationReanchorProof(
+	transaction, proof, err := spvProofAssembler(
 		transactionHash,
 		requiredConfirmations,
-		reservationKey,
-		reservation.RequestNonce,
 		btcChain,
-		spvChain,
-		spvProofAssembler,
 	)
+	if err != nil {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
+		return fmt.Errorf("failed to assemble transaction spv proof: [%v]", err)
+	}
+
+	utxo, pkh, err := parseReservationTransaction(btcChain, transaction, txType)
+	if err != nil {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
+		return fmt.Errorf("error while parsing reservation transaction inputs: [%v]", err)
+	}
+
+	action, err := spvChain.GetReservationAction(reservationKey, requestNonce)
+	if err != nil {
+		return fmt.Errorf("cannot fetch reservation action generation: [%v]", err)
+	}
+
+	// The action snapshot is the on-chain authorization for the destination, so verify the PKH match.
+	if pkh != action.TargetWalletPublicKeyHash {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
+		return fmt.Errorf("target wallet public key hash mismatch")
+	}
+
+	if action.ActionType != expectedActionType {
+		return fmt.Errorf("reservation action generation is not expected type")
+	}
+
+	if action.State != tbtc.ReservationActionStatePending {
+		return fmt.Errorf("reservation action generation is not pending")
+	}
+
+	txInfo := buildReservationProofTxInfo(transaction)
+	txProof := buildReservationProofTxProof(proof)
+	mainUtxo := buildReservationProofMainUtxo(utxo)
+
+	if err := spvChain.SubmitReservationProof(
+		proofType,
+		txInfo,
+		txProof,
+		mainUtxo,
+		reservationKey,
+		requestNonce,
+	); err != nil {
+		return fmt.Errorf("failed to submit reservation proof: [%v]", err)
+	}
+
+	return nil
 }
