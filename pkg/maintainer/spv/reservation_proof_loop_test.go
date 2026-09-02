@@ -78,7 +78,9 @@ func TestReservationProofNextScanRange(t *testing.T) {
 // TestFindReservationAcceptanceTransaction verifies the acceptance
 // transaction matcher: it must find the 1-input-1-output transaction whose
 // sole input spends the deposit UTXO identified by event.ReservationKey (via
-// BuildDepositKey), skip transactions with the wrong shape, and return nil
+// BuildDepositKey), whose sole output is P2WPKH to the custody wallet,
+// and whose value is depositAmount - fee (with fee <= TxMaxFee), skip
+// transactions with wrong shape, wrong script, or invalid value, and return nil
 // when nothing matches.
 func TestFindReservationAcceptanceTransaction(t *testing.T) {
 	spvChain := newLocalChain()
@@ -92,6 +94,22 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 	}
 	reservationKey := spvChain.BuildDepositKey(fundingTxHash, 0)
 
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	otherWalletPKH := [20]byte{99, 99, 99}
+	otherWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(otherWalletPKH)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spvChain.setDepositRequest(fundingTxHash, 0, &tbtc.DepositChainRequest{
+		Amount: 150000,
+	})
+
 	matchingTx := &bitcoin.Transaction{
 		Inputs: []*bitcoin.TransactionInput{{
 			Outpoint: &bitcoin.TransactionOutpoint{
@@ -99,7 +117,52 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 				OutputIndex:     0,
 			},
 		}},
-		Outputs: []*bitcoin.TransactionOutput{{Value: 100}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           100000,
+			PublicKeyScript: walletScript,
+		}},
+	}
+
+	// Wrong script: pays to a different wallet.
+	wrongScriptTx := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTxHash,
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           100000,
+			PublicKeyScript: otherWalletScript,
+		}},
+	}
+
+	// Wrong value: output value >= depositAmount (zero or negative fee).
+	wrongValueTx := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTxHash,
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           160000,
+			PublicKeyScript: walletScript,
+		}},
+	}
+
+	// Excess fee: fee 100000 > TxMaxFee 60000.
+	excessFeeTx := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTxHash,
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           50000,
+			PublicKeyScript: walletScript,
+		}},
 	}
 
 	// Wrong shape: two outputs, must be skipped even though it otherwise
@@ -111,7 +174,10 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 				OutputIndex:     0,
 			},
 		}},
-		Outputs: []*bitcoin.TransactionOutput{{Value: 100}, {Value: 200}},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 50000, PublicKeyScript: walletScript},
+			{Value: 50000, PublicKeyScript: walletScript},
+		},
 	}
 
 	// Non-matching: correct shape, different outpoint.
@@ -129,11 +195,16 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 				OutputIndex:     0,
 			},
 		}},
-		Outputs: []*bitcoin.TransactionOutput{{Value: 100}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           100000,
+			PublicKeyScript: walletScript,
+		}},
 	}
 
 	event := &tbtc.ReservationAcceptanceRequestedEvent{
-		ReservationKey: reservationKey,
+		ReservationKey:      reservationKey,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		TxMaxFee:            60000,
 	}
 
 	t.Run("finds the matching transaction among candidates", func(t *testing.T) {
@@ -177,12 +248,56 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 			t.Errorf("expected nil, got %v", found)
 		}
 	})
+
+	t.Run("skips transaction with wrong output script", func(t *testing.T) {
+		found, err := findReservationAcceptanceTransaction(
+			spvChain,
+			event,
+			[]*bitcoin.Transaction{wrongScriptTx},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found != nil {
+			t.Errorf("expected nil for wrong script transaction, got %v", found)
+		}
+	})
+
+	t.Run("skips transaction with wrong output value", func(t *testing.T) {
+		found, err := findReservationAcceptanceTransaction(
+			spvChain,
+			event,
+			[]*bitcoin.Transaction{wrongValueTx},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found != nil {
+			t.Errorf("expected nil for wrong value transaction, got %v", found)
+		}
+	})
+
+	t.Run("skips transaction with excess fee", func(t *testing.T) {
+		found, err := findReservationAcceptanceTransaction(
+			spvChain,
+			event,
+			[]*bitcoin.Transaction{excessFeeTx},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found != nil {
+			t.Errorf("expected nil for excess fee transaction, got %v", found)
+		}
+	})
 }
 
 // TestFindReservationReanchorTransaction verifies the re-anchor transaction
 // matcher: it must find the 1-input-1-output transaction whose sole input
-// spends the reservation's current anchor UTXO outpoint exactly, skip
-// wrong-shape transactions, and return nil when nothing matches.
+// spends the reservation's current anchor UTXO outpoint exactly, whose sole output
+// is P2WPKH to the target wallet, and whose value is anchorUtxo.Value - fee
+// (with fee <= TxMaxFee), skip wrong-shape, wrong-script, or invalid-value
+// transactions, and return nil when nothing matches.
 func TestFindReservationReanchorTransaction(t *testing.T) {
 	anchorTxHash, err := bitcoin.NewHashFromString(
 		"2222222222222222222222222222222222222222222222222222222222222222",
@@ -199,6 +314,18 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 		Value: 600000,
 	}
 
+	targetWalletPKH := [20]byte{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
+	targetWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPKH)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	otherPKH := [20]byte{99, 99, 99}
+	otherScript, err := bitcoin.PayToWitnessPublicKeyHash(otherPKH)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	matchingTx := &bitcoin.Transaction{
 		Inputs: []*bitcoin.TransactionInput{{
 			Outpoint: &bitcoin.TransactionOutpoint{
@@ -206,7 +333,49 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 				OutputIndex:     1,
 			},
 		}},
-		Outputs: []*bitcoin.TransactionOutput{{Value: 590000}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           590000,
+			PublicKeyScript: targetWalletScript,
+		}},
+	}
+
+	wrongScriptTx := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           590000,
+			PublicKeyScript: otherScript,
+		}},
+	}
+
+	wrongValueTx := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           600000,
+			PublicKeyScript: targetWalletScript,
+		}},
+	}
+
+	excessFeeTx := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           500000,
+			PublicKeyScript: targetWalletScript,
+		}},
 	}
 
 	// Same transaction hash, wrong output index: must not match.
@@ -217,7 +386,10 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 				OutputIndex:     0,
 			},
 		}},
-		Outputs: []*bitcoin.TransactionOutput{{Value: 590000}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           590000,
+			PublicKeyScript: targetWalletScript,
+		}},
 	}
 
 	wrongShapeTx := &bitcoin.Transaction{
@@ -227,10 +399,16 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 				OutputIndex:     1,
 			},
 		}},
-		Outputs: []*bitcoin.TransactionOutput{{Value: 300000}, {Value: 290000}},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 300000, PublicKeyScript: targetWalletScript},
+			{Value: 290000, PublicKeyScript: targetWalletScript},
+		},
 	}
 
-	event := &tbtc.ReservationReanchorRequestedEvent{}
+	event := &tbtc.ReservationReanchorRequestedEvent{
+		TargetWalletPublicKeyHash: targetWalletPKH,
+		TxMaxFee:                  20000,
+	}
 
 	t.Run("finds the matching transaction among candidates", func(t *testing.T) {
 		found, err := findReservationReanchorTransaction(
@@ -257,6 +435,48 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 		}
 		if found != nil {
 			t.Errorf("expected nil, got %v", found)
+		}
+	})
+
+	t.Run("skips transaction with wrong output script", func(t *testing.T) {
+		found, err := findReservationReanchorTransaction(
+			event,
+			anchorUtxo,
+			[]*bitcoin.Transaction{wrongScriptTx},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found != nil {
+			t.Errorf("expected nil for wrong script transaction, got %v", found)
+		}
+	})
+
+	t.Run("skips transaction with wrong output value", func(t *testing.T) {
+		found, err := findReservationReanchorTransaction(
+			event,
+			anchorUtxo,
+			[]*bitcoin.Transaction{wrongValueTx},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found != nil {
+			t.Errorf("expected nil for wrong value transaction, got %v", found)
+		}
+	})
+
+	t.Run("skips transaction with excess fee", func(t *testing.T) {
+		found, err := findReservationReanchorTransaction(
+			event,
+			anchorUtxo,
+			[]*bitcoin.Transaction{excessFeeTx},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found != nil {
+			t.Errorf("expected nil for excess fee transaction, got %v", found)
 		}
 	})
 }
@@ -371,10 +591,9 @@ func TestProveReservationTransaction(t *testing.T) {
 // top-level orchestration function wired into production via
 // runReservationProofLoop: it seeds a requested event, a matching pending
 // action, and a matching wallet transaction, then asserts the submit hook
-// fires with the correct (reservationKey, requestNonce) pair. A
-// regression that swapped the acceptance and re-anchor submitters (or
-// mixed up their arguments) would show up here, not just in the
-// lower-level helper unit tests above.
+// fires with the correct (reservationKey, requestNonce) pair on the first pass.
+// On a second pass with the on-chain action state mutated to Settled, it
+// asserts no second submission occurs and the event is evicted from the pending map.
 func TestProveReservationAcceptanceActions(t *testing.T) {
 	const proofStart = 790270
 	diff := func(d int64) *big.Int { return big.NewInt(d) }
@@ -407,6 +626,10 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 	fundingTxHash := fundingTx.Hash()
 	reservationKey := spvChain.BuildDepositKey(fundingTxHash, 0)
 	const requestNonce = 1
+
+	spvChain.setDepositRequest(fundingTxHash, 0, &tbtc.DepositChainRequest{
+		Amount: 150000,
+	})
 
 	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
 	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
@@ -471,9 +694,10 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 	}
 
 	config := Config{TransactionLimit: 100}
+	scanState := newReservationProofScanState()
 
 	if err := proveReservationAcceptanceActions(
-		newReservationProofScanState(),
+		scanState,
 		config,
 		spvChain,
 		spvChain,
@@ -500,6 +724,35 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 		)
 	}
 
+	// Second pass: action transitions to Settled. Verify it is not resubmitted
+	// and is evicted from the pending map.
+	spvChain.setReservationAction(
+		reservationKey,
+		requestNonce,
+		&tbtc.ReservationAction{
+			State:                     tbtc.ReservationActionStateSettled,
+			ActionType:                tbtc.ReservationActionTypeAcceptance,
+			TargetWalletPublicKeyHash: walletPublicKeyHash,
+		},
+	)
+
+	if err := proveReservationAcceptanceActions(
+		scanState,
+		config,
+		spvChain,
+		spvChain,
+		btcChain,
+	); err != nil {
+		t.Fatalf("unexpected error on second pass: %v", err)
+	}
+
+	if submissions != 1 {
+		t.Errorf("expected submissions to remain 1 on second pass, got %d", submissions)
+	}
+	key := reservationEventKey(reservationKey, requestNonce)
+	if _, exists := scanState.pendingAcceptanceEvents[key]; exists {
+		t.Errorf("expected settled event to be evicted from pendingAcceptanceEvents")
+	}
 	// Regression test: when the reservation action for a discovered transaction
 	// is no longer Pending at submission time, zero submissions occur.
 	t.Run("skip when action no longer pending", func(t *testing.T) {
@@ -618,9 +871,9 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 // runReservationProofLoop: it seeds a requested event, a matching
 // reservation with an anchor UTXO, a matching pending action, and a
 // matching wallet transaction, then asserts the submit hook fires with the
-// correct (reservationKey, requestNonce) pair. A regression that swapped
-// the acceptance and re-anchor submitters (or mixed up their arguments)
-// would show up here, not just in the lower-level helper unit tests above.
+// correct (reservationKey, requestNonce) pair on the first pass.
+// On a second pass with the on-chain action state mutated to Settled, it
+// asserts no second submission occurs and the event is evicted from the pending map.
 func TestProveReservationReanchorActions(t *testing.T) {
 	const proofStart = 790270
 	diff := func(d int64) *big.Int { return big.NewInt(d) }
@@ -732,9 +985,10 @@ func TestProveReservationReanchorActions(t *testing.T) {
 	}
 
 	config := Config{TransactionLimit: 100}
+	scanState := newReservationProofScanState()
 
 	if err := proveReservationReanchorActions(
-		newReservationProofScanState(),
+		scanState,
 		config,
 		spvChain,
 		spvChain,
@@ -1170,5 +1424,128 @@ func TestVerifyReservationActionStillProvable(t *testing.T) {
 				t.Fatalf("unexpected stillProvable value\nexpected: %v\nactual:   %v", test.expectedStillProvable, stillProvable)
 			}
 		})
+	}
+}
+
+func TestProveReservationAcceptanceActions_EvictsOnExceededRetries(t *testing.T) {
+	spvChain := newLocalChain()
+	btcChain := newLocalBitcoinChain()
+
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	reservationKey := big.NewInt(12345)
+	const requestNonce = 1
+
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      reservationKey,
+		RequestNonce:        requestNonce,
+		WalletPublicKeyHash: [20]byte{1},
+		BlockNumber:         500,
+	})
+	// Intentionally do NOT set the reservation action on spvChain, so GetReservationAction fails.
+
+	scanState := newReservationProofScanState()
+	config := Config{TransactionLimit: 100}
+	key := reservationEventKey(reservationKey, requestNonce)
+
+	for i := uint(1); i < maxReservationActionLoadRetries; i++ {
+		if err := proveReservationAcceptanceActions(
+			scanState,
+			config,
+			spvChain,
+			spvChain,
+			btcChain,
+		); err != nil {
+			t.Fatalf("unexpected error on pass %d: %v", i, err)
+		}
+
+		if _, exists := scanState.pendingAcceptanceEvents[key]; !exists {
+			t.Fatalf("expected event to remain pending on pass %d (retries %d)", i, i)
+		}
+		if scanState.acceptanceRetries[key] != i {
+			t.Errorf("expected retries to be %d, got %d", i, scanState.acceptanceRetries[key])
+		}
+	}
+
+	// Final pass: should exceed max retries and be evicted.
+	if err := proveReservationAcceptanceActions(
+		scanState,
+		config,
+		spvChain,
+		spvChain,
+		btcChain,
+	); err != nil {
+		t.Fatalf("unexpected error on final pass: %v", err)
+	}
+
+	if _, exists := scanState.pendingAcceptanceEvents[key]; exists {
+		t.Errorf("expected event to be evicted after exceeding max retries")
+	}
+	if _, exists := scanState.acceptanceRetries[key]; exists {
+		t.Errorf("expected retry entry to be cleaned up after eviction")
+	}
+}
+
+func TestProveReservationReanchorActions_EvictsOnExceededRetries(t *testing.T) {
+	spvChain := newLocalChain()
+	btcChain := newLocalBitcoinChain()
+
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	reservationKey := big.NewInt(67890)
+	const requestNonce = 1
+
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            reservationKey,
+		RequestNonce:              requestNonce,
+		SourceWalletPublicKeyHash: [20]byte{2},
+		TargetWalletPublicKeyHash: [20]byte{2},
+		BlockNumber:               500,
+	})
+	// Intentionally do NOT set the reservation action on spvChain, so GetReservationAction fails.
+
+	scanState := newReservationProofScanState()
+	config := Config{TransactionLimit: 100}
+	key := reservationEventKey(reservationKey, requestNonce)
+
+	for i := uint(1); i < maxReservationActionLoadRetries; i++ {
+		if err := proveReservationReanchorActions(
+			scanState,
+			config,
+			spvChain,
+			spvChain,
+			btcChain,
+		); err != nil {
+			t.Fatalf("unexpected error on pass %d: %v", i, err)
+		}
+
+		if _, exists := scanState.pendingReanchorEvents[key]; !exists {
+			t.Fatalf("expected event to remain pending on pass %d (retries %d)", i, i)
+		}
+		if scanState.reanchorRetries[key] != i {
+			t.Errorf("expected retries to be %d, got %d", i, scanState.reanchorRetries[key])
+		}
+	}
+
+	// Final pass: should exceed max retries and be evicted.
+	if err := proveReservationReanchorActions(
+		scanState,
+		config,
+		spvChain,
+		spvChain,
+		btcChain,
+	); err != nil {
+		t.Fatalf("unexpected error on final pass: %v", err)
+	}
+
+	if _, exists := scanState.pendingReanchorEvents[key]; exists {
+		t.Errorf("expected event to be evicted after exceeding max retries")
+	}
+	if _, exists := scanState.reanchorRetries[key]; exists {
+		t.Errorf("expected retry entry to be cleaned up after eviction")
 	}
 }

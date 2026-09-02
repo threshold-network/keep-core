@@ -67,15 +67,8 @@ type TbtcChain struct {
 	walletProposalValidator *tbtccontract.WalletProposalValidator
 	redemptionWatchtower    *tbtccontract.RedemptionWatchtower
 	// reservationRouter is the abigen binding for ReservationRouter.sol's ABI
-	// (functions, events, errors). It is NOT bound to the deployed router
-	// address -- the router contract holds its own empty storage and only
-	// ever executes via Bridge.fallback's delegatecall. The binding is
-	// constructed against the Bridge address so every read, write, and log
-	// filter goes through Bridge.fallback, which dispatches to the router
-	// code with the Bridge's storage and emits events under the Bridge's
-	// address. Calling the binding against the router's standalone address
-	// would invoke its empty storage and either revert (writes) or return
-	// zeros (views).
+	// constructed against the Bridge address (see reservationRouterBinding for
+	// the address invariant explanation).
 	reservationRouter *tbtccontract.ReservationRouter
 	// ecdsaDkgValidatorAddress optional; when zero, TBTC uses defaultGroupParameters(network).
 	ecdsaDkgValidatorAddress common.Address
@@ -2458,10 +2451,7 @@ func (tc *TbtcChain) GetDepositMinAge() (uint32, error) {
 }
 
 // GetReservation returns the on-chain reservation record for the given
-// reservation key. The reservation router code is reached via
-// Bridge.fallback's delegatecall; the reservationRouter binding is bound to
-// the Bridge address so this call routes through the fallback into the
-// router code that reads the Bridge's reservation storage.
+// reservation key via the reservationRouter binding (see reservationRouterBinding).
 func (tc *TbtcChain) GetReservation(
 	reservationKey *big.Int,
 ) (*tbtc.Reservation, error) {
@@ -2519,8 +2509,7 @@ func (tc *TbtcChain) GetReservationAction(
 }
 
 // ReservationParameters returns the current on-chain Bridge reservation
-// parameters (10-tuple). The reservationRouter binding routes this read
-// through Bridge.fallback into the router's reservationParameters view.
+// parameters (10-tuple) via the reservationRouter binding (see reservationRouterBinding).
 func (tc *TbtcChain) ReservationParameters() (
 	*tbtc.ReservationParameters,
 	error,
@@ -2836,11 +2825,9 @@ func parseReservationActionState(value uint8) (tbtc.ReservationActionState, erro
 	}
 }
 
-// RequestReservationAcceptance asks the Bridge (via its ReservationRouter
-// delegatecall target) to start a new reservation acceptance action generation
-// for the given reservation. The Bridge binding holds the actual storage; the
-// reservationRouter binding is bound to the Bridge address so this call routes
-// through Bridge.fallback into the router code.
+// RequestReservationAcceptance calls the Bridge (via reservationRouter binding,
+// see reservationRouterBinding) to start a new reservation acceptance action
+// generation for the given reservation.
 func (tc *TbtcChain) RequestReservationAcceptance(
 	reservationKey *big.Int,
 	walletPublicKeyHash [20]byte,
@@ -3036,9 +3023,7 @@ func (tc *TbtcChain) NotifyReservationStranded(
 }
 
 // ReservationCaps returns the cap parameters that gate reservation
-// acceptance. The reservationRouter binding is bound to the Bridge
-// address; the call routes through Bridge.fallback into the router's
-// reservationCaps view.
+// acceptance via the reservationRouter binding (see reservationRouterBinding).
 func (tc *TbtcChain) ReservationCaps() (
 	uint64,
 	uint64,
@@ -3123,29 +3108,6 @@ func (tc *TbtcChain) ReservedDepositWallet(
 
 	return walletPublicKeyHash, nil
 }
-
-// convertReservationRequestFromAbiType converts the ReservationRouter-
-// specific Reservation.ReservationRequest ABI struct to the TBTC
-// application `tbtc.ReservationRequest` representation. This is the
-// verbatim-on-chain conversion; callers that want a slightly-shrunk Go
-// representation use GetReservation, which drops CumulativeReanchorFee
-// because m1 has no fee-ceiling enforcement.
-
-// Reservations returns the on-chain reservation request record for the
-// given reservation key, including the cumulative re-anchor fee that the
-// existing GetReservation representation drops.
-
-// convertReservationActionRecordFromAbiType converts the ReservationRouter-
-// specific Reservation.ReservationAction ABI struct to the TBTC
-// application `tbtc.ReservationActionRecord` representation. This is the
-// verbatim-on-chain conversion; callers that want a slightly-shrunk Go
-// representation use GetReservationAction, which drops the late-settlement
-// and retry-credit fields because m1 does not consume them.
-
-// ReservationActions returns the on-chain reservation action record for the
-// given reservation key and request nonce, including the late-settlement
-// and retry-credit fields that the existing GetReservationAction
-// representation drops.
 
 // ActiveReservationsCount returns the current count of active reservations
 // across all wallets and the cap on that count.

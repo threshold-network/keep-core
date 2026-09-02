@@ -68,11 +68,14 @@ type Config struct {
 	// more transaction proofs to submit.
 	IdleBackoffTime time.Duration
 
-	// Reservations controls the SPV proof submission for reservation
-	// acceptance / re-anchor action generations. The reservation watchers are
-	// gated by the separate Tbtc.Reservations.Enabled flag.
+	// Reservations controls SPV proof submission for reservation acceptance
+	// and re-anchor action generations.
+	//
+	// OPERATOR NOTE: This flag only controls SPV proof submission in the
+	// maintainer process. Proposal generation and watcher wiring in the client
+	// process are gated by the separate Tbtc.Reservations.Enabled flag.
+	// An operator MUST enable BOTH flags ([Tbtc.Reservations] in the client
+	// and [Maintainer.Spv.Reservations] in the maintainer) for the reservation
+	// feature to work end-to-end.
 	Reservations tbtc.ReservationsConfig
 }
-
-// ReservationsConfig is deprecated and refers to tbtc.ReservationsConfig.
-type ReservationsConfig = tbtc.ReservationsConfig

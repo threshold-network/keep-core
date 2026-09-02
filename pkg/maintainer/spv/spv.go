@@ -52,6 +52,11 @@ func Initialize(
 	}
 
 	if config.Reservations.Enabled {
+		logger.Infof(
+			"SPV maintainer reservation proof submission is enabled; " +
+				"ensure the paired Tbtc.Reservations.Enabled flag is also " +
+				"enabled in the client config for end-to-end operation",
+		)
 		// Reservation acceptance/re-anchor proofs run on a dedicated loop,
 		// not through the generic proofTypes map: SubmitReservationProof
 		// requires the (reservationKey, requestNonce) pair of the action
