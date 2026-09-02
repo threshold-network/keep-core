@@ -157,7 +157,6 @@ func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
 	validHash[0] = 0x01
 	validWalletHash := make([]byte, 20)
 	validWalletHash[0] = 0xaa
-
 	tests := map[string]struct {
 		actionType    WalletActionType
 		payload       []byte
@@ -246,6 +245,36 @@ func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
 			}),
 			expectedError: "cannot unmarshal proposal payload: [invalid re-anchor transaction fee byte length: [9]]",
 		},
+		"anchor zero fee marshaled through Marshal is rejected as missing": {
+			actionType: ActionReservationAnchor,
+			payload: marshalThroughProposal(t, &ReservationAnchorProposal{
+				DepositFundingTxHash:      bitcoin.Hash{0x01, 0x02},
+				DepositFundingOutputIndex: 3,
+				RequestNonce:              1,
+				AnchorTxFee:               big.NewInt(0),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
+		},
+		"re-anchor zero reservation key marshaled through Marshal is rejected as missing": {
+			actionType: ActionReservationReanchor,
+			payload: marshalThroughProposal(t, &ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(0),
+				RequestNonce:              3,
+				TargetWalletPublicKeyHash: [20]byte{0xaa, 0xbb},
+				ReanchorTxFee:             big.NewInt(1700),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
+		},
+		"re-anchor zero fee marshaled through Marshal is rejected as missing": {
+			actionType: ActionReservationReanchor,
+			payload: marshalThroughProposal(t, &ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321),
+				RequestNonce:              3,
+				TargetWalletPublicKeyHash: [20]byte{0xaa, 0xbb},
+				ReanchorTxFee:             big.NewInt(0),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
+		},
 	}
 
 	for testName, test := range tests {
@@ -265,6 +294,18 @@ func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
 	}
 }
 
+// marshalThroughProposal marshals a CoordinationProposal via its own Marshal
+// method, for use as a test fixture payload. Unlike marshalPb, this exercises
+// the proposal's real wire-encoding path (e.g. *big.Int.Bytes()) rather than
+// hand-constructing the protobuf message directly.
+func marshalThroughProposal(t *testing.T, proposal CoordinationProposal) []byte {
+	t.Helper()
+	data, err := proposal.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
 func signReservationTransaction(
 	t *testing.T,
 	builder *bitcoin.TransactionBuilder,
