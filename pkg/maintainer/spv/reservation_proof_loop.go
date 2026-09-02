@@ -2,6 +2,7 @@ package spv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -9,6 +10,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/maintainer/btcdiff"
 	"github.com/keep-network/keep-core/pkg/tbtc"
+)
+
+// errReservationActionNoLongerProvable is returned when a discovered
+// transaction's action generation is no longer provable at submission time.
+// This is an expected, benign skip rather than a submission failure.
+var errReservationActionNoLongerProvable = errors.New(
+	"reservation action generation is no longer provable",
 )
 
 // reservationProofLookBackBlocks bounds the pending-action-request event
@@ -22,19 +30,19 @@ const reservationProofLookBackBlocks = uint64(216000)
 // submission and confirms it is still the exact pending action generation
 // the discovered transaction was found for.
 //
-// proveReservationAcceptanceActions/proveReservationReanchorActions check
-// Pending once near the top of their loop, then run a Bitcoin
-// transaction-history scan before reaching the submit call - a window in
-// which the action generation could settle, time out, or be superseded.
-// This closes that window with a second, submission-time check.
+// Its purpose is to distinguish an expected, benign "this action generation is
+// no longer the exact pending one" outcome (Warn-logged, and skipped so it is
+// treated as "never attempted" rather than counted as a failed submission
+// attempt by metricsRecorder) from a genuine chain-read error (propagated to
+// the caller) or a genuine logic error caught later inside
+// submitReservationActionProof (which remains the authoritative
+// pre-submission check — it re-fetches the action itself right before
+// SubmitReservationProof and is what actually prevents an incorrect or
+// misdirected submission).
 //
-// Whether a stale generation's action record could still read Pending
-// after a superseding generation exists is an unverified on-chain
-// assumption (see reservation_reanchor_proof.go's doc comments on
-// submitReservationReanchorProof's discovery counterpart in the prior
-// design) - this check does not resolve that, it only shrinks the window
-// in which it could matter and skips, rather than misdirects a
-// submission, if it does.
+// This function does not, by itself, close any submission-correctness race —
+// it only produces cleaner logs and metrics for an expected outcome that
+// submitReservationActionProof's own checks already handle safely either way.
 func verifyReservationActionStillProvable(
 	spvChain Chain,
 	reservationKey *big.Int,
@@ -56,11 +64,13 @@ func verifyReservationActionStillProvable(
 		action.State != tbtc.ReservationActionStatePending {
 		logger.Warnf(
 			"skipping reservation proof submission for reservation "+
-				"[%v]'s action generation [%d]: no longer a pending %v "+
-				"action at submission time",
+				"[%v]'s action generation [%d]: action generation is now "+
+				"%s/%s, no longer the expected pending %s action",
 			reservationKey,
 			requestNonce,
-			expectedActionType,
+			action.ActionType.String(),
+			action.State.String(),
+			expectedActionType.String(),
 		)
 		return false, nil
 	}
@@ -77,6 +87,87 @@ func verifyReservationActionStillProvable(
 	}
 
 	return true, nil
+}
+
+// submitReservationAcceptanceActionProof re-verifies that event's action
+// generation is still the exact pending one the discovered transaction was
+// found for, then submits its SPV proof. Extracted out of
+// proveReservationAcceptanceActions' submit callback so the wallet
+// argument passed to verifyReservationActionStillProvable
+// (event.WalletPublicKeyHash) can be exercised directly in a unit test,
+// without going through Bitcoin transaction discovery.
+func submitReservationAcceptanceActionProof(
+	spvChain Chain,
+	btcChain bitcoin.Chain,
+	event *tbtc.ReservationAcceptanceRequestedEvent,
+	transactionHash bitcoin.Hash,
+	requiredConfirmations uint,
+) error {
+	stillProvable, err := verifyReservationActionStillProvable(
+		spvChain,
+		event.ReservationKey,
+		event.RequestNonce,
+		tbtc.ReservationActionTypeAcceptance,
+		event.WalletPublicKeyHash,
+	)
+	if err != nil {
+		return err
+	}
+	if !stillProvable {
+		return errReservationActionNoLongerProvable
+	}
+
+	return SubmitReservationAcceptanceProof(
+		transactionHash,
+		requiredConfirmations,
+		event.ReservationKey,
+		event.RequestNonce,
+		btcChain,
+		spvChain,
+	)
+}
+
+// submitReservationReanchorActionProof re-verifies that event's action
+// generation is still the exact pending one the discovered transaction was
+// found for, then submits its SPV proof. Extracted out of
+// proveReservationReanchorActions' submit callback so the
+// target-vs-source wallet-hash field selection passed to
+// verifyReservationActionStillProvable (event.TargetWalletPublicKeyHash,
+// not event.SourceWalletPublicKeyHash — a re-anchor event carries both)
+// can be exercised directly in a unit test, without going through Bitcoin
+// transaction discovery: this package's local test double can only
+// discover a transaction via the source wallet's outputs, which forces
+// the two fields to coincide by construction in any end-to-end test and
+// so cannot catch a swap between them.
+func submitReservationReanchorActionProof(
+	spvChain Chain,
+	btcChain bitcoin.Chain,
+	event *tbtc.ReservationReanchorRequestedEvent,
+	transactionHash bitcoin.Hash,
+	requiredConfirmations uint,
+) error {
+	stillProvable, err := verifyReservationActionStillProvable(
+		spvChain,
+		event.ReservationKey,
+		event.RequestNonce,
+		tbtc.ReservationActionTypeReanchor,
+		event.TargetWalletPublicKeyHash,
+	)
+	if err != nil {
+		return err
+	}
+	if !stillProvable {
+		return errReservationActionNoLongerProvable
+	}
+
+	return SubmitReservationReanchorProof(
+		transactionHash,
+		requiredConfirmations,
+		event.ReservationKey,
+		event.RequestNonce,
+		btcChain,
+		spvChain,
+	)
 }
 
 // reservationAcceptanceWalletEvent adapts
@@ -390,27 +481,12 @@ func proveReservationAcceptanceActions(
 				spvChain,
 				btcDiffChain,
 				func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
-					stillProvable, err := verifyReservationActionStillProvable(
+					return submitReservationAcceptanceActionProof(
 						spvChain,
-						event.ReservationKey,
-						event.RequestNonce,
-						tbtc.ReservationActionTypeAcceptance,
-						event.WalletPublicKeyHash,
-					)
-					if err != nil {
-						return err
-					}
-					if !stillProvable {
-						return nil
-					}
-
-					return SubmitReservationAcceptanceProof(
+						btcChain,
+						event,
 						transactionHash,
 						requiredConfirmations,
-						event.ReservationKey,
-						event.RequestNonce,
-						btcChain,
-						spvChain,
 					)
 				},
 			); err != nil {
@@ -587,27 +663,12 @@ func proveReservationReanchorActions(
 				spvChain,
 				btcDiffChain,
 				func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
-					stillProvable, err := verifyReservationActionStillProvable(
+					return submitReservationReanchorActionProof(
 						spvChain,
-						event.ReservationKey,
-						event.RequestNonce,
-						tbtc.ReservationActionTypeReanchor,
-						event.TargetWalletPublicKeyHash,
-					)
-					if err != nil {
-						return err
-					}
-					if !stillProvable {
-						return nil
-					}
-
-					return SubmitReservationReanchorProof(
+						btcChain,
+						event,
 						transactionHash,
 						requiredConfirmations,
-						event.ReservationKey,
-						event.RequestNonce,
-						btcChain,
-						spvChain,
 					)
 				},
 			); err != nil {
@@ -693,6 +754,10 @@ func proveReservationTransaction(
 	}
 
 	if err := submit(transaction.Hash(), requiredConfirmations); err != nil {
+		if errors.Is(err, errReservationActionNoLongerProvable) {
+			return nil
+		}
+
 		return err
 	}
 

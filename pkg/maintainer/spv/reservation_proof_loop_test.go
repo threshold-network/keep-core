@@ -499,6 +499,118 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 			submittedRequestNonce,
 		)
 	}
+
+	// Regression test: when the reservation action for a discovered transaction
+	// is no longer Pending at submission time, zero submissions occur.
+	t.Run("skip when action no longer pending", func(t *testing.T) {
+		const proofStart = 790270
+		diff := func(d int64) *big.Int { return big.NewInt(d) }
+
+		spvChain := newLocalChain()
+		btcChain := newLocalBitcoinChain()
+
+		if err := populateBlockHeaders(
+			btcChain,
+			proofStart,
+			proofStart+19,
+			func(uint) *big.Int { return diff(32) },
+		); err != nil {
+			t.Fatal(err)
+		}
+		spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+		spvChain.setCurrentEpoch(392)
+		spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
+
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(1000)
+		spvChain.setBlockCounter(blockCounter)
+
+		fundingTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{{Value: 150000}},
+		}
+		if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+			t.Fatal(err)
+		}
+		fundingTxHash := fundingTx.Hash()
+		reservationKey := spvChain.BuildDepositKey(fundingTxHash, 0)
+		const requestNonce = 1
+
+		walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+		walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		transaction := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: fundingTxHash,
+					OutputIndex:     0,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           100000,
+				PublicKeyScript: walletScript,
+			}},
+		}
+		if err := btcChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+		if err := btcChain.addTransactionConfirmations(
+			transaction.Hash(),
+			20,
+		); err != nil {
+			t.Fatal(err)
+		}
+		btcChain.setCoinbaseTxHash(transaction.Hash())
+
+		// Set up a timed-out action (not pending)
+		spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+			ReservationKey:      reservationKey,
+			RequestNonce:        requestNonce,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			BlockNumber:         500,
+		})
+		spvChain.setReservationAction(
+			reservationKey,
+			requestNonce,
+			&tbtc.ReservationAction{
+				State:                     tbtc.ReservationActionStateTimedOut, // Not pending!
+				ActionType:                tbtc.ReservationActionTypeAcceptance,
+				TargetWalletPublicKeyHash: walletPublicKeyHash,
+			},
+		)
+
+		submissions := 0
+		spvChain.submitReservationProofHook = func(
+			proofType uint8,
+			txInfo *tbtc.BitcoinTxInfo,
+			proof *tbtc.BitcoinTxProof,
+			mainUtxo *tbtc.BitcoinTxUTXO,
+			reservationKey *big.Int,
+			requestNonce uint64,
+		) error {
+			submissions++
+			return nil
+		}
+
+		config := Config{TransactionLimit: 100}
+
+		if err := proveReservationAcceptanceActions(
+			newReservationProofScanState(),
+			config,
+			spvChain,
+			spvChain,
+			btcChain,
+		); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Should have zero submissions because action is not pending
+		if submissions != 0 {
+			t.Fatalf("expected zero proofs submissions when action is not pending, got %d", submissions)
+		}
+	})
 }
 
 // TestProveReservationReanchorActions is an end-to-end test of the
@@ -648,186 +760,415 @@ func TestProveReservationReanchorActions(t *testing.T) {
 			submittedRequestNonce,
 		)
 	}
+
+	// Regression test: when the reservation action for a discovered transaction
+	// is no longer Pending at submission time, zero submissions occur.
+	t.Run("skip when action no longer pending", func(t *testing.T) {
+		const proofStart = 790270
+		diff := func(d int64) *big.Int { return big.NewInt(d) }
+
+		spvChain := newLocalChain()
+		btcChain := newLocalBitcoinChain()
+
+		if err := populateBlockHeaders(
+			btcChain,
+			proofStart,
+			proofStart+19,
+			func(uint) *big.Int { return diff(32) },
+		); err != nil {
+			t.Fatal(err)
+		}
+		spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+		spvChain.setCurrentEpoch(392)
+		spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
+
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(1000)
+		spvChain.setBlockCounter(blockCounter)
+
+		reservationKey := big.NewInt(424242)
+		const requestNonce = 2
+
+		priorAnchorTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{
+				{Value: 10000},
+				{Value: 600000},
+			},
+		}
+		if err := btcChain.BroadcastTransaction(priorAnchorTx); err != nil {
+			t.Fatal(err)
+		}
+		anchorTxHash := priorAnchorTx.Hash()
+		anchorUtxo := &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+			Value: 600000,
+		}
+
+		sourceWalletPublicKeyHash := [20]byte{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
+		walletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		transaction := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     1,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           590000,
+				PublicKeyScript: walletScript,
+			}},
+		}
+		if err := btcChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+		if err := btcChain.addTransactionConfirmations(
+			transaction.Hash(),
+			20,
+		); err != nil {
+			t.Fatal(err)
+		}
+		btcChain.setCoinbaseTxHash(transaction.Hash())
+
+		// Set up a timed-out action (not pending)
+		spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+			ReservationKey:            reservationKey,
+			RequestNonce:              requestNonce,
+			SourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
+			TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
+			BlockNumber:               500,
+		})
+		spvChain.setReservationAction(
+			reservationKey,
+			requestNonce,
+			&tbtc.ReservationAction{
+				State:                     tbtc.ReservationActionStateTimedOut, // Not pending!
+				ActionType:                tbtc.ReservationActionTypeReanchor,
+				TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
+			},
+		)
+		spvChain.setReservation(reservationKey, &tbtc.Reservation{
+			AnchorUtxo: anchorUtxo,
+		})
+
+		submissions := 0
+		spvChain.submitReservationProofHook = func(
+			proofType uint8,
+			txInfo *tbtc.BitcoinTxInfo,
+			proof *tbtc.BitcoinTxProof,
+			mainUtxo *tbtc.BitcoinTxUTXO,
+			reservationKey *big.Int,
+			requestNonce uint64,
+		) error {
+			submissions++
+			return nil
+		}
+
+		config := Config{TransactionLimit: 100}
+
+		if err := proveReservationReanchorActions(
+			newReservationProofScanState(),
+			config,
+			spvChain,
+			spvChain,
+			btcChain,
+		); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Should have zero submissions because action is not pending
+		if submissions != 0 {
+			t.Fatalf("expected zero proofs submissions when action is not pending, got %d", submissions)
+		}
+	})
 }
 
-// TestVerifyReservationActionStillProvable_Pending verifies the happy path:
-// the action generation is still pending, still the expected type, and
-// still targets the expected wallet, so submission may proceed.
-func TestVerifyReservationActionStillProvable_Pending(t *testing.T) {
+// TestSubmitReservationReanchorActionProof_UsesTargetWallet verifies that
+// submitReservationReanchorActionProof re-checks the action generation
+// against event.TargetWalletPublicKeyHash, not
+// event.SourceWalletPublicKeyHash. TestProveReservationReanchorActions
+// cannot catch a regression that swapped the two fields at the call site:
+// this package's local Bitcoin-history test double can only discover a
+// transaction via the source wallet's own outputs
+// (localBitcoinChain.GetTransactionsForPublicKeyHash matches on output
+// script), which forces source and target to coincide by construction in
+// any test that goes through discovery. Calling
+// submitReservationReanchorActionProof directly with a known transaction
+// hash bypasses discovery, so source and target can differ here: the
+// installed action authorizes only the target wallet, so passing Source
+// instead of Target would make the guard wrongly skip the submission.
+func TestSubmitReservationReanchorActionProof_UsesTargetWallet(t *testing.T) {
+	const proofStart = 790270
+	diff := func(d int64) *big.Int { return big.NewInt(d) }
+
 	spvChain := newLocalChain()
+	btcChain := newLocalBitcoinChain()
 
-	reservationKey := big.NewInt(1)
-	requestNonce := uint64(5)
-	targetWalletPKH := [20]byte{0x01, 0x02, 0x03}
+	if err := populateBlockHeaders(
+		btcChain,
+		proofStart,
+		proofStart+19,
+		func(uint) *big.Int { return diff(32) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+	spvChain.setCurrentEpoch(392)
+	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
 
-	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeReanchor,
-		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: targetWalletPKH,
-	})
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
 
-	stillProvable, err := verifyReservationActionStillProvable(
-		spvChain,
+	reservationKey := big.NewInt(555555)
+	const requestNonce = 9
+
+	priorAnchorTx := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 10000},
+			{Value: 600000},
+		},
+	}
+	if err := btcChain.BroadcastTransaction(priorAnchorTx); err != nil {
+		t.Fatal(err)
+	}
+	anchorTxHash := priorAnchorTx.Hash()
+
+	sourceWalletPublicKeyHash := [20]byte{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
+	targetWalletPublicKeyHash := [20]byte{100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119}
+	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transaction := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           590000,
+			PublicKeyScript: walletScript,
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(transaction); err != nil {
+		t.Fatal(err)
+	}
+	if err := btcChain.addTransactionConfirmations(
+		transaction.Hash(),
+		20,
+	); err != nil {
+		t.Fatal(err)
+	}
+	btcChain.setCoinbaseTxHash(transaction.Hash())
+
+	// The on-chain action authorizes only the target wallet - genuinely
+	// distinct from the source wallet here, unlike the discovery-bound E2E
+	// test above.
+	spvChain.setReservationAction(
 		reservationKey,
 		requestNonce,
-		tbtc.ReservationActionTypeReanchor,
-		targetWalletPKH,
+		&tbtc.ReservationAction{
+			State:                     tbtc.ReservationActionStatePending,
+			ActionType:                tbtc.ReservationActionTypeReanchor,
+			TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
+		},
 	)
+
+	event := &tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            reservationKey,
+		RequestNonce:              requestNonce,
+		SourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
+		TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
+	}
+
+	submissions := 0
+	spvChain.submitReservationProofHook = func(
+		proofType uint8,
+		txInfo *tbtc.BitcoinTxInfo,
+		proof *tbtc.BitcoinTxProof,
+		mainUtxo *tbtc.BitcoinTxUTXO,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error {
+		submissions++
+		return nil
+	}
+
+	_, _, requiredConfirmations, err := getProofInfo(transaction.Hash(), btcChain, spvChain, spvChain)
 	if err != nil {
+		t.Fatalf("failed to get proof info: %v", err)
+	}
+
+	if err := submitReservationReanchorActionProof(
+		spvChain,
+		btcChain,
+		event,
+		transaction.Hash(),
+		requiredConfirmations,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !stillProvable {
-		t.Fatal("expected the still-pending action generation to be provable")
-	}
-}
 
-// TestVerifyReservationActionStillProvable_StaleActionGeneration verifies
-// that submission is skipped, without error, when the action generation at
-// the given nonce is no longer pending (settled, timed out, or superseded)
-// by the time the caller is ready to submit - mirroring the race the
-// generic-loop adapter design (superseded by this dedicated loop) guarded
-// against: a discovered transaction's action generation advancing between
-// discovery and submission. A nil error matters here: an error would
-// propagate out of proveReservationAcceptanceActions/
-// proveReservationReanchorActions and abort that pass for every other
-// in-flight action generation this tick, which is disproportionate for
-// what is an expected, if rare, race outcome rather than an infrastructure
-// failure.
-func TestVerifyReservationActionStillProvable_StaleActionGeneration(t *testing.T) {
-	spvChain := newLocalChain()
-
-	reservationKey := big.NewInt(2)
-	staleNonce := uint64(7)
-	targetWalletPKH := [20]byte{0x01, 0x02, 0x03}
-
-	// The action generation that produced the discovered transaction timed
-	// out; the reservation may have since moved on to an unrelated action
-	// generation.
-	spvChain.setReservationAction(reservationKey, staleNonce, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeReanchor,
-		State:                     tbtc.ReservationActionStateTimedOut,
-		TargetWalletPublicKeyHash: targetWalletPKH,
-	})
-
-	stillProvable, err := verifyReservationActionStillProvable(
-		spvChain,
-		reservationKey,
-		staleNonce,
-		tbtc.ReservationActionTypeReanchor,
-		targetWalletPKH,
-	)
-	if err != nil {
+	if submissions != 1 {
 		t.Fatalf(
-			"expected nil error for a stale action generation (the "+
-				"caller must not abort the whole proving round for a "+
-				"skip), got: %v",
-			err,
+			"expected exactly one proof submission using the target wallet, got %d",
+			submissions,
 		)
 	}
-	if stillProvable {
-		t.Fatal("expected a timed-out action generation to be reported unprovable")
-	}
 }
 
-// TestVerifyReservationActionStillProvable_WrongActionType verifies that
-// submission is skipped when the action generation at the given nonce is
-// pending but for a different action type than expected - e.g. the
-// reservation moved on to a dissolution while the caller was still trying
-// to prove a stale re-anchor transaction.
-func TestVerifyReservationActionStillProvable_WrongActionType(t *testing.T) {
-	spvChain := newLocalChain()
-
-	reservationKey := big.NewInt(3)
-	requestNonce := uint64(8)
-	targetWalletPKH := [20]byte{0x01, 0x02, 0x03}
-
-	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-		ActionType: tbtc.ReservationActionTypeDissolution,
-		State:      tbtc.ReservationActionStatePending,
-	})
-
-	stillProvable, err := verifyReservationActionStillProvable(
-		spvChain,
-		reservationKey,
-		requestNonce,
-		tbtc.ReservationActionTypeReanchor,
-		targetWalletPKH,
-	)
-	if err != nil {
-		t.Fatalf("expected nil error for a wrong action type, got: %v", err)
+// TestVerifyReservationActionStillProvable tests the guard that confirms a reservation action
+// is still the expected pending generation at submission time.
+func TestVerifyReservationActionStillProvable(t *testing.T) {
+	tests := map[string]struct {
+		setupFunc                         func(*localChain, *big.Int, uint64)
+		reservationKey                    *big.Int
+		requestNonce                      uint64
+		targetWalletPKH                   [20]byte
+		expectedActionType                tbtc.ReservationActionType
+		expectedTargetWalletPublicKeyHash [20]byte
+		expectedStillProvable             bool
+		expectedWantErr                   bool
+		description                       string
+	}{
+		"happy path": {
+			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
+				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
+					ActionType:                tbtc.ReservationActionTypeReanchor,
+					State:                     tbtc.ReservationActionStatePending,
+					TargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
+				})
+			},
+			reservationKey:                    big.NewInt(1),
+			requestNonce:                      uint64(5),
+			targetWalletPKH:                   [20]byte{0x01, 0x02, 0x03},
+			expectedActionType:                tbtc.ReservationActionTypeReanchor,
+			expectedTargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
+			expectedStillProvable:             true,
+			expectedWantErr:                   false,
+			description:                       "action generation is still pending, still the expected type, and still targets the expected wallet",
+		},
+		"stale action generation": {
+			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
+				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
+					ActionType:                tbtc.ReservationActionTypeReanchor,
+					State:                     tbtc.ReservationActionStateTimedOut,
+					TargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
+				})
+			},
+			reservationKey:                    big.NewInt(2),
+			requestNonce:                      uint64(7),
+			targetWalletPKH:                   [20]byte{0x01, 0x02, 0x03},
+			expectedActionType:                tbtc.ReservationActionTypeReanchor,
+			expectedTargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
+			expectedStillProvable:             false,
+			expectedWantErr:                   false,
+			description:                       "action generation is no longer pending (timed out)",
+		},
+		"wrong action type": {
+			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
+				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
+					ActionType:                tbtc.ReservationActionTypeDissolution,
+					State:                     tbtc.ReservationActionStatePending,
+					TargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03}, // must match expected to isolate ActionType check
+				})
+			},
+			reservationKey:                    big.NewInt(3),
+			requestNonce:                      uint64(8),
+			targetWalletPKH:                   [20]byte{0x01, 0x02, 0x03},
+			expectedActionType:                tbtc.ReservationActionTypeReanchor,
+			expectedTargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
+			expectedStillProvable:             false,
+			expectedWantErr:                   false,
+			description:                       "action generation is Pending but for a different action type than expected",
+		},
+		"mismatched target wallet": {
+			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
+				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
+					ActionType:                tbtc.ReservationActionTypeReanchor,
+					State:                     tbtc.ReservationActionStatePending,
+					TargetWalletPublicKeyHash: [20]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44},
+				})
+			},
+			reservationKey:                    big.NewInt(4),
+			requestNonce:                      uint64(3),
+			targetWalletPKH:                   [20]byte{0x92, 0xa6, 0xec, 0x88, 0x9a, 0x8f, 0xa3, 0x4f, 0x73, 0x1e},
+			expectedActionType:                tbtc.ReservationActionTypeReanchor,
+			expectedTargetWalletPublicKeyHash: [20]byte{0x92, 0xa6, 0xec, 0x88, 0x9a, 0x8f, 0xa3, 0x4f, 0x73, 0x1e},
+			expectedStillProvable:             false,
+			expectedWantErr:                   false,
+			description:                       "action generation targets a different wallet than expected",
+		},
+		"genuine chain error": {
+			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
+				lc.getReservationActionErr = fmt.Errorf("simulated chain read failure")
+			},
+			reservationKey:                    big.NewInt(5),
+			requestNonce:                      uint64(1),
+			targetWalletPKH:                   [20]byte{}, // unused when error expected
+			expectedActionType:                tbtc.ReservationActionTypeReanchor,
+			expectedTargetWalletPublicKeyHash: [20]byte{}, // unused when error expected
+			expectedStillProvable:             false,
+			expectedWantErr:                   true,
+			description:                       "chain-level error re-fetching the action generation",
+		},
+		"absent/zero-value action": {
+			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
+				// Install zero value action: ActionType==None, State==Unknown
+				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{})
+			},
+			reservationKey:                    big.NewInt(6),
+			requestNonce:                      uint64(2),
+			targetWalletPKH:                   [20]byte{0x01, 0x02, 0x03},
+			expectedActionType:                tbtc.ReservationActionTypeReanchor, // expecting Reanchor but got None
+			expectedTargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
+			expectedStillProvable:             false,
+			expectedWantErr:                   false,
+			description:                       "zero-value action models missing on-chain entry (treated as skip)",
+		},
 	}
-	if stillProvable {
-		t.Fatal("expected a mismatched action type to be reported unprovable")
-	}
-}
 
-// TestVerifyReservationActionStillProvable_MismatchedTargetWallet verifies
-// that submission is skipped when the reservation's current pending action
-// generation at the given nonce targets a different wallet than the one
-// the discovered transaction actually pays - evidence the transaction
-// belongs to a superseded generation even though the current generation is
-// also, coincidentally, pending and of the expected type.
-func TestVerifyReservationActionStillProvable_MismatchedTargetWallet(t *testing.T) {
-	spvChain := newLocalChain()
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			spvChain := newLocalChain()
 
-	reservationKey := big.NewInt(4)
-	requestNonce := uint64(3)
-	oldTargetWalletPKH := [20]byte{0x92, 0xa6, 0xec, 0x88, 0x9a, 0x8f, 0xa3, 0x4f, 0x73, 0x1e}
-	newTargetWalletPKH := [20]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44}
+			if test.setupFunc != nil {
+				test.setupFunc(spvChain, test.reservationKey, test.requestNonce)
+			}
 
-	// A new re-anchor request superseded the one that produced the
-	// discovered transaction, this time targeting a different wallet,
-	// before the discovered transaction's proof was submitted.
-	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeReanchor,
-		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: newTargetWalletPKH,
-	})
+			stillProvable, err := verifyReservationActionStillProvable(
+				spvChain,
+				test.reservationKey,
+				test.requestNonce,
+				test.expectedActionType,
+				test.expectedTargetWalletPublicKeyHash,
+			)
 
-	stillProvable, err := verifyReservationActionStillProvable(
-		spvChain,
-		reservationKey,
-		requestNonce,
-		tbtc.ReservationActionTypeReanchor,
-		oldTargetWalletPKH,
-	)
-	if err != nil {
-		t.Fatalf(
-			"expected nil error for a mismatched target wallet (the "+
-				"caller must not abort the whole proving round for a "+
-				"skip), got: %v",
-			err,
-		)
-	}
-	if stillProvable {
-		t.Fatal("expected a mismatched target wallet to be reported unprovable")
-	}
-}
+			if test.expectedWantErr {
+				if err == nil {
+					t.Fatal("expected an error but got nil")
+				}
+				if test.expectedStillProvable {
+					t.Fatal("expected error to report unprovable")
+				}
+				return
+			}
 
-// TestVerifyReservationActionStillProvable_ChainError verifies that a
-// chain-level error re-fetching the action generation is propagated to the
-// caller, rather than silently treated as a skip - unlike a settled/
-// superseded action generation, a read failure gives no evidence either
-// way and must not be treated as "safe to skip".
-func TestVerifyReservationActionStillProvable_ChainError(t *testing.T) {
-	spvChain := newLocalChain()
-
-	reservationKey := big.NewInt(5)
-	requestNonce := uint64(1)
-
-	// No action installed for this (reservationKey, requestNonce) pair, so
-	// GetReservationAction returns an error (see localChain.GetReservationAction).
-	stillProvable, err := verifyReservationActionStillProvable(
-		spvChain,
-		reservationKey,
-		requestNonce,
-		tbtc.ReservationActionTypeReanchor,
-		[20]byte{},
-	)
-	if err == nil {
-		t.Fatal("expected a chain error to be propagated, got nil")
-	}
-	if stillProvable {
-		t.Fatal("expected a chain error to report unprovable")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if stillProvable != test.expectedStillProvable {
+				t.Fatalf("unexpected stillProvable value\nexpected: %v\nactual:   %v", test.expectedStillProvable, stillProvable)
+			}
+		})
 	}
 }
