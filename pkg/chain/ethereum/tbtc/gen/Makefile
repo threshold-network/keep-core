@@ -79,3 +79,29 @@ define fix_reservation_router_contract_collision
 endef
 
 include ../../common/gen/Makefile
+
+# @keep-network/tbtc-v2@development on npm does not yet publish
+# ReservationRouter.json (threshold-network/keep-core#4281), which makes
+# `make generate` fail outright since nothing else can produce that
+# prerequisite. Fall back to a vendored copy - its ABI is byte-for-byte
+# the ABI already embedded in the committed bindings (re-derived from
+# ReservationRouterMetaData.ABI, with the "struct"/"enum"/"contract"
+# internalType prefix space abigen's metadata packer strips put back;
+# verified by round-tripping through the same abigen + keep-common
+# generator invocation and diffing byte-identical against
+# abi/ReservationRouter.go, contract/ReservationRouter.go, and
+# cmd/ReservationRouter.go) - only when the real artifact is missing,
+# and only in the `development` environment, which already tolerates
+# placeholder addresses (see the _address/% rule above). Non-development
+# builds still hard-fail if the real artifact is ever missing there,
+# since a real deployed address must never be substituted silently.
+# Remove this rule once tbtc-v2 publishes the real artifact upstream.
+${artifacts_dir}/ReservationRouter.json:
+ifeq ($(environment), development)
+	@[ -f "$@" ] || { \
+		echo "ReservationRouter - artifact missing from ${npm_package_name}@${environment}, using vendored fallback (see threshold-network/keep-core#4281)"; \
+		cp ReservationRouter.fallback-artifact.json "$@"; \
+	}
+else
+	@[ -f "$@" ] || { echo "$@ does not exist!"; exit 1; }
+endif
