@@ -14,7 +14,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 )
 
-
 func TestReservationStateValues(t *testing.T) {
 	tests := map[ReservationState]uint8{
 		ReservationStateUnknown:       0,
@@ -614,9 +613,9 @@ func TestAssembleReservationDissolutionTransaction(t *testing.T) {
 			expectedOutputValue: 298500,
 		},
 		"no-main-UTXO snapshot with newly current main UTXO": {
-			action:        &baseAction,
+			action:         &baseAction,
 			walletMainUtxo: walletMainUtxo,
-			expectedError: "wallet main UTXO must not be provided when the dissolution action has no expected main UTXO snapshot",
+			expectedError:  "wallet main UTXO must not be provided when the dissolution action has no expected main UTXO snapshot",
 		},
 		"mismatched action amount": {
 			action: func() *ReservationAction {
@@ -625,7 +624,7 @@ func TestAssembleReservationDissolutionTransaction(t *testing.T) {
 				return &action
 			}(),
 			walletMainUtxo: walletMainUtxo,
-			expectedError: "dissolution action amount does not match the anchor value",
+			expectedError:  "dissolution action amount does not match the anchor value",
 		},
 		"mismatched target wallet": {
 			action: func() *ReservationAction {
@@ -634,7 +633,7 @@ func TestAssembleReservationDissolutionTransaction(t *testing.T) {
 				return &action
 			}(),
 			walletMainUtxo: walletMainUtxo,
-			expectedError: "dissolution action targets a different wallet",
+			expectedError:  "dissolution action targets a different wallet",
 		},
 	}
 

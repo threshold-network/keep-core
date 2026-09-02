@@ -524,6 +524,7 @@ func assembleReservationReanchorTransaction(
 
 	return builder, nil
 }
+
 // assembleReservationDissolutionTransaction constructs an unsigned
 // reservation dissolution transaction for the given nonce-bound action.
 // The anchor outpoint is the first input. The wallet main UTXO is the
