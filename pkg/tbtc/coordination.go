@@ -10,9 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/internal/pb"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
+
+	"github.com/keep-network/keep-core/pkg/internal/pb"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -20,7 +23,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -66,6 +68,10 @@ const (
 	// upgrade to a binary containing this constant before the activation block
 	// is reached.
 	DepositSweepEveryWindowActivationBlock = uint64(24559289)
+	// ReservationsActivationBlock is the Ethereum block height at which
+	// reservation actions (anchor, re-anchor) become available in the
+	// coordination checklist.
+	ReservationsActivationBlock = uint64(24559289)
 )
 
 // errCoordinationExecutorBusy is an error returned when the coordination
@@ -591,21 +597,11 @@ func (ce *coordinationExecutor) getActionsChecklist(
 
 	var actions []WalletActionType
 
-	// Redemption, reservation anchor, and reservation reanchor are priority
-	// actions and should be checked on every coordination window: like
-	// Redemption, they are custody-critical (an unaccepted reservation or a
-	// stale re-anchor risks reservation stranding, not just throughput), not
-	// throughput-heavy scans like the sweep/moving-funds actions gated below.
-	//
-	// A node that has not enabled the reservation feature
-	// (config.Reservations.Enabled=false) never registers a matching
-	// ProposalTask for these action types; pkg/tbtcpg.ProposalGenerator.
-	// Generate already treats a checklist action with no registered task as
-	// "unsupported" and skips it, so listing these unconditionally here is
-	// safe on non-reservation deployments.
+	// Redemption is a priority action and should be checked on every
+	// coordination window: unlike the throughput-heavy sweep/moving-funds
+	// actions gated below, an unredeemed request risks user funds being
+	// stuck, not just throughput.
 	actions = append(actions, ActionRedemption)
-	actions = append(actions, ActionReservationAnchor)
-	actions = append(actions, ActionReservationReanchor)
 
 	// Other actions should be checked with a lower frequency. The default
 	// frequency is every 4 coordination windows.
@@ -641,6 +637,22 @@ func (ce *coordinationExecutor) getActionsChecklist(
 		if windowIndex%frequencyWindows == 0 {
 			actions = append(actions, ActionMovingFunds)
 		}
+	}
+
+	// Reservation actions (acceptance, re-anchor) are only checked when the
+	// operator has enabled the reservation subsystem. Gating the checklist
+	// entry on the same flag that gates the reservation proposal generator
+	// tasks (see tbtcpg.NewProposalGenerator) keeps leader and follower
+	// checklists in agreement: a follower that never enters this branch
+	// would otherwise fault a leader's reservation proposal as
+	// FaultLeaderMistake because the action would not appear in its own
+	// checklist. Frequency-gated like DepositSweep/MovingFunds below the
+	// activation block: reservation acceptance/re-anchor windows are not
+	// as time-critical as redemption.
+	if coordinationBlock >= ReservationsActivationBlock &&
+		windowIndex%frequencyWindows == 0 {
+		actions = append(actions, ActionReservationAnchor)
+		actions = append(actions, ActionReservationReanchor)
 	}
 
 	// #nosec G404 (insecure random number source (rand))

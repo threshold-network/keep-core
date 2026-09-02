@@ -61,21 +61,9 @@ message ReservationAnchorProposal {
     bytes anchorTxFee = 4;
 }
 
-message ReservedRedemptionProposal {
-    bytes reservationKey = 1;
-    uint64 requestNonce = 2;
-    bytes redemptionTxFee = 3;
-}
-
 message ReservationReanchorProposal {
     bytes reservationKey = 1;
     uint64 requestNonce = 2;
     bytes targetWalletPublicKeyHash = 3;
     bytes reanchorTxFee = 4;
-}
-
-message ReservationDissolutionProposal {
-    bytes reservationKey = 1;
-    uint64 requestNonce = 2;
-    bytes dissolutionTxFee = 3;
 }

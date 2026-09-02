@@ -8,6 +8,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtcpg"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
+
 	"github.com/keep-network/keep-core/build"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	"github.com/keep-network/keep-core/pkg/operator"
@@ -93,7 +94,11 @@ func start(cmd *cobra.Command) error {
 	// Wire performance metrics into network provider if available
 	var perfMetrics *clientinfo.PerformanceMetrics
 	if clientInfoRegistry != nil {
-		perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfoRegistry)
+		perfMetrics = clientinfo.NewPerformanceMetrics(
+			ctx,
+			clientInfoRegistry,
+			clientConfig.Tbtc.Reservations.Enabled,
+		)
 		// Type assert to libp2p provider to set metrics recorder
 		// The provider struct is not exported, so we use interface assertion
 		if setter, ok := netProvider.(interface {
@@ -164,19 +169,7 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Tbtc.Reservations.Enabled,
 		)
 
-		// PR H: when reservations are enabled, hand tbtc.Initialize a
-		// wiring callback that constructs the reservation watchers in the
-		// spv package and subscribes them to the chain. The wiring lives
-		// in spv because that is where the watcher types are defined; the
-		// indirection keeps the tbtc package free of any static import of
-		// spv (which would cycle with spv's existing import of tbtc).
-		wireReservationWatchers := tbtc.ReservationWatchersWirer(
-			func(ctx context.Context, chain tbtc.Chain) error {
-				return spv.WireReservationWatchers(ctx, chain, tbtcChain)
-			},
-		)
-
-		err = tbtc.Initialize(
+		resolver, err := tbtc.Initialize(
 			ctx,
 			tbtcChain,
 			btcChain,
@@ -189,10 +182,31 @@ func start(cmd *cobra.Command) error {
 			clientInfoRegistry,
 			perfMetrics, // Pass the existing performance metrics instance to avoid duplicate registrations
 			clientConfig.Ethereum.Network,
-			wireReservationWatchers,
 		)
 		if err != nil {
-			return fmt.Errorf("error initializing TBTC: [%v]", err)
+			return fmt.Errorf("cannot initialize TBTC: [%v]", err)
+		}
+
+		// Wire the reservation watchers (stranding, stale-deposit,
+		// action-timeout) directly against the same tbtcChain handle:
+		// cmd/start.go already imports both tbtc and spv, so there is no
+		// import-cycle reason to thread this through tbtc.Initialize via a
+		// callback type. Gated on the same flag that gates the reservation
+		// proposal generator tasks above. Failing to wire the watchers is
+		// fatal: the operator opted into reservations, so a missing
+		// watcher would silently strand anchors.
+		if clientConfig.Tbtc.Reservations.Enabled {
+			if err := spv.WireReservationWatchers(
+				ctx,
+				tbtcChain,
+				tbtcChain,
+				resolver,
+			); err != nil {
+				return fmt.Errorf(
+					"failed to wire reservation watchers: [%v]",
+					err,
+				)
+			}
 		}
 	}
 
