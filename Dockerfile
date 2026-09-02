@@ -81,7 +81,7 @@ RUN make get_artifacts environment=$ENVIRONMENT
 # artifacts, and only for `environment=development` (PR CI) builds - sepolia/mainnet
 # builds and the beacon/ecdsa/threshold modules are untouched.
 COPY ./ci-shims/tbtc-artifacts /tmp/tbtc-artifacts
-RUN if [ "$ENVIRONMENT" = "development" ] && [ -n "$(ls -A /tmp/tbtc-artifacts 2>/dev/null)" ]; then \
+RUN if { [ -z "$ENVIRONMENT" ] || [ "$ENVIRONMENT" = "development" ]; } && [ -n "$(ls -A /tmp/tbtc-artifacts 2>/dev/null)" ]; then \
 	echo "Using tbtc-v2 module artifacts built from tbtc-v2 PR #1112 (temporary shim)"; \
 	cp /tmp/tbtc-artifacts/*.json \
 		$APP_DIR/tmp/contracts/development/@keep-network/tbtc-v2/artifacts/; \
