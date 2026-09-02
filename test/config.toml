@@ -47,6 +47,12 @@ TransactionLimit = 80
 RestartBackoffTime = "2h"
 IdleBackoffTime = "15m"
 
+[maintainer.Spv.Reservations]
+Enabled = true
+
+[tbtc.reservations]
+Enabled = true
+
 [developer]
 RandomBeaconAddress = "0xcf64c2a367341170cb4e09cf8c0ed137d8473ceb"
 WalletRegistryAddress = "0x143ba24e66fce8bca22f7d739f9a932c519b1c76"

@@ -12,6 +12,7 @@ import (
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/persistence"
+
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -106,6 +107,18 @@ type Config struct {
 // ReservationsConfig holds the reservation-related tbtc.Config fields. It is
 // a separate type so future reservation knobs (poll intervals, cap overrides)
 // can be added without breaking the top-level Config layout.
+//
+// This flag controls only reservation acceptance / re-anchor proposal
+// GENERATION (the `start` command's coordination layer, config category
+// Tbtc). The `maintainer` command runs as a separate process reading a
+// disjoint config category (see config.MaintainerCategories) and has its
+// own independent gate, spv.ReservationsConfig.Enabled, that controls SPV
+// PROOF SUBMISSION for those same proposals. Neither command's config
+// loading sees the other's category, so this flag cannot be derived from or
+// validated against spv.ReservationsConfig.Enabled in code. An operator
+// running both `start` and `maintainer` for the reservation feature to work
+// end-to-end MUST enable both flags - normally the same [Tbtc.Reservations]
+// / [Maintainer.Spv.Reservations] TOML sections in one shared config file.
 type ReservationsConfig struct {
 	// Enabled toggles reservation acceptance / re-anchor proposal
 	// generation and reservation watcher wiring. Defaults to false so
@@ -113,21 +126,22 @@ type ReservationsConfig struct {
 	Enabled bool
 }
 
+// WalletMembersResolver defines the interface for resolving wallet members.
+type WalletMembersResolver interface {
+	ResolveWalletMembers(walletPublicKeyHash [20]byte) ([]uint32, error)
+}
+
 // Initialize kicks off the TBTC by initializing internal state, ensuring
 // preconditions like staking are met, and then kicking off the internal TBTC
 // implementation. Returns an error if this failed.
-// ReservationWatchersWirer is the contract the Initialize caller fulfils
-// to gate the PR H reservation watcher wiring on config.Reservations.Enabled.
-// The signature accepts the live tbtc.Chain so the wiring can subscribe to
-// the On* event surface and forward Bridge notifications; production
-// implementations live in pkg/maintainer/spv and are passed in by cmd/start.go
-// to avoid a static tbtc -> spv import cycle.
 //
-// When config.Reservations.Enabled is true and the wirer is non-nil,
-// Initialize invokes the wirer after the existing event subscriptions have
-// been registered so the watcher event handlers see the same chain handle.
-// When Reservations.Enabled is false the wirer is not invoked.
-type ReservationWatchersWirer func(ctx context.Context, chain Chain) error
+// Reservation watcher wiring (stranding / stale-deposit / action-timeout,
+// see pkg/maintainer/spv.WireReservationWatchers) is not performed here:
+// it lives in cmd/start.go, called directly against the same tbtc.Chain
+// handle once Initialize returns successfully and gated on the same
+// config.Reservations.Enabled flag. Threading it through Initialize via a
+// callback type would only exist to dodge a tbtc -> spv import cycle that
+// cmd/start.go (which already imports both packages) does not have.
 
 func Initialize(
 	ctx context.Context,
@@ -142,8 +156,7 @@ func Initialize(
 	clientInfo *clientinfo.Registry,
 	perfMetrics *clientinfo.PerformanceMetrics,
 	ethereumNetwork ethereum.Network,
-	wireReservationWatchers ReservationWatchersWirer,
-) error {
+) (WalletMembersResolver, error) {
 	groupParameters := defaultGroupParameters(ethereumNetwork)
 
 	if ethChain, ok := chain.(interface {
@@ -151,7 +164,7 @@ func Initialize(
 	}); ok {
 		gp, err := ethChain.EcdsaWalletGroupParametersFromChain(ctx)
 		if err != nil {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"cannot read TBTC group sizing from ECDSA validator: [%w]",
 				err,
 			)
@@ -181,12 +194,12 @@ func Initialize(
 		config,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
+		return nil, fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
 
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
-		return fmt.Errorf("cannot run coordination layer: [%w]", err)
+		return nil, fmt.Errorf("cannot run coordination layer: [%w]", err)
 	}
 
 	deduplicator := newDeduplicator()
@@ -203,7 +216,11 @@ func Initialize(
 		)
 
 		if perfMetrics == nil {
-			perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfo)
+			perfMetrics = clientinfo.NewPerformanceMetrics(
+				ctx,
+				clientInfo,
+				config.Reservations.Enabled,
+			)
 		}
 		node.setPerformanceMetrics(perfMetrics)
 
@@ -241,7 +258,7 @@ func Initialize(
 		),
 	)
 	if err != nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"could not set up sortition pool monitoring: [%v]",
 			err,
 		)
@@ -403,24 +420,7 @@ func Initialize(
 		}()
 	})
 
-	if config.Reservations.Enabled && wireReservationWatchers != nil {
-		// PR H: wire reservation watchers (stranding, stale-deposit,
-		// action-timeout). The wiring function is supplied by the
-		// caller (cmd/start.go) so the tbtc package never imports spv
-		// directly. The wirer constructs the watchers and subscribes
-		// them to the chain; construction itself is gated on
-		// Reservations.Enabled inside spv. Failing to wire the watchers
-		// is fatal: the operator opted into reservations, so a missing
-		// watcher would silently strand anchors.
-		if err := wireReservationWatchers(ctx, chain); err != nil {
-			return fmt.Errorf(
-				"failed to wire reservation watchers: [%w]",
-				err,
-			)
-		}
-	}
-
-	return nil
+	return node, nil
 }
 
 // enoughPreParamsInPoolPolicy is a policy that enforces the sufficient size

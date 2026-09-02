@@ -10,9 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/internal/pb"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
+
+	"github.com/keep-network/keep-core/pkg/internal/pb"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -20,7 +23,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -66,6 +68,10 @@ const (
 	// upgrade to a binary containing this constant before the activation block
 	// is reached.
 	DepositSweepEveryWindowActivationBlock = uint64(24559289)
+	// ReservationsActivationBlock is the Ethereum block height at which
+	// reservation actions (anchor, re-anchor) become available in the
+	// coordination checklist.
+	ReservationsActivationBlock = uint64(24559289)
 )
 
 // errCoordinationExecutorBusy is an error returned when the coordination
@@ -629,6 +635,22 @@ func (ce *coordinationExecutor) getActionsChecklist(
 		if windowIndex%frequencyWindows == 0 {
 			actions = append(actions, ActionMovingFunds)
 		}
+	}
+
+	// Reservation actions (acceptance, re-anchor) are only checked when the
+	// operator has enabled the reservation subsystem. Gating the checklist
+	// entry on the same flag that gates the reservation proposal generator
+	// tasks (see tbtcpg.NewProposalGenerator) keeps leader and follower
+	// checklists in agreement: a follower that never enters this branch
+	// would otherwise fault a leader's reservation proposal as
+	// FaultLeaderMistake because the action would not appear in its own
+	// checklist. Frequency-gated like DepositSweep/MovingFunds below the
+	// activation block: reservation acceptance/re-anchor windows are not
+	// as time-critical as redemption.
+	if coordinationBlock >= ReservationsActivationBlock &&
+		windowIndex%frequencyWindows == 0 {
+		actions = append(actions, ActionReservationAnchor)
+		actions = append(actions, ActionReservationReanchor)
 	}
 
 	// #nosec G404 (insecure random number source (rand))
