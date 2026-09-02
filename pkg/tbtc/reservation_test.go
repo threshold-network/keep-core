@@ -228,7 +228,7 @@ func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
 		},
 		"anchor fee exceeds 8 bytes": {
 			actionType: ActionReservationAnchor,
-			payload: marshalPb(t, &pb.ReservationAnchorProposal{
+			payload: marshalPb(&pb.ReservationAnchorProposal{
 				AnchorTxFee:               []byte{1, 2, 3, 4, 5, 6, 7, 8, 9},
 				RequestNonce:              1,
 				DepositFundingTxHash:      make([]byte, 32),
@@ -238,7 +238,7 @@ func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
 		},
 		"re-anchor fee exceeds 8 bytes": {
 			actionType: ActionReservationReanchor,
-			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+			payload: marshalPb(&pb.ReservationReanchorProposal{
 				ReservationKey:            big.NewInt(54321).Bytes(),
 				RequestNonce:              3,
 				ReanchorTxFee:             []byte{1, 2, 3, 4, 5, 6, 7, 8, 9},
