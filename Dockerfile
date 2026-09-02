@@ -62,10 +62,30 @@ COPY ./pkg/protocol/inactivity/gen $APP_DIR/pkg/protocol/inactivity/gen
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0
 
 # Environment is to download published and tagged NPM packages versions.
-ARG ENVIRONMENT
+# Defaults to `development` to mirror the root Makefile's `ifndef environment`
+# fallback (the "Build Docker Build Image" CI step never passes this build-arg).
+ARG ENVIRONMENT=development
 
 COPY ./Makefile $APP_DIR/Makefile
 RUN make get_artifacts environment=$ENVIRONMENT
+
+# TODO(https://github.com/threshold-network/tbtc-v2/pull/1112): remove once
+# @keep-network/tbtc-v2 publishes Bridge/WalletProposalValidator/RedemptionWatchtower/
+# ReservationRouter (and the rest of the tbtc module's required_contracts) under the
+# `development` npm tag. Until then, `get_artifacts` fetches a tbtc-v2 package whose
+# Bridge/WalletProposalValidator/RedemptionWatchtower don't yet expose the reservation
+# methods this PR binds against, and has no ReservationRouter artifact at all. The
+# `client.yml` workflow locally builds and deploys tbtc-v2 PR #1112 (pinned SHA) and
+# drops its deployment artifacts for the tbtc module's required_contracts at
+# ./ci-shims/tbtc-artifacts/*.json when it runs; this only overrides the tbtc module's
+# artifacts, and only for `environment=development` (PR CI) builds - sepolia/mainnet
+# builds and the beacon/ecdsa/threshold modules are untouched.
+COPY ./ci-shims/tbtc-artifacts /tmp/tbtc-artifacts
+RUN if [ "$ENVIRONMENT" = "development" ] && [ -n "$(ls -A /tmp/tbtc-artifacts 2>/dev/null)" ]; then \
+	echo "Using tbtc-v2 module artifacts built from tbtc-v2 PR #1112 (temporary shim)"; \
+	cp /tmp/tbtc-artifacts/*.json \
+		$APP_DIR/tmp/contracts/development/@keep-network/tbtc-v2/artifacts/; \
+fi
 
 # Need this to resolve imports in generated Ethereum commands.
 COPY ./config $APP_DIR/config
