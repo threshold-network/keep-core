@@ -18,10 +18,11 @@ import (
 	"strings"
 
 	"github.com/ipfs/go-log/v2"
-	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/tbtc"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
+
+	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 var logger = log.Logger("keep-tbtcpg")

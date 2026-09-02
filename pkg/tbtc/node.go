@@ -11,6 +11,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
+
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 )
@@ -309,4 +310,21 @@ func (n *node) validateDKG(
 	resultHash [32]byte,
 ) {
 	n.dkgExecutor.executeDkgValidation(seed, submissionBlock, result, resultHash)
+}
+
+func (n *node) ResolveWalletMembers(walletPublicKeyHash [20]byte) ([]uint32, error) {
+	wallet, found := n.walletRegistry.getWalletByPublicKeyHash(walletPublicKeyHash)
+	if !found {
+		return nil, fmt.Errorf("wallet not found")
+	}
+
+	operatorIDs := make([]uint32, len(wallet.signingGroupOperators))
+	for i, operatorAddress := range wallet.signingGroupOperators {
+		operatorID, err := n.chain.GetOperatorID(operatorAddress)
+		if err != nil {
+			return nil, err
+		}
+		operatorIDs[i] = uint32(operatorID)
+	}
+	return operatorIDs, nil
 }

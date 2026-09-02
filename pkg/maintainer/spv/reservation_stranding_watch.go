@@ -2,7 +2,6 @@ package spv
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
@@ -18,88 +17,27 @@ import (
 // be reconciled via the owner-facing late settlement path.
 type ReservationStrandingWatcher struct {
 	spvChain Chain
-	notifier ReservationStrandingNotifier
-}
-
-// ReservationStrandingNotifier is the contract the stranding watcher uses to
-// forward notifications to the Bridge. It mirrors
-// `Chain.NotifyReservationStranded` but is interface-typed so the watcher can
-// be unit-tested with an in-memory recorder.
-type ReservationStrandingNotifier interface {
-	NotifyReservationStranded(reservationKey *big.Int) error
-}
-
-// ReservationStrandingNotifierFunc adapts a plain function to the
-// ReservationStrandingNotifier interface, matching the Go idiomatic pattern
-// for callbacks in this package (see also `unprovenTransactionsGetter` in
-// spv.go).
-type ReservationStrandingNotifierFunc func(reservationKey *big.Int) error
-
-// NotifyReservationStranded forwards the call to the wrapped function.
-func (f ReservationStrandingNotifierFunc) NotifyReservationStranded(
-	reservationKey *big.Int,
-) error {
-	return f(reservationKey)
 }
 
 // NewReservationStrandingWatcher constructs a stranding watcher bound to the
-// given chain. The returned watcher is not yet attached to a wallet; use
-// WatchWallet to start observing a particular wallet's close/termination
-// events.
+// given chain.
 //
-// The notifier is mandatory and must be non-nil; nil is treated as a
-// programming error rather than a no-op because silently dropping stray
-// notifications would leave reservation anchors unreconciled.
-func NewReservationStrandingWatcher(
-	spvChain Chain,
-	notifier ReservationStrandingNotifier,
-) *ReservationStrandingWatcher {
+// The watcher is intended to be wired to wallet-close events via a subscription
+func NewReservationStrandingWatcher(spvChain Chain) *ReservationStrandingWatcher {
 	return &ReservationStrandingWatcher{
 		spvChain: spvChain,
-		notifier: notifier,
 	}
-}
-
-// WatchWallet subscribes the watcher to Bridge close/termination events for
-// the given wallet. When the wallet transitions to StateClosed or
-// StateTerminated, the watcher walks the wallet's reservations and notifies
-// the Bridge of any reservation that is not currently ActionPending.
-//
-// Note: Bridge.go emits OnWalletClosed for both close and termination
-// (see `pkg/tbtc/chain.go` BridgeChain.OnWalletClosed), so a single
-// subscription covers both terminal states. The watcher therefore registers
-// a single OnWalletClosed handler; downstream code may alias this hook for
-// OnWalletTerminated dispatch if both events are ever split.
-//
-// Pass a nil fn to skip wiring (used in tests that drive the watcher
-// imperatively via CheckReservationStranding). Pass a non-nil fn to enable
-// live observation.
-func (rsw *ReservationStrandingWatcher) WatchWallet(
-	walletPublicKeyHash [20]byte,
-) error {
-	if rsw.notifier == nil {
-		return fmt.Errorf("stranding watcher requires a non-nil notifier")
-	}
-
-	// Implementation note: an integration step (a later PR in this milestone)
-	// wires the watcher into `chain.OnWalletClosed(...)` and dispatches by
-	// wallet ID -> public key hash mapping. The watcher itself remains
-	// wallet-agnostic; tests can exercise it by calling
-	// `CheckReservationStrandingForWallet` directly.
-	_ = walletPublicKeyHash
-
-	return nil
 }
 
 // CheckReservationStrandingForWallet walks the reservations currently
 // custodied by walletPublicKeyHash and forwards a stray notification to the
-// Bridge for every reservation whose state is not ActionPending.
+// Bridge for every reservation whose state is Active.
 //
 // This is the single-shot form used both by tests and by the integration
-// wiring of WatchWallet. It is intentionally synchronous and per-wallet: the
-// caller decides which wallets to inspect, and the watcher does not run a
-// background loop of its own.
-//
+// wiring that subscribes to wallet close/termination events. It is
+// intentionally synchronous and per-wallet: the caller decides which wallets
+// to inspect, and the watcher does not run a background loop of its own.
+
 // The function is idempotent at the chain level: notifying an already-stranded
 // reservation is a no-op on the Bridge side. It is the caller's
 // responsibility to dedupe notifications across watcher restarts; the watcher
@@ -107,10 +45,6 @@ func (rsw *ReservationStrandingWatcher) WatchWallet(
 func (rsw *ReservationStrandingWatcher) CheckReservationStrandingForWallet(
 	walletPublicKeyHash [20]byte,
 ) error {
-	if rsw.notifier == nil {
-		return fmt.Errorf("stranding watcher requires a non-nil notifier")
-	}
-
 	keys, err := rsw.spvChain.WalletReservations(walletPublicKeyHash)
 	if err != nil {
 		return fmt.Errorf(
@@ -139,19 +73,21 @@ func (rsw *ReservationStrandingWatcher) CheckReservationStrandingForWallet(
 		// action-timeout watcher. Marking it stranded would preempt a healthy
 		// settlement path and trigger gratuitous reconciliation cost for the
 		// owner.
-		if reservation.State == tbtc.ReservationStateActionPending {
+		if reservation.State != tbtc.ReservationStateActive {
 			logger.Debugf(
-				"reservation [%v] has a pending action generation; "+
+				"reservation [%v] is not Active (state: %v); "+
 					"deferring stray notification to action-timeout watcher",
 				key,
+				reservation.State,
 			)
 			continue
 		}
 
-		if err := rsw.notifier.NotifyReservationStranded(key); err != nil {
+		if err := rsw.spvChain.NotifyReservationStranded(key); err != nil {
 			logger.Errorf(
 				"failed to notify stranded reservation [%v]: [%v]",
 				key,
+				err,
 			)
 			// Continue with the remaining reservations: a single failure
 			// must not starve the others.

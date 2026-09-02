@@ -3,6 +3,7 @@ package tbtcpg
 import (
 	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/ipfs/go-log/v2"
 	"go.uber.org/zap"
@@ -16,23 +17,6 @@ import (
 // 30 days assuming 12 seconds per block.
 const ReservationReanchorLookBackBlocks = uint64(216000)
 
-// ErrNoReservationToReanchor is returned when the wallet has no reservations
-// that are eligible for a re-anchor proposal.
-var ErrNoReservationToReanchor = fmt.Errorf("no reservation eligible for re-anchor")
-
-// ErrReservationReanchorTxMaxFeeTooLow is returned when the on-chain maximum
-// fee allowed for a reservation re-anchor transaction is too low to build a
-// safe non-RBF transaction at the minimum fee rate.
-var ErrReservationReanchorTxMaxFeeTooLow = fmt.Errorf(
-	"reservation re-anchor minimum safe transaction fee exceeds the maximum fee",
-)
-
-// ErrReservationReanchorTxFeeTooHigh is returned when the estimated fee for a
-// reservation re-anchor transaction exceeds the on-chain maximum.
-var ErrReservationReanchorTxFeeTooHigh = fmt.Errorf(
-	"reservation re-anchor estimated fee exceeds the maximum fee",
-)
-
 // ReservationReanchorTask is a task that may produce a reservation re-anchor
 // proposal. The wallet enters this task when the source wallet has begun a
 // move to a new wallet (state StateMovingFunds) or when the source wallet's
@@ -41,8 +25,11 @@ var ErrReservationReanchorTxFeeTooHigh = fmt.Errorf(
 // task picks a destination wallet and assembles a 1-input-1-output re-anchor
 // transaction moving the anchor outpoint into that destination wallet.
 type ReservationReanchorTask struct {
-	chain    Chain
-	btcChain bitcoin.Chain
+	chain                   Chain
+	btcChain                bitcoin.Chain
+	targetWalletCache       [20]byte
+	targetWalletInitialized bool
+	targetWalletMutex       sync.RWMutex
 }
 
 // NewReservationReanchorTask returns a new ReservationReanchorTask bound to
@@ -165,7 +152,7 @@ func (rrt *ReservationReanchorTask) Run(
 			continue
 		}
 
-		if hasPendingAction(reservationKey, request, rrt.chain, taskLogger) {
+		if hasPendingAction(reservationKey, reservation, rrt.chain, taskLogger) {
 			continue
 		}
 
@@ -174,10 +161,11 @@ func (rrt *ReservationReanchorTask) Run(
 			walletPublicKeyHash,
 		)
 		if err != nil {
-			return nil, false, fmt.Errorf(
-				"cannot pick re-anchor target wallet: [%w]",
+			taskLogger.Errorf(
+				"cannot pick re-anchor target wallet: [%v]",
 				err,
 			)
+			continue
 		}
 
 		proposal, err := rrt.ProposeReservationReanchor(
@@ -189,10 +177,11 @@ func (rrt *ReservationReanchorTask) Run(
 			0,
 		)
 		if err != nil {
-			return nil, false, fmt.Errorf(
-				"cannot prepare reservation re-anchor proposal: [%w]",
+			taskLogger.Errorf(
+				"cannot prepare reservation re-anchor proposal: [%v]",
 				err,
 			)
+			continue
 		}
 
 		return proposal, true, nil
@@ -239,7 +228,14 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 		)
 	}
 
-	if reservation.AnchorUtxo == nil {
+	// convertReservationFromAbiType (the Go-side chain adapter) always
+	// allocates a non-nil AnchorUtxo, populated with zero hash/value when
+	// no anchor exists on-chain, so a bare nil check can never fire against
+	// the production chain. Detect the unset case by value instead.
+	if reservation.AnchorUtxo == nil ||
+		reservation.AnchorUtxo.Value == 0 ||
+		reservation.AnchorUtxo.Outpoint == nil ||
+		reservation.AnchorUtxo.Outpoint.TransactionHash == (bitcoin.Hash{}) {
 		return nil, fmt.Errorf(
 			"reservation [0x%x] has no anchor UTXO",
 			reservationKey,
@@ -291,18 +287,58 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 			err,
 		)
 	}
+	// The re-anchor request generation must be authorized on-chain.
+	if err := rrt.chain.RequestReservationReanchor(
+		reservationKey,
+		targetWalletPublicKeyHash,
+	); err != nil {
+		return nil, fmt.Errorf("cannot request reservation re-anchor: [%v]", err)
+	}
 
 	return proposal, nil
 }
 
 // findTargetWallet picks a live destination wallet from the on-chain wallet
 // registry, mirroring the moving funds target selection. The new wallet must
-// be in StateLive and must not be the source wallet itself.
+// be in StateLive and must not be the source wallet itself. The registration
+// scan is bounded to ReservationReanchorLookBackBlocks (mirroring the other
+// look-back scans in this package) rather than the full chain history: a
+// live wallet must have registered recently, and an unbounded eth_getLogs
+// scan on every re-anchor attempt does not.
 func (rrt *ReservationReanchorTask) findTargetWallet(
 	taskLogger log.StandardLogger,
 	sourceWalletPublicKeyHash [20]byte,
 ) ([20]byte, error) {
-	events, err := rrt.chain.PastNewWalletRegisteredEvents(nil)
+	rrt.targetWalletMutex.RLock()
+	if rrt.targetWalletInitialized {
+		cache := rrt.targetWalletCache
+		rrt.targetWalletMutex.RUnlock()
+
+		wallet, err := rrt.chain.GetWallet(cache)
+		if err == nil && wallet.State == tbtc.StateLive {
+			return cache, nil
+		}
+	} else {
+		rrt.targetWalletMutex.RUnlock()
+	}
+	blockCounter, err := rrt.chain.BlockCounter()
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("failed to get block counter: [%v]", err)
+	}
+
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("failed to get current block: [%v]", err)
+	}
+
+	startBlock := uint64(0)
+	if currentBlock > ReservationReanchorLookBackBlocks {
+		startBlock = currentBlock - ReservationReanchorLookBackBlocks
+	}
+
+	events, err := rrt.chain.PastNewWalletRegisteredEvents(
+		&tbtc.NewWalletRegisteredEventFilter{StartBlock: startBlock},
+	)
 	if err != nil {
 		return [20]byte{}, fmt.Errorf(
 			"failed to get past new wallet registered events: [%v]",
@@ -327,6 +363,10 @@ func (rrt *ReservationReanchorTask) findTargetWallet(
 		}
 
 		if wallet.State == tbtc.StateLive {
+			rrt.targetWalletMutex.Lock()
+			rrt.targetWalletCache = walletPubKeyHash
+			rrt.targetWalletInitialized = true
+			rrt.targetWalletMutex.Unlock()
 			return walletPubKeyHash, nil
 		}
 	}
@@ -394,25 +434,17 @@ func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 }
 
 // hasPendingAction reports whether the on-chain reservation action
-// generation at the wallet's current request nonce (if any) is in a pending
-// state. This guards against duplicate re-anchor requests: the Bridge rejects
-// a new request while the previous generation is still in flight.
+// generation at the reservation's current request nonce (if any) is in a
+// pending state. This guards against duplicate re-anchor requests: the
+// Bridge rejects a new request while the previous generation is still in
+// flight. The caller supplies the reservation record it already fetched
+// (see Run) rather than this function re-reading it.
 func hasPendingAction(
 	reservationKey *big.Int,
-	request *tbtc.CoordinationProposalRequest,
+	reservation *tbtc.Reservation,
 	chain Chain,
 	taskLogger log.StandardLogger,
 ) bool {
-	reservation, err := chain.GetReservation(reservationKey)
-	if err != nil {
-		taskLogger.Errorf(
-			"cannot re-read reservation [0x%x] for action state check: [%v]",
-			reservationKey,
-			err,
-		)
-		return false
-	}
-
 	if reservation.RequestNonce == 0 {
 		return false
 	}
@@ -422,18 +454,20 @@ func hasPendingAction(
 		reservation.RequestNonce,
 	)
 	if err != nil {
+		// Fail safe: a lookup error is indistinguishable from "still
+		// pending" here, and treating it as not-pending would let the
+		// caller send a duplicate re-anchor request that the Bridge
+		// rejects while a real pending generation is in flight. Skip this
+		// reservation for the current coordination window instead; the
+		// next window retries.
 		taskLogger.Errorf(
 			"cannot get reservation action for [0x%x] nonce [%d]: [%v]",
 			reservationKey,
 			reservation.RequestNonce,
 			err,
 		)
-		return false
+		return true
 	}
-
-	// Suppress unused-parameter lint while keeping request available for
-	// future filtering against the executing operator's wallet membership.
-	_ = request
 
 	return action.State == tbtc.ReservationActionStatePending
 }
@@ -450,31 +484,10 @@ func estimateReservationReanchorFee(
 		AddPublicKeyHashInputs(1, true).
 		AddPublicKeyHashOutputs(1, true)
 
-	transactionSize, err := sizeEstimator.VirtualSize()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"cannot estimate transaction virtual size: [%v]",
-			err,
-		)
-	}
-
-	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
-	totalFee, err := feeEstimator.EstimateFee(transactionSize)
-	if err != nil {
-		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
-	}
-
-	if uint64(totalFee) > txMaxFee {
-		return 0, ErrReservationReanchorTxFeeTooHigh
-	}
-
-	// Enforce the safe minimum fee rate and buffer so a non-RBF
-	// reservation re-anchor transaction is never broadcast below the
-	// floor where it could get stuck and jam the wallet.
-	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, txMaxFee)
-	if err != nil {
-		return 0, err
-	}
-
-	return totalFee, nil
+	return estimateReservationFixedSizeTxFee(
+		btcChain,
+		sizeEstimator,
+		txMaxFee,
+		"reservation re-anchor estimated fee exceeds the maximum fee",
+	)
 }
