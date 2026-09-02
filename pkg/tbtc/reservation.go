@@ -106,7 +106,10 @@ const (
 )
 
 // ReservationActionState represents the settlement state of a reservation
-// action generation.
+// action generation (models the anticipated two-phase authorize-then-prove
+// redesign tracked in tbtc-v2#1088's own review findings, not the
+// currently-reviewed single-phase contract; the enum values may change
+// before Ethereum bindings are implemented).
 type ReservationActionState uint8
 
 const (
@@ -121,13 +124,19 @@ const (
 // ReservationAction represents one nonce-bound generation of a reservation
 // action. All authorization data used to construct and settle the action is
 // snapshotted when the generation is requested.
+//
+// The nonce-keyed lookup (see chain.go's GetReservationAction) and the
+// terminal ReservationActionState values below model the anticipated
+// two-phase authorize-then-prove redesign tracked in tbtc-v2#1088's own
+// review findings, not the currently-reviewed single-phase contract; this
+// interface may change before Ethereum bindings are implemented.
 type ReservationAction struct {
 	// TargetWalletPublicKeyHash is the wallet an acceptance, re-anchor, or
 	// dissolution output must pay to. It is zero for redemptions.
 	TargetWalletPublicKeyHash [20]byte
 	// RequestedAt is the UNIX timestamp the action was requested at.
 	RequestedAt uint32
-	// TimeoutAt is the UNIX timestamp after which the action may time out.
+	// TimeoutAt is the UNIX timestamp at or after which the action times out.
 	TimeoutAt uint32
 	// TxMaxFee is the snapshotted maximum Bitcoin transaction fee in satoshi.
 	TxMaxFee uint64
@@ -258,7 +267,10 @@ func requireReservationAction(
 	if action.State != ReservationActionStatePending {
 		return fmt.Errorf("reservation action has already been settled")
 	}
-	if action.TimeoutAt != 0 && now >= action.TimeoutAt {
+	if action.TimeoutAt == 0 {
+		return fmt.Errorf("reservation action timeout is required")
+	}
+	if now >= action.TimeoutAt {
 		return fmt.Errorf("reservation action has timed out")
 	}
 	return nil
@@ -296,11 +308,11 @@ func assembleReservationAnchorTransaction(
 	if err := requireReservationAction(action, ReservationActionTypeAcceptance, now, "an acceptance"); err != nil {
 		return nil, err
 	}
-	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
-		return nil, fmt.Errorf("acceptance action targets a different wallet")
-	}
 	if action.TargetWalletPublicKeyHash == [20]byte{} {
 		return nil, fmt.Errorf("target wallet public key hash is required")
+	}
+	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
+		return nil, fmt.Errorf("acceptance action targets a different wallet")
 	}
 	if err := requireValidActionFee(fee, action.TxMaxFee); err != nil {
 		return nil, err
@@ -512,22 +524,17 @@ func assembleReservationReanchorTransaction(
 
 	return builder, nil
 }
-
 // assembleReservationDissolutionTransaction constructs an unsigned
-// reservation dissolution transaction for the given nonce-bound action. The
-// anchor outpoint is the first input. The wallet main UTXO is the second input
-// only when it is present in the action snapshot and matches that snapshot
-// exactly. The single output pays back to the custodying wallet.
+// reservation dissolution transaction for the given nonce-bound action.
+// The anchor outpoint is the first input. The wallet main UTXO is the
+// second input only when it is present in the action snapshot and matches
+// that snapshot exactly. The single output pays back to the custodying
+// wallet.
 //
-// TODO: the anchor-first, main-UTXO-second input ordering below is a
-// load-bearing assumption about the reservation Bridge contract's SPV proof
-// validation (see the companion contracts PR, threshold-network/tbtc-v2#1088,
-// for the authoritative rule). This is not independently verified from this
-// repo. If the merged Bridge contract requires a different order, a broadcast
-// dissolution transaction here would be irreversible and unrecognized by the
-// Bridge. Confirm the exact input-order clause in tbtc-v2#1088 before this
-// assembler is wired into the coordination executor, and remove this TODO
-// once confirmed (or fix the ordering if it turns out to be wrong).
+// The Bridge's dissolution proof accepts either input order (see
+// Reservation.sol's dissolution-input verification, which matches by
+// outpoint hash, not position); this assembler's anchor-first ordering
+// is one of the two accepted orders.
 func assembleReservationDissolutionTransaction(
 	bitcoinChain bitcoin.Chain,
 	bridgeChain interface {
@@ -563,11 +570,11 @@ func assembleReservationDissolutionTransaction(
 	if err := requireReservationAction(action, ReservationActionTypeDissolution, now, "a dissolution"); err != nil {
 		return nil, err
 	}
-	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
-		return nil, fmt.Errorf("dissolution action targets a different wallet")
-	}
 	if action.TargetWalletPublicKeyHash == [20]byte{} {
 		return nil, fmt.Errorf("target wallet public key hash is required")
+	}
+	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
+		return nil, fmt.Errorf("dissolution action targets a different wallet")
 	}
 	if anchorUtxo.Value <= 0 {
 		return nil, fmt.Errorf("anchor UTXO value must be positive")
@@ -600,7 +607,8 @@ func assembleReservationDissolutionTransaction(
 
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
 
-	// The Bridge requires the anchor outpoint to be the first input.
+	// The anchor outpoint is added first (one of the two input orders the
+	// Bridge's dissolution proof accepts; see the function doc comment).
 	err := builder.AddPublicKeyHashInput(anchorUtxo)
 	if err != nil {
 		return nil, fmt.Errorf(

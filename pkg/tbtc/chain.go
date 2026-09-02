@@ -281,6 +281,11 @@ type BridgeChain interface {
 	// GetReservationAction gets the on-chain action record for the given
 	// reservation key and request nonce. Returns an error if the action
 	// generation was not found.
+	//
+	// This models the anticipated two-phase authorize-then-prove redesign
+	// tracked in tbtc-v2#1088's own review findings, not the
+	// currently-reviewed single-phase contract; the signature may change
+	// before Ethereum bindings are implemented.
 	GetReservationAction(
 		reservationKey *big.Int,
 		requestNonce uint64,
