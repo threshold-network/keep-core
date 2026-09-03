@@ -556,8 +556,8 @@ func TestConvertReservationFromAbiType(t *testing.T) {
 		RetryCredit:           true,
 		DissolutionEligibleAt: 1700200000,
 		// CumulativeReanchorFee is intentionally dropped on the Go
-		// boundary (see the function doc comment); set it to a nonzero
-		// value to prove it never leaks into tbtc.Reservation.
+		// boundary (see the Field omissions note on
+		// convertReservationFromAbiType).
 		CumulativeReanchorFee: 12345,
 	}
 
@@ -600,6 +600,66 @@ func TestConvertReservationFromAbiType(t *testing.T) {
 		}
 		if err == nil {
 			t.Fatal("expected error, got nil")
+		}
+	})
+
+	// t.Run below documents the intentional CumulativeReanchorFee drop
+	// performed by convertReservationFromAbiType: the field is written
+	// on-chain by every re-anchor hop but is not exposed on
+	// tbtc.Reservation (see the Field omissions note on
+	// convertReservationFromAbiType). It also pins that every other
+	// field maps correctly - each field below is a distinct value so a
+	// future accidental restoration of CumulativeReanchorFee, or a
+	// swapped adjacent field, does not go unnoticed.
+	t.Run("drops cumulative reanchor fee and maps every other field", func(t *testing.T) {
+		abiReservation := tbtcabi.ReservationReservationRequest{
+			Owner:                 common.HexToAddress("0x111111111111111111111111111111111111111B"),
+			MintedAmount:          111,
+			AcceptedAt:            222,
+			WalletPubKeyHash:      [20]byte{0x01, 0x02, 0x03},
+			AnchorAmount:          333,
+			ExpiresAt:             444,
+			AnchorTxHash:          [32]byte{0x04, 0x05, 0x06},
+			AnchorTxOutputIndex:   555,
+			State:                 1, // ReservationStateActive
+			RequestNonce:          666,
+			RetryCredit:           true,
+			DissolutionEligibleAt: 777,
+			CumulativeReanchorFee: 888, // must not appear anywhere in the output
+		}
+
+		expected := &tbtc.Reservation{
+			Owner:        chain.Address("0x111111111111111111111111111111111111111B"),
+			MintedAmount: 111,
+			AcceptedAt:   222,
+			WalletPublicKeyHash: [20]byte{
+				0x01, 0x02, 0x03,
+			},
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x04, 0x05, 0x06},
+					OutputIndex:     555,
+				},
+				Value: 333,
+			},
+			ExpiresAt:             444,
+			State:                 tbtc.ReservationStateActive,
+			RequestNonce:          666,
+			RetryCredit:           true,
+			DissolutionEligibleAt: 777,
+		}
+
+		actual, err := convertReservationFromAbiType(abiReservation)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !reflect.DeepEqual(expected, actual) {
+			t.Errorf(
+				"unexpected reservation\nexpected: [%+v]\nactual:   [%+v]",
+				expected,
+				actual,
+			)
 		}
 	})
 }
@@ -801,67 +861,6 @@ func TestConvertReservationParametersFromAbiType(t *testing.T) {
 	if !reflect.DeepEqual(expected, actual) {
 		t.Errorf(
 			"unexpected reservation parameters\nexpected: [%+v]\nactual:   [%+v]",
-			expected,
-			actual,
-		)
-	}
-}
-
-// TestConvertReservationFromAbiType_DropsCumulativeReanchorFee documents
-// the intentional CumulativeReanchorFee drop performed by
-// convertReservationFromAbiType: the field is written on-chain by every
-// re-anchor hop but is not exposed on tbtc.Reservation because m1 has no
-// fee-ceiling enforcement (own comment, tbtc.go:2637-2643). This test both
-// pins that intentional omission and verifies every other field maps
-// correctly - each field below is a distinct value so a future accidental
-// restoration of CumulativeReanchorFee, or a swapped adjacent field, does
-// not go unnoticed.
-func TestConvertReservationFromAbiType_DropsCumulativeReanchorFee(t *testing.T) {
-	abiReservation := tbtcabi.ReservationReservationRequest{
-		Owner:                 common.HexToAddress("0x111111111111111111111111111111111111111B"),
-		MintedAmount:          111,
-		AcceptedAt:            222,
-		WalletPubKeyHash:      [20]byte{0x01, 0x02, 0x03},
-		AnchorAmount:          333,
-		ExpiresAt:             444,
-		AnchorTxHash:          [32]byte{0x04, 0x05, 0x06},
-		AnchorTxOutputIndex:   555,
-		State:                 1, // ReservationStateActive
-		RequestNonce:          666,
-		RetryCredit:           true,
-		DissolutionEligibleAt: 777,
-		CumulativeReanchorFee: 888, // must not appear anywhere in the output
-	}
-
-	expected := &tbtc.Reservation{
-		Owner:        chain.Address("0x111111111111111111111111111111111111111B"),
-		MintedAmount: 111,
-		AcceptedAt:   222,
-		WalletPublicKeyHash: [20]byte{
-			0x01, 0x02, 0x03,
-		},
-		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: bitcoin.Hash{0x04, 0x05, 0x06},
-				OutputIndex:     555,
-			},
-			Value: 333,
-		},
-		ExpiresAt:             444,
-		State:                 tbtc.ReservationStateActive,
-		RequestNonce:          666,
-		RetryCredit:           true,
-		DissolutionEligibleAt: 777,
-	}
-
-	actual, err := convertReservationFromAbiType(abiReservation)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !reflect.DeepEqual(expected, actual) {
-		t.Errorf(
-			"unexpected reservation\nexpected: [%+v]\nactual:   [%+v]",
 			expected,
 			actual,
 		)
