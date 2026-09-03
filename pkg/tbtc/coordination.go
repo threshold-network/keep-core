@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/internal/pb"
 
 	"golang.org/x/sync/semaphore"
@@ -68,14 +69,33 @@ const (
 	// upgrade to a binary containing this constant before the activation block
 	// is reached.
 	DepositSweepEveryWindowActivationBlock = uint64(24559289)
-	// ReservationsActivationBlock is the Ethereum block height at which
-	// reservation actions (anchor, re-anchor) become available in the
-	// coordination checklist.
+	// reservationsActivationBlocks maps each Ethereum network to the block
+	// height at which reservation actions (anchor, re-anchor) become
+	// available in the coordination checklist. All operators must upgrade
+	// to a binary containing this table before a network's activation
+	// block is reached, mirroring DepositSweepEveryWindowActivationBlock's
+	// precondition above. Networks without an explicit entry (e.g. local/
+	// dev chains) activate the feature immediately at block 0 instead of
+	// having it silently disabled for years on a lower-tip chain.
 	//
-	// NOTE: This value is a placeholder that MUST be set to the real mainnet
-	// rollout height before release and must stay ahead of the chain tip.
-	ReservationsActivationBlock = uint64(26500000)
+	// NOTE: The mainnet value is a placeholder that MUST be set to the
+	// real mainnet rollout height before release and must stay ahead of
+	// the chain tip.
 )
+
+// reservationsActivationBlocks maps each Ethereum network to its
+// reservations activation block. See the doc comment above.
+var reservationsActivationBlocks = map[ethereum.Network]uint64{
+	ethereum.Mainnet: 26500000,
+}
+
+// reservationsActivationBlock returns the reservations activation block
+// height for the given network. Networks without an explicit entry in
+// reservationsActivationBlocks (e.g. local/dev chains) return 0, meaning
+// reservation actions are active immediately.
+func reservationsActivationBlock(network ethereum.Network) uint64 {
+	return reservationsActivationBlocks[network]
+}
 
 // errCoordinationExecutorBusy is an error returned when the coordination
 // executor cannot execute the requested coordination due to an ongoing one.
@@ -299,7 +319,8 @@ func (cm *coordinationMessage) Type() string {
 type coordinationExecutor struct {
 	lock *semaphore.Weighted
 
-	chain Chain
+	chain           Chain
+	ethereumNetwork ethereum.Network
 
 	coordinatedWallet wallet
 	membersIndexes    []group.MemberIndex
@@ -325,6 +346,7 @@ type coordinationExecutor struct {
 // given wallet.
 func newCoordinationExecutor(
 	chain Chain,
+	ethereumNetwork ethereum.Network,
 	coordinatedWallet wallet,
 	membersIndexes []group.MemberIndex,
 	operatorAddress chain.Address,
@@ -337,6 +359,7 @@ func newCoordinationExecutor(
 	return &coordinationExecutor{
 		lock:                semaphore.NewWeighted(1),
 		chain:               chain,
+		ethereumNetwork:     ethereumNetwork,
 		coordinatedWallet:   coordinatedWallet,
 		membersIndexes:      membersIndexes,
 		operatorAddress:     operatorAddress,
@@ -649,13 +672,11 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// throughput-driven DepositSweep/MovedFundsSweep/MovingFunds actions
 	// above: a delayed reservation acceptance or re-anchor risks the
 	// on-chain ReservationActionTimeout backstop firing before the wallet
-	// subsystem gets a chance to act. There is no per-operator enable
-	// flag here; the activation block is a network-wide constant, which
-	// keeps leader and follower checklists in agreement without relying
-	// on local config (a follower whose local config diverged from the
-	// leader's would otherwise fault an honest leader's reservation
-	// proposal as FaultLeaderMistake because the action would not appear
-	// in its own checklist).
+	// subsystem gets a chance to act. The activation block is a per-network
+	// table (reservationsActivationBlock), not a single global constant, but
+	// it is still config-independent and globally observable from chain
+	// height alone -- which is what keeps leader and follower checklists in
+	// agreement without relying on local config.
 	//
 	// Note: because getActionsChecklist appends reservation actions after
 	// Redemption/DepositSweep/MovedFundsSweep/MovingFunds and
@@ -664,7 +685,7 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// traffic can still delay reservation acceptance/re-anchor even
 	// though the checklist entry itself is unconditional. This is an
 	// accepted tradeoff bounded by ReservationActionTimeout, not a bug.
-	if coordinationBlock >= ReservationsActivationBlock {
+	if coordinationBlock >= reservationsActivationBlock(ce.ethereumNetwork) {
 		actions = append(actions, ActionReservationAnchor)
 		actions = append(actions, ActionReservationReanchor)
 	}

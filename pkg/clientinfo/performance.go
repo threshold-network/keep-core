@@ -329,6 +329,15 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricRAMUtilizationPercent,
 		MetricSwapUtilizationPercent,
 	}
+	if pm.reservationsEnabled {
+		gauges = append(
+			gauges,
+			MetricReservationActiveReservationsCount,
+			MetricReservationMaxActiveReservations,
+			MetricReservationLiveWalletsCount,
+			MetricReservationWalletReservationsCount,
+		)
+	}
 
 	// First, initialize all gauges in the map
 	pm.gaugesMutex.Lock()
@@ -715,6 +724,16 @@ const (
 	MetricCPULoadPercent         = "cpu_load_percent"
 	MetricRAMUtilizationPercent  = "ram_utilization_percent"
 	MetricSwapUtilizationPercent = "swap_utilization_percent"
+
+	// Reservation Metrics (m1 reservations feature; only registered when
+	// reservationsEnabled - see NewPerformanceMetrics). These are leading
+	// indicators of the §4.1 saturation cliff: without them, an operator
+	// cannot see reservation capacity approaching its cap before
+	// acceptances silently stop.
+	MetricReservationActiveReservationsCount = "active_reservations_count"
+	MetricReservationMaxActiveReservations   = "max_active_reservations"
+	MetricReservationLiveWalletsCount        = "live_wallets_count"
+	MetricReservationWalletReservationsCount = "wallet_reservations_count"
 )
 
 // Network join request failure reasons. These are the low-cardinality

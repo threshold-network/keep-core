@@ -425,6 +425,9 @@ func proveReservationAcceptanceActions(
 
 	// Re-check every tracked event's on-chain action state, evict settled/stale
 	// ones, and group still-pending events by wallet public key hash.
+	// nextScannedBlock starts at currentBlock but is pulled back by any
+	// eviction below, so a rewind survives the final cursor update.
+	nextScannedBlock := currentBlock
 	walletEvents := make(map[[20]byte][]*tbtc.ReservationAcceptanceRequestedEvent)
 	for key, event := range state.pendingAcceptanceEvents {
 		action, err := spvChain.GetReservationAction(
@@ -434,13 +437,27 @@ func proveReservationAcceptanceActions(
 		if err != nil {
 			state.acceptanceRetries[key]++
 			if state.acceptanceRetries[key] >= maxReservationActionLoadRetries {
+				// Eviction is non-lossy: rewind the cursor behind the
+				// lost event's block so the next pass re-fetches the
+				// range and rediscovers the event. Without this, a
+				// transient RPC outage that hits `maxRetries` consecutive
+				// times permanently strands the action generation: the
+				// cursor has already advanced past the event, no other
+				// code path re-creates the pending entry, and the
+				// already-confirmed Bitcoin anchor's SPV proof goes
+				// unsubmitted until action timeout slashes.
+				if event.BlockNumber > 0 &&
+					(nextScannedBlock == 0 || event.BlockNumber-1 < nextScannedBlock) {
+					nextScannedBlock = event.BlockNumber - 1
+				}
 				logger.Errorf(
 					"failed to load reservation acceptance action [%v]/%d: [%v]; "+
-						"exceeded max retries (%d), evicting event",
+						"exceeded max retries (%d), evicting event and rewinding cursor to [%d]",
 					event.ReservationKey,
 					event.RequestNonce,
 					err,
 					maxReservationActionLoadRetries,
+					nextScannedBlock,
 				)
 				delete(state.pendingAcceptanceEvents, key)
 				delete(state.acceptanceRetries, key)
@@ -530,7 +547,7 @@ func proveReservationAcceptanceActions(
 		}
 	}
 
-	state.acceptanceLastScannedBlock = currentBlock
+	state.acceptanceLastScannedBlock = nextScannedBlock
 
 	return nil
 }
@@ -641,9 +658,11 @@ func proveReservationReanchorActions(
 		state.pendingReanchorEvents[key] = event
 	}
 
-	// Re-check every tracked event's on-chain action state and drop the
 	// Re-check every tracked event's on-chain action state, evict settled/stale
 	// ones, and group still-pending events by source wallet public key hash.
+	// nextScannedBlock starts at currentBlock but is pulled back by any
+	// eviction below, so a rewind survives the final cursor update.
+	nextScannedBlock := currentBlock
 	walletEvents := make(map[[20]byte][]*tbtc.ReservationReanchorRequestedEvent)
 	for key, event := range state.pendingReanchorEvents {
 		action, err := spvChain.GetReservationAction(
@@ -653,13 +672,22 @@ func proveReservationReanchorActions(
 		if err != nil {
 			state.reanchorRetries[key]++
 			if state.reanchorRetries[key] >= maxReservationActionLoadRetries {
+				// Eviction is non-lossy: rewind the cursor behind the
+				// lost event's block so the next pass re-fetches the
+				// range and rediscovers the event. See the mirrored
+				// comment in proveReservationAcceptanceActions above.
+				if event.BlockNumber > 0 &&
+					(nextScannedBlock == 0 || event.BlockNumber-1 < nextScannedBlock) {
+					nextScannedBlock = event.BlockNumber - 1
+				}
 				logger.Errorf(
 					"failed to load reservation re-anchor action [%v]/%d: [%v]; "+
-						"exceeded max retries (%d), evicting event",
+						"exceeded max retries (%d), evicting event and rewinding cursor to [%d]",
 					event.ReservationKey,
 					event.RequestNonce,
 					err,
 					maxReservationActionLoadRetries,
+					nextScannedBlock,
 				)
 				delete(state.pendingReanchorEvents, key)
 				delete(state.reanchorRetries, key)
@@ -764,7 +792,7 @@ func proveReservationReanchorActions(
 		}
 	}
 
-	state.reanchorLastScannedBlock = currentBlock
+	state.reanchorLastScannedBlock = nextScannedBlock
 
 	return nil
 }

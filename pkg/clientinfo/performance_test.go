@@ -541,3 +541,76 @@ func TestWalletActionMetricsNotRegisteredWhenReservationsDisabled(t *testing.T) 
 		}
 	}
 }
+
+// TestReservationGaugesRegistered verifies the four reservation saturation
+// gauges (active_reservations_count, max_active_reservations,
+// live_wallets_count, wallet_reservations_count) are registered upfront
+// with a 0 value when reservations are enabled.
+func TestReservationGaugesRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry, true)
+
+	reservationGauges := []string{
+		MetricReservationActiveReservationsCount,
+		MetricReservationMaxActiveReservations,
+		MetricReservationLiveWalletsCount,
+		MetricReservationWalletReservationsCount,
+	}
+
+	for _, name := range reservationGauges {
+		pm.gaugesMutex.RLock()
+		g, exists := pm.gauges[name]
+		pm.gaugesMutex.RUnlock()
+		if !exists {
+			t.Errorf("gauge %s should be registered upfront", name)
+			continue
+		}
+		g.mutex.RLock()
+		value := g.value
+		g.mutex.RUnlock()
+		if value != 0 {
+			t.Errorf("gauge %s should start at 0, got %v", name, value)
+		}
+	}
+
+	// SetGauge (as the reservation tasks do) must update the registered
+	// gauge, not silently no-op.
+	pm.SetGauge(MetricReservationActiveReservationsCount, 42)
+	if got := pm.GetGaugeValue(MetricReservationActiveReservationsCount); got != 42 {
+		t.Errorf("expected active_reservations_count = 42, got %v", got)
+	}
+}
+
+// TestReservationGaugesNotRegisteredWhenReservationsDisabled verifies the
+// four reservation saturation gauges are absent (not just zero) when the
+// m1 reservations feature is disabled, mirroring the wallet-action-metrics
+// gating in TestWalletActionMetricsNotRegisteredWhenReservationsDisabled.
+func TestReservationGaugesNotRegisteredWhenReservationsDisabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry, false)
+
+	reservationGauges := []string{
+		MetricReservationActiveReservationsCount,
+		MetricReservationMaxActiveReservations,
+		MetricReservationLiveWalletsCount,
+		MetricReservationWalletReservationsCount,
+	}
+
+	for _, name := range reservationGauges {
+		pm.gaugesMutex.RLock()
+		_, exists := pm.gauges[name]
+		pm.gaugesMutex.RUnlock()
+		if exists {
+			t.Errorf(
+				"gauge %s should not be registered when reservations are disabled",
+				name,
+			)
+		}
+	}
+}

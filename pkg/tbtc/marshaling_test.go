@@ -505,6 +505,44 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithNoopProposal(t *testing
 	}
 }
 
+func TestReservationAnchorProposal_Marshal_NilPanic(t *testing.T) {
+	proposal := &ReservationAnchorProposal{
+		AnchorTxFee: nil,
+	}
+
+	_, err := proposal.Marshal()
+	if err == nil {
+		t.Fatal("expected error when marshaling proposal with nil AnchorTxFee")
+	}
+	if err.Error() != "anchor transaction fee is required" {
+		t.Errorf("unexpected error: [%v]", err)
+	}
+}
+
+func TestReservationAnchorProposal_Unmarshal_ZeroHash(t *testing.T) {
+	proposal := &ReservationAnchorProposal{
+		DepositFundingTxHash: [32]byte{},
+	}
+	// Manually construct the protobuf message to bypass nil check
+	pbMsg := &pb.ReservationAnchorProposal{
+		DepositFundingTxHash:      proposal.DepositFundingTxHash[:],
+		DepositFundingOutputIndex: 0,
+		RequestNonce:              1,
+		AnchorTxFee:               big.NewInt(1000).Bytes(),
+	}
+	data, err := proto.Marshal(pbMsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = proposal.Unmarshal(data)
+	if err == nil {
+		t.Fatal("expected error when unmarshaling proposal with zero hash")
+	}
+	if err.Error() != "deposit funding tx hash is required" {
+		t.Errorf("unexpected error: [%v]", err)
+	}
+}
 func TestFuzzCoordinationMessage_Unmarshaler(t *testing.T) {
 	pbutils.FuzzUnmarshaler(&coordinationMessage{})
 }

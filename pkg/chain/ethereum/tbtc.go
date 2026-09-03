@@ -2537,6 +2537,47 @@ func (tc *TbtcChain) ValidateReservationAnchorProposal(
 		FundingTx *bitcoin.Transaction
 	},
 ) error {
+	abiProposal, abiExtraInfo := buildReservationAnchorProposalAbi(
+		walletPublicKeyHash,
+		proposal,
+		depositExtraInfo,
+	)
+
+	valid, err := tc.walletProposalValidator.ValidateReservationAnchorProposal(
+		abiProposal,
+		abiExtraInfo,
+	)
+	if err != nil {
+		return fmt.Errorf("validation failed: [%v]", err)
+	}
+
+	// Should never happen because `validateReservationAnchorProposal`
+	// returns true or reverts (returns an error) but do the check just in
+	// case.
+	if !valid {
+		return fmt.Errorf("unexpected validation result")
+	}
+
+	return nil
+}
+
+// buildReservationAnchorProposalAbi constructs the ABI-struct arguments
+// for WalletProposalValidator.ValidateReservationAnchorProposal from their
+// application-level representations. Extracted as a pure function from
+// ValidateReservationAnchorProposal so the field mapping can be unit
+// tested directly, mirroring the reverse-direction converters below
+// (convertReservationFromAbiType et al.).
+func buildReservationAnchorProposalAbi(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) (
+	tbtcabi.WalletProposalValidatorReservationAnchorProposal,
+	tbtcabi.WalletProposalValidatorDepositExtraInfo,
+) {
 	// WalletProposalValidator's DepositExtraInfo.FundingTx is typed as
 	// BitcoinTxInfo2 because the BitcoinTxInfo struct is renamed via the
 	// collision hook in gen/Makefile (Bridge keeps the un-suffixed name;
@@ -2569,22 +2610,7 @@ func (tc *TbtcChain) ValidateReservationAnchorProposal(
 		AnchorTxFee:      proposal.AnchorTxFee,
 	}
 
-	valid, err := tc.walletProposalValidator.ValidateReservationAnchorProposal(
-		abiProposal,
-		abiExtraInfo,
-	)
-	if err != nil {
-		return fmt.Errorf("validation failed: [%v]", err)
-	}
-
-	// Should never happen because `validateReservationAnchorProposal`
-	// returns true or reverts (returns an error) but do the check just in
-	// case.
-	if !valid {
-		return fmt.Errorf("unexpected validation result")
-	}
-
-	return nil
+	return abiProposal, abiExtraInfo
 }
 
 // ValidateReservationReanchorProposal asks the WalletProposalValidator
@@ -2595,12 +2621,10 @@ func (tc *TbtcChain) ValidateReservationReanchorProposal(
 	sourceWalletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationReanchorProposal,
 ) error {
-	abiProposal := tbtcabi.WalletProposalValidatorReservationReanchorProposal{
-		SourceWalletPubKeyHash: sourceWalletPublicKeyHash,
-		ReservationKey:         proposal.ReservationKey,
-		TargetWalletPubKeyHash: proposal.TargetWalletPublicKeyHash,
-		ReanchorTxFee:          proposal.ReanchorTxFee,
-	}
+	abiProposal := buildReservationReanchorProposalAbi(
+		sourceWalletPublicKeyHash,
+		proposal,
+	)
 
 	valid, err := tc.walletProposalValidator.ValidateReservationReanchorProposal(
 		abiProposal,
@@ -2617,6 +2641,23 @@ func (tc *TbtcChain) ValidateReservationReanchorProposal(
 	}
 
 	return nil
+}
+
+// buildReservationReanchorProposalAbi constructs the ABI-struct argument
+// for WalletProposalValidator.ValidateReservationReanchorProposal from its
+// application-level representation. Extracted as a pure function from
+// ValidateReservationReanchorProposal so the field mapping can be unit
+// tested directly.
+func buildReservationReanchorProposalAbi(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationReanchorProposal,
+) tbtcabi.WalletProposalValidatorReservationReanchorProposal {
+	return tbtcabi.WalletProposalValidatorReservationReanchorProposal{
+		SourceWalletPubKeyHash: sourceWalletPublicKeyHash,
+		ReservationKey:         proposal.ReservationKey,
+		TargetWalletPubKeyHash: proposal.TargetWalletPublicKeyHash,
+		ReanchorTxFee:          proposal.ReanchorTxFee,
+	}
 }
 
 // convertReservationFromAbiType converts the ReservationRouter-specific
@@ -2840,6 +2881,7 @@ func (tc *TbtcChain) RequestReservationAcceptance(
 		return err
 	}
 
+	// Here we add a 20% margin to overcome the gas problems.
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
 	_, err = tc.reservationRouter.RequestReservationAcceptance(
@@ -2868,6 +2910,7 @@ func (tc *TbtcChain) RequestReservationReanchor(
 		return err
 	}
 
+	// Here we add a 20% margin to overcome the gas problems.
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
 	_, err = tc.reservationRouter.RequestReservationReanchor(
@@ -2961,6 +3004,7 @@ func (tc *TbtcChain) NotifyReservationActionTimeout(
 		return err
 	}
 
+	// Here we add a 20% margin to overcome the gas problems.
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
 	_, err = tc.reservationRouter.NotifyReservationActionTimeout(
@@ -2986,6 +3030,7 @@ func (tc *TbtcChain) NotifyStaleReservedDeposit(
 		return err
 	}
 
+	// Here we add a 20% margin to overcome the gas problems.
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
 	_, err = tc.reservationRouter.NotifyStaleReservedDeposit(
@@ -3010,10 +3055,54 @@ func (tc *TbtcChain) NotifyReservationStranded(
 		return err
 	}
 
+	// Here we add a 20% margin to overcome the gas problems.
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
 	_, err = tc.reservationRouter.NotifyReservationStranded(
 		reservationKey,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
+// NotifyMovingFundsBelowDust notifies the Bridge that the given wallet's
+// main UTXO has fallen below the moving funds dust threshold, ending the
+// moving funds process and starting wallet closing immediately. This call
+// is permissionless on-chain (MovingFunds.sol's notifyMovingFundsBelowDust
+// carries no caller restriction), so it is submitted directly through the
+// Bridge rather than routed through MaintainerProxy for reimbursement,
+// mirroring the other reservation notify/request calls in this file.
+func (tc *TbtcChain) NotifyMovingFundsBelowDust(
+	walletPublicKeyHash [20]byte,
+	mainUtxo *bitcoin.UnspentTransactionOutput,
+) error {
+	var utxo tbtcabi.BitcoinTxUTXO
+	if mainUtxo != nil {
+		utxo = tbtcabi.BitcoinTxUTXO{
+			TxHash:        mainUtxo.Outpoint.TransactionHash,
+			TxOutputIndex: mainUtxo.Outpoint.OutputIndex,
+			TxOutputValue: uint64(mainUtxo.Value),
+		}
+	}
+
+	gasEstimate, err := tc.bridge.NotifyMovingFundsBelowDustGasEstimate(
+		walletPublicKeyHash,
+		utxo,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Here we add a 20% margin to overcome the gas problems, mirroring the
+	// other reservation notify calls in this file.
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.bridge.NotifyMovingFundsBelowDust(
+		walletPublicKeyHash,
+		utxo,
 		ethutil.TransactionOptions{
 			GasLimit: uint64(gasEstimateWithMargin),
 		},

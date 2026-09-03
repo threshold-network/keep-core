@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
@@ -466,6 +467,194 @@ func TestAssembleReservationTransactions_FeeBoundaries(t *testing.T) {
 	}
 }
 
+// TestAssembleReservationTransactions_HappyPathShape verifies the actual
+// shape of a successfully assembled reservation anchor/re-anchor
+// transaction: exactly one input, exactly one output, the output value
+// equal to input value minus fee, and a P2WPKH locking script paying the
+// target wallet. Existing tests only exercise error/boundary paths; none
+// assert the happy-path output shape.
+func TestAssembleReservationTransactions_HappyPathShape(t *testing.T) {
+	targetWalletPublicKeyHash := [20]byte{
+		0x8d, 0xb5, 0x0e, 0xb5, 0x20, 0x63, 0xea, 0x9d, 0x98, 0xb3,
+		0xea, 0xc9, 0x14, 0x89, 0xa9, 0x0f, 0x73, 0x89, 0x86, 0xf6,
+	}
+	const fee = int64(1500)
+	const depositValue = int64(100000)
+
+	expectedOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		targetWalletPublicKeyHash,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	btcecKey, err := btcec.NewPrivateKey(btcec.S256())
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingKey := (*ecdsa.PrivateKey)(btcecKey)
+
+	t.Run("anchor transaction", func(t *testing.T) {
+		bitcoinChain := newLocalBitcoinChain()
+
+		deposit := &Deposit{
+			Depositor:           "0x934b98637ca318a4d6e7ca6ffd1690b8e77df637",
+			WalletPublicKeyHash: [20]byte{0xaa},
+			RefundPublicKeyHash: [20]byte{0xbb},
+			RefundLocktime:      [4]byte{0x60, 0xbc, 0xea, 0x61},
+		}
+		depositScript, err := deposit.Script()
+		if err != nil {
+			t.Fatal(err)
+		}
+		scriptHash := sha256.Sum256(depositScript)
+		fundingOutputScript, err := bitcoin.PayToWitnessScriptHash(scriptHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fundingTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           depositValue,
+				PublicKeyScript: fundingOutputScript,
+			}},
+		}
+		if err := bitcoinChain.BroadcastTransaction(fundingTx); err != nil {
+			t.Fatal(err)
+		}
+
+		deposit.Utxo = &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTx.Hash(),
+				OutputIndex:     0,
+			},
+			Value: depositValue,
+		}
+
+		builder, err := AssembleReservationAnchorTransaction(
+			bitcoinChain,
+			deposit,
+			targetWalletPublicKeyHash,
+			&ReservationAction{TxMaxFee: 2000},
+			fee,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		signedTx := signReservationTransaction(
+			t,
+			builder,
+			&signingKey.PublicKey,
+			signingKey.D,
+		)
+
+		assertReservationTransactionShape(
+			t,
+			signedTx,
+			depositValue,
+			fee,
+			expectedOutputScript,
+		)
+	})
+
+	t.Run("re-anchor transaction", func(t *testing.T) {
+		bitcoinChain := newLocalBitcoinChain()
+
+		anchorOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+			[20]byte{0xcc},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		anchorFundingTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           depositValue,
+				PublicKeyScript: anchorOutputScript,
+			}},
+		}
+		if err := bitcoinChain.BroadcastTransaction(anchorFundingTx); err != nil {
+			t.Fatal(err)
+		}
+
+		anchorUtxo := &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorFundingTx.Hash(),
+				OutputIndex:     0,
+			},
+			Value: depositValue,
+		}
+
+		builder, err := AssembleReservationReanchorTransaction(
+			bitcoinChain,
+			anchorUtxo,
+			targetWalletPublicKeyHash,
+			&ReservationAction{TxMaxFee: 2000},
+			fee,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		signedTx := signReservationTransaction(
+			t,
+			builder,
+			&signingKey.PublicKey,
+			signingKey.D,
+		)
+
+		assertReservationTransactionShape(
+			t,
+			signedTx,
+			depositValue,
+			fee,
+			expectedOutputScript,
+		)
+	})
+}
+
+// assertReservationTransactionShape asserts the invariants a successfully
+// assembled and signed reservation anchor/re-anchor transaction must
+// satisfy: exactly 1 input, exactly 1 output, output value == inputValue -
+// fee, and the output's locking script matches expectedOutputScript exactly.
+func assertReservationTransactionShape(
+	t *testing.T,
+	transaction *bitcoin.Transaction,
+	inputValue int64,
+	fee int64,
+	expectedOutputScript bitcoin.Script,
+) {
+	t.Helper()
+
+	if len(transaction.Inputs) != 1 {
+		t.Fatalf("expected exactly 1 input, got %d", len(transaction.Inputs))
+	}
+	if len(transaction.Outputs) != 1 {
+		t.Fatalf("expected exactly 1 output, got %d", len(transaction.Outputs))
+	}
+
+	expectedValue := inputValue - fee
+	if transaction.Outputs[0].Value != expectedValue {
+		t.Errorf(
+			"unexpected output value\nexpected: %d\nactual:   %d",
+			expectedValue,
+			transaction.Outputs[0].Value,
+		)
+	}
+
+	if !reflect.DeepEqual(
+		[]byte(transaction.Outputs[0].PublicKeyScript),
+		[]byte(expectedOutputScript),
+	) {
+		t.Errorf(
+			"unexpected output locking script\nexpected: %x\nactual:   %x",
+			expectedOutputScript,
+			transaction.Outputs[0].PublicKeyScript,
+		)
+	}
+}
+
 // reservationTestWallet returns a wallet with a real ECDSA public key so
 // bitcoin.PublicKeyHash (called at the top of both execute() methods)
 // doesn't panic on a nil key.
@@ -637,24 +826,92 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 			RevealedAt: time.Now(),
 		})
 		chain.setReservationAction(&ReservationAction{
-			ActionType: ReservationActionTypeAcceptance,
-			State:      ReservationActionStatePending,
-			TxMaxFee:   2000,
+			ActionType:                ReservationActionTypeAcceptance,
+			State:                     ReservationActionStatePending,
+			TargetWalletPublicKeyHash: walletPublicKeyHash,
+			TxMaxFee:                  2000,
 		})
 
 		action := newAction(chain, btcChain, fundingTxHash)
 		// Below reservationActionSigningTimeoutSafetyMarginBlocks (300):
 		// every real upstream step (event match, deposit request fetch,
-		// reservation key derivation, action load, on-chain validation,
-		// transaction assembly) must succeed before this guard is
-		// reached and rejects the proposal - reaching this exact error
-		// is the test's proof that all of it worked.
+		// reservation key derivation, action load, target wallet match,
+		// on-chain validation, transaction assembly) must succeed before
+		// this guard is reached and rejects the proposal - reaching this
+		// exact error is the test's proof that all of it worked.
 		action.expiryBlock = 100
 
 		err = action.execute()
 		if err == nil || err.Error() != "invalid proposal expiry block" {
 			t.Errorf(
 				"unexpected error\nexpected: [invalid proposal expiry block]\nactual:   [%v]",
+				err,
+			)
+		}
+	})
+
+	t.Run("target wallet mismatch is rejected before signing", func(t *testing.T) {
+		chain := Connect()
+		btcChain := newLocalBitcoinChain()
+
+		depositForScript := &Deposit{
+			Depositor:           "0x0000000000000000000000000000000000000001",
+			WalletPublicKeyHash: walletPublicKeyHash,
+		}
+		depositScript, err := depositForScript.Script()
+		if err != nil {
+			t.Fatal(err)
+		}
+		scriptHash := sha256.Sum256(depositScript)
+		fundingOutputScript, err := bitcoin.PayToWitnessScriptHash(scriptHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fundingTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           100000,
+				PublicKeyScript: fundingOutputScript,
+			}},
+		}
+		if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+			t.Fatal(err)
+		}
+		fundingTxHash := fundingTx.Hash()
+
+		if err := chain.setPastDepositRevealedEvents(
+			&DepositRevealedEventFilter{
+				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				StartBlock:          300000 - reservationLookBackBlocks,
+			},
+			[]*DepositRevealedEvent{{
+				FundingTxHash:       fundingTxHash,
+				FundingOutputIndex:  fundingOutputIndex,
+				WalletPublicKeyHash: walletPublicKeyHash,
+				Amount:              100000,
+				Depositor:           "0x0000000000000000000000000000000000000001",
+			}},
+		); err != nil {
+			t.Fatal(err)
+		}
+		chain.setDepositRequest(fundingTxHash, fundingOutputIndex, &DepositChainRequest{
+			Amount:     100000,
+			RevealedAt: time.Now(),
+		})
+		chain.setReservationAction(&ReservationAction{
+			ActionType:                ReservationActionTypeAcceptance,
+			State:                     ReservationActionStatePending,
+			TargetWalletPublicKeyHash: [20]byte{0xff}, // does not match the signing wallet
+			TxMaxFee:                  2000,
+		})
+
+		action := newAction(chain, btcChain, fundingTxHash)
+		action.expiryBlock = 100
+
+		err = action.execute()
+		if err == nil || err.Error() != "reservation action targets a different wallet" {
+			t.Errorf(
+				"unexpected error\nexpected: [reservation action targets a different wallet]\nactual:   [%v]",
 				err,
 			)
 		}
