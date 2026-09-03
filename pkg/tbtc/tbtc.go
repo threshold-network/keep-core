@@ -258,6 +258,7 @@ func Initialize(
 	}
 
 	node, err := newNode(
+		ethereumNetwork,
 		groupParameters,
 		chain,
 		btcChain,

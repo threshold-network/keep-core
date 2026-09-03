@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -57,6 +58,7 @@ func TestNode_GetSigningExecutor(t *testing.T) {
 	}
 
 	node, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
@@ -192,6 +194,7 @@ func TestNode_GetCoordinationExecutor(t *testing.T) {
 	keyStorePersistence := createMockKeyStorePersistence(t, signer)
 
 	node, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
@@ -329,6 +332,7 @@ func TestNode_RunCoordinationLayer(t *testing.T) {
 	keyStorePersistence := createMockKeyStorePersistence(t, signer)
 
 	n, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
@@ -1130,6 +1134,7 @@ func setupNodeForClosureTests(t *testing.T) (*node, *signer, *localChain) {
 	})
 
 	n, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		lc,
 		newLocalBitcoinChain(),
@@ -1309,6 +1314,7 @@ func setupNodeWithChain(t *testing.T) (*node, *signer, *localChain) {
 	})
 
 	n, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		lc,
 		newLocalBitcoinChain(),

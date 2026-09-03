@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"golang.org/x/crypto/sha3"
 
 	"github.com/keep-network/keep-core/internal/testutils"
@@ -171,6 +172,7 @@ func setupInactivityClaimExecutorScenario(t *testing.T) (
 	)
 
 	node, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
