@@ -240,6 +240,7 @@ func newReservationCoordinationOperator(
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { netlocal.ResetForTesting() })
 
 	broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
 		return &coordinationMessage{}
@@ -1277,6 +1278,7 @@ func TestCoordinationExecutor_ExecuteLeaderRoutine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { netlocal.ResetForTesting() })
 
 	broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
 		return &coordinationMessage{}
@@ -1486,6 +1488,7 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { netlocal.ResetForTesting() })
 
 		broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
 			return &coordinationMessage{}
@@ -1783,6 +1786,7 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine_WithIdleLeader(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { netlocal.ResetForTesting() })
 
 	executor := &coordinationExecutor{
 		// Set only relevant fields.
