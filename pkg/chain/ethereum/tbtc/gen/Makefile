@@ -79,3 +79,63 @@ define fix_reservation_router_contract_collision
 endef
 
 include ../../common/gen/Makefile
+
+# @keep-network/tbtc-v2@development on npm does not yet publish
+# ReservationRouter.json (threshold-network/keep-core#4281), which makes
+# `make generate` fail outright since nothing else can produce that
+# prerequisite. Fall back to a vendored copy - its ABI is byte-for-byte
+# the ABI already embedded in the committed bindings (re-derived from
+# ReservationRouterMetaData.ABI, with the "struct"/"enum"/"contract"
+# internalType prefix space abigen's metadata packer strips put back;
+# verified by round-tripping through the same abigen + keep-common
+# generator invocation and diffing byte-identical against
+# abi/ReservationRouter.go, contract/ReservationRouter.go, and
+# cmd/ReservationRouter.go) - only when the real artifact is missing,
+# and only in the `development` environment, which already tolerates
+# placeholder addresses (see the _address/% rule above). Non-development
+# builds still hard-fail if the real artifact is ever missing there,
+# since a real deployed address must never be substituted silently.
+# Remove this rule once tbtc-v2 publishes the real artifact upstream.
+${artifacts_dir}/ReservationRouter.json:
+ifeq ($(environment), development)
+	@[ -f "$@" ] || { \
+		echo "ReservationRouter - artifact missing from ${npm_package_name}@${environment}, using vendored fallback (see threshold-network/keep-core#4281)"; \
+		cp ReservationRouter.fallback-artifact.json "$@"; \
+	}
+else
+	@[ -f "$@" ] || { echo "$@ does not exist!"; exit 1; }
+endif
+
+# @keep-network/tbtc-v2@development on npm publishes Bridge.json and
+# WalletProposalValidator.json, but both are stale relative to the
+# reservation feature: they're missing isReservedDeposit (Bridge) and
+# validateReservationAnchorProposal/validateReservationReanchorProposal
+# (WalletProposalValidator), which the committed bindings already call
+# (threshold-network/keep-core#4281). Unlike ReservationRouter.json,
+# these files exist, so an only-if-missing artifact rule can't apply -
+# patch the fetched artifact in place instead, merging in vendored
+# fragments (extracted from the committed BridgeMetaData.ABI /
+# WalletProposalValidatorMetaData.ABI, internalType prefix space
+# restored the same way as ReservationRouter's; verified by
+# round-tripping through the same abigen + keep-common generator
+# invocation, producing a clean `go build ./...`) before anything reads
+# the artifact. Only in `development`; only when the methods are
+# actually missing, so a real future npm publish makes this a no-op
+# without needing to be removed first. Non-development builds are
+# untouched. Remove this whole block once tbtc-v2 publishes the real
+# methods upstream.
+.PHONY: patch-artifacts
+check_artifacts: patch-artifacts
+patch-artifacts:
+ifeq ($(environment), development)
+	@jq -e '.abi[] | select(.name == "isReservedDeposit")' ${artifacts_dir}/Bridge.json >/dev/null 2>&1 || { \
+		echo "Bridge - artifact missing reservation methods, patching in vendored fallback (see threshold-network/keep-core#4281)"; \
+		jq --slurpfile extra Bridge.reservation-methods-fallback.json '.abi += $$extra[0]' ${artifacts_dir}/Bridge.json > ${artifacts_dir}/Bridge.json.patched && \
+		mv ${artifacts_dir}/Bridge.json.patched ${artifacts_dir}/Bridge.json; \
+	}
+	@jq -e '.abi[] | select(.name == "validateReservationAnchorProposal")' ${artifacts_dir}/WalletProposalValidator.json >/dev/null 2>&1 || { \
+		echo "WalletProposalValidator - artifact missing reservation methods, patching in vendored fallback (see threshold-network/keep-core#4281)"; \
+		jq --slurpfile extra WalletProposalValidator.reservation-methods-fallback.json '.abi += $$extra[0]' ${artifacts_dir}/WalletProposalValidator.json > ${artifacts_dir}/WalletProposalValidator.json.patched && \
+		mv ${artifacts_dir}/WalletProposalValidator.json.patched ${artifacts_dir}/WalletProposalValidator.json; \
+	}
+endif

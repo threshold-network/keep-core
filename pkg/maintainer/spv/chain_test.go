@@ -102,6 +102,7 @@ type localChain struct {
 	// Error-injection fields for the reservation watcher chain-error
 	// passthrough tests: nil (the default) means the corresponding method
 	// falls through to its normal, table-driven behavior.
+	getReservationActionErr           error
 	walletReservationsErr             error
 	isReservedDepositErr              error
 	reservedDepositWalletErr          error
@@ -945,6 +946,10 @@ func (lc *localChain) GetReservationAction(
 ) (*tbtc.ReservationAction, error) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
+
+	if lc.getReservationActionErr != nil {
+		return nil, lc.getReservationActionErr
+	}
 
 	key := buildReservationActionKey(reservationKey, requestNonce)
 	action, ok := lc.reservationActions[key]
