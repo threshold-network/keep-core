@@ -189,13 +189,14 @@ type reservationCoordinationOperatorFixture struct {
 // deterministic keypair (so leader election is reproducible across runs), a
 // local chain fake wired to that keypair, and a broadcast channel joined to a
 // local network shared by every operator in the same test so they exchange
-// real coordinationMessage wire traffic. channelName should be unique per
-// test invocation (not just per test function): the coordination leader
-// intentionally keeps its context - and therefore its retransmissions -
-// alive for the lifetime of the active phase to maximize delivery odds (see
-// coordinate()'s own doc comment in coordination.go), so an earlier
-// invocation's leader can still be retransmitting under a given name when a
-// later invocation starts; a fresh name per invocation closes that window.
+// real coordinationMessage wire traffic. channelName need not be unique
+// across test invocations: this registers a t.Cleanup that calls
+// netlocal.ResetForTesting(), which cancels every outstanding channel's
+// retransmission ticker and clears the registry, so a later invocation
+// reusing the same name starts from an empty registry regardless of
+// whether an earlier invocation's leader was still retransmitting.
+// channelName is passed as t.Name() purely so a leaked broadcast (a
+// ResetForTesting regression) is easy to attribute to its source test.
 func newReservationCoordinationOperator(
 	t *testing.T,
 	privateKey int64,
@@ -410,7 +411,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 		return parsed
 	}
 
-	channelName := fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())
+	channelName := t.Name()
 
 	operator1 := newReservationCoordinationOperator(t, 1, coordinationBlock, channelName)
 	operator2 := newReservationCoordinationOperator(t, 2, coordinationBlock, channelName)
@@ -562,7 +563,7 @@ func TestCoordinationExecutor_Coordinate_ReservationProposals(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			channelName := fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())
+			channelName := t.Name()
 
 			operator1 := newReservationCoordinationOperator(t, 1, coordinationBlock, channelName)
 			operator2 := newReservationCoordinationOperator(t, 2, coordinationBlock, channelName)
