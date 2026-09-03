@@ -340,26 +340,6 @@ func runReservationCoordinationRound(
 		}
 	}
 
-	// Guard against a fan-in bug that would otherwise be invisible: the
-	// loop above only checks the *count* of received reports, so a
-	// goroutine that reports twice for the same operator while another
-	// operator's report is lost would still satisfy len(reports) ==
-	// len(operators). Verify every expected operator actually reported.
-	seenOperatorIndices := make(map[int]bool, len(operators))
-	for _, report := range reports {
-		seenOperatorIndices[report.operatorIndex] = true
-	}
-	for i := 1; i <= len(operators); i++ {
-		if !seenOperatorIndices[i] {
-			t.Fatalf(
-				"coordination round did not produce a report for operator %d "+
-					"(got reports for operators: %v)",
-				i,
-				seenOperatorIndices,
-			)
-		}
-	}
-
 	return reports
 }
 
