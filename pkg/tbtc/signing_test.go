@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 
 	"github.com/keep-network/keep-core/internal/testutils"
