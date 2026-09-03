@@ -1529,7 +1529,7 @@ func TestReservationAcceptanceTask_ReservationParametersFetchedLive(t *testing.T
 
 		ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
 
-		setupEligibleDeposit(
+		fundingTxHash := setupEligibleDeposit(
 			t,
 			ralc,
 			btcChain,
@@ -1552,18 +1552,27 @@ func TestReservationAcceptanceTask_ReservationParametersFetchedLive(t *testing.T
 			t.Fatalf("expected shouldExecute=true on first run, got false")
 		}
 
-		// Second run on the same, now-requested deposit: RequestReservationAcceptance
-		// recorded a ReservationAcceptanceRequestedEvent as a side effect of the
-		// first run, so production's dedup guard (which queries
-		// PastReservationAcceptanceRequestedEvents) must now find it and skip the
-		// candidate. Without the fixture actually recording that event, this run
-		// would (incorrectly) accept again and the dedup guard would go untested.
+		// RequestReservationAcceptance bumped RequestNonce to 1 as a side
+		// effect of the first run, mirroring the on-chain Bridge. On real
+		// chain the Bridge also marks that generation's action record
+		// Pending; record that here too so the second run's dedup guard
+		// (hasPendingAction, which reads GetReservationAction) genuinely
+		// observes a pending generation instead of merely fail-closing on
+		// a not-found lookup.
+		depositKey := ralc.BuildDepositKey(fundingTxHash, 0)
+		ralc.SetReservationAction(depositKey, 1, &tbtc.ReservationAction{
+			State: tbtc.ReservationActionStatePending,
+		})
+
+		// Second run on the same, now-requested deposit: the pending
+		// action generation recorded above must be found and the
+		// candidate skipped.
 		_, shouldExecute, err = task.Run(request)
 		if err != nil {
 			t.Fatalf("unexpected error on second run: [%v]", err)
 		}
 		if shouldExecute {
-			t.Fatalf("expected shouldExecute=false on second run due to existing acceptance request, got true")
+			t.Fatalf("expected shouldExecute=false on second run due to pending acceptance action, got true")
 		}
 	})
 
