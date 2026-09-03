@@ -4,6 +4,10 @@
 # Executables
 /keep-client
 
+# Temporary CI-only artifact injected before the Docker build; see Dockerfile
+# and .github/workflows/client.yml (ReservationRouter tbtc-v2 PR #1112 shim).
+/ci-shims/
+
 # IDEs
 .vscode/
 .idea/

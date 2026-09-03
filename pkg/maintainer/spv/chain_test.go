@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -43,6 +44,33 @@ type submittedMovedFundsSweepProof struct {
 	mainUTXO    bitcoin.UnspentTransactionOutput
 }
 
+// submittedReservationStranded records a NotifyReservationStranded call for
+// assertion in tests.
+type submittedReservationStranded struct {
+	reservationKey *big.Int
+}
+
+// submittedStaleReservedDeposit records a NotifyStaleReservedDeposit call for
+// assertion in tests.
+type submittedStaleReservedDeposit struct {
+	depositKey *big.Int
+}
+
+// submittedReservationActionTimeout records a NotifyReservationActionTimeout
+// call for assertion in tests.
+type submittedReservationActionTimeout struct {
+	reservationKey   *big.Int
+	walletMembersIDs []uint32
+}
+
+// reservedDepositRecord is the local-chain-side booking for a reserved
+// deposit. WalletPublicKeyHash is the wallet currently assigned to the
+// deposit; IsReserved drives the IsReservedDeposit return value.
+type reservedDepositRecord struct {
+	walletPublicKeyHash [20]byte
+	isReserved          bool
+}
+
 type localChain struct {
 	mutex sync.Mutex
 
@@ -59,10 +87,51 @@ type localChain struct {
 	pastDepositRevealedEvents                map[[32]byte][]*tbtc.DepositRevealedEvent
 	pastMovingFundsCommitmentSubmittedEvents map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent
 
+	// Reservation watcher state. Indexed by [16]byte / [24]byte map keys
+	// derived from the relevant big.Int so they fit the map type without
+	// per-test marshalling.
+	walletReservations      map[[20]byte][]*big.Int
+	reservations            map[string]*tbtc.Reservation
+	reservationActions      map[string]*tbtc.ReservationAction
+	reservedDeposits        map[string]*reservedDepositRecord
+	submittedStrandedKeys   []*big.Int
+	submittedStaleDeposits  []*big.Int
+	submittedActionTimeouts []*submittedReservationActionTimeout
+	reservationParameters   *tbtc.ReservationParameters
+
+	// Error-injection fields for the reservation watcher chain-error
+	// passthrough tests: nil (the default) means the corresponding method
+	// falls through to its normal, table-driven behavior.
+	walletReservationsErr             error
+	isReservedDepositErr              error
+	reservedDepositWalletErr          error
+	notifyReservationActionTimeoutErr error
+	notifyStaleReservedDepositErr     error
+	pastNewWalletRegisteredEventsErr  error
+	notifyReservationStrandedErrByKey map[string]error
+
+	// Wallet registration and pending-action-request event state for the
+	// watcher dispatch and reservation proof loop tests.
+	newWalletRegisteredEvents            []*tbtc.NewWalletRegisteredEvent
+	reservationAcceptanceRequestedEvents []*tbtc.ReservationAcceptanceRequestedEvent
+	reservationReanchorRequestedEvents   []*tbtc.ReservationReanchorRequestedEvent
+
 	txProofDifficultyFactor *big.Int
 	currentEpoch            uint64
 	currentEpochDifficulty  *big.Int
 	previousEpochDifficulty *big.Int
+	// submitReservationProofHook, when non-nil, overrides the default
+	// success stub and gives the test full control over
+	// SubmitReservationProof behavior (e.g. to assert arguments or return
+	// an error).
+	submitReservationProofHook func(
+		proofType uint8,
+		txInfo *tbtc.BitcoinTxInfo,
+		proof *tbtc.BitcoinTxProof,
+		mainUtxo *tbtc.BitcoinTxUTXO,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error
 }
 
 func newLocalChain() *localChain {
@@ -74,9 +143,17 @@ func newLocalChain() *localChain {
 		submittedRedemptionProofs:                make([]*submittedRedemptionProof, 0),
 		submittedDepositSweepProofs:              make([]*submittedDepositSweepProof, 0),
 		submittedMovingFundsProofs:               make([]*submittedMovingFundsProof, 0),
+		submittedMovedFundsSweepProofs:           make([]*submittedMovedFundsSweepProof, 0),
 		pastRedemptionRequestedEvents:            make(map[[32]byte][]*tbtc.RedemptionRequestedEvent),
 		pastDepositRevealedEvents:                make(map[[32]byte][]*tbtc.DepositRevealedEvent),
 		pastMovingFundsCommitmentSubmittedEvents: make(map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent),
+		walletReservations:                       make(map[[20]byte][]*big.Int),
+		reservations:                             make(map[string]*tbtc.Reservation),
+		reservationActions:                       make(map[string]*tbtc.ReservationAction),
+		reservedDeposits:                         make(map[string]*reservedDepositRecord),
+		submittedStrandedKeys:                    make([]*big.Int, 0),
+		submittedStaleDeposits:                   make([]*big.Int, 0),
+		submittedActionTimeouts:                  make([]*submittedReservationActionTimeout, 0),
 	}
 }
 
@@ -719,4 +796,451 @@ func (mbc *mockBlockCounter) SetCurrentBlock(block uint64) {
 
 func (mbc *mockBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
 	panic("unsupported")
+}
+
+// SubmitReservationProof is a stub matching the reservation additions on
+// the production Chain interface.
+func (lc *localChain) SubmitReservationProof(
+	proofType uint8,
+	txInfo *tbtc.BitcoinTxInfo,
+	proof *tbtc.BitcoinTxProof,
+	mainUtxo *tbtc.BitcoinTxUTXO,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	if lc.submitReservationProofHook != nil {
+		return lc.submitReservationProofHook(
+			proofType,
+			txInfo,
+			proof,
+			mainUtxo,
+			reservationKey,
+			requestNonce,
+		)
+	}
+	panic("unsupported")
+}
+
+// NotifyReservationActionTimeout records the notification for assertion in
+// tests. The action-timeout watcher builder invokes this through the
+// Chain interface to drive the notification path.
+func (lc *localChain) NotifyReservationActionTimeout(
+	reservationKey *big.Int,
+	walletMembersIDs []uint32,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.submittedActionTimeouts = append(
+		lc.submittedActionTimeouts,
+		&submittedReservationActionTimeout{
+			reservationKey:   reservationKey,
+			walletMembersIDs: walletMembersIDs,
+		},
+	)
+
+	return lc.notifyReservationActionTimeoutErr
+}
+
+// getSubmittedReservationActionTimeouts returns the recorded action-timeout
+// notifications in submission order.
+func (lc *localChain) getSubmittedReservationActionTimeouts() []*submittedReservationActionTimeout {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	out := make([]*submittedReservationActionTimeout, len(lc.submittedActionTimeouts))
+	copy(out, lc.submittedActionTimeouts)
+	return out
+}
+
+// NotifyStaleReservedDeposit records the notification for assertion in
+// tests. The stale-deposit watcher builder invokes this through the
+// Chain interface to drive the notification path.
+func (lc *localChain) NotifyStaleReservedDeposit(depositKey *big.Int) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.submittedStaleDeposits = append(
+		lc.submittedStaleDeposits,
+		depositKey,
+	)
+
+	return lc.notifyStaleReservedDepositErr
+}
+
+// getSubmittedStaleReservedDeposits returns the recorded stale-deposit
+// notifications in submission order.
+func (lc *localChain) getSubmittedStaleReservedDeposits() []*big.Int {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	out := make([]*big.Int, len(lc.submittedStaleDeposits))
+	copy(out, lc.submittedStaleDeposits)
+	return out
+}
+
+// NotifyReservationStranded records the notification for assertion in
+// tests. The stranding watcher builder invokes this through the Chain
+// interface to drive the notification path.
+func (lc *localChain) NotifyReservationStranded(reservationKey *big.Int) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if err, ok := lc.notifyReservationStrandedErrByKey[reservationKey.String()]; ok {
+		return err
+	}
+
+	lc.submittedStrandedKeys = append(
+		lc.submittedStrandedKeys,
+		reservationKey,
+	)
+
+	return nil
+}
+
+// getSubmittedReservationStrandedKeys returns the recorded stranding
+// notifications in submission order.
+func (lc *localChain) getSubmittedReservationStrandedKeys() []*big.Int {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	out := make([]*big.Int, len(lc.submittedStrandedKeys))
+	copy(out, lc.submittedStrandedKeys)
+	return out
+}
+
+// GetReservation returns the reservation previously installed via
+// setReservation. Returns an error if the reservation is not set, matching
+// the production contract behavior.
+func (lc *localChain) GetReservation(
+	reservationKey *big.Int,
+) (*tbtc.Reservation, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	key := bigIntKey(reservationKey)
+	reservation, ok := lc.reservations[key]
+	if !ok {
+		return nil, fmt.Errorf("no reservation for given key")
+	}
+	return reservation, nil
+}
+
+// setReservation installs a reservation for GetReservation to return.
+func (lc *localChain) setReservation(
+	reservationKey *big.Int,
+	reservation *tbtc.Reservation,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservations[bigIntKey(reservationKey)] = reservation
+}
+
+// GetReservationAction returns the reservation action previously installed
+// via setReservationAction. Returns an error if the action is not set.
+func (lc *localChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationAction, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	key := buildReservationActionKey(reservationKey, requestNonce)
+	action, ok := lc.reservationActions[key]
+	if !ok {
+		return nil, fmt.Errorf("no action for given reservation/nonce")
+	}
+	return action, nil
+}
+
+// setReservationAction installs a reservation action for GetReservationAction
+// to return.
+func (lc *localChain) setReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+	action *tbtc.ReservationAction,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationActions[buildReservationActionKey(reservationKey, requestNonce)] = action
+}
+
+// buildReservationActionKey produces a map key encoding the reservation
+// identifier and the nonce, using the big.Int's full base-16 text
+// representation so distinct reservation keys can never collide.
+func buildReservationActionKey(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) string {
+	return fmt.Sprintf("%s/%d", bigIntKey(reservationKey), requestNonce)
+}
+
+// bigIntKey returns a map key string from a big.Int using its full base-16
+// text representation, so distinct values can never collide. Returns the
+// empty string for nil.
+func bigIntKey(v *big.Int) string {
+	if v == nil {
+		return ""
+	}
+	return v.Text(16)
+}
+
+// ReservationParameters returns the reservation parameters previously
+// installed via setReservationParameters, or a default set if none was set.
+func (lc *localChain) ReservationParameters() (
+	*tbtc.ReservationParameters,
+	error,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.reservationParameters != nil {
+		return lc.reservationParameters, nil
+	}
+	return &tbtc.ReservationParameters{
+		ReservationActionTimeout: 3600,
+	}, nil
+}
+
+// setReservationParameters installs reservation parameters for
+// ReservationParameters to return.
+func (lc *localChain) setReservationParameters(
+	params *tbtc.ReservationParameters,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationParameters = params
+}
+
+// WalletReservations returns the reservation keys previously installed via
+// setWalletReservations. The slice is a copy so the caller can mutate it
+// without affecting the local chain.
+func (lc *localChain) WalletReservations(
+	walletPublicKeyHash [20]byte,
+) ([]*big.Int, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.walletReservationsErr != nil {
+		return nil, lc.walletReservationsErr
+	}
+
+	keys := lc.walletReservations[walletPublicKeyHash]
+	out := make([]*big.Int, len(keys))
+	copy(out, keys)
+	return out, nil
+}
+
+// setWalletReservations installs the list of reservation keys for a wallet.
+func (lc *localChain) setWalletReservations(
+	walletPublicKeyHash [20]byte,
+	keys []*big.Int,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.walletReservations[walletPublicKeyHash] = append(
+		[]*big.Int{},
+		keys...,
+	)
+}
+
+// IsReservedDeposit returns whether the deposit was previously booked via
+// setReservedDeposit.
+func (lc *localChain) IsReservedDeposit(
+	depositKey *big.Int,
+) (bool, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.isReservedDepositErr != nil {
+		return false, lc.isReservedDepositErr
+	}
+
+	record, ok := lc.reservedDeposits[bigIntKey(depositKey)]
+	if !ok {
+		return false, nil
+	}
+	return record.isReserved, nil
+}
+
+// ReservedDepositWallet returns the wallet previously assigned to the
+// deposit via setReservedDeposit.
+func (lc *localChain) ReservedDepositWallet(
+	depositKey *big.Int,
+) ([20]byte, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.reservedDepositWalletErr != nil {
+		return [20]byte{}, lc.reservedDepositWalletErr
+	}
+
+	record, ok := lc.reservedDeposits[bigIntKey(depositKey)]
+	if !ok {
+		return [20]byte{}, nil
+	}
+	return record.walletPublicKeyHash, nil
+}
+
+// setReservedDeposit installs the reserved-deposit booking for
+// IsReservedDeposit and ReservedDepositWallet to return.
+func (lc *localChain) setReservedDeposit(
+	depositKey *big.Int,
+	walletPublicKeyHash [20]byte,
+	isReserved bool,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservedDeposits[bigIntKey(depositKey)] = &reservedDepositRecord{
+		walletPublicKeyHash: walletPublicKeyHash,
+		isReserved:          isReserved,
+	}
+}
+
+func (lc *localChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	var result []*tbtc.ReservationAcceptanceRequestedEvent
+	for _, event := range lc.reservationAcceptanceRequestedEvents {
+		if filter != nil && event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter != nil && len(filter.ReservationKey) > 0 {
+			matched := false
+			for _, key := range filter.ReservationKey {
+				if key.Cmp(event.ReservationKey) == 0 {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		result = append(result, event)
+	}
+
+	return result, nil
+}
+
+func (lc *localChain) addReservationAcceptanceRequestedEvent(
+	event *tbtc.ReservationAcceptanceRequestedEvent,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationAcceptanceRequestedEvents = append(
+		lc.reservationAcceptanceRequestedEvents,
+		event,
+	)
+}
+
+func (lc *localChain) PastReservationReanchorRequestedEvents(
+	filter *tbtc.ReservationReanchorRequestedEventFilter,
+) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	var result []*tbtc.ReservationReanchorRequestedEvent
+	for _, event := range lc.reservationReanchorRequestedEvents {
+		if filter != nil && event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter != nil && len(filter.ReservationKey) > 0 {
+			matched := false
+			for _, key := range filter.ReservationKey {
+				if key.Cmp(event.ReservationKey) == 0 {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		result = append(result, event)
+	}
+
+	return result, nil
+}
+
+func (lc *localChain) addReservationReanchorRequestedEvent(
+	event *tbtc.ReservationReanchorRequestedEvent,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationReanchorRequestedEvents = append(
+		lc.reservationReanchorRequestedEvents,
+		event,
+	)
+}
+
+func (lc *localChain) PastNewWalletRegisteredEvents(
+	filter *tbtc.NewWalletRegisteredEventFilter,
+) ([]*tbtc.NewWalletRegisteredEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.pastNewWalletRegisteredEventsErr != nil {
+		return nil, lc.pastNewWalletRegisteredEventsErr
+	}
+
+	var result []*tbtc.NewWalletRegisteredEvent
+	for _, event := range lc.newWalletRegisteredEvents {
+		if filter != nil && event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter != nil && len(filter.EcdsaWalletID) > 0 {
+			matched := false
+			for _, id := range filter.EcdsaWalletID {
+				if id == event.EcdsaWalletID {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		result = append(result, event)
+	}
+
+	return result, nil
+}
+
+func (lc *localChain) addNewWalletRegisteredEvent(
+	event *tbtc.NewWalletRegisteredEvent,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.newWalletRegisteredEvents = append(lc.newWalletRegisteredEvents, event)
+}
+
+func (lc *localChain) setPastNewWalletRegisteredEventsErr(err error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.pastNewWalletRegisteredEventsErr = err
+}
+
+// BuildDepositKey is a test-double implementation independent of the
+// production keccak256-based algorithm (pkg/chain/ethereum's unexported
+// buildDepositKey): only self-consistency within this fake chain matters
+// for unit tests, since nothing here cross-checks against a real contract.
+func (lc *localChain) BuildDepositKey(
+	fundingTxHash bitcoin.Hash,
+	fundingOutputIndex uint32,
+) *big.Int {
+	key := buildDepositRequestKey(fundingTxHash, fundingOutputIndex)
+	return new(big.Int).SetBytes(key[:])
 }

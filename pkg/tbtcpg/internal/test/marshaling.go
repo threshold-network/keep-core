@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/keep-network/keep-core/pkg/tbtcpg"
 	"math/big"
 	"time"
+
+	"github.com/keep-network/keep-core/pkg/tbtcpg"
 
 	"github.com/keep-network/keep-core/internal/hexutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -374,4 +375,189 @@ func hexToSlice(hexString string) []byte {
 	}
 
 	return bytes
+}
+
+// UnmarshalJSON implements a custom JSON unmarshaling logic to produce a
+// proper ReservationReanchorTestScenario.
+func (rrts *ReservationReanchorTestScenario) UnmarshalJSON(data []byte) error {
+	type reservationDataJSON struct {
+		ReservationKey      string
+		WalletPublicKeyHash string
+		AnchorTxHash        string
+		AnchorTxOutputIndex uint32
+		AnchorValue         int64
+		State               string
+		RequestNonce        uint64
+		HasPendingAction    bool
+		PendingActionState  string
+	}
+	type reservationReanchorTestScenarioJSON struct {
+		Title string
+
+		SourceWalletPublicKeyHash   string
+		SourceWalletState           string
+		SourceWalletMainUtxoHash    string
+		SourceWalletMainUtxoValue   int64
+		SourceWalletMainUtxoTxHash  string
+		SourceWalletMainUtxoTxIndex uint32
+
+		TargetWalletPublicKeyHash string
+
+		LiveWalletsCount uint32
+
+		MovingFundsDustThreshold uint64
+		ReservationTxMaxFee      uint64
+		EstimateSatPerVByteFee   int64
+		ReanchorTxFee            int64
+
+		Reservations []reservationDataJSON
+
+		ExpectedProposal *reservationReanchorProposalJSON
+		ExpectedErr      string
+	}
+
+	var unmarshaled reservationReanchorTestScenarioJSON
+
+	if err := json.Unmarshal(data, &unmarshaled); err != nil {
+		return err
+	}
+
+	rrts.Title = unmarshaled.Title
+
+	if len(unmarshaled.SourceWalletPublicKeyHash) > 0 {
+		copy(rrts.SourceWalletPublicKeyHash[:], hexToSlice(unmarshaled.SourceWalletPublicKeyHash))
+	}
+	rrts.SourceWalletState = parseWalletState(unmarshaled.SourceWalletState)
+	if len(unmarshaled.SourceWalletMainUtxoHash) > 0 {
+		copy(rrts.SourceWalletMainUtxoHashBytes[:], hexToSlice(unmarshaled.SourceWalletMainUtxoHash))
+	} else {
+		rrts.SourceWalletMainUtxoHashBytes = [32]byte{}
+	}
+	rrts.SourceWalletMainUtxoValue = unmarshaled.SourceWalletMainUtxoValue
+	rrts.SourceWalletMainUtxoTxHash = unmarshaled.SourceWalletMainUtxoTxHash
+	rrts.SourceWalletMainUtxoTxIndex = unmarshaled.SourceWalletMainUtxoTxIndex
+
+	if len(unmarshaled.TargetWalletPublicKeyHash) > 0 {
+		copy(rrts.TargetWalletPublicKeyHash[:], hexToSlice(unmarshaled.TargetWalletPublicKeyHash))
+	}
+
+	rrts.LiveWalletsCount = unmarshaled.LiveWalletsCount
+
+	rrts.MovingFundsDustThreshold = unmarshaled.MovingFundsDustThreshold
+	rrts.ReservationTxMaxFee = unmarshaled.ReservationTxMaxFee
+	rrts.EstimateSatPerVByteFee = unmarshaled.EstimateSatPerVByteFee
+	rrts.ReanchorTxFee = unmarshaled.ReanchorTxFee
+
+	rrts.Reservations = make([]*ReservationReanchorData, 0, len(unmarshaled.Reservations))
+	for _, r := range unmarshaled.Reservations {
+		d := &ReservationReanchorData{}
+
+		if len(r.ReservationKey) > 0 {
+			keyBytes := hexToSlice(r.ReservationKey)
+			d.ReservationKey = new(big.Int).SetBytes(keyBytes)
+		}
+		if len(r.WalletPublicKeyHash) > 0 {
+			copy(d.WalletPublicKeyHash[:], hexToSlice(r.WalletPublicKeyHash))
+		}
+		d.AnchorTxHash = r.AnchorTxHash
+		d.AnchorTxOutputIndex = r.AnchorTxOutputIndex
+		d.AnchorValue = r.AnchorValue
+		d.State = parseReservationState(r.State)
+		d.RequestNonce = r.RequestNonce
+		d.HasPendingAction = r.HasPendingAction
+		d.PendingActionState = parseReservationActionState(r.PendingActionState)
+
+		rrts.Reservations = append(rrts.Reservations, d)
+	}
+
+	if unmarshaled.ExpectedProposal != nil {
+		prop, err := unmarshaled.ExpectedProposal.convert()
+		if err != nil {
+			return fmt.Errorf(
+				"failed to convert expected reservation re-anchor proposal: [%w]",
+				err,
+			)
+		}
+		rrts.ExpectedProposal = prop
+	}
+
+	if len(unmarshaled.ExpectedErr) > 0 {
+		rrts.ExpectedErr = errors.New(unmarshaled.ExpectedErr)
+	}
+
+	return nil
+}
+
+type reservationReanchorProposalJSON struct {
+	ReservationKey            string
+	RequestNonce              uint64
+	TargetWalletPublicKeyHash string
+	ReanchorTxFee             int64
+}
+
+func (rj *reservationReanchorProposalJSON) convert() (*tbtc.ReservationReanchorProposal, error) {
+	if rj == nil {
+		return nil, nil
+	}
+
+	result := &tbtc.ReservationReanchorProposal{
+		RequestNonce:  rj.RequestNonce,
+		ReanchorTxFee: big.NewInt(rj.ReanchorTxFee),
+	}
+	if len(rj.ReservationKey) > 0 {
+		result.ReservationKey = new(big.Int).SetBytes(hexToSlice(rj.ReservationKey))
+	}
+	if len(rj.TargetWalletPublicKeyHash) > 0 {
+		copy(result.TargetWalletPublicKeyHash[:], hexToSlice(rj.TargetWalletPublicKeyHash))
+	}
+	return result, nil
+}
+
+func parseWalletState(s string) tbtc.WalletState {
+	switch s {
+	case "Live":
+		return tbtc.StateLive
+	case "MovingFunds":
+		return tbtc.StateMovingFunds
+	case "Closing":
+		return tbtc.StateClosing
+	case "Closed":
+		return tbtc.StateClosed
+	case "Terminated":
+		return tbtc.StateTerminated
+	default:
+		return tbtc.StateUnknown
+	}
+}
+
+func parseReservationState(s string) tbtc.ReservationState {
+	switch s {
+	case "Active":
+		return tbtc.ReservationStateActive
+	case "ActionPending":
+		return tbtc.ReservationStateActionPending
+	case "Closed":
+		return tbtc.ReservationStateClosed
+	case "Stranded":
+		return tbtc.ReservationStateStranded
+	default:
+		return tbtc.ReservationStateUnknown
+	}
+}
+
+func parseReservationActionState(s string) tbtc.ReservationActionState {
+	switch s {
+	case "Pending":
+		return tbtc.ReservationActionStatePending
+	case "Settled":
+		return tbtc.ReservationActionStateSettled
+	case "TimedOut":
+		return tbtc.ReservationActionStateTimedOut
+	case "Vetoed":
+		return tbtc.ReservationActionStateVetoed
+	case "Superseded":
+		return tbtc.ReservationActionStateSuperseded
+	default:
+		return tbtc.ReservationActionStateUnknown
+	}
 }

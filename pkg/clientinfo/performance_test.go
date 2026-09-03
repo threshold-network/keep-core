@@ -17,7 +17,7 @@ func TestConcurrentCounterIncrement(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 100
@@ -51,7 +51,7 @@ func TestConcurrentCounterDifferentMetrics(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 50
@@ -115,7 +115,7 @@ func TestConcurrentDurationRecording(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 50
@@ -169,7 +169,7 @@ func TestConcurrentGaugeSet(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 100
@@ -205,7 +205,7 @@ func TestConcurrentDifferentOperations(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 30
@@ -264,7 +264,7 @@ func TestHistogramBucketPlacement(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	metricName := "test_duration_seconds"
 
@@ -320,7 +320,7 @@ func TestMetricsInitialization(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	// Test counters
 	counters := []string{
@@ -359,7 +359,7 @@ func TestContextCancelation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	// Cancel context immediately
 	cancel()
@@ -404,7 +404,7 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	expectedCounters := []string{MetricFirewallOnChainChecksTotal}
 	for _, reason := range GetAllNetworkJoinFailureReasons() {
@@ -427,6 +427,117 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 		pm.IncrementCounter(counterName, 1)
 		if value := pm.GetCounterValue(counterName); value != 1 {
 			t.Errorf("counter %s should increment to 1, got %v", counterName, value)
+		}
+	}
+}
+
+func TestWalletActionMetricsRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry, true)
+
+	expectedActionTypes := []string{
+		"heartbeat",
+		"deposit_sweep",
+		"redemption",
+		"moving_funds",
+		"moved_funds_sweep",
+		"reservation_anchor",
+		"reservation_reanchor",
+	}
+
+	for _, actionType := range expectedActionTypes {
+		for _, metricType := range []string{
+			"total",
+			"success_total",
+			"failed_total",
+		} {
+			metricName := WalletActionMetricName(actionType, metricType)
+
+			pm.countersMutex.RLock()
+			_, exists := pm.counters[metricName]
+			pm.countersMutex.RUnlock()
+			if !exists {
+				t.Errorf("counter %s should be registered upfront", metricName)
+			}
+		}
+
+		durationMetricName := WalletActionMetricName(
+			actionType,
+			"duration_seconds",
+		)
+		pm.histogramsMutex.RLock()
+		_, exists := pm.histograms[durationMetricName]
+		pm.histogramsMutex.RUnlock()
+		if !exists {
+			t.Errorf(
+				"histogram %s should be registered upfront",
+				durationMetricName,
+			)
+		}
+	}
+}
+
+func TestWalletActionMetricsNotRegisteredWhenReservationsDisabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry, false)
+
+	nonReservationActionTypes := []string{
+		"heartbeat",
+		"deposit_sweep",
+		"redemption",
+		"moving_funds",
+		"moved_funds_sweep",
+	}
+	reservationActionTypes := []string{
+		"reservation_anchor",
+		"reservation_reanchor",
+	}
+
+	for _, actionType := range nonReservationActionTypes {
+		metricName := WalletActionMetricName(actionType, "total")
+		pm.countersMutex.RLock()
+		_, exists := pm.counters[metricName]
+		pm.countersMutex.RUnlock()
+		if !exists {
+			t.Errorf(
+				"counter %s should still be registered when reservations "+
+					"are disabled",
+				metricName,
+			)
+		}
+	}
+
+	for _, actionType := range reservationActionTypes {
+		for _, metricType := range []string{"total", "success_total", "failed_total"} {
+			metricName := WalletActionMetricName(actionType, metricType)
+			pm.countersMutex.RLock()
+			_, exists := pm.counters[metricName]
+			pm.countersMutex.RUnlock()
+			if exists {
+				t.Errorf(
+					"counter %s should not be registered when reservations "+
+						"are disabled",
+					metricName,
+				)
+			}
+		}
+
+		durationMetricName := WalletActionMetricName(actionType, "duration_seconds")
+		pm.histogramsMutex.RLock()
+		_, exists := pm.histograms[durationMetricName]
+		pm.histogramsMutex.RUnlock()
+		if exists {
+			t.Errorf(
+				"histogram %s should not be registered when reservations "+
+					"are disabled",
+				durationMetricName,
+			)
 		}
 	}
 }

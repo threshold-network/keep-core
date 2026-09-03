@@ -29,6 +29,13 @@ type movingFundsCommitmentSubmission struct {
 	TargetWallets       [][20]byte
 }
 
+// reservationReanchorRequestSubmission captures a submitted reservation
+// re-anchor request that tests can inspect for assertion.
+type reservationReanchorRequestSubmission struct {
+	ReservationKey            *big.Int
+	TargetWalletPublicKeyHash [20]byte
+}
+
 type LocalChain struct {
 	mutex sync.Mutex
 
@@ -57,6 +64,16 @@ type LocalChain struct {
 	operatorIDs                              map[chain.Address]uint32
 	redemptionDelays                         map[[32]byte]time.Duration
 	depositMinAge                            uint32
+
+	reservations                          map[string]*tbtc.Reservation
+	reservationActions                    map[string]*tbtc.ReservationAction
+	reservationParametersValue            tbtc.ReservationParameters
+	reservationParametersSet              bool
+	reservationProposalValidations        map[[32]byte]bool
+	reservationReanchorRequestSubmissions []*reservationReanchorRequestSubmission
+	reservationWalletKeys                 map[[20]byte][]*big.Int
+	liveWalletsCountValue                 uint32
+	liveWalletsCountSet                   bool
 }
 
 func NewLocalChain() *LocalChain {
@@ -78,6 +95,12 @@ func NewLocalChain() *LocalChain {
 		movedFundsSweepProposalValidations:       make(map[[32]byte]bool),
 		operatorIDs:                              make(map[chain.Address]uint32),
 		redemptionDelays:                         make(map[[32]byte]time.Duration),
+
+		reservations:                          make(map[string]*tbtc.Reservation),
+		reservationActions:                    make(map[string]*tbtc.ReservationAction),
+		reservationProposalValidations:        make(map[[32]byte]bool),
+		reservationReanchorRequestSubmissions: make([]*reservationReanchorRequestSubmission, 0),
+		reservationWalletKeys:                 make(map[[20]byte][]*big.Int),
 	}
 }
 
@@ -1003,11 +1026,46 @@ func (lc *LocalChain) SetWalletParameters(
 }
 
 func (lc *LocalChain) GetLiveWalletsCount() (uint32, error) {
-	panic("unsupported")
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.liveWalletsCountSet {
+		return lc.liveWalletsCountValue, nil
+	}
+
+	count := uint32(0)
+	for _, wallet := range lc.walletChainData {
+		if wallet != nil && wallet.State == tbtc.StateLive {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// SetLiveWalletsCount stores an explicit live-wallets count for tests.
+func (lc *LocalChain) SetLiveWalletsCount(count uint32) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.liveWalletsCountValue = count
+	lc.liveWalletsCountSet = true
 }
 
 func (lc *LocalChain) ComputeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte {
-	panic("unsupported")
+	outputIndexBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(outputIndexBytes, mainUtxo.Outpoint.OutputIndex)
+
+	valueBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(valueBytes, uint64(mainUtxo.Value))
+
+	return crypto.Keccak256Hash(
+		append(
+			append(
+				mainUtxo.Outpoint.TransactionHash[:],
+				outputIndexBytes...,
+			), valueBytes...,
+		),
+	)
 }
 
 func (lc *LocalChain) ComputeMovingFundsCommitmentHash(targetWallets [][20]byte) [32]byte {
@@ -1283,4 +1341,370 @@ func (mbc *MockBlockCounter) SetCurrentBlock(block uint64) {
 
 func (mbc *MockBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
 	panic("unsupported")
+}
+
+// ValidateReservationAnchorProposal is a stub matching the reservation
+// additions on the production Chain interface. Full behavioral
+// validation belongs to the reservation acceptance proposal builder.
+func (lc *LocalChain) ValidateReservationAnchorProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	panic("unsupported")
+}
+
+// ValidateReservationReanchorProposal returns nil when no explicit
+// validation result was registered, mirroring the production contract's
+// happy path for tests that don't need to enforce specific validation
+// outcomes. Tests that need to drive specific failure modes should
+// populate this via SetReservationReanchorProposalValidationResult.
+func (lc *LocalChain) ValidateReservationReanchorProposal(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationReanchorProposal,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if proposal == nil {
+		return fmt.Errorf("proposal is required")
+	}
+
+	key, err := buildReservationReanchorProposalValidationKey(
+		sourceWalletPublicKeyHash,
+		proposal,
+	)
+	if err != nil {
+		return err
+	}
+
+	if result, ok := lc.reservationProposalValidations[key]; ok {
+		if !result {
+			return fmt.Errorf("validation failed")
+		}
+	}
+
+	return nil
+}
+
+// SetReservationReanchorProposalValidationResult stores the validation
+// outcome for the given (sourceWalletPublicKeyHash, proposal) tuple.
+func (lc *LocalChain) SetReservationReanchorProposalValidationResult(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationReanchorProposal,
+	result bool,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	key, err := buildReservationReanchorProposalValidationKey(
+		sourceWalletPublicKeyHash,
+		proposal,
+	)
+	if err != nil {
+		return err
+	}
+
+	lc.reservationProposalValidations[key] = result
+	return nil
+}
+
+func buildReservationReanchorProposalValidationKey(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *tbtc.ReservationReanchorProposal,
+) ([32]byte, error) {
+	var buffer bytes.Buffer
+
+	buffer.Write(sourceWalletPublicKeyHash[:])
+
+	if proposal != nil {
+		if proposal.ReservationKey != nil {
+			buffer.Write(proposal.ReservationKey.Bytes())
+		}
+		for i := 0; i < 8; i++ {
+			buffer.Write([]byte{byte(proposal.RequestNonce >> (8 * i))})
+		}
+		buffer.Write(proposal.TargetWalletPublicKeyHash[:])
+		if proposal.ReanchorTxFee != nil {
+			buffer.Write(proposal.ReanchorTxFee.Bytes())
+		}
+	}
+
+	return sha256.Sum256(buffer.Bytes()), nil
+}
+
+// RequestReservationAcceptance records a submitted reservation acceptance
+// request for assertion in tests.
+func (lc *LocalChain) RequestReservationAcceptance(
+	reservationKey *big.Int,
+	walletPublicKeyHash [20]byte,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	_ = walletPublicKeyHash
+	_ = reservationKey
+	return nil
+}
+
+// RequestReservationReanchor records a submitted reservation re-anchor
+// request for assertion in tests.
+func (lc *LocalChain) RequestReservationReanchor(
+	reservationKey *big.Int,
+	targetWalletPublicKeyHash [20]byte,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationReanchorRequestSubmissions = append(
+		lc.reservationReanchorRequestSubmissions,
+		&reservationReanchorRequestSubmission{
+			ReservationKey:            new(big.Int).Set(reservationKey),
+			TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
+		},
+	)
+	return nil
+}
+
+// GetReservation returns the configured reservation record for the given
+// reservation key, or an error if not found.
+func (lc *LocalChain) GetReservation(
+	reservationKey *big.Int,
+) (*tbtc.Reservation, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if reservation, ok := lc.reservations[reservationKey.Text(16)]; ok {
+		return reservation, nil
+	}
+	return nil, fmt.Errorf("reservation not found")
+}
+
+// SetReservation stores the given reservation record keyed by reservationKey.
+func (lc *LocalChain) SetReservation(
+	reservationKey *big.Int,
+	reservation *tbtc.Reservation,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservations[reservationKey.Text(16)] = reservation
+}
+
+// GetReservationAction returns the configured reservation action record.
+func (lc *LocalChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationAction, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	key := buildReservationActionKey(reservationKey, requestNonce)
+	if action, ok := lc.reservationActions[key]; ok {
+		return action, nil
+	}
+	// Fall back to comparing by value
+	for k, a := range lc.reservationActions {
+		expected := buildReservationActionKey(reservationKey, requestNonce)
+		if k == expected {
+			return a, nil
+		}
+	}
+	return nil, fmt.Errorf("reservation action not found")
+}
+
+// SetReservationAction stores the given reservation action record.
+func (lc *LocalChain) SetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+	action *tbtc.ReservationAction,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	key := buildReservationActionKey(reservationKey, requestNonce)
+	lc.reservationActions[key] = action
+}
+
+func buildReservationActionKey(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) string {
+	if reservationKey == nil {
+		return fmt.Sprintf("nil/%d", requestNonce)
+	}
+	return fmt.Sprintf("%s/%d", reservationKey.String(), requestNonce)
+}
+
+// ReservationParameters returns the configured reservation parameters.
+func (lc *LocalChain) ReservationParameters() (
+	*tbtc.ReservationParameters,
+	error,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if !lc.reservationParametersSet {
+		return nil, fmt.Errorf("reservation parameters not set")
+	}
+	params := lc.reservationParametersValue
+	return &params, nil
+}
+
+// SetReservationParameters stores the given reservation parameters.
+func (lc *LocalChain) SetReservationParameters(params tbtc.ReservationParameters) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationParametersValue = params
+	lc.reservationParametersSet = true
+}
+
+// ReservationCaps returns a static cap-pair useful for tests.
+func (lc *LocalChain) ReservationCaps() (
+	maxReservationsAmountPerWallet uint64,
+	reservationMaxSingleAmount uint64,
+	err error,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return 100000000, 10000000, nil
+}
+
+// WalletReservationsAmount returns the sum of anchor values for the
+// wallet's reservations.
+func (lc *LocalChain) WalletReservationsAmount(
+	walletPublicKeyHash [20]byte,
+) (uint64, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	var total uint64
+	for _, reservationKey := range lc.reservationWalletKeys[walletPublicKeyHash] {
+		if r, ok := lc.reservations[reservationKey.Text(16)]; ok && r != nil && r.AnchorUtxo != nil {
+			total += uint64(r.AnchorUtxo.Value)
+		}
+	}
+	return total, nil
+}
+
+// WalletReservationsCount returns the count of reservations for the wallet.
+func (lc *LocalChain) WalletReservationsCount(
+	walletPublicKeyHash [20]byte,
+) (uint32, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return uint32(len(lc.reservationWalletKeys[walletPublicKeyHash])), nil
+}
+
+// WalletReservations returns the configured reservation keys for the wallet.
+func (lc *LocalChain) WalletReservations(
+	walletPublicKeyHash [20]byte,
+) ([]*big.Int, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	keys := lc.reservationWalletKeys[walletPublicKeyHash]
+	result := make([]*big.Int, len(keys))
+	for i, k := range keys {
+		result[i] = new(big.Int).Set(k)
+	}
+	return result, nil
+}
+
+// SetWalletReservations stores the reservation keys associated with the wallet.
+func (lc *LocalChain) SetWalletReservations(
+	walletPublicKeyHash [20]byte,
+	reservationKeys []*big.Int,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	copy := make([]*big.Int, len(reservationKeys))
+	for i, k := range reservationKeys {
+		copy[i] = new(big.Int).Set(k)
+	}
+	lc.reservationWalletKeys[walletPublicKeyHash] = copy
+}
+
+// Reservations is a stub mirroring the Bridge view. Tests that need this
+// data should populate it explicitly via custom extensions.
+
+// ActiveReservationsCount reports zero active reservations by default.
+func (lc *LocalChain) ActiveReservationsCount() (
+	count uint32,
+	maxActive uint32,
+	err error,
+) {
+	return 0, 0, nil
+}
+
+// IsReservedDeposit returns false by default.
+func (lc *LocalChain) IsReservedDeposit(
+	depositKey *big.Int,
+) (bool, error) {
+	return false, nil
+}
+
+// PastReservationAcceptanceRequestedEvents returns no events by default.
+func (lc *LocalChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	return nil, nil
+}
+
+// PastReservationReanchorRequestedEvents returns the recorded re-anchor
+// request submissions that match the filter.
+func (lc *LocalChain) PastReservationReanchorRequestedEvents(
+	filter *tbtc.ReservationReanchorRequestedEventFilter,
+) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	results := make([]*tbtc.ReservationReanchorRequestedEvent, 0)
+	for _, submission := range lc.reservationReanchorRequestSubmissions {
+		event := &tbtc.ReservationReanchorRequestedEvent{
+			ReservationKey:            new(big.Int).Set(submission.ReservationKey),
+			TargetWalletPublicKeyHash: submission.TargetWalletPublicKeyHash,
+		}
+
+		if filter != nil {
+			if len(filter.TargetWalletPublicKeyHash) > 0 {
+				matched := false
+				for _, w := range filter.TargetWalletPublicKeyHash {
+					if w == submission.TargetWalletPublicKeyHash {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+		}
+
+		results = append(results, event)
+	}
+	return results, nil
+}
+
+// GetReservationReanchorRequestSubmissions returns the recorded
+// reservation re-anchor request submissions for assertion.
+func (lc *LocalChain) GetReservationReanchorRequestSubmissions() []*reservationReanchorRequestSubmission {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	copy := make([]*reservationReanchorRequestSubmission, len(lc.reservationReanchorRequestSubmissions))
+	for i, s := range lc.reservationReanchorRequestSubmissions {
+		copy[i] = &reservationReanchorRequestSubmission{
+			ReservationKey:            new(big.Int).Set(s.ReservationKey),
+			TargetWalletPublicKeyHash: s.TargetWalletPublicKeyHash,
+		}
+	}
+	return copy
 }

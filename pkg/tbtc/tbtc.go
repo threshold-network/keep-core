@@ -12,6 +12,7 @@ import (
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/persistence"
+
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -96,11 +97,53 @@ type Config struct {
 	PreParamsGenerationConcurrency int
 	// Concurrency level for key-generation for tECDSA.
 	KeyGenerationConcurrency int
+	// Reservations gates the m1 reservation feature (acceptance, re-anchor,
+	// stranding / stale / action-timeout watchers). When disabled the
+	// coordination layer constructs without any reservation plumbing, so
+	// non-reservation deployments stay side-effect free.
+	Reservations ReservationsConfig
+}
+
+// ReservationsConfig holds the reservation-related tbtc.Config fields. It is
+// a separate type so future reservation knobs (poll intervals, cap overrides)
+// can be added without breaking the top-level Config layout.
+//
+// This flag controls BOTH reservation acceptance / re-anchor proposal
+// GENERATION AND watcher wiring in the start process (the `start`
+// command's coordination and watcher layers, config category Tbtc). The
+// `maintainer` command runs as a separate process reading a
+// disjoint config category (see config.MaintainerCategories) and has its
+// own independent gate, spv.ReservationsConfig.Enabled, that controls SPV
+// PROOF SUBMISSION for those same proposals. Neither command's config
+// loading sees the other's category, so this flag cannot be derived from or
+// validated against spv.ReservationsConfig.Enabled in code. An operator
+// running both `start` and `maintainer` for the reservation feature to work
+// end-to-end MUST enable both flags - normally the same [Tbtc.Reservations]
+// / [Maintainer.Spv.Reservations] TOML sections in one shared config file.
+type ReservationsConfig struct {
+	// Enabled toggles reservation acceptance / re-anchor proposal
+	// generation and reservation watcher wiring. Defaults to false so
+	// existing deployments opt in explicitly.
+	Enabled bool
+}
+
+// WalletMembersResolver defines the interface for resolving wallet members.
+type WalletMembersResolver interface {
+	ResolveWalletMembers(walletPublicKeyHash [20]byte) ([]uint32, error)
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
 // preconditions like staking are met, and then kicking off the internal TBTC
 // implementation. Returns an error if this failed.
+//
+// Reservation watcher wiring (stranding / stale-deposit / action-timeout,
+// see pkg/maintainer/spv.WireReservationWatchers) is not performed here:
+// it lives in cmd/start.go, called directly against the same tbtc.Chain
+// handle once Initialize returns successfully and gated on the same
+// config.Reservations.Enabled flag. Threading it through Initialize via a
+// callback type would only exist to dodge a tbtc -> spv import cycle that
+// cmd/start.go (which already imports both packages) does not have.
+
 func Initialize(
 	ctx context.Context,
 	chain Chain,
@@ -114,7 +157,7 @@ func Initialize(
 	clientInfo *clientinfo.Registry,
 	perfMetrics *clientinfo.PerformanceMetrics,
 	ethereumNetwork ethereum.Network,
-) error {
+) (WalletMembersResolver, error) {
 	groupParameters := defaultGroupParameters(ethereumNetwork)
 
 	if ethChain, ok := chain.(interface {
@@ -122,7 +165,7 @@ func Initialize(
 	}); ok {
 		gp, err := ethChain.EcdsaWalletGroupParametersFromChain(ctx)
 		if err != nil {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"cannot read TBTC group sizing from ECDSA validator: [%w]",
 				err,
 			)
@@ -152,12 +195,12 @@ func Initialize(
 		config,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
+		return nil, fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
 
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
-		return fmt.Errorf("cannot run coordination layer: [%w]", err)
+		return nil, fmt.Errorf("cannot run coordination layer: [%w]", err)
 	}
 
 	deduplicator := newDeduplicator()
@@ -174,7 +217,11 @@ func Initialize(
 		)
 
 		if perfMetrics == nil {
-			perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfo)
+			perfMetrics = clientinfo.NewPerformanceMetrics(
+				ctx,
+				clientInfo,
+				config.Reservations.Enabled,
+			)
 		}
 		node.setPerformanceMetrics(perfMetrics)
 
@@ -212,7 +259,7 @@ func Initialize(
 		),
 	)
 	if err != nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"could not set up sortition pool monitoring: [%v]",
 			err,
 		)
@@ -374,7 +421,7 @@ func Initialize(
 		}()
 	})
 
-	return nil
+	return node, nil
 }
 
 // enoughPreParamsInPoolPolicy is a policy that enforces the sufficient size

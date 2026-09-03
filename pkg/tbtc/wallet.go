@@ -13,13 +13,14 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/ipfs/go-log/v2"
+	"go.uber.org/zap"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"go.uber.org/zap"
 )
 
 // WalletActionType represents actions types that can be performed by a wallet.
@@ -32,6 +33,10 @@ const (
 	ActionRedemption
 	ActionMovingFunds
 	ActionMovedFundsSweep
+	ActionReservationAnchor
+	_ // reserved: formerly ActionReservedRedemption (wire value 7); client-side scaffolding removed, wire slot retained
+	ActionReservationReanchor
+	_ // reserved: formerly ActionReservationDissolution (wire value 9); client-side scaffolding removed, wire slot retained
 )
 
 // ParseWalletActionType parses the given value into a WalletActionType.
@@ -49,6 +54,10 @@ func ParseWalletActionType(value uint8) (WalletActionType, error) {
 		return ActionMovingFunds, nil
 	case 5:
 		return ActionMovedFundsSweep, nil
+	case 6:
+		return ActionReservationAnchor, nil
+	case 8:
+		return ActionReservationReanchor, nil
 	default:
 		return 0, fmt.Errorf("unknown wallet action type [%v]", value)
 	}
@@ -68,6 +77,10 @@ func (wat WalletActionType) String() string {
 		return "MovingFunds"
 	case ActionMovedFundsSweep:
 		return "MovedFundsSweep"
+	case ActionReservationAnchor:
+		return "ReservationAnchor"
+	case ActionReservationReanchor:
+		return "ReservationReanchor"
 	default:
 		panic("unknown wallet action type")
 	}
@@ -89,6 +102,10 @@ func (wat WalletActionType) MetricName() string {
 		return "moving_funds"
 	case ActionMovedFundsSweep:
 		return "moved_funds_sweep"
+	case ActionReservationAnchor:
+		return "reservation_anchor"
+	case ActionReservationReanchor:
+		return "reservation_reanchor"
 	default:
 		panic("unknown wallet action type")
 	}

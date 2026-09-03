@@ -164,4 +164,100 @@ type Chain interface {
 	// the deposit reveal before a deposit becomes eligible for
 	// a processing.
 	GetDepositMinAge() (uint32, error)
+
+	// ValidateReservationAnchorProposal validates the given reservation
+	// anchor proposal against the chain. Returns an error if the proposal
+	// is not valid or nil otherwise.
+	ValidateReservationAnchorProposal(
+		walletPublicKeyHash [20]byte,
+		proposal *tbtc.ReservationAnchorProposal,
+		depositExtraInfo struct {
+			*tbtc.Deposit
+			FundingTx *bitcoin.Transaction
+		},
+	) error
+
+	// ValidateReservationReanchorProposal validates the given reservation
+	// re-anchor proposal against the chain. Returns an error if the
+	// proposal is not valid or nil otherwise.
+	ValidateReservationReanchorProposal(
+		sourceWalletPublicKeyHash [20]byte,
+		proposal *tbtc.ReservationReanchorProposal,
+	) error
+
+	// RequestReservationAcceptance requests a reservation acceptance action
+	// generation for the given reservation. The reservation must be in a
+	// state that allows acceptance; the operator-side guard is enforced at
+	// the chain layer.
+	RequestReservationAcceptance(
+		reservationKey *big.Int,
+		walletPublicKeyHash [20]byte,
+	) error
+
+	// RequestReservationReanchor requests a reservation re-anchor action
+	// generation for the given reservation, targeting the given wallet.
+	RequestReservationReanchor(
+		reservationKey *big.Int,
+		targetWalletPublicKeyHash [20]byte,
+	) error
+
+	// GetReservation gets the on-chain reservation record for the given
+	// reservation key. Returns an error if the reservation was not found.
+	GetReservation(reservationKey *big.Int) (*tbtc.Reservation, error)
+
+	// GetReservationAction gets the on-chain action record for the given
+	// reservation key and request nonce. Returns an error if the action
+	// generation was not found.
+	GetReservationAction(
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) (*tbtc.ReservationAction, error)
+
+	// ReservationParameters gets the current on-chain values of the Bridge
+	// reservation parameters.
+	ReservationParameters() (*tbtc.ReservationParameters, error)
+
+	// ReservationCaps returns the cap parameters that gate reservation
+	// acceptance: the maximum aggregate satoshi amount a single wallet may
+	// custody across all of its reservations, and the maximum satoshi
+	// amount any single reservation may anchor.
+	ReservationCaps() (maxReservationsAmountPerWallet uint64, reservationMaxSingleAmount uint64, err error)
+
+	// WalletReservationsAmount returns the aggregate satoshi amount
+	// currently anchored by the given wallet across all of its
+	// reservations.
+	WalletReservationsAmount(walletPublicKeyHash [20]byte) (uint64, error)
+
+	// WalletReservationsCount returns the number of reservations currently
+	// custodied by the given wallet.
+	WalletReservationsCount(walletPublicKeyHash [20]byte) (uint32, error)
+
+	// WalletReservations returns the reservation keys for all reservations
+	// currently custodied by the given wallet.
+	WalletReservations(walletPublicKeyHash [20]byte) ([]*big.Int, error)
+
+	// ActiveReservationsCount returns the current count of active
+	// reservations across all wallets and the cap on that count.
+	ActiveReservationsCount() (count uint32, maxActive uint32, err error)
+
+	// IsReservedDeposit returns true if the given deposit was revealed
+	// with the reservation vault address and is therefore a reservation
+	// rather than a default deposit.
+	IsReservedDeposit(depositKey *big.Int) (bool, error)
+
+	// PastReservationAcceptanceRequestedEvents fetches past
+	// ReservationAcceptanceRequested events according to the provided
+	// filter or unfiltered if the filter is nil. Returned events are sorted
+	// by the block number in the ascending order.
+	PastReservationAcceptanceRequestedEvents(
+		filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+	) ([]*tbtc.ReservationAcceptanceRequestedEvent, error)
+
+	// PastReservationReanchorRequestedEvents fetches past
+	// ReservationReanchorRequested events according to the provided
+	// filter or unfiltered if the filter is nil. Returned events are
+	// sorted by the block number in the ascending order.
+	PastReservationReanchorRequestedEvents(
+		filter *tbtc.ReservationReanchorRequestedEventFilter,
+	) ([]*tbtc.ReservationReanchorRequestedEvent, error)
 }

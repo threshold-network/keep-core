@@ -10,9 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/internal/pb"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
+
+	"github.com/keep-network/keep-core/pkg/internal/pb"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -20,7 +23,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -66,6 +68,13 @@ const (
 	// upgrade to a binary containing this constant before the activation block
 	// is reached.
 	DepositSweepEveryWindowActivationBlock = uint64(24559289)
+	// ReservationsActivationBlock is the Ethereum block height at which
+	// reservation actions (anchor, re-anchor) become available in the
+	// coordination checklist.
+	//
+	// NOTE: This value is a placeholder that MUST be set to the real mainnet
+	// rollout height before release and must stay ahead of the chain tip.
+	ReservationsActivationBlock = uint64(26500000)
 )
 
 // errCoordinationExecutorBusy is an error returned when the coordination
@@ -629,6 +638,27 @@ func (ce *coordinationExecutor) getActionsChecklist(
 		if windowIndex%frequencyWindows == 0 {
 			actions = append(actions, ActionMovingFunds)
 		}
+	}
+
+	// Reservation actions (acceptance, re-anchor) checklist gate is deliberately
+	// config-independent and height-only so every operator computes an
+	// identical checklist once the network-wide activation block passes.
+	// If the checklist depended on each operator's local config flag,
+	// operators with different local settings would compute different checklists
+	// and fault each other's proposals via FaultLeaderMistake. Checklist
+	// agreement is achieved because the gate ignores local config and uses only
+	// globally-observable chain height. Config.Reservations.Enabled controls
+	// only whether THIS operator originates (leader-proposes) new reservation
+	// actions and whether its reservation watchers run - it does NOT prevent
+	// this operator from evaluating/countersigning another leader's reservation
+	// proposal as a follower once the activation height passes, regardless of
+	// this operator's own local flag setting. Frequency-gated like
+	// DepositSweep/MovingFunds below the activation block: reservation
+	// acceptance/re-anchor windows are not as time-critical as redemption.
+	if coordinationBlock >= ReservationsActivationBlock &&
+		windowIndex%frequencyWindows == 0 {
+		actions = append(actions, ActionReservationAnchor)
+		actions = append(actions, ActionReservationReanchor)
 	}
 
 	// #nosec G404 (insecure random number source (rand))

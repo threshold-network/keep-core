@@ -4,6 +4,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -85,6 +86,69 @@ type Chain interface {
 		mainUTXO bitcoin.UnspentTransactionOutput,
 	) error
 
+	// SubmitReservationProof submits an SPV proof for the given reservation
+	// action generation. proofType selects between Acceptance, Redemption,
+	// Reanchor, and Dissolution proofs; m1 invokes only Acceptance (1) and
+	// Reanchor (3). The call is restricted to the SPV maintainer registered
+	// against the Bridge.
+	SubmitReservationProof(
+		proofType uint8,
+		txInfo *tbtc.BitcoinTxInfo,
+		proof *tbtc.BitcoinTxProof,
+		mainUtxo *tbtc.BitcoinTxUTXO,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error
+
+	// NotifyReservationActionTimeout notifies the Bridge that the timeout
+	// for the given reservation action generation has elapsed without the
+	// SPV proof being submitted. The walletMembersIDs carry the operator
+	// IDs of the wallet that was authorized for the action.
+	NotifyReservationActionTimeout(
+		reservationKey *big.Int,
+		walletMembersIDs []uint32,
+	) error
+
+	// NotifyStaleReservedDeposit notifies the Bridge that the given reserved
+	// deposit's wallet did not anchor it within the reservation-action
+	// timeout and should be released back to the default sweeping path.
+	NotifyStaleReservedDeposit(depositKey *big.Int) error
+
+	// NotifyReservationStranded notifies the Bridge that the wallet
+	// custodying the given reservation has been closed or terminated and
+	// the anchor is therefore stranded.
+	NotifyReservationStranded(reservationKey *big.Int) error
+
+	// GetReservation gets the on-chain reservation record for the given
+	// reservation key. Returns an error if the reservation was not found.
+	GetReservation(reservationKey *big.Int) (*tbtc.Reservation, error)
+
+	// GetReservationAction gets the on-chain action record for the given
+	// reservation key and request nonce. Returns an error if the action
+	// generation was not found.
+	GetReservationAction(
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) (*tbtc.ReservationAction, error)
+
+	// ReservationParameters gets the current on-chain values of the Bridge
+	// reservation parameters.
+	ReservationParameters() (*tbtc.ReservationParameters, error)
+
+	// WalletReservations returns the reservation keys for all reservations
+	// currently custodied by the given wallet.
+	WalletReservations(walletPublicKeyHash [20]byte) ([]*big.Int, error)
+
+	// IsReservedDeposit returns true if the given deposit was revealed
+	// with the reservation vault address and is therefore a reservation
+	// rather than a default deposit.
+	IsReservedDeposit(depositKey *big.Int) (bool, error)
+
+	// ReservedDepositWallet returns the wallet public key hash to which the
+	// given reserved deposit was revealed. Returns the zero hash if the
+	// deposit is not a reserved deposit.
+	ReservedDepositWallet(depositKey *big.Int) ([20]byte, error)
+
 	// PastDepositRevealedEvents fetches past deposit reveal events according
 	// to the provided filter or unfiltered if the filter is nil. Returned
 	// events are sorted by the block number in the ascending order, i.e. the
@@ -109,4 +173,31 @@ type Chain interface {
 	PastMovingFundsCommitmentSubmittedEvents(
 		filter *tbtc.MovingFundsCommitmentSubmittedEventFilter,
 	) ([]*tbtc.MovingFundsCommitmentSubmittedEvent, error)
+
+	// PastReservationAcceptanceRequestedEvents fetches past
+	// ReservationAcceptanceRequested events according to the provided filter
+	// or unfiltered if the filter is nil. Returned events are sorted by the
+	// block number in the ascending order.
+	PastReservationAcceptanceRequestedEvents(
+		filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+	) ([]*tbtc.ReservationAcceptanceRequestedEvent, error)
+
+	// PastReservationReanchorRequestedEvents fetches past
+	// ReservationReanchorRequested events according to the provided filter
+	// or unfiltered if the filter is nil. Returned events are sorted by the
+	// block number in the ascending order.
+	PastReservationReanchorRequestedEvents(
+		filter *tbtc.ReservationReanchorRequestedEventFilter,
+	) ([]*tbtc.ReservationReanchorRequestedEvent, error)
+
+	// PastNewWalletRegisteredEvents fetches past NewWalletRegistered events
+	// according to the provided filter or unfiltered if the filter is nil.
+	// Returned events are sorted by the block number in the ascending order.
+	PastNewWalletRegisteredEvents(
+		filter *tbtc.NewWalletRegisteredEventFilter,
+	) ([]*tbtc.NewWalletRegisteredEvent, error)
+
+	// BuildDepositKey calculates the key used by the Bridge to store a
+	// deposit request, which is a unique identifier for a deposit on-chain.
+	BuildDepositKey(fundingTxHash bitcoin.Hash, fundingOutputIndex uint32) *big.Int
 }
