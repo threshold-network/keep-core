@@ -1,7 +1,6 @@
 package spv
 
 import (
-	"testing"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -10,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
+	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 

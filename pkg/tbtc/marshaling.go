@@ -545,7 +545,6 @@ func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
 	return nil
 }
 
-
 // Marshal converts the ReservationReanchorProposal to a byte array.
 func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
 	if rrp.ReservationKey == nil {
