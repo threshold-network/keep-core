@@ -40,8 +40,9 @@ const (
 // because the anchor can never be produced. The watcher is the backstop that
 // flips the deposit's bookkeeping when the wallet never shows up.
 type ReservationStaleDepositWatcher struct {
-	spvChain Chain
-	notified map[string]struct{}
+	spvChain        Chain
+	notified        map[string]struct{}
+	memoizedTimeout map[string]uint32
 }
 
 // NewReservationStaleDepositWatcher constructs a stale-deposit watcher
@@ -50,8 +51,9 @@ func NewReservationStaleDepositWatcher(
 	spvChain Chain,
 ) *ReservationStaleDepositWatcher {
 	return &ReservationStaleDepositWatcher{
-		spvChain: spvChain,
-		notified: make(map[string]struct{}),
+		spvChain:        spvChain,
+		notified:        make(map[string]struct{}),
+		memoizedTimeout: make(map[string]uint32),
 	}
 }
 
@@ -259,6 +261,10 @@ func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 	depositKey *big.Int,
 	walletPublicKeyHash [20]byte,
 ) (uint32, error) {
+	if timeout, ok := rsdw.memoizedTimeout[depositKey.String()]; ok {
+		return timeout, nil
+	}
+
 	blockCounter, err := rsdw.spvChain.BlockCounter()
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -343,6 +349,7 @@ func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 		)
 	}
 
-	return uint32(depositRequest.RevealedAt.Unix()) +
-		params.ReservationActionTimeout, nil
+	result := uint32(depositRequest.RevealedAt.Unix()) + params.ReservationActionTimeout
+	rsdw.memoizedTimeout[depositKey.String()] = result
+	return result, nil
 }
