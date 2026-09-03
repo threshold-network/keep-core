@@ -750,11 +750,15 @@ func TestConvertReservationActionFromAbiType(t *testing.T) {
 
 // TestConvertReservationParametersFromAbiType verifies the full 10-tuple
 // field mapping performed by convertReservationParametersFromAbiType.
-// Gap-analysis Minor row: field count/order was not yet cross-checked
-// against the live Solidity struct; every field below is set to a distinct
-// non-zero value so a swapped or dropped field is caught, not masked by a
-// shared zero-value default.
+// Field count/order had not previously been cross-checked against the
+// live Solidity struct; every field below is set to a distinct non-zero
+// value so a swapped or dropped field is caught, not masked by a shared
+// zero-value default.
 func TestConvertReservationParametersFromAbiType(t *testing.T) {
+	vaultAddress := common.HexToAddress(
+		"0x111111111111111111111111111111111111111A",
+	)
+
 	abiParameters := struct {
 		ReservationVault                common.Address
 		ReservationMinAmount            uint64
@@ -767,29 +771,29 @@ func TestConvertReservationParametersFromAbiType(t *testing.T) {
 		ReservationActionTimeout        uint32
 		ReservationRenewalWindowSeconds uint32
 	}{
-		ReservationVault:                common.HexToAddress("0x1111111111111111111111111111111111111a"),
-		ReservationMinAmount:            10000,
-		ReservationTxMaxFee:             20000,
-		ReservationTermSeconds:          30000,
-		ReservationDissolutionDelay:     40000,
-		ReservationMaxTotalAmount:       50000,
-		ReservationTotalAmount:          60000,
-		MaxReservationsPerWallet:        70000,
-		ReservationActionTimeout:        80000,
-		ReservationRenewalWindowSeconds: 90000,
+		ReservationVault:                vaultAddress,
+		ReservationMinAmount:            1000,
+		ReservationTxMaxFee:             5000,
+		ReservationTermSeconds:          1209600,
+		ReservationDissolutionDelay:     3600,
+		ReservationMaxTotalAmount:       10000000,
+		ReservationTotalAmount:          2500000,
+		MaxReservationsPerWallet:        5,
+		ReservationActionTimeout:        86400,
+		ReservationRenewalWindowSeconds: 604800,
 	}
 
 	expected := &tbtc.ReservationParameters{
-		ReservationVault:                chain.Address(common.HexToAddress("0x1111111111111111111111111111111111111a").String()),
-		ReservationMinAmount:            10000,
-		ReservationTxMaxFee:             20000,
-		ReservationTermSeconds:          30000,
-		ReservationDissolutionDelay:     40000,
-		ReservationMaxTotalAmount:       50000,
-		ReservationTotalAmount:          60000,
-		MaxReservationsPerWallet:        70000,
-		ReservationActionTimeout:        80000,
-		ReservationRenewalWindowSeconds: 90000,
+		ReservationVault:                chain.Address("0x111111111111111111111111111111111111111A"),
+		ReservationMinAmount:            1000,
+		ReservationTxMaxFee:             5000,
+		ReservationTermSeconds:          1209600,
+		ReservationDissolutionDelay:     3600,
+		ReservationMaxTotalAmount:       10000000,
+		ReservationTotalAmount:          2500000,
+		MaxReservationsPerWallet:        5,
+		ReservationActionTimeout:        86400,
+		ReservationRenewalWindowSeconds: 604800,
 	}
 
 	actual := convertReservationParametersFromAbiType(abiParameters)
@@ -807,14 +811,14 @@ func TestConvertReservationParametersFromAbiType(t *testing.T) {
 // the intentional CumulativeReanchorFee drop performed by
 // convertReservationFromAbiType: the field is written on-chain by every
 // re-anchor hop but is not exposed on tbtc.Reservation because m1 has no
-// fee-ceiling enforcement (own comment, tbtc.go:2672-2676). This test both
+// fee-ceiling enforcement (own comment, tbtc.go:2637-2643). This test both
 // pins that intentional omission and verifies every other field maps
 // correctly - each field below is a distinct value so a future accidental
 // restoration of CumulativeReanchorFee, or a swapped adjacent field, does
 // not go unnoticed.
 func TestConvertReservationFromAbiType_DropsCumulativeReanchorFee(t *testing.T) {
 	abiReservation := tbtcabi.ReservationReservationRequest{
-		Owner:                 common.HexToAddress("0x1111111111111111111111111111111111111b"),
+		Owner:                 common.HexToAddress("0x111111111111111111111111111111111111111B"),
 		MintedAmount:          111,
 		AcceptedAt:            222,
 		WalletPubKeyHash:      [20]byte{0x01, 0x02, 0x03},
@@ -830,7 +834,7 @@ func TestConvertReservationFromAbiType_DropsCumulativeReanchorFee(t *testing.T) 
 	}
 
 	expected := &tbtc.Reservation{
-		Owner:        chain.Address(common.HexToAddress("0x1111111111111111111111111111111111111b").String()),
+		Owner:        chain.Address("0x111111111111111111111111111111111111111B"),
 		MintedAmount: 111,
 		AcceptedAt:   222,
 		WalletPublicKeyHash: [20]byte{

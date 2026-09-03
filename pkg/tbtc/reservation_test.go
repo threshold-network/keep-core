@@ -698,16 +698,22 @@ func TestReservationReanchorAction_Execute(t *testing.T) {
 // shape of AssembleReservationAnchorTransaction: a 1-input-1-output
 // transaction spending the reserved deposit's P2WSH UTXO into a single
 // P2WPKH output controlled by the target wallet, valued at the deposit
-// amount less the transaction fee. Gap-analysis Minor row: the only
-// existing coverage (TestAssembleReservationTransactions_InputValidation)
-// exercises the nil-deposit error path only.
+// amount less the transaction fee. Prior to this test, existing coverage
+// (TestAssembleReservationTransactions_InputValidation,
+// TestAssembleReservationTransactions_FeeBoundaries) exercised only
+// validation-error and fee-boundary-error paths; no test asserted the
+// happy-path output shape.
 func TestAssembleReservationAnchorTransaction(t *testing.T) {
 	bitcoinChain := newLocalBitcoinChain()
 
 	privateKeyValue := big.NewInt(100)
 	testWallet := generateWallet(privateKeyValue)
 	walletPublicKeyHash := bitcoin.PublicKeyHash(testWallet.publicKey)
-	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+
+	targetPrivateKeyValue := big.NewInt(200)
+	targetWallet := generateWallet(targetPrivateKeyValue)
+	targetWalletPublicKeyHash := bitcoin.PublicKeyHash(targetWallet.publicKey)
+	targetWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPublicKeyHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,7 +770,7 @@ func TestAssembleReservationAnchorTransaction(t *testing.T) {
 	builder, err := AssembleReservationAnchorTransaction(
 		bitcoinChain,
 		deposit,
-		walletPublicKeyHash,
+		targetWalletPublicKeyHash,
 		&ReservationAction{TxMaxFee: 1500},
 		1500,
 	)
@@ -782,7 +788,7 @@ func TestAssembleReservationAnchorTransaction(t *testing.T) {
 	expectedOutputs := []*bitcoin.TransactionOutput{
 		{
 			Value:           98500,
-			PublicKeyScript: walletScript,
+			PublicKeyScript: targetWalletScript,
 		},
 	}
 
@@ -801,9 +807,12 @@ func TestAssembleReservationAnchorTransaction(t *testing.T) {
 // shape of AssembleReservationReanchorTransaction: a 1-input-1-output
 // transaction spending the reservation's anchor UTXO into a single P2WPKH
 // output controlled by the target wallet, valued at the anchor amount less
-// the transaction fee. Gap-analysis Minor row: the only existing coverage
-// (TestAssembleReservationTransactions_InputValidation) exercises the
-// nil-anchor-UTXO error path only.
+// the transaction fee. Prior to this test, existing coverage
+// (TestAssembleReservationTransactions_InputValidation,
+// TestAssembleReservationTransactions_FeeBoundaries) exercised only
+// validation-error and fee-boundary-error paths; no test asserted the
+// happy-path output shape. Note that pkg/tbtcpg does not yet exercise the
+// reanchor assembly path via this function.
 func TestAssembleReservationReanchorTransaction(t *testing.T) {
 	bitcoinChain := newLocalBitcoinChain()
 
