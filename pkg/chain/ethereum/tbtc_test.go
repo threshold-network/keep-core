@@ -556,8 +556,8 @@ func TestConvertReservationFromAbiType(t *testing.T) {
 		RetryCredit:           true,
 		DissolutionEligibleAt: 1700200000,
 		// CumulativeReanchorFee is intentionally dropped on the Go
-		// boundary (see the function doc comment); set it to a nonzero
-		// value to prove it never leaks into tbtc.Reservation.
+		// boundary (see the Field omissions note on
+		// convertReservationFromAbiType).
 		CumulativeReanchorFee: 12345,
 	}
 
@@ -600,6 +600,66 @@ func TestConvertReservationFromAbiType(t *testing.T) {
 		}
 		if err == nil {
 			t.Fatal("expected error, got nil")
+		}
+	})
+
+	// t.Run below documents the intentional CumulativeReanchorFee drop
+	// performed by convertReservationFromAbiType: the field is written
+	// on-chain by every re-anchor hop but is not exposed on
+	// tbtc.Reservation (see the Field omissions note on
+	// convertReservationFromAbiType). It also pins that every other
+	// field maps correctly - each field below is a distinct value so a
+	// future accidental restoration of CumulativeReanchorFee, or a
+	// swapped adjacent field, does not go unnoticed.
+	t.Run("drops cumulative reanchor fee and maps every other field", func(t *testing.T) {
+		abiReservation := tbtcabi.ReservationReservationRequest{
+			Owner:                 common.HexToAddress("0x111111111111111111111111111111111111111B"),
+			MintedAmount:          111,
+			AcceptedAt:            222,
+			WalletPubKeyHash:      [20]byte{0x01, 0x02, 0x03},
+			AnchorAmount:          333,
+			ExpiresAt:             444,
+			AnchorTxHash:          [32]byte{0x04, 0x05, 0x06},
+			AnchorTxOutputIndex:   555,
+			State:                 1, // ReservationStateActive
+			RequestNonce:          666,
+			RetryCredit:           true,
+			DissolutionEligibleAt: 777,
+			CumulativeReanchorFee: 888, // must not appear anywhere in the output
+		}
+
+		expected := &tbtc.Reservation{
+			Owner:        chain.Address("0x111111111111111111111111111111111111111B"),
+			MintedAmount: 111,
+			AcceptedAt:   222,
+			WalletPublicKeyHash: [20]byte{
+				0x01, 0x02, 0x03,
+			},
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x04, 0x05, 0x06},
+					OutputIndex:     555,
+				},
+				Value: 333,
+			},
+			ExpiresAt:             444,
+			State:                 tbtc.ReservationStateActive,
+			RequestNonce:          666,
+			RetryCredit:           true,
+			DissolutionEligibleAt: 777,
+		}
+
+		actual, err := convertReservationFromAbiType(abiReservation)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !reflect.DeepEqual(expected, actual) {
+			t.Errorf(
+				"unexpected reservation\nexpected: [%+v]\nactual:   [%+v]",
+				expected,
+				actual,
+			)
 		}
 	})
 }
@@ -748,9 +808,15 @@ func TestConvertReservationActionFromAbiType(t *testing.T) {
 	})
 }
 
+// TestConvertReservationParametersFromAbiType verifies the full 10-tuple
+// field mapping performed by convertReservationParametersFromAbiType.
+// Field count/order had not previously been cross-checked against the
+// live Solidity struct; every field below is set to a distinct non-zero
+// value so a swapped or dropped field is caught, not masked by a shared
+// zero-value default.
 func TestConvertReservationParametersFromAbiType(t *testing.T) {
 	vaultAddress := common.HexToAddress(
-		"0x9876543210FeDcBa9876543210fEdCbA98765432",
+		"0x111111111111111111111111111111111111111A",
 	)
 
 	abiParameters := struct {
@@ -777,10 +843,8 @@ func TestConvertReservationParametersFromAbiType(t *testing.T) {
 		ReservationRenewalWindowSeconds: 604800,
 	}
 
-	parameters := convertReservationParametersFromAbiType(abiParameters)
-
 	expected := &tbtc.ReservationParameters{
-		ReservationVault:                chain.Address(vaultAddress.String()),
+		ReservationVault:                chain.Address("0x111111111111111111111111111111111111111A"),
 		ReservationMinAmount:            1000,
 		ReservationTxMaxFee:             5000,
 		ReservationTermSeconds:          1209600,
@@ -792,11 +856,13 @@ func TestConvertReservationParametersFromAbiType(t *testing.T) {
 		ReservationRenewalWindowSeconds: 604800,
 	}
 
-	if !reflect.DeepEqual(expected, parameters) {
+	actual := convertReservationParametersFromAbiType(abiParameters)
+
+	if !reflect.DeepEqual(expected, actual) {
 		t.Errorf(
-			"unexpected parameters\nexpected: [%+v]\nactual:   [%+v]\n",
+			"unexpected reservation parameters\nexpected: [%+v]\nactual:   [%+v]",
 			expected,
-			parameters,
+			actual,
 		)
 	}
 }

@@ -2525,6 +2525,10 @@ func (tc *TbtcChain) ReservationParameters() (
 	return convertReservationParametersFromAbiType(abiParameters), nil
 }
 
+// TODO(test-coverage): ValidateReservationAnchorProposal has no direct unit
+// test coverage. It requires go-ethereum simulated-backend infrastructure
+// that does not exist anywhere in pkg/chain/ethereum today; blocked on that
+// infra landing. See PR #4280 and its linked gap-analysis doc.
 // ValidateReservationAnchorProposal asks the WalletProposalValidator
 // whether the given anchor proposal is valid for the given wallet and
 // reserved deposit. The validator is a separate contract reached at its

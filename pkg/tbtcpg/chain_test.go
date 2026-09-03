@@ -169,7 +169,7 @@ func buildPastDepositRevealedEventsKey(
 
 	if filter.EndBlock != nil {
 		endBlock := make([]byte, 8)
-		binary.BigEndian.PutUint64(startBlock, *filter.EndBlock)
+		binary.BigEndian.PutUint64(endBlock, *filter.EndBlock)
 		buffer.Write(endBlock)
 	}
 
@@ -277,7 +277,7 @@ func buildPastNewWalletRegisteredEventsKey(
 
 	if filter.EndBlock != nil {
 		endBlock := make([]byte, 8)
-		binary.BigEndian.PutUint64(startBlock, *filter.EndBlock)
+		binary.BigEndian.PutUint64(endBlock, *filter.EndBlock)
 		buffer.Write(endBlock)
 	}
 
@@ -346,7 +346,7 @@ func buildPastRedemptionRequestedEventsKey(
 
 	if filter.EndBlock != nil {
 		endBlock := make([]byte, 8)
-		binary.BigEndian.PutUint64(startBlock, *filter.EndBlock)
+		binary.BigEndian.PutUint64(endBlock, *filter.EndBlock)
 		buffer.Write(endBlock)
 	}
 
@@ -381,7 +381,7 @@ func buildPastMovingFundsCommitmentSubmittedEventsKey(
 
 	if filter.EndBlock != nil {
 		endBlock := make([]byte, 8)
-		binary.BigEndian.PutUint64(startBlock, *filter.EndBlock)
+		binary.BigEndian.PutUint64(endBlock, *filter.EndBlock)
 		buffer.Write(endBlock)
 	}
 
@@ -407,7 +407,7 @@ func buildPastMovingFundsCompletedEventsKey(
 
 	if filter.EndBlock != nil {
 		endBlock := make([]byte, 8)
-		binary.BigEndian.PutUint64(startBlock, *filter.EndBlock)
+		binary.BigEndian.PutUint64(endBlock, *filter.EndBlock)
 		buffer.Write(endBlock)
 	}
 

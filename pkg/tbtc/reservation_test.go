@@ -14,7 +14,9 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
 )
 
@@ -174,7 +176,7 @@ func TestReservationProposals_UnmarshalRejectsInvalidPayloads(t *testing.T) {
 			}),
 			expectedError: "cannot unmarshal proposal payload: [invalid deposit funding tx hash length: [0]]",
 		},
-		"re-anchor empty payload": {
+		"re-anchor null payload": {
 			actionType:    ActionReservationReanchor,
 			payload:       nil,
 			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
@@ -1025,4 +1027,208 @@ func TestReservationReanchorAction_Execute(t *testing.T) {
 			)
 		}
 	})
+}
+
+// TestAssembleReservationAnchorTransaction verifies the happy-path output
+// shape of AssembleReservationAnchorTransaction: a 1-input-1-output
+// transaction spending the reserved deposit's P2WSH UTXO into a single
+// P2WPKH output controlled by the target wallet, valued at the deposit
+// amount less the transaction fee. Prior to this test, existing coverage
+// (TestAssembleReservationTransactions_InputValidation,
+// TestAssembleReservationTransactions_FeeBoundaries) exercised only
+// validation-error and fee-boundary-error paths; no test asserted the
+// happy-path output shape.
+func TestAssembleReservationAnchorTransaction(t *testing.T) {
+	bitcoinChain := newLocalBitcoinChain()
+
+	privateKeyValue := big.NewInt(100)
+	testWallet := generateWallet(privateKeyValue)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(testWallet.publicKey)
+
+	targetPrivateKeyValue := big.NewInt(200)
+	targetWallet := generateWallet(targetPrivateKeyValue)
+	targetWalletPublicKeyHash := bitcoin.PublicKeyHash(targetWallet.publicKey)
+	targetWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deposit := &Deposit{
+		Depositor:           chain.Address("0x1111111111111111111111111111111111111111"),
+		BlindingFactor:      [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+		WalletPublicKeyHash: walletPublicKeyHash,
+		RefundPublicKeyHash: [20]byte{0x02},
+		RefundLocktime:      [4]byte{0x03, 0x04, 0x05, 0x06},
+	}
+
+	depositScript, err := deposit.Script()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	depositScriptHash := sha256.Sum256(depositScript)
+	depositLockingScript, err := bitcoin.PayToWitnessScriptHash(depositScriptHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x09},
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: depositLockingScript,
+			},
+		},
+	}
+	if err := bitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	deposit.Utxo = &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: fundingTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	}
+
+	builder, err := AssembleReservationAnchorTransaction(
+		bitcoinChain,
+		deposit,
+		targetWalletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 1500},
+		1500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transaction := signReservationTransaction(
+		t,
+		builder,
+		testWallet.publicKey,
+		privateKeyValue,
+	)
+
+	expectedOutputs := []*bitcoin.TransactionOutput{
+		{
+			Value:           98500,
+			PublicKeyScript: targetWalletScript,
+		},
+	}
+
+	if !reflect.DeepEqual(expectedOutputs, transaction.Outputs) {
+		t.Errorf(
+			"unexpected outputs\nexpected: [%+v]\nactual:   [%+v]",
+			expectedOutputs,
+			transaction.Outputs,
+		)
+	}
+
+	testutils.AssertIntsEqual(t, "inputs count", 1, len(transaction.Inputs))
+}
+
+// TestAssembleReservationReanchorTransaction verifies the happy-path output
+// shape of AssembleReservationReanchorTransaction: a 1-input-1-output
+// transaction spending the reservation's anchor UTXO into a single P2WPKH
+// output controlled by the target wallet, valued at the anchor amount less
+// the transaction fee. Prior to this test, existing coverage
+// (TestAssembleReservationTransactions_InputValidation,
+// TestAssembleReservationTransactions_FeeBoundaries) exercised only
+// validation-error and fee-boundary-error paths; no test asserted the
+// happy-path output shape. Note that pkg/tbtcpg does not yet exercise the
+// reanchor assembly path via this function.
+func TestAssembleReservationReanchorTransaction(t *testing.T) {
+	bitcoinChain := newLocalBitcoinChain()
+
+	privateKeyValue := big.NewInt(100)
+	testWallet := generateWallet(privateKeyValue)
+	sourceWalletPublicKeyHash := bitcoin.PublicKeyHash(testWallet.publicKey)
+	sourceWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	targetPrivateKeyValue := big.NewInt(200)
+	targetWallet := generateWallet(targetPrivateKeyValue)
+	targetWalletPublicKeyHash := bitcoin.PublicKeyHash(targetWallet.publicKey)
+	targetWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x0a},
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: sourceWalletScript,
+			},
+		},
+	}
+	if err := bitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	anchorUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: fundingTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	}
+
+	builder, err := AssembleReservationReanchorTransaction(
+		bitcoinChain,
+		anchorUtxo,
+		targetWalletPublicKeyHash,
+		&ReservationAction{TxMaxFee: 1500},
+		1500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transaction := signReservationTransaction(
+		t,
+		builder,
+		testWallet.publicKey,
+		privateKeyValue,
+	)
+
+	expectedOutputs := []*bitcoin.TransactionOutput{
+		{
+			Value:           98500,
+			PublicKeyScript: targetWalletScript,
+		},
+	}
+
+	if !reflect.DeepEqual(expectedOutputs, transaction.Outputs) {
+		t.Errorf(
+			"unexpected outputs\nexpected: [%+v]\nactual:   [%+v]",
+			expectedOutputs,
+			transaction.Outputs,
+		)
+	}
+
+	testutils.AssertIntsEqual(t, "inputs count", 1, len(transaction.Inputs))
 }
