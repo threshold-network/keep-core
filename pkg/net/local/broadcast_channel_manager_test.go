@@ -96,7 +96,9 @@ func TestReleaseBroadcastChannel(t *testing.T) {
 	// sent, not a sign the ticker "kept firing" - so absorb it in a short
 	// settle window before asserting the real invariant this test cares
 	// about: no further deliveries once release has taken effect.
-	drain(ch1Deliveries, RetransmissionTick)
+	if got := drain(ch1Deliveries, RetransmissionTick); got > 1 {
+		t.Errorf("expected at most one straggler tick after release, got %d", got)
+	}
 
 	if got := drain(ch1Deliveries, RetransmissionTick*3); got != 0 {
 		t.Errorf("expected no deliveries after release, got %d", got)
