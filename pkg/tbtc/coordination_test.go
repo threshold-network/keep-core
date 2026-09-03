@@ -531,10 +531,13 @@ func TestCoordinationExecutor_GetLeader(t *testing.T) {
 
 func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 	// All test cases below exercise the pre-activation code path because
-	// their coordination blocks are below
-	// DepositSweepEveryWindowActivationBlock. In this mode, all three
-	// actions (DepositSweep, MovedFundsSweep, MovingFunds) are gated to
-	// every 4th coordination window.
+	// their coordination blocks are below both
+	// DepositSweepEveryWindowActivationBlock and
+	// ReservationsActivationBlock. In this mode, DepositSweep,
+	// MovedFundsSweep, and MovingFunds are all gated to every 4th
+	// coordination window, and reservation actions never appear at all
+	// (see TestCoordinationExecutor_GetActionsChecklist_Reservations for
+	// the activation-block gate itself).
 	tests := map[string]struct {
 		coordinationBlock uint64
 		expectedChecklist []WalletActionType
@@ -563,8 +566,8 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 			coordinationBlock: 2700,
 			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 4): all actions present. Heartbeat randomly
-		// selected for this specific seed.
+		// 4th-window (window 4): sweep/moving-funds actions present.
+		// Heartbeat randomly selected for this specific seed.
 		"block 3600": {
 			coordinationBlock: 3600,
 			expectedChecklist: []WalletActionType{
@@ -587,7 +590,8 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 			coordinationBlock: 6300,
 			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 8): all actions present except heartbeat.
+		// 4th-window (window 8): sweep/moving-funds actions present,
+		// no heartbeat for this seed.
 		"block 7200": {
 			coordinationBlock: 7200,
 			expectedChecklist: []WalletActionType{
@@ -609,7 +613,8 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 			coordinationBlock: 9900,
 			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 12): all actions present except heartbeat.
+		// 4th-window (window 12): sweep/moving-funds actions present,
+		// no heartbeat for this seed.
 		"block 10800": {
 			coordinationBlock: 10800,
 			expectedChecklist: []WalletActionType{
@@ -625,15 +630,14 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 		"block 12600": {
 			coordinationBlock: 12600,
-			expectedChecklist: []WalletActionType{
-				ActionRedemption,
-			},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		"block 13500": {
 			coordinationBlock: 13500,
 			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 16): all actions present except heartbeat.
+		// 4th-window (window 16): sweep/moving-funds actions present,
+		// no heartbeat for this seed.
 		"block 14400": {
 			coordinationBlock: 14400,
 			expectedChecklist: []WalletActionType{
@@ -697,7 +701,7 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 		is4thWindow       bool
 	}{
 		// Non-4th window (window 27289): DepositSweep and
-		// MovedFundsSweep present, MovingFunds absent.
+		// MovedFundsSweep present, MovingFunds absent (frequency-gated).
 		"post-activation non-4th window 27289": {
 			coordinationBlock: 24560100,
 			expectedChecklist: []WalletActionType{
@@ -726,7 +730,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			is4thWindow: false,
 		},
 		// 4th window (window 27292, divisible by 4): MovingFunds
-		// appears. Heartbeat is NOT triggered for this seed.
+		// appears (frequency-gated). Heartbeat is NOT triggered for
+		// this seed.
 		"post-activation 4th window 27292 no heartbeat": {
 			coordinationBlock: 24562800,
 			expectedChecklist: []WalletActionType{
@@ -760,7 +765,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			is4thWindow: false,
 		},
 		// 4th window (window 27320, divisible by 4): MovingFunds
-		// appears. Heartbeat is also triggered for this seed.
+		// appears (frequency-gated). Heartbeat is also triggered for
+		// this seed.
 		"post-activation 4th window 27320 with heartbeat": {
 			coordinationBlock: 24588000,
 			expectedChecklist: []WalletActionType{
@@ -773,8 +779,9 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			is4thWindow: true,
 		},
 		// 4th window (window 27296, divisible by 4): MovingFunds
-		// appears. Heartbeat is NOT triggered, verifying that
-		// 4th-window behavior works independently of heartbeat.
+		// appears (frequency-gated). Heartbeat is NOT triggered,
+		// verifying that 4th-window behavior works independently of
+		// heartbeat.
 		"post-activation 4th window 27296 no heartbeat": {
 			coordinationBlock: 24566400,
 			expectedChecklist: []WalletActionType{
@@ -841,31 +848,31 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 
 // TestCoordinationExecutor_GetActionsChecklist_Reservations verifies the
 // reservation actions checklist gate depends solely on the activation
-// block and the frequency window, never on a local per-operator
+// block, never on the frequency window or a local per-operator
 // configuration flag - see coordinationExecutor.getActionsChecklist's
 // comment for why: a follower gating checklist validation on its own
 // local flag would wrongly fault an honest leader whenever the two
 // operators' local configs diverge.
 func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 	tests := map[string]struct {
-		coordinationBlock uint64
-		windowIndex       uint64
-		expectedActions   []WalletActionType
+		coordinationBlock          uint64
+		windowIndex                uint64
+		expectedReservationActions []WalletActionType
 	}{
 		"below activation": {
-			coordinationBlock: ReservationsActivationBlock - 1,
-			windowIndex:       4,
-			expectedActions:   []WalletActionType{ActionRedemption},
+			coordinationBlock:          ReservationsActivationBlock - 1,
+			windowIndex:                4,
+			expectedReservationActions: nil,
 		},
 		"at activation, non-4th window": {
-			coordinationBlock: ReservationsActivationBlock,
-			windowIndex:       5,
-			expectedActions:   []WalletActionType{ActionRedemption},
+			coordinationBlock:          ReservationsActivationBlock,
+			windowIndex:                5,
+			expectedReservationActions: []WalletActionType{ActionReservationAnchor, ActionReservationReanchor},
 		},
 		"at activation, 4th window": {
-			coordinationBlock: ReservationsActivationBlock,
-			windowIndex:       4,
-			expectedActions:   []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
+			coordinationBlock:          ReservationsActivationBlock,
+			windowIndex:                4,
+			expectedReservationActions: []WalletActionType{ActionReservationAnchor, ActionReservationReanchor},
 		},
 	}
 
@@ -891,14 +898,7 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 				}
 			}
 
-			var expectedReservationActions []WalletActionType
-			for _, action := range test.expectedActions {
-				if action == ActionReservationAnchor || action == ActionReservationReanchor {
-					expectedReservationActions = append(expectedReservationActions, action)
-				}
-			}
-
-			if diff := deep.Equal(actualReservationActions, expectedReservationActions); diff != nil {
+			if diff := deep.Equal(actualReservationActions, test.expectedReservationActions); diff != nil {
 				t.Errorf("reservation actions mismatch: %v", diff)
 			}
 		})
@@ -967,8 +967,8 @@ func assertPostActivationSafety(
 
 // assertChecklistOrdering verifies that actions appear in canonical priority
 // order: Redemption < DepositSweep < MovedFundsSweep < MovingFunds <
-// Heartbeat. Each consecutive pair of actions must have strictly increasing
-// priority values.
+// ReservationAnchor < ReservationReanchor < Heartbeat. Each consecutive pair
+// of actions must have strictly increasing priority values.
 func assertChecklistOrdering(
 	t *testing.T,
 	checklist []WalletActionType,

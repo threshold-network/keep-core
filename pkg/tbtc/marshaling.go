@@ -493,6 +493,7 @@ func validateMemberIndex(protoIndex uint32) error {
 	return nil
 }
 
+// Marshal converts the reservationAnchorProposal to a byte array.
 func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
 	return proto.Marshal(
 		&pb.ReservationAnchorProposal{
@@ -503,6 +504,7 @@ func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
 		})
 }
 
+// Unmarshal converts a byte array back to the reservationAnchorProposal.
 func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
 	pbMsg := pb.ReservationAnchorProposal{}
 	if err := proto.Unmarshal(data, &pbMsg); err != nil {
@@ -536,6 +538,7 @@ func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
 	return nil
 }
 
+// Marshal converts the reservationReanchorProposal to a byte array.
 func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
 	return proto.Marshal(
 		&pb.ReservationReanchorProposal{
@@ -546,6 +549,7 @@ func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
 		})
 }
 
+// Unmarshal converts a byte array back to the reservationReanchorProposal.
 func (rrp *ReservationReanchorProposal) Unmarshal(data []byte) error {
 	pbMsg := pb.ReservationReanchorProposal{}
 	if err := proto.Unmarshal(data, &pbMsg); err != nil {

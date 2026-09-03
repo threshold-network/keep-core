@@ -137,7 +137,7 @@ func TestReservationProposals_MarshalingRoundtrip(t *testing.T) {
 	roundtrip(reanchorProposal, &ReservationReanchorProposal{})
 }
 
-func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
+func TestReservationProposals_UnmarshalRejectsInvalidPayloads(t *testing.T) {
 	tests := map[string]struct {
 		actionType    WalletActionType
 		payload       []byte
@@ -159,6 +159,14 @@ func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
 				AnchorTxFee: big.NewInt(1500).Bytes(),
 			}),
 			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
+		},
+		"anchor invalid deposit funding tx hash length": {
+			actionType: ActionReservationAnchor,
+			payload: marshalPb(t, &pb.ReservationAnchorProposal{
+				RequestNonce: 1,
+				AnchorTxFee:  big.NewInt(1500).Bytes(),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [invalid deposit funding tx hash length: [0]]",
 		},
 		"re-anchor null payload": {
 			actionType:    ActionReservationReanchor,
@@ -230,6 +238,25 @@ func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
 				ReanchorTxFee:             big.NewInt(0),
 			}),
 			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
+		},
+		"re-anchor invalid target wallet hash length": {
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+				ReservationKey: big.NewInt(54321).Bytes(),
+				RequestNonce:   3,
+				ReanchorTxFee:  big.NewInt(1700).Bytes(),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [invalid target wallet public key hash length: [0]]",
+		},
+		"re-anchor zero-value target wallet hash": {
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321).Bytes(),
+				RequestNonce:              3,
+				TargetWalletPublicKeyHash: make([]byte, 20),
+				ReanchorTxFee:             big.NewInt(1700).Bytes(),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [target wallet public key hash is required]",
 		},
 	}
 
