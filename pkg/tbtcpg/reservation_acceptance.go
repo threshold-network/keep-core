@@ -21,6 +21,12 @@ import (
 // sweep look-back window: 30 days at 12 seconds per block.
 const ReservationAcceptanceLookBackBlocks = uint64(216000)
 
+// zeroAddressHex is the Ethereum zero address as returned by the chain
+// adapter's address converter (chain.Address(common.Address{}.String())
+// never produces an empty string, even for the zero address) -- used to
+// detect an unconfigured reservation vault instead of comparing against "".
+const zeroAddressHex = "0x0000000000000000000000000000000000000000"
+
 // ReservationAcceptanceTask is a task that may produce a reservation
 // acceptance (anchor) proposal. It scans the chain for reserved deposits
 // revealed to the operator's wallet, validates the wallet's eligibility
@@ -30,6 +36,15 @@ const ReservationAcceptanceLookBackBlocks = uint64(216000)
 type ReservationAcceptanceTask struct {
 	chain    Chain
 	btcChain bitcoin.Chain
+
+	// metricsRecorder is optional and used for recording performance
+	// metrics: active_reservations_count, max_active_reservations, and
+	// wallet_reservations_count, sourced from the chain calls this task
+	// already makes in findReservationAcceptanceCandidate. These are
+	// leading indicators of the reservation capacity saturation cliff.
+	metricsRecorder interface {
+		SetGauge(name string, value float64)
+	}
 }
 
 // NewReservationAcceptanceTask constructs a ReservationAcceptanceTask.
@@ -41,6 +56,14 @@ func NewReservationAcceptanceTask(
 		chain:    chain,
 		btcChain: btcChain,
 	}
+}
+
+// setMetricsRecorder sets the metrics recorder for the reservation
+// acceptance task.
+func (rat *ReservationAcceptanceTask) setMetricsRecorder(recorder interface {
+	SetGauge(name string, value float64)
+}) {
+	rat.metricsRecorder = recorder
 }
 
 // Run inspects the chain for an acceptance candidate reserved deposit and,
@@ -86,6 +109,9 @@ func (rat *ReservationAcceptanceTask) Run(request *tbtc.CoordinationProposalRequ
 		)
 	}
 
+	if proposal == nil {
+		return nil, shouldExecute, nil
+	}
 	return proposal, shouldExecute, nil
 }
 
@@ -124,7 +150,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		)
 	}
 	reservationVault := reservationParameters.ReservationVault
-	if reservationVault == "" {
+	if reservationVault == "" || reservationVault == chain.Address(zeroAddressHex) {
 		taskLogger.Info("reservation vault not configured")
 		return nil, nil
 	}
@@ -175,6 +201,12 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			err,
 		)
 	}
+	if rat.metricsRecorder != nil {
+		rat.metricsRecorder.SetGauge(
+			"wallet_reservations_count",
+			float64(walletReservationsCount),
+		)
+	}
 
 	walletReservationsAmount, err := rat.chain.WalletReservationsAmount(
 		walletPublicKeyHash,
@@ -194,6 +226,16 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			err,
 		)
 	}
+	if rat.metricsRecorder != nil {
+		rat.metricsRecorder.SetGauge(
+			"active_reservations_count",
+			float64(activeReservationsCount),
+		)
+		rat.metricsRecorder.SetGauge(
+			"max_active_reservations",
+			float64(maxActiveReservations),
+		)
+	}
 
 	depositMinAgeSeconds, err := rat.chain.GetDepositMinAge()
 	if err != nil {
@@ -203,6 +245,16 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		)
 	}
 	depositMinAge := time.Duration(depositMinAgeSeconds) * time.Second
+
+	if uint64(reservationParameters.ReservationActionTimeout) <= uint64(depositMinAgeSeconds) {
+		taskLogger.Errorf(
+			"misconfiguration: ReservationActionTimeout [%d] <= DEPOSIT_MIN_AGE [%d]; "+
+				"every reserved deposit will be marked stale before it can become "+
+				"acceptance-eligible",
+			reservationParameters.ReservationActionTimeout,
+			depositMinAgeSeconds,
+		)
+	}
 
 	filterStartBlock := uint64(0)
 	if currentBlock > ReservationAcceptanceLookBackBlocks {
@@ -334,30 +386,11 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			continue
 		}
 
-		// Third fix (a): check for existing acceptance requested events
-		// and fail closed on error.
-		acceptanceEvents, err := rat.chain.PastReservationAcceptanceRequestedEvents(
-			&tbtc.ReservationAcceptanceRequestedEventFilter{
-				ReservationKey: []*big.Int{depositKey},
-			},
-		)
-		if err != nil {
-			taskLogger.Errorf(
-				"failed to get past reservation acceptance requested events for [%v]: [%v]",
-				depositKey,
-				err,
-			)
-			continue
-		}
-		if len(acceptanceEvents) > 0 {
-			taskLogger.Infof(
-				"reservation [%v] already has acceptance requested event(s), skipping",
-				depositKey,
-			)
-			continue
-		}
-
-		// Second & Third fix: check reservation state and derive RequestNonce.
+		// Determine RequestNonce and re-request eligibility from the
+		// reservation's own on-chain state, which authoritatively reflects
+		// whether a prior generation is still pending -- not from acceptance-
+		// requested event history, which would still show a first generation
+		// that has since timed out and become eligible for retry again.
 		var requestNonce uint64 = 1
 		reservation, err := rat.chain.GetReservation(depositKey)
 		if err != nil {
@@ -422,6 +455,46 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	return nil, nil
 }
 
+// hasPendingAction reports whether the on-chain reservation action
+// generation at the reservation's current request nonce (if any) is in a
+// pending state. This guards against duplicate acceptance requests within
+// findReservationAcceptanceCandidate: the Bridge rejects a new request
+// while the previous generation is still in flight. The caller supplies
+// the reservation record it already fetched rather than this function
+// re-reading it.
+func hasPendingAction(
+	reservationKey *big.Int,
+	reservation *tbtc.Reservation,
+	chain Chain,
+	taskLogger log.StandardLogger,
+) bool {
+	if reservation.RequestNonce == 0 {
+		return false
+	}
+
+	action, err := chain.GetReservationAction(
+		reservationKey,
+		reservation.RequestNonce,
+	)
+	if err != nil {
+		// Fail safe: a lookup error is indistinguishable from "still
+		// pending" here, and treating it as not-pending would let the
+		// caller send a duplicate acceptance request that the Bridge
+		// rejects while a real pending generation is in flight. Skip this
+		// reservation for the current coordination window instead; the
+		// next window retries.
+		taskLogger.Errorf(
+			"cannot get reservation action for [0x%x] nonce [%d]: [%v]",
+			reservationKey,
+			reservation.RequestNonce,
+			err,
+		)
+		return true
+	}
+
+	return action.State == tbtc.ReservationActionStatePending
+}
+
 func checkReservationAcceptanceEligibility(
 	taskLogger log.StandardLogger,
 	depositRequest *tbtc.DepositChainRequest,
@@ -443,8 +516,14 @@ func checkReservationAcceptanceEligibility(
 		return false
 	}
 
-	if maxActiveReservations > 0 &&
-		activeReservationsCount >= maxActiveReservations {
+	if maxActiveReservations == 0 {
+		taskLogger.Errorf(
+			"active reservations cap (maxActiveReservations) not configured " +
+				"(is 0); failing closed rather than treating as unlimited",
+		)
+		return false
+	}
+	if activeReservationsCount >= maxActiveReservations {
 		taskLogger.Infof(
 			"active reservations count [%d] already at max [%d]",
 			activeReservationsCount,
@@ -476,19 +555,24 @@ func checkReservationAcceptanceEligibility(
 		return false
 	}
 
-	if reservationParameters.ReservationMaxTotalAmount > 0 {
-		newTotal := reservationParameters.ReservationTotalAmount +
-			depositRequest.Amount
-		if newTotal > reservationParameters.ReservationMaxTotalAmount {
-			taskLogger.Infof(
-				"global reservation total would exceed cap "+
-					"[current=%d, deposit=%d, cap=%d]",
-				reservationParameters.ReservationTotalAmount,
-				depositRequest.Amount,
-				reservationParameters.ReservationMaxTotalAmount,
-			)
-			return false
-		}
+	if reservationParameters.ReservationMaxTotalAmount == 0 {
+		taskLogger.Errorf(
+			"global reservation total amount cap (ReservationMaxTotalAmount) " +
+				"not configured (is 0); failing closed rather than treating as unlimited",
+		)
+		return false
+	}
+	newTotal := reservationParameters.ReservationTotalAmount +
+		depositRequest.Amount
+	if newTotal > reservationParameters.ReservationMaxTotalAmount {
+		taskLogger.Infof(
+			"global reservation total would exceed cap "+
+				"[current=%d, deposit=%d, cap=%d]",
+			reservationParameters.ReservationTotalAmount,
+			depositRequest.Amount,
+			reservationParameters.ReservationMaxTotalAmount,
+		)
+		return false
 	}
 
 	return true
@@ -580,19 +664,32 @@ func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 		)
 	}
 
-	// Fifth fix: Note that RequestReservationAcceptance is called as a
-	// side effect of proposal generation itself (before coordination has
-	// agreed to anything), which is a known, accepted deviation from the
-	// read-only-during-generation pattern (also present in MovingFundsTask's
-	// SubmitMovingFundsCommitment). The guards against re-requesting
-	// acceptance for existing or pending reservations are the primary
-	// mitigation for spurious repeat writes.
+	// RequestReservationAcceptance is called as a side effect of proposal
+	// generation itself (before coordination has agreed to anything), which
+	// is a known, accepted deviation from the read-only-during-generation
+	// pattern (also present in MovingFundsTask's SubmitMovingFundsCommitment).
+	// The guards against re-requesting acceptance for existing or pending
+	// reservations (checked in findReservationAcceptanceCandidate) are the
+	// primary mitigation for spurious repeat writes.
 	if err := rat.chain.RequestReservationAcceptance(
 		reservationKey,
 		walletPublicKeyHash,
 	); err != nil {
 		return nil, false, fmt.Errorf("cannot request reservation acceptance: [%v]", err)
 	}
+
+	updatedReservation, err := rat.chain.GetReservation(reservationKey)
+	if err != nil {
+		return nil, false, fmt.Errorf("cannot re-read reservation: [%v]", err)
+	}
+	if updatedReservation.RequestNonce != candidate.RequestNonce {
+		return nil, false, fmt.Errorf(
+			"reservation request nonce mismatch after request: predicted [%d], on-chain [%d]",
+			candidate.RequestNonce,
+			updatedReservation.RequestNonce,
+		)
+	}
+	proposal.RequestNonce = updatedReservation.RequestNonce
 
 	return proposal, true, nil
 }

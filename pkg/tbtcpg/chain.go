@@ -201,6 +201,17 @@ type Chain interface {
 		targetWalletPublicKeyHash [20]byte,
 	) error
 
+	// NotifyMovingFundsBelowDust notifies the Bridge that the given wallet's
+	// main UTXO has fallen below the moving funds dust threshold, ending
+	// the moving funds process and starting wallet closing immediately.
+	// mainUtxo may be nil when the wallet has no main UTXO at all; the
+	// Bridge only uses it to verify the on-chain balance it already holds
+	// for the wallet, so it is ignored in that case.
+	NotifyMovingFundsBelowDust(
+		walletPublicKeyHash [20]byte,
+		mainUtxo *bitcoin.UnspentTransactionOutput,
+	) error
+
 	// GetReservation gets the on-chain reservation record for the given
 	// reservation key. Returns an error if the reservation was not found.
 	GetReservation(reservationKey *big.Int) (*tbtc.Reservation, error)
