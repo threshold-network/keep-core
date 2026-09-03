@@ -143,7 +143,12 @@ func TestReservationProposals_UnmarshalRejectsInvalidPayloads(t *testing.T) {
 		payload       []byte
 		expectedError string
 	}{
-		"anchor empty object": {
+		// Proto3 scalar fields have no wire presence, so an entirely
+		// empty payload and one with every field explicitly zeroed are
+		// indistinguishable - a single "empty payload" case per type
+		// covers what the old JSON test split into "empty object" and
+		// "null payload" cases.
+		"anchor empty payload": {
 			actionType:    ActionReservationAnchor,
 			payload:       marshalPb(t, &pb.ReservationAnchorProposal{}),
 			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
@@ -168,7 +173,7 @@ func TestReservationProposals_UnmarshalRejectsInvalidPayloads(t *testing.T) {
 			}),
 			expectedError: "cannot unmarshal proposal payload: [invalid deposit funding tx hash length: [0]]",
 		},
-		"re-anchor null payload": {
+		"re-anchor empty payload": {
 			actionType:    ActionReservationReanchor,
 			payload:       nil,
 			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
