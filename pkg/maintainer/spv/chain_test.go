@@ -1,6 +1,7 @@
 package spv
 
 import (
+	"testing"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -1248,4 +1249,23 @@ func (lc *localChain) BuildDepositKey(
 ) *big.Int {
 	key := buildDepositRequestKey(fundingTxHash, fundingOutputIndex)
 	return new(big.Int).SetBytes(key[:])
+}
+func TestIsReservedDeposit_PointerIdentity(t *testing.T) {
+	spvChain := newLocalChain()
+
+	// Set reserved with one pointer
+	key1 := big.NewInt(123)
+	wallet := [20]byte{1, 2, 3}
+	spvChain.setReservedDeposit(key1, wallet, true)
+
+	// Check reserved with another pointer with same value
+	key2 := big.NewInt(123)
+	isReserved, err := spvChain.IsReservedDeposit(key2)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isReserved {
+		t.Fatal("expected deposit to be reserved")
+	}
 }
