@@ -137,13 +137,18 @@ func TestReservationProposals_MarshalingRoundtrip(t *testing.T) {
 	roundtrip(reanchorProposal, &ReservationReanchorProposal{})
 }
 
-func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
+func TestReservationProposals_UnmarshalRejectsInvalidPayloads(t *testing.T) {
 	tests := map[string]struct {
 		actionType    WalletActionType
 		payload       []byte
 		expectedError string
 	}{
-		"anchor empty object": {
+		// Proto3 scalar fields have no wire presence, so an entirely
+		// empty payload and one with every field explicitly zeroed are
+		// indistinguishable - a single "empty payload" case per type
+		// covers what the old JSON test split into "empty object" and
+		// "null payload" cases.
+		"anchor empty payload": {
 			actionType:    ActionReservationAnchor,
 			payload:       marshalPb(t, &pb.ReservationAnchorProposal{}),
 			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
@@ -160,7 +165,15 @@ func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
 			}),
 			expectedError: "cannot unmarshal proposal payload: [request nonce is required]",
 		},
-		"re-anchor null payload": {
+		"anchor invalid deposit funding tx hash length": {
+			actionType: ActionReservationAnchor,
+			payload: marshalPb(t, &pb.ReservationAnchorProposal{
+				RequestNonce: 1,
+				AnchorTxFee:  big.NewInt(1500).Bytes(),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [invalid deposit funding tx hash length: [0]]",
+		},
+		"re-anchor empty payload": {
 			actionType:    ActionReservationReanchor,
 			payload:       nil,
 			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
@@ -230,6 +243,25 @@ func TestReservationProposals_UnmarshalRejectsInvalidFields(t *testing.T) {
 				ReanchorTxFee:             big.NewInt(0),
 			}),
 			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
+		},
+		"re-anchor invalid target wallet hash length": {
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+				ReservationKey: big.NewInt(54321).Bytes(),
+				RequestNonce:   3,
+				ReanchorTxFee:  big.NewInt(1700).Bytes(),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [invalid target wallet public key hash length: [0]]",
+		},
+		"re-anchor zero-value target wallet hash": {
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321).Bytes(),
+				RequestNonce:              3,
+				TargetWalletPublicKeyHash: make([]byte, 20),
+				ReanchorTxFee:             big.NewInt(1700).Bytes(),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [target wallet public key hash is required]",
 		},
 	}
 
