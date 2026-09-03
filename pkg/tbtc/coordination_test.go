@@ -173,36 +173,36 @@ func TestWatchCoordinationWindows(t *testing.T) {
 	expectWindow(1800)
 }
 
-// reservationCoordinationOperatorFixture bundles the per-operator state
+// coordinationOperatorFixture bundles the per-operator state
 // needed to run coordinationExecutor.coordinate as an independent
-// in-process simulated node, sharing a local chain and broadcast channel
-// with its peers the same way pkg/tbtc/node wires a real operator.
-type reservationCoordinationOperatorFixture struct {
+// in-process simulated node, its own local chain fake plus a broadcast
+// channel shared with its peers the same way pkg/tbtc/node wires a real operator.
+type coordinationOperatorFixture struct {
 	chain              Chain
 	address            chain.Address
 	channel            net.BroadcastChannel
 	waitForBlockHeight func(ctx context.Context, blockHeight uint64) error
 }
 
-// newReservationCoordinationOperator builds one simulated operator shared by
+// newCoordinationOperator builds one simulated operator shared by
 // every coordinationExecutor.coordinate integration test in this file: a
 // deterministic keypair (so leader election is reproducible across runs), a
 // local chain fake wired to that keypair, and a broadcast channel joined to a
 // local network shared by every operator in the same test so they exchange
 // real coordinationMessage wire traffic. channelName need not be unique
 // across test invocations: this registers a t.Cleanup that calls
-// netlocal.ResetForTesting(), which cancels every outstanding channel's
-// retransmission ticker and clears the registry, so a later invocation
-// reusing the same name starts from an empty registry regardless of
-// whether an earlier invocation's leader was still retransmitting.
-// channelName is passed as t.Name() purely so a leaked broadcast (a
-// ResetForTesting regression) is easy to attribute to its source test.
-func newReservationCoordinationOperator(
+// netlocal.ReleaseBroadcastChannel(channelName), which cancels that
+// specific channel's retransmission ticker and clears the registry, so a
+// later invocation reusing the same name starts from an empty registry regardless
+// of whether an earlier invocation's leader was still retransmitting.
+// channelName is passed as t.Name() purely so a leaked broadcast is easy to
+// attribute to its source test.
+func newCoordinationOperator(
 	t *testing.T,
 	privateKey int64,
 	coordinationBlock uint64,
 	channelName string,
-) *reservationCoordinationOperatorFixture {
+) *coordinationOperatorFixture {
 	t.Helper()
 
 	privateKeyBigInt := big.NewInt(privateKey)
@@ -240,7 +240,7 @@ func newReservationCoordinationOperator(
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { netlocal.ResetForTesting() })
+	t.Cleanup(func() { netlocal.ReleaseBroadcastChannel(channelName) })
 
 	broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
 		return &coordinationMessage{}
@@ -252,7 +252,20 @@ func newReservationCoordinationOperator(
 			return err
 		}
 
-		wait, err := blockCounter.BlockHeightWaiter(blockHeight)
+		// The local chain fake's block counter always starts at 0
+		// regardless of coordinationBlock (see local_v1.BlockCounter),
+		// but every caller here only ever asks to wait for a height
+		// derived as coordinationBlock + a fixed small offset (e.g.
+		// window.activePhaseEndBlock()). Waiting on the raw absolute
+		// height would take the fake's block-rate multiplied by
+		// coordinationBlock itself - days of wall-clock time for the
+		// mainnet-scale coordinationBlock values these tests use -
+		// leaking the leader's goroutine and this waiter registration
+		// for the life of the test binary, since coordinate() only
+		// cancels this context on failure, not on success. Translating
+		// to the counter's own relative frame makes the wait actually
+		// reachable in a few seconds instead.
+		wait, err := blockCounter.BlockHeightWaiter(blockHeight - coordinationBlock)
 		if err != nil {
 			return err
 		}
@@ -265,7 +278,7 @@ func newReservationCoordinationOperator(
 		return nil
 	}
 
-	return &reservationCoordinationOperatorFixture{
+	return &coordinationOperatorFixture{
 		chain:              localChain,
 		address:            operatorAddress,
 		channel:            broadcastChannel,
@@ -273,39 +286,39 @@ func newReservationCoordinationOperator(
 	}
 }
 
-// reservationCoordinationReport captures one simulated operator's outcome
+// coordinationReport captures one simulated operator's outcome
 // from a single coordination round.
-type reservationCoordinationReport struct {
+type coordinationReport struct {
 	operatorIndex int
 	result        *coordinationResult
 	err           error
 }
 
-// runReservationCoordinationRound runs coordinationExecutor.coordinate
+// runCoordinationRound runs coordinationExecutor.coordinate
 // concurrently for every given operator against the same window - one
 // goroutine per operator, sharing one proposalGenerator, membershipValidator,
 // and protocolLatch across all three (the leader is the only goroutine that
-// calls Generate, and the latch serializes the active-phase start) the same
+// calls Generate; the latch is a shared, mutex-guarded execution counter,
+// safe to share precisely because it does not serialize or order the
+// goroutines -- the trailing protocolLatch.IsExecuting() == false assertion
+// in each caller verifies all three balanced their Lock/Unlock) the same
 // way a real node would have each operator drive its own executor in a
 // separate process. Fails the test if not every operator reports within the
-// timeout, rather than hanging: coordinate()'s only cancellation path is
-// bounded by the window's active-phase-end block, which some callers
-// (deliberately) never reach within a test's wall-clock lifetime.
-func runReservationCoordinationRound(
+func runCoordinationRound(
 	t *testing.T,
-	operators []*reservationCoordinationOperatorFixture,
+	operators []*coordinationOperatorFixture,
 	coordinatedWallet wallet,
 	proposalGenerator CoordinationProposalGenerator,
 	membershipValidator *group.MembershipValidator,
 	protocolLatch *generator.ProtocolLatch,
 	window *coordinationWindow,
-) []*reservationCoordinationReport {
+) []*coordinationReport {
 	t.Helper()
 
-	reportChan := make(chan *reservationCoordinationReport, len(operators))
+	reportChan := make(chan *coordinationReport, len(operators))
 
 	for i, currentOperator := range operators {
-		go func(operatorIndex int, op *reservationCoordinationOperatorFixture) {
+		go func(operatorIndex int, op *coordinationOperatorFixture) {
 			executor := newCoordinationExecutor(
 				op.chain,
 				coordinatedWallet,
@@ -320,7 +333,7 @@ func runReservationCoordinationRound(
 
 			result, err := executor.coordinate(window)
 
-			reportChan <- &reservationCoordinationReport{
+			reportChan <- &coordinationReport{
 				operatorIndex: operatorIndex,
 				result:        result,
 				err:           err,
@@ -328,12 +341,13 @@ func runReservationCoordinationRound(
 		}(i+1, currentOperator)
 	}
 
-	reports := make([]*reservationCoordinationReport, 0, len(operators))
+	deadline := time.After(30 * time.Second)
+	reports := make([]*coordinationReport, 0, len(operators))
 	for len(reports) < len(operators) {
 		select {
 		case report := <-reportChan:
 			reports = append(reports, report)
-		case <-time.After(30 * time.Second):
+		case <-deadline:
 			t.Fatalf(
 				"timed out waiting for coordination reports; got %d of %d",
 				len(reports),
@@ -345,18 +359,18 @@ func runReservationCoordinationRound(
 	return reports
 }
 
-// newReservationCoordinationWallet returns the 3-operator wallet fixture
+// newCoordinationWallet returns the 3-operator wallet fixture
 // shared by every coordinationExecutor.coordinate integration test in this
 // file: same wallet public key hash and operator-to-member-index layout, so
 // leader election (operator2 wins) is identical across all of them - the
 // seed depends only on the wallet public key hash and the safe-block hash
-// newReservationCoordinationOperator injects at coordinationBlock-32 (both
+// newCoordinationOperator injects at coordinationBlock-32 (both
 // identical across every caller here), not on the raw coordinationBlock
 // value itself, so this holds regardless of which block a given caller
 // passes.
-func newReservationCoordinationWallet(
+func newCoordinationWallet(
 	t *testing.T,
-	operators []*reservationCoordinationOperatorFixture,
+	operators []*coordinationOperatorFixture,
 ) (wallet, [20]byte) {
 	t.Helper()
 
@@ -413,14 +427,14 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 
 	channelName := t.Name()
 
-	operator1 := newReservationCoordinationOperator(t, 1, coordinationBlock, channelName)
-	operator2 := newReservationCoordinationOperator(t, 2, coordinationBlock, channelName)
-	operator3 := newReservationCoordinationOperator(t, 3, coordinationBlock, channelName)
-	operators := []*reservationCoordinationOperatorFixture{
+	operator1 := newCoordinationOperator(t, 1, coordinationBlock, channelName)
+	operator2 := newCoordinationOperator(t, 2, coordinationBlock, channelName)
+	operator3 := newCoordinationOperator(t, 3, coordinationBlock, channelName)
+	operators := []*coordinationOperatorFixture{
 		operator1, operator2, operator3,
 	}
 
-	coordinatedWallet, publicKeyHash := newReservationCoordinationWallet(t, operators)
+	coordinatedWallet, publicKeyHash := newCoordinationWallet(t, operators)
 
 	proposalGenerator := newMockCoordinationProposalGenerator(
 		func(
@@ -454,7 +468,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 
 	window := newCoordinationWindow(coordinationBlock)
 
-	reports := runReservationCoordinationRound(
+	reports := runCoordinationRound(
 		t,
 		operators,
 		coordinatedWallet,
@@ -565,14 +579,14 @@ func TestCoordinationExecutor_Coordinate_ReservationProposals(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			channelName := t.Name()
 
-			operator1 := newReservationCoordinationOperator(t, 1, coordinationBlock, channelName)
-			operator2 := newReservationCoordinationOperator(t, 2, coordinationBlock, channelName)
-			operator3 := newReservationCoordinationOperator(t, 3, coordinationBlock, channelName)
-			operators := []*reservationCoordinationOperatorFixture{
+			operator1 := newCoordinationOperator(t, 1, coordinationBlock, channelName)
+			operator2 := newCoordinationOperator(t, 2, coordinationBlock, channelName)
+			operator3 := newCoordinationOperator(t, 3, coordinationBlock, channelName)
+			operators := []*coordinationOperatorFixture{
 				operator1, operator2, operator3,
 			}
 
-			coordinatedWallet, publicKeyHash := newReservationCoordinationWallet(t, operators)
+			coordinatedWallet, publicKeyHash := newCoordinationWallet(t, operators)
 
 			proposalGenerator := newMockCoordinationProposalGenerator(
 				func(
@@ -600,7 +614,7 @@ func TestCoordinationExecutor_Coordinate_ReservationProposals(t *testing.T) {
 
 			window := newCoordinationWindow(coordinationBlock)
 
-			reports := runReservationCoordinationRound(
+			reports := runCoordinationRound(
 				t,
 				operators,
 				coordinatedWallet,
@@ -1278,7 +1292,7 @@ func TestCoordinationExecutor_ExecuteLeaderRoutine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { netlocal.ResetForTesting() })
+	t.Cleanup(func() { netlocal.ReleaseBroadcastChannel("test") })
 
 	broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
 		return &coordinationMessage{}
@@ -1488,7 +1502,7 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { netlocal.ResetForTesting() })
+		t.Cleanup(func() { netlocal.ReleaseBroadcastChannel("test") })
 
 		broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
 			return &coordinationMessage{}
@@ -1774,7 +1788,7 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine_WithIdleLeader(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { netlocal.ResetForTesting() })
+	t.Cleanup(func() { netlocal.ReleaseBroadcastChannel("test-idle") })
 
 	executor := &coordinationExecutor{
 		// Set only relevant fields.
