@@ -11,6 +11,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -44,6 +45,7 @@ const (
 
 // node represents the current state of an ECDSA node.
 type node struct {
+	ethereumNetwork ethereum.Network
 	groupParameters *GroupParameters
 
 	chain          Chain
@@ -121,6 +123,7 @@ type node struct {
 }
 
 func newNode(
+	ethereumNetwork ethereum.Network,
 	groupParameters *GroupParameters,
 	chain Chain,
 	btcChain bitcoin.Chain,
@@ -145,6 +148,7 @@ func newNode(
 	node := &node{
 		groupParameters:          groupParameters,
 		chain:                    chain,
+		ethereumNetwork:          ethereumNetwork,
 		btcChain:                 btcChain,
 		netProvider:              netProvider,
 		walletRegistry:           walletRegistry,
@@ -228,6 +232,18 @@ func (n *node) setPerformanceMetrics(metrics interface {
 		})
 	}); ok {
 		pg.SetRedemptionMetricsRecorder(metrics)
+	}
+
+	// Wire reservation metrics to proposal generator if it supports it,
+	// mirroring the redemption wiring above. A no-op on non-reservation
+	// deployments since SetReservationMetricsRecorder finds no reservation
+	// tasks in that case.
+	if pg, ok := n.proposalGenerator.(interface {
+		SetReservationMetricsRecorder(recorder interface {
+			SetGauge(name string, value float64)
+		})
+	}); ok {
+		pg.SetReservationMetricsRecorder(metrics)
 	}
 
 	// Update metrics recorder for all cached coordination executors

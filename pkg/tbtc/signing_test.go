@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -261,6 +262,7 @@ func setupSigningExecutor(t *testing.T) *signingExecutor {
 	keyStorePersistence := createMockKeyStorePersistence(t, signers...)
 
 	node, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),

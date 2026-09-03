@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-test/deep"
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"golang.org/x/exp/slices"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -333,6 +334,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 	generateExecutor := func(operator *operatorFixture) *coordinationExecutor {
 		return newCoordinationExecutor(
 			operator.chain,
+			ethereum.Unknown,
 			coordinatedWallet,
 			coordinatedWallet.membersByOperator(operator.address),
 			operator.address,
@@ -650,7 +652,7 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 	// loop since it does not vary per subtest.
 	var _ uint64 = DepositSweepEveryWindowActivationBlock
 
-	executor := &coordinationExecutor{}
+	executor := &coordinationExecutor{ethereumNetwork: ethereum.Mainnet}
 
 	for testName, test := range tests {
 		t.Run(
@@ -791,7 +793,7 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 	// be typed as uint64.
 	var _ uint64 = DepositSweepEveryWindowActivationBlock
 
-	executor := &coordinationExecutor{}
+	executor := &coordinationExecutor{ethereumNetwork: ethereum.Mainnet}
 
 	for testName, test := range tests {
 		t.Run(
@@ -853,17 +855,17 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 		expectedActions   []WalletActionType
 	}{
 		"below activation": {
-			coordinationBlock: ReservationsActivationBlock - 1,
+			coordinationBlock: reservationsActivationBlocks[ethereum.Mainnet] - 1,
 			windowIndex:       4,
 			expectedActions:   []WalletActionType{ActionRedemption},
 		},
 		"at activation, non-4th window": {
-			coordinationBlock: ReservationsActivationBlock,
+			coordinationBlock: reservationsActivationBlocks[ethereum.Mainnet],
 			windowIndex:       5,
 			expectedActions:   []WalletActionType{ActionRedemption},
 		},
 		"at activation, 4th window": {
-			coordinationBlock: ReservationsActivationBlock,
+			coordinationBlock: reservationsActivationBlocks[ethereum.Mainnet],
 			windowIndex:       4,
 			expectedActions:   []WalletActionType{ActionRedemption, ActionReservationAnchor, ActionReservationReanchor},
 		},
@@ -871,7 +873,7 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
-			executor := &coordinationExecutor{}
+			executor := &coordinationExecutor{ethereumNetwork: ethereum.Mainnet}
 
 			// We don't care about the seed for this test, as it only affects
 			// the ActionHeartbeat which is not the focus here.
@@ -907,15 +909,16 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 
 func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
 	// Reference Ethereum mainnet block height as of 2026-09-02 (~25,880,000).
-	// ReservationsActivationBlock must be set to a future block height ahead
-	// of chain tip before release. If this test fails, both the reference
-	// height and ReservationsActivationBlock must be updated.
+	// reservationsActivationBlocks[ethereum.Mainnet] must be set to a future
+	// block height ahead of chain tip before release. If this test fails,
+	// both the reference height and that value must be updated.
 	const referenceMainnetBlockHeight = uint64(25880000)
 
-	if ReservationsActivationBlock <= referenceMainnetBlockHeight {
+	mainnetActivationBlock := reservationsActivationBlocks[ethereum.Mainnet]
+	if mainnetActivationBlock <= referenceMainnetBlockHeight {
 		t.Errorf(
-			"ReservationsActivationBlock [%d] must be ahead of the reference mainnet block height [%d]",
-			ReservationsActivationBlock,
+			"mainnet reservationsActivationBlock [%d] must be ahead of the reference mainnet block height [%d]",
+			mainnetActivationBlock,
 			referenceMainnetBlockHeight,
 		)
 	}
