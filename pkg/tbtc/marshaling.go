@@ -493,7 +493,12 @@ func validateMemberIndex(protoIndex uint32) error {
 	return nil
 }
 
+// Marshal converts the ReservationAnchorProposal to a byte array.
 func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
+	if rap.AnchorTxFee == nil {
+		return nil, fmt.Errorf("anchor transaction fee is required")
+	}
+
 	return proto.Marshal(
 		&pb.ReservationAnchorProposal{
 			DepositFundingTxHash:      rap.DepositFundingTxHash[:],
@@ -503,6 +508,7 @@ func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
 		})
 }
 
+// Unmarshal converts a byte array back to the ReservationAnchorProposal.
 func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
 	pbMsg := pb.ReservationAnchorProposal{}
 	if err := proto.Unmarshal(data, &pbMsg); err != nil {
@@ -527,6 +533,9 @@ func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
 			len(pbMsg.DepositFundingTxHash),
 		)
 	}
+	if [32]byte(pbMsg.DepositFundingTxHash) == [32]byte{} {
+		return fmt.Errorf("deposit funding tx hash is required")
+	}
 
 	copy(rap.DepositFundingTxHash[:], pbMsg.DepositFundingTxHash)
 	rap.DepositFundingOutputIndex = pbMsg.DepositFundingOutputIndex
@@ -536,7 +545,16 @@ func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
 	return nil
 }
 
+
+// Marshal converts the ReservationReanchorProposal to a byte array.
 func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
+	if rrp.ReservationKey == nil {
+		return nil, fmt.Errorf("reservation key is required")
+	}
+	if rrp.ReanchorTxFee == nil {
+		return nil, fmt.Errorf("re-anchor transaction fee is required")
+	}
+
 	return proto.Marshal(
 		&pb.ReservationReanchorProposal{
 			ReservationKey:            rrp.ReservationKey.Bytes(),
@@ -546,6 +564,7 @@ func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
 		})
 }
 
+// Unmarshal converts a byte array back to the ReservationReanchorProposal.
 func (rrp *ReservationReanchorProposal) Unmarshal(data []byte) error {
 	pbMsg := pb.ReservationReanchorProposal{}
 	if err := proto.Unmarshal(data, &pbMsg); err != nil {
