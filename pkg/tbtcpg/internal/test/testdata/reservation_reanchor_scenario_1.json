@@ -1,5 +1,5 @@
 {
-  "Title": "below-dust trigger: Live wallet without main UTXO re-anchors",
+  "Title": "M-27: Live wallet without main UTXO is not eligible for re-anchor (privileged-caller gate removed)",
   "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
   "SourceWalletState": "Live",
   "SourceWalletMainUtxoHash": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -25,10 +25,5 @@
       "PendingActionState": "Unknown"
     }
   ],
-  "ExpectedProposal": {
-    "ReservationKey": "0xbbbb02",
-    "RequestNonce": 6,
-    "TargetWalletPublicKeyHash": "0x92a6ec889a8fa34f731e639edede4c75e184307c",
-    "ReanchorTxFee": 550
-  }
+  "ExpectedProposal": null
 }

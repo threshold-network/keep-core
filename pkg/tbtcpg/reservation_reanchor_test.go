@@ -100,12 +100,23 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 					t.Fatal(err)
 				}
 
+				anchorWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(
+					r.WalletPublicKeyHash,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				anchorOutputs := make([]*bitcoin.TransactionOutput, r.AnchorTxOutputIndex+1)
+				for i := range anchorOutputs {
+					anchorOutputs[i] = &bitcoin.TransactionOutput{Value: 1}
+				}
+				anchorOutputs[r.AnchorTxOutputIndex] = &bitcoin.TransactionOutput{
+					Value:           r.AnchorValue,
+					PublicKeyScript: anchorWalletScript,
+				}
 				btcChain.SetTransaction(anchorTxHash, &bitcoin.Transaction{
 					Version: 1,
-					Outputs: []*bitcoin.TransactionOutput{{
-						Value:           r.AnchorValue,
-						PublicKeyScript: []byte{},
-					}},
+					Outputs: anchorOutputs,
 				})
 
 				reservationState := r.State
@@ -323,12 +334,16 @@ func TestReservationReanchorTask_TargetWalletExclusion_SharedTask(t *testing.T) 
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		bitcoin.ReversedByteOrder,
 	)
+	walletAScript, err := bitcoin.PayToWitnessPublicKeyHash(walletA)
+	if err != nil {
+		t.Fatal(err)
+	}
 	btcChain.SetTransaction(anchorTxHashA, &bitcoin.Transaction{
 		Version: 1,
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           100000,
-			PublicKeyScript: []byte{},
-		}},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 1},
+			{Value: 100000, PublicKeyScript: walletAScript},
+		},
 	})
 	tbtcChain.SetReservation(resAKey, &tbtc.Reservation{
 		WalletPublicKeyHash: walletA,
@@ -350,12 +365,16 @@ func TestReservationReanchorTask_TargetWalletExclusion_SharedTask(t *testing.T) 
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		bitcoin.ReversedByteOrder,
 	)
+	walletBScript, err := bitcoin.PayToWitnessPublicKeyHash(walletB)
+	if err != nil {
+		t.Fatal(err)
+	}
 	btcChain.SetTransaction(anchorTxHashB, &bitcoin.Transaction{
 		Version: 1,
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           200000,
-			PublicKeyScript: []byte{},
-		}},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 1},
+			{Value: 200000, PublicKeyScript: walletBScript},
+		},
 	})
 	tbtcChain.SetReservation(resBKey, &tbtc.Reservation{
 		WalletPublicKeyHash: walletB,
@@ -487,12 +506,16 @@ func TestReservationReanchorTask_Run_SkipNonActiveReservations(t *testing.T) {
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		bitcoin.ReversedByteOrder,
 	)
+	walletAScript, err := bitcoin.PayToWitnessPublicKeyHash(walletA)
+	if err != nil {
+		t.Fatal(err)
+	}
 	btcChain.SetTransaction(anchorTxHash1, &bitcoin.Transaction{
 		Version: 1,
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           100000,
-			PublicKeyScript: []byte{},
-		}},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 1},
+			{Value: 100000, PublicKeyScript: walletAScript},
+		},
 	})
 	tbtcChain.SetReservation(res1Key, &tbtc.Reservation{
 		WalletPublicKeyHash: walletA,
@@ -514,10 +537,10 @@ func TestReservationReanchorTask_Run_SkipNonActiveReservations(t *testing.T) {
 	)
 	btcChain.SetTransaction(anchorTxHash2, &bitcoin.Transaction{
 		Version: 1,
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           200000,
-			PublicKeyScript: []byte{},
-		}},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 1},
+			{Value: 200000, PublicKeyScript: walletAScript},
+		},
 	})
 	tbtcChain.SetReservation(res2Key, &tbtc.Reservation{
 		WalletPublicKeyHash: walletA,
@@ -555,4 +578,101 @@ func TestReservationReanchorTask_Run_SkipNonActiveReservations(t *testing.T) {
 	if proposal.TargetWalletPublicKeyHash != walletB {
 		t.Errorf("expected target walletB [%x], got [%x]", walletB, proposal.TargetWalletPublicKeyHash)
 	}
+}
+
+// TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust is a
+// regression test for the NotifyMovingFundsBelowDust wiring: once a
+// MovingFunds wallet has no reservations left and its main UTXO is below
+// the moving funds dust threshold, Run must call NotifyMovingFundsBelowDust
+// exactly once with the wallet's resolved main UTXO. A wallet above the
+// dust threshold must not trigger any notification.
+func TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust(t *testing.T) {
+	walletPublicKeyHash := hexToByte20("ffb3f7538bfa98a511495dd96027cfbd57baf2fa")
+
+	newFixture := func(mainUtxoValue int64) (*tbtcpg.LocalChain, *tbtcpg.LocalBitcoinChain) {
+		tbtcChain := tbtcpg.NewLocalChain()
+		btcChain := tbtcpg.NewLocalBitcoinChain()
+
+		walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mainUtxoTx := &bitcoin.Transaction{
+			Version: 1,
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           mainUtxoValue,
+				PublicKeyScript: walletScript,
+			}},
+		}
+		mainUtxoTxHash := mainUtxoTx.Hash()
+		btcChain.SetTransaction(mainUtxoTxHash, mainUtxoTx)
+		btcChain.SetTxHashesForPublicKeyHash(
+			walletPublicKeyHash,
+			[]bitcoin.Hash{mainUtxoTxHash},
+		)
+
+		mainUtxo := &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: mainUtxoTxHash,
+				OutputIndex:     0,
+			},
+			Value: mainUtxoValue,
+		}
+
+		tbtcChain.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{
+			State:        tbtc.StateMovingFunds,
+			MainUtxoHash: tbtcChain.ComputeMainUtxoHash(mainUtxo),
+		})
+		tbtcChain.SetMovingFundsParameters(
+			1000000, 1000000, 0, 0, nil, 0, 0, 0, 0, nil, 0,
+		)
+		tbtcChain.SetWalletReservations(walletPublicKeyHash, nil)
+
+		return tbtcChain, btcChain
+	}
+
+	t.Run("below dust threshold: notifies exactly once", func(t *testing.T) {
+		tbtcChain, btcChain := newFixture(500000)
+		task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+
+		prop, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: walletPublicKeyHash,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok || prop != nil {
+			t.Fatalf("expected no proposal, got ok=%v, prop=%v", ok, prop)
+		}
+
+		notifications := tbtcChain.GetBelowDustNotifications()
+		if len(notifications) != 1 {
+			t.Fatalf("expected exactly 1 below-dust notification, got %d", len(notifications))
+		}
+		if notifications[0].WalletPublicKeyHash != walletPublicKeyHash {
+			t.Errorf(
+				"unexpected notified wallet\nexpected: %x\nactual:   %x",
+				walletPublicKeyHash,
+				notifications[0].WalletPublicKeyHash,
+			)
+		}
+		if notifications[0].MainUtxo == nil || notifications[0].MainUtxo.Value != 500000 {
+			t.Errorf("unexpected notified main UTXO: %+v", notifications[0].MainUtxo)
+		}
+	})
+
+	t.Run("above dust threshold: no notification", func(t *testing.T) {
+		tbtcChain, btcChain := newFixture(2000000)
+		task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+
+		if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: walletPublicKeyHash,
+		}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if notifications := tbtcChain.GetBelowDustNotifications(); len(notifications) != 0 {
+			t.Fatalf("expected no below-dust notifications, got %d", len(notifications))
+		}
+	})
 }

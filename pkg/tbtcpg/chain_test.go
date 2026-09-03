@@ -36,6 +36,13 @@ type reservationReanchorRequestSubmission struct {
 	TargetWalletPublicKeyHash [20]byte
 }
 
+// belowDustNotification captures a submitted NotifyMovingFundsBelowDust
+// call that tests can inspect for assertion.
+type belowDustNotification struct {
+	WalletPublicKeyHash [20]byte
+	MainUtxo            *bitcoin.UnspentTransactionOutput
+}
+
 type LocalChain struct {
 	mutex sync.Mutex
 
@@ -72,6 +79,7 @@ type LocalChain struct {
 	reservationParametersSet              bool
 	reservationProposalValidations        map[[32]byte]bool
 	reservationReanchorRequestSubmissions []*reservationReanchorRequestSubmission
+	belowDustNotifications                []*belowDustNotification
 	reservationWalletKeys                 map[[20]byte][]*big.Int
 	reservedDeposits                      map[string]bool
 	liveWalletsCountValue                 uint32
@@ -102,6 +110,7 @@ func NewLocalChain() *LocalChain {
 		reservationActions:                    make(map[string]*tbtc.ReservationAction),
 		reservationProposalValidations:        make(map[[32]byte]bool),
 		reservationReanchorRequestSubmissions: make([]*reservationReanchorRequestSubmission, 0),
+		belowDustNotifications:                make([]*belowDustNotification, 0),
 		reservationWalletKeys:                 make(map[[20]byte][]*big.Int),
 		reservedDeposits:                      make(map[string]bool),
 	}
@@ -1466,7 +1475,19 @@ func (lc *LocalChain) RequestReservationAcceptance(
 	defer lc.mutex.Unlock()
 
 	_ = walletPublicKeyHash
-	_ = reservationKey
+
+	// Mirror the on-chain Bridge's own nonce bump: GetReservation after
+	// this call must observe the incremented RequestNonce for the
+	// nonce-reconciliation check in proposeReservationAcceptance.
+	key := reservationKey.Text(16)
+	existing, ok := lc.reservations[key]
+	if ok && existing != nil {
+		updated := *existing
+		updated.RequestNonce++
+		lc.reservations[key] = &updated
+	} else {
+		lc.reservations[key] = &tbtc.Reservation{RequestNonce: 1}
+	}
 	return nil
 }
 
@@ -1486,7 +1507,49 @@ func (lc *LocalChain) RequestReservationReanchor(
 			TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
 		},
 	)
+
+	// Mirror the on-chain Bridge's own nonce bump: GetReservation after
+	// this call must observe the incremented RequestNonce for the
+	// nonce-reconciliation check in ProposeReservationReanchor.
+	key := reservationKey.Text(16)
+	if existing, ok := lc.reservations[key]; ok && existing != nil {
+		updated := *existing
+		updated.RequestNonce++
+		lc.reservations[key] = &updated
+	}
 	return nil
+}
+
+// NotifyMovingFundsBelowDust records a submitted below-dust notification
+// for assertion in tests.
+func (lc *LocalChain) NotifyMovingFundsBelowDust(
+	walletPublicKeyHash [20]byte,
+	mainUtxo *bitcoin.UnspentTransactionOutput,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.belowDustNotifications = append(
+		lc.belowDustNotifications,
+		&belowDustNotification{
+			WalletPublicKeyHash: walletPublicKeyHash,
+			MainUtxo:            mainUtxo,
+		},
+	)
+	return nil
+}
+
+// GetBelowDustNotifications returns the recorded NotifyMovingFundsBelowDust
+// submissions for assertion.
+func (lc *LocalChain) GetBelowDustNotifications() []*belowDustNotification {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	copy := make([]*belowDustNotification, len(lc.belowDustNotifications))
+	for i, n := range lc.belowDustNotifications {
+		copy[i] = n
+	}
+	return copy
 }
 
 // GetReservation returns the configured reservation record for the given
@@ -1671,6 +1734,9 @@ func (lc *LocalChain) IsReservedDeposit(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
+	if depositKey == nil {
+		return false, nil
+	}
 	return lc.reservedDeposits[depositKey.Text(16)], nil
 }
 

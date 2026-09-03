@@ -26,6 +26,13 @@ const ReservationReanchorLookBackBlocks = uint64(216000)
 type ReservationReanchorTask struct {
 	chain    Chain
 	btcChain bitcoin.Chain
+
+	// metricsRecorder is optional and used for recording performance
+	// metrics: live_wallets_count, sourced from the GetLiveWalletsCount
+	// chain call this task already makes.
+	metricsRecorder interface {
+		SetGauge(name string, value float64)
+	}
 }
 
 // NewReservationReanchorTask returns a new ReservationReanchorTask bound to
@@ -40,20 +47,34 @@ func NewReservationReanchorTask(
 	}
 }
 
+// setMetricsRecorder sets the metrics recorder for the reservation
+// re-anchor task.
+func (rrt *ReservationReanchorTask) setMetricsRecorder(recorder interface {
+	SetGauge(name string, value float64)
+}) {
+	rrt.metricsRecorder = recorder
+}
+
 // ActionType returns the type of wallet action this task produces.
 func (rrt *ReservationReanchorTask) ActionType() tbtc.WalletActionType {
 	return tbtc.ActionReservationReanchor
 }
 
 // Run evaluates whether the given wallet needs to re-anchor any of its
-// reservations and returns a single ReservationReanchorProposal for the first
-// reservation found to be re-anchorable. A wallet is a candidate for re-anchor
-// when either:
-//   - it has entered the StateMovingFunds state (the wallet is migrating and
-//     reservations must be released to a live wallet), or
-//   - its main UTXO has dropped below the moving funds dust threshold (a
-//     re-anchor frees value from the wallet's main UTXO pool into a fresh
-//     reservation anchor held by another live wallet).
+// reservations and returns a single ReservationReanchorProposal for the
+// first reservation found to be re-anchorable. A wallet is a candidate for
+// re-anchor only once it has entered the StateMovingFunds state (the
+// wallet is migrating and reservations must be released to a live
+// wallet); tbtc-v2's Reservation.requestReservationReanchor requires a
+// privileged (governance) caller for StateLive sources
+// (Reservation.sol:742-746, ReservationRouter.sol:269-277), which the
+// client's ordinary operator key can never satisfy, so no below-dust
+// re-anchor trigger is attempted for Live wallets.
+//
+// Once a MovingFunds wallet's reservations are fully drained, Run also
+// checks whether its main UTXO has fallen below the moving funds dust
+// threshold and, if so, notifies the Bridge so wallet closing can proceed
+// (see notifyMovingFundsBelowDustIfEligible).
 //
 // Returns (nil, false, nil) when no reservation is eligible; callers should
 // treat that as a benign no-op for the coordination window.
@@ -79,24 +100,9 @@ func (rrt *ReservationReanchorTask) Run(
 		)
 	}
 
-	migrating := walletChainData.State == tbtc.StateMovingFunds
-	if !migrating {
-		// Check the below-dust trigger. Re-anchor also unlocks wallet value
-		// when the main UTXO has fallen below the moving funds dust
-		// threshold, so wallets in StateLive may still need to re-anchor
-		// before they enter the moving funds flow.
-		needs, err := rrt.isBelowMovingFundsDustThreshold(
-			taskLogger,
-			walletPublicKeyHash,
-		)
-		if err != nil {
-			return nil, false, err
-		}
-
-		if !needs {
-			taskLogger.Info("wallet is not eligible for reservation re-anchor")
-			return nil, false, nil
-		}
+	if walletChainData.State != tbtc.StateMovingFunds {
+		taskLogger.Info("wallet is not eligible for reservation re-anchor")
+		return nil, false, nil
 	}
 
 	reservationKeys, err := rrt.chain.WalletReservations(walletPublicKeyHash)
@@ -109,6 +115,7 @@ func (rrt *ReservationReanchorTask) Run(
 
 	if len(reservationKeys) == 0 {
 		taskLogger.Info("wallet has no reservations to re-anchor")
+		rrt.notifyMovingFundsBelowDustIfEligible(taskLogger, walletPublicKeyHash)
 		return nil, false, nil
 	}
 
@@ -118,6 +125,9 @@ func (rrt *ReservationReanchorTask) Run(
 			"cannot get live wallets count: [%w]",
 			err,
 		)
+	}
+	if rrt.metricsRecorder != nil {
+		rrt.metricsRecorder.SetGauge("live_wallets_count", float64(liveWalletsCount))
 	}
 
 	if liveWalletsCount == 0 {
@@ -234,20 +244,21 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 		)
 	}
 
-	// Estimate fee if it's missing. The Bridge caps each reservation
-	// lifecycle transaction with its own ReservationTxMaxFee, not the
-	// moving-funds TxMaxTotalFee, so we use the reservation parameters
-	// directly.
+	// The Bridge caps each reservation lifecycle transaction with its own
+	// ReservationTxMaxFee, not the moving-funds TxMaxTotalFee, so we use
+	// the reservation parameters directly. Fetched unconditionally (not
+	// only when fee needs estimating) because the pre-check below also
+	// needs ReservationTxMaxFee to bound-check a caller-supplied fee.
+	params, err := rrt.chain.ReservationParameters()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get reservation parameters: [%w]",
+			err,
+		)
+	}
+
 	if fee <= 0 {
 		taskLogger.Infof("estimating reservation re-anchor transaction fee")
-
-		params, err := rrt.chain.ReservationParameters()
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot get reservation parameters: [%w]",
-				err,
-			)
-		}
 
 		fee, err = estimateReservationReanchorFee(
 			rrt.btcChain,
@@ -262,6 +273,23 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 	}
 
 	taskLogger.Infof("reservation re-anchor transaction fee: [%d]", fee)
+
+	feeBoundAction := &tbtc.ReservationAction{
+		TxMaxFee: params.ReservationTxMaxFee,
+	}
+
+	if _, err := tbtc.AssembleReservationReanchorTransaction(
+		rrt.btcChain,
+		reservation.AnchorUtxo,
+		targetWalletPublicKeyHash,
+		feeBoundAction,
+		fee,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"cannot assemble reservation re-anchor transaction: [%v]",
+			err,
+		)
+	}
 
 	proposal := &tbtc.ReservationReanchorProposal{
 		ReservationKey:            new(big.Int).Set(reservationKey),
@@ -289,6 +317,19 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 	); err != nil {
 		return nil, fmt.Errorf("cannot request reservation re-anchor: [%v]", err)
 	}
+
+	updatedReservation, err := rrt.chain.GetReservation(reservationKey)
+	if err != nil {
+		return nil, fmt.Errorf("cannot re-read reservation: [%v]", err)
+	}
+	if updatedReservation.RequestNonce != requestNonce {
+		return nil, fmt.Errorf(
+			"reservation request nonce mismatch after request: predicted [%d], on-chain [%d]",
+			requestNonce,
+			updatedReservation.RequestNonce,
+		)
+	}
+	proposal.RequestNonce = updatedReservation.RequestNonce
 
 	return proposal, nil
 }
@@ -353,17 +394,18 @@ func (rrt *ReservationReanchorTask) findTargetWallet(
 	return [20]byte{}, fmt.Errorf("no live wallet available for re-anchor target")
 }
 
-// isBelowMovingFundsDustThreshold returns true when the wallet's main UTXO
-// value is below the moving funds dust threshold. The threshold is sourced
-// from the on-chain MovingFundsParameters. A wallet without a main UTXO is
-// considered to have fallen below the threshold.
+// isBelowMovingFundsDustThreshold returns the wallet's resolved main UTXO
+// (nil if it has none) and whether its value is below the moving funds
+// dust threshold. The threshold is sourced from the on-chain
+// MovingFundsParameters. A wallet without a main UTXO is considered to
+// have fallen below the threshold.
 func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 	taskLogger log.StandardLogger,
 	walletPublicKeyHash [20]byte,
-) (bool, error) {
+) (*bitcoin.UnspentTransactionOutput, bool, error) {
 	params, err := rrt.chain.GetMovingFundsParameters()
 	if err != nil {
-		return false, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"cannot get moving funds parameters: [%w]",
 			err,
 		)
@@ -371,7 +413,7 @@ func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 
 	walletChainData, err := rrt.chain.GetWallet(walletPublicKeyHash)
 	if err != nil {
-		return false, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"cannot get wallet chain data: [%w]",
 			err,
 		)
@@ -381,7 +423,7 @@ func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 		// No main UTXO on-chain, the wallet has fully depleted its pool and
 		// must release any reservation anchors.
 		taskLogger.Info("wallet has no main UTXO; below dust threshold")
-		return true, nil
+		return nil, true, nil
 	}
 
 	walletMainUtxo, err := tbtc.DetermineWalletMainUtxo(
@@ -390,7 +432,7 @@ func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 		rrt.btcChain,
 	)
 	if err != nil {
-		return false, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"cannot determine wallet main UTXO: [%w]",
 			err,
 		)
@@ -398,7 +440,7 @@ func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 
 	if walletMainUtxo == nil {
 		taskLogger.Info("wallet has no resolvable main UTXO; below dust threshold")
-		return true, nil
+		return nil, true, nil
 	}
 
 	below := walletMainUtxo.Value < int64(params.DustThreshold)
@@ -409,46 +451,52 @@ func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 			params.DustThreshold,
 		)
 	}
-	return below, nil
+	return walletMainUtxo, below, nil
 }
 
-// hasPendingAction reports whether the on-chain reservation action
-// generation at the reservation's current request nonce (if any) is in a
-// pending state. This guards against duplicate re-anchor requests: the
-// Bridge rejects a new request while the previous generation is still in
-// flight. The caller supplies the reservation record it already fetched
-// (see Run) rather than this function re-reading it.
-func hasPendingAction(
-	reservationKey *big.Int,
-	reservation *tbtc.Reservation,
-	chain Chain,
+// notifyMovingFundsBelowDustIfEligible checks whether the given (just
+// drained) MovingFunds wallet's main UTXO has fallen below the moving
+// funds dust threshold and, if so, notifies the Bridge so wallet closing
+// can proceed. m1-b-implementation.md §5 documents this as the only
+// remaining route to close a wallet that proved its funds moved while it
+// still held reservation anchors: the Bridge's own automatic closing
+// attempt runs once, while the reservation count is still non-zero, and is
+// never retried. Errors are logged rather than propagated: a failed
+// notification here must not block the coordination window, and the wallet
+// remains in StateMovingFunds so the next call to Run retries.
+func (rrt *ReservationReanchorTask) notifyMovingFundsBelowDustIfEligible(
 	taskLogger log.StandardLogger,
-) bool {
-	if reservation.RequestNonce == 0 {
-		return false
-	}
-
-	action, err := chain.GetReservationAction(
-		reservationKey,
-		reservation.RequestNonce,
+	walletPublicKeyHash [20]byte,
+) {
+	mainUtxo, below, err := rrt.isBelowMovingFundsDustThreshold(
+		taskLogger,
+		walletPublicKeyHash,
 	)
 	if err != nil {
-		// Fail safe: a lookup error is indistinguishable from "still
-		// pending" here, and treating it as not-pending would let the
-		// caller send a duplicate re-anchor request that the Bridge
-		// rejects while a real pending generation is in flight. Skip this
-		// reservation for the current coordination window instead; the
-		// next window retries.
 		taskLogger.Errorf(
-			"cannot get reservation action for [0x%x] nonce [%d]: [%v]",
-			reservationKey,
-			reservation.RequestNonce,
+			"cannot determine moving funds below-dust eligibility: [%v]",
 			err,
 		)
-		return true
+		return
+	}
+	if !below {
+		return
 	}
 
-	return action.State == tbtc.ReservationActionStatePending
+	if err := rrt.chain.NotifyMovingFundsBelowDust(
+		walletPublicKeyHash,
+		mainUtxo,
+	); err != nil {
+		taskLogger.Errorf(
+			"cannot notify moving funds below dust: [%v]",
+			err,
+		)
+		return
+	}
+
+	taskLogger.Info(
+		"notified moving funds below dust; wallet has no remaining reservations",
+	)
 }
 
 // estimateReservationReanchorFee estimates the fee for a reservation

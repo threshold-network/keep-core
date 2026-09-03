@@ -92,6 +92,12 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 	}
 	reservationKey := spvChain.BuildDepositKey(fundingTxHash, 0)
 
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	matchingTx := &bitcoin.Transaction{
 		Inputs: []*bitcoin.TransactionInput{{
 			Outpoint: &bitcoin.TransactionOutpoint{
@@ -99,7 +105,7 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 				OutputIndex:     0,
 			},
 		}},
-		Outputs: []*bitcoin.TransactionOutput{{Value: 100}},
+		Outputs: []*bitcoin.TransactionOutput{{Value: 100, PublicKeyScript: walletScript}},
 	}
 
 	// Wrong shape: two outputs, must be skipped even though it otherwise
@@ -133,7 +139,8 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 	}
 
 	event := &tbtc.ReservationAcceptanceRequestedEvent{
-		ReservationKey: reservationKey,
+		ReservationKey:      reservationKey,
+		WalletPublicKeyHash: walletPublicKeyHash,
 	}
 
 	t.Run("finds the matching transaction among candidates", func(t *testing.T) {
@@ -199,6 +206,12 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 		Value: 600000,
 	}
 
+	targetWalletPublicKeyHash := [20]byte{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
+	targetWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	matchingTx := &bitcoin.Transaction{
 		Inputs: []*bitcoin.TransactionInput{{
 			Outpoint: &bitcoin.TransactionOutpoint{
@@ -206,7 +219,7 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 				OutputIndex:     1,
 			},
 		}},
-		Outputs: []*bitcoin.TransactionOutput{{Value: 590000}},
+		Outputs: []*bitcoin.TransactionOutput{{Value: 590000, PublicKeyScript: targetWalletScript}},
 	}
 
 	// Same transaction hash, wrong output index: must not match.
@@ -230,7 +243,7 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 		Outputs: []*bitcoin.TransactionOutput{{Value: 300000}, {Value: 290000}},
 	}
 
-	event := &tbtc.ReservationReanchorRequestedEvent{}
+	event := &tbtc.ReservationReanchorRequestedEvent{TargetWalletPublicKeyHash: targetWalletPublicKeyHash}
 
 	t.Run("finds the matching transaction among candidates", func(t *testing.T) {
 		found, err := findReservationReanchorTransaction(
@@ -716,7 +729,7 @@ func TestProveReservationAcceptanceActions_EvictionRewindsCursor(t *testing.T) {
 		return nil
 	}
 
-	config := Config{TransactionLimit: 100}
+	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
 	scanState := newReservationProofScanState()
 	key := reservationEventKey(reservationKey, requestNonce)
 
@@ -727,6 +740,7 @@ func TestProveReservationAcceptanceActions_EvictionRewindsCursor(t *testing.T) {
 			spvChain,
 			spvChain,
 			btcChain,
+			nil,
 		); err != nil {
 			t.Fatalf("unexpected error on pass %d: %v", i, err)
 		}
@@ -743,6 +757,7 @@ func TestProveReservationAcceptanceActions_EvictionRewindsCursor(t *testing.T) {
 		spvChain,
 		spvChain,
 		btcChain,
+		nil,
 	); err != nil {
 		t.Fatalf("unexpected error on eviction pass: %v", err)
 	}
@@ -777,6 +792,7 @@ func TestProveReservationAcceptanceActions_EvictionRewindsCursor(t *testing.T) {
 		spvChain,
 		spvChain,
 		btcChain,
+		nil,
 	); err != nil {
 		t.Fatalf("unexpected error on recovery pass: %v", err)
 	}
@@ -1168,7 +1184,7 @@ func TestProveReservationReanchorActions_EvictionRewindsCursor(t *testing.T) {
 		return nil
 	}
 
-	config := Config{TransactionLimit: 100}
+	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
 	scanState := newReservationProofScanState()
 	key := reservationEventKey(reservationKey, requestNonce)
 
@@ -1179,6 +1195,7 @@ func TestProveReservationReanchorActions_EvictionRewindsCursor(t *testing.T) {
 			spvChain,
 			spvChain,
 			btcChain,
+			nil,
 		); err != nil {
 			t.Fatalf("unexpected error on pass %d: %v", i, err)
 		}
@@ -1195,6 +1212,7 @@ func TestProveReservationReanchorActions_EvictionRewindsCursor(t *testing.T) {
 		spvChain,
 		spvChain,
 		btcChain,
+		nil,
 	); err != nil {
 		t.Fatalf("unexpected error on eviction pass: %v", err)
 	}
@@ -1229,6 +1247,7 @@ func TestProveReservationReanchorActions_EvictionRewindsCursor(t *testing.T) {
 		spvChain,
 		spvChain,
 		btcChain,
+		nil,
 	); err != nil {
 		t.Fatalf("unexpected error on recovery pass: %v", err)
 	}
