@@ -58,6 +58,23 @@ func (pg *ProposalGenerator) SetRedemptionMetricsRecorder(recorder interface {
 	}
 }
 
+// SetReservationMetricsRecorder sets the metrics recorder for the
+// reservation acceptance and re-anchor tasks (registered only when
+// reservationsEnabled - see NewProposalGenerator). A no-op when
+// reservations are disabled since neither task is present in pg.tasks.
+func (pg *ProposalGenerator) SetReservationMetricsRecorder(recorder interface {
+	SetGauge(name string, value float64)
+}) {
+	for _, task := range pg.tasks {
+		switch t := task.(type) {
+		case *ReservationAcceptanceTask:
+			t.setMetricsRecorder(recorder)
+		case *ReservationReanchorTask:
+			t.setMetricsRecorder(recorder)
+		}
+	}
+}
+
 // NewProposalGenerator returns a new proposal generator. When
 // reservationsEnabled is true the proposal generator appends the reservation
 // acceptance (anchor) and re-anchor tasks to the standard task list so that
