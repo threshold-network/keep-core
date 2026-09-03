@@ -36,6 +36,12 @@ working scratchpad.
 - [tbtc-v2#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) (`reservations-upgrade` → `dev`, no diff) watches the tbtc-v2 stack against the fixed build order. Checklist text is stale (last updated 2026-09-01, before B merged) — refresh once F/G land. Flags a `dev`-divergence risk: `reservations-upgrade` forked from `main`, not `dev`; `dev` has 28 commits it lacks (confirmed zero overlap with `solidity/contracts/bridge/*`) — needs reconciling before the final PR to `dev`/`main` can land, independent of the F/G rebase.
 - [keep-core#4282](https://github.com/threshold-network/keep-core/pull/4282) (`reservations-epic` → `dev`, no diff), opened 2026-09-03, watches the keep-core stack. Same `dev`-divergence pattern, worse: `reservations-epic` is 63 commits ahead / **68 commits behind** current `dev` (its own stated diff caveat — the PR's GitHub diff is computed against a stale merge-base and does not yet reflect a real merge onto current `dev`). Separately confirms `keep-core#4238` (`feat/utxo-reservation-wallet-support`, 12 commits, draft) remains a parallel, unreconciled branch targeting `reservations-epic` — independent of the H-chain, not merged, no reconcile-or-supersede decision made yet.
 
+**Out-of-stack reservations PR (post-AH, spec'd in `docs/spec/reservations/pr-strategy.md`):**
+
+| PR | tbtc-v2 branch | Status | Notes |
+|----|---------------|--------|-------|
+| [#1120](https://github.com/threshold-network/tbtc-v2/pull/1120) `m1/reanchor-dissolution-gate-fix` | fix(bridge): remove dissolution-eligibility gate from `requestReservationReanchor` | OPEN, `mergeable: MERGEABLE`/`mergeState: UNSTABLE` (CI pending/queued) | Separate from the A→H merge stack per `pr-strategy.md`. Already spec'd as PR I. Safe to land independently once A-H merge — does not depend on the F/G rebase outcome. |
+
 **Worktrees present** (`git worktree list`): `/tmp/m1-{a,b,c,d,e,f,g,h}` exist. `/tmp/m1-h-{a,r,w}` were transient parallel-builder worktrees for PR H's acceptance/re-anchor/watchers branches, merged into `m1-h` and safe to prune. `/tmp/src-{1091,1093,1094,1096,1102}` are read-only reference copies. (`m1-g2` worktree and `m1/bridge-integration-seams-g2` branch retired 2026-08-26 — fast-forward-merged into `m1/bridge-integration-seams`; single branch now carries all of PR #G.)
 
 ## Resolved this session (2026-08-25)
