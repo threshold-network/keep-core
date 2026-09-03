@@ -88,6 +88,16 @@ func TestReleaseBroadcastChannel(t *testing.T) {
 
 	ReleaseBroadcastChannel(name)
 
+	// NewTimeTicker's piping goroutine selects between an already-elapsed
+	// timerTick.C and ctx.Done(); if both are ready when cancel() runs, Go's
+	// pseudo-random select can let exactly one straggler tick through before
+	// the goroutine observes cancellation and exits. That single straggler
+	// is a harmless, already-in-flight retransmission of a message already
+	// sent, not a sign the ticker "kept firing" - so absorb it in a short
+	// settle window before asserting the real invariant this test cares
+	// about: no further deliveries once release has taken effect.
+	drain(ch1Deliveries, RetransmissionTick)
+
 	if got := drain(ch1Deliveries, RetransmissionTick*3); got != 0 {
 		t.Errorf("expected no deliveries after release, got %d", got)
 	}
