@@ -71,7 +71,10 @@ const (
 	// ReservationsActivationBlock is the Ethereum block height at which
 	// reservation actions (anchor, re-anchor) become available in the
 	// coordination checklist.
-	ReservationsActivationBlock = uint64(24559289)
+	//
+	// NOTE: This value is a placeholder that MUST be set to the real mainnet
+	// rollout height before release and must stay ahead of the chain tip.
+	ReservationsActivationBlock = uint64(26500000)
 )
 
 // errCoordinationExecutorBusy is an error returned when the coordination
@@ -598,9 +601,10 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	var actions []WalletActionType
 
 	// Redemption is a priority action and should be checked on every
-	// coordination window: unlike the throughput-heavy sweep/moving-funds
-	// actions gated below, an unredeemed request risks user funds being
-	// stuck, not just throughput.
+	// coordination window: unlike MovingFunds (and, pre-activation, the
+	// sweep actions) which remain frequency-gated below for throughput
+	// reasons, an unredeemed request risks user funds being stuck, not
+	// just throughput.
 	actions = append(actions, ActionRedemption)
 
 	// Other actions should be checked with a lower frequency. The default
@@ -639,18 +643,28 @@ func (ce *coordinationExecutor) getActionsChecklist(
 		}
 	}
 
-	// Reservation actions (acceptance, re-anchor) are only checked when the
-	// operator has enabled the reservation subsystem. Gating the checklist
-	// entry on the same flag that gates the reservation proposal generator
-	// tasks (see tbtcpg.NewProposalGenerator) keeps leader and follower
-	// checklists in agreement: a follower that never enters this branch
-	// would otherwise fault a leader's reservation proposal as
-	// FaultLeaderMistake because the action would not appear in its own
-	// checklist. Frequency-gated like DepositSweep/MovingFunds below the
-	// activation block: reservation acceptance/re-anchor windows are not
-	// as time-critical as redemption.
-	if coordinationBlock >= ReservationsActivationBlock &&
-		windowIndex%frequencyWindows == 0 {
+	// Reservation actions (acceptance, re-anchor) are custody-critical like
+	// Redemption and are checked on every coordination window once the
+	// activation block is reached, not frequency-gated like the
+	// throughput-driven DepositSweep/MovedFundsSweep/MovingFunds actions
+	// above: a delayed reservation acceptance or re-anchor risks the
+	// on-chain ReservationActionTimeout backstop firing before the wallet
+	// subsystem gets a chance to act. There is no per-operator enable
+	// flag here; the activation block is a network-wide constant, which
+	// keeps leader and follower checklists in agreement without relying
+	// on local config (a follower whose local config diverged from the
+	// leader's would otherwise fault an honest leader's reservation
+	// proposal as FaultLeaderMistake because the action would not appear
+	// in its own checklist).
+	//
+	// Note: because getActionsChecklist appends reservation actions after
+	// Redemption/DepositSweep/MovedFundsSweep/MovingFunds and
+	// ProposalGenerator.Generate returns on the first checklist action
+	// that yields a proposal, a wallet with steady redemption/sweep
+	// traffic can still delay reservation acceptance/re-anchor even
+	// though the checklist entry itself is unconditional. This is an
+	// accepted tradeoff bounded by ReservationActionTimeout, not a bug.
+	if coordinationBlock >= ReservationsActivationBlock {
 		actions = append(actions, ActionReservationAnchor)
 		actions = append(actions, ActionReservationReanchor)
 	}

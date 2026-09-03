@@ -139,13 +139,18 @@ func TestReservationProposals_MarshalingRoundtrip(t *testing.T) {
 	roundtrip(reanchorProposal, &ReservationReanchorProposal{})
 }
 
-func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
+func TestReservationProposals_UnmarshalRejectsInvalidPayloads(t *testing.T) {
 	tests := map[string]struct {
 		actionType    WalletActionType
 		payload       []byte
 		expectedError string
 	}{
-		"anchor empty object": {
+		// Proto3 scalar fields have no wire presence, so an entirely
+		// empty payload and one with every field explicitly zeroed are
+		// indistinguishable - a single "empty payload" case per type
+		// covers what the old JSON test split into "empty object" and
+		// "null payload" cases.
+		"anchor empty payload": {
 			actionType:    ActionReservationAnchor,
 			payload:       marshalPb(t, &pb.ReservationAnchorProposal{}),
 			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
@@ -191,6 +196,56 @@ func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
 			}),
 			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
 		},
+		"anchor fee exceeds 8 bytes": {
+			actionType: ActionReservationAnchor,
+			payload: marshalPb(t, &pb.ReservationAnchorProposal{
+				AnchorTxFee:               []byte{1, 2, 3, 4, 5, 6, 7, 8, 9},
+				RequestNonce:              1,
+				DepositFundingTxHash:      make([]byte, 32),
+				DepositFundingOutputIndex: 0,
+			}),
+			expectedError: "cannot unmarshal proposal payload: [invalid anchor transaction fee byte length: [9]]",
+		},
+		"re-anchor fee exceeds 8 bytes": {
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321).Bytes(),
+				RequestNonce:              3,
+				ReanchorTxFee:             []byte{1, 2, 3, 4, 5, 6, 7, 8, 9},
+				TargetWalletPublicKeyHash: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
+			}),
+			expectedError: "cannot unmarshal proposal payload: [invalid re-anchor transaction fee byte length: [9]]",
+		},
+		"anchor zero fee marshaled through Marshal is rejected as missing": {
+			actionType: ActionReservationAnchor,
+			payload: marshalThroughProposal(t, &ReservationAnchorProposal{
+				DepositFundingTxHash:      bitcoin.Hash{0x01, 0x02},
+				DepositFundingOutputIndex: 3,
+				RequestNonce:              1,
+				AnchorTxFee:               big.NewInt(0),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
+		},
+		"re-anchor zero reservation key marshaled through Marshal is rejected as missing": {
+			actionType: ActionReservationReanchor,
+			payload: marshalThroughProposal(t, &ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(0),
+				RequestNonce:              3,
+				TargetWalletPublicKeyHash: [20]byte{0xaa, 0xbb},
+				ReanchorTxFee:             big.NewInt(1700),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
+		},
+		"re-anchor zero fee marshaled through Marshal is rejected as missing": {
+			actionType: ActionReservationReanchor,
+			payload: marshalThroughProposal(t, &ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321),
+				RequestNonce:              3,
+				TargetWalletPublicKeyHash: [20]byte{0xaa, 0xbb},
+				ReanchorTxFee:             big.NewInt(0),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
+		},
 		"re-anchor invalid target wallet hash length": {
 			actionType: ActionReservationReanchor,
 			payload: marshalPb(t, &pb.ReservationReanchorProposal{
@@ -199,6 +254,16 @@ func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
 				ReanchorTxFee:  big.NewInt(1700).Bytes(),
 			}),
 			expectedError: "cannot unmarshal proposal payload: [invalid target wallet public key hash length: [0]]",
+		},
+		"re-anchor zero-value target wallet hash": {
+			actionType: ActionReservationReanchor,
+			payload: marshalPb(t, &pb.ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321).Bytes(),
+				RequestNonce:              3,
+				TargetWalletPublicKeyHash: make([]byte, 20),
+				ReanchorTxFee:             big.NewInt(1700).Bytes(),
+			}),
+			expectedError: "cannot unmarshal proposal payload: [target wallet public key hash is required]",
 		},
 	}
 
@@ -223,6 +288,19 @@ func TestReservationProposals_UnmarshalRejectsMissingIntegers(t *testing.T) {
 func marshalPb(t *testing.T, msg proto.Message) []byte {
 	t.Helper()
 	data, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// marshalThroughProposal marshals a CoordinationProposal via its own Marshal
+// method, for use as a test fixture payload. Unlike marshalPb, this exercises
+// the proposal's real wire-encoding path (e.g. *big.Int.Bytes()) rather than
+// hand-constructing the protobuf message directly.
+func marshalThroughProposal(t *testing.T, proposal CoordinationProposal) []byte {
+	t.Helper()
+	data, err := proposal.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}

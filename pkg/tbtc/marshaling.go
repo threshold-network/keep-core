@@ -514,6 +514,12 @@ func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
 	if len(pbMsg.AnchorTxFee) == 0 {
 		return fmt.Errorf("anchor transaction fee is required")
 	}
+	if len(pbMsg.AnchorTxFee) > 8 {
+		return fmt.Errorf(
+			"invalid anchor transaction fee byte length: [%v]",
+			len(pbMsg.AnchorTxFee),
+		)
+	}
 	if pbMsg.RequestNonce == 0 {
 		return fmt.Errorf("request nonce is required")
 	}
@@ -559,13 +565,20 @@ func (rrp *ReservationReanchorProposal) Unmarshal(data []byte) error {
 	if len(pbMsg.ReanchorTxFee) == 0 {
 		return fmt.Errorf("re-anchor transaction fee is required")
 	}
+	if len(pbMsg.ReanchorTxFee) > 8 {
+		return fmt.Errorf(
+			"invalid re-anchor transaction fee byte length: [%v]",
+			len(pbMsg.ReanchorTxFee),
+		)
+	}
 	if len(pbMsg.TargetWalletPublicKeyHash) != 20 {
 		return fmt.Errorf(
 			"invalid target wallet public key hash length: [%v]",
 			len(pbMsg.TargetWalletPublicKeyHash),
 		)
 	}
-	if copy(rrp.TargetWalletPublicKeyHash[:], pbMsg.TargetWalletPublicKeyHash) == 0 || rrp.TargetWalletPublicKeyHash == [20]byte{} {
+	copy(rrp.TargetWalletPublicKeyHash[:], pbMsg.TargetWalletPublicKeyHash)
+	if rrp.TargetWalletPublicKeyHash == [20]byte{} {
 		return fmt.Errorf("target wallet public key hash is required")
 	}
 

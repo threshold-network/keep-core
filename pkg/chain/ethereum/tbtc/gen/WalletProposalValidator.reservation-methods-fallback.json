@@ -1,0 +1,145 @@
+[
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "bytes20",
+            "name": "walletPubKeyHash",
+            "type": "bytes20"
+          },
+          {
+            "components": [
+              {
+                "internalType": "bytes32",
+                "name": "fundingTxHash",
+                "type": "bytes32"
+              },
+              {
+                "internalType": "uint32",
+                "name": "fundingOutputIndex",
+                "type": "uint32"
+              }
+            ],
+            "internalType": "struct WalletProposalValidator.DepositKey",
+            "name": "depositKey",
+            "type": "tuple"
+          },
+          {
+            "internalType": "uint256",
+            "name": "anchorTxFee",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct WalletProposalValidator.ReservationAnchorProposal",
+        "name": "proposal",
+        "type": "tuple"
+      },
+      {
+        "components": [
+          {
+            "components": [
+              {
+                "internalType": "bytes4",
+                "name": "version",
+                "type": "bytes4"
+              },
+              {
+                "internalType": "bytes",
+                "name": "inputVector",
+                "type": "bytes"
+              },
+              {
+                "internalType": "bytes",
+                "name": "outputVector",
+                "type": "bytes"
+              },
+              {
+                "internalType": "bytes4",
+                "name": "locktime",
+                "type": "bytes4"
+              }
+            ],
+            "internalType": "struct BitcoinTx.Info",
+            "name": "fundingTx",
+            "type": "tuple"
+          },
+          {
+            "internalType": "bytes8",
+            "name": "blindingFactor",
+            "type": "bytes8"
+          },
+          {
+            "internalType": "bytes20",
+            "name": "walletPubKeyHash",
+            "type": "bytes20"
+          },
+          {
+            "internalType": "bytes20",
+            "name": "refundPubKeyHash",
+            "type": "bytes20"
+          },
+          {
+            "internalType": "bytes4",
+            "name": "refundLocktime",
+            "type": "bytes4"
+          }
+        ],
+        "internalType": "struct WalletProposalValidator.DepositExtraInfo",
+        "name": "depositExtraInfo",
+        "type": "tuple"
+      }
+    ],
+    "name": "validateReservationAnchorProposal",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "bytes20",
+            "name": "sourceWalletPubKeyHash",
+            "type": "bytes20"
+          },
+          {
+            "internalType": "uint256",
+            "name": "reservationKey",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bytes20",
+            "name": "targetWalletPubKeyHash",
+            "type": "bytes20"
+          },
+          {
+            "internalType": "uint256",
+            "name": "reanchorTxFee",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct WalletProposalValidator.ReservationReanchorProposal",
+        "name": "proposal",
+        "type": "tuple"
+      }
+    ],
+    "name": "validateReservationReanchorProposal",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]

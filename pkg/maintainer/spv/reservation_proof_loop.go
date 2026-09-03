@@ -1,7 +1,9 @@
 package spv
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -9,6 +11,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/maintainer/btcdiff"
 	"github.com/keep-network/keep-core/pkg/tbtc"
+)
+
+// errReservationActionNoLongerProvable is returned when a discovered
+// transaction's action generation is no longer provable at submission time.
+// This is an expected, benign skip rather than a submission failure.
+var errReservationActionNoLongerProvable = errors.New(
+	"reservation action generation is no longer provable",
 )
 
 // reservationProofLookBackBlocks bounds the pending-action-request event
@@ -22,19 +31,19 @@ const reservationProofLookBackBlocks = uint64(216000)
 // submission and confirms it is still the exact pending action generation
 // the discovered transaction was found for.
 //
-// proveReservationAcceptanceActions/proveReservationReanchorActions check
-// Pending once near the top of their loop, then run a Bitcoin
-// transaction-history scan before reaching the submit call - a window in
-// which the action generation could settle, time out, or be superseded.
-// This closes that window with a second, submission-time check.
+// Its purpose is to distinguish an expected, benign "this action generation is
+// no longer the exact pending one" outcome (Warn-logged, and skipped so it is
+// treated as "never attempted" rather than counted as a failed submission
+// attempt by metricsRecorder) from a genuine chain-read error (propagated to
+// the caller) or a genuine logic error caught later inside
+// submitReservationActionProof (which remains the authoritative
+// pre-submission check — it re-fetches the action itself right before
+// SubmitReservationProof and is what actually prevents an incorrect or
+// misdirected submission).
 //
-// Whether a stale generation's action record could still read Pending
-// after a superseding generation exists is an unverified on-chain
-// assumption (see reservation_reanchor_proof.go's doc comments on
-// submitReservationReanchorProof's discovery counterpart in the prior
-// design) - this check does not resolve that, it only shrinks the window
-// in which it could matter and skips, rather than misdirects a
-// submission, if it does.
+// This function does not, by itself, close any submission-correctness race —
+// it only produces cleaner logs and metrics for an expected outcome that
+// submitReservationActionProof's own checks already handle safely either way.
 func verifyReservationActionStillProvable(
 	spvChain Chain,
 	reservationKey *big.Int,
@@ -56,11 +65,13 @@ func verifyReservationActionStillProvable(
 		action.State != tbtc.ReservationActionStatePending {
 		logger.Warnf(
 			"skipping reservation proof submission for reservation "+
-				"[%v]'s action generation [%d]: no longer a pending %v "+
-				"action at submission time",
+				"[%v]'s action generation [%d]: action generation is now "+
+				"%s/%s, no longer the expected pending %s action",
 			reservationKey,
 			requestNonce,
-			expectedActionType,
+			action.ActionType.String(),
+			action.State.String(),
+			expectedActionType.String(),
 		)
 		return false, nil
 	}
@@ -77,6 +88,87 @@ func verifyReservationActionStillProvable(
 	}
 
 	return true, nil
+}
+
+// submitReservationAcceptanceActionProof re-verifies that event's action
+// generation is still the exact pending one the discovered transaction was
+// found for, then submits its SPV proof. Extracted out of
+// proveReservationAcceptanceActions' submit callback so the wallet
+// argument passed to verifyReservationActionStillProvable
+// (event.WalletPublicKeyHash) can be exercised directly in a unit test,
+// without going through Bitcoin transaction discovery.
+func submitReservationAcceptanceActionProof(
+	spvChain Chain,
+	btcChain bitcoin.Chain,
+	event *tbtc.ReservationAcceptanceRequestedEvent,
+	transactionHash bitcoin.Hash,
+	requiredConfirmations uint,
+) error {
+	stillProvable, err := verifyReservationActionStillProvable(
+		spvChain,
+		event.ReservationKey,
+		event.RequestNonce,
+		tbtc.ReservationActionTypeAcceptance,
+		event.WalletPublicKeyHash,
+	)
+	if err != nil {
+		return err
+	}
+	if !stillProvable {
+		return errReservationActionNoLongerProvable
+	}
+
+	return SubmitReservationAcceptanceProof(
+		transactionHash,
+		requiredConfirmations,
+		event.ReservationKey,
+		event.RequestNonce,
+		btcChain,
+		spvChain,
+	)
+}
+
+// submitReservationReanchorActionProof re-verifies that event's action
+// generation is still the exact pending one the discovered transaction was
+// found for, then submits its SPV proof. Extracted out of
+// proveReservationReanchorActions' submit callback so the
+// target-vs-source wallet-hash field selection passed to
+// verifyReservationActionStillProvable (event.TargetWalletPublicKeyHash,
+// not event.SourceWalletPublicKeyHash — a re-anchor event carries both)
+// can be exercised directly in a unit test, without going through Bitcoin
+// transaction discovery: this package's local test double can only
+// discover a transaction via the source wallet's outputs, which forces
+// the two fields to coincide by construction in any end-to-end test and
+// so cannot catch a swap between them.
+func submitReservationReanchorActionProof(
+	spvChain Chain,
+	btcChain bitcoin.Chain,
+	event *tbtc.ReservationReanchorRequestedEvent,
+	transactionHash bitcoin.Hash,
+	requiredConfirmations uint,
+) error {
+	stillProvable, err := verifyReservationActionStillProvable(
+		spvChain,
+		event.ReservationKey,
+		event.RequestNonce,
+		tbtc.ReservationActionTypeReanchor,
+		event.TargetWalletPublicKeyHash,
+	)
+	if err != nil {
+		return err
+	}
+	if !stillProvable {
+		return errReservationActionNoLongerProvable
+	}
+
+	return SubmitReservationReanchorProof(
+		transactionHash,
+		requiredConfirmations,
+		event.ReservationKey,
+		event.RequestNonce,
+		btcChain,
+		spvChain,
+	)
 }
 
 // reservationAcceptanceWalletEvent adapts
@@ -135,17 +227,27 @@ func wrapReservationReanchorEvents(
 type reservationProofScanState struct {
 	acceptanceLastScannedBlock uint64
 	pendingAcceptanceEvents    map[string]*tbtc.ReservationAcceptanceRequestedEvent
+	acceptanceRetries          map[string]uint
 
 	reanchorLastScannedBlock uint64
 	pendingReanchorEvents    map[string]*tbtc.ReservationReanchorRequestedEvent
+	reanchorRetries          map[string]uint
 }
 
 func newReservationProofScanState() *reservationProofScanState {
 	return &reservationProofScanState{
 		pendingAcceptanceEvents: make(map[string]*tbtc.ReservationAcceptanceRequestedEvent),
+		acceptanceRetries:       make(map[string]uint),
 		pendingReanchorEvents:   make(map[string]*tbtc.ReservationReanchorRequestedEvent),
+		reanchorRetries:         make(map[string]uint),
 	}
 }
+
+// maxReservationActionLoadRetries is the maximum number of consecutive
+// passes GetReservationAction may fail for a tracked pending event before
+// the event is evicted from the pending map to avoid unbounded map growth
+// and log spam on unrecoverable RPC/chain errors.
+const maxReservationActionLoadRetries = 3
 
 // reservationEventKey identifies one reservation action generation, unique
 // across both the acceptance and re-anchor pending-event maps.
@@ -303,7 +405,10 @@ func proveReservationAcceptanceActions(
 	}
 
 	newEvents, err := spvChain.PastReservationAcceptanceRequestedEvents(
-		&tbtc.ReservationAcceptanceRequestedEventFilter{StartBlock: startBlock},
+		&tbtc.ReservationAcceptanceRequestedEventFilter{
+			StartBlock: startBlock,
+			EndBlock:   &currentBlock,
+		},
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -318,40 +423,54 @@ func proveReservationAcceptanceActions(
 		state.pendingAcceptanceEvents[key] = event
 	}
 
-	// Re-check every tracked event's on-chain action state and drop the
-	// ones that are no longer pending, so the pending set does not grow
-	// without bound.
-	var pending []*tbtc.ReservationAcceptanceRequestedEvent
+	// Re-check every tracked event's on-chain action state, evict settled/stale
+	// ones, and group still-pending events by wallet public key hash.
+	walletEvents := make(map[[20]byte][]*tbtc.ReservationAcceptanceRequestedEvent)
 	for key, event := range state.pendingAcceptanceEvents {
 		action, err := spvChain.GetReservationAction(
 			event.ReservationKey,
 			event.RequestNonce,
 		)
 		if err != nil {
-			logger.Errorf(
-				"failed to load reservation acceptance action [%v]/%d: [%v]",
-				event.ReservationKey,
-				event.RequestNonce,
-				err,
-			)
-			// Keep tracking; retry on the next pass.
+			state.acceptanceRetries[key]++
+			if state.acceptanceRetries[key] >= maxReservationActionLoadRetries {
+				logger.Errorf(
+					"failed to load reservation acceptance action [%v]/%d: [%v]; "+
+						"exceeded max retries (%d), evicting event",
+					event.ReservationKey,
+					event.RequestNonce,
+					err,
+					maxReservationActionLoadRetries,
+				)
+				delete(state.pendingAcceptanceEvents, key)
+				delete(state.acceptanceRetries, key)
+			} else {
+				logger.Errorf(
+					"failed to load reservation acceptance action [%v]/%d (retry %d/%d): [%v]",
+					event.ReservationKey,
+					event.RequestNonce,
+					state.acceptanceRetries[key],
+					maxReservationActionLoadRetries,
+					err,
+				)
+			}
 			continue
 		}
+
+		delete(state.acceptanceRetries, key)
+
 		if action.State != tbtc.ReservationActionStatePending {
 			delete(state.pendingAcceptanceEvents, key)
 			continue
 		}
-		pending = append(pending, event)
+
+		walletEvents[event.WalletPublicKeyHash] = append(
+			walletEvents[event.WalletPublicKeyHash],
+			event,
+		)
 	}
 
-	// There will often be multiple pending events for a single wallet.
-	// Fetch that wallet's Bitcoin transaction history once, not once per
-	// event.
-	walletPublicKeyHashes := uniqueWalletPublicKeyHashes(
-		wrapReservationAcceptanceEvents(pending),
-	)
-
-	for _, walletPublicKeyHash := range walletPublicKeyHashes {
+	for walletPublicKeyHash, events := range walletEvents {
 		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
 			walletPublicKeyHash,
 			config.TransactionLimit,
@@ -361,26 +480,26 @@ func proveReservationAcceptanceActions(
 			continue
 		}
 
-		for _, event := range pending {
-			if event.WalletPublicKeyHash != walletPublicKeyHash {
+		// Index wallet transactions by deposit key for O(1) matching.
+		candidateTransactions := make(map[string]*bitcoin.Transaction)
+		for _, transaction := range walletTransactions {
+			if len(transaction.Inputs) == 1 && len(transaction.Outputs) == 1 && transaction.Inputs[0].Outpoint != nil {
+				input := transaction.Inputs[0]
+				depositKey := spvChain.BuildDepositKey(
+					input.Outpoint.TransactionHash,
+					input.Outpoint.OutputIndex,
+				)
+				candidateTransactions[depositKey.String()] = transaction
+			}
+		}
+
+		for _, event := range events {
+			transaction, ok := candidateTransactions[event.ReservationKey.String()]
+			if !ok {
 				continue
 			}
 
-			transaction, err := findReservationAcceptanceTransaction(
-				spvChain,
-				event,
-				walletTransactions,
-			)
-			if err != nil {
-				logger.Errorf(
-					"failed to search for reservation acceptance transaction "+
-						"for reservation [%v]: [%v]",
-					event.ReservationKey,
-					err,
-				)
-				continue
-			}
-			if transaction == nil {
+			if !isMatchingReservationAcceptanceTransaction(spvChain, event, transaction) {
 				continue
 			}
 
@@ -390,27 +509,12 @@ func proveReservationAcceptanceActions(
 				spvChain,
 				btcDiffChain,
 				func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
-					stillProvable, err := verifyReservationActionStillProvable(
+					return submitReservationAcceptanceActionProof(
 						spvChain,
-						event.ReservationKey,
-						event.RequestNonce,
-						tbtc.ReservationActionTypeAcceptance,
-						event.WalletPublicKeyHash,
-					)
-					if err != nil {
-						return err
-					}
-					if !stillProvable {
-						return nil
-					}
-
-					return SubmitReservationAcceptanceProof(
+						btcChain,
+						event,
 						transactionHash,
 						requiredConfirmations,
-						event.ReservationKey,
-						event.RequestNonce,
-						btcChain,
-						spvChain,
 					)
 				},
 			); err != nil {
@@ -435,30 +539,69 @@ func proveReservationAcceptanceActions(
 // transaction history for the 1-input-1-output acceptance (anchor)
 // transaction whose sole input spends the deposit identified by
 // event.ReservationKey (== the deposit key; see the m1 identity mapping
-// documented in reservation_stale_deposit_watch.go). Returns nil, nil if no
-// matching transaction has been broadcast yet.
+// documented in reservation_stale_deposit_watch.go), whose sole output is
+// P2WPKH to the custody wallet, and whose output value equals depositAmount - anchorFee.
+// Returns nil, nil if no matching transaction has been broadcast yet.
 func findReservationAcceptanceTransaction(
 	spvChain Chain,
 	event *tbtc.ReservationAcceptanceRequestedEvent,
 	walletTransactions []*bitcoin.Transaction,
 ) (*bitcoin.Transaction, error) {
 	for _, transaction := range walletTransactions {
-		if len(transaction.Inputs) != 1 || len(transaction.Outputs) != 1 {
-			continue
-		}
-
-		input := transaction.Inputs[0]
-		depositKey := spvChain.BuildDepositKey(
-			input.Outpoint.TransactionHash,
-			input.Outpoint.OutputIndex,
-		)
-
-		if depositKey.Cmp(event.ReservationKey) == 0 {
+		if isMatchingReservationAcceptanceTransaction(spvChain, event, transaction) {
 			return transaction, nil
 		}
 	}
 
 	return nil, nil
+}
+
+func isMatchingReservationAcceptanceTransaction(
+	spvChain Chain,
+	event *tbtc.ReservationAcceptanceRequestedEvent,
+	transaction *bitcoin.Transaction,
+) bool {
+	if len(transaction.Inputs) != 1 || len(transaction.Outputs) != 1 || transaction.Inputs[0].Outpoint == nil {
+		return false
+	}
+
+	input := transaction.Inputs[0]
+	depositKey := spvChain.BuildDepositKey(
+		input.Outpoint.TransactionHash,
+		input.Outpoint.OutputIndex,
+	)
+
+	if depositKey.Cmp(event.ReservationKey) != 0 {
+		return false
+	}
+
+	expectedScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		event.WalletPublicKeyHash,
+	)
+	if err != nil || !bytes.Equal(transaction.Outputs[0].PublicKeyScript, expectedScript) {
+		return false
+	}
+
+	if depositRequest, found, err := spvChain.GetDepositRequest(
+		input.Outpoint.TransactionHash,
+		input.Outpoint.OutputIndex,
+	); err != nil {
+		return false
+	} else if found {
+		fee := int64(depositRequest.Amount) - transaction.Outputs[0].Value
+		if fee <= 0 || (event.TxMaxFee > 0 && uint64(fee) > event.TxMaxFee) {
+			return false
+		}
+		if transaction.Outputs[0].Value != int64(depositRequest.Amount)-fee {
+			return false
+		}
+	} else {
+		if transaction.Outputs[0].Value <= 0 {
+			return false
+		}
+	}
+
+	return true
 }
 
 // proveReservationReanchorActions finds pending ReservationReanchor action
@@ -481,7 +624,10 @@ func proveReservationReanchorActions(
 	}
 
 	newEvents, err := spvChain.PastReservationReanchorRequestedEvents(
-		&tbtc.ReservationReanchorRequestedEventFilter{StartBlock: startBlock},
+		&tbtc.ReservationReanchorRequestedEventFilter{
+			StartBlock: startBlock,
+			EndBlock:   &currentBlock,
+		},
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -496,39 +642,54 @@ func proveReservationReanchorActions(
 	}
 
 	// Re-check every tracked event's on-chain action state and drop the
-	// ones that are no longer pending, so the pending set does not grow
-	// without bound.
-	var pending []*tbtc.ReservationReanchorRequestedEvent
+	// Re-check every tracked event's on-chain action state, evict settled/stale
+	// ones, and group still-pending events by source wallet public key hash.
+	walletEvents := make(map[[20]byte][]*tbtc.ReservationReanchorRequestedEvent)
 	for key, event := range state.pendingReanchorEvents {
 		action, err := spvChain.GetReservationAction(
 			event.ReservationKey,
 			event.RequestNonce,
 		)
 		if err != nil {
-			logger.Errorf(
-				"failed to load reservation re-anchor action [%v]/%d: [%v]",
-				event.ReservationKey,
-				event.RequestNonce,
-				err,
-			)
-			// Keep tracking; retry on the next pass.
+			state.reanchorRetries[key]++
+			if state.reanchorRetries[key] >= maxReservationActionLoadRetries {
+				logger.Errorf(
+					"failed to load reservation re-anchor action [%v]/%d: [%v]; "+
+						"exceeded max retries (%d), evicting event",
+					event.ReservationKey,
+					event.RequestNonce,
+					err,
+					maxReservationActionLoadRetries,
+				)
+				delete(state.pendingReanchorEvents, key)
+				delete(state.reanchorRetries, key)
+			} else {
+				logger.Errorf(
+					"failed to load reservation re-anchor action [%v]/%d (retry %d/%d): [%v]",
+					event.ReservationKey,
+					event.RequestNonce,
+					state.reanchorRetries[key],
+					maxReservationActionLoadRetries,
+					err,
+				)
+			}
 			continue
 		}
+
+		delete(state.reanchorRetries, key)
+
 		if action.State != tbtc.ReservationActionStatePending {
 			delete(state.pendingReanchorEvents, key)
 			continue
 		}
-		pending = append(pending, event)
+
+		walletEvents[event.SourceWalletPublicKeyHash] = append(
+			walletEvents[event.SourceWalletPublicKeyHash],
+			event,
+		)
 	}
 
-	// There will often be multiple pending events for a single source
-	// wallet. Fetch that wallet's Bitcoin transaction history once, not
-	// once per event.
-	walletPublicKeyHashes := uniqueWalletPublicKeyHashes(
-		wrapReservationReanchorEvents(pending),
-	)
-
-	for _, walletPublicKeyHash := range walletPublicKeyHashes {
+	for walletPublicKeyHash, events := range walletEvents {
 		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
 			walletPublicKeyHash,
 			config.TransactionLimit,
@@ -538,11 +699,15 @@ func proveReservationReanchorActions(
 			continue
 		}
 
-		for _, event := range pending {
-			if event.SourceWalletPublicKeyHash != walletPublicKeyHash {
-				continue
+		// Index wallet transactions by spent outpoint for O(1) matching.
+		candidateTransactions := make(map[bitcoin.TransactionOutpoint]*bitcoin.Transaction)
+		for _, transaction := range walletTransactions {
+			if len(transaction.Inputs) == 1 && len(transaction.Outputs) == 1 && transaction.Inputs[0].Outpoint != nil {
+				candidateTransactions[*transaction.Inputs[0].Outpoint] = transaction
 			}
+		}
 
+		for _, event := range events {
 			reservation, err := spvChain.GetReservation(event.ReservationKey)
 			if err != nil {
 				logger.Errorf(
@@ -563,21 +728,12 @@ func proveReservationReanchorActions(
 				continue
 			}
 
-			transaction, err := findReservationReanchorTransaction(
-				event,
-				reservation.AnchorUtxo,
-				walletTransactions,
-			)
-			if err != nil {
-				logger.Errorf(
-					"failed to search for reservation re-anchor transaction "+
-						"for reservation [%v]: [%v]",
-					event.ReservationKey,
-					err,
-				)
+			transaction, ok := candidateTransactions[*reservation.AnchorUtxo.Outpoint]
+			if !ok {
 				continue
 			}
-			if transaction == nil {
+
+			if !isMatchingReservationReanchorTransaction(event, reservation.AnchorUtxo, transaction) {
 				continue
 			}
 
@@ -587,27 +743,12 @@ func proveReservationReanchorActions(
 				spvChain,
 				btcDiffChain,
 				func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
-					stillProvable, err := verifyReservationActionStillProvable(
+					return submitReservationReanchorActionProof(
 						spvChain,
-						event.ReservationKey,
-						event.RequestNonce,
-						tbtc.ReservationActionTypeReanchor,
-						event.TargetWalletPublicKeyHash,
-					)
-					if err != nil {
-						return err
-					}
-					if !stillProvable {
-						return nil
-					}
-
-					return SubmitReservationReanchorProof(
+						btcChain,
+						event,
 						transactionHash,
 						requiredConfirmations,
-						event.ReservationKey,
-						event.RequestNonce,
-						btcChain,
-						spvChain,
 					)
 				},
 			); err != nil {
@@ -630,26 +771,54 @@ func proveReservationReanchorActions(
 
 // findReservationReanchorTransaction scans the source wallet's Bitcoin
 // transaction history for the 1-input-1-output re-anchor transaction whose
-// sole input spends the reservation's current anchor UTXO. Returns nil, nil
-// if no matching transaction has been broadcast yet.
+// sole input spends the reservation's current anchor UTXO, whose sole output is
+// P2WPKH to the target wallet, and whose output value equals anchorUtxo.Value - reanchorFee.
+// Returns nil, nil if no matching transaction has been broadcast yet.
 func findReservationReanchorTransaction(
 	event *tbtc.ReservationReanchorRequestedEvent,
 	anchorUtxo *bitcoin.UnspentTransactionOutput,
 	walletTransactions []*bitcoin.Transaction,
 ) (*bitcoin.Transaction, error) {
 	for _, transaction := range walletTransactions {
-		if len(transaction.Inputs) != 1 || len(transaction.Outputs) != 1 {
-			continue
-		}
-
-		input := transaction.Inputs[0]
-		if input.Outpoint.TransactionHash == anchorUtxo.Outpoint.TransactionHash &&
-			input.Outpoint.OutputIndex == anchorUtxo.Outpoint.OutputIndex {
+		if isMatchingReservationReanchorTransaction(event, anchorUtxo, transaction) {
 			return transaction, nil
 		}
 	}
 
 	return nil, nil
+}
+
+func isMatchingReservationReanchorTransaction(
+	event *tbtc.ReservationReanchorRequestedEvent,
+	anchorUtxo *bitcoin.UnspentTransactionOutput,
+	transaction *bitcoin.Transaction,
+) bool {
+	if len(transaction.Inputs) != 1 || len(transaction.Outputs) != 1 || transaction.Inputs[0].Outpoint == nil {
+		return false
+	}
+
+	input := transaction.Inputs[0]
+	if input.Outpoint.TransactionHash != anchorUtxo.Outpoint.TransactionHash ||
+		input.Outpoint.OutputIndex != anchorUtxo.Outpoint.OutputIndex {
+		return false
+	}
+
+	expectedScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		event.TargetWalletPublicKeyHash,
+	)
+	if err != nil || !bytes.Equal(transaction.Outputs[0].PublicKeyScript, expectedScript) {
+		return false
+	}
+
+	fee := int64(anchorUtxo.Value) - transaction.Outputs[0].Value
+	if fee <= 0 || (event.TxMaxFee > 0 && uint64(fee) > event.TxMaxFee) {
+		return false
+	}
+	if transaction.Outputs[0].Value != int64(anchorUtxo.Value)-fee {
+		return false
+	}
+
+	return true
 }
 
 // proveReservationTransaction assembles and submits the SPV proof for a
@@ -693,6 +862,10 @@ func proveReservationTransaction(
 	}
 
 	if err := submit(transaction.Hash(), requiredConfirmations); err != nil {
+		if errors.Is(err, errReservationActionNoLongerProvable) {
+			return nil
+		}
+
 		return err
 	}
 

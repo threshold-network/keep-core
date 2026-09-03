@@ -108,9 +108,10 @@ type Config struct {
 // a separate type so future reservation knobs (poll intervals, cap overrides)
 // can be added without breaking the top-level Config layout.
 //
-// This flag controls only reservation acceptance / re-anchor proposal
-// GENERATION (the `start` command's coordination layer, config category
-// Tbtc). The `maintainer` command runs as a separate process reading a
+// This flag controls BOTH reservation acceptance / re-anchor proposal
+// GENERATION AND watcher wiring in the start process (the `start`
+// command's coordination and watcher layers, config category Tbtc). The
+// `maintainer` command runs as a separate process reading a
 // disjoint config category (see config.MaintainerCategories) and has its
 // own independent gate, spv.ReservationsConfig.Enabled, that controls SPV
 // PROOF SUBMISSION for those same proposals. Neither command's config

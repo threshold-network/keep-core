@@ -39,9 +39,8 @@ type PerformanceMetrics struct {
 
 	// reservationsEnabled mirrors tbtc.Config.Reservations.Enabled. Gates
 	// registration of the reservation-specific wallet action metrics
-	// (reservation_anchor, reserved_redemption, reservation_reanchor,
-	// reservation_dissolution) so a non-reservation deployment's metric
-	// surface does not change - see GetAllWalletActionTypes.
+	// (reservation_anchor, reservation_reanchor) so a non-reservation
+	// deployment's metric surface does not change - see GetAllWalletActionTypes.
 	reservationsEnabled bool
 
 	// Counters track cumulative counts of events

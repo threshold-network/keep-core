@@ -419,7 +419,7 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithMovedFundsSweepProposal
 }
 
 func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationAnchorProposal(t *testing.T) {
-	for range 10 {
+	for i := 0; i < 10; i++ {
 		var (
 			senderID            group.MemberIndex
 			coordinationBlock   uint64
@@ -448,7 +448,7 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationAnchorPropos
 }
 
 func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationReanchorProposal(t *testing.T) {
-	for range 10 {
+	for i := 0; i < 10; i++ {
 		var (
 			senderID            group.MemberIndex
 			coordinationBlock   uint64

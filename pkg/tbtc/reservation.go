@@ -90,6 +90,23 @@ const (
 	ReservationActionTypeDissolution
 )
 
+func (t ReservationActionType) String() string {
+	switch t {
+	case ReservationActionTypeNone:
+		return "None"
+	case ReservationActionTypeAcceptance:
+		return "Acceptance"
+	case ReservationActionTypeRedemption:
+		return "Redemption"
+	case ReservationActionTypeReanchor:
+		return "Reanchor"
+	case ReservationActionTypeDissolution:
+		return "Dissolution"
+	default:
+		return fmt.Sprintf("ReservationActionType(%d)", uint8(t))
+	}
+}
+
 // ReservationActionState represents the settlement state of a reservation
 // action generation.
 type ReservationActionState uint8
@@ -102,6 +119,25 @@ const (
 	ReservationActionStateVetoed
 	ReservationActionStateSuperseded
 )
+
+func (s ReservationActionState) String() string {
+	switch s {
+	case ReservationActionStateUnknown:
+		return "Unknown"
+	case ReservationActionStatePending:
+		return "Pending"
+	case ReservationActionStateSettled:
+		return "Settled"
+	case ReservationActionStateTimedOut:
+		return "TimedOut"
+	case ReservationActionStateVetoed:
+		return "Vetoed"
+	case ReservationActionStateSuperseded:
+		return "Superseded"
+	default:
+		return fmt.Sprintf("ReservationActionState(%d)", uint8(s))
+	}
+}
 
 // ReservationAction represents one nonce-bound generation of a reservation
 // action. All authorization data used to construct and settle the action is
@@ -224,9 +260,6 @@ func (rrp *ReservationReanchorProposal) ActionType() WalletActionType {
 func (rrp *ReservationReanchorProposal) ValidityBlocks() uint64 {
 	return reservationReanchorProposalValidityBlocks
 }
-
-// Marshal/Unmarshal for ReservationReanchorProposal live in marshaling.go,
-// alongside every other coordination proposal type's wire-format methods.
 
 // AssembleReservationAnchorTransaction constructs an unsigned reservation
 // anchor transaction: a 1-input-1-output spend of the given reserved deposit

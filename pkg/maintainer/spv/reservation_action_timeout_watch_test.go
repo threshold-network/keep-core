@@ -13,7 +13,7 @@ import (
 )
 
 // recordingActionTimeoutMembers is a test double for the
-// WalletMembersResolver interface. It returns the operator IDs configured
+// tbtc.WalletMembersResolver interface. It returns the operator IDs configured
 // at construction time and records the wallet PKHs it was asked to resolve.
 type recordingActionTimeoutMembers struct {
 	walletIDs map[[20]byte][]uint32
@@ -260,8 +260,12 @@ func TestReservationActionTimeoutWatcher_MembersResolverError(t *testing.T) {
 	wallet := walletPKH()
 	key := reservationKey(0xC006)
 
+	// In production, node.ResolveWalletMembers errors ("wallet not found") for
+	// wallets the local operator is not a signing member of. The watcher must
+	// treat this as an expected non-membership condition and skip cleanly without
+	// returning an error or notifying.
 	resolver := &recordingActionTimeoutMembers{
-		errByPKH: map[[20]byte]error{wallet: errors.New("oops")},
+		errByPKH: map[[20]byte]error{wallet: errors.New("wallet not found")},
 	}
 	seededReservation(
 		t,
@@ -278,11 +282,44 @@ func TestReservationActionTimeoutWatcher_MembersResolverError(t *testing.T) {
 	)
 
 	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
-	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err == nil {
-		t.Fatal("expected error from resolver, got nil")
+	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
+		t.Fatalf("expected nil error on resolver non-member error, got: %v", err)
 	}
 	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
 		t.Fatalf("no notifications should fire on resolver error, got %d", len(calls))
+	}
+}
+
+func TestReservationActionTimeoutWatcher_MembersResolverEmpty(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	key := reservationKey(0xC007)
+
+	// An empty member set must also skip cleanly without emitting a notification.
+	resolver := &recordingActionTimeoutMembers{
+		walletIDs: map[[20]byte][]uint32{wallet: {}},
+	}
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				State:     tbtc.ReservationActionStatePending,
+				TimeoutAt: 100,
+			},
+		},
+		1,
+	)
+
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
+		t.Fatalf("expected nil error on empty member set, got: %v", err)
+	}
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
+		t.Fatalf("no notifications should fire on empty member set, got %d", len(calls))
 	}
 }
 
@@ -377,14 +414,65 @@ func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestReservationActionTimeoutWatcher_RunLoop(t *testing.T) {
+func TestReservationActionTimeoutWatcher_NextScanRange(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	spvChain.setBlockCounter(blockCounter)
+
+	resolver := &recordingActionTimeoutMembers{}
+	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, time.Minute)
+
+	// Case 1: First scan (lastScannedBlock == 0) and currentBlock > lookback.
+	blockCounter.SetCurrentBlock(300_000)
+	startBlock, currentBlock, err := watcher.nextScanRange(0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expectedStart := uint64(300_000) - reservationActionTimeoutLookBackBlocks
+	if startBlock != expectedStart {
+		t.Errorf("expected start block %d, got %d", expectedStart, startBlock)
+	}
+	if currentBlock != 300_000 {
+		t.Errorf("expected current block 300000, got %d", currentBlock)
+	}
+
+	// Case 2: First scan (lastScannedBlock == 0) and currentBlock <= lookback.
+	blockCounter.SetCurrentBlock(100_000)
+	startBlock, currentBlock, err = watcher.nextScanRange(0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if startBlock != 0 {
+		t.Errorf("expected start block 0, got %d", startBlock)
+	}
+	if currentBlock != 100_000 {
+		t.Errorf("expected current block 100000, got %d", currentBlock)
+	}
+
+	// Case 3: Subsequent scan (lastScannedBlock > 0).
+	blockCounter.SetCurrentBlock(500_000)
+	startBlock, currentBlock, err = watcher.nextScanRange(450_000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if startBlock != 450_001 {
+		t.Errorf("expected start block 450001, got %d", startBlock)
+	}
+	if currentBlock != 500_000 {
+		t.Errorf("expected current block 500000, got %d", currentBlock)
+	}
+}
+
+func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.T) {
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(1000)
 	spvChain.setBlockCounter(blockCounter)
 
+	wallet1 := walletPKH()
+	members := []uint32{1, 2, 3}
 	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{},
+		walletIDs: map[[20]byte][]uint32{wallet1: members},
 	}
 
 	pollInterval := 10 * time.Millisecond
@@ -393,40 +481,84 @@ func TestReservationActionTimeoutWatcher_RunLoop(t *testing.T) {
 		resolver,
 		pollInterval,
 	)
-	ratw.nowFn = func() uint32 { return 100 }
+	ratw.nowFn = func() uint32 { return 500 }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Tick 1: register wallet 1, within the first scan window.
-	wallet1 := [20]byte{1}
-	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+	// Tick 1: acceptance event for key1 (nonce 1).
+	key1 := reservationKey(0x1001)
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      key1,
+		RequestNonce:        1,
 		WalletPublicKeyHash: wallet1,
 		BlockNumber:         500,
 	})
-	spvChain.setWallet(wallet1, &tbtc.WalletChainData{State: tbtc.StateLive})
+	seededReservation(
+		t,
+		spvChain,
+		key1,
+		wallet1,
+		[]*tbtc.ReservationAction{
+			{
+				State:     tbtc.ReservationActionStatePending,
+				TimeoutAt: 100, // Timed out (now=500 > 100)
+			},
+		},
+		1,
+	)
 
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- ratw.Run(ctx)
 	}()
 
-	// Wait for tick 1 to run discoverWallets and pick up wallet 1.
+	// Wait for tick 1 to process key1.
 	time.Sleep(50 * time.Millisecond)
 
-	// Tick 2: register wallet 2 (block number past the tick-1 cursor, so
-	// the incremental scan actually picks it up) and close wallet 1, which
-	// must be evicted from knownWallets on this pass.
-	blockCounter.SetCurrentBlock(2000)
-	wallet2 := [20]byte{2}
-	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
-		WalletPublicKeyHash: wallet2,
-		BlockNumber:         1500,
-	})
-	spvChain.setWallet(wallet2, &tbtc.WalletChainData{State: tbtc.StateLive})
-	spvChain.setWallet(wallet1, &tbtc.WalletChainData{State: tbtc.StateClosed})
+	// Verify key1 was notified.
+	calls := spvChain.getSubmittedReservationActionTimeouts()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 notification after tick 1, got %d", len(calls))
+	}
+	if diff := deep.Equal(key1, calls[0].reservationKey); diff != nil {
+		t.Errorf("unexpected notified key: %v", diff)
+	}
 
-	// Wait for tick 2 to observe the new wallet and the eviction.
+	// Tick 2: key1 is now settled (no longer pending), and a reanchor event
+	// arrives for key2 (nonce 2) at block 1500.
+	spvChain.setReservationAction(key1, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStateSettled,
+		TimeoutAt: 100,
+	})
+
+	blockCounter.SetCurrentBlock(2000)
+	key2 := reservationKey(0x1002)
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            key2,
+		RequestNonce:              2,
+		SourceWalletPublicKeyHash: wallet1,
+		BlockNumber:               1500,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		key2,
+		wallet1,
+		[]*tbtc.ReservationAction{
+			{
+				State:     tbtc.ReservationActionStateSettled,
+				TimeoutAt: 100,
+			},
+			{
+				State:     tbtc.ReservationActionStatePending,
+				TimeoutAt: 200, // Timed out (now=500 > 200)
+			},
+		},
+		2,
+	)
+
+	// Wait for tick 2 to process key2 and evict key1.
 	time.Sleep(50 * time.Millisecond)
 
 	cancel()
@@ -434,12 +566,114 @@ func TestReservationActionTimeoutWatcher_RunLoop(t *testing.T) {
 		t.Errorf("Run returned error: %v", err)
 	}
 
-	// Assertions run only after Run has fully returned, so knownWallets is
-	// no longer being mutated concurrently by the background goroutine.
-	if _, ok := ratw.knownWallets[wallet1]; ok {
-		t.Errorf("wallet 1 should have been evicted after being observed Closed")
+	// Total timeout notifications should now be 2 (key1 on tick 1, key2 on tick 2).
+	calls = spvChain.getSubmittedReservationActionTimeouts()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 notifications after tick 2, got %d", len(calls))
 	}
-	if _, ok := ratw.knownWallets[wallet2]; !ok {
-		t.Errorf("wallet 2 should have been discovered")
+	if diff := deep.Equal(key2, calls[1].reservationKey); diff != nil {
+		t.Errorf("unexpected second notified key: %v", diff)
+	}
+
+	// key1 should have been evicted from pendingActions because it became Settled.
+	key1EventKey := actionEventKey(key1, 1)
+	if _, ok := ratw.pendingActions[key1EventKey]; ok {
+		t.Errorf("key1 should have been evicted from pendingActions once Settled")
+	}
+}
+
+func TestReservationActionTimeoutWatcher_RunLoop_BoundedFirstScan(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	// Set current block high enough that lookback applies.
+	currentBlock := uint64(500_000)
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	wallet1 := walletPKH()
+	members := []uint32{1, 2, 3}
+	resolver := &recordingActionTimeoutMembers{
+		walletIDs: map[[20]byte][]uint32{wallet1: members},
+	}
+
+	pollInterval := 10 * time.Millisecond
+	ratw := NewReservationActionTimeoutWatcher(
+		spvChain,
+		resolver,
+		pollInterval,
+	)
+	ratw.nowFn = func() uint32 { return 500 }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Event 1 is old: block 100,000 (before startBlock = 500,000 - 216,000 = 284,000).
+	oldKey := reservationKey(0x9001)
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      oldKey,
+		RequestNonce:        1,
+		WalletPublicKeyHash: wallet1,
+		BlockNumber:         100_000,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		oldKey,
+		wallet1,
+		[]*tbtc.ReservationAction{
+			{
+				State:     tbtc.ReservationActionStatePending,
+				TimeoutAt: 100,
+			},
+		},
+		1,
+	)
+
+	// Event 2 is within lookback: block 300,000.
+	recentKey := reservationKey(0x9002)
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      recentKey,
+		RequestNonce:        1,
+		WalletPublicKeyHash: wallet1,
+		BlockNumber:         300_000,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		recentKey,
+		wallet1,
+		[]*tbtc.ReservationAction{
+			{
+				State:     tbtc.ReservationActionStatePending,
+				TimeoutAt: 100,
+			},
+		},
+		1,
+	)
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ratw.Run(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if err := <-errChan; err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Only recentKey should have been discovered and notified.
+	calls := spvChain.getSubmittedReservationActionTimeouts()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 notification (recent event only), got %d", len(calls))
+	}
+	if diff := deep.Equal(recentKey, calls[0].reservationKey); diff != nil {
+		t.Errorf("unexpected notified key: %v", diff)
+	}
+
+	// oldKey should not be tracked in pendingActions.
+	oldEventKey := actionEventKey(oldKey, 1)
+	if _, ok := ratw.pendingActions[oldEventKey]; ok {
+		t.Errorf("oldKey should not have been discovered by bounded initial scan")
 	}
 }
