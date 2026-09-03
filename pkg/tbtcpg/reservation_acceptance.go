@@ -104,6 +104,7 @@ type reservationAcceptanceCandidate struct {
 	ReservationParameters *tbtc.ReservationParameters
 	TxMaxFee              uint64
 	RequestNonce          uint64
+	AnchorFee             int64
 }
 
 // findReservationAcceptanceCandidate returns the first reserved deposit
@@ -358,6 +359,20 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		}
 
 		// Second & Third fix: check reservation state and derive RequestNonce.
+		//
+		// GetReservation's documented contract (chain.go) is "returns an
+		// error if the reservation was not found" -- unlike the sibling
+		// lookups above (GetDepositRequest's foundRequest bool,
+		// PastReservationAcceptanceRequestedEvents' empty-slice-on-none),
+		// this call has no way to distinguish "not found" (the expected,
+		// common case for a brand-new candidate) from a genuine query
+		// failure. Failing closed here like the siblings would reject
+		// every first-time candidate, since "not yet reserved" is itself
+		// signaled as an error. This is a deliberate fail-open deviation:
+		// any GetReservation error is treated as "not yet created" and
+		// requestNonce defaults to 1; see
+		// TestReservationAcceptanceTask_GetReservationError for the pinned
+		// RequestNonce == 1 fallback behavior.
 		var requestNonce uint64 = 1
 		reservation, err := rat.chain.GetReservation(depositKey)
 		if err != nil {
@@ -390,6 +405,47 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			requestNonce = reservation.RequestNonce + 1
 		}
 
+		// Estimate the anchor fee and check net-of-fee viability here, as
+		// part of candidate selection, rather than after a single candidate
+		// has already been chosen. A candidate that fails this check is
+		// skipped in favor of the next one; nothing marks it retried, so
+		// leaving this check in proposeReservationAcceptance (which is
+		// called for exactly one already-selected candidate) would cause
+		// the same doomed deposit to be re-selected and abort on every
+		// subsequent Run() until it aged out of the look-back window.
+		anchorFee, err := estimateReservationAcceptanceFee(
+			rat.btcChain,
+			reservationParameters.ReservationTxMaxFee,
+		)
+		if err != nil {
+			taskLogger.Errorf(
+				"failed to estimate reservation acceptance transaction fee for [%v]: [%v]",
+				depositKey,
+				err,
+			)
+			continue
+		}
+
+		anchorValue := int64(depositRequest.Amount) - anchorFee
+		if anchorValue <= 0 {
+			taskLogger.Infof(
+				"reserved deposit [%v] value [%d] does not cover anchor fee [%d]; skipping",
+				depositKey,
+				depositRequest.Amount,
+				anchorFee,
+			)
+			continue
+		}
+		if uint64(anchorValue) < reservationParameters.ReservationMinAmount {
+			taskLogger.Infof(
+				"reserved deposit [%v] net-of-fee value [%d] below minimum [%d]; skipping",
+				depositKey,
+				anchorValue,
+				reservationParameters.ReservationMinAmount,
+			)
+			continue
+		}
+
 		taskLogger.Infof(
 			"selected reserved deposit [%v] for acceptance",
 			depositKey,
@@ -416,6 +472,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			ReservationParameters: reservationParameters,
 			TxMaxFee:              reservationParameters.ReservationTxMaxFee,
 			RequestNonce:          requestNonce,
+			AnchorFee:             anchorFee,
 		}, nil
 	}
 
@@ -505,30 +562,13 @@ func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 
 	taskLogger.Infof("preparing a reservation acceptance proposal")
 
-	anchorFee, err := estimateReservationAcceptanceFee(
-		rat.btcChain,
-		candidate.TxMaxFee,
-	)
-	if err != nil {
-		return nil, false, fmt.Errorf(
-			"cannot estimate reservation acceptance transaction fee: [%v]",
-			err,
-		)
-	}
-
-	anchorValue := candidate.Deposit.Utxo.Value - anchorFee
-	if anchorValue <= 0 {
-		return nil, false, fmt.Errorf(
-			"deposit value [%d] does not cover anchor fee [%d]",
-			candidate.Deposit.Utxo.Value,
-			anchorFee,
-		)
-	}
-
-	if candidate.ReservationParameters != nil &&
-		uint64(anchorValue) < candidate.ReservationParameters.ReservationMinAmount {
-		return nil, false, nil
-	}
+	// The anchor fee and its net-of-fee viability were already computed and
+	// validated during candidate selection in findReservationAcceptanceCandidate;
+	// re-checking here (after exactly one candidate has already been chosen)
+	// would abort this Run() outright on failure instead of trying the next
+	// candidate, causing the same doomed deposit to be re-selected on every
+	// subsequent Run() until it aged out of the look-back window.
+	anchorFee := candidate.AnchorFee
 
 	taskLogger.Infof("anchor transaction fee: [%d]", anchorFee)
 
