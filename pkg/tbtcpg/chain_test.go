@@ -73,6 +73,7 @@ type LocalChain struct {
 	reservationProposalValidations        map[[32]byte]bool
 	reservationReanchorRequestSubmissions []*reservationReanchorRequestSubmission
 	reservationWalletKeys                 map[[20]byte][]*big.Int
+	reservedDeposits                      map[string]bool
 	liveWalletsCountValue                 uint32
 	liveWalletsCountSet                   bool
 }
@@ -102,6 +103,7 @@ func NewLocalChain() *LocalChain {
 		reservationProposalValidations:        make(map[[32]byte]bool),
 		reservationReanchorRequestSubmissions: make([]*reservationReanchorRequestSubmission, 0),
 		reservationWalletKeys:                 make(map[[20]byte][]*big.Int),
+		reservedDeposits:                      make(map[string]bool),
 	}
 }
 
@@ -1661,11 +1663,24 @@ func (lc *LocalChain) ActiveReservationsCount() (
 	return 0, 0, nil
 }
 
-// IsReservedDeposit returns false by default.
+// IsReservedDeposit reports whether the given deposit key was marked
+// reserved via SetReservedDeposit; false by default.
 func (lc *LocalChain) IsReservedDeposit(
 	depositKey *big.Int,
 ) (bool, error) {
-	return false, nil
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.reservedDeposits[depositKey.Text(16)], nil
+}
+
+// SetReservedDeposit marks the given deposit key as reserved (or not) for
+// subsequent IsReservedDeposit calls.
+func (lc *LocalChain) SetReservedDeposit(depositKey *big.Int, reserved bool) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservedDeposits[depositKey.Text(16)] = reserved
 }
 
 // PastReservationAcceptanceRequestedEvents returns no events by default.
