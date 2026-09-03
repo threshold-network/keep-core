@@ -196,6 +196,11 @@ func start(cmd *cobra.Command) error {
 		// fatal: the operator opted into reservations, so a missing
 		// watcher would silently strand anchors.
 		if clientConfig.Tbtc.Reservations.Enabled {
+			if !clientConfig.Maintainer.Spv.Reservations.Enabled {
+				logger.Warnf("Client reservation proposal generation is enabled; " +
+					"ensure the paired Maintainer.Spv.Reservations.Enabled flag is also " +
+					"enabled in the maintainer config for end-to-end operation")
+			}
 			if err := spv.WireReservationWatchers(
 				ctx,
 				tbtcChain,

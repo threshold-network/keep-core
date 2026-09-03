@@ -129,11 +129,22 @@ func (ralc *reservationAcceptanceLocalChain) GetWallet(
 	return ralc.LocalChain.GetWallet(walletPublicKeyHash)
 }
 
+// GetReservation delegates to the embedded LocalChain, except that a
+// non-nil getReservationErr is consumed exactly once: it fires on the
+// very next call and then clears itself, simulating a transient RPC
+// failure rather than a permanent one. This lets
+// TestReservationAcceptanceTask_GetReservationError exercise the
+// candidate-selection fail-open path (see production's documented
+// deviation above the call site) while still letting
+// proposeReservationAcceptance's later post-request GetReservation
+// verification call succeed once the reservation actually exists.
 func (ralc *reservationAcceptanceLocalChain) GetReservation(
 	reservationKey *big.Int,
 ) (*tbtc.Reservation, error) {
 	if ralc.getReservationErr != nil {
-		return nil, ralc.getReservationErr
+		err := ralc.getReservationErr
+		ralc.getReservationErr = nil
+		return nil, err
 	}
 	return ralc.LocalChain.GetReservation(reservationKey)
 }
@@ -211,26 +222,6 @@ func (ralc *reservationAcceptanceLocalChain) AddPastReservationAcceptanceRequest
 	event *tbtc.ReservationAcceptanceRequestedEvent,
 ) {
 	ralc.acceptanceEvents = append(ralc.acceptanceEvents, event)
-}
-
-// RequestReservationAcceptance overrides the embedded LocalChain no-op
-// implementation to actually record a ReservationAcceptanceRequestedEvent,
-// so that production's own dedup guard (which queries
-// PastReservationAcceptanceRequestedEvents) genuinely engages on a
-// subsequent Run() against the same reservation, instead of silently never
-// observing the request this call represents.
-func (ralc *reservationAcceptanceLocalChain) RequestReservationAcceptance(
-	reservationKey *big.Int,
-	walletPublicKeyHash [20]byte,
-) error {
-	ralc.acceptanceEvents = append(
-		ralc.acceptanceEvents,
-		&tbtc.ReservationAcceptanceRequestedEvent{
-			ReservationKey:      reservationKey,
-			WalletPublicKeyHash: walletPublicKeyHash,
-		},
-	)
-	return nil
 }
 
 // scenarioReservationAcceptanceChain wires a scenario's on-chain state
@@ -483,10 +474,11 @@ func newBoundaryTestChain(
 	ralc := newReservationAcceptanceLocalChain()
 
 	ralc.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationVault:         testReservationVaultAddress,
-		ReservationMinAmount:     1000,
-		ReservationTxMaxFee:      5000,
-		MaxReservationsPerWallet: 5,
+		ReservationVault:          testReservationVaultAddress,
+		ReservationMinAmount:      1000,
+		ReservationTxMaxFee:       5000,
+		MaxReservationsPerWallet:  5,
+		ReservationMaxTotalAmount: 100000000,
 	})
 	ralc.maxPerWalletAmount = 5000000
 	ralc.maxSingleAmount = 5000000
@@ -901,6 +893,233 @@ func TestReservationAcceptanceTask_NoCandidates(t *testing.T) {
 	}
 }
 
+// TestReservationAcceptanceTask_VaultNotConfigured_ZeroAddress verifies
+// that a zero-address ReservationVault (the actual value the production
+// chain.Address converter emits for an unset vault, never an empty
+// string) is correctly treated as "not configured".
+func TestReservationAcceptanceTask_VaultNotConfigured_ZeroAddress(t *testing.T) {
+	ralc := newReservationAcceptanceLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	walletPublicKeyHash := hexToByte20(
+		"8db50eb52063ea9d98b3eac91489a90f738986f6",
+	)
+
+	ralc.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault: chain.Address(
+			"0x0000000000000000000000000000000000000000",
+		),
+		ReservationMaxTotalAmount: 100000000,
+	})
+	ralc.maxPerWalletAmount = 1000000
+	ralc.maxSingleAmount = 5000000
+	ralc.maxActive = 100
+
+	ralc.SetDepositMinAge(3600)
+	ralc.SetWallet(
+		walletPublicKeyHash,
+		&tbtc.WalletChainData{State: tbtc.StateLive},
+	)
+
+	currentBlock := uint64(300000)
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	ralc.SetBlockCounter(blockCounter)
+
+	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
+
+	request := &tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+	}
+
+	proposal, shouldExecute, err := task.Run(request)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if shouldExecute {
+		t.Errorf("expected shouldExecute=false, got true")
+	}
+	if proposal != nil {
+		t.Errorf("expected nil proposal, got [%+v]", proposal)
+	}
+}
+
+// TestReservationAcceptanceTask_AmountCapBoundaries verifies the three
+// amount-based eligibility caps (single-deposit, wallet-aggregate,
+// global-total) at their exact boundary: a deposit that would land
+// exactly at the cap is accepted, one satoshi over is rejected.
+func TestReservationAcceptanceTask_AmountCapBoundaries(t *testing.T) {
+	const depositAmount = uint64(1_000_000)
+
+	tests := map[string]struct {
+		singleCap        uint64
+		walletCap        uint64
+		walletExisting   uint64
+		globalCap        uint64
+		globalExisting   uint64
+		expectAcceptance bool
+	}{
+		"single-deposit cap: exactly at cap is accepted": {
+			singleCap:        depositAmount,
+			walletCap:        depositAmount * 10,
+			globalCap:        depositAmount * 10,
+			expectAcceptance: true,
+		},
+		"single-deposit cap: one over cap is rejected": {
+			singleCap:        depositAmount - 1,
+			walletCap:        depositAmount * 10,
+			globalCap:        depositAmount * 10,
+			expectAcceptance: false,
+		},
+		"wallet-aggregate cap: exactly at cap is accepted": {
+			singleCap:        depositAmount * 10,
+			walletCap:        depositAmount,
+			walletExisting:   0,
+			globalCap:        depositAmount * 10,
+			expectAcceptance: true,
+		},
+		"wallet-aggregate cap: one over cap is rejected": {
+			singleCap:        depositAmount * 10,
+			walletCap:        depositAmount,
+			walletExisting:   1,
+			globalCap:        depositAmount * 10,
+			expectAcceptance: false,
+		},
+		"global-total cap: exactly at cap is accepted": {
+			singleCap:        depositAmount * 10,
+			walletCap:        depositAmount * 10,
+			globalCap:        depositAmount,
+			globalExisting:   0,
+			expectAcceptance: true,
+		},
+		"global-total cap: one over cap is rejected": {
+			singleCap:        depositAmount * 10,
+			walletCap:        depositAmount * 10,
+			globalCap:        depositAmount,
+			globalExisting:   1,
+			expectAcceptance: false,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			ralc := newReservationAcceptanceLocalChain()
+			btcChain := tbtcpg.NewLocalBitcoinChain()
+
+			walletPublicKeyHash := hexToByte20(
+				"8db50eb52063ea9d98b3eac91489a90f738986f6",
+			)
+
+			ralc.SetReservationParameters(tbtc.ReservationParameters{
+				ReservationVault: chain.Address(
+					"0xReservationVaultAddress1234567890abcdef12345678",
+				),
+				ReservationMinAmount:      1000,
+				ReservationTxMaxFee:       5000,
+				MaxReservationsPerWallet:  5,
+				ReservationMaxTotalAmount: test.globalCap,
+				ReservationTotalAmount:    test.globalExisting,
+			})
+			ralc.maxPerWalletAmount = test.walletCap
+			ralc.maxSingleAmount = test.singleCap
+			ralc.walletReservationsAmount = test.walletExisting
+			ralc.maxActive = 100
+
+			ralc.SetDepositMinAge(3600)
+			ralc.SetWallet(
+				walletPublicKeyHash,
+				&tbtc.WalletChainData{State: tbtc.StateLive},
+			)
+
+			currentBlock := uint64(300000)
+			blockCounter := tbtcpg.NewMockBlockCounter()
+			blockCounter.SetCurrentBlock(currentBlock)
+			ralc.SetBlockCounter(blockCounter)
+
+			fundingTxHash := fundingTxHashForTestName(testName)
+			dummyTx := &bitcoin.Transaction{
+				Outputs: []*bitcoin.TransactionOutput{{
+					Value:           0,
+					PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
+				}},
+			}
+			btcChain.SetTransaction(fundingTxHash, dummyTx)
+			btcChain.SetEstimateSatPerVByteFee(1, 1)
+			btcChain.SetTransactionConfirmations(
+				fundingTxHash,
+				tbtc.DepositSweepRequiredFundingTxConfirmations,
+			)
+			ralc.SetDepositRequest(
+				fundingTxHash,
+				0,
+				&tbtc.DepositChainRequest{
+					Depositor:  chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
+					Amount:     depositAmount,
+					RevealedAt: time.Now().Add(-2 * time.Hour),
+					SweptAt:    time.Unix(0, 0),
+					Vault: &[]chain.Address{chain.Address(
+						"0xReservationVaultAddress1234567890abcdef12345678",
+					)}[0],
+				},
+			)
+
+			filterStartBlock := uint64(0)
+			if currentBlock > tbtcpg.ReservationAcceptanceLookBackBlocks {
+				filterStartBlock = currentBlock - tbtcpg.ReservationAcceptanceLookBackBlocks
+			}
+
+			if err := ralc.AddPastDepositRevealedEvent(
+				&tbtc.DepositRevealedEventFilter{
+					StartBlock:          filterStartBlock,
+					EndBlock:            &currentBlock,
+					WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+				&tbtc.DepositRevealedEvent{
+					BlockNumber:         290000,
+					WalletPublicKeyHash: walletPublicKeyHash,
+					FundingTxHash:       fundingTxHash,
+					FundingOutputIndex:  0,
+					Vault: &[]chain.Address{chain.Address(
+						"0xReservationVaultAddress1234567890abcdef12345678",
+					)}[0],
+				},
+			); err != nil {
+				t.Fatal(err)
+			}
+
+			task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
+			request := &tbtc.CoordinationProposalRequest{
+				WalletPublicKeyHash: walletPublicKeyHash,
+			}
+
+			proposal, shouldExecute, err := task.Run(request)
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+			if test.expectAcceptance {
+				if !shouldExecute || proposal == nil {
+					t.Fatalf("expected proposal to be accepted at the exact cap boundary")
+				}
+			} else {
+				if shouldExecute || proposal != nil {
+					t.Fatalf("expected proposal to be rejected one unit over the cap")
+				}
+			}
+		})
+	}
+}
+
+// fundingTxHashForTestName derives a unique, deterministic funding tx hash
+// per subtest name so parallel/sequential subtests never collide on the
+// same fixture key.
+func fundingTxHashForTestName(name string) bitcoin.Hash {
+	sum := 0
+	for _, r := range name {
+		sum += int(r)
+	}
+	return hashFromString(fmt.Sprintf("%064x", sum+1))
+}
+
 // TestReservationAcceptanceTask_BoundedLookback verifies that the bounded
 // look-back window is applied when the current block exceeds it.
 func TestReservationAcceptanceTask_BoundedLookback(t *testing.T) {
@@ -1188,6 +1407,7 @@ func TestReservationAcceptanceTask_Stateless_Maturity(t *testing.T) {
 	walletPublicKeyHash := hexToByte20(
 		"8db50eb52063ea9d98b3eac91489a90f738986f6",
 	)
+
 	currentBlock := uint64(300000)
 
 	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
@@ -1420,12 +1640,16 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 		maxReservationsPerWallet uint32
 		walletReservationsCount  uint32
 		reservationMinAmount     uint64
-		reservationMaxTotal      uint64
 		reservationTotal         uint64
-		// maxSingleAmount, maxPerWalletAmount, and maxActive are pointers
-		// so a test row can explicitly request the cap-disabled value of 0
-		// (production's "0 = unlimited" semantic for these caps); nil means
-		// "use this test's default cap" instead.
+		// maxSingleAmount, maxPerWalletAmount, maxActive, and
+		// reservationMaxTotal are pointers so a test row can explicitly
+		// request the cap-disabled value of 0 for the three caps where
+		// production treats 0 as "unlimited", or explicitly exercise the
+		// fail-closed misconfiguration path for the two caps
+		// (maxActiveReservations, ReservationMaxTotalAmount) where
+		// production treats 0 as "not configured" instead; nil means "use
+		// this test's default cap" (a large, effectively-unlimited value).
+		reservationMaxTotal      *uint64
 		maxSingleAmount          *uint64
 		maxPerWalletAmount       *uint64
 		walletReservationsAmount uint64
@@ -1479,7 +1703,7 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 			maxReservationsPerWallet: 5,
 			reservationMinAmount:     1000,
 			reservationTotal:         3000000,
-			reservationMaxTotal:      5000000,
+			reservationMaxTotal:      uint64Ptr(5000000),
 			expectAccept:             true,
 		},
 		"ReservationMaxTotalAmount: one over cap rejects": {
@@ -1487,7 +1711,19 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 			maxReservationsPerWallet: 5,
 			reservationMinAmount:     1000,
 			reservationTotal:         3000001,
-			reservationMaxTotal:      5000000,
+			reservationMaxTotal:      uint64Ptr(5000000),
+			expectAccept:             false,
+		},
+		// Unlike ReservationMaxSingleAmount and MaxReservationsAmountPerWallet
+		// below, ReservationMaxTotalAmount == 0 is NOT treated as
+		// "unlimited": checkReservationAcceptanceEligibility fails closed on
+		// a misconfigured (zero) global cap rather than silently allowing
+		// unbounded reservations.
+		"ReservationMaxTotalAmount: cap of 0 fails closed (misconfiguration)": {
+			depositAmount:            2000000,
+			maxReservationsPerWallet: 5,
+			reservationMinAmount:     1000,
+			reservationMaxTotal:      uint64Ptr(0),
 			expectAccept:             false,
 		},
 		"ReservationMaxSingleAmount: exactly at cap accepts": {
@@ -1559,15 +1795,18 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 			reservationMinAmount:     1000,
 			expectAccept:             false,
 		},
-		// A cap of 0 means "unlimited" (maxActiveReservations > 0 gates the
-		// check).
-		"ActiveReservationsCount: cap of 0 means unlimited": {
+		// Unlike ReservationMaxSingleAmount and MaxReservationsAmountPerWallet
+		// above, maxActiveReservations == 0 is NOT treated as "unlimited":
+		// checkReservationAcceptanceEligibility fails closed on a
+		// misconfigured (zero) active-reservations cap rather than silently
+		// allowing unbounded active reservations.
+		"ActiveReservationsCount: cap of 0 fails closed (misconfiguration)": {
 			depositAmount:            2000000,
 			maxActive:                uint32Ptr(0),
 			activeCount:              1000,
 			maxReservationsPerWallet: 5,
 			reservationMinAmount:     1000,
-			expectAccept:             true,
+			expectAccept:             false,
 		},
 	}
 
@@ -1581,12 +1820,16 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 				"8db50eb52063ea9d98b3eac91489a90f738986f6",
 			)
 
+			reservationMaxTotal := uint64(100000000)
+			if test.reservationMaxTotal != nil {
+				reservationMaxTotal = *test.reservationMaxTotal
+			}
 			ralc.SetReservationParameters(tbtc.ReservationParameters{
 				ReservationVault:          testReservationVaultAddress,
 				ReservationMinAmount:      test.reservationMinAmount,
 				ReservationTxMaxFee:       5000,
 				MaxReservationsPerWallet:  test.maxReservationsPerWallet,
-				ReservationMaxTotalAmount: test.reservationMaxTotal,
+				ReservationMaxTotalAmount: reservationMaxTotal,
 				ReservationTotalAmount:    test.reservationTotal,
 			})
 			ralc.maxPerWalletAmount = 50000000
@@ -1655,6 +1898,7 @@ func TestReservationAcceptanceTask_Stateless_NoReRequest(t *testing.T) {
 	walletPublicKeyHash := hexToByte20(
 		"8db50eb52063ea9d98b3eac91489a90f738986f6",
 	)
+
 	currentBlock := uint64(300000)
 
 	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
@@ -1739,84 +1983,6 @@ func TestReservationAcceptanceTask_Stateless_NoReRequest(t *testing.T) {
 	}
 	if shouldExecute || proposal != nil {
 		t.Fatalf("expected no proposal on second run due to existing acceptance event")
-	}
-}
-
-// TestReservationAcceptanceTask_Stateless_PastEventsError verifies that an
-// RPC failure querying past acceptance requested events fails closed (skips candidate).
-func TestReservationAcceptanceTask_Stateless_PastEventsError(t *testing.T) {
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
-	currentBlock := uint64(300000)
-
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-	fundingTxHash := hashFromString(
-		"7777777777777777777777777777777777777777777777777777777777777777",
-	)
-	dummyTx := &bitcoin.Transaction{
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           0,
-			PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
-		}},
-	}
-	btcChain.SetTransaction(fundingTxHash, dummyTx)
-	btcChain.SetEstimateSatPerVByteFee(1, 1)
-	btcChain.SetTransactionConfirmations(
-		fundingTxHash,
-		tbtc.DepositSweepRequiredFundingTxConfirmations,
-	)
-
-	ralc.SetDepositRequest(
-		fundingTxHash,
-		0,
-		&tbtc.DepositChainRequest{
-			Amount:     2000000,
-			RevealedAt: time.Now().Add(-2 * time.Hour),
-			SweptAt:    time.Unix(0, 0),
-			Vault:      &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	)
-
-	filterStartBlock := uint64(0)
-	if currentBlock > tbtcpg.ReservationAcceptanceLookBackBlocks {
-		filterStartBlock = currentBlock - tbtcpg.ReservationAcceptanceLookBackBlocks
-	}
-
-	if err := ralc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          filterStartBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         290000,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  0,
-			Vault:               &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	// Force an error on PastReservationAcceptanceRequestedEvents.
-	ralc.acceptanceEventsErr = fmt.Errorf("rpc failure")
-
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-	request := &tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	}
-
-	proposal, shouldExecute, err := task.Run(request)
-	if err != nil {
-		t.Fatalf("unexpected task error: [%v]", err)
-	}
-	if shouldExecute || proposal != nil {
-		t.Fatalf("expected candidate to be skipped when past events check fails closed")
 	}
 }
 
@@ -1928,10 +2094,11 @@ func TestReservationAcceptanceTask_Stateless_DynamicMinAmount(t *testing.T) {
 	// Initial min amount is 5,000,000.
 	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, func(ralc *reservationAcceptanceLocalChain) {
 		ralc.SetReservationParameters(tbtc.ReservationParameters{
-			ReservationVault:         testReservationVaultAddress,
-			ReservationMinAmount:     5000000,
-			ReservationTxMaxFee:      5000,
-			MaxReservationsPerWallet: 5,
+			ReservationVault:          testReservationVaultAddress,
+			ReservationMinAmount:      5000000,
+			ReservationTxMaxFee:       5000,
+			MaxReservationsPerWallet:  5,
+			ReservationMaxTotalAmount: 100000000,
 		})
 		ralc.maxPerWalletAmount = 50000000
 		ralc.maxSingleAmount = 50000000
@@ -2004,10 +2171,11 @@ func TestReservationAcceptanceTask_Stateless_DynamicMinAmount(t *testing.T) {
 
 	// Governance lowers min amount to 1,000,000.
 	ralc.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationVault:         testReservationVaultAddress,
-		ReservationMinAmount:     1000000,
-		ReservationTxMaxFee:      5000,
-		MaxReservationsPerWallet: 5,
+		ReservationVault:          testReservationVaultAddress,
+		ReservationMinAmount:      1000000,
+		ReservationTxMaxFee:       5000,
+		MaxReservationsPerWallet:  5,
+		ReservationMaxTotalAmount: 100000000,
 	})
 
 	// Second run on the same task instance: deposit is now above min and proposed.
@@ -2029,6 +2197,7 @@ func TestReservationAcceptanceTask_Stateless_RequestNonceIncremented(t *testing.
 	walletPublicKeyHash := hexToByte20(
 		"8db50eb52063ea9d98b3eac91489a90f738986f6",
 	)
+
 	currentBlock := uint64(300000)
 
 	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)

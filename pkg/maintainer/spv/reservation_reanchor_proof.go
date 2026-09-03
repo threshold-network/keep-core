@@ -238,9 +238,15 @@ func submitReservationActionProof(
 		return fmt.Errorf("provided required confirmations count must be greater than 0")
 	}
 	if reservationKey == nil {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
 		return fmt.Errorf("reservation key is required")
 	}
 	if requestNonce == 0 {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
 		return fmt.Errorf("request nonce must be > 0")
 	}
 
@@ -266,6 +272,9 @@ func submitReservationActionProof(
 
 	action, err := spvChain.GetReservationAction(reservationKey, requestNonce)
 	if err != nil {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
 		return fmt.Errorf("cannot fetch reservation action generation: [%v]", err)
 	}
 
@@ -278,10 +287,16 @@ func submitReservationActionProof(
 	}
 
 	if action.ActionType != expectedActionType {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
 		return fmt.Errorf("reservation action generation is not expected type")
 	}
 
 	if action.State != tbtc.ReservationActionStatePending {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
 		return fmt.Errorf("reservation action generation is not pending")
 	}
 
@@ -297,7 +312,14 @@ func submitReservationActionProof(
 		reservationKey,
 		requestNonce,
 	); err != nil {
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+		}
 		return fmt.Errorf("failed to submit reservation proof: [%v]", err)
+	}
+
+	if metricsRecorder != nil {
+		metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_succeeded_total", 1)
 	}
 
 	return nil

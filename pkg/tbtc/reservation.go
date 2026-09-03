@@ -444,9 +444,14 @@ func (raa *reservationAnchorAction) execute() error {
 	// be block-range narrowed the way the deposit sweep validation path
 	// narrows it via DepositsRevealBlocks. Narrow by wallet PKH instead and
 	// match the exact funding outpoint among the returned events.
+	eventsStartBlock := uint64(0)
+	if raa.startBlock > reservationLookBackBlocks {
+		eventsStartBlock = raa.startBlock - reservationLookBackBlocks
+	}
+
 	events, err := raa.chain.PastDepositRevealedEvents(&DepositRevealedEventFilter{
 		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		StartBlock:          raa.startBlock - reservationLookBackBlocks,
+		StartBlock:          eventsStartBlock,
 	})
 	if err != nil {
 		return fmt.Errorf("cannot fetch deposit revealed events: [%v]", err)
@@ -490,6 +495,9 @@ func (raa *reservationAnchorAction) execute() error {
 	}
 	if action.ActionType != ReservationActionTypeAcceptance || action.State != ReservationActionStatePending {
 		return fmt.Errorf("reservation action is not a pending acceptance")
+	}
+	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
+		return fmt.Errorf("reservation action targets a different wallet")
 	}
 
 	err = raa.chain.ValidateReservationAnchorProposal(
