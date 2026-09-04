@@ -139,41 +139,16 @@ jobs:
       # @keep-network/tbtc-v2 publishes the reservation-router surface (Bridge,
       # WalletProposalValidator, RedemptionWatchtower, ReservationRouter, and the
       # rest of the tbtc module's required_contracts) under the `development` npm
-      # tag. Until then, PRs targeting `reservations-epic` compile tbtc-v2 PR #1112
-      # (pinned SHA, not a moving branch ref) locally to produce the artifacts
-      # `make get_artifacts` can't fetch from npm yet. `environment=development`
-      # only ever reads the `.abi` field off these files (the gen Makefile writes
-      # a hardcoded zero address rather than reading one - see
-      # pkg/chain/ethereum/common/gen/Makefile's `_address/%` rule), so a plain
-      # `hardhat compile` artifact is sufficient; no local deployment needed. See
+      # tag. Until then, `make get_artifacts` can't fetch these from npm; the gen
+      # Makefile's vendored fallback artifacts (see
+      # pkg/chain/ethereum/tbtc/gen/Makefile's ReservationRouter.fallback-artifact.json
+      # rule and the Bridge/WalletProposalValidator reservation-methods-fallback.json
+      # patch rules) supply the missing methods for `environment=development` builds
+      # instead. This directory only exists so the Dockerfile's COPY step (guarded by
+      # `-n "$(ls -A ...)"`, a no-op when empty) always has a source to copy from; see
       # ./ci-shims/tbtc-artifacts and the matching Dockerfile step.
       - name: Prepare tbtc-v2 artifact shim directory
         run: mkdir -p ci-shims/tbtc-artifacts
-
-      - name: Set up Node.js for tbtc-v2 shim build
-        if: github.base_ref == 'reservations-epic'
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22.23.1"
-
-      - name: Build tbtc-v2 module artifacts from PR #1112 (temporary shim)
-        if: github.base_ref == 'reservations-epic'
-        run: |
-          set -euo pipefail
-          git clone --quiet https://github.com/threshold-network/tbtc-v2.git /tmp/tbtc-v2-shim
-          cd /tmp/tbtc-v2-shim
-          git checkout --quiet 1c8c1cd1437c077700b372544677aa0f9b08ef87
-          cd solidity
-          corepack enable
-          git config --global url."https://".insteadOf git://
-          yarn install --immutable
-          yarn build
-          for contract in Bridge MaintainerProxy LightRelay LightRelayMaintainerProxy \
-            WalletProposalValidator RedemptionWatchtower ReservationRouter; do
-            artifact="$(find build/contracts -iname "$contract.json" -path "*/$contract.sol/*")"
-            cp "$artifact" "$GITHUB_WORKSPACE/ci-shims/tbtc-artifacts/$contract.json"
-          done
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
