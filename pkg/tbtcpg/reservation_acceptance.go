@@ -2,10 +2,12 @@ package tbtcpg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ipfs/go-log/v2"
@@ -45,6 +47,16 @@ type ReservationAcceptanceTask struct {
 	metricsRecorder interface {
 		SetGauge(name string, value float64)
 	}
+
+	// scanStateMutex guards scanState. Run() may be invoked for different
+	// wallets concurrently, and every call shares this one task instance
+	// (see NewProposalGenerator), so the per-wallet scan-state map needs
+	// its own lock rather than relying on a single caller goroutine.
+	scanStateMutex sync.Mutex
+	// scanState holds, per wallet, the incremental deposit-reveal scan
+	// cursor and its cached candidate events (see
+	// reservationAcceptanceScanState).
+	scanState map[[20]byte]*reservationAcceptanceScanState
 }
 
 // NewReservationAcceptanceTask constructs a ReservationAcceptanceTask.
@@ -53,8 +65,9 @@ func NewReservationAcceptanceTask(
 	btcChain bitcoin.Chain,
 ) *ReservationAcceptanceTask {
 	return &ReservationAcceptanceTask{
-		chain:    chain,
-		btcChain: btcChain,
+		chain:     chain,
+		btcChain:  btcChain,
+		scanState: make(map[[20]byte]*reservationAcceptanceScanState),
 	}
 }
 
@@ -66,10 +79,107 @@ func (rat *ReservationAcceptanceTask) setMetricsRecorder(recorder interface {
 	rat.metricsRecorder = recorder
 }
 
+// maxReservationAcceptanceCandidatesPerRun bounds the number of reserved
+// deposits examined by findReservationAcceptanceCandidate in a single
+// Run() call. Reveals are gas-only (no SPV proof required to appear), so
+// reveal volume is not bounded by anything else; this cap keeps per-window
+// work bounded even if a wallet's reveal volume spikes.
+const maxReservationAcceptanceCandidatesPerRun = 50
+
+// reservationAcceptanceScanState is the per-wallet incremental deposit-
+// reveal scan cursor and its in-memory candidate cache, mirroring the
+// cursor/cache split used by pkg/maintainer/spv/reservation_proof_loop.go's
+// reservationProofScanState: only the block-range delta since the previous
+// Run() call is fetched from the chain, while the cached event set is
+// still fully re-evaluated against live eligibility state on every call,
+// since an already-cached event's temporal maturity, applicable caps, and
+// reservation state can all change between calls.
+type reservationAcceptanceScanState struct {
+	// mutex guards the fields below across the entire read-fetch-merge-
+	// prune sequence in depositRevealedEventsSince, not just the map
+	// lookup in the caller: two concurrent Run() calls for the same
+	// wallet must serialize on this wallet's cursor rather than racing
+	// on lastScannedBlock/events.
+	mutex            sync.Mutex
+	lastScannedBlock uint64
+	events           []*tbtc.DepositRevealedEvent
+}
+
+// depositRevealedEventsSince returns every DepositRevealedEvent within the
+// ReservationAcceptanceLookBackBlocks window for walletPublicKeyHash, using
+// this task's per-wallet incremental cursor (see reservationAcceptanceScanState):
+// the first call for a wallet performs the full look-back scan; every call
+// after fetches only the block-range delta since the previous call and
+// merges it into the cached set. Events that have aged out of the
+// look-back window are pruned from the cache on every call.
+func (rat *ReservationAcceptanceTask) depositRevealedEventsSince(
+	walletPublicKeyHash [20]byte,
+	currentBlock uint64,
+) ([]*tbtc.DepositRevealedEvent, error) {
+	rat.scanStateMutex.Lock()
+	state, ok := rat.scanState[walletPublicKeyHash]
+	if !ok {
+		state = &reservationAcceptanceScanState{}
+		rat.scanState[walletPublicKeyHash] = state
+	}
+	rat.scanStateMutex.Unlock()
+
+	state.mutex.Lock()
+	defer state.mutex.Unlock()
+
+	windowStartBlock := uint64(0)
+	if currentBlock > ReservationAcceptanceLookBackBlocks {
+		windowStartBlock = currentBlock - ReservationAcceptanceLookBackBlocks
+	}
+
+	fetchStartBlock := windowStartBlock
+	if state.lastScannedBlock != 0 {
+		fetchStartBlock = state.lastScannedBlock + 1
+	}
+
+	if fetchStartBlock <= currentBlock {
+		newEvents, err := rat.chain.PastDepositRevealedEvents(
+			&tbtc.DepositRevealedEventFilter{
+				StartBlock:          fetchStartBlock,
+				EndBlock:            &currentBlock,
+				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"failed to get past deposit revealed events: [%w]",
+				err,
+			)
+		}
+
+		state.events = append(state.events, newEvents...)
+		state.lastScannedBlock = currentBlock
+	}
+
+	// Prune events that have aged out of the look-back window and build a
+	// fresh slice, so the caller's in-place sort does not reorder the
+	// cached backing array shared across Run() calls for this wallet.
+	prunedEvents := make([]*tbtc.DepositRevealedEvent, 0, len(state.events))
+	for _, event := range state.events {
+		if event.BlockNumber >= windowStartBlock {
+			prunedEvents = append(prunedEvents, event)
+		}
+	}
+	state.events = prunedEvents
+
+	events := make([]*tbtc.DepositRevealedEvent, len(prunedEvents))
+	copy(events, prunedEvents)
+	return events, nil
+}
+
 // Run inspects the chain for an acceptance candidate reserved deposit and,
 // if one passes the eligibility gate, returns the resulting anchor proposal.
 // The task is a no-op (proposal == nil, shouldExecute == false) when no
-// candidate exists.
+// candidate exists. A candidate whose proposal generation fails before any
+// chain-state-mutating call (assemble/validate) is skipped in favor of the
+// next candidate rather than aborting the window outright -- see
+// reservationAcceptancePreWriteError. A failure after a write still aborts
+// the window, since a partial on-chain effect may already exist.
 func (rat *ReservationAcceptanceTask) Run(request *tbtc.CoordinationProposalRequest) (
 	tbtc.CoordinationProposal,
 	bool,
@@ -82,37 +192,54 @@ func (rat *ReservationAcceptanceTask) Run(request *tbtc.CoordinationProposalRequ
 		zap.String("walletPKH", fmt.Sprintf("0x%x", walletPublicKeyHash)),
 	)
 
-	candidate, err := rat.findReservationAcceptanceCandidate(
-		taskLogger,
-		walletPublicKeyHash,
-	)
-	if err != nil {
-		return nil, false, fmt.Errorf(
-			"cannot find reservation acceptance candidate: [%w]",
-			err,
-		)
-	}
-	if candidate == nil {
-		taskLogger.Info("no reservation acceptance candidate")
-		return nil, false, nil
-	}
+	skipDepositKeys := make(map[string]bool)
 
-	proposal, shouldExecute, err := rat.proposeReservationAcceptance(
-		taskLogger,
-		walletPublicKeyHash,
-		candidate,
-	)
-	if err != nil {
-		return nil, false, fmt.Errorf(
-			"cannot prepare reservation acceptance proposal: [%w]",
-			err,
+	for {
+		candidate, err := rat.findReservationAcceptanceCandidate(
+			taskLogger,
+			walletPublicKeyHash,
+			skipDepositKeys,
 		)
-	}
+		if err != nil {
+			return nil, false, fmt.Errorf(
+				"cannot find reservation acceptance candidate: [%w]",
+				err,
+			)
+		}
+		if candidate == nil {
+			taskLogger.Info("no reservation acceptance candidate")
+			return nil, false, nil
+		}
 
-	if proposal == nil {
-		return nil, shouldExecute, nil
+		proposal, shouldExecute, err := rat.proposeReservationAcceptance(
+			taskLogger,
+			walletPublicKeyHash,
+			candidate,
+		)
+		if err != nil {
+			var preWriteErr *reservationAcceptancePreWriteError
+			if errors.As(err, &preWriteErr) {
+				taskLogger.Warnf(
+					"reservation acceptance candidate [%v] failed before "+
+						"any chain-state-mutating call, trying next "+
+						"candidate: [%v]",
+					candidate.DepositKey,
+					err,
+				)
+				skipDepositKeys[candidate.DepositKey.Text(16)] = true
+				continue
+			}
+			return nil, false, fmt.Errorf(
+				"cannot prepare reservation acceptance proposal: [%w]",
+				err,
+			)
+		}
+
+		if proposal == nil {
+			return nil, shouldExecute, nil
+		}
+		return proposal, shouldExecute, nil
 	}
-	return proposal, shouldExecute, nil
 }
 
 // ActionType returns the wallet action type this task proposes.
@@ -125,6 +252,7 @@ func (rat *ReservationAcceptanceTask) ActionType() tbtc.WalletActionType {
 // deposit's reveal context, the derived request nonce, plus the on-chain cap
 // snapshot taken at scan time.
 type reservationAcceptanceCandidate struct {
+	DepositKey            *big.Int
 	Deposit               *tbtc.Deposit
 	FundingTx             *bitcoin.Transaction
 	ReservationParameters *tbtc.ReservationParameters
@@ -135,9 +263,14 @@ type reservationAcceptanceCandidate struct {
 
 // findReservationAcceptanceCandidate returns the first reserved deposit
 // that the operator's wallet may accept, or nil when none qualifies.
+// skipDepositKeys (keyed by depositKey.Text(16)) excludes deposits the
+// caller already tried and rejected earlier in the same Run() call, so a
+// deposit whose proposal generation fails pre-write does not block every
+// other candidate on the wallet.
 func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	taskLogger log.StandardLogger,
 	walletPublicKeyHash [20]byte,
+	skipDepositKeys map[string]bool,
 ) (*reservationAcceptanceCandidate, error) {
 	if walletPublicKeyHash == [20]byte{} {
 		return nil, fmt.Errorf("wallet public key hash is required")
@@ -257,22 +390,12 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		)
 	}
 
-	filterStartBlock := uint64(0)
-	if currentBlock > ReservationAcceptanceLookBackBlocks {
-		filterStartBlock = currentBlock - ReservationAcceptanceLookBackBlocks
-	}
-	filter := &tbtc.DepositRevealedEventFilter{
-		StartBlock:          filterStartBlock,
-		EndBlock:            &currentBlock,
-		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-	}
-
-	depositRevealedEvents, err := rat.chain.PastDepositRevealedEvents(filter)
+	depositRevealedEvents, err := rat.depositRevealedEventsSince(
+		walletPublicKeyHash,
+		currentBlock,
+	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get past deposit revealed events: [%w]",
-			err,
-		)
+		return nil, err
 	}
 
 	// Take the oldest first.
@@ -282,15 +405,31 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 
 	now := time.Now()
 
+	candidatesExamined := 0
 	for _, event := range depositRevealedEvents {
 		if !depositTargetsReservationVault(event.Vault, reservationVault) {
 			continue
 		}
 
+		if candidatesExamined >= maxReservationAcceptanceCandidatesPerRun {
+			taskLogger.Warnf(
+				"reached max reservation acceptance candidates per run "+
+					"[%d]; remaining reserved deposits will be examined "+
+					"on a subsequent run",
+				maxReservationAcceptanceCandidatesPerRun,
+			)
+			break
+		}
+		candidatesExamined++
+
 		depositKey := rat.chain.BuildDepositKey(
 			event.FundingTxHash,
 			event.FundingOutputIndex,
 		)
+
+		if skipDepositKeys[depositKey.Text(16)] {
+			continue
+		}
 
 		depositRequest, foundRequest, err := rat.chain.GetDepositRequest(
 			event.FundingTxHash,
@@ -395,12 +534,28 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		var requestNonce uint64 = 1
 		reservation, err := rat.chain.GetReservation(depositKey)
 		if err != nil {
-			taskLogger.Debugf(
-				"cannot get reservation [%v] (assuming not yet created): [%v]",
+			// Fail safe: the production chain adapter never errors for "not
+			// found" (it returns a zero record with State == Unknown), so a
+			// non-nil error here can only be an RPC/decode failure -- not a
+			// signal that the reservation is not yet created. Treating it as
+			// "assume not yet created" would skip both the eligible-state
+			// gate and the hasPendingAction gate below. Skip this deposit for
+			// the current coordination window instead; the next window
+			// retries (mirrors the fail-safe policy in hasPendingAction).
+			taskLogger.Errorf(
+				"cannot get reservation [%v], skipping deposit for this window: [%v]",
 				depositKey,
 				err,
 			)
-		} else if reservation != nil {
+			continue
+		}
+
+		// "Not yet created" is derived only from a successful read: a zero
+		// record reports State == Unknown with RequestNonce == 0, in which
+		// case the predicted requestNonce of 1 (set above) already applies
+		// and the gates below do not apply.
+		if reservation != nil &&
+			!(reservation.State == tbtc.ReservationStateUnknown && reservation.RequestNonce == 0) {
 			if reservation.State == tbtc.ReservationStateActive ||
 				reservation.State == tbtc.ReservationStateActionPending ||
 				reservation.State == tbtc.ReservationStateClosed ||
@@ -471,6 +626,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		)
 
 		return &reservationAcceptanceCandidate{
+			DepositKey: depositKey,
 			Deposit: &tbtc.Deposit{
 				Utxo: &bitcoin.UnspentTransactionOutput{
 					Outpoint: &bitcoin.TransactionOutpoint{
@@ -621,6 +777,25 @@ func checkReservationAcceptanceEligibility(
 	return true
 }
 
+// reservationAcceptancePreWriteError wraps a proposeReservationAcceptance
+// failure that occurred before any chain-state-mutating call (assemble or
+// validate). The caller (Run) treats this as "this deposit is doomed" and
+// skips it in favor of the next candidate instead of aborting the whole
+// coordination window -- a failure after a write (RequestReservationAcceptance
+// or the post-request GetReservation check) still aborts the window as
+// before, since a partial on-chain effect may already exist.
+type reservationAcceptancePreWriteError struct {
+	err error
+}
+
+func (e *reservationAcceptancePreWriteError) Error() string {
+	return e.err.Error()
+}
+
+func (e *reservationAcceptancePreWriteError) Unwrap() error {
+	return e.err
+}
+
 func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 	taskLogger log.StandardLogger,
 	walletPublicKeyHash [20]byte,
@@ -658,10 +833,12 @@ func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 		feeBoundAction,
 		anchorFee,
 	); err != nil {
-		return nil, false, fmt.Errorf(
-			"cannot assemble reservation anchor transaction: [%v]",
-			err,
-		)
+		return nil, false, &reservationAcceptancePreWriteError{
+			err: fmt.Errorf(
+				"cannot assemble reservation anchor transaction: [%v]",
+				err,
+			),
+		}
 	}
 
 	proposal := &tbtc.ReservationAnchorProposal{
@@ -684,10 +861,12 @@ func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 			FundingTx: candidate.FundingTx,
 		},
 	); err != nil {
-		return nil, false, fmt.Errorf(
-			"failed to verify reservation anchor proposal: %v",
-			err,
-		)
+		return nil, false, &reservationAcceptancePreWriteError{
+			err: fmt.Errorf(
+				"failed to verify reservation anchor proposal: %v",
+				err,
+			),
+		}
 	}
 
 	// RequestReservationAcceptance is called as a side effect of proposal
