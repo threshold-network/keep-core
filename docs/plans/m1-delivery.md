@@ -11,7 +11,7 @@ working scratchpad.
 
 ## Current status — 2026-09-04
 
-**tbtc-v2 (`reservations-upgrade`, tip `09b3d2c7d`, 2026-09-04T10:58:46Z) — A–G build order fully merged:**
+**tbtc-v2 (`reservations-upgrade`, tip `398fcedf9`, 2026-09-04T12:51:23Z) — A–G build order fully merged:**
 
 | # | PR | tbtc-v2 branch | Status | Notes |
 |---|----|---------------|--------|-------|
@@ -29,13 +29,14 @@ working scratchpad.
 |----|--------|--------|-------|
 | [#1120](https://github.com/threshold-network/tbtc-v2/pull/1120) `m1/reanchor-dissolution-gate-fix` | fix(bridge): remove dissolution-eligibility gate from `requestReservationReanchor` | **MERGED** (2026-09-03T11:25:12Z) | Spec'd as PR I in `pr-strategy.md`; independent of A–G |
 | 5 direct commits by the maintainer (no PR) | `reservations-upgrade` directly | **LANDED** 2026-09-04T08:38–10:58 | `test: cover reservations end-to-end and consolidate harnesses`; `style: prettier-format reservation contracts and deployment docs`; `fix(reservations): router occupancy parity, closeReservation completeness, snapshot pin, drop dead strand overload`; `fix(reservations): adapt closing-period gate to packed counters; restore re-anchor amount floor`; `style(reservations): plain-text comment in re-anchor request gate`. Pushed directly, not through PR review — flagged here for visibility, not a queue item. |
+| [#1121](https://github.com/threshold-network/tbtc-v2/pull/1121) `port/reserved-redemption-veto` | feat(bridge): port reserved-redemption and veto surface from the settlement branch | **MERGED** (2026-09-04T12:51:23Z), **currently being reverted** | **Scope violation, being undone.** `#1116`'s multi-agent review found this shipped M2-scope Bridge-side reserved-redemption/veto/renewal machinery (`requestReservedRedemption`, `notifyReservationRedemptionTimedOut`, `notifyReservedRedemptionVeto`, `extendReservation`) that `docs/spec/reservations/roadmap.md` §1.2 and `m1-b-implementation.md` §2.3 explicitly say must stay **absent** from milestone 1, not deployed-and-paused. Plus 3 independent P0 security findings in the same surface: an escrow-refund gap in `unwindPendingAction`, zero test coverage of the settlement-proof path, and a watchtower-veto-bypass double-claim (late-settle after timeout keeps the refund AND the BTC output, no TBTC burned). See [#1122](https://github.com/threshold-network/tbtc-v2/pull/1122) for the full revert. |
 
 **Open, not yet merged (tbtc-v2):**
 
 | PR | Branch → base | Status | Notes |
 |----|---------------|--------|-------|
-| [#1121](https://github.com/threshold-network/tbtc-v2/pull/1121) `port/reserved-redemption-veto` → `reservations-upgrade` | feat(bridge): port reserved-redemption and veto surface from the settlement branch | OPEN, `mergeable: CONFLICTING`/`mergeState: DIRTY` (flipped from `UNKNOWN` within minutes of opening, once GitHub finished recomputing) | Touches `Reservation.sol`, `ReservationRouter.sol`, `ReservationProofs.sol`, `ReservationVault.sol` — the same files the 5 direct maintainer commits (row above) modified on `reservations-upgrade` after this PR's branch point. New work, not part of the original A–H decomposition; not yet reviewed. |
-| [#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) `reservations-upgrade` → `dev` | chore(bridge): milestone-1 UTXO reservations stack tracker | OPEN, `mergeable: MERGEABLE`/`mergeState: UNSTABLE` | Diff now `+20394/-45` across 50 files (reflects full A–G payload). UNSTABLE = 5 checks still `IN_PROGRESS` (`contracts-build-and-test`, `contracts-format`, `contracts-slither`, `contracts-deployment-dry-run`, docs preview), no failures seen. `dev` still ahead by commits `reservations-upgrade` lacks — reconcile before this can go green and merge. |
+| [#1122](https://github.com/threshold-network/tbtc-v2/pull/1122) `fix/revert-1121-bridge-redemption-veto-surface` → `reservations-upgrade` | Revert #1121 | OPEN, `mergeable: MERGEABLE`/`mergeState: UNSTABLE` (opened 2026-09-04T14:29Z, checks still running, 0 failures so far) | Full `git revert` of `398fcedf` (12 files, matches #1121 exactly) — the vault and Bridge-side halves are one feature split across two contracts, not independently revertible, so it's an all-or-nothing revert. Claims `yarn build` clean, 277/277 reservation tests passing, no dangling references. Restores milestone-1's intended "not enabled" behavior (`whenRedemptionsNotPaused`/`whenRenewalsNotPaused` reverts) per `m1-b-implementation.md` §3. Author's stated next step: re-land as a separately-reviewed m2 PR after fixing the P0s. |
+| [#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) `reservations-upgrade` → `dev` | chore(bridge): milestone-1 UTXO reservations stack tracker | OPEN, `mergeable: MERGEABLE`/`mergeState: UNSTABLE` | Diff now `+23037/-45` across 54 files (grew again after #1121 landed; will shrink back once #1122's revert lands). `dev` still ahead by commits `reservations-upgrade` lacks — reconcile before this can go green and merge. |
 
 **keep-core (`reservations-epic`, tip `356d35bae`, 2026-09-03T16:42:49Z) — H plus full downstream chain merged:**
 
