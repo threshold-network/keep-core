@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 	"strings"
@@ -74,27 +75,44 @@ const (
 	// available in the coordination checklist. All operators must upgrade
 	// to a binary containing this table before a network's activation
 	// block is reached, mirroring DepositSweepEveryWindowActivationBlock's
-	// precondition above. Networks without an explicit entry (e.g. local/
-	// dev chains) activate the feature immediately at block 0 instead of
-	// having it silently disabled for years on a lower-tip chain.
+	// precondition above. Only ethereum.Developer and ethereum.Unknown
+	// (local/dev chains) activate the feature immediately at block 0;
+	// every other public network MUST have an explicit entry here, or
+	// reservationsActivationBlock never activates the feature for it
+	// (see that function) instead of silently defaulting to block 0.
 	//
-	// NOTE: The mainnet value is a placeholder that MUST be set to the
-	// real mainnet rollout height before release and must stay ahead of
-	// the chain tip.
+	// NOTE: The mainnet and Sepolia values are placeholders that MUST be
+	// set to their real rollout heights before release and must stay
+	// ahead of each network's chain tip.
 )
 
 // reservationsActivationBlocks maps each Ethereum network to its
 // reservations activation block. See the doc comment above.
 var reservationsActivationBlocks = map[ethereum.Network]uint64{
 	ethereum.Mainnet: 26500000,
+	// Sepolia placeholder; MUST be set to the real Sepolia rollout height
+	// before release and must stay ahead of the Sepolia chain tip.
+	ethereum.Sepolia: 12000000,
 }
 
 // reservationsActivationBlock returns the reservations activation block
-// height for the given network. Networks without an explicit entry in
-// reservationsActivationBlocks (e.g. local/dev chains) return 0, meaning
-// reservation actions are active immediately.
+// height for the given network. Only ethereum.Developer and
+// ethereum.Unknown (local/dev chains) return 0, meaning reservation
+// actions are active immediately. Every other network without an
+// explicit entry in reservationsActivationBlocks returns
+// math.MaxUint64, so an unrecognized public network never activates the
+// feature instead of silently inheriting an immediate-activation
+// default.
 func reservationsActivationBlock(network ethereum.Network) uint64 {
-	return reservationsActivationBlocks[network]
+	if network == ethereum.Developer || network == ethereum.Unknown {
+		return 0
+	}
+
+	if block, ok := reservationsActivationBlocks[network]; ok {
+		return block
+	}
+
+	return math.MaxUint64
 }
 
 // errCoordinationExecutorBusy is an error returned when the coordination

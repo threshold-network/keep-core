@@ -58,6 +58,10 @@ func ParseWalletActionType(value uint8) (WalletActionType, error) {
 		return ActionReservationAnchor, nil
 	case 8:
 		return ActionReservationReanchor, nil
+	// NOTE: Action types 7 and 9 are reserved wire slots (formerly ActionReservedRedemption
+	// and ActionReservationDissolution). Their client-side scaffolding was removed but the
+	// wire slots are retained for forward compatibility. Parsing is intentionally incomplete
+	// until M2 action types are implemented. See const declarations above for details.
 	default:
 		return 0, fmt.Errorf("unknown wallet action type [%v]", value)
 	}

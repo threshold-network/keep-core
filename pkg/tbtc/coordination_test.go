@@ -538,7 +538,14 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 // actually appear in getActionsChecklist's output; without it, every
 // operator's checklist search below falls through to NoopProposal.
 func TestCoordinationExecutor_Coordinate_ReservationProposals(t *testing.T) {
-	coordinationBlock := uint64(26500500)
+	// coordinationBlock is an arbitrary block number; every executor
+	// below is constructed with ethereum.Unknown (activation block 0,
+	// see runCoordinationRound), so the reservation actions checklist
+	// gate is satisfied at any height here and this value proves
+	// nothing about the gate itself (see
+	// TestCoordinationExecutor_GetActionsChecklist_Reservations for
+	// dedicated gate coverage).
+	coordinationBlock := uint64(900)
 
 	tests := map[string]struct {
 		matchingAction    WalletActionType

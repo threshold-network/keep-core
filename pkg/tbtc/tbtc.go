@@ -97,10 +97,17 @@ type Config struct {
 	PreParamsGenerationConcurrency int
 	// Concurrency level for key-generation for tECDSA.
 	KeyGenerationConcurrency int
-	// Reservations gates the m1 reservation feature (acceptance, re-anchor,
-	// stranding / stale / action-timeout watchers). When disabled the
-	// coordination layer constructs without any reservation plumbing, so
-	// non-reservation deployments stay side-effect free.
+	// Reservations gates the m1 reservation feature's proposal generation
+	// (acceptance, re-anchor), watcher wiring (stranding / stale-deposit /
+	// action-timeout), and reservation metrics registration. It does NOT
+	// gate reservation action execution: once a network's reservation
+	// activation block is reached (see reservationsActivationBlocks in
+	// coordination.go), every wallet signer validates, co-signs, and
+	// broadcasts reservation anchor/re-anchor Bitcoin transactions
+	// proposed by an upgraded leader regardless of this flag - follower/
+	// executor dispatch gates only on wallet-signer membership, by
+	// design, so an honest follower can never be made to fault a leader
+	// over a local config difference.
 	Reservations ReservationsConfig
 }
 
@@ -122,7 +129,12 @@ type Config struct {
 // / [Maintainer.Spv.Reservations] TOML sections in one shared config file.
 type ReservationsConfig struct {
 	// Enabled toggles reservation acceptance / re-anchor proposal
-	// generation and reservation watcher wiring. Defaults to false so
+	// generation, reservation watcher wiring, and reservation metrics
+	// registration only. It does NOT gate reservation action execution:
+	// once a network's reservation activation block is reached, every
+	// wallet signer validates, co-signs, and broadcasts reservation
+	// proposals regardless of this flag - execution dispatch gates only
+	// on wallet-signer membership, by design. Defaults to false so
 	// existing deployments opt in explicitly.
 	Enabled bool
 }
