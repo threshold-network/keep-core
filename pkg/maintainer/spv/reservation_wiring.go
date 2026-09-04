@@ -351,10 +351,17 @@ func startStaleDepositPoll(
 						depositKey,
 						err,
 					)
-					// Skip only this deposit; still examine the rest of
-					// the window's events instead of abandoning them, and
-					// still advance lastSeenBlock below since every event
-					// in the window was at least attempted.
+					// Track it for retry instead of dropping it: this
+					// window's event won't be re-fetched once
+					// lastSeenBlock advances below, so silently skipping
+					// here would permanently orphan the deposit on one
+					// transient RPC flake. CheckStaleReservedDeposit
+					// performs its own independent IsReservedDeposit
+					// re-check on every tick (see
+					// reservation_stale_deposit_watch.go) and resolves to
+					// Drop if the deposit genuinely isn't reserved, so
+					// tracking it speculatively here is safe.
+					pending[depositKey.String()] = depositKey
 					continue
 				}
 				if !isReserved {
