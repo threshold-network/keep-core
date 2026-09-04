@@ -228,6 +228,22 @@ func TestCoordinationMessage_MarshalingRoundtrip(t *testing.T) {
 				SweepTxFee:               big.NewInt(8000),
 			},
 		},
+		"with reservation anchor proposal": {
+			proposal: &ReservationAnchorProposal{
+				DepositFundingTxHash:      parseHash("709b55bd3da0f5a838125bd0ee20c5bfdd7caba173912d4281cae816b79a201b"),
+				DepositFundingOutputIndex: 2,
+				RequestNonce:              7,
+				AnchorTxFee:               big.NewInt(1500),
+			},
+		},
+		"with reservation reanchor proposal": {
+			proposal: &ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(424242),
+				RequestNonce:              4,
+				TargetWalletPublicKeyHash: toByte20("f87eb7ec3b15a3fdd7b57754d765694b3e0b4bf4"),
+				ReanchorTxFee:             big.NewInt(1200),
+			},
+		},
 	}
 
 	walletPublicKeyHash := toByte20("aa768412ceed10bd423c025542ca90071f9fb62d")
@@ -399,6 +415,64 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithMovedFundsSweepProposal
 	}
 }
 
+func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationAnchorProposal(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		var (
+			senderID            group.MemberIndex
+			coordinationBlock   uint64
+			walletPublicKeyHash [20]byte
+			proposal            ReservationAnchorProposal
+		)
+
+		f := fuzz.New().NilChance(0.1).
+			NumElements(0, 512).
+			Funcs(pbutils.FuzzFuncs()...)
+
+		f.Fuzz(&senderID)
+		f.Fuzz(&coordinationBlock)
+		f.Fuzz(&walletPublicKeyHash)
+		f.Fuzz(&proposal)
+
+		coordinationMsg := &coordinationMessage{
+			senderID:            senderID,
+			coordinationBlock:   coordinationBlock,
+			walletPublicKeyHash: walletPublicKeyHash,
+			proposal:            &proposal,
+		}
+
+		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
+	}
+}
+
+func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithReservationReanchorProposal(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		var (
+			senderID            group.MemberIndex
+			coordinationBlock   uint64
+			walletPublicKeyHash [20]byte
+			proposal            ReservationReanchorProposal
+		)
+
+		f := fuzz.New().NilChance(0.1).
+			NumElements(0, 512).
+			Funcs(pbutils.FuzzFuncs()...)
+
+		f.Fuzz(&senderID)
+		f.Fuzz(&coordinationBlock)
+		f.Fuzz(&walletPublicKeyHash)
+		f.Fuzz(&proposal)
+
+		coordinationMsg := &coordinationMessage{
+			senderID:            senderID,
+			coordinationBlock:   coordinationBlock,
+			walletPublicKeyHash: walletPublicKeyHash,
+			proposal:            &proposal,
+		}
+
+		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
+	}
+}
+
 func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithNoopProposal(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		var (
@@ -428,6 +502,44 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithNoopProposal(t *testing
 	}
 }
 
+func TestReservationAnchorProposal_Marshal_NilPanic(t *testing.T) {
+	proposal := &ReservationAnchorProposal{
+		AnchorTxFee: nil,
+	}
+
+	_, err := proposal.Marshal()
+	if err == nil {
+		t.Fatal("expected error when marshaling proposal with nil AnchorTxFee")
+	}
+	if err.Error() != "anchor transaction fee is required" {
+		t.Errorf("unexpected error: [%v]", err)
+	}
+}
+
+func TestReservationAnchorProposal_Unmarshal_ZeroHash(t *testing.T) {
+	proposal := &ReservationAnchorProposal{
+		DepositFundingTxHash: [32]byte{},
+	}
+	// Manually construct the protobuf message to bypass nil check
+	pbMsg := &pb.ReservationAnchorProposal{
+		DepositFundingTxHash:      proposal.DepositFundingTxHash[:],
+		DepositFundingOutputIndex: 0,
+		RequestNonce:              1,
+		AnchorTxFee:               big.NewInt(1000).Bytes(),
+	}
+	data, err := proto.Marshal(pbMsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = proposal.Unmarshal(data)
+	if err == nil {
+		t.Fatal("expected error when unmarshaling proposal with zero hash")
+	}
+	if err.Error() != "deposit funding tx hash is required" {
+		t.Errorf("unexpected error: [%v]", err)
+	}
+}
 func TestFuzzCoordinationMessage_Unmarshaler(t *testing.T) {
 	pbutils.FuzzUnmarshaler(&coordinationMessage{})
 }

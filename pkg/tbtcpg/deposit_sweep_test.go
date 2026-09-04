@@ -1108,3 +1108,82 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 		}
 	})
 }
+
+// TestFindDepositsToSweep_ExcludesReservedDeposits verifies that findDeposits
+// skips deposits IsReservedDeposit reports as reserved, so a wallet's
+// reservation-vault deposits never starve its ordinary deposits of
+// sweeping by winning the largest-group selection in FindDepositsToSweep.
+func TestFindDepositsToSweep_ExcludesReservedDeposits(t *testing.T) {
+	currentBlock := uint64(300000)
+	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+	tbtcChain.SetDepositMinAge(3600)
+
+	// 1 ordinary (non-reserved) deposit.
+	ordinaryHash := setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+		"6666666666666666666666666666666666666666666666666666666666666666",
+		0, 290000, nil,
+	)
+
+	// 2 reservation-vault deposits: without exclusion this would be the
+	// larger group and would starve the ordinary deposit above.
+	reservedHash1 := setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+		"7777777777777777777777777777777777777777777777777777777777777777",
+		0, 290001, nil,
+	)
+	reservedHash2 := setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+		"8888888888888888888888888888888888888888888888888888888888888888",
+		0, 290002, nil,
+	)
+
+	tbtcChain.SetReservedDeposit(
+		tbtcChain.BuildDepositKey(reservedHash1, 0), true,
+	)
+	tbtcChain.SetReservedDeposit(
+		tbtcChain.BuildDepositKey(reservedHash2, 0), true,
+	)
+
+	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+	deposits, err := task.FindDepositsToSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(deposits) != 1 {
+		t.Fatalf(
+			"expected exactly 1 deposit (reserved ones excluded), got %d",
+			len(deposits),
+		)
+	}
+	if deposits[0].FundingTxHash != ordinaryHash {
+		t.Errorf(
+			"expected the ordinary deposit %v, got %v",
+			ordinaryHash,
+			deposits[0].FundingTxHash,
+		)
+	}
+	for _, d := range deposits {
+		if d.FundingTxHash == reservedHash1 || d.FundingTxHash == reservedHash2 {
+			t.Errorf(
+				"reserved deposit %v should have been excluded",
+				d.FundingTxHash,
+			)
+		}
+	}
+}

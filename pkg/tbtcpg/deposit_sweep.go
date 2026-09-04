@@ -209,6 +209,20 @@ func findDeposits(
 		depositKey := chain.BuildDepositKey(event.FundingTxHash, event.FundingOutputIndex)
 		depositKeyStr := depositKey.Text(16)
 
+		isReserved, err := chain.IsReservedDeposit(depositKey)
+		if err != nil {
+			taskLogger.Errorf(
+				"failed to check if deposit [%s] is reserved: [%v]",
+				depositKeyStr,
+				err,
+			)
+			continue
+		}
+		if isReserved {
+			taskLogger.Infof("skipping reserved deposit [%s]", depositKeyStr)
+			continue
+		}
+
 		taskLogger.Debugf("getting details of deposit [%s]", depositKeyStr)
 
 		depositRequest, found, err := chain.GetDepositRequest(

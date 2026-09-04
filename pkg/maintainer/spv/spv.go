@@ -68,6 +68,23 @@ func Initialize(
 		btcChain:     btcChain,
 	}
 
+	if config.Reservations.Enabled {
+		logger.Infof(
+			"SPV maintainer reservation proof submission is enabled; " +
+				"ensure the paired Tbtc.Reservations.Enabled flag is also " +
+				"enabled in the client config for end-to-end operation",
+		)
+		// Reservation acceptance/re-anchor proofs run on a dedicated loop,
+		// not through the generic proofTypes map: SubmitReservationProof
+		// requires the (reservationKey, requestNonce) pair of the action
+		// generation being proven, which the generic
+		// unprovenTransactionsGetter/transactionProofSubmitter signatures
+		// (shared by deposit sweep, redemption, moving funds, and moved
+		// funds sweep, none of which need that pair) cannot carry. See
+		// reservation_proof_loop.go.
+		go maintainReservationProofs(ctx, config, spvChain, btcDiffChain, btcChain)
+	}
+
 	go spvMaintainer.startControlLoop(ctx)
 }
 

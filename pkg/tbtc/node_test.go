@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -52,6 +53,7 @@ func TestNode_GetSigningExecutor(t *testing.T) {
 	keyStorePersistence := createMockKeyStorePersistence(t, signer)
 
 	node, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
@@ -184,6 +186,7 @@ func TestNode_GetCoordinationExecutor(t *testing.T) {
 	keyStorePersistence := createMockKeyStorePersistence(t, signer)
 
 	node, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
@@ -321,6 +324,7 @@ func TestNode_RunCoordinationLayer(t *testing.T) {
 	keyStorePersistence := createMockKeyStorePersistence(t, signer)
 
 	n, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
@@ -1029,6 +1033,71 @@ func TestProcessCoordinationResult_MovedFundsSweepRoutesToHandler(t *testing.T) 
 	}
 }
 
+// TestProcessCoordinationResult_ReservationAnchorRoutesToHandler verifies that
+func TestProcessCoordinationResult_ReservationAnchorRoutesToHandler(t *testing.T) {
+	n, signer := setupNodeForHandlerTests(t)
+	walletKey := walletKeyFor(t, signer)
+
+	// Mark the wallet busy so dispatch is rejected before execute() runs.
+	func() {
+		n.walletDispatcher.actionsMutex.Lock()
+		defer n.walletDispatcher.actionsMutex.Unlock()
+		n.walletDispatcher.actions[walletKey] = ActionNoop
+	}()
+
+	result := &coordinationResult{
+		wallet:   signer.wallet,
+		proposal: &ReservationAnchorProposal{},
+		window:   &coordinationWindow{coordinationBlock: 1},
+	}
+
+	processCoordinationResult(n, result)
+
+	// Busy sentinel must still be there: dispatch was attempted (routing worked)
+	// but returned errWalletBusy without touching the map entry.
+	_, ok := func() (WalletActionType, bool) {
+		n.walletDispatcher.actionsMutex.Lock()
+		defer n.walletDispatcher.actionsMutex.Unlock()
+		v, exists := n.walletDispatcher.actions[walletKey]
+		return v, exists
+	}()
+	if !ok {
+		t.Error("expected walletDispatcher to retain the busy sentinel after ReservationAnchor routing")
+	}
+}
+
+func TestProcessCoordinationResult_ReservationReanchorRoutesToHandler(t *testing.T) {
+	n, signer := setupNodeForHandlerTests(t)
+	walletKey := walletKeyFor(t, signer)
+
+	// Mark the wallet busy so dispatch is rejected before execute() runs.
+	func() {
+		n.walletDispatcher.actionsMutex.Lock()
+		defer n.walletDispatcher.actionsMutex.Unlock()
+		n.walletDispatcher.actions[walletKey] = ActionNoop
+	}()
+
+	result := &coordinationResult{
+		wallet:   signer.wallet,
+		proposal: &ReservationReanchorProposal{},
+		window:   &coordinationWindow{coordinationBlock: 1},
+	}
+
+	processCoordinationResult(n, result)
+
+	// Busy sentinel must still be there: dispatch was attempted (routing worked)
+	// but returned errWalletBusy without touching the map entry.
+	_, ok := func() (WalletActionType, bool) {
+		n.walletDispatcher.actionsMutex.Lock()
+		defer n.walletDispatcher.actionsMutex.Unlock()
+		v, exists := n.walletDispatcher.actions[walletKey]
+		return v, exists
+	}()
+	if !ok {
+		t.Error("expected walletDispatcher to retain the busy sentinel after ReservationReanchor routing")
+	}
+}
+
 // setupNodeForClosureTests creates a node backed by a fast-block localChain
 // (1 ms per block) so that WaitForBlockConfirmations (32 blocks) completes in
 // ~32 ms instead of seconds.
@@ -1057,6 +1126,7 @@ func setupNodeForClosureTests(t *testing.T) (*node, *signer, *localChain) {
 	})
 
 	n, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		lc,
 		newLocalBitcoinChain(),
@@ -1236,6 +1306,7 @@ func setupNodeWithChain(t *testing.T) (*node, *signer, *localChain) {
 	})
 
 	n, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		lc,
 		newLocalBitcoinChain(),

@@ -10,7 +10,9 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/persistence"
+
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 )
@@ -43,6 +45,7 @@ const (
 
 // node represents the current state of an ECDSA node.
 type node struct {
+	ethereumNetwork ethereum.Network
 	groupParameters *GroupParameters
 
 	chain          Chain
@@ -120,6 +123,7 @@ type node struct {
 }
 
 func newNode(
+	ethereumNetwork ethereum.Network,
 	groupParameters *GroupParameters,
 	chain Chain,
 	btcChain bitcoin.Chain,
@@ -144,6 +148,7 @@ func newNode(
 	node := &node{
 		groupParameters:          groupParameters,
 		chain:                    chain,
+		ethereumNetwork:          ethereumNetwork,
 		btcChain:                 btcChain,
 		netProvider:              netProvider,
 		walletRegistry:           walletRegistry,
@@ -229,6 +234,18 @@ func (n *node) setPerformanceMetrics(metrics interface {
 		pg.SetRedemptionMetricsRecorder(metrics)
 	}
 
+	// Wire reservation metrics to proposal generator if it supports it,
+	// mirroring the redemption wiring above. A no-op on non-reservation
+	// deployments since SetReservationMetricsRecorder finds no reservation
+	// tasks in that case.
+	if pg, ok := n.proposalGenerator.(interface {
+		SetReservationMetricsRecorder(recorder interface {
+			SetGauge(name string, value float64)
+		})
+	}); ok {
+		pg.SetReservationMetricsRecorder(metrics)
+	}
+
 	// Update metrics recorder for all cached coordination executors
 	// This is important because executors may be created before metrics are set
 	n.coordinationExecutorsMutex.Lock()
@@ -309,4 +326,21 @@ func (n *node) validateDKG(
 	resultHash [32]byte,
 ) {
 	n.dkgExecutor.executeDkgValidation(seed, submissionBlock, result, resultHash)
+}
+
+func (n *node) ResolveWalletMembers(walletPublicKeyHash [20]byte) ([]uint32, error) {
+	wallet, found := n.walletRegistry.getWalletByPublicKeyHash(walletPublicKeyHash)
+	if !found {
+		return nil, fmt.Errorf("wallet not found")
+	}
+
+	operatorIDs := make([]uint32, len(wallet.signingGroupOperators))
+	for i, operatorAddress := range wallet.signingGroupOperators {
+		operatorID, err := n.chain.GetOperatorID(operatorAddress)
+		if err != nil {
+			return nil, err
+		}
+		operatorIDs[i] = uint32(operatorID)
+	}
+	return operatorIDs, nil
 }

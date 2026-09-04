@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"golang.org/x/crypto/sha3"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
@@ -24,7 +26,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/inactivity"
 	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tecdsa/dkg"
-	"golang.org/x/crypto/sha3"
 )
 
 const (
@@ -102,6 +103,11 @@ type localChain struct {
 
 	blockCounter       chain.BlockCounter
 	operatorPrivateKey *operator.PrivateKey
+
+	reservation                            *Reservation
+	reservationAction                      *ReservationAction
+	validateReservationAnchorProposalErr   error
+	validateReservationReanchorProposalErr error
 }
 
 func (lc *localChain) BlockCounter() (chain.BlockCounter, error) {
@@ -802,6 +808,15 @@ func (lc *localChain) GetDepositRequest(
 	return request, true, nil
 }
 
+func (lc *localChain) BuildDepositKey(
+	fundingTxHash bitcoin.Hash,
+	fundingOutputIndex uint32,
+) *big.Int {
+	depositKeyBytes := buildDepositRequestKey(fundingTxHash, fundingOutputIndex)
+
+	return new(big.Int).SetBytes(depositKeyBytes[:])
+}
+
 func (lc *localChain) setDepositRequest(
 	fundingTxHash bitcoin.Hash,
 	fundingOutputIndex uint32,
@@ -1449,4 +1464,188 @@ func generateHandlerID() int {
 	// #nosec G404 (insecure random number source (rand))
 	// Local chain implementation doesn't require secure randomness.
 	return rand.Int()
+}
+
+// GetReservation returns the reservation previously installed via
+// setReservation. Panics if never set, matching this fake chain's
+// convention for exercising an unconfigured dependency.
+func (lc *localChain) GetReservation(
+	reservationKey *big.Int,
+) (*Reservation, error) {
+	if lc.reservation != nil {
+		return lc.reservation, nil
+	}
+	panic("unsupported")
+}
+
+// setReservation installs the reservation GetReservation returns.
+func (lc *localChain) setReservation(reservation *Reservation) {
+	lc.reservation = reservation
+}
+
+// GetReservationAction returns the reservation action previously installed
+// via setReservationAction. Panics if never set, matching this fake
+// chain's convention for exercising an unconfigured dependency.
+func (lc *localChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*ReservationAction, error) {
+	if lc.reservationAction != nil {
+		return lc.reservationAction, nil
+	}
+	panic("unsupported")
+}
+
+// setReservationAction installs the action GetReservationAction returns.
+func (lc *localChain) setReservationAction(action *ReservationAction) {
+	lc.reservationAction = action
+}
+
+func (lc *localChain) ReservationParameters() (*ReservationParameters, error) {
+	panic("unsupported")
+}
+
+// ValidateReservationAnchorProposal returns the error previously installed
+// via setValidateReservationAnchorProposalErr, or nil (accept) by default.
+func (lc *localChain) ValidateReservationAnchorProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return lc.validateReservationAnchorProposalErr
+}
+
+// setValidateReservationAnchorProposalErr installs the error
+// ValidateReservationAnchorProposal returns.
+func (lc *localChain) setValidateReservationAnchorProposalErr(err error) {
+	lc.validateReservationAnchorProposalErr = err
+}
+
+// ValidateReservationReanchorProposal returns the error previously
+// installed via setValidateReservationReanchorProposalErr, or nil (accept)
+// by default.
+func (lc *localChain) ValidateReservationReanchorProposal(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *ReservationReanchorProposal,
+) error {
+	return lc.validateReservationReanchorProposalErr
+}
+
+// setValidateReservationReanchorProposalErr installs the error
+// ValidateReservationReanchorProposal returns.
+func (lc *localChain) setValidateReservationReanchorProposalErr(err error) {
+	lc.validateReservationReanchorProposalErr = err
+}
+
+func (lc *localChain) RequestReservationAcceptance(
+	reservationKey *big.Int,
+	walletPublicKeyHash [20]byte,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) RequestReservationReanchor(
+	reservationKey *big.Int,
+	targetWalletPublicKeyHash [20]byte,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) SubmitReservationProof(
+	proofType uint8,
+	txInfo *BitcoinTxInfo,
+	proof *BitcoinTxProof,
+	mainUtxo *BitcoinTxUTXO,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) NotifyReservationActionTimeout(
+	reservationKey *big.Int,
+	walletMembersIDs []uint32,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) NotifyStaleReservedDeposit(
+	depositKey *big.Int,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) NotifyReservationStranded(
+	reservationKey *big.Int,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) ReservationCaps() (
+	uint64,
+	uint64,
+	error,
+) {
+	return 0, 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) WalletReservationsAmount(
+	walletPublicKeyHash [20]byte,
+) (uint64, error) {
+	return 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) WalletReservationsCount(
+	walletPublicKeyHash [20]byte,
+) (uint32, error) {
+	return 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) WalletReservations(
+	walletPublicKeyHash [20]byte,
+) ([]*big.Int, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ReservedDepositWallet(
+	depositKey *big.Int,
+) ([20]byte, error) {
+	return [20]byte{}, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ActiveReservationsCount() (uint32, uint32, error) {
+	return 0, 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) IsReservedDeposit(
+	depositKey *big.Int,
+) (bool, error) {
+	return false, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) OnReservationAcceptanceRequested(
+	handler func(event *ReservationAcceptanceRequestedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) PastReservationAcceptanceRequestedEvents(
+	filter *ReservationAcceptanceRequestedEventFilter,
+) ([]*ReservationAcceptanceRequestedEvent, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) OnReservationReanchorRequested(
+	handler func(event *ReservationReanchorRequestedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) PastReservationReanchorRequestedEvents(
+	filter *ReservationReanchorRequestedEventFilter,
+) ([]*ReservationReanchorRequestedEvent, error) {
+	return nil, fmt.Errorf("unsupported")
 }

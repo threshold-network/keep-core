@@ -1,6 +1,7 @@
 // tbtc.go: TbtcChain adapter construction and shared state. See tbtc_*.go for
 // per-concern implementations (tbtc_deposit.go, tbtc_dkg.go, tbtc_moving_funds.go,
-// tbtc_redemption.go, tbtc_wallet.go, tbtc_sortition.go, tbtc_inactivity.go).
+// tbtc_redemption.go, tbtc_reservation.go, tbtc_wallet.go, tbtc_sortition.go,
+// tbtc_inactivity.go).
 //
 // These files were split out of a single monolithic tbtc.go with no rename
 // markers git can detect (each file is a fresh addition, not a tracked move),
@@ -61,6 +62,10 @@ type TbtcChain struct {
 	sortitionPool           *ecdsacontract.EcdsaSortitionPool
 	walletProposalValidator *tbtccontract.WalletProposalValidator
 	redemptionWatchtower    *tbtccontract.RedemptionWatchtower
+	// reservationRouter is the abigen binding for ReservationRouter.sol's ABI
+	// constructed against the Bridge address (see tbtc_reservation.go for the
+	// address invariant explanation).
+	reservationRouter *tbtccontract.ReservationRouter
 	// ecdsaDkgValidatorAddress optional; when zero, TBTC uses defaultGroupParameters(network).
 	ecdsaDkgValidatorAddress common.Address
 
@@ -263,6 +268,14 @@ func newTbtcChain(
 		)
 	}
 
+	reservationRouter, err := reservationRouterBinding(bridgeAddress, baseChain)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to attach to ReservationRouter binding: [%v]",
+			err,
+		)
+	}
+
 	return &TbtcChain{
 		baseChain:                baseChain,
 		bridge:                   bridge,
@@ -271,6 +284,7 @@ func newTbtcChain(
 		sortitionPool:            sortitionPool,
 		walletProposalValidator:  walletProposalValidator,
 		redemptionWatchtower:     redemptionWatchtower,
+		reservationRouter:        reservationRouter,
 		ecdsaDkgValidatorAddress: ecdsaDkgValidatorAddress,
 		sweptDepositsCache:       cache.NewGenericTimeCache[*tbtc.DepositChainRequest](sweptDepositsCachePeriod),
 	}, nil

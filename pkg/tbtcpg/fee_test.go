@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -127,7 +128,120 @@ func TestApplyWalletTxFeeFloor(t *testing.T) {
 	}
 }
 
-// TestApplyWalletTxFeeFloor_BufferOverride verifies that the safety buffer
+func TestEstimateReservationFixedSizeTxFee(t *testing.T) {
+	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
+		AddScriptHashInputs(1, DepositScriptByteSize, true).
+		AddPublicKeyHashOutputs(1, true)
+
+	size, err := sizeEstimator.VirtualSize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		acceptanceErrMsg = "reservation acceptance estimated fee exceeds the maximum fee"
+		reanchorErrMsg   = "reservation re-anchor estimated fee exceeds the maximum fee"
+	)
+
+	tests := map[string]struct {
+		estimateSatPerVByte int64
+		txMaxFee            uint64
+		exceedsMaxErrMsg    string
+		expectedFee         int64
+		expectErrorContains string
+	}{
+		"low estimate is raised to the minimum floor": {
+			estimateSatPerVByte: 1,
+			txMaxFee:            100000,
+			exceedsMaxErrMsg:    acceptanceErrMsg,
+			expectedFee:         5 * size, // max(5, ceil(1*1.25)=2)=5 sat/vByte * size
+		},
+		"estimate above the floor is buffered by 25%": {
+			estimateSatPerVByte: 20,
+			txMaxFee:            100000,
+			exceedsMaxErrMsg:    acceptanceErrMsg,
+			expectedFee:         25 * size, // ceil(20*1.25) = 25 sat/vByte * size
+		},
+		"buffered estimate above the cap is bounded to the cap": {
+			estimateSatPerVByte: 20,
+			txMaxFee:            uint64(22 * size),
+			exceedsMaxErrMsg:    acceptanceErrMsg,
+			expectedFee:         22 * size,
+		},
+		"raw estimate exactly equal to the cap is allowed and bounded": {
+			estimateSatPerVByte: 20,
+			txMaxFee:            uint64(20 * size),
+			exceedsMaxErrMsg:    acceptanceErrMsg,
+			expectedFee:         20 * size,
+		},
+		"raw estimate 1 sat above the cap returns an error": {
+			estimateSatPerVByte: 20,
+			txMaxFee:            uint64(20*size - 1),
+			exceedsMaxErrMsg:    acceptanceErrMsg,
+			expectErrorContains: acceptanceErrMsg,
+		},
+		"raw estimate above the cap returns acceptance error": {
+			estimateSatPerVByte: 30,
+			// The raw 30*size fee already exceeds the 10*size cap, so the raw-fee
+			// check must error before the minimum-floor logic runs. The returned
+			// error must match the exact exceedsMaxErrMsg passed by the caller.
+			txMaxFee:            uint64(10 * size),
+			exceedsMaxErrMsg:    acceptanceErrMsg,
+			expectErrorContains: acceptanceErrMsg,
+		},
+		"raw estimate above the cap returns re-anchor error": {
+			estimateSatPerVByte: 30,
+			txMaxFee:            uint64(10 * size),
+			exceedsMaxErrMsg:    reanchorErrMsg,
+			expectErrorContains: reanchorErrMsg,
+		},
+		"minimum floor above the cap returns an error": {
+			estimateSatPerVByte: 1,
+			// Cap sits below 5*size (the floor) but above the raw fee (1*size),
+			// so the minimum-fee check must error rather than lower the fee.
+			txMaxFee:            uint64(3 * size),
+			exceedsMaxErrMsg:    acceptanceErrMsg,
+			expectErrorContains: "minimum safe transaction fee",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			btcChain := NewLocalBitcoinChain()
+			btcChain.SetEstimateSatPerVByteFee(1, tc.estimateSatPerVByte)
+
+			fee, err := estimateReservationFixedSizeTxFee(
+				btcChain,
+				sizeEstimator,
+				tc.txMaxFee,
+				tc.exceedsMaxErrMsg,
+			)
+
+			if tc.expectErrorContains != "" {
+				if err == nil {
+					t.Fatalf("expected an error, got fee [%d]", fee)
+				}
+				if !strings.Contains(err.Error(), tc.expectErrorContains) {
+					t.Fatalf(
+						"expected error containing [%s]; got [%v]",
+						tc.expectErrorContains, err,
+					)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+			if fee != tc.expectedFee {
+				t.Errorf(
+					"unexpected fee\nexpected: [%d]\nactual:   [%d]",
+					tc.expectedFee, fee,
+				)
+			}
+		})
+	}
+}
+
 // is driven by the canonical pkg/tbtc WalletTxFeeBufferPercent var, not
 // a hardcoded constant. A test that overrides the var MUST restore it
 // via t.Cleanup so other tests see the production defaults.

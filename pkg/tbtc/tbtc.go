@@ -12,6 +12,7 @@ import (
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/persistence"
+
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -142,6 +143,19 @@ type Config struct {
 	PreParamsGenerationConcurrency int
 	// Concurrency level for key-generation for tECDSA.
 	KeyGenerationConcurrency int
+	// Reservations gates the m1 reservation feature's proposal generation
+	// (acceptance, re-anchor), watcher wiring (stranding / stale-deposit /
+	// action-timeout), and reservation metrics registration. It does NOT
+	// gate reservation action execution: once a network's reservation
+	// activation block is reached (see reservationsActivationBlocks in
+	// coordination.go), every wallet signer validates, co-signs, and
+	// broadcasts reservation anchor/re-anchor Bitcoin transactions
+	// proposed by an upgraded leader regardless of this flag - follower/
+	// executor dispatch gates only on wallet-signer membership, by
+	// design, so an honest follower can never be made to fault a leader
+	// over a local config difference.
+	Reservations ReservationsConfig
+
 	// WalletTxSatPerVByteFloor is the minimum fee rate (sat/vByte) applied
 	// to wallet Bitcoin transactions. Zero means use
 	// DefaultWalletTxSatPerVByteFloor. Maps to the
@@ -153,6 +167,39 @@ type Config struct {
 	// DefaultWalletTxFeeBufferPercent. Maps to the
 	// tbtc.walletTxFeeBufferPercent flag / viper key.
 	WalletTxFeeBufferPercent int
+}
+
+// ReservationsConfig holds the reservation-related tbtc.Config fields. It is
+// a separate type so future reservation knobs (poll intervals, cap overrides)
+// can be added without breaking the top-level Config layout.
+//
+// This flag controls BOTH reservation acceptance / re-anchor proposal
+// GENERATION AND watcher wiring in the start process (the `start`
+// command's coordination and watcher layers, config category Tbtc). The
+// `maintainer` command runs as a separate process reading a
+// disjoint config category (see config.MaintainerCategories) and has its
+// own independent gate, spv.ReservationsConfig.Enabled, that controls SPV
+// PROOF SUBMISSION for those same proposals. Neither command's config
+// loading sees the other's category, so this flag cannot be derived from or
+// validated against spv.ReservationsConfig.Enabled in code. An operator
+// running both `start` and `maintainer` for the reservation feature to work
+// end-to-end MUST enable both flags - normally the same [Tbtc.Reservations]
+// / [Maintainer.Spv.Reservations] TOML sections in one shared config file.
+type ReservationsConfig struct {
+	// Enabled toggles reservation acceptance / re-anchor proposal
+	// generation, reservation watcher wiring, and reservation metrics
+	// registration only. It does NOT gate reservation action execution:
+	// once a network's reservation activation block is reached, every
+	// wallet signer validates, co-signs, and broadcasts reservation
+	// proposals regardless of this flag - execution dispatch gates only
+	// on wallet-signer membership, by design. Defaults to false so
+	// existing deployments opt in explicitly.
+	Enabled bool
+}
+
+// WalletMembersResolver defines the interface for resolving wallet members.
+type WalletMembersResolver interface {
+	ResolveWalletMembers(walletPublicKeyHash [20]byte) ([]uint32, error)
 }
 
 // applyWalletTxFeePolicy applies the operator-tunable wallet-tx fee-floor
@@ -171,6 +218,15 @@ func applyWalletTxFeePolicy(config Config) {
 // Initialize kicks off the TBTC by initializing internal state, ensuring
 // preconditions like staking are met, and then kicking off the internal TBTC
 // implementation. Returns an error if this failed.
+//
+// Reservation watcher wiring (stranding / stale-deposit / action-timeout,
+// see pkg/maintainer/spv.WireReservationWatchers) is not performed here:
+// it lives in cmd/start.go, called directly against the same tbtc.Chain
+// handle once Initialize returns successfully and gated on the same
+// config.Reservations.Enabled flag. Threading it through Initialize via a
+// callback type would only exist to dodge a tbtc -> spv import cycle that
+// cmd/start.go (which already imports both packages) does not have.
+
 func Initialize(
 	ctx context.Context,
 	chain Chain,
@@ -184,7 +240,7 @@ func Initialize(
 	clientInfo *clientinfo.Registry,
 	perfMetrics *clientinfo.PerformanceMetrics,
 	ethereumNetwork ethereum.Network,
-) error {
+) (WalletMembersResolver, error) {
 	applyWalletTxFeePolicy(config)
 
 	groupParameters := defaultGroupParameters(ethereumNetwork)
@@ -194,7 +250,7 @@ func Initialize(
 	}); ok {
 		gp, err := ethChain.EcdsaWalletGroupParametersFromChain(ctx)
 		if err != nil {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"cannot read TBTC group sizing from ECDSA validator: [%w]",
 				err,
 			)
@@ -213,6 +269,7 @@ func Initialize(
 	}
 
 	node, err := newNode(
+		ethereumNetwork,
 		groupParameters,
 		chain,
 		btcChain,
@@ -224,12 +281,12 @@ func Initialize(
 		config,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
+		return nil, fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
 
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
-		return fmt.Errorf("cannot run coordination layer: [%w]", err)
+		return nil, fmt.Errorf("cannot run coordination layer: [%w]", err)
 	}
 
 	deduplicator := newDeduplicator()
@@ -246,7 +303,11 @@ func Initialize(
 		)
 
 		if perfMetrics == nil {
-			perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfo)
+			perfMetrics = clientinfo.NewPerformanceMetrics(
+				ctx,
+				clientInfo,
+				config.Reservations.Enabled,
+			)
 		}
 		node.setPerformanceMetrics(perfMetrics)
 
@@ -284,7 +345,7 @@ func Initialize(
 		),
 	)
 	if err != nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"could not set up sortition pool monitoring: [%v]",
 			err,
 		)
@@ -446,7 +507,7 @@ func Initialize(
 		}()
 	})
 
-	return nil
+	return node, nil
 }
 
 // enoughPreParamsInPoolPolicy is a policy that enforces the sufficient size

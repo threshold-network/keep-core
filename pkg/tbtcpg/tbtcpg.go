@@ -18,10 +18,11 @@ import (
 	"strings"
 
 	"github.com/ipfs/go-log/v2"
-	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/tbtc"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
+
+	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 var logger = log.Logger("keep-tbtcpg")
@@ -57,10 +58,35 @@ func (pg *ProposalGenerator) SetRedemptionMetricsRecorder(recorder interface {
 	}
 }
 
-// NewProposalGenerator returns a new proposal generator.
+// SetReservationMetricsRecorder sets the metrics recorder for the
+// reservation acceptance and re-anchor tasks (registered only when
+// reservationsEnabled - see NewProposalGenerator). A no-op when
+// reservations are disabled since neither task is present in pg.tasks.
+func (pg *ProposalGenerator) SetReservationMetricsRecorder(recorder interface {
+	SetGauge(name string, value float64)
+}) {
+	for _, task := range pg.tasks {
+		switch t := task.(type) {
+		case *ReservationAcceptanceTask:
+			t.setMetricsRecorder(recorder)
+		case *ReservationReanchorTask:
+			t.setMetricsRecorder(recorder)
+		}
+	}
+}
+
+// NewProposalGenerator returns a new proposal generator. When
+// reservationsEnabled is true the proposal generator appends the reservation
+// acceptance (anchor) and re-anchor tasks to the standard task list so that
+// wallets with reservations can produce anchor and re-anchor proposals in
+// addition to the default sweep / redemption / heartbeat / moving-funds /
+// moved-funds-sweep proposals. When reservationsEnabled is false the
+// reservation tasks are skipped entirely; the proposal generator is safe to
+// construct in either mode and the existing task ordering is preserved.
 func NewProposalGenerator(
 	chain Chain,
 	btcChain bitcoin.Chain,
+	reservationsEnabled bool,
 ) *ProposalGenerator {
 	tasks := []ProposalTask{
 		NewDepositSweepTask(chain, btcChain),
@@ -68,6 +94,19 @@ func NewProposalGenerator(
 		NewHeartbeatTask(chain),
 		NewMovingFundsTask(chain, btcChain),
 		NewMovedFundsSweepTask(chain, btcChain),
+	}
+
+	if reservationsEnabled {
+		// These tasks only run when the operator has opted into the
+		// reservation feature via config.Reservations.Enabled; the gate
+		// is applied at task registration so the coordination loop
+		// never even considers these actions on a non-reservation
+		// deployment.
+		tasks = append(
+			tasks,
+			NewReservationAcceptanceTask(chain, btcChain),
+			NewReservationReanchorTask(chain, btcChain),
+		)
 	}
 
 	return &ProposalGenerator{

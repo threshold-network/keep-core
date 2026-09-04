@@ -16,6 +16,7 @@ const RetransmissionTick = 50 * time.Millisecond
 
 var broadcastChannelsMutex sync.Mutex
 var broadcastChannels map[string][]*localChannel
+var broadcastChannelCancels map[string][]context.CancelFunc
 
 // getBroadcastChannel returns a BroadcastChannel designed to mediate between local
 // participants. It delivers all messages sent to the channel through its
@@ -31,11 +32,18 @@ func getBroadcastChannel(
 	if broadcastChannels == nil {
 		broadcastChannels = make(map[string][]*localChannel)
 	}
+	if broadcastChannelCancels == nil {
+		broadcastChannelCancels = make(map[string][]context.CancelFunc)
+	}
 
 	_, exists := broadcastChannels[name]
 	if !exists {
 		broadcastChannels[name] = make([]*localChannel, 0)
+		broadcastChannelCancels[name] = make([]context.CancelFunc, 0)
 	}
+
+	tickerCtx, cancelTicker := context.WithCancel(context.Background())
+	broadcastChannelCancels[name] = append(broadcastChannelCancels[name], cancelTicker)
 
 	identifier := randomLocalIdentifier()
 	channel := &localChannel{
@@ -47,7 +55,7 @@ func getBroadcastChannel(
 		unmarshalersMutex:    sync.Mutex{},
 		unmarshalersByType:   make(map[string]func() net.TaggedUnmarshaler, 0),
 		retransmissionTicker: retransmission.NewTimeTicker(
-			context.Background(), RetransmissionTick,
+			tickerCtx, RetransmissionTick,
 		),
 	}
 	broadcastChannels[name] = append(broadcastChannels[name], channel)
@@ -65,4 +73,22 @@ func broadcastMessage(name string, message net.Message) error {
 	}
 
 	return nil
+}
+
+// ReleaseBroadcastChannel cancels every outstanding retransmission ticker
+// registered under name and removes name's entry from the registry, so a
+// later invocation reusing name starts from an empty registry regardless of
+// whether an earlier invocation's leader was still retransmitting. Callers
+// that create broadcast channels in tests should call this from t.Cleanup,
+// passing the same name they created the channel(s) under.
+func ReleaseBroadcastChannel(name string) {
+	broadcastChannelsMutex.Lock()
+	defer broadcastChannelsMutex.Unlock()
+
+	for _, cancel := range broadcastChannelCancels[name] {
+		cancel()
+	}
+
+	delete(broadcastChannels, name)
+	delete(broadcastChannelCancels, name)
 }
