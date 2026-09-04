@@ -480,7 +480,14 @@ func TestWalletActionMetricsRegistered(t *testing.T) {
 	}
 }
 
-func TestWalletActionMetricsNotRegisteredWhenReservationsDisabled(t *testing.T) {
+// TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag verifies
+// wallet_action_reservation_* counters and histograms are registered even
+// when Tbtc.Reservations.Enabled is false. Reservation action execution
+// (anchor/re-anchor co-signing) is not itself gated on that flag - only
+// proposal generation, watcher wiring, and the reservation gauges are - so
+// gating this registration would silently drop observability for the
+// operators most likely to see unconditional execution.
+func TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -519,10 +526,11 @@ func TestWalletActionMetricsNotRegisteredWhenReservationsDisabled(t *testing.T) 
 			pm.countersMutex.RLock()
 			_, exists := pm.counters[metricName]
 			pm.countersMutex.RUnlock()
-			if exists {
+			if !exists {
 				t.Errorf(
-					"counter %s should not be registered when reservations "+
-						"are disabled",
+					"counter %s should be registered even when reservations "+
+						"are disabled, since action execution is not gated "+
+						"on the flag",
 					metricName,
 				)
 			}
@@ -532,10 +540,11 @@ func TestWalletActionMetricsNotRegisteredWhenReservationsDisabled(t *testing.T) 
 		pm.histogramsMutex.RLock()
 		_, exists := pm.histograms[durationMetricName]
 		pm.histogramsMutex.RUnlock()
-		if exists {
+		if !exists {
 			t.Errorf(
-				"histogram %s should not be registered when reservations "+
-					"are disabled",
+				"histogram %s should be registered even when reservations "+
+					"are disabled, since action execution is not gated on "+
+					"the flag",
 				durationMetricName,
 			)
 		}

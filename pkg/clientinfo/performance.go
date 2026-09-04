@@ -38,9 +38,13 @@ type PerformanceMetrics struct {
 	cancel   context.CancelFunc
 
 	// reservationsEnabled mirrors tbtc.Config.Reservations.Enabled. Gates
-	// registration of the reservation-specific wallet action metrics
-	// (reservation_anchor, reservation_reanchor) so a non-reservation
-	// deployment's metric surface does not change - see GetAllWalletActionTypes.
+	// registration of the reservation-specific gauge metrics (active_
+	// reservations_count, max_active_reservations, live_wallets_count,
+	// wallet_reservations_count) so a non-reservation deployment's metric
+	// surface does not change. The reservation wallet action counters
+	// (reservation_anchor, reservation_reanchor) are registered
+	// unconditionally regardless of this flag, because reservation action
+	// execution itself is not gated on it - see registerAllMetrics.
 	reservationsEnabled bool
 
 	// Counters track cumulative counts of events
@@ -81,8 +85,9 @@ const (
 )
 
 // NewPerformanceMetrics creates a new performance metrics instance.
-// reservationsEnabled gates registration of the reservation-specific wallet
-// action metrics (see GetAllWalletActionTypes / registerAllMetrics).
+// reservationsEnabled gates registration of the reservation-specific gauge
+// metrics only (see registerAllMetrics); the reservation wallet action
+// counters are registered unconditionally.
 func NewPerformanceMetrics(
 	ctx context.Context,
 	registry *Registry,
@@ -192,10 +197,14 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 
 	// Register per-action type wallet metrics
 	// For each action type, register: total, success_total, failed_total, duration_seconds
-	actionTypes := GetAllWalletActionTypes()
-	if pm.reservationsEnabled {
-		actionTypes = append(actionTypes, GetReservationWalletActionTypes()...)
-	}
+	// Reservation action types are registered unconditionally: reservation
+	// action execution in node_proposals.go is not itself gated on
+	// Tbtc.Reservations.Enabled, so an operator running with the flag
+	// disabled can still execute anchor/re-anchor actions post-activation.
+	// Gating registration here would leave those wallet_action_reservation_*
+	// counters created (by IncrementCounter's slow path) but never
+	// exported, silently losing observability.
+	actionTypes := append(GetAllWalletActionTypes(), GetReservationWalletActionTypes()...)
 
 	for _, actionType := range actionTypes {
 
