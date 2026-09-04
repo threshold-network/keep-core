@@ -582,6 +582,116 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 	}
 }
 
+// TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending
+// covers the dedup guarantee TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking
+// does not: it never flips the tracked action's state away from Pending,
+// so eviction-on-settlement cannot be what is suppressing repeat
+// notifications. Two poll windows elapse (several 10ms ticks each) while
+// the action stays Pending and past its deadline; the notifier must still
+// show exactly one call, and the entry must still be present in
+// pendingActions (not evicted) after both windows. Both assertions depend
+// on Finding A's fix: the prior unconditional
+// delete-after-successful-check would also happen to leave the call count
+// at one, but only because it deletes the entry outright on tick 1 - it
+// would fail the "still tracked" assertion below.
+func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	wallet1 := walletPKH()
+	members := []uint32{1, 2, 3}
+	resolver := &recordingActionTimeoutMembers{
+		walletIDs: map[[20]byte][]uint32{wallet1: members},
+	}
+
+	pollInterval := 10 * time.Millisecond
+	ratw := NewReservationActionTimeoutWatcher(
+		spvChain,
+		resolver,
+		pollInterval,
+	)
+	ratw.nowFn = func() uint32 { return 500 }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	key1 := reservationKey(0x2001)
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      key1,
+		RequestNonce:        1,
+		WalletPublicKeyHash: wallet1,
+		BlockNumber:         500,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		key1,
+		wallet1,
+		[]*tbtc.ReservationAction{
+			{
+				State:     tbtc.ReservationActionStatePending,
+				TimeoutAt: 100, // Timed out (now=500 > 100)
+			},
+		},
+		1,
+	)
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ratw.Run(ctx)
+	}()
+
+	// Tick window 1: several poll ticks fire while key1 is Pending and
+	// overdue.
+	time.Sleep(50 * time.Millisecond)
+
+	calls := spvChain.getSubmittedReservationActionTimeouts()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 notification after tick window 1, got %d", len(calls))
+	}
+	if diff := deep.Equal(key1, calls[0].reservationKey); diff != nil {
+		t.Errorf("unexpected notified key: %v", diff)
+	}
+
+	key1EventKey := actionEventKey(key1, 1)
+	item, ok := ratw.pendingActions[key1EventKey]
+	if !ok {
+		t.Fatalf("key1 should remain tracked in pendingActions while still Pending")
+	}
+	if !item.notified {
+		t.Errorf("expected key1's pendingActions entry to be marked notified")
+	}
+
+	// Tick window 2: key1's action generation is left untouched - still
+	// Pending, still past TimeoutAt. Several more poll ticks fire.
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	if err := <-errChan; err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	calls = spvChain.getSubmittedReservationActionTimeouts()
+	if len(calls) != 1 {
+		t.Fatalf(
+			"expected notifier to still show exactly 1 call for key1 after "+
+				"tick window 2 (not 2), got %d",
+			len(calls),
+		)
+	}
+
+	if _, ok := ratw.pendingActions[key1EventKey]; !ok {
+		t.Errorf(
+			"key1 should still be tracked in pendingActions after tick " +
+				"window 2: it never left Pending on-chain, so only " +
+				"state-driven eviction - not a delete-on-notify-success - " +
+				"may remove it",
+		)
+	}
+}
+
 func TestReservationActionTimeoutWatcher_RunLoop_BoundedFirstScan(t *testing.T) {
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()

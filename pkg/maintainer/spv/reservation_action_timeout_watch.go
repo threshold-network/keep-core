@@ -15,9 +15,13 @@ import (
 // 30 days at 12s/block.
 const reservationActionTimeoutLookBackBlocks = uint64(216000)
 
-// reservationActionTimeoutWalletScanLookBackBlocks is kept as an alias for
-// backward-compatibility with earlier references to the lookback window.
-const reservationActionTimeoutWalletScanLookBackBlocks = reservationActionTimeoutLookBackBlocks
+// maxActionTimeoutLoadRetries is the maximum number of consecutive
+// GetReservationAction poll-pass failures a tracked pendingAction entry
+// may accumulate before it is evicted from pendingActions. Mirrors the
+// maxReservationActionLoadRetries convention in reservation_proof_loop.go,
+// kept as a separate local constant rather than a shared one since the two
+// loops track independent pending-action sets.
+const maxActionTimeoutLoadRetries = 3
 
 // ReservationActionTimeoutWatcher observes the reservation action set and
 // notifies the Bridge when a pending action's on-chain deadline has elapsed
@@ -51,9 +55,12 @@ type ReservationActionTimeoutWatcher struct {
 	// deadline forward; production wires it to time.Now in UTC.
 	nowFn func() uint32
 	// interval is how often the background poll loop re-checks pending
-	// actions. The interval must be positive whenever Run is used to drive
-	// the background loop; tests and the synchronously driven integration
-	// code path use a positive duration.
+	// actions. Production always drives the watcher through Run, started
+	// as a background goroutine by WireReservationWatchers with the fixed
+	// one-minute DefaultReservationActionTimeoutPollInterval; there is no
+	// other production integration path. interval must be positive
+	// whenever Run is used; tests that call CheckReservationActionTimeouts
+	// directly, without starting Run, may leave it zero.
 	interval time.Duration
 	// membersResolver turns a wallet public key hash into the operator IDs
 	// the Bridge expects for the slashing argument. The resolver is
@@ -73,6 +80,22 @@ type ReservationActionTimeoutWatcher struct {
 type pendingAction struct {
 	reservationKey *big.Int
 	requestNonce   uint64
+	// loadFailures counts consecutive GetReservationAction failures for
+	// this entry across successive poll passes. Reset to 0 on a
+	// successful load; once it reaches maxActionTimeoutLoadRetries the
+	// entry is evicted so a permanently unreadable action does not
+	// accumulate forever in pendingActions.
+	loadFailures int
+	// notified is set once a timeout notification has been attempted (and
+	// locally reported success) for this action generation while it is
+	// still Pending, so pollPendingActions does not resubmit
+	// NotifyReservationActionTimeout on every subsequent poll tick. The
+	// entry is NOT deleted when this is set: eviction still happens only
+	// once action.State actually leaves Pending, which is the real
+	// on-chain evidence the notification took effect, so a dropped or
+	// reverted notification stays visible in pendingActions instead of
+	// being forgotten.
+	notified bool
 }
 
 // actionEventKey identifies one reservation action generation.
@@ -87,9 +110,11 @@ func actionEventKey(reservationKey *big.Int, requestNonce uint64) string {
 // without it because emitting NotifyReservationActionTimeout with a nil
 // or empty member slice would be ill-formed on the Bridge side.
 //
-// The pollInterval must be positive whenever Run is used to drive the
-// background loop; the watcher can otherwise be driven by
-// CheckReservationActionTimeouts calls from the integration.
+// pollInterval must be positive whenever Run is used to drive the
+// background loop. Production always uses Run, via
+// WireReservationWatchers; pollInterval only needs to be non-zero for
+// that path, not for tests that drive the watcher directly through
+// CheckReservationActionTimeouts.
 func NewReservationActionTimeoutWatcher(
 	spvChain Chain,
 	membersResolver tbtc.WalletMembersResolver,
@@ -241,31 +266,61 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 
 	now := ratw.nowFn()
 
-	// 3. Re-check each tracked action and remove entries that are no longer pending
+	// 3. Re-check each tracked action and remove entries that are no longer
+	// pending. Each tracked action costs one serial GetReservationAction RPC
+	// per poll tick; no multicall-style batching helper exists elsewhere in
+	// this codebase for this chain-read pattern (checked pkg/chain), so
+	// per-tick RPC count scales linearly with the number of tracked actions.
 	for key, item := range ratw.pendingActions {
 		action, err := ratw.spvChain.GetReservationAction(
 			item.reservationKey,
 			item.requestNonce,
 		)
 		if err != nil {
+			item.loadFailures++
 			logger.Errorf(
 				"failed to load reservation action [%v]/%d: [%v]",
 				item.reservationKey,
 				item.requestNonce,
 				err,
 			)
+			if item.loadFailures >= maxActionTimeoutLoadRetries {
+				logger.Errorf(
+					"evicting reservation action [%v]/%d from tracking "+
+						"after %d consecutive load failures",
+					item.reservationKey,
+					item.requestNonce,
+					item.loadFailures,
+				)
+				delete(ratw.pendingActions, key)
+			}
 			continue
 		}
+		item.loadFailures = 0
 
 		if action.State != tbtc.ReservationActionStatePending {
 			delete(ratw.pendingActions, key)
 			continue
 		}
 
+		if item.notified {
+			// A timeout notification was already attempted for this
+			// action generation while it remains Pending; skip
+			// resubmitting NotifyReservationActionTimeout on every poll
+			// tick. The entry is not deleted here - eviction happens only
+			// above, once action.State actually leaves Pending, which is
+			// the real on-chain evidence the notification took effect. A
+			// dropped or reverted notification therefore stays visible in
+			// pendingActions instead of being silently forgotten for the
+			// rest of the process lifetime.
+			continue
+		}
+
 		if now > action.TimeoutAt {
-			if err := ratw.CheckReservationActionTimeouts(
+			if err := ratw.checkReservationActionTimeout(
 				item.reservationKey,
 				now,
+				action,
 			); err != nil {
 				logger.Errorf(
 					"action-timeout watcher failed to check reservation [%v]: [%v]",
@@ -273,10 +328,7 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 					err,
 				)
 			} else {
-				// Once a timeout check has successfully completed (either notified
-				// or cleanly skipped for non-member/empty set), remove it from
-				// pendingActions so subsequent poll ticks do not repeat notifications.
-				delete(ratw.pendingActions, key)
+				item.notified = true
 			}
 		}
 	}
@@ -307,6 +359,23 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 func (ratw *ReservationActionTimeoutWatcher) CheckReservationActionTimeouts(
 	reservationKey *big.Int,
 	now uint32,
+) error {
+	return ratw.checkReservationActionTimeout(reservationKey, now, nil)
+}
+
+// checkReservationActionTimeout is the shared implementation behind
+// CheckReservationActionTimeouts. When preloadedAction is non-nil, it is
+// used in place of a second GetReservationAction RPC: pollPendingActions
+// already loads the action for (reservationKey, requestNonce) once per
+// poll pass to decide whether the entry is overdue, and by the Bridge
+// invariant documented above that loaded action is the same one
+// reservation.RequestNonce resolves to whenever its state is still
+// Pending, so re-fetching it here would be a redundant RPC for the exact
+// same value.
+func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
+	reservationKey *big.Int,
+	now uint32,
+	preloadedAction *tbtc.ReservationAction,
 ) error {
 	if ratw.membersResolver == nil {
 		return fmt.Errorf(
@@ -339,14 +408,17 @@ func (ratw *ReservationActionTimeoutWatcher) CheckReservationActionTimeouts(
 
 	nonce := reservation.RequestNonce
 
-	action, err := ratw.spvChain.GetReservationAction(reservationKey, nonce)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to load action for reservation [%v] at nonce %d: [%v]",
-			reservationKey,
-			nonce,
-			err,
-		)
+	action := preloadedAction
+	if action == nil {
+		action, err = ratw.spvChain.GetReservationAction(reservationKey, nonce)
+		if err != nil {
+			return fmt.Errorf(
+				"failed to load action for reservation [%v] at nonce %d: [%v]",
+				reservationKey,
+				nonce,
+				err,
+			)
+		}
 	}
 
 	if action.State != tbtc.ReservationActionStatePending {
