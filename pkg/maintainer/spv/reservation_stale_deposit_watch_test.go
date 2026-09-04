@@ -77,7 +77,13 @@ func TestReservationStaleDepositWatcher_NonReservedDepositIsSkipped(t *testing.T
 	}
 }
 
-func TestReservationStaleDepositWatcher_LiveWalletDoesNotNotify(t *testing.T) {
+// TestReservationStaleDepositWatcher_LiveWalletIsKeptNotDropped verifies
+// that a reserved deposit assigned to a Live wallet does not notify and
+// resolves to Keep, not Drop: the wallet may still transition away from
+// Live (e.g. MovingFunds/Closing/Terminated) before anchoring, and the
+// poller's forward-only scan cursor means a deposit dropped here could
+// never re-enter tracking to be caught later.
+func TestReservationStaleDepositWatcher_LiveWalletIsKeptNotDropped(t *testing.T) {
 	spvChain := newLocalChain()
 
 	key := reservationDepositKey(0xB002)
@@ -92,8 +98,8 @@ func TestReservationStaleDepositWatcher_LiveWalletDoesNotNotify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res != StaleDepositResolutionDrop {
-		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionDrop, res)
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
 	}
 
 	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 0 {
@@ -377,7 +383,7 @@ func TestReservationStaleDepositWatcher_GetReservationChainError(t *testing.T) {
 }
 
 // TestReservationStaleDepositWatcher_GetReservationActionChainError_DoesNotNotifyEvenPastDeadline
-// verifies Fix 1 (P1): a transient RPC error on GetReservationAction must be
+// verifies that a transient RPC error on GetReservationAction is
 // propagated as an error and MUST NOT fall through to the reveal-timestamp
 // staleness path or trigger a premature stale deposit notification.
 func TestReservationStaleDepositWatcher_GetReservationActionChainError_DoesNotNotifyEvenPastDeadline(t *testing.T) {
@@ -413,9 +419,11 @@ func TestReservationStaleDepositWatcher_GetReservationActionChainError_DoesNotNo
 
 	// GetReservationAction is NOT seeded, so it returns an error ("no action for given reservation/nonce").
 	watcher := NewReservationStaleDepositWatcher(spvChain)
-	// now = 10_000 is well past 4_600. Under the buggy code (which conflated
-	// err != nil with Unknown state), this would fall through to the reveal
-	// fallback and submit a premature stale deposit notification.
+	// now = 10_000 is well past the 4_600 reveal-derived deadline. A
+	// transient RPC error must be surfaced as an error and must not be
+	// conflated with an "action generation not yet created" Unknown state,
+	// which would fall through to the reveal fallback and submit a
+	// premature stale deposit notification.
 	res, err := watcher.CheckStaleReservedDeposit(key, 10_000)
 	if err == nil {
 		t.Fatal("expected error on transient GetReservationAction RPC failure, got nil")
@@ -433,10 +441,10 @@ func TestReservationStaleDepositWatcher_GetReservationActionChainError_DoesNotNo
 }
 
 // TestReservationStaleDepositWatcher_AdvancingNonceEvaluatesActiveGeneration
-// verifies Fix 2 (P2): the watcher reads reservation.RequestNonce via
+// verifies that the watcher reads reservation.RequestNonce via
 // GetReservation rather than assuming a hardcoded nonce = 1. If nonce 1
 // timed out and a retry advanced the nonce to 2, the watcher must evaluate
-// nonce 2's action generation.
+// nonce 2's action generation, the current one.
 func TestReservationStaleDepositWatcher_AdvancingNonceEvaluatesActiveGeneration(t *testing.T) {
 	spvChain := newLocalChain()
 
