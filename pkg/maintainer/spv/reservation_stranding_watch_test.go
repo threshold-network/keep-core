@@ -37,12 +37,12 @@ func walletPKHAt(b byte) [20]byte {
 func TestReservationStrandingWatcher_NoReservations(t *testing.T) {
 	spvChain := newLocalChain()
 
-	watcher := NewReservationStrandingWatcher(spvChain)
+	watcher := newReservationStrandingWatcher(spvChain)
 	if watcher == nil {
 		t.Fatal("expected non-nil watcher")
 	}
 
-	if err := watcher.CheckReservationStrandingForWallet(walletPKH()); err != nil {
+	if err := watcher.checkReservationStrandingForWallet(walletPKH()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -65,8 +65,8 @@ func TestReservationStrandingWatcher_NotifiesActiveReservation(t *testing.T) {
 		State: tbtc.ReservationStateActive,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain)
-	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -90,8 +90,8 @@ func TestReservationStrandingWatcher_SkipsClosedReservation(t *testing.T) {
 		State: tbtc.ReservationStateClosed,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain)
-	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -111,8 +111,8 @@ func TestReservationStrandingWatcher_SkipsPendingReservation(t *testing.T) {
 		State: tbtc.ReservationStateActionPending,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain)
-	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -151,8 +151,8 @@ func TestReservationStrandingWatcher_MultipleReservations(t *testing.T) {
 		State: tbtc.ReservationStateStranded,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain)
-	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -193,8 +193,8 @@ func TestReservationStrandingWatcher_UnknownReservationIsSkipped(t *testing.T) {
 		State: tbtc.ReservationStateActive,
 	})
 
-	watcher := NewReservationStrandingWatcher(spvChain)
-	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -217,8 +217,8 @@ func TestReservationStrandingWatcher_WalletChainError(t *testing.T) {
 	wallet := walletPKH()
 	spvChain.setWalletReservations(wallet, nil)
 
-	watcher := NewReservationStrandingWatcher(spvChain)
-	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error for empty wallet: %v", err)
 	}
 
@@ -253,8 +253,8 @@ func TestReservationStrandingWatcher_NotifierErrorContinuesProcessing(t *testing
 		failing.String(): fmt.Errorf("notifier unavailable"),
 	}
 
-	watcher := NewReservationStrandingWatcher(spvChain)
-	if err := watcher.CheckReservationStrandingForWallet(wallet); err != nil {
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf(
 			"a single notifier failure must not fail the whole check: %v",
 			err,
@@ -282,8 +282,8 @@ func TestReservationStrandingWatcher_WalletReservationsChainError(t *testing.T) 
 
 	spvChain.walletReservationsErr = fmt.Errorf("rpc unavailable")
 
-	watcher := NewReservationStrandingWatcher(spvChain)
-	if err := watcher.CheckReservationStrandingForWallet(walletPKH()); err == nil {
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(walletPKH()); err == nil {
 		t.Fatal("expected error when WalletReservations fails, got nil")
 	}
 

@@ -6,7 +6,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// ReservationStrandingWatcher observes wallet close/termination events and
+// reservationStrandingWatcher observes wallet close/termination events and
 // notifies the Bridge of any reservation whose anchor is now stranded.
 //
 // In tBTC v2 wallets, a live reservation anchor is held in a wallet-controlled
@@ -15,21 +15,21 @@ import (
 // transaction for that reservation. The Bridge must be informed so the
 // reservation can transition to ReservationStateStranded and the anchor can
 // be reconciled via the owner-facing late settlement path.
-type ReservationStrandingWatcher struct {
+type reservationStrandingWatcher struct {
 	spvChain Chain
 }
 
-// NewReservationStrandingWatcher constructs a stranding watcher bound to the
+// newReservationStrandingWatcher constructs a stranding watcher bound to the
 // given chain.
 //
 // The watcher is intended to be wired to wallet-close events via a subscription
-func NewReservationStrandingWatcher(spvChain Chain) *ReservationStrandingWatcher {
-	return &ReservationStrandingWatcher{
+func newReservationStrandingWatcher(spvChain Chain) *reservationStrandingWatcher {
+	return &reservationStrandingWatcher{
 		spvChain: spvChain,
 	}
 }
 
-// CheckReservationStrandingForWallet walks the reservations currently
+// checkReservationStrandingForWallet walks the reservations currently
 // custodied by walletPublicKeyHash and forwards a stray notification to the
 // Bridge for every reservation whose state is Active.
 //
@@ -37,12 +37,12 @@ func NewReservationStrandingWatcher(spvChain Chain) *ReservationStrandingWatcher
 // wiring that subscribes to wallet close/termination events. It is
 // intentionally synchronous and per-wallet: the caller decides which wallets
 // to inspect, and the watcher does not run a background loop of its own.
-
+//
 // The function is idempotent at the chain level: notifying an already-stranded
 // reservation is a no-op on the Bridge side. It is the caller's
 // responsibility to dedupe notifications across watcher restarts; the watcher
 // never silently drops or coalesces calls.
-func (rsw *ReservationStrandingWatcher) CheckReservationStrandingForWallet(
+func (rsw *reservationStrandingWatcher) checkReservationStrandingForWallet(
 	walletPublicKeyHash [20]byte,
 ) error {
 	keys, err := rsw.spvChain.WalletReservations(walletPublicKeyHash)
