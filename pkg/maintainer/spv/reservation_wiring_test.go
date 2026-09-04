@@ -93,9 +93,11 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 
 // TestCheckStaleReservedDeposit_Resolution covers the resolution outcomes of
 // CheckStaleReservedDeposit used by the poller to decide pending-set retention:
-// a deposit still reserved with unreached timeout must be kept, non-reserved
-// deposits, deposits with live wallets, or settled actions must be dropped,
-// and timed-out deposits must be notified and evicted.
+// a deposit still reserved with unreached timeout, or reserved with a live
+// wallet, must be kept (a live wallet can still transition away from Live
+// before anchoring, so the poller must keep re-evaluating it); non-reserved
+// deposits or deposits with settled actions must be dropped; and timed-out
+// deposits must be notified and evicted.
 func TestCheckStaleReservedDeposit_Resolution(t *testing.T) {
 	tests := map[string]struct {
 		isReserved         bool
@@ -119,7 +121,7 @@ func TestCheckStaleReservedDeposit_Resolution(t *testing.T) {
 			actionState:        tbtc.ReservationActionStatePending,
 			timeoutAt:          100,
 			now:                1000,
-			expectedResolution: StaleDepositResolutionDrop,
+			expectedResolution: StaleDepositResolutionKeep,
 		},
 		"reserved, action settled": {
 			isReserved:         true,
@@ -257,10 +259,11 @@ func TestWireReservationWatchers_NilParameters(t *testing.T) {
 }
 
 // TestWireReservationWatchers_StartupCatchUpScan_TransientErrorsDoNotAbort
-// proves Fix 1: during the stranding watcher's startup catch-up scan, a transient
-// chain-read failure against one wallet (e.g. GetWallet returning an error)
-// does not abort the entire startup. The scan continues to the next wallets,
-// properly processing Closed and Terminated wallets while skipping Live ones.
+// verifies that the stranding watcher's startup catch-up scan tolerates a
+// transient chain-read failure against one wallet (e.g. GetWallet
+// returning an error): the scan continues to the remaining wallets rather
+// than aborting client startup, correctly notifying Closed and Terminated
+// wallets' stranded reservations while skipping Live ones.
 func TestWireReservationWatchers_StartupCatchUpScan_TransientErrorsDoNotAbort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
