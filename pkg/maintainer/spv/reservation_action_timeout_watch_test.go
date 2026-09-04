@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -660,8 +661,8 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 	if !ok {
 		t.Fatalf("key1 should remain tracked in pendingActions while still Pending")
 	}
-	if !item.notified {
-		t.Errorf("expected key1's pendingActions entry to be marked notified")
+	if item.notifiedAt == 0 {
+		t.Errorf("expected key1's pendingActions entry to record a notifiedAt timestamp")
 	}
 
 	// Tick window 2: key1's action generation is left untouched - still
@@ -689,6 +690,110 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 				"state-driven eviction - not a delete-on-notify-success - " +
 				"may remove it",
 		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow
+// proves the retry path the notifiedAt/actionTimeoutRenotifyInterval
+// mechanism exists for: if the first NotifyReservationActionTimeout
+// transaction is dropped or reverted, the action stays Pending on-chain
+// forever, and the watcher must eventually try again rather than leaving
+// item.notifiedAt as permanent (but false) evidence of success. This
+// drives nowFn forward past actionTimeoutRenotifyInterval between two
+// poll ticks and asserts a second notification call is submitted.
+func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	wallet1 := walletPKH()
+	members := []uint32{1, 2, 3}
+	resolver := &recordingActionTimeoutMembers{
+		walletIDs: map[[20]byte][]uint32{wallet1: members},
+	}
+
+	pollInterval := 10 * time.Millisecond
+	ratw := NewReservationActionTimeoutWatcher(
+		spvChain,
+		resolver,
+		pollInterval,
+	)
+
+	var currentNow uint32 = 500
+	var nowMutex sync.Mutex
+	ratw.nowFn = func() uint32 {
+		nowMutex.Lock()
+		defer nowMutex.Unlock()
+		return currentNow
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	key1 := reservationKey(0x2101)
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      key1,
+		RequestNonce:        1,
+		WalletPublicKeyHash: wallet1,
+		BlockNumber:         500,
+	})
+	// TimeoutAt stays fixed and far in the past relative to every "now"
+	// value used below, so the action is overdue for the whole test.
+	seededReservation(
+		t,
+		spvChain,
+		key1,
+		wallet1,
+		[]*tbtc.ReservationAction{
+			{
+				State:     tbtc.ReservationActionStatePending,
+				TimeoutAt: 100,
+			},
+		},
+		1,
+	)
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ratw.Run(ctx)
+	}()
+
+	// First window: exactly one notification while notifiedAt is 0.
+	time.Sleep(50 * time.Millisecond)
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
+		t.Fatalf("expected 1 notification before the backoff window, got %d", len(calls))
+	}
+
+	// Advance "now" past actionTimeoutRenotifyInterval. The on-chain
+	// action is left untouched (still Pending, still overdue) - exactly
+	// the dropped/reverted-notification scenario this mechanism exists
+	// to recover from.
+	nowMutex.Lock()
+	currentNow = 500 + uint32(actionTimeoutRenotifyInterval.Seconds()) + 1
+	nowMutex.Unlock()
+
+	// Second window: the backoff has elapsed, so a retry notification
+	// must be submitted.
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	if err := <-errChan; err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	calls := spvChain.getSubmittedReservationActionTimeouts()
+	if len(calls) != 2 {
+		t.Fatalf(
+			"expected a retry notification after the backoff window "+
+				"elapsed (2 total calls), got %d",
+			len(calls),
+		)
+	}
+	for _, call := range calls {
+		if diff := deep.Equal(key1, call.reservationKey); diff != nil {
+			t.Errorf("unexpected notified key: %v", diff)
+		}
 	}
 }
 

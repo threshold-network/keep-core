@@ -23,6 +23,16 @@ const reservationActionTimeoutLookBackBlocks = uint64(216000)
 // loops track independent pending-action sets.
 const maxActionTimeoutLoadRetries = 3
 
+// actionTimeoutRenotifyInterval bounds how often a still-Pending action
+// generation is re-offered to NotifyReservationActionTimeout once one
+// attempt has already been made. Mirrors DefaultIdleBackOffTime's 10
+// minute convention in config.go; long enough to avoid resubmitting on
+// every one-minute poll tick while a normal transaction confirms, short
+// enough that a dropped or reverted notification is retried well within
+// an action's timeout-to-slashing window rather than silently stalling
+// for the process lifetime.
+const actionTimeoutRenotifyInterval = 10 * time.Minute
+
 // ReservationActionTimeoutWatcher observes the reservation action set and
 // notifies the Bridge when a pending action's on-chain deadline has elapsed
 // without an SPV proof being submitted.
@@ -86,16 +96,18 @@ type pendingAction struct {
 	// entry is evicted so a permanently unreadable action does not
 	// accumulate forever in pendingActions.
 	loadFailures int
-	// notified is set once a timeout notification has been attempted (and
-	// locally reported success) for this action generation while it is
-	// still Pending, so pollPendingActions does not resubmit
-	// NotifyReservationActionTimeout on every subsequent poll tick. The
-	// entry is NOT deleted when this is set: eviction still happens only
-	// once action.State actually leaves Pending, which is the real
-	// on-chain evidence the notification took effect, so a dropped or
-	// reverted notification stays visible in pendingActions instead of
-	// being forgotten.
-	notified bool
+	// notifiedAt is the UNIX timestamp of the last attempted (and locally
+	// reported successful) NotifyReservationActionTimeout call for this
+	// action generation, or 0 if none has been attempted yet. It is NOT
+	// treated as proof the notification landed: a submitted-but-dropped
+	// or reverted transaction still leaves the on-chain action Pending,
+	// so pollPendingActions re-attempts the notification once
+	// actionTimeoutRenotifyInterval has elapsed since notifiedAt rather
+	// than treating one local send as permanent evidence of success.
+	// Eviction still happens only once action.State actually leaves
+	// Pending, which is the real on-chain evidence the notification took
+	// effect.
+	notifiedAt uint32
 }
 
 // actionEventKey identifies one reservation action generation.
@@ -303,16 +315,15 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			continue
 		}
 
-		if item.notified {
-			// A timeout notification was already attempted for this
-			// action generation while it remains Pending; skip
-			// resubmitting NotifyReservationActionTimeout on every poll
-			// tick. The entry is not deleted here - eviction happens only
-			// above, once action.State actually leaves Pending, which is
-			// the real on-chain evidence the notification took effect. A
-			// dropped or reverted notification therefore stays visible in
-			// pendingActions instead of being silently forgotten for the
-			// rest of the process lifetime.
+		if item.notifiedAt != 0 &&
+			now-item.notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds()) {
+			// A timeout notification was attempted recently for this
+			// action generation while it remains Pending; give it time
+			// to land before resubmitting NotifyReservationActionTimeout
+			// on every poll tick. If the prior attempt's transaction was
+			// dropped or reverted, the action is still Pending once
+			// actionTimeoutRenotifyInterval elapses and this branch is
+			// skipped, so the next tick retries below.
 			continue
 		}
 
@@ -328,7 +339,7 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 					err,
 				)
 			} else {
-				item.notified = true
+				item.notifiedAt = now
 			}
 		}
 	}
