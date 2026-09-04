@@ -1,6 +1,7 @@
 package tbtcpg
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -100,6 +101,25 @@ func (rrt *ReservationReanchorTask) Run(
 		)
 	}
 
+	// live_wallets_count is published unconditionally on every Run pass,
+	// mirroring the sibling active_reservations_count/max_active_reservations
+	// gauges that ReservationAcceptanceTask publishes every coordination
+	// window: it must not depend on this task's StateMovingFunds/
+	// non-empty-reservations guards below, which are false for most
+	// wallets in steady state. Gating the publish on those guards would
+	// leave the gauge stuck at its registered-zero value indefinitely and
+	// make the occupancy-monitor ratio permanently undefined.
+	liveWalletsCount, err := rrt.chain.GetLiveWalletsCount()
+	if err != nil {
+		return nil, false, fmt.Errorf(
+			"cannot get live wallets count: [%w]",
+			err,
+		)
+	}
+	if rrt.metricsRecorder != nil {
+		rrt.metricsRecorder.SetGauge("live_wallets_count", float64(liveWalletsCount))
+	}
+
 	if walletChainData.State != tbtc.StateMovingFunds {
 		taskLogger.Info("wallet is not eligible for reservation re-anchor")
 		return nil, false, nil
@@ -117,17 +137,6 @@ func (rrt *ReservationReanchorTask) Run(
 		taskLogger.Info("wallet has no reservations to re-anchor")
 		rrt.notifyMovingFundsBelowDustIfEligible(taskLogger, walletPublicKeyHash)
 		return nil, false, nil
-	}
-
-	liveWalletsCount, err := rrt.chain.GetLiveWalletsCount()
-	if err != nil {
-		return nil, false, fmt.Errorf(
-			"cannot get live wallets count: [%w]",
-			err,
-		)
-	}
-	if rrt.metricsRecorder != nil {
-		rrt.metricsRecorder.SetGauge("live_wallets_count", float64(liveWalletsCount))
 	}
 
 	if liveWalletsCount == 0 {
@@ -183,6 +192,16 @@ func (rrt *ReservationReanchorTask) Run(
 				"cannot prepare reservation re-anchor proposal: [%v]",
 				err,
 			)
+			var postWriteErr *errReservationReanchorPostWriteFailure
+			if errors.As(err, &postWriteErr) {
+				// RequestReservationReanchor already authorized a
+				// re-anchor action generation on-chain for this
+				// reservation before the post-write post-condition check
+				// (re-read + nonce verification) failed. Stop instead of
+				// continuing to the next reservation so at most one
+				// on-chain authorization is issued per Run pass.
+				break
+			}
 			continue
 		}
 
@@ -191,6 +210,26 @@ func (rrt *ReservationReanchorTask) Run(
 
 	taskLogger.Info("no reservations eligible for re-anchor")
 	return nil, false, nil
+}
+
+// errReservationReanchorPostWriteFailure marks a ProposeReservationReanchor
+// failure that occurred after RequestReservationReanchor already
+// authorized a re-anchor action generation on-chain. Run distinguishes
+// this from a pre-write failure (validation, fee estimation, transaction
+// assembly) via errors.As: on a pre-write failure no authorization was
+// issued, so Run may safely try the next reservation, but on a post-write
+// failure an authorization is already in flight and Run must stop instead
+// of risking a second one in the same pass.
+type errReservationReanchorPostWriteFailure struct {
+	err error
+}
+
+func (e *errReservationReanchorPostWriteFailure) Error() string {
+	return e.err.Error()
+}
+
+func (e *errReservationReanchorPostWriteFailure) Unwrap() error {
+	return e.err
 }
 
 // ProposeReservationReanchor assembles a single reservation re-anchor proposal
@@ -320,14 +359,18 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 
 	updatedReservation, err := rrt.chain.GetReservation(reservationKey)
 	if err != nil {
-		return nil, fmt.Errorf("cannot re-read reservation: [%v]", err)
+		return nil, &errReservationReanchorPostWriteFailure{
+			err: fmt.Errorf("cannot re-read reservation: [%v]", err),
+		}
 	}
 	if updatedReservation.RequestNonce != requestNonce {
-		return nil, fmt.Errorf(
-			"reservation request nonce mismatch after request: predicted [%d], on-chain [%d]",
-			requestNonce,
-			updatedReservation.RequestNonce,
-		)
+		return nil, &errReservationReanchorPostWriteFailure{
+			err: fmt.Errorf(
+				"reservation request nonce mismatch after request: predicted [%d], on-chain [%d]",
+				requestNonce,
+				updatedReservation.RequestNonce,
+			),
+		}
 	}
 	proposal.RequestNonce = updatedReservation.RequestNonce
 
@@ -335,12 +378,34 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 }
 
 // findTargetWallet picks a live destination wallet from the on-chain wallet
-// registry, mirroring the moving funds target selection. The new wallet must
-// be in StateLive and must not be the source wallet itself. The registration
-// scan is bounded to ReservationReanchorLookBackBlocks (mirroring the other
-// look-back scans in this package) rather than the full chain history: a
-// live wallet must have registered recently, and an unbounded eth_getLogs
-// scan on every re-anchor attempt does not.
+// registry for the re-anchor transaction's output. The new wallet must be
+// in StateLive and must not be the source wallet itself.
+//
+// Selection here is independent of the source wallet's own moving funds
+// commitment (SubmitMovingFundsCommitment /
+// PastMovingFundsCommitmentSubmittedEvents): this method does not attempt
+// to route the reservation's anchor UTXO to one of the specific wallets
+// the source wallet has committed to for its Bitcoin funds move. A
+// reservation re-anchored here may therefore end up under different
+// custody than the BTC the source wallet moves in the same window. This
+// is a deliberate custody-scatter-not-theft tradeoff: every reservation
+// stays fully accounted for on-chain regardless of which Live wallet
+// holds its anchor, so scattering custody across an arbitrary Live wallet
+// is a bookkeeping inconvenience, not a fund-safety issue. Selecting from
+// the source wallet's actual commitment would require this task to parse
+// and disambiguate among possibly several committed target wallets at
+// proposal time; that is not worth building unless the chain interface
+// already exposed the mapping trivially, which it does not today.
+//
+// The primary registration scan is bounded to
+// ReservationReanchorLookBackBlocks (mirroring the other look-back scans
+// in this package): an unbounded eth_getLogs scan on every re-anchor
+// attempt is too expensive to run every window. GetLiveWalletsCount
+// (checked by the caller before this method runs) can confirm live
+// wallets exist even when none of them registered within the look-back
+// window, so a bounded scan that finds no candidate falls back to an
+// unbounded one instead of leaving Run stuck returning no proposal
+// indefinitely.
 func (rrt *ReservationReanchorTask) findTargetWallet(
 	taskLogger log.StandardLogger,
 	sourceWalletPublicKeyHash [20]byte,
@@ -360,6 +425,40 @@ func (rrt *ReservationReanchorTask) findTargetWallet(
 		startBlock = currentBlock - ReservationReanchorLookBackBlocks
 	}
 
+	targetWalletPublicKeyHash, err := rrt.findLiveWalletFromRegistrationEvents(
+		taskLogger,
+		sourceWalletPublicKeyHash,
+		startBlock,
+	)
+	if err == nil {
+		return targetWalletPublicKeyHash, nil
+	}
+	if startBlock == 0 {
+		// The bounded scan above already covered full chain history.
+		return [20]byte{}, err
+	}
+
+	taskLogger.Infof(
+		"no live re-anchor target registered within the last [%d] blocks, "+
+			"falling back to an unbounded registration event scan",
+		ReservationReanchorLookBackBlocks,
+	)
+
+	return rrt.findLiveWalletFromRegistrationEvents(
+		taskLogger,
+		sourceWalletPublicKeyHash,
+		0,
+	)
+}
+
+// findLiveWalletFromRegistrationEvents scans new-wallet-registered events
+// starting at startBlock and returns the most-recently-registered Live
+// wallet other than sourceWalletPublicKeyHash.
+func (rrt *ReservationReanchorTask) findLiveWalletFromRegistrationEvents(
+	taskLogger log.StandardLogger,
+	sourceWalletPublicKeyHash [20]byte,
+	startBlock uint64,
+) ([20]byte, error) {
 	events, err := rrt.chain.PastNewWalletRegisteredEvents(
 		&tbtc.NewWalletRegisteredEventFilter{StartBlock: startBlock},
 	)
