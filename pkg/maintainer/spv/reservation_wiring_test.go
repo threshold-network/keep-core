@@ -113,13 +113,17 @@ func TestCheckStaleReservedDeposit_Resolution(t *testing.T) {
 			now:                1000,
 			expectedResolution: StaleDepositResolutionDrop,
 		},
+		// A Live wallet is not yet stale: it may still transition away from
+		// Live (e.g. MovingFunds/Closing/Terminated) before anchoring, so
+		// the deposit is kept in tracking rather than dropped (see
+		// CheckStaleReservedDeposit's Live-wallet branch).
 		"reserved, wallet live": {
 			isReserved:         true,
 			walletState:        tbtc.StateLive,
 			actionState:        tbtc.ReservationActionStatePending,
 			timeoutAt:          100,
 			now:                1000,
-			expectedResolution: StaleDepositResolutionDrop,
+			expectedResolution: StaleDepositResolutionKeep,
 		},
 		"reserved, action settled": {
 			isReserved:         true,
