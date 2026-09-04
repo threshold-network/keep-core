@@ -328,10 +328,7 @@ func (dsp *DepositSweepProposal) Unmarshal(bytes []byte) error {
 	}
 
 	depositsKeys := make(
-		[]struct {
-			FundingTxHash      bitcoin.Hash
-			FundingOutputIndex uint32
-		},
+		[]DepositKey,
 		len(pbMsg.DepositsKeys),
 	)
 	for i, depositKey := range pbMsg.DepositsKeys {
@@ -346,10 +343,7 @@ func (dsp *DepositSweepProposal) Unmarshal(bytes []byte) error {
 			)
 		}
 
-		depositsKeys[i] = struct {
-			FundingTxHash      bitcoin.Hash
-			FundingOutputIndex uint32
-		}{
+		depositsKeys[i] = DepositKey{
 			FundingTxHash:      hash,
 			FundingOutputIndex: depositKey.FundingOutputIndex,
 		}

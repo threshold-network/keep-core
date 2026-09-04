@@ -1,8 +1,0 @@
-apiVersion: snapshot.storage.k8s.io/v1
-kind: VolumeSnapshot
-metadata:
-  name: electrumx-snapshot
-spec:
-  volumeSnapshotClassName: electrumx
-  source:
-    persistentVolumeClaimName: electrumx-data-electrumx-0

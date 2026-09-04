@@ -43,7 +43,7 @@ func SubmitReservationReanchorProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		getGlobalMetricsRecorder(),
+		getMetricsRecorder(),
 	)
 }
 

@@ -42,7 +42,7 @@ func SubmitReservationAcceptanceProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		getGlobalMetricsRecorder(),
+		getMetricsRecorder(),
 	)
 }
 

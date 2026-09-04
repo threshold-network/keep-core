@@ -31,6 +31,12 @@ const (
 	DefaultIdleBackOffTime = 10 * time.Minute
 )
 
+// DefaultMaxProofHeaders is the default value for the maximum number of
+// block headers allowed in a single SPV proof. It caps the forward walk
+// over headers when assembling a proof; see the documentation on the
+// MaxProofHeaders config field and on getProofInfo in spv.go.
+const DefaultMaxProofHeaders = 144
+
 // Config holds configurable properties.
 type Config struct {
 	// Enabled indicates whether the SPV maintainer should be started.
@@ -78,4 +84,13 @@ type Config struct {
 	// and [Maintainer.Spv.Reservations] in the maintainer) for the reservation
 	// feature to work end-to-end.
 	Reservations tbtc.ReservationsConfig
+
+	// MaxProofHeaders caps the forward walk over headers when assembling an
+	// SPV proof. The proof window is anchored at a fixed start block, so a
+	// run of leading minimum-difficulty (DIFF1) headers longer than this
+	// bound makes the transaction permanently unprovable rather than merely
+	// delayed. Raise the value on networks (e.g. testnet4 with extended
+	// BIP94 minimum-difficulty runs) where the default 144 headers is
+	// insufficient.
+	MaxProofHeaders uint
 }

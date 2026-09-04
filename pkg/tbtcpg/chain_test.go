@@ -71,18 +71,18 @@ type LocalChain struct {
 	operatorIDs                              map[chain.Address]uint32
 	redemptionDelays                         map[[32]byte]time.Duration
 	depositMinAge                            uint32
-
-	reservations                          map[string]*tbtc.Reservation
-	reservationActions                    map[string]*tbtc.ReservationAction
-	reservationParametersValue            tbtc.ReservationParameters
-	reservationParametersSet              bool
-	reservationProposalValidations        map[[32]byte]bool
-	reservationReanchorRequestSubmissions []*reservationReanchorRequestSubmission
-	belowDustNotifications                []*belowDustNotification
-	reservationWalletKeys                 map[[20]byte][]*big.Int
-	reservedDeposits                      map[string]bool
-	liveWalletsCountValue                 uint32
-	liveWalletsCountSet                   bool
+	reservations                             map[string]*tbtc.Reservation
+	reservationActions                       map[string]*tbtc.ReservationAction
+	reservationParametersValue               tbtc.ReservationParameters
+	reservationParametersSet                 bool
+	reservationProposalValidations           map[[32]byte]bool
+	reservationReanchorRequestSubmissions    []*reservationReanchorRequestSubmission
+	belowDustNotifications                   []*belowDustNotification
+	reservationWalletKeys                    map[[20]byte][]*big.Int
+	reservedDeposits                         map[string]bool
+	liveWalletsCountValue                    uint32
+	liveWalletsCountSet                      bool
+	depositSweepMaxSizeErr                   error
 }
 
 func NewLocalChain() *LocalChain {
@@ -904,7 +904,24 @@ func (lc *LocalChain) SetRedemptionRequestMinAge(redemptionRequestMinAge uint32)
 }
 
 func (lc *LocalChain) GetDepositSweepMaxSize() (uint16, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.depositSweepMaxSizeErr != nil {
+		return 0, lc.depositSweepMaxSizeErr
+	}
+
 	panic("unsupported")
+}
+
+// SetDepositSweepMaxSizeError configures the error GetDepositSweepMaxSize
+// returns, allowing tests to exercise the max-size-lookup failure path
+// without a real chain implementation.
+func (lc *LocalChain) SetDepositSweepMaxSizeError(err error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.depositSweepMaxSizeErr = err
 }
 
 func (lc *LocalChain) BlockCounter() (chain.BlockCounter, error) {

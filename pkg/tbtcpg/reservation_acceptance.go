@@ -904,7 +904,7 @@ func estimateReservationAcceptanceFee(
 	txMaxFee uint64,
 ) (int64, error) {
 	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
-		AddScriptHashInputs(1, depositScriptByteSize, true).
+		AddScriptHashInputs(1, DepositScriptByteSize, true).
 		AddPublicKeyHashOutputs(1, true)
 
 	return estimateReservationFixedSizeTxFee(

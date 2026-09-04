@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/maintainer/btcdiff"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
@@ -696,19 +697,46 @@ func proveReservationTransaction(
 ) error {
 	transactionHashStr := transaction.Hash().Hex(bitcoin.ReversedByteOrder)
 
-	isProofWithinRelayRange, accumulatedConfirmations, requiredConfirmations, err :=
-		getProofInfo(transaction.Hash(), btcChain, spvChain, btcDiffChain)
+	accumulatedConfirmations, requiredConfirmations, skipReason, err := getProofInfo(
+		transaction.Hash(),
+		btcChain,
+		spvChain,
+		btcDiffChain,
+		DefaultMaxProofHeaders,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to get proof info: [%v]", err)
 	}
 
-	if !isProofWithinRelayRange {
+	switch skipReason {
+	case proofSkipOutsideRelayRange:
 		logger.Warnf(
 			"skipped proving transaction [%s]; the range of the "+
 				"required proof goes outside the previous and current "+
 				"difficulty epochs as seen by the relay",
 			transactionHashStr,
 		)
+		if recorder := getMetricsRecorder(); recorder != nil {
+			recorder.IncrementCounter(
+				clientinfo.MetricSpvProofSkippedOutsideRelayRangeTotal,
+				1,
+			)
+		}
+		return nil
+	case proofSkipExceededMaxHeaders:
+		logger.Errorf(
+			"skipped proving transaction [%s]; could not find a decisive "+
+				"header or accumulate enough difficulty within [%d] "+
+				"headers; the transaction may be permanently unprovable",
+			transactionHashStr,
+			DefaultMaxProofHeaders,
+		)
+		if recorder := getMetricsRecorder(); recorder != nil {
+			recorder.IncrementCounter(
+				clientinfo.MetricSpvProofSkippedExceededMaxHeadersTotal,
+				1,
+			)
+		}
 		return nil
 	}
 

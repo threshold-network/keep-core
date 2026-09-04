@@ -1236,7 +1236,13 @@ func TestSubmitReservationReanchorActionProof_UsesTargetWallet(t *testing.T) {
 		return nil
 	}
 
-	_, _, requiredConfirmations, err := getProofInfo(transaction.Hash(), btcChain, spvChain, spvChain)
+	_, requiredConfirmations, _, err := getProofInfo(
+		transaction.Hash(),
+		btcChain,
+		spvChain,
+		spvChain,
+		DefaultMaxProofHeaders,
+	)
 	if err != nil {
 		t.Fatalf("failed to get proof info: %v", err)
 	}

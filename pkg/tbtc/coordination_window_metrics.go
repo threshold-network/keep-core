@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -218,16 +219,13 @@ func (cwm *coordinationWindowMetrics) recordWalletCoordination(
 		wm.WalletsFailed++
 	}
 
-	// Track leader
 	leaderStr := leader.String()
 	wm.Leaders[leaderStr]++
 
-	// Track action type
 	if actionType != "" {
 		wm.ActionTypes[actionType]++
 	}
 
-	// Track faults
 	faultDetails := make([]faultDetail, 0, len(faults))
 	for _, fault := range faults {
 		faultTypeStr := fault.faultType.String()
@@ -285,13 +283,9 @@ func (cwm *coordinationWindowMetrics) GetRecentWindows(limit int) []*windowMetri
 	}
 
 	// Sort in descending order (most recent first)
-	for i := 0; i < len(indices)-1; i++ {
-		for j := i + 1; j < len(indices); j++ {
-			if indices[i] < indices[j] {
-				indices[i], indices[j] = indices[j], indices[i]
-			}
-		}
-	}
+	sort.Slice(indices, func(i, j int) bool {
+		return indices[i] > indices[j]
+	})
 
 	// Limit results
 	if limit > 0 && limit < len(indices) {
@@ -321,13 +315,9 @@ func (cwm *coordinationWindowMetrics) cleanupOldWindows() {
 	}
 
 	// Sort in ascending order (oldest first)
-	for i := 0; i < len(indices)-1; i++ {
-		for j := i + 1; j < len(indices); j++ {
-			if indices[i] > indices[j] {
-				indices[i], indices[j] = indices[j], indices[i]
-			}
-		}
-	}
+	sort.Slice(indices, func(i, j int) bool {
+		return indices[i] < indices[j]
+	})
 
 	// Remove oldest windows
 	windowsToRemove := len(cwm.windows) - int(cwm.maxWindowsToTrack)

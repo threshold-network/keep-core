@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths-ignore:
       - "docs/**"
       - "infrastructure/**"
@@ -206,6 +207,21 @@ jobs:
           path: coverage/coverage.out
           if-no-files-found: warn
 
+      # Coverage gate: 14% minimum total. Baseline measured at PR #4256
+      # (2026-08-19); no automated baseline-update mechanism exists.
+      - name: Check coverage gate
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/coverage:/coverage" \
+            go-build-env \
+            go tool cover -func /coverage/coverage.out > /tmp/cover-func.txt
+          TOTAL=$(grep '^total:' /tmp/cover-func.txt | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${TOTAL}%"
+          PASS=$(awk -v t="$TOTAL" 'BEGIN { print (t+0 >= 14) ? "yes" : "no" }')
+          if [ "$PASS" != "yes" ]; then
+            echo "::error::Coverage ${TOTAL}% is below the 14% minimum threshold"
+            exit 1
+          fi
 
       - name: Build Docker Runtime Image
         if: github.event_name != 'workflow_dispatch'
@@ -372,6 +388,93 @@ jobs:
           install-go: false
           checks: "-SA1019"
 
+  client-bench:
+    needs: [client-build-test-publish]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - name: Download Docker Build Image
+        uses: actions/download-artifact@v4
+        with:
+          name: go-build-env-image
+          path: /tmp
+
+      - name: Load Docker Build Image
+        run: |
+          docker load --input /tmp/go-build-env-image.tar
+
+      - name: Download previous benchmark results
+        id: download-prev
+        uses: dawidd6/action-download-artifact@bf251b5aa9c2f7eeb574a96ee720e24f801b7c11 # v6
+        continue-on-error: true
+        with:
+          name: go-bench
+          path: bench-prev
+          workflow: client.yml
+          branch: main
+          if_no_artifact_found: warn
+
+      - name: Run benchmarks
+        run: |
+          docker run \
+            --workdir /go/src/github.com/keep-network/keep-core \
+            go-build-env \
+            go test -bench=. -benchmem -count=10 -run='^$' ./pkg/... \
+            > bench.txt
+          cat bench.txt
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260813145340-fd4a688df892
+
+      # Benchmark regression gate: >12% slower than main's last `go-bench`
+      # artifact. Baseline measured at PR #4256 (2026-08-19). This job only
+      # runs on manual `workflow_dispatch` - no automatic push/PR trigger.
+      # GAP: benchmarks added in this PR have no main-side baseline, so
+      # benchstat silently skips them on first run; they only become
+      # gated after shipping to main and someone manually dispatches this
+      # workflow again on main to record a baseline artifact.
+      # No automated baseline-record mechanism exists in this workflow.
+      - name: Compare benchmarks
+        if: steps.download-prev.outcome == 'success' && hashFiles('bench-prev/**') != ''
+        run: |
+          benchstat bench-prev/*.txt bench.txt | tee benchstat-results.txt
+          python3 - <<'EOF'
+          import sys, re
+          content = open('benchstat-results.txt').read()
+          regressions = []
+          for line in content.splitlines():
+              if '~' in line or not line.strip():
+                  continue
+              m = re.search(r'\+(\d+\.\d+)%', line)
+              if m and float(m.group(1)) > 12:
+                  regressions.append(line)
+          if regressions:
+              print('Performance regressions >12% detected:')
+              for r in regressions:
+                  print(' ', r)
+              sys.exit(1)
+          EOF
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-bench
+          path: bench.txt
+          overwrite: true
+          if-no-files-found: warn
+
   client-integration-test:
     needs: [client-detect-changes, electrum-integration-detect-changes, client-build-test-publish]
     if: |
@@ -393,8 +496,11 @@ jobs:
           docker load --input /tmp/go-build-env-image.tar
 
       - name: Run Go Integration Tests
+        env:
+          ETHEREUM_MAINNET_RPC_URL: ${{ secrets.ETHEREUM_MAINNET_RPC_URL }}
         run: |
           docker run \
+            -e ETHEREUM_MAINNET_RPC_URL \
             --workdir /go/src/github.com/keep-network/keep-core \
             go-build-env \
             gotestsum -- -timeout 20m -tags=integration ./...
