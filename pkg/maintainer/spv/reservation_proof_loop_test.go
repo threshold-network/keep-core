@@ -504,7 +504,12 @@ func TestProveReservationTransaction(t *testing.T) {
 			btcChain,
 			spvChain,
 			spvChain,
-			DefaultMaxProofHeaders,
+			// 0 exercises the zero-fallback that normalizes
+			// programmatically-built Config paths to the default bound;
+			// without it, getProofInfo would skip with
+			// proofSkipExceededMaxHeaders and this submission could never
+			// happen.
+			0,
 			func(hash bitcoin.Hash, requiredConfirmations uint) error {
 				submitted = true
 				if hash != transaction.Hash() {
