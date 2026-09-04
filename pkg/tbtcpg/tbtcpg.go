@@ -97,8 +97,7 @@ func NewProposalGenerator(
 	}
 
 	if reservationsEnabled {
-		// PR H: reservation acceptance (anchor) and re-anchor tasks.
-		// These tasks only run when the operator has opted into the m1
+		// These tasks only run when the operator has opted into the
 		// reservation feature via config.Reservations.Enabled; the gate
 		// is applied at task registration so the coordination loop
 		// never even considers these actions on a non-reservation
