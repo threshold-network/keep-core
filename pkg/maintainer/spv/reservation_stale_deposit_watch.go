@@ -22,7 +22,7 @@ const (
 	StaleDepositResolutionUnknown StaleDepositResolution = iota
 	// StaleDepositResolutionKeep indicates the deposit is still pending-stale and should be retained in the tracking set.
 	StaleDepositResolutionKeep
-	// StaleDepositResolutionDrop indicates the deposit is no longer a candidate for staleness (e.g. not reserved, live wallet, settled action) and can be dropped from tracking.
+	// StaleDepositResolutionDrop indicates the deposit is no longer a candidate for staleness (e.g. not reserved, settled action) and can be dropped from tracking.
 	StaleDepositResolutionDrop
 	// StaleDepositResolutionNotified indicates the deposit was confirmed stale and the notification was submitted.
 	StaleDepositResolutionNotified
@@ -42,7 +42,17 @@ const (
 type ReservationStaleDepositWatcher struct {
 	spvChain        Chain
 	notified        map[string]struct{}
-	memoizedTimeout map[string]uint32
+	memoizedTimeout map[string]staleDepositTimeoutMemo
+}
+
+// staleDepositTimeoutMemo caches a reveal-derived staleness deadline
+// alongside the ReservationActionTimeout governance parameter it was
+// derived from. If governance later changes ReservationActionTimeout, the
+// stored parameter no longer matches the live one and the memo is
+// recomputed instead of silently reusing a stale deadline.
+type staleDepositTimeoutMemo struct {
+	timeoutAt                uint32
+	reservationActionTimeout uint32
 }
 
 // NewReservationStaleDepositWatcher constructs a stale-deposit watcher
@@ -53,7 +63,7 @@ func NewReservationStaleDepositWatcher(
 	return &ReservationStaleDepositWatcher{
 		spvChain:        spvChain,
 		notified:        make(map[string]struct{}),
-		memoizedTimeout: make(map[string]uint32),
+		memoizedTimeout: make(map[string]staleDepositTimeoutMemo),
 	}
 }
 
@@ -61,9 +71,10 @@ func NewReservationStaleDepositWatcher(
 // invoked by the integration's polling or deferred callback once the action
 // timeout window may have elapsed.
 //
-// The function is intentionally pure: given the chain state and a `now`
-// timestamp, it either notifies the Bridge of a stale deposit or skips
-// silently. There is no internal scheduling; the caller owns the lifecycle.
+// The function may submit a Bridge notification (NotifyStaleReservedDeposit)
+// as a side effect, and it caches derived timeouts and notification state
+// on the receiver across calls. There is no internal scheduling; the
+// caller owns invocation lifecycle and synchronization.
 //
 // Conditions for notification:
 //
@@ -152,7 +163,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 			depositKey,
 			walletPublicKeyHash,
 		)
-		return StaleDepositResolutionDrop, nil
+		return StaleDepositResolutionKeep, nil
 	}
 
 	// In m1 the reservation key and deposit key share the same identifier
@@ -257,12 +268,33 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	return StaleDepositResolutionNotified, nil
 }
 
+// forgetDeposit clears any cached notification state and memoized
+// staleness deadline held for the given deposit key. The poller invokes
+// this once a deposit resolves to Drop or Notified, so a resolved
+// deposit's per-call cache entries do not linger in these maps for the
+// remaining life of the process.
+func (rsdw *ReservationStaleDepositWatcher) forgetDeposit(depositKey *big.Int) {
+	key := depositKey.String()
+	delete(rsdw.notified, key)
+	delete(rsdw.memoizedTimeout, key)
+}
+
 func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 	depositKey *big.Int,
 	walletPublicKeyHash [20]byte,
 ) (uint32, error) {
-	if timeout, ok := rsdw.memoizedTimeout[depositKey.String()]; ok {
-		return timeout, nil
+	params, paramsErr := rsdw.spvChain.ReservationParameters()
+	if paramsErr != nil {
+		return 0, fmt.Errorf(
+			"failed to load reservation parameters for staleness "+
+				"deadline derivation: [%v]",
+			paramsErr,
+		)
+	}
+
+	if memo, ok := rsdw.memoizedTimeout[depositKey.String()]; ok &&
+		memo.reservationActionTimeout == params.ReservationActionTimeout {
+		return memo.timeoutAt, nil
 	}
 
 	blockCounter, err := rsdw.spvChain.BlockCounter()
@@ -340,16 +372,10 @@ func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 		)
 	}
 
-	params, paramsErr := rsdw.spvChain.ReservationParameters()
-	if paramsErr != nil {
-		return 0, fmt.Errorf(
-			"failed to load reservation parameters for staleness "+
-				"deadline derivation: [%v]",
-			paramsErr,
-		)
-	}
-
 	result := uint32(depositRequest.RevealedAt.Unix()) + params.ReservationActionTimeout
-	rsdw.memoizedTimeout[depositKey.String()] = result
+	rsdw.memoizedTimeout[depositKey.String()] = staleDepositTimeoutMemo{
+		timeoutAt:                result,
+		reservationActionTimeout: params.ReservationActionTimeout,
+	}
 	return result, nil
 }
