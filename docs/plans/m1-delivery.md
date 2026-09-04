@@ -60,7 +60,20 @@ working scratchpad.
 
 **Fully unrelated keep-core PRs seen in the same query window (base `main`, no action needed):** [#4285](https://github.com/threshold-network/keep-core/pull/4285)/[#4286](https://github.com/threshold-network/keep-core/pull/4286) (dependabot version bumps, OPEN); [#4199](https://github.com/threshold-network/keep-core/pull/4199)/[#4226](https://github.com/threshold-network/keep-core/pull/4226) (frost-schnorr signer work, separate feature).
 
-**Superseded pre-M1 chain (tbtc-v2, not part of the active queue):** [#1088](https://github.com/threshold-network/tbtc-v2/pull/1088), [#1090](https://github.com/threshold-network/tbtc-v2/pull/1090)–[#1096](https://github.com/threshold-network/tbtc-v2/pull/1096), [#1102](https://github.com/threshold-network/tbtc-v2/pull/1102) (MERGED review-fix), [#1104](https://github.com/threshold-network/tbtc-v2/pull/1104) (MERGED test) — the original monolithic reservation-feature stack, still OPEN/parked, superseded by the A–H milestone-1 decomposition per `docs/spec/reservations/pr-strategy.md` §4.1. Kept as frozen-spec reference only; not part of this merge queue.
+**Superseded pre-M1 chain (tbtc-v2, not part of the active A–H queue):** the original monolithic reservation-feature stack, superseded by the milestone-1 decomposition per `docs/spec/reservations/pr-strategy.md` §4.1. Kept as frozen-spec reference only.
+
+| PR | Branch → base | Status | Title |
+|----|---------------|--------|-------|
+| [#1088](https://github.com/threshold-network/tbtc-v2/pull/1088) | `feat/utxo-reservation-core` → `reservations-upgrade` | OPEN, parked | draft: UTXO reservations — segregated custody with in-kind redemption |
+| [#1090](https://github.com/threshold-network/tbtc-v2/pull/1090) | `feat/utxo-reservation-router` → `feat/utxo-reservation-core` | OPEN, parked | feat(bridge): delegatecall reservation router (EIP-170) + RFC 13 |
+| [#1091](https://github.com/threshold-network/tbtc-v2/pull/1091) | `feat/utxo-reservation-settlement` → `feat/utxo-reservation-router` | OPEN, parked | feat(bridge): two-phase authorize-then-prove reservation settlement |
+| [#1092](https://github.com/threshold-network/tbtc-v2/pull/1092) | `feat/utxo-reservation-renewal` → `feat/utxo-reservation-settlement` | OPEN, parked | feat(bridge): bounded permissionless renewal and strict expiry semantics |
+| [#1093](https://github.com/threshold-network/tbtc-v2/pull/1093) | `feat/utxo-reservation-backing` → `feat/utxo-reservation-renewal` | OPEN, parked | feat(bridge): claim-equals-anchor backing model with financed in-kind fees |
+| [#1094](https://github.com/threshold-network/tbtc-v2/pull/1094) | `feat/utxo-reservation-guards` → `feat/utxo-reservation-backing` | OPEN, parked | feat(bridge): reveal-side wallet binding, pending-deposit guard, stranding and monitoring |
+| [#1095](https://github.com/threshold-network/tbtc-v2/pull/1095) | `docs/utxo-reservation-release` → `feat/utxo-reservation-guards` | OPEN, parked | docs+test: reservation release completeness (M-09) |
+| [#1096](https://github.com/threshold-network/tbtc-v2/pull/1096) | `feat/utxo-reservation-partial-redemption` → `docs/utxo-reservation-release` | OPEN, parked | feat(reservation): partial reserved redemption (1-in-2-out split) |
+| [#1102](https://github.com/threshold-network/tbtc-v2/pull/1102) | `fix/utxo-reservation-review-followups` → `feat/utxo-reservation-core` | **MERGED** | fix(reservation): address multi-agent review findings on #1088 |
+| [#1104](https://github.com/threshold-network/tbtc-v2/pull/1104) | `test/reanchor-fee-exposure` → `feat/utxo-reservation-backing` | **MERGED** | test(reservation): characterize the accepted cumulative re-anchor fee exposure |
 
 **Worktrees present** (`git worktree list`): `/tmp/m1-{a,b,c,d,e,f,g,h}` exist. `/tmp/m1-h-{a,r,w}` were transient parallel-builder worktrees for PR H's acceptance/re-anchor/watchers branches, merged into `m1-h` and safe to prune. `/tmp/src-{1091,1093,1094,1096,1102}` are read-only reference copies. (`m1-g2` worktree and `m1/bridge-integration-seams-g2` branch retired 2026-08-26 — fast-forward-merged into `m1/bridge-integration-seams`; single branch now carries all of PR #G.) All F/G rebase-blocker worktrees are now moot since F and G merged; safe to prune `/tmp/m1-f` and `/tmp/m1-g` next session if untouched.
 
