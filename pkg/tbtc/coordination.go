@@ -81,18 +81,19 @@ const (
 	// reservationsActivationBlock never activates the feature for it
 	// (see that function) instead of silently defaulting to block 0.
 	//
-	// NOTE: The mainnet and Sepolia values are placeholders that MUST be
-	// set to their real rollout heights before release and must stay
-	// ahead of each network's chain tip.
+	// NOTE: The mainnet value is a placeholder that MUST be set to its
+	// real rollout height before release and must stay ahead of the
+	// mainnet chain tip. Sepolia deliberately has no entry below (falls
+	// through to math.MaxUint64, i.e. never activates) until a real
+	// Sepolia rollout height is chosen - an invented placeholder number
+	// here would be exactly the kind of silently-live landmine this
+	// table exists to prevent.
 )
 
 // reservationsActivationBlocks maps each Ethereum network to its
 // reservations activation block. See the doc comment above.
 var reservationsActivationBlocks = map[ethereum.Network]uint64{
 	ethereum.Mainnet: 26500000,
-	// Sepolia placeholder; MUST be set to the real Sepolia rollout height
-	// before release and must stay ahead of the Sepolia chain tip.
-	ethereum.Sepolia: 12000000,
 }
 
 // reservationsActivationBlock returns the reservations activation block
