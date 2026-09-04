@@ -698,6 +698,14 @@ func proveReservationTransaction(
 	maxProofHeaders uint,
 	submit func(transactionHash bitcoin.Hash, requiredConfirmations uint) error,
 ) error {
+	// Normalize a zero maxProofHeaders: the 144 default is applied by flag
+	// registration (cmd/flags.go), so any Config built programmatically
+	// without going through flags would cap getProofInfo at 0 and skip every
+	// proof as proofSkipExceededMaxHeaders.
+	if maxProofHeaders == 0 {
+		maxProofHeaders = DefaultMaxProofHeaders
+	}
+
 	transactionHashStr := transaction.Hash().Hex(bitcoin.ReversedByteOrder)
 
 	accumulatedConfirmations, requiredConfirmations, skipReason, err := getProofInfo(
