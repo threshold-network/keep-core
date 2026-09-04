@@ -129,6 +129,17 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 		if mainUtxo == nil {
 			t.Fatal("mainUtxo must not be nil")
 		}
+		// The mainUtxo argument to SubmitReservationProof is currently
+		// populated from the spent anchor outpoint (see the milestone-1
+		// comment on buildReservationProofMainUtxo). Assert the exact
+		// encoded value so a future change to that encoding does not
+		// silently drift without a test failure.
+		if mainUtxo.TxHash != anchorTxHash {
+			t.Errorf("unexpected UTXO tx hash: got %x, want %x", mainUtxo.TxHash, anchorTxHash)
+		}
+		if mainUtxo.TxOutputIndex != 0 {
+			t.Errorf("unexpected UTXO output index: got %d, want %d", mainUtxo.TxOutputIndex, 0)
+		}
 		if mainUtxo.TxOutputValue != 600000 {
 			t.Errorf("unexpected UTXO value: got %d, want %d", mainUtxo.TxOutputValue, 600000)
 		}

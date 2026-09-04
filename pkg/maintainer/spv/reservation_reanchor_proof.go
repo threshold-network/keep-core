@@ -185,6 +185,15 @@ func buildReservationProofTxProof(
 
 // buildReservationProofMainUtxo packages the spent deposit or anchor UTXO
 // into the BitcoinTxUTXO structure expected by SubmitReservationProof.
+//
+// IMPORTANT: The mainUtxo parameter is INERT IN MILESTONE 1. Per
+// ReservationRouter.sol's devdoc on the tbtc-v2 reservations-upgrade branch:
+// "Unused in milestone 1; Dissolution proofs are rejected by the underlying
+// library. Reserved for milestone 2." The underlying ReservationProofs.sol
+// library has zero references to mainUtxo. The current value passed is the
+// spent deposit/anchor outpoint, which is harmless for m1 but a future
+// milestone-2 activation MUST revisit what value is actually correct here.
+// Do NOT change this value without updating the corresponding test assertion.
 func buildReservationProofMainUtxo(
 	spentUtxo *bitcoin.UnspentTransactionOutput,
 ) *tbtc.BitcoinTxUTXO {
