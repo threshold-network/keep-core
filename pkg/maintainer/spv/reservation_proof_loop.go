@@ -171,52 +171,6 @@ func submitReservationReanchorActionProof(
 	)
 }
 
-// reservationAcceptanceWalletEvent adapts
-// *tbtc.ReservationAcceptanceRequestedEvent to the walletEvent interface
-// (see spv.go) so uniqueWalletPublicKeyHashes can be reused here instead of
-// a reservation-specific duplicate of the same dedup logic.
-type reservationAcceptanceWalletEvent struct {
-	*tbtc.ReservationAcceptanceRequestedEvent
-}
-
-// GetWalletPublicKeyHash implements walletEvent.
-func (e reservationAcceptanceWalletEvent) GetWalletPublicKeyHash() [20]byte {
-	return e.WalletPublicKeyHash
-}
-
-// reservationReanchorWalletEvent adapts
-// *tbtc.ReservationReanchorRequestedEvent to the walletEvent interface (see
-// spv.go) so uniqueWalletPublicKeyHashes can be reused here instead of a
-// reservation-specific duplicate of the same dedup logic.
-type reservationReanchorWalletEvent struct {
-	*tbtc.ReservationReanchorRequestedEvent
-}
-
-// GetWalletPublicKeyHash implements walletEvent.
-func (e reservationReanchorWalletEvent) GetWalletPublicKeyHash() [20]byte {
-	return e.SourceWalletPublicKeyHash
-}
-
-func wrapReservationAcceptanceEvents(
-	events []*tbtc.ReservationAcceptanceRequestedEvent,
-) []reservationAcceptanceWalletEvent {
-	wrapped := make([]reservationAcceptanceWalletEvent, len(events))
-	for i, event := range events {
-		wrapped[i] = reservationAcceptanceWalletEvent{event}
-	}
-	return wrapped
-}
-
-func wrapReservationReanchorEvents(
-	events []*tbtc.ReservationReanchorRequestedEvent,
-) []reservationReanchorWalletEvent {
-	wrapped := make([]reservationReanchorWalletEvent, len(events))
-	for i, event := range events {
-		wrapped[i] = reservationReanchorWalletEvent{event}
-	}
-	return wrapped
-}
-
 // reservationProofScanState persists the incremental event-scan cursor and
 // the set of still-pending action-request events across successive passes
 // of runReservationProofLoop, so proveReservationAcceptanceActions and
@@ -227,27 +181,17 @@ func wrapReservationReanchorEvents(
 type reservationProofScanState struct {
 	acceptanceLastScannedBlock uint64
 	pendingAcceptanceEvents    map[string]*tbtc.ReservationAcceptanceRequestedEvent
-	acceptanceRetries          map[string]uint
 
 	reanchorLastScannedBlock uint64
 	pendingReanchorEvents    map[string]*tbtc.ReservationReanchorRequestedEvent
-	reanchorRetries          map[string]uint
 }
 
 func newReservationProofScanState() *reservationProofScanState {
 	return &reservationProofScanState{
 		pendingAcceptanceEvents: make(map[string]*tbtc.ReservationAcceptanceRequestedEvent),
-		acceptanceRetries:       make(map[string]uint),
 		pendingReanchorEvents:   make(map[string]*tbtc.ReservationReanchorRequestedEvent),
-		reanchorRetries:         make(map[string]uint),
 	}
 }
-
-// maxReservationActionLoadRetries is the maximum number of consecutive
-// passes GetReservationAction may fail for a tracked pending event before
-// the event is evicted from the pending map to avoid unbounded map growth
-// and log spam on unrecoverable RPC/chain errors.
-const maxReservationActionLoadRetries = 3
 
 // reservationEventKey identifies one reservation action generation, unique
 // across both the acceptance and re-anchor pending-event maps.
@@ -425,9 +369,6 @@ func proveReservationAcceptanceActions(
 
 	// Re-check every tracked event's on-chain action state, evict settled/stale
 	// ones, and group still-pending events by wallet public key hash.
-	// nextScannedBlock starts at currentBlock but is pulled back by any
-	// eviction below, so a rewind survives the final cursor update.
-	nextScannedBlock := currentBlock
 	walletEvents := make(map[[20]byte][]*tbtc.ReservationAcceptanceRequestedEvent)
 	for key, event := range state.pendingAcceptanceEvents {
 		action, err := spvChain.GetReservationAction(
@@ -435,46 +376,14 @@ func proveReservationAcceptanceActions(
 			event.RequestNonce,
 		)
 		if err != nil {
-			state.acceptanceRetries[key]++
-			if state.acceptanceRetries[key] >= maxReservationActionLoadRetries {
-				// Eviction is non-lossy: rewind the cursor behind the
-				// lost event's block so the next pass re-fetches the
-				// range and rediscovers the event. Without this, a
-				// transient RPC outage that hits `maxRetries` consecutive
-				// times permanently strands the action generation: the
-				// cursor has already advanced past the event, no other
-				// code path re-creates the pending entry, and the
-				// already-confirmed Bitcoin anchor's SPV proof goes
-				// unsubmitted until action timeout slashes.
-				if event.BlockNumber > 0 &&
-					(nextScannedBlock == 0 || event.BlockNumber-1 < nextScannedBlock) {
-					nextScannedBlock = event.BlockNumber - 1
-				}
-				logger.Errorf(
-					"failed to load reservation acceptance action [%v]/%d: [%v]; "+
-						"exceeded max retries (%d), evicting event and rewinding cursor to [%d]",
-					event.ReservationKey,
-					event.RequestNonce,
-					err,
-					maxReservationActionLoadRetries,
-					nextScannedBlock,
-				)
-				delete(state.pendingAcceptanceEvents, key)
-				delete(state.acceptanceRetries, key)
-			} else {
-				logger.Errorf(
-					"failed to load reservation acceptance action [%v]/%d (retry %d/%d): [%v]",
-					event.ReservationKey,
-					event.RequestNonce,
-					state.acceptanceRetries[key],
-					maxReservationActionLoadRetries,
-					err,
-				)
-			}
+			logger.Errorf(
+				"failed to load reservation acceptance action [%v]/%d: [%v]",
+				event.ReservationKey,
+				event.RequestNonce,
+				err,
+			)
 			continue
 		}
-
-		delete(state.acceptanceRetries, key)
 
 		if action.State != tbtc.ReservationActionStatePending {
 			delete(state.pendingAcceptanceEvents, key)
@@ -547,30 +456,9 @@ func proveReservationAcceptanceActions(
 		}
 	}
 
-	state.acceptanceLastScannedBlock = nextScannedBlock
+	state.acceptanceLastScannedBlock = currentBlock
 
 	return nil
-}
-
-// findReservationAcceptanceTransaction scans the candidate wallet's Bitcoin
-// transaction history for the 1-input-1-output acceptance (anchor)
-// transaction whose sole input spends the deposit identified by
-// event.ReservationKey (== the deposit key; see the m1 identity mapping
-// documented in reservation_stale_deposit_watch.go), whose sole output is
-// P2WPKH to the custody wallet, and whose output value equals depositAmount - anchorFee.
-// Returns nil, nil if no matching transaction has been broadcast yet.
-func findReservationAcceptanceTransaction(
-	spvChain Chain,
-	event *tbtc.ReservationAcceptanceRequestedEvent,
-	walletTransactions []*bitcoin.Transaction,
-) (*bitcoin.Transaction, error) {
-	for _, transaction := range walletTransactions {
-		if isMatchingReservationAcceptanceTransaction(spvChain, event, transaction) {
-			return transaction, nil
-		}
-	}
-
-	return nil, nil
 }
 
 func isMatchingReservationAcceptanceTransaction(
@@ -609,11 +497,9 @@ func isMatchingReservationAcceptanceTransaction(
 		if fee <= 0 || (event.TxMaxFee > 0 && uint64(fee) > event.TxMaxFee) {
 			return false
 		}
-		if transaction.Outputs[0].Value != int64(depositRequest.Amount)-fee {
-			return false
-		}
 	} else {
-		if transaction.Outputs[0].Value <= 0 {
+		fee := int64(event.DepositAmount) - transaction.Outputs[0].Value
+		if fee <= 0 || (event.TxMaxFee > 0 && uint64(fee) > event.TxMaxFee) {
 			return false
 		}
 	}
@@ -660,9 +546,6 @@ func proveReservationReanchorActions(
 
 	// Re-check every tracked event's on-chain action state, evict settled/stale
 	// ones, and group still-pending events by source wallet public key hash.
-	// nextScannedBlock starts at currentBlock but is pulled back by any
-	// eviction below, so a rewind survives the final cursor update.
-	nextScannedBlock := currentBlock
 	walletEvents := make(map[[20]byte][]*tbtc.ReservationReanchorRequestedEvent)
 	for key, event := range state.pendingReanchorEvents {
 		action, err := spvChain.GetReservationAction(
@@ -670,41 +553,14 @@ func proveReservationReanchorActions(
 			event.RequestNonce,
 		)
 		if err != nil {
-			state.reanchorRetries[key]++
-			if state.reanchorRetries[key] >= maxReservationActionLoadRetries {
-				// Eviction is non-lossy: rewind the cursor behind the
-				// lost event's block so the next pass re-fetches the
-				// range and rediscovers the event. See the mirrored
-				// comment in proveReservationAcceptanceActions above.
-				if event.BlockNumber > 0 &&
-					(nextScannedBlock == 0 || event.BlockNumber-1 < nextScannedBlock) {
-					nextScannedBlock = event.BlockNumber - 1
-				}
-				logger.Errorf(
-					"failed to load reservation re-anchor action [%v]/%d: [%v]; "+
-						"exceeded max retries (%d), evicting event and rewinding cursor to [%d]",
-					event.ReservationKey,
-					event.RequestNonce,
-					err,
-					maxReservationActionLoadRetries,
-					nextScannedBlock,
-				)
-				delete(state.pendingReanchorEvents, key)
-				delete(state.reanchorRetries, key)
-			} else {
-				logger.Errorf(
-					"failed to load reservation re-anchor action [%v]/%d (retry %d/%d): [%v]",
-					event.ReservationKey,
-					event.RequestNonce,
-					state.reanchorRetries[key],
-					maxReservationActionLoadRetries,
-					err,
-				)
-			}
+			logger.Errorf(
+				"failed to load reservation re-anchor action [%v]/%d: [%v]",
+				event.ReservationKey,
+				event.RequestNonce,
+				err,
+			)
 			continue
 		}
-
-		delete(state.reanchorRetries, key)
 
 		if action.State != tbtc.ReservationActionStatePending {
 			delete(state.pendingReanchorEvents, key)
@@ -792,28 +648,9 @@ func proveReservationReanchorActions(
 		}
 	}
 
-	state.reanchorLastScannedBlock = nextScannedBlock
+	state.reanchorLastScannedBlock = currentBlock
 
 	return nil
-}
-
-// findReservationReanchorTransaction scans the source wallet's Bitcoin
-// transaction history for the 1-input-1-output re-anchor transaction whose
-// sole input spends the reservation's current anchor UTXO, whose sole output is
-// P2WPKH to the target wallet, and whose output value equals anchorUtxo.Value - reanchorFee.
-// Returns nil, nil if no matching transaction has been broadcast yet.
-func findReservationReanchorTransaction(
-	event *tbtc.ReservationReanchorRequestedEvent,
-	anchorUtxo *bitcoin.UnspentTransactionOutput,
-	walletTransactions []*bitcoin.Transaction,
-) (*bitcoin.Transaction, error) {
-	for _, transaction := range walletTransactions {
-		if isMatchingReservationReanchorTransaction(event, anchorUtxo, transaction) {
-			return transaction, nil
-		}
-	}
-
-	return nil, nil
 }
 
 func isMatchingReservationReanchorTransaction(
@@ -840,9 +677,6 @@ func isMatchingReservationReanchorTransaction(
 
 	fee := int64(anchorUtxo.Value) - transaction.Outputs[0].Value
 	if fee <= 0 || (event.TxMaxFee > 0 && uint64(fee) > event.TxMaxFee) {
-		return false
-	}
-	if transaction.Outputs[0].Value != int64(anchorUtxo.Value)-fee {
 		return false
 	}
 

@@ -206,88 +206,76 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 		WalletPublicKeyHash: walletPublicKeyHash,
 		TxMaxFee:            60000,
 	}
+	findMatchingTx := func(candidates []*bitcoin.Transaction) *bitcoin.Transaction {
+		candidateTransactions := make(map[string]*bitcoin.Transaction)
+		for _, transaction := range candidates {
+			if len(transaction.Inputs) == 1 && len(transaction.Outputs) == 1 && transaction.Inputs[0].Outpoint != nil {
+				input := transaction.Inputs[0]
+				depositKey := spvChain.BuildDepositKey(
+					input.Outpoint.TransactionHash,
+					input.Outpoint.OutputIndex,
+				)
+				candidateTransactions[depositKey.String()] = transaction
+			}
+		}
+
+		if transaction, ok := candidateTransactions[event.ReservationKey.String()]; ok {
+			if isMatchingReservationAcceptanceTransaction(spvChain, event, transaction) {
+				return transaction
+			}
+		}
+
+		return nil
+	}
 
 	t.Run("finds the matching transaction among candidates", func(t *testing.T) {
-		found, err := findReservationAcceptanceTransaction(
-			spvChain,
-			event,
-			[]*bitcoin.Transaction{wrongShapeTx, nonMatchingTx, matchingTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx([]*bitcoin.Transaction{wrongShapeTx, nonMatchingTx, matchingTx})
 		if found != matchingTx {
 			t.Errorf("expected to find the matching transaction, got %v", found)
 		}
 	})
 
 	t.Run("returns nil when nothing matches", func(t *testing.T) {
-		found, err := findReservationAcceptanceTransaction(
-			spvChain,
-			event,
-			[]*bitcoin.Transaction{wrongShapeTx, nonMatchingTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx([]*bitcoin.Transaction{wrongShapeTx, nonMatchingTx})
 		if found != nil {
 			t.Errorf("expected nil, got %v", found)
 		}
 	})
 
 	t.Run("returns nil for an empty candidate list", func(t *testing.T) {
-		found, err := findReservationAcceptanceTransaction(
-			spvChain,
-			event,
-			nil,
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx(nil)
 		if found != nil {
 			t.Errorf("expected nil, got %v", found)
 		}
 	})
 
 	t.Run("skips transaction with wrong output script", func(t *testing.T) {
-		found, err := findReservationAcceptanceTransaction(
-			spvChain,
-			event,
-			[]*bitcoin.Transaction{wrongScriptTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx([]*bitcoin.Transaction{wrongScriptTx})
 		if found != nil {
 			t.Errorf("expected nil for wrong script transaction, got %v", found)
+		}
+		if isMatchingReservationAcceptanceTransaction(spvChain, event, wrongScriptTx) {
+			t.Errorf("expected isMatchingReservationAcceptanceTransaction to be false")
 		}
 	})
 
 	t.Run("skips transaction with wrong output value", func(t *testing.T) {
-		found, err := findReservationAcceptanceTransaction(
-			spvChain,
-			event,
-			[]*bitcoin.Transaction{wrongValueTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx([]*bitcoin.Transaction{wrongValueTx})
 		if found != nil {
 			t.Errorf("expected nil for wrong value transaction, got %v", found)
+		}
+		if isMatchingReservationAcceptanceTransaction(spvChain, event, wrongValueTx) {
+			t.Errorf("expected isMatchingReservationAcceptanceTransaction to be false")
 		}
 	})
 
 	t.Run("skips transaction with excess fee", func(t *testing.T) {
-		found, err := findReservationAcceptanceTransaction(
-			spvChain,
-			event,
-			[]*bitcoin.Transaction{excessFeeTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx([]*bitcoin.Transaction{excessFeeTx})
 		if found != nil {
 			t.Errorf("expected nil for excess fee transaction, got %v", found)
+		}
+		if isMatchingReservationAcceptanceTransaction(spvChain, event, excessFeeTx) {
+			t.Errorf("expected isMatchingReservationAcceptanceTransaction to be false")
 		}
 	})
 }
@@ -410,73 +398,64 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 		TxMaxFee:                  20000,
 	}
 
-	t.Run("finds the matching transaction among candidates", func(t *testing.T) {
-		found, err := findReservationReanchorTransaction(
-			event,
-			anchorUtxo,
-			[]*bitcoin.Transaction{wrongShapeTx, wrongIndexTx, matchingTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+	findMatchingTx := func(candidates []*bitcoin.Transaction) *bitcoin.Transaction {
+		candidateTransactions := make(map[bitcoin.TransactionOutpoint]*bitcoin.Transaction)
+		for _, transaction := range candidates {
+			if len(transaction.Inputs) == 1 && len(transaction.Outputs) == 1 && transaction.Inputs[0].Outpoint != nil {
+				candidateTransactions[*transaction.Inputs[0].Outpoint] = transaction
+			}
 		}
+
+		if transaction, ok := candidateTransactions[*anchorUtxo.Outpoint]; ok {
+			if isMatchingReservationReanchorTransaction(event, anchorUtxo, transaction) {
+				return transaction
+			}
+		}
+
+		return nil
+	}
+
+	t.Run("finds the matching transaction among candidates", func(t *testing.T) {
+		found := findMatchingTx([]*bitcoin.Transaction{wrongShapeTx, wrongIndexTx, matchingTx})
 		if found != matchingTx {
 			t.Errorf("expected to find the matching transaction, got %v", found)
 		}
 	})
 
 	t.Run("returns nil when nothing matches", func(t *testing.T) {
-		found, err := findReservationReanchorTransaction(
-			event,
-			anchorUtxo,
-			[]*bitcoin.Transaction{wrongShapeTx, wrongIndexTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx([]*bitcoin.Transaction{wrongShapeTx, wrongIndexTx})
 		if found != nil {
 			t.Errorf("expected nil, got %v", found)
 		}
 	})
 
 	t.Run("skips transaction with wrong output script", func(t *testing.T) {
-		found, err := findReservationReanchorTransaction(
-			event,
-			anchorUtxo,
-			[]*bitcoin.Transaction{wrongScriptTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx([]*bitcoin.Transaction{wrongScriptTx})
 		if found != nil {
 			t.Errorf("expected nil for wrong script transaction, got %v", found)
+		}
+		if isMatchingReservationReanchorTransaction(event, anchorUtxo, wrongScriptTx) {
+			t.Errorf("expected isMatchingReservationReanchorTransaction to be false")
 		}
 	})
 
 	t.Run("skips transaction with wrong output value", func(t *testing.T) {
-		found, err := findReservationReanchorTransaction(
-			event,
-			anchorUtxo,
-			[]*bitcoin.Transaction{wrongValueTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx([]*bitcoin.Transaction{wrongValueTx})
 		if found != nil {
 			t.Errorf("expected nil for wrong value transaction, got %v", found)
+		}
+		if isMatchingReservationReanchorTransaction(event, anchorUtxo, wrongValueTx) {
+			t.Errorf("expected isMatchingReservationReanchorTransaction to be false")
 		}
 	})
 
 	t.Run("skips transaction with excess fee", func(t *testing.T) {
-		found, err := findReservationReanchorTransaction(
-			event,
-			anchorUtxo,
-			[]*bitcoin.Transaction{excessFeeTx},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		found := findMatchingTx([]*bitcoin.Transaction{excessFeeTx})
 		if found != nil {
 			t.Errorf("expected nil for excess fee transaction, got %v", found)
+		}
+		if isMatchingReservationReanchorTransaction(event, anchorUtxo, excessFeeTx) {
+			t.Errorf("expected isMatchingReservationReanchorTransaction to be false")
 		}
 	})
 }
@@ -866,173 +845,6 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 	})
 }
 
-// TestProveReservationAcceptanceActions_EvictionRewindsCursor is a
-// regression test for the eviction cursor-loss bug: when GetReservationAction
-// fails maxReservationActionLoadRetries times in a row for a tracked event,
-// the event is evicted from the pending map, but the scan cursor must be
-// rewound behind the evicted event's block. Without the rewind, the cursor
-// has already advanced past the event on every failed pass, so once the RPC
-// recovers there is no code path left that rediscovers the event and its
-// already-confirmed Bitcoin anchor transaction never gets its SPV proof
-// submitted.
-func TestProveReservationAcceptanceActions_EvictionRewindsCursor(t *testing.T) {
-	const proofStart = 790270
-	diff := func(d int64) *big.Int { return big.NewInt(d) }
-
-	spvChain := newLocalChain()
-	btcChain := newLocalBitcoinChain()
-
-	if err := populateBlockHeaders(
-		btcChain,
-		proofStart,
-		proofStart+19,
-		func(uint) *big.Int { return diff(32) },
-	); err != nil {
-		t.Fatal(err)
-	}
-	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
-	spvChain.setCurrentEpoch(392)
-	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
-
-	blockCounter := newMockBlockCounter()
-	blockCounter.SetCurrentBlock(1000)
-	spvChain.setBlockCounter(blockCounter)
-
-	fundingTx := &bitcoin.Transaction{
-		Outputs: []*bitcoin.TransactionOutput{{Value: 150000}},
-	}
-	if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
-		t.Fatal(err)
-	}
-	fundingTxHash := fundingTx.Hash()
-	reservationKey := spvChain.BuildDepositKey(fundingTxHash, 0)
-	const requestNonce = 1
-
-	spvChain.setDepositRequest(fundingTxHash, 0, &tbtc.DepositChainRequest{
-		Amount: 150000,
-	})
-
-	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
-	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	transaction := &bitcoin.Transaction{
-		Inputs: []*bitcoin.TransactionInput{{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: fundingTxHash,
-				OutputIndex:     0,
-			},
-		}},
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           100000,
-			PublicKeyScript: walletScript,
-		}},
-	}
-	if err := btcChain.BroadcastTransaction(transaction); err != nil {
-		t.Fatal(err)
-	}
-	if err := btcChain.addTransactionConfirmations(
-		transaction.Hash(),
-		20,
-	); err != nil {
-		t.Fatal(err)
-	}
-	btcChain.setCoinbaseTxHash(transaction.Hash())
-
-	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
-		ReservationKey:      reservationKey,
-		RequestNonce:        requestNonce,
-		WalletPublicKeyHash: walletPublicKeyHash,
-		BlockNumber:         500,
-	})
-
-	// Simulate a persistent RPC outage on GetReservationAction.
-	spvChain.getReservationActionErr = fmt.Errorf("simulated chain read failure")
-
-	submissions := 0
-	spvChain.submitReservationProofHook = func(
-		proofType uint8,
-		txInfo *tbtc.BitcoinTxInfo,
-		proof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) error {
-		submissions++
-		return nil
-	}
-
-	config := Config{TransactionLimit: 100}
-	scanState := newReservationProofScanState()
-	key := reservationEventKey(reservationKey, requestNonce)
-
-	for i := uint(1); i < maxReservationActionLoadRetries; i++ {
-		if err := proveReservationAcceptanceActions(
-			scanState,
-			config,
-			spvChain,
-			spvChain,
-			btcChain,
-		); err != nil {
-			t.Fatalf("unexpected error on pass %d: %v", i, err)
-		}
-		if _, exists := scanState.pendingAcceptanceEvents[key]; !exists {
-			t.Fatalf("expected event to remain pending on pass %d", i)
-		}
-	}
-
-	// Final failing pass: exceeds max retries, evicts the event, and must
-	// rewind the cursor behind block 500 rather than leaving it at 1000.
-	if err := proveReservationAcceptanceActions(
-		scanState,
-		config,
-		spvChain,
-		spvChain,
-		btcChain,
-	); err != nil {
-		t.Fatalf("unexpected error on eviction pass: %v", err)
-	}
-	if _, exists := scanState.pendingAcceptanceEvents[key]; exists {
-		t.Fatal("expected event to be evicted after exceeding max retries")
-	}
-	if scanState.acceptanceLastScannedBlock >= 500 {
-		t.Fatalf(
-			"expected cursor to be rewound behind block 500, got %d",
-			scanState.acceptanceLastScannedBlock,
-		)
-	}
-
-	// RPC recovers and the action is genuinely pending.
-	spvChain.getReservationActionErr = nil
-	spvChain.setReservationAction(
-		reservationKey,
-		requestNonce,
-		&tbtc.ReservationAction{
-			State:                     tbtc.ReservationActionStatePending,
-			ActionType:                tbtc.ReservationActionTypeAcceptance,
-			TargetWalletPublicKeyHash: walletPublicKeyHash,
-		},
-	)
-
-	// Next pass must rediscover the event via the rewound cursor and submit
-	// its proof; without the rewind fix the cursor would already be at 1000
-	// and the event's block 500 would never be re-scanned.
-	if err := proveReservationAcceptanceActions(
-		scanState,
-		config,
-		spvChain,
-		spvChain,
-		btcChain,
-	); err != nil {
-		t.Fatalf("unexpected error on recovery pass: %v", err)
-	}
-	if submissions != 1 {
-		t.Fatalf("expected event to be rediscovered and proved after cursor rewind, got %d submissions", submissions)
-	}
-}
-
 // TestProveReservationReanchorActions is an end-to-end test of the
 // top-level orchestration function wired into production via
 // runReservationProofLoop: it seeds a requested event, a matching
@@ -1308,180 +1120,6 @@ func TestProveReservationReanchorActions(t *testing.T) {
 			t.Fatalf("expected zero proofs submissions when action is not pending, got %d", submissions)
 		}
 	})
-}
-
-// TestProveReservationReanchorActions_EvictionRewindsCursor mirrors
-// TestProveReservationAcceptanceActions_EvictionRewindsCursor for the
-// re-anchor path: after eviction on exceeded retries, the scan cursor must
-// be rewound behind the evicted event's block so it is rediscovered once
-// the RPC recovers.
-func TestProveReservationReanchorActions_EvictionRewindsCursor(t *testing.T) {
-	const proofStart = 790270
-	diff := func(d int64) *big.Int { return big.NewInt(d) }
-
-	spvChain := newLocalChain()
-	btcChain := newLocalBitcoinChain()
-
-	if err := populateBlockHeaders(
-		btcChain,
-		proofStart,
-		proofStart+19,
-		func(uint) *big.Int { return diff(32) },
-	); err != nil {
-		t.Fatal(err)
-	}
-	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
-	spvChain.setCurrentEpoch(392)
-	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
-
-	blockCounter := newMockBlockCounter()
-	blockCounter.SetCurrentBlock(1000)
-	spvChain.setBlockCounter(blockCounter)
-
-	reservationKey := big.NewInt(424242)
-	const requestNonce = 2
-
-	priorAnchorTx := &bitcoin.Transaction{
-		Outputs: []*bitcoin.TransactionOutput{
-			{Value: 10000},
-			{Value: 600000},
-		},
-	}
-	if err := btcChain.BroadcastTransaction(priorAnchorTx); err != nil {
-		t.Fatal(err)
-	}
-	anchorTxHash := priorAnchorTx.Hash()
-	anchorUtxo := &bitcoin.UnspentTransactionOutput{
-		Outpoint: &bitcoin.TransactionOutpoint{
-			TransactionHash: anchorTxHash,
-			OutputIndex:     1,
-		},
-		Value: 600000,
-	}
-
-	sourceWalletPublicKeyHash := [20]byte{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
-	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	transaction := &bitcoin.Transaction{
-		Inputs: []*bitcoin.TransactionInput{{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: anchorTxHash,
-				OutputIndex:     1,
-			},
-		}},
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           590000,
-			PublicKeyScript: walletScript,
-		}},
-	}
-	if err := btcChain.BroadcastTransaction(transaction); err != nil {
-		t.Fatal(err)
-	}
-	if err := btcChain.addTransactionConfirmations(
-		transaction.Hash(),
-		20,
-	); err != nil {
-		t.Fatal(err)
-	}
-	btcChain.setCoinbaseTxHash(transaction.Hash())
-
-	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
-		ReservationKey:            reservationKey,
-		RequestNonce:              requestNonce,
-		SourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
-		TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
-		BlockNumber:               500,
-	})
-	spvChain.setReservation(reservationKey, &tbtc.Reservation{
-		AnchorUtxo: anchorUtxo,
-	})
-
-	// Simulate a persistent RPC outage on GetReservationAction.
-	spvChain.getReservationActionErr = fmt.Errorf("simulated chain read failure")
-
-	submissions := 0
-	spvChain.submitReservationProofHook = func(
-		proofType uint8,
-		txInfo *tbtc.BitcoinTxInfo,
-		proof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) error {
-		submissions++
-		return nil
-	}
-
-	config := Config{TransactionLimit: 100}
-	scanState := newReservationProofScanState()
-	key := reservationEventKey(reservationKey, requestNonce)
-
-	for i := uint(1); i < maxReservationActionLoadRetries; i++ {
-		if err := proveReservationReanchorActions(
-			scanState,
-			config,
-			spvChain,
-			spvChain,
-			btcChain,
-		); err != nil {
-			t.Fatalf("unexpected error on pass %d: %v", i, err)
-		}
-		if _, exists := scanState.pendingReanchorEvents[key]; !exists {
-			t.Fatalf("expected event to remain pending on pass %d", i)
-		}
-	}
-
-	// Final failing pass: exceeds max retries, evicts the event, and must
-	// rewind the cursor behind block 500 rather than leaving it at 1000.
-	if err := proveReservationReanchorActions(
-		scanState,
-		config,
-		spvChain,
-		spvChain,
-		btcChain,
-	); err != nil {
-		t.Fatalf("unexpected error on eviction pass: %v", err)
-	}
-	if _, exists := scanState.pendingReanchorEvents[key]; exists {
-		t.Fatal("expected event to be evicted after exceeding max retries")
-	}
-	if scanState.reanchorLastScannedBlock >= 500 {
-		t.Fatalf(
-			"expected cursor to be rewound behind block 500, got %d",
-			scanState.reanchorLastScannedBlock,
-		)
-	}
-
-	// RPC recovers and the action is genuinely pending.
-	spvChain.getReservationActionErr = nil
-	spvChain.setReservationAction(
-		reservationKey,
-		requestNonce,
-		&tbtc.ReservationAction{
-			State:                     tbtc.ReservationActionStatePending,
-			ActionType:                tbtc.ReservationActionTypeReanchor,
-			TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
-		},
-	)
-
-	// Next pass must rediscover the event via the rewound cursor and submit
-	// its proof; without the rewind fix the cursor would already be at 1000
-	// and the event's block 500 would never be re-scanned.
-	if err := proveReservationReanchorActions(
-		scanState,
-		config,
-		spvChain,
-		spvChain,
-		btcChain,
-	); err != nil {
-		t.Fatalf("unexpected error on recovery pass: %v", err)
-	}
-	if submissions != 1 {
-		t.Fatalf("expected event to be rediscovered and proved after cursor rewind, got %d submissions", submissions)
-	}
 }
 
 // TestSubmitReservationReanchorActionProof_UsesTargetWallet verifies that
@@ -1768,7 +1406,7 @@ func TestVerifyReservationActionStillProvable(t *testing.T) {
 	}
 }
 
-func TestProveReservationAcceptanceActions_EvictsOnExceededRetries(t *testing.T) {
+func TestProveReservationAcceptanceActions_LeavesPendingOnChainError(t *testing.T) {
 	spvChain := newLocalChain()
 	btcChain := newLocalBitcoinChain()
 
@@ -1791,7 +1429,8 @@ func TestProveReservationAcceptanceActions_EvictsOnExceededRetries(t *testing.T)
 	config := Config{TransactionLimit: 100}
 	key := reservationEventKey(reservationKey, requestNonce)
 
-	for i := uint(1); i < maxReservationActionLoadRetries; i++ {
+	// Multiple passes: event must remain pending unconditionally on read error without eviction.
+	for i := 1; i <= 5; i++ {
 		if err := proveReservationAcceptanceActions(
 			scanState,
 			config,
@@ -1803,33 +1442,16 @@ func TestProveReservationAcceptanceActions_EvictsOnExceededRetries(t *testing.T)
 		}
 
 		if _, exists := scanState.pendingAcceptanceEvents[key]; !exists {
-			t.Fatalf("expected event to remain pending on pass %d (retries %d)", i, i)
-		}
-		if scanState.acceptanceRetries[key] != i {
-			t.Errorf("expected retries to be %d, got %d", i, scanState.acceptanceRetries[key])
+			t.Fatalf("expected event to remain pending on pass %d", i)
 		}
 	}
 
-	// Final pass: should exceed max retries and be evicted.
-	if err := proveReservationAcceptanceActions(
-		scanState,
-		config,
-		spvChain,
-		spvChain,
-		btcChain,
-	); err != nil {
-		t.Fatalf("unexpected error on final pass: %v", err)
-	}
-
-	if _, exists := scanState.pendingAcceptanceEvents[key]; exists {
-		t.Errorf("expected event to be evicted after exceeding max retries")
-	}
-	if _, exists := scanState.acceptanceRetries[key]; exists {
-		t.Errorf("expected retry entry to be cleaned up after eviction")
+	if scanState.acceptanceLastScannedBlock != 1000 {
+		t.Fatalf("expected cursor to advance to current block 1000, got %d", scanState.acceptanceLastScannedBlock)
 	}
 }
 
-func TestProveReservationReanchorActions_EvictsOnExceededRetries(t *testing.T) {
+func TestProveReservationReanchorActions_LeavesPendingOnChainError(t *testing.T) {
 	spvChain := newLocalChain()
 	btcChain := newLocalBitcoinChain()
 
@@ -1853,7 +1475,8 @@ func TestProveReservationReanchorActions_EvictsOnExceededRetries(t *testing.T) {
 	config := Config{TransactionLimit: 100}
 	key := reservationEventKey(reservationKey, requestNonce)
 
-	for i := uint(1); i < maxReservationActionLoadRetries; i++ {
+	// Multiple passes: event must remain pending unconditionally on read error without eviction.
+	for i := 1; i <= 5; i++ {
 		if err := proveReservationReanchorActions(
 			scanState,
 			config,
@@ -1865,28 +1488,11 @@ func TestProveReservationReanchorActions_EvictsOnExceededRetries(t *testing.T) {
 		}
 
 		if _, exists := scanState.pendingReanchorEvents[key]; !exists {
-			t.Fatalf("expected event to remain pending on pass %d (retries %d)", i, i)
-		}
-		if scanState.reanchorRetries[key] != i {
-			t.Errorf("expected retries to be %d, got %d", i, scanState.reanchorRetries[key])
+			t.Fatalf("expected event to remain pending on pass %d", i)
 		}
 	}
 
-	// Final pass: should exceed max retries and be evicted.
-	if err := proveReservationReanchorActions(
-		scanState,
-		config,
-		spvChain,
-		spvChain,
-		btcChain,
-	); err != nil {
-		t.Fatalf("unexpected error on final pass: %v", err)
-	}
-
-	if _, exists := scanState.pendingReanchorEvents[key]; exists {
-		t.Errorf("expected event to be evicted after exceeding max retries")
-	}
-	if _, exists := scanState.reanchorRetries[key]; exists {
-		t.Errorf("expected retry entry to be cleaned up after eviction")
+	if scanState.reanchorLastScannedBlock != 1000 {
+		t.Fatalf("expected cursor to advance to current block 1000, got %d", scanState.reanchorLastScannedBlock)
 	}
 }
