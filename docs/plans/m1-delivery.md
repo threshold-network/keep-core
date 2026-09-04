@@ -9,40 +9,56 @@ working scratchpad.
 **Source of truth for the PR decomposition and order:** `docs/spec/reservations/pr-strategy.md` §4.1 + §9.
 **Build order** (corrected 2026-08-24): **A → C → D → E → B → F → G** (then keep-core PR #H post-epic).
 
-## Current status — 2026-09-03
+## Current status — 2026-09-04
 
-| # | PR | tbtc-v2 branch | Status | What blocks |
-|---|----|---------------|--------|-------------|
-| 1 | A `storage-layout` | `m1/storage-layout` @ `e175092a` | **MERGED** [tbtc-v2#1106](https://github.com/threshold-network/tbtc-v2/pull/1106) @ `edfbe0c2` (2026-09-01) into `reservations-upgrade` | — |
-| 2 | C `acceptance-core` | `m1/acceptance-core` @ `1f87f8d8` | **MERGED** [tbtc-v2#1107](https://github.com/threshold-network/tbtc-v2/pull/1107) @ `e30e3233` (2026-09-01) into `reservations-upgrade` | — |
-| 3 | D `reanchor-core` | `m1/reanchor-core` @ `08536cd4` | **MERGED** [tbtc-v2#1108](https://github.com/threshold-network/tbtc-v2/pull/1108) @ `a3ea888e` (2026-09-01) into `reservations-upgrade` | — |
-| 4 | E `timeout-and-stranding` | `m1/timeout-and-stranding` @ `a5c7ef61` | **MERGED** [tbtc-v2#1109](https://github.com/threshold-network/tbtc-v2/pull/1109) @ `76eab846` (2026-09-02) into `reservations-upgrade` | Review-fix [#1119](https://github.com/threshold-network/tbtc-v2/pull/1119) (11 confirmed findings) merged 2026-09-03 @ `24386f1f`, already folded in |
-| 5 | B `router-minimal` | `m1/router-minimal` @ `3156ed50` | **MERGED** [tbtc-v2#1110](https://github.com/threshold-network/tbtc-v2/pull/1110) @ `8f30da66` (2026-09-03) into `reservations-upgrade` | Review-fix [#1118](https://github.com/threshold-network/tbtc-v2/pull/1118) (2 confirmed findings) merged 2026-09-02 @ `6568b8a6`, already folded in |
-| 6 | F `m1/vault-pause-flags` | `m1/vault-pause-flags` @ `324eab4d` | **OPEN, CONFLICTING**: [tbtc-v2#1111](https://github.com/threshold-network/tbtc-v2/pull/1111) | Stale-snapshot conflict against the current `reservations-upgrade` tip (`8f30da66`): F's branch carries B's *pre-`#1118`* content, which now collides with B's actual merged content. 9 conflicting files (verified via `git merge-tree`, not just the GitHub label). Needs a fresh rebase onto `8f30da66`; next in build order. |
-| 7 | G `m1/bridge-integration-seams` | `m1/bridge-integration-seams` @ `81bd85c4` | **OPEN, CONFLICTING**: [tbtc-v2#1112](https://github.com/threshold-network/tbtc-v2/pull/1112) | Same root cause as F (row 6), plus a 10th conflicting file (`WalletProposalValidator.test.ts`) since G is built on top of F. Was `MERGEABLE`/`CLEAN` earlier 2026-09-03 before B merged. Blocked on F's rebase landing first. |
-| 8 | H `m1/keep-core-client` (keep-core repo) | `m1/keep-core-client` @ `48985451d` | **MERGED** [keep-core#4274](https://github.com/threshold-network/keep-core/pull/4274) (2026-09-03) into `reservations-epic` | — |
+**tbtc-v2 (`reservations-upgrade`, tip `09b3d2c7d`, 2026-09-04T10:58:46Z) — A–G build order fully merged:**
 
-**Downstream keep-core chain past H (stacked #4278→#4279→#4280, per keep-core), verified live 2026-09-03:**
+| # | PR | tbtc-v2 branch | Status | Notes |
+|---|----|---------------|--------|-------|
+| 1 | A `storage-layout` | `m1/storage-layout` | **MERGED** [tbtc-v2#1106](https://github.com/threshold-network/tbtc-v2/pull/1106) (2026-09-01) | — |
+| 2 | C `acceptance-core` | `m1/acceptance-core` | **MERGED** [tbtc-v2#1107](https://github.com/threshold-network/tbtc-v2/pull/1107) (2026-09-01) | — |
+| 3 | D `reanchor-core` | `m1/reanchor-core` | **MERGED** [tbtc-v2#1108](https://github.com/threshold-network/tbtc-v2/pull/1108) (2026-09-01) | — |
+| 4 | E `timeout-and-stranding` | `m1/timeout-and-stranding` | **MERGED** [tbtc-v2#1109](https://github.com/threshold-network/tbtc-v2/pull/1109) (2026-09-02) | Review-fix [#1119](https://github.com/threshold-network/tbtc-v2/pull/1119) (11 confirmed findings) merged 2026-09-03, folded in |
+| 5 | B `router-minimal` | `m1/router-minimal` | **MERGED** [tbtc-v2#1110](https://github.com/threshold-network/tbtc-v2/pull/1110) (2026-09-03) | Review-fix [#1118](https://github.com/threshold-network/tbtc-v2/pull/1118) (2 confirmed findings) merged 2026-09-02, folded in |
+| 6 | F `vault-pause-flags` | `m1/vault-pause-flags` | **MERGED** [tbtc-v2#1111](https://github.com/threshold-network/tbtc-v2/pull/1111) (2026-09-03T15:35:06Z) | Prior conflict blocker (9-file stale-snapshot vs B/#1118) resolved and merged |
+| 7 | G `bridge-integration-seams` | `m1/bridge-integration-seams` | **MERGED** [tbtc-v2#1112](https://github.com/threshold-network/tbtc-v2/pull/1112) (2026-09-03T17:09:41Z) | Prior conflict blocker (10-file, same root cause as F) resolved and merged |
 
-| PR | keep-core branch | Status | What blocks |
-|----|------------------|--------|-------------|
-| [#4276](https://github.com/threshold-network/keep-core/pull/4276) `m1/reservation-readiness-fixes` | fix(spv): re-verify reservation action generation before SPV proof submission | **MERGED** into `reservations-epic` | — |
-| [#4277](https://github.com/threshold-network/keep-core/pull/4277) `m1/reservation-protobuf-marshaling` | reservation proposal marshaling test coverage | **MERGED** into `reservations-epic` | — |
-| [#4278](https://github.com/threshold-network/keep-core/pull/4278) `m1/reservation-coordination-checklist` | fix(tbtc): remove frequency gate on reservation checklist actions | OPEN, draft, `mergeable: MERGEABLE`/`mergeState: CLEAN` against `reservations-epic` | Per its own tracking PR #4282: CI (`client-build-test-publish`) still failing on current head `b852948` — base auto-retargeted to `reservations-epic` after #4277 merged, but not yet rebased to pick up #4276/#4277's fix content. Needs a rebase + fresh CI run. |
-| [#4279](https://github.com/threshold-network/keep-core/pull/4279) `m1/reservation-multisigner-integration-test` | multi-signer simulated integration test | OPEN, draft, `mergeable: CONFLICTING`/`mergeState: DIRTY`, base `m1/reservation-coordination-checklist` | Stacked on #4278; blocked on #4278 landing and rebasing first. |
-| [#4280](https://github.com/threshold-network/keep-core/pull/4280) `m1/reservation-test-coverage-backfill` | M2 test-coverage backfill (7/8 items) | OPEN, draft, `mergeable: MERGEABLE`/`mergeState: UNSTABLE`, base `m1/reservation-multisigner-integration-test` | Stacked on #4279; blocked on #4278→#4279 landing first. |
+**Also landed on `reservations-upgrade` since G, spec'd as out-of-stack items:**
 
-**Tracking PRs:**
-- [tbtc-v2#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) (`reservations-upgrade` → `dev`, no diff) watches the tbtc-v2 stack against the fixed build order. Checklist text is stale (last updated 2026-09-01, before B merged) — refresh once F/G land. Flags a `dev`-divergence risk: `reservations-upgrade` forked from `main`, not `dev`; `dev` has 28 commits it lacks (confirmed zero overlap with `solidity/contracts/bridge/*`) — needs reconciling before the final PR to `dev`/`main` can land, independent of the F/G rebase.
-- [keep-core#4282](https://github.com/threshold-network/keep-core/pull/4282) (`reservations-epic` → `dev`, no diff), opened 2026-09-03, watches the keep-core stack. Same `dev`-divergence pattern, worse: `reservations-epic` is 63 commits ahead / **68 commits behind** current `dev` (its own stated diff caveat — the PR's GitHub diff is computed against a stale merge-base and does not yet reflect a real merge onto current `dev`). Separately confirms `keep-core#4238` (`feat/utxo-reservation-wallet-support`, 12 commits, draft) remains a parallel, unreconciled branch targeting `reservations-epic` — independent of the H-chain, not merged, no reconcile-or-supersede decision made yet.
+| PR | Branch | Status | Notes |
+|----|--------|--------|-------|
+| [#1120](https://github.com/threshold-network/tbtc-v2/pull/1120) `m1/reanchor-dissolution-gate-fix` | fix(bridge): remove dissolution-eligibility gate from `requestReservationReanchor` | **MERGED** (2026-09-03T11:25:12Z) | Spec'd as PR I in `pr-strategy.md`; independent of A–G |
+| 5 direct commits by the maintainer (no PR) | `reservations-upgrade` directly | **LANDED** 2026-09-04T08:38–10:58 | `test: cover reservations end-to-end and consolidate harnesses`; `style: prettier-format reservation contracts and deployment docs`; `fix(reservations): router occupancy parity, closeReservation completeness, snapshot pin, drop dead strand overload`; `fix(reservations): adapt closing-period gate to packed counters; restore re-anchor amount floor`; `style(reservations): plain-text comment in re-anchor request gate`. Pushed directly, not through PR review — flagged here for visibility, not a queue item. |
 
-**Out-of-stack reservations PR (post-AH, spec'd in `docs/spec/reservations/pr-strategy.md`):**
+**Open, not yet merged (tbtc-v2):**
 
-| PR | tbtc-v2 branch | Status | Notes |
+| PR | Branch → base | Status | Notes |
 |----|---------------|--------|-------|
-| [#1120](https://github.com/threshold-network/tbtc-v2/pull/1120) `m1/reanchor-dissolution-gate-fix` | fix(bridge): remove dissolution-eligibility gate from `requestReservationReanchor` | OPEN, `mergeable: MERGEABLE`/`mergeState: UNSTABLE` (CI pending/queued) | Separate from the A→H merge stack per `pr-strategy.md`. Already spec'd as PR I. Safe to land independently once A-H merge — does not depend on the F/G rebase outcome. |
+| [#1121](https://github.com/threshold-network/tbtc-v2/pull/1121) `port/reserved-redemption-veto` → `reservations-upgrade` | feat(bridge): port reserved-redemption and veto surface from the settlement branch | OPEN, `mergeState: UNKNOWN` (just opened 2026-09-04T09:26Z, checks not yet run) | New work, not part of the original A–H decomposition; not yet reviewed |
+| [#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) `reservations-upgrade` → `dev` | chore(bridge): milestone-1 UTXO reservations stack tracker | OPEN, `mergeable: MERGEABLE`/`mergeState: UNSTABLE` | Diff now `+20394/-45` across 50 files (reflects full A–G payload). UNSTABLE = 5 checks still `IN_PROGRESS` (`contracts-build-and-test`, `contracts-format`, `contracts-slither`, `contracts-deployment-dry-run`, docs preview), no failures seen. `dev` still ahead by commits `reservations-upgrade` lacks — reconcile before this can go green and merge. |
 
-**Worktrees present** (`git worktree list`): `/tmp/m1-{a,b,c,d,e,f,g,h}` exist. `/tmp/m1-h-{a,r,w}` were transient parallel-builder worktrees for PR H's acceptance/re-anchor/watchers branches, merged into `m1-h` and safe to prune. `/tmp/src-{1091,1093,1094,1096,1102}` are read-only reference copies. (`m1-g2` worktree and `m1/bridge-integration-seams-g2` branch retired 2026-08-26 — fast-forward-merged into `m1/bridge-integration-seams`; single branch now carries all of PR #G.)
+**keep-core (`reservations-epic`, tip `356d35bae`, 2026-09-03T16:42:49Z) — H plus full downstream chain merged:**
+
+| PR | keep-core branch | Status | Notes |
+|----|------------------|--------|-------|
+| [#4274](https://github.com/threshold-network/keep-core/pull/4274) `m1/keep-core-client` (H) | **MERGED** into `reservations-epic` (2026-09-03T05:45:08Z) | — |
+| [#4276](https://github.com/threshold-network/keep-core/pull/4276) `m1/reservation-readiness-fixes` | **MERGED** (2026-09-03T05:49:28Z) | — |
+| [#4277](https://github.com/threshold-network/keep-core/pull/4277) `m1/reservation-protobuf-marshaling` | **MERGED** (2026-09-03T05:49:37Z) | — |
+| [#4283](https://github.com/threshold-network/keep-core/pull/4283) `m1/reservation-review-fixes` | fix(tbtc): reservation review remediation (37 findings from multi-agent review of #4282) | **MERGED** (2026-09-03T15:04:40Z) | Not previously tracked in this doc — found live this session |
+| [#4278](https://github.com/threshold-network/keep-core/pull/4278) `m1/reservation-coordination-checklist` | **MERGED** (2026-09-03T13:02:32Z) | Prior rebase/CI blocker resolved and merged |
+| [#4279](https://github.com/threshold-network/keep-core/pull/4279) `m1/reservation-multisigner-integration-test` | **MERGED** (2026-09-03T12:34:15Z) | Prior conflict blocker resolved and merged |
+| [#4280](https://github.com/threshold-network/keep-core/pull/4280) `m1/reservation-test-coverage-backfill` | **MERGED** (2026-09-03T16:42:50Z) | M2 test-coverage backfill (7/8 items); current epic tip |
+
+**Open, not yet merged (keep-core):**
+
+| PR | Branch → base | Status | Notes |
+|----|---------------|--------|-------|
+| [#4238](https://github.com/threshold-network/keep-core/pull/4238) `feat/utxo-reservation-wallet-support` → `reservations-epic` | OPEN, `mergeable: CONFLICTING`/`mergeState: DIRTY` | 22 commits, `+3779/-37` across 15 files. Base ref still pinned to the pre-H epic base (`a7ac8989`) — never rebased across 6 merged PRs since. Parallel branch, not part of the H chain. **Reconcile-or-supersede decision is a human call** (blocked, see todo). |
+| [#4282](https://github.com/threshold-network/keep-core/pull/4282) `reservations-epic` → `dev` | OPEN, `mergeable: CONFLICTING`/`mergeState: DIRTY` | Diff now `+34034/-307` across 110 files (full epic payload). Real conflicts against `dev` this time (not just a stale label) — touches `.github/workflows/client.yml`, `cmd/start.go`, `config/config_test.go`, `pkg/chain/ethereum/tbtc.go`, and generated `pkg/chain/ethereum/tbtc/gen/**` files, all likely touched independently on `dev`. `reservations-epic` was 63 ahead / 68 behind `dev` as of last count; needs an explicit merge/rebase decision, not a trivial fast-forward. |
+
+**Unrelated keep-core PRs seen in the same query window (not reservations, no action needed):** [#4284](https://github.com/threshold-network/keep-core/pull/4284) (net/local test fix, MERGED), [#4285](https://github.com/threshold-network/keep-core/pull/4285)/[#4286](https://github.com/threshold-network/keep-core/pull/4286) (dependabot version bumps, OPEN).
+
+**Worktrees present** (`git worktree list`): `/tmp/m1-{a,b,c,d,e,f,g,h}` exist. `/tmp/m1-h-{a,r,w}` were transient parallel-builder worktrees for PR H's acceptance/re-anchor/watchers branches, merged into `m1-h` and safe to prune. `/tmp/src-{1091,1093,1094,1096,1102}` are read-only reference copies. (`m1-g2` worktree and `m1/bridge-integration-seams-g2` branch retired 2026-08-26 — fast-forward-merged into `m1/bridge-integration-seams`; single branch now carries all of PR #G.) All F/G rebase-blocker worktrees are now moot since F and G merged; safe to prune `/tmp/m1-f` and `/tmp/m1-g` next session if untouched.
 
 ## Resolved this session (2026-08-25)
 
