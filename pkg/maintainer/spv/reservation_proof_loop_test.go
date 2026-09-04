@@ -504,6 +504,7 @@ func TestProveReservationTransaction(t *testing.T) {
 			btcChain,
 			spvChain,
 			spvChain,
+			DefaultMaxProofHeaders,
 			func(hash bitcoin.Hash, requiredConfirmations uint) error {
 				submitted = true
 				if hash != transaction.Hash() {
@@ -535,6 +536,7 @@ func TestProveReservationTransaction(t *testing.T) {
 			btcChain,
 			spvChain,
 			spvChain,
+			DefaultMaxProofHeaders,
 			func(hash bitcoin.Hash, requiredConfirmations uint) error {
 				submitted = true
 				return nil
@@ -556,6 +558,7 @@ func TestProveReservationTransaction(t *testing.T) {
 			btcChain,
 			spvChain,
 			spvChain,
+			DefaultMaxProofHeaders,
 			func(hash bitcoin.Hash, requiredConfirmations uint) error {
 				return fmt.Errorf("submission failed")
 			},
@@ -672,7 +675,7 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 		return nil
 	}
 
-	config := Config{TransactionLimit: 100}
+	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
 	scanState := newReservationProofScanState()
 
 	if err := proveReservationAcceptanceActions(
@@ -826,7 +829,7 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 			return nil
 		}
 
-		config := Config{TransactionLimit: 100}
+		config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
 
 		if err := proveReservationAcceptanceActions(
 			newReservationProofScanState(),
@@ -963,7 +966,7 @@ func TestProveReservationReanchorActions(t *testing.T) {
 		return nil
 	}
 
-	config := Config{TransactionLimit: 100}
+	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
 	scanState := newReservationProofScanState()
 
 	if err := proveReservationReanchorActions(
@@ -1103,7 +1106,7 @@ func TestProveReservationReanchorActions(t *testing.T) {
 			return nil
 		}
 
-		config := Config{TransactionLimit: 100}
+		config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
 
 		if err := proveReservationReanchorActions(
 			newReservationProofScanState(),
@@ -1432,7 +1435,7 @@ func TestProveReservationAcceptanceActions_LeavesPendingOnChainError(t *testing.
 	// Intentionally do NOT set the reservation action on spvChain, so GetReservationAction fails.
 
 	scanState := newReservationProofScanState()
-	config := Config{TransactionLimit: 100}
+	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
 	key := reservationEventKey(reservationKey, requestNonce)
 
 	// Multiple passes: event must remain pending unconditionally on read error without eviction.
@@ -1478,7 +1481,7 @@ func TestProveReservationReanchorActions_LeavesPendingOnChainError(t *testing.T)
 	// Intentionally do NOT set the reservation action on spvChain, so GetReservationAction fails.
 
 	scanState := newReservationProofScanState()
-	config := Config{TransactionLimit: 100}
+	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
 	key := reservationEventKey(reservationKey, requestNonce)
 
 	// Multiple passes: event must remain pending unconditionally on read error without eviction.

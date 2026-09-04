@@ -435,6 +435,7 @@ func proveReservationAcceptanceActions(
 				btcChain,
 				spvChain,
 				btcDiffChain,
+				config.MaxProofHeaders,
 				func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
 					return submitReservationAcceptanceActionProof(
 						spvChain,
@@ -627,6 +628,7 @@ func proveReservationReanchorActions(
 				btcChain,
 				spvChain,
 				btcDiffChain,
+				config.MaxProofHeaders,
 				func(transactionHash bitcoin.Hash, requiredConfirmations uint) error {
 					return submitReservationReanchorActionProof(
 						spvChain,
@@ -693,6 +695,7 @@ func proveReservationTransaction(
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
+	maxProofHeaders uint,
 	submit func(transactionHash bitcoin.Hash, requiredConfirmations uint) error,
 ) error {
 	transactionHashStr := transaction.Hash().Hex(bitcoin.ReversedByteOrder)
@@ -702,7 +705,7 @@ func proveReservationTransaction(
 		btcChain,
 		spvChain,
 		btcDiffChain,
-		DefaultMaxProofHeaders,
+		maxProofHeaders,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to get proof info: [%v]", err)
@@ -729,7 +732,7 @@ func proveReservationTransaction(
 				"header or accumulate enough difficulty within [%d] "+
 				"headers; the transaction may be permanently unprovable",
 			transactionHashStr,
-			DefaultMaxProofHeaders,
+			maxProofHeaders,
 		)
 		if recorder := getMetricsRecorder(); recorder != nil {
 			recorder.IncrementCounter(
