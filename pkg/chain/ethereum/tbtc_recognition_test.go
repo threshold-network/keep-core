@@ -195,9 +195,11 @@ func TestTbtcChain_IsRecognized_UnregisteredOperator(t *testing.T) {
 func TestTbtcChain_IsRecognized_StakingProviderLookupFails(t *testing.T) {
 	operatorPublicKey, _ := newTestOperator(t)
 
+	lookupErr := errors.New("connection refused")
+
 	chain := &TbtcChain{
 		admission: &mockAdmissionReader{
-			stakingProviderErr: errors.New("connection refused"),
+			stakingProviderErr: lookupErr,
 		},
 	}
 
@@ -207,6 +209,13 @@ func TestTbtcChain_IsRecognized_StakingProviderLookupFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the chain error to be returned to the caller")
 	}
+
+	// Recognition wraps rather than formats its chain errors, so the cause
+	// stays reachable through errors.Is for any caller that needs to classify
+	// it. The firewall's own non-recognition check does not rely on this - it
+	// keys on its ErrNotRecognized sentinel - so nothing else would notice the
+	// wrapping being dropped.
+	testutils.AssertAnyErrorInChainMatchesTarget(t, lookupErr, err)
 }
 
 // TestTbtcChain_IsRecognized_EligibleStakeLookupFails asserts the same
