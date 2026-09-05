@@ -358,7 +358,7 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 	)
 	if err != nil {
 		return false, fmt.Errorf(
-			"failed to map operator [%v] to a staking provider: [%v]",
+			"failed to map operator [%v] to a staking provider: [%w]",
 			operatorAddress,
 			err,
 		)

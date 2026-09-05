@@ -367,14 +367,20 @@ func TestTbtcChain_IsRecognized_PendingDecreaseAtTheFloor(t *testing.T) {
 		}
 
 		providersAtTheFloor++
+	}
 
-		if eligibleStake.Sign() <= 0 {
-			t.Errorf(
-				"provider [%v] sits on the minimum authorization and must "+
-					"stay recognized",
-				operator.StakingProvider,
-			)
-		}
+	// The filter above leaves eligible stake equal to the minimum authorization,
+	// so asserting it is positive per provider would be a tautology. The
+	// invariant worth guarding is the floor itself: the predicate admits on
+	// eligible stake being above zero, so a zero minimum authorization would
+	// silently reject every provider sitting on it.
+	if minimumAuthorization.Sign() <= 0 {
+		t.Errorf(
+			"minimum authorization is [%v] at block %d; providers sitting on "+
+				"the floor would read zero eligible stake and lose admission",
+			minimumAuthorization,
+			admissionPinnedBlock,
+		)
 	}
 
 	if providersAtTheFloor == 0 {
