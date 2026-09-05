@@ -366,6 +366,16 @@ func (bc *BeaconChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool
 
 	// Check if the staking provider has an owner. This check ensures that there
 	// is/was a stake delegation for the given staking provider.
+	//
+	// This deliberately differs from TbtcChain.IsRecognized, which reads
+	// eligible stake instead, and the asymmetry must not be harmonised away.
+	// TokenStaking.authorizedStake short-circuits to zero for every application
+	// but one hard-coded constant, and the random beacon is not that
+	// application, so RandomBeacon.eligibleStake is zero for every staking
+	// provider that has ever registered a beacon operator. An eligible-stake
+	// predicate here would therefore recognize nobody. The watchtower re-runs
+	// this check against every connected peer every ten minutes and disconnects
+	// on failure, so the whole fleet would come apart within a single round.
 	_, _, _, hasStakeDelegation, err := bc.baseChain.RolesOf(
 		chain.Address(stakingProvider.Hex()),
 	)

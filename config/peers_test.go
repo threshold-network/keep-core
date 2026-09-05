@@ -20,7 +20,6 @@ func TestResolvePeers(t *testing.T) {
 				"/ip4/34.95.131.254/tcp/3919/ipfs/16Uiu2HAm4ZKNenwo6osQ9uWGovuA4XQWgFbjM7LLgHkhDk17bVsH",
 				"/ip4/13.209.70.114/tcp/3919/ipfs/16Uiu2HAmCnzWWJdyfH2yY1d6BqLY8yBijcc2Gm2T3t5Hv7zCf2mv",
 				"/ip4/204.93.241.110/tcp/3919/ipfs/16Uiu2HAm5ouZoUsG9s8NHpYXecEHLv7pog3nLbEHFM2QAcuquEPV",
-				"/ip4/51.81.154.237/tcp/3919/ipfs/16Uiu2HAm75UztoweN19V8tmXNBbFfxcUApT21Bv17u1vv215QsGZ",
 				"/ip4/135.181.90.126/tcp/3919/ipfs/16Uiu2HAmSKJDirLDh6zyahVFHFf7QEYktQFztC6vAT7rJi7B3jNm",
 				"/ip4/173.234.17.141/tcp/3919/ipfs/16Uiu2HAmL8L2LFTYuZHxjTNmGzpjhfftBpGJrFomVg1yU82rXzy4",
 				"/ip4/18.218.95.143/tcp/3919/ipfs/16Uiu2HAkzY9Y8ETqYNKKcnJ63bH26X6AgbrSZxCByJzLVgnGvHt4",
