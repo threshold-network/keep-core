@@ -99,7 +99,14 @@ func (pm *PerformanceMetrics) Stop() {
 // registerAllMetrics registers all performance metrics with 0 values
 // so they appear in the /metrics endpoint even before operations occur.
 func (pm *PerformanceMetrics) registerAllMetrics() {
-	// ----- counter metrics -----
+	pm.registerCounterMetrics()
+	pm.registerWalletActionMetrics()
+	pm.registerHistogramMetrics()
+	pm.registerGaugeMetrics()
+}
+
+// registerCounterMetrics registers all counter metrics with 0 initial values.
+func (pm *PerformanceMetrics) registerCounterMetrics() {
 	counters := []string{
 		// ----- DKG counters -----
 		MetricDKGJoinedTotal,
@@ -115,16 +122,6 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricWalletHeartbeatFailuresTotal,
 		MetricStuckWalletTransactionsTotal,
 		MetricUnmonitoredWalletTransactionsTotal,
-
-		// ----- SPV proof-skip counters -----
-		MetricRedemptionProofSubmissionsTotal,
-		MetricRedemptionProofSubmissionsSuccessTotal,
-		MetricRedemptionProofSubmissionsFailedTotal,
-		MetricDepositSweepProofSubmissionsTotal,
-		MetricDepositSweepProofSubmissionsSuccessTotal,
-		MetricDepositSweepProofSubmissionsFailedTotal,
-		MetricSpvProofSkippedOutsideRelayRangeTotal,
-		MetricSpvProofSkippedExceededMaxHeadersTotal,
 
 		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
@@ -189,7 +186,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// ----- wallet action metrics -----
+}
+
+// registerWalletActionMetrics registers per-action-type wallet counters and
+// duration histograms with 0 initial values.
+func (pm *PerformanceMetrics) registerWalletActionMetrics() {
 	// For each action type, register: total, success_total, failed_total, duration_seconds
 	for _, actionType := range GetAllWalletActionTypes() {
 		actionCounters := []string{
@@ -250,7 +251,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// ----- histogram metrics -----
+}
+
+// registerHistogramMetrics registers standalone duration/histogram metrics with
+// 0 initial values.
+func (pm *PerformanceMetrics) registerHistogramMetrics() {
 	// These use the actual metric names as used in the codebase.
 	durationMetrics := []string{
 		MetricDKGDurationSeconds,
@@ -307,7 +312,10 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		pm.registry.ObserveApplicationSource("performance", sources)
 	}
 
-	// ----- gauge metrics -----
+}
+
+// registerGaugeMetrics registers all gauge metrics with 0 initial values.
+func (pm *PerformanceMetrics) registerGaugeMetrics() {
 	gauges := []string{
 		MetricWalletDispatcherActiveActions,
 		MetricIncomingMessageQueueSize,
@@ -557,27 +565,6 @@ const (
 	MetricRedemptionProposalGenerationSuccessTotal = "redemption_proposal_generation_success_total"
 	MetricRedemptionProposalBroadcastTotal         = "redemption_proposal_broadcast_total"
 	MetricRedemptionProposalBroadcastFailedTotal   = "redemption_proposal_broadcast_failed_total"
-
-	// Redemption Proof Submission Metrics (SPV maintainer)
-	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"
-	MetricRedemptionProofSubmissionsSuccessTotal = "redemption_proof_submissions_success_total"
-	MetricRedemptionProofSubmissionsFailedTotal  = "redemption_proof_submissions_failed_total"
-
-	// Deposit Sweep Proof Submission Metrics (SPV maintainer)
-	MetricDepositSweepProofSubmissionsTotal        = "deposit_sweep_proof_submissions_total"
-	MetricDepositSweepProofSubmissionsSuccessTotal = "deposit_sweep_proof_submissions_success_total"
-	MetricDepositSweepProofSubmissionsFailedTotal  = "deposit_sweep_proof_submissions_failed_total"
-
-	// SPV Proof Skip Metrics (SPV maintainer)
-	// MetricSpvProofSkippedOutsideRelayRangeTotal counts the number of
-	// transactions whose SPV proofs were skipped because no relay range
-	// contained the transaction.
-	MetricSpvProofSkippedOutsideRelayRangeTotal = "spv_proof_skipped_outside_relay_range_total"
-	// MetricSpvProofSkippedExceededMaxHeadersTotal counts the number of
-	// transactions whose SPV proofs were skipped because the chain header
-	// count exceeded the configured maximum.
-	MetricSpvProofSkippedExceededMaxHeadersTotal = "spv_proof_skipped_exceeded_max_headers_total"
-
 	// Wallet Action Metrics (aggregate)
 	MetricWalletActionsTotal                 = "wallet_actions_total"
 	MetricWalletActionSuccessTotal           = "wallet_action_success_total"

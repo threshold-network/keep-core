@@ -433,7 +433,6 @@ func (cvm *CommitmentsVerifyingMember) VerifyReceivedSharesAndCommitmentsMessage
 					break
 				}
 				cvm.receivedQualifiedSharesS[commitmentsMessage.senderID] = shareS
-				cvm.receivedQualifiedSharesT[commitmentsMessage.senderID] = shareT
 				break
 			}
 		}
@@ -766,7 +765,6 @@ func (sjm *SharesJustifyingMember) discardReceivedShares(
 	memberID group.MemberIndex,
 ) {
 	delete(sjm.receivedQualifiedSharesS, memberID)
-	delete(sjm.receivedQualifiedSharesT, memberID)
 }
 
 // Inspects evidence log looking for ephemeral public key message sent in phase

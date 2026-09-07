@@ -9,7 +9,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
-	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
 // SubmitDepositSweepProof prepares deposit sweep proof for the given
@@ -27,7 +26,6 @@ func SubmitDepositSweepProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		getMetricsRecorder(),
 	)
 }
 
@@ -37,19 +35,8 @@ func submitDepositSweepProof(
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	spvProofAssembler spvProofAssembler,
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-	},
 ) error {
-	// Record proof submission attempt
-	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsTotal, 1)
-	}
-
 	if requiredConfirmations == 0 {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
-		}
 		return fmt.Errorf(
 			"provided required confirmations count must be greater than 0",
 		)
@@ -61,9 +48,6 @@ func submitDepositSweepProof(
 		btcChain,
 	)
 	if err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
-		}
 		return fmt.Errorf(
 			"failed to assemble transaction spv proof: [%v]",
 			err,
@@ -76,9 +60,6 @@ func submitDepositSweepProof(
 		transaction,
 	)
 	if err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
-		}
 		return fmt.Errorf(
 			"error while parsing transaction inputs: [%v]",
 			err,
@@ -91,18 +72,10 @@ func submitDepositSweepProof(
 		mainUTXO,
 		vault,
 	); err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
-		}
 		return fmt.Errorf(
 			"failed to submit deposit sweep proof with reimbursement: [%v]",
 			err,
 		)
-	}
-
-	// Record successful proof submission
-	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal, 1)
 	}
 
 	return nil
@@ -252,19 +225,10 @@ func getUnprovenDepositSweepTransactions(
 	[]*bitcoin.Transaction,
 	error,
 ) {
-	blockCounter, err := spvChain.BlockCounter()
+	startBlock, err := unprovenSearchStartBlock(historyDepth, spvChain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block counter: [%v]", err)
+		return nil, err
 	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	// Calculate the starting block of the range in which the events will be
-	// searched for.
-	startBlock := currentBlock - historyDepth
 
 	events, err :=
 		spvChain.PastDepositRevealedEvents(
@@ -306,40 +270,28 @@ func getUnprovenDepositSweepTransactions(
 			continue
 		}
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		unproven, err := collectUnprovenWalletTransactions(
 			walletPublicKeyHash,
 			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenDepositSweepTransaction(
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenDepositSweepTransaction(
 					transaction,
 					walletPublicKeyHash,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven deposit sweep "+
-						"transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenDepositSweepTransactions = append(
-					unprovenDepositSweepTransactions,
-					transaction,
-				)
-			}
+			},
+			false,
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenDepositSweepTransactions = append(
+			unprovenDepositSweepTransactions,
+			unproven...,
+		)
 	}
 
 	return unprovenDepositSweepTransactions, nil
