@@ -55,7 +55,7 @@ jobs:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "18.15.0"
+          node-version: "22.23.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:
@@ -81,7 +81,7 @@ jobs:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "18.15.0"
+          node-version: "22.23.1"
 
       - uses: actions/setup-python@v4
         with:
@@ -121,7 +121,7 @@ jobs:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "18.15.0"
+          node-version: "22.23.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:
@@ -148,7 +148,7 @@ jobs:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "18.15.0"
+          node-version: "22.23.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:
@@ -181,7 +181,7 @@ jobs:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "18.15.0"
+          node-version: "22.23.1"
           registry-url: "https://registry.npmjs.org"
 
       - uses: ./.github/actions/install-yarn-deps
@@ -279,7 +279,7 @@ jobs:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "18.15.0"
+          node-version: "22.23.1"
           registry-url: "https://registry.npmjs.org"
 
       - uses: ./.github/actions/install-yarn-deps

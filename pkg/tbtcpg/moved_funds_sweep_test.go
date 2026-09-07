@@ -365,7 +365,9 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 			expectedProposal: &tbtc.MovedFundsSweepProposal{
 				MovingFundsTxHash:        movingFundsTxHash,
 				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
-				SweepTxFee:               big.NewInt(4450),
+				// raw 4450 (178 vByte * 25 sat/vByte), buffered to
+				// ceil(25*1.25)=32 sat/vByte * 178 = 5696, below the 6000 cap.
+				SweepTxFee: big.NewInt(5696),
 			},
 		},
 	}
@@ -423,35 +425,62 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 
 func TestEstimateMovedFundsSweepFee(t *testing.T) {
 	var tests = map[string]struct {
-		sweepTxMaxTotalFee uint64
-		hasMainUtxo        bool
-		expectedFee        uint64
-		expectedError      error
+		estimateSatPerVByte int64
+		sweepTxMaxTotalFee  uint64
+		hasMainUtxo         bool
+		expectedFee         uint64
+		expectedError       error
 	}{
 		"estimated fee correct, one input": {
-			sweepTxMaxTotalFee: 3000,
-			hasMainUtxo:        false,
-			expectedFee:        1760,
-			expectedError:      nil,
+			estimateSatPerVByte: 16,
+			sweepTxMaxTotalFee:  3000,
+			hasMainUtxo:         false,
+			// raw 1760 (110 vByte * 16 sat/vByte), buffered to
+			// ceil(16*1.25)=20 sat/vByte * 110 = 2200, below the cap.
+			expectedFee:   2200,
+			expectedError: nil,
 		},
 		"estimated fee correct, two inputs": {
-			sweepTxMaxTotalFee: 3000,
-			hasMainUtxo:        true,
-			expectedFee:        2848,
-			expectedError:      nil,
+			estimateSatPerVByte: 16,
+			sweepTxMaxTotalFee:  3000,
+			hasMainUtxo:         true,
+			// raw 2848 (178 vByte * 16 sat/vByte); buffered 20 sat/vByte * 178
+			// = 3560 exceeds the 3000 cap, so it is bounded down to the cap.
+			expectedFee:   3000,
+			expectedError: nil,
+		},
+		"low estimate is raised to the minimum floor": {
+			estimateSatPerVByte: 1,
+			sweepTxMaxTotalFee:  3000,
+			hasMainUtxo:         false,
+			// raw 110 (110 vByte * 1 sat/vByte), buffered ceil(1*1.25)=2 is
+			// below the 5 sat/vByte floor, so clamped to 5 * 110 = 550.
+			expectedFee:   550,
+			expectedError: nil,
 		},
 		"estimated fee too high": {
-			sweepTxMaxTotalFee: 2500,
-			hasMainUtxo:        true,
+			estimateSatPerVByte: 16,
+			sweepTxMaxTotalFee:  2500,
+			hasMainUtxo:         true,
+			expectedFee:         0,
+			expectedError:       tbtcpg.ErrSweepTxFeeTooHigh,
+		},
+		"minimum floor exceeds the max total fee": {
+			estimateSatPerVByte: 1,
+			// raw 110 (110 vByte * 1 sat/vByte) is below the cap, so it passes
+			// the raw-estimate guard, but the 5 sat/vByte floor total (550)
+			// exceeds the cap, so a safe sweep cannot be built.
+			sweepTxMaxTotalFee: 400,
+			hasMainUtxo:        false,
 			expectedFee:        0,
-			expectedError:      tbtcpg.ErrSweepTxFeeTooHigh,
+			expectedError:      tbtcpg.ErrMaxFeeTooLow,
 		},
 	}
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
 			btcChain := tbtcpg.NewLocalBitcoinChain()
-			btcChain.SetEstimateSatPerVByteFee(1, 16)
+			btcChain.SetEstimateSatPerVByteFee(1, test.estimateSatPerVByte)
 
 			actualFee, err := tbtcpg.EstimateMovedFundsSweepFee(
 				btcChain,

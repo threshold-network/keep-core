@@ -1,6 +1,7 @@
 package tbtcpg_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 // with the given number of deposit inputs, mirroring the sizing that
 // EstimateDepositsSweepFee performs internally: 1 P2WPKH main-UTXO input,
 // depositsCount P2WSH deposit inputs, and 1 P2WPKH output. 126 ==
-// depositScriptByteSize.
+// DepositScriptByteSize.
 func sweepVirtualSize(t *testing.T, depositsCount int) int64 {
 	t.Helper()
 	size, err := bitcoin.NewTransactionSizeEstimator().
@@ -34,7 +35,9 @@ func sweepVirtualSize(t *testing.T, depositsCount int) int64 {
 // the informational SatPerVByteFee and the TotalFee actually broadcast on-chain
 // are asserted, and multi-deposit sweeps (where transactionSize grows
 // sub-linearly while totalMaxFee grows linearly) are exercised on both the happy
-// path and the floor-exceeds-cap error branch.
+// path and the floor-exceeds-cap error branch. A depositsCount of 0 is also
+// covered, verifying the max-size-lookup failure is reported with its real
+// underlying cause rather than the zero-value size.
 func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 	// Virtual sizes used to pin the cap and the expected total fee (the on-chain
 	// value) relative to the fee rate. The cap and expected-total expectations
@@ -48,6 +51,7 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 		depositsCount          int
 		estimateSatPerVByte    int64
 		perDepositMaxFee       uint64
+		sweepMaxSizeErr        error
 		expectedSatPerVByteFee int64
 		expectedTotalFee       int64
 		expectErrorContains    string
@@ -100,7 +104,7 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 			// substring pins this to the floor-exceeds-cap branch specifically,
 			// distinguishing it from the raw-fee-exceeds-cap error.
 			perDepositMaxFee:    uint64(3 * size1),
-			expectErrorContains: "minimum safe sweep fee",
+			expectErrorContains: "minimum safe transaction fee",
 		},
 		"multi-deposit minimum floor above the cap returns an error": {
 			depositsCount:       3,
@@ -111,7 +115,17 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 			// the cap, so the raw-fee check passes and the floor branch is the
 			// one exercised.
 			perDepositMaxFee:    uint64(size3),
-			expectErrorContains: "minimum safe sweep fee",
+			expectErrorContains: "minimum safe transaction fee",
+		},
+		"depositsCount of 0 with a failing max size lookup returns the wrapped error": {
+			depositsCount: 0,
+			// A depositsCount of 0 takes the "estimate for every count" branch,
+			// which looks up the max sweep size first. Inject a distinctive
+			// underlying error so the assertion below fails if that cause is
+			// ever dropped again (the bug this guards against formatted the
+			// zero-value max size instead of the real error).
+			sweepMaxSizeErr:     errors.New("boom"),
+			expectErrorContains: "cannot get sweep max size: [boom]",
 		},
 	}
 
@@ -119,6 +133,9 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			tbtcChain := tbtcpg.NewLocalChain()
 			tbtcChain.SetDepositParameters(0, 0, test.perDepositMaxFee, 0)
+			if test.sweepMaxSizeErr != nil {
+				tbtcChain.SetDepositSweepMaxSizeError(test.sweepMaxSizeErr)
+			}
 
 			btcChain := tbtcpg.NewLocalBitcoinChain()
 			btcChain.SetEstimateSatPerVByteFee(1, test.estimateSatPerVByte)
@@ -135,6 +152,13 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 					t.Fatalf(
 						"expected error containing [%s]; got [%v]",
 						test.expectErrorContains, err,
+					)
+				}
+				if test.sweepMaxSizeErr != nil &&
+					!errors.Is(err, test.sweepMaxSizeErr) {
+					t.Fatalf(
+						"expected error to wrap [%v]; got [%v]",
+						test.sweepMaxSizeErr, err,
 					)
 				}
 				return

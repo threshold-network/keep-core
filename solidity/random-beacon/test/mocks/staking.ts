@@ -1,13 +1,13 @@
-import { smock } from "@defi-wonderland/smock"
+import { createMock } from "../helpers/mock"
 
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "../helpers/mock"
 import type { RandomBeacon, TokenStaking } from "../../typechain"
 
 // eslint-disable-next-line import/prefer-default-export
 export async function fakeTokenStaking(
   randomBeacon: RandomBeacon
-): Promise<FakeContract<TokenStaking>> {
-  const tokenStaking = await smock.fake<TokenStaking>("TokenStaking", {
+): Promise<Mock<TokenStaking>> {
+  const tokenStaking = await createMock<TokenStaking>("TokenStaking", {
     address: await randomBeacon.callStatic.staking(),
   })
 

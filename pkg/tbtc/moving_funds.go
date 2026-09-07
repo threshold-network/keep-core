@@ -103,6 +103,7 @@ func newMovingFundsAction(
 	proposalProcessingStartBlock uint64,
 	proposalExpiryBlock uint64,
 	waitForBlockFn waitForBlockFn,
+	transactionMonitor *transactionMonitor,
 ) *movingFundsAction {
 	transactionExecutor := newWalletTransactionExecutor(
 		btcChain,
@@ -110,6 +111,8 @@ func newMovingFundsAction(
 		signingExecutor,
 		waitForBlockFn,
 	)
+
+	transactionExecutor.setTransactionMonitor(transactionMonitor)
 
 	return &movingFundsAction{
 		logger:                           logger,
@@ -322,20 +325,7 @@ func ValidateMovingFundsProposal(
 
 		GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
 
-		GetMovingFundsParameters() (
-			txMaxTotalFee uint64,
-			dustThreshold uint64,
-			timeoutResetDelay uint32,
-			timeout uint32,
-			timeoutSlashingAmount *big.Int,
-			timeoutNotifierRewardMultiplier uint32,
-			commitmentGasOffset uint16,
-			sweepTxMaxTotalFee uint64,
-			sweepTimeout uint32,
-			sweepTimeoutSlashingAmount *big.Int,
-			sweepTimeoutNotifierRewardMultiplier uint32,
-			err error,
-		)
+		GetMovingFundsParameters() (MovingFundsParameters, error)
 
 		PastMovingFundsCommitmentSubmittedEvents(
 			filter *MovingFundsCommitmentSubmittedEventFilter,
@@ -360,6 +350,42 @@ func ValidateMovingFundsProposal(
 
 	validateProposalLogger.Infof("moving funds proposal is valid")
 
+	// Follower-side soft check on the proposed fee. The on-chain
+	// WalletProposalValidator only bounds the moving-funds fee from above, not
+	// below, so a misbehaving or unpatched leader can propose a fee at the
+	// ~1 sat/vByte relay floor that this node would otherwise sign - the same
+	// underpricing that jams the wallet (see
+	// threshold-network/keep-core#4171). We recompute the safe minimum
+	// (applying the 25% safety buffer that tbtcpg.applyWalletTxFeeFloor would
+	// also enforce on the leader side) and warn if the proposal is below it.
+	//
+	// This is intentionally log-only, not a rejection: rejecting a below-floor
+	// proposal here would, during a mixed-version rollout, split signers
+	// (patched nodes reject, unpatched nodes sign) and could stall signing.
+	// Hard enforcement belongs on-chain in the WalletProposalValidator, or
+	// behind a coordinated all-nodes upgrade. The threshold is recomputed in
+	// warnIfProposedWalletTxFeeBelowBufferedFloor (proposal_fee_check.go);
+	// keep the size estimator below in sync with the leader-side estimator
+	// in tbtcpg/moving_funds.go.
+	if movingFundsTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddPublicKeyHashOutputs(len(proposal.TargetWallets), true).
+		VirtualSize(); sizeErr != nil {
+		validateProposalLogger.Warnf(
+			"cannot estimate moving funds tx size for the fee sanity "+
+				"check: [%v]",
+			sizeErr,
+		)
+	} else {
+		warnIfProposedWalletTxFeeBelowBufferedFloor(
+			validateProposalLogger,
+			MinWalletTxSatPerVByteFee,
+			movingFundsTxSize,
+			proposal.MovingFundsTxFee,
+			"moving funds",
+		)
+	}
+
 	return nil
 }
 
@@ -371,20 +397,7 @@ type movingFundsSafetyMarginChain interface {
 
 	GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
 
-	GetMovingFundsParameters() (
-		txMaxTotalFee uint64,
-		dustThreshold uint64,
-		timeoutResetDelay uint32,
-		timeout uint32,
-		timeoutSlashingAmount *big.Int,
-		timeoutNotifierRewardMultiplier uint32,
-		commitmentGasOffset uint16,
-		sweepTxMaxTotalFee uint64,
-		sweepTimeout uint32,
-		sweepTimeoutSlashingAmount *big.Int,
-		sweepTimeoutNotifierRewardMultiplier uint32,
-		err error,
-	)
+	GetMovingFundsParameters() (MovingFundsParameters, error)
 
 	PastMovingFundsCommitmentSubmittedEvents(
 		filter *MovingFundsCommitmentSubmittedEventFilter,
@@ -437,13 +450,12 @@ func ValidateMovingFundsSafetyMargin(
 	// As the moving funds procedure is time constrained, we must ensure the
 	// safety margin does not exceed half of the moving funds timeout parameter.
 	// This should give the wallet enough time to complete moving funds.
-	_, _, _, movingFundsTimeout, _, _, _, _, _, _, _, err :=
-		chain.GetMovingFundsParameters()
+	movingFundsParameters, err := chain.GetMovingFundsParameters()
 	if err != nil {
 		return fmt.Errorf("cannot get moving funds parameters: [%w]", err)
 	}
 
-	maxAllowedSafetyMargin := time.Duration(movingFundsTimeout/2) * time.Second
+	maxAllowedSafetyMargin := time.Duration(movingFundsParameters.Timeout/2) * time.Second
 
 	if safetyMargin > maxAllowedSafetyMargin {
 		safetyMargin = maxAllowedSafetyMargin

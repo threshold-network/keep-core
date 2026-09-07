@@ -21,47 +21,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-type depositParameters = struct {
-	dustThreshold      uint64
-	treasuryFeeDivisor uint64
-	txMaxFee           uint64
-	revealAheadPeriod  uint32
-}
-
-type redemptionParameters = struct {
-	dustThreshold                   uint64
-	treasuryFeeDivisor              uint64
-	txMaxFee                        uint64
-	txMaxTotalFee                   uint64
-	timeout                         uint32
-	timeoutSlashingAmount           *big.Int
-	timeoutNotifierRewardMultiplier uint32
-}
-
-type walletParameters = struct {
-	creationPeriod        uint32
-	creationMinBtcBalance uint64
-	creationMaxBtcBalance uint64
-	closureMinBtcBalance  uint64
-	maxAge                uint32
-	maxBtcTransfer        uint64
-	closingPeriod         uint32
-}
-
-type movingFundsParameters = struct {
-	txMaxTotalFee                        uint64
-	dustThreshold                        uint64
-	timeoutResetDelay                    uint32
-	timeout                              uint32
-	timeoutSlashingAmount                *big.Int
-	timeoutNotifierRewardMultiplier      uint32
-	commitmentGasOffset                  uint16
-	sweepTxMaxTotalFee                   uint64
-	sweepTimeout                         uint32
-	sweepTimeoutSlashingAmount           *big.Int
-	sweepTimeoutNotifierRewardMultiplier uint32
-}
-
 type movingFundsCommitmentSubmission struct {
 	WalletPublicKeyHash [20]byte
 	WalletMainUtxo      *bitcoin.UnspentTransactionOutput
@@ -76,11 +35,11 @@ type LocalChain struct {
 	depositRequests                          map[[32]byte]*tbtc.DepositChainRequest
 	pastDepositRevealedEvents                map[[32]byte][]*tbtc.DepositRevealedEvent
 	pastNewWalletRegisteredEvents            map[[32]byte][]*tbtc.NewWalletRegisteredEvent
-	depositParameters                        depositParameters
+	depositParameters                        tbtc.DepositParameters
 	depositSweepProposalValidations          map[[32]byte]bool
-	redemptionParameters                     redemptionParameters
+	redemptionParameters                     tbtc.RedemptionParameters
 	redemptionRequestMinAge                  uint32
-	walletParameters                         walletParameters
+	walletParameters                         tbtc.WalletParameters
 	walletChainData                          map[[20]byte]*tbtc.WalletChainData
 	blockCounter                             chain.BlockCounter
 	pastRedemptionRequestedEvents            map[[32]byte][]*tbtc.RedemptionRequestedEvent
@@ -88,7 +47,7 @@ type LocalChain struct {
 	pendingRedemptionRequests                map[[32]byte]*tbtc.RedemptionRequest
 	redemptionProposalValidations            map[[32]byte]bool
 	heartbeatProposalValidations             map[[16]byte]bool
-	movingFundsParameters                    movingFundsParameters
+	movingFundsParameters                    tbtc.MovingFundsParameters
 	pastMovingFundsCommitmentSubmittedEvents map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent
 	movingFundsProposalValidations           map[[32]byte]bool
 	movingFundsCommitmentSubmissions         []*movingFundsCommitmentSubmission
@@ -98,6 +57,7 @@ type LocalChain struct {
 	operatorIDs                              map[chain.Address]uint32
 	redemptionDelays                         map[[32]byte]time.Duration
 	depositMinAge                            uint32
+	depositSweepMaxSizeErr                   error
 }
 
 func NewLocalChain() *LocalChain {
@@ -472,21 +432,11 @@ func buildRedemptionRequestKey(
 	return sha256.Sum256(append(walletPublicKeyHash[:], redeemerOutputScript...))
 }
 
-func (lc *LocalChain) GetDepositParameters() (
-	dustThreshold uint64,
-	treasuryFeeDivisor uint64,
-	txMaxFee uint64,
-	revealAheadPeriod uint32,
-	err error,
-) {
+func (lc *LocalChain) GetDepositParameters() (tbtc.DepositParameters, error) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	return lc.depositParameters.dustThreshold,
-		lc.depositParameters.treasuryFeeDivisor,
-		lc.depositParameters.txMaxFee,
-		lc.depositParameters.revealAheadPeriod,
-		nil
+	return lc.depositParameters, nil
 }
 
 func (lc *LocalChain) GetPendingRedemptionRequest(
@@ -530,35 +480,19 @@ func (lc *LocalChain) SetDepositParameters(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	lc.depositParameters = depositParameters{
-		dustThreshold:      dustThreshold,
-		treasuryFeeDivisor: treasuryFeeDivisor,
-		txMaxFee:           txMaxFee,
-		revealAheadPeriod:  revealAheadPeriod,
+	lc.depositParameters = tbtc.DepositParameters{
+		DustThreshold:      dustThreshold,
+		TreasuryFeeDivisor: treasuryFeeDivisor,
+		TxMaxFee:           txMaxFee,
+		RevealAheadPeriod:  revealAheadPeriod,
 	}
 }
 
-func (lc *LocalChain) GetRedemptionParameters() (
-	dustThreshold uint64,
-	treasuryFeeDivisor uint64,
-	txMaxFee uint64,
-	txMaxTotalFee uint64,
-	timeout uint32,
-	timeoutSlashingAmount *big.Int,
-	timeoutNotifierRewardMultiplier uint32,
-	err error,
-) {
+func (lc *LocalChain) GetRedemptionParameters() (tbtc.RedemptionParameters, error) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	return lc.redemptionParameters.dustThreshold,
-		lc.redemptionParameters.treasuryFeeDivisor,
-		lc.redemptionParameters.txMaxFee,
-		lc.redemptionParameters.txMaxTotalFee,
-		lc.redemptionParameters.timeout,
-		lc.redemptionParameters.timeoutSlashingAmount,
-		lc.redemptionParameters.timeoutNotifierRewardMultiplier,
-		nil
+	return lc.redemptionParameters, nil
 }
 
 func (lc *LocalChain) SetRedemptionParameters(
@@ -573,14 +507,14 @@ func (lc *LocalChain) SetRedemptionParameters(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	lc.redemptionParameters = redemptionParameters{
-		dustThreshold:                   dustThreshold,
-		treasuryFeeDivisor:              treasuryFeeDivisor,
-		txMaxFee:                        txMaxFee,
-		txMaxTotalFee:                   txMaxTotalFee,
-		timeout:                         timeout,
-		timeoutSlashingAmount:           timeoutSlashingAmount,
-		timeoutNotifierRewardMultiplier: timeoutNotifierRewardMultiplier,
+	lc.redemptionParameters = tbtc.RedemptionParameters{
+		DustThreshold:                   dustThreshold,
+		TreasuryFeeDivisor:              treasuryFeeDivisor,
+		TxMaxFee:                        txMaxFee,
+		TxMaxTotalFee:                   txMaxTotalFee,
+		Timeout:                         timeout,
+		TimeoutSlashingAmount:           timeoutSlashingAmount,
+		TimeoutNotifierRewardMultiplier: timeoutNotifierRewardMultiplier,
 	}
 }
 
@@ -738,35 +672,11 @@ func (lc *LocalChain) SetHeartbeatProposalValidationResult(
 	lc.heartbeatProposalValidations[proposal.Message] = result
 }
 
-func (lc *LocalChain) GetMovingFundsParameters() (
-	txMaxTotalFee uint64,
-	dustThreshold uint64,
-	timeoutResetDelay uint32,
-	timeout uint32,
-	timeoutSlashingAmount *big.Int,
-	timeoutNotifierRewardMultiplier uint32,
-	commitmentGasOffset uint16,
-	sweepTxMaxTotalFee uint64,
-	sweepTimeout uint32,
-	sweepTimeoutSlashingAmount *big.Int,
-	sweepTimeoutNotifierRewardMultiplier uint32,
-	err error,
-) {
+func (lc *LocalChain) GetMovingFundsParameters() (tbtc.MovingFundsParameters, error) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	return lc.movingFundsParameters.txMaxTotalFee,
-		lc.movingFundsParameters.dustThreshold,
-		lc.movingFundsParameters.timeoutResetDelay,
-		lc.movingFundsParameters.timeout,
-		lc.movingFundsParameters.timeoutSlashingAmount,
-		lc.movingFundsParameters.timeoutNotifierRewardMultiplier,
-		lc.movingFundsParameters.commitmentGasOffset,
-		lc.movingFundsParameters.sweepTxMaxTotalFee,
-		lc.movingFundsParameters.sweepTimeout,
-		lc.movingFundsParameters.sweepTimeoutSlashingAmount,
-		lc.movingFundsParameters.sweepTimeoutNotifierRewardMultiplier,
-		nil
+	return lc.movingFundsParameters, nil
 }
 
 func (lc *LocalChain) GetMovedFundsSweepRequest(
@@ -836,18 +746,18 @@ func (lc *LocalChain) SetMovingFundsParameters(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	lc.movingFundsParameters = movingFundsParameters{
-		txMaxTotalFee:                        txMaxTotalFee,
-		dustThreshold:                        dustThreshold,
-		timeoutResetDelay:                    timeoutResetDelay,
-		timeout:                              timeout,
-		timeoutSlashingAmount:                timeoutSlashingAmount,
-		timeoutNotifierRewardMultiplier:      timeoutNotifierRewardMultiplier,
-		commitmentGasOffset:                  commitmentGasOffset,
-		sweepTxMaxTotalFee:                   sweepTxMaxTotalFee,
-		sweepTimeout:                         sweepTimeout,
-		sweepTimeoutSlashingAmount:           sweepTimeoutSlashingAmount,
-		sweepTimeoutNotifierRewardMultiplier: sweepTimeoutNotifierRewardMultiplier,
+	lc.movingFundsParameters = tbtc.MovingFundsParameters{
+		TxMaxTotalFee:                        txMaxTotalFee,
+		DustThreshold:                        dustThreshold,
+		TimeoutResetDelay:                    timeoutResetDelay,
+		Timeout:                              timeout,
+		TimeoutSlashingAmount:                timeoutSlashingAmount,
+		TimeoutNotifierRewardMultiplier:      timeoutNotifierRewardMultiplier,
+		CommitmentGasOffset:                  commitmentGasOffset,
+		SweepTxMaxTotalFee:                   sweepTxMaxTotalFee,
+		SweepTimeout:                         sweepTimeout,
+		SweepTimeoutSlashingAmount:           sweepTimeoutSlashingAmount,
+		SweepTimeoutNotifierRewardMultiplier: sweepTimeoutNotifierRewardMultiplier,
 	}
 }
 
@@ -961,7 +871,24 @@ func (lc *LocalChain) SetRedemptionRequestMinAge(redemptionRequestMinAge uint32)
 }
 
 func (lc *LocalChain) GetDepositSweepMaxSize() (uint16, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.depositSweepMaxSizeErr != nil {
+		return 0, lc.depositSweepMaxSizeErr
+	}
+
 	panic("unsupported")
+}
+
+// SetDepositSweepMaxSizeError configures the error GetDepositSweepMaxSize
+// returns, allowing tests to exercise the max-size-lookup failure path
+// without a real chain implementation.
+func (lc *LocalChain) SetDepositSweepMaxSizeError(err error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.depositSweepMaxSizeErr = err
 }
 
 func (lc *LocalChain) BlockCounter() (chain.BlockCounter, error) {
@@ -1063,27 +990,11 @@ func (lc *LocalChain) OnWalletClosed(
 	panic("unsupported")
 }
 
-func (lc *LocalChain) GetWalletParameters() (
-	creationPeriod uint32,
-	creationMinBtcBalance uint64,
-	creationMaxBtcBalance uint64,
-	closureMinBtcBalance uint64,
-	maxAge uint32,
-	maxBtcTransfer uint64,
-	closingPeriod uint32,
-	err error,
-) {
+func (lc *LocalChain) GetWalletParameters() (tbtc.WalletParameters, error) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	return lc.walletParameters.creationPeriod,
-		lc.walletParameters.creationMinBtcBalance,
-		lc.walletParameters.creationMaxBtcBalance,
-		lc.walletParameters.closureMinBtcBalance,
-		lc.walletParameters.maxAge,
-		lc.walletParameters.maxBtcTransfer,
-		lc.walletParameters.closingPeriod,
-		nil
+	return lc.walletParameters, nil
 }
 
 func (lc *LocalChain) SetWalletParameters(
@@ -1098,14 +1009,14 @@ func (lc *LocalChain) SetWalletParameters(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	lc.walletParameters = walletParameters{
-		creationPeriod:        creationPeriod,
-		creationMinBtcBalance: creationMinBtcBalance,
-		creationMaxBtcBalance: creationMaxBtcBalance,
-		closureMinBtcBalance:  closureMinBtcBalance,
-		maxAge:                maxAge,
-		maxBtcTransfer:        maxBtcTransfer,
-		closingPeriod:         closingPeriod,
+	lc.walletParameters = tbtc.WalletParameters{
+		CreationPeriod:        creationPeriod,
+		CreationMinBtcBalance: creationMinBtcBalance,
+		CreationMaxBtcBalance: creationMaxBtcBalance,
+		ClosureMinBtcBalance:  closureMinBtcBalance,
+		MaxAge:                maxAge,
+		MaxBtcTransfer:        maxBtcTransfer,
+		ClosingPeriod:         closingPeriod,
 	}
 }
 

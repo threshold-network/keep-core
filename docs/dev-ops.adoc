@@ -7,7 +7,7 @@
 
 = Kubernetes
 
-At Keep we run on GCP + Kubernetes. To accommodate the aforementioned 
+At Keep we run on GCP and Kubernetes. To accommodate the
 xref:./run-keep-node.adoc#system-considerations[System Considerations]
 we use the following pattern for each of our environments:
 
@@ -16,4 +16,3 @@ we use the following pattern for each of our environments:
 - A LoadBalancer Service for each client.
 - A StatefulSet for each client.
 
-You can see our Testnet Kubernetes configurations link:https://github.com/keep-network/keep-core/tree/main/infrastructure/kube/keep-test[here].

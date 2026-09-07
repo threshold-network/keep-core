@@ -18,11 +18,19 @@ import (
 
 // To run the tests execute:
 // ETHEREUM_MAINNET_RPC_URL=<url> go test -v -tags=integration ./...
+//
+// The URL MUST point to Ethereum mainnet (not a testnet): the test asserts
+// against well-known historical mainnet block numbers and will silently
+// fail against any other network.
+//
+// The Infura URL previously hardcoded here was checked into the repository
+// and must be treated as compromised; rotate the key on the provider side
+// before reusing it.
 
 func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 	ethereumURL := os.Getenv("ETHEREUM_MAINNET_RPC_URL")
 	if ethereumURL == "" {
-		t.Skip("ETHEREUM_MAINNET_RPC_URL not set; skipping integration test")
+		t.Skip("ETHEREUM_MAINNET_RPC_URL not set; skipping mainnet integration test")
 	}
 
 	client, err := ethclient.Dial(ethereumURL)

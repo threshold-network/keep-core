@@ -4,7 +4,7 @@ import { expect } from "chai"
 import { walletRegistryFixture } from "./fixtures"
 
 import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
   WalletRegistry,
@@ -21,8 +21,8 @@ describe("WalletRegistry - Parameters", async () => {
 
   let deployer: SignerWithAddress
   let governance: SignerWithAddress
-  let walletOwner: FakeContract<IWalletOwner>
-  let randomBeacon: FakeContract<IRandomBeacon>
+  let walletOwner: Mock<IWalletOwner>
+  let randomBeacon: Mock<IRandomBeacon>
   let thirdParty: SignerWithAddress
 
   before("load test fixture", async () => {

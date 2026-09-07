@@ -30,27 +30,3 @@ repos:
       files: '\.(json|yaml)$'
       language: script
       description: "Checks JSON/YAML code according to the package's linter configuration"
-    - id: lint-js-v1
-      name: 'lint solidity-v1 js'
-      entry: /usr/bin/env bash -c "cd solidity-v1 && npm run lint:js"
-      files: 'solidity-v1\/.*\.js$'
-      language: script
-      description: "Checks JS code according to the package's linter configuration"
-    - id: lint-sol-v1
-      name: 'lint solidity-v1 sol'
-      entry: /usr/bin/env bash -c "cd solidity-v1 && npm run lint:sol"
-      files: 'solidity-v1\/.*\.sol$'
-      language: script
-      description: "Checks solidity code according to the package's linter configuration"
-    - id: format-dashboard
-      name: 'format dashboard'
-      entry: /usr/bin/env bash -c "cd solidity-v1/dashboard && npm run format"
-      files: 'solidity-v1/dashboard/'
-      language: script
-      description: "Checks dashboard code according to the package's formatting configuration"
-    - id: lint-faucet-js
-      name: 'lint faucet js'
-      entry: /usr/bin/env bash -c "cd infrastructure/gcp/keep-test/google-functions/keep-faucet && npm run lint:js"
-      files: 'infrastructure\/gcp\/keep-test\/google-functions\/keep-faucet\/.*\.js$'
-      language: script
-      description: "Checks JS code according to the package's linter configuration"

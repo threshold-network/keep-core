@@ -101,7 +101,7 @@ func initializeMaintainerMetrics(
 ) spv.MetricsRecorder {
 	registry, isConfigured := clientinfo.Initialize(
 		ctx,
-		clientConfig.ClientInfo.Port,
+		clientConfig.ClientInfo,
 	)
 	if !isConfigured {
 		logger.Infof("client info endpoint not configured")

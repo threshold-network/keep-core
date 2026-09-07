@@ -1,6 +1,7 @@
 package tbtcpg
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -47,6 +48,7 @@ func (lbc *LocalBitcoinChain) SetTransaction(
 }
 
 func (lbc *LocalBitcoinChain) GetTransactionConfirmations(
+	_ context.Context,
 	transactionHash bitcoin.Hash,
 ) (uint, error) {
 	lbc.mutex.Lock()

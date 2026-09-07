@@ -346,3 +346,91 @@ func TestCoordinationWindowMetrics_Concurrent(t *testing.T) {
 	_ = cwm.GetSummary()
 	_ = cwm.GetRecentWindows(5)
 }
+
+// TestCleanupOldWindows_BoundsMapSize inserts 2000 windows into a store capped
+// at 100 and asserts the map never exceeds the cap. This guards against a
+// regression where cleanupOldWindows stops enforcing the bound, causing
+// unbounded memory growth on long-running nodes.
+func TestCleanupOldWindows_BoundsMapSize(t *testing.T) {
+	const maxWindows = 100
+	cwm := newTestWindowMetrics(maxWindows)
+	leader := chain.Address("0xleader")
+
+	for i := uint64(1); i <= 2000; i++ {
+		window := newCoordinationWindow(i * 900)
+		cwm.recordWalletCoordination(window, [20]byte{byte(i % 256)}, leader, "Heartbeat", true, 0, nil, nil)
+	}
+
+	summary := cwm.GetSummary()
+	if int(summary.TotalWindows) > maxWindows {
+		t.Errorf(
+			"cleanupOldWindows not enforcing bound: got %d windows, want <= %d",
+			summary.TotalWindows, maxWindows,
+		)
+	}
+}
+
+// --- Benchmarks ---
+
+func populateWindowMetrics(b *testing.B, cwm *coordinationWindowMetrics, n int) {
+	b.Helper()
+	leader := chain.Address("0xleader")
+	for i := uint64(1); i <= uint64(n); i++ {
+		window := newCoordinationWindow(i * 900)
+		cwm.recordWalletCoordination(window, [20]byte{}, leader, "Heartbeat", true, 0, nil, nil)
+	}
+}
+
+func BenchmarkGetRecentWindows_100Windows(b *testing.B) {
+	cwm := newTestWindowMetrics(200)
+	populateWindowMetrics(b, cwm, 100)
+	b.ResetTimer()
+	for range b.N {
+		_ = cwm.GetRecentWindows(100)
+	}
+}
+
+func BenchmarkGetRecentWindows_1000Windows(b *testing.B) {
+	cwm := newTestWindowMetrics(2000)
+	populateWindowMetrics(b, cwm, 1000)
+	b.ResetTimer()
+	for range b.N {
+		_ = cwm.GetRecentWindows(1000)
+	}
+}
+
+func BenchmarkGetSummary_100Windows(b *testing.B) {
+	cwm := newTestWindowMetrics(200)
+	populateWindowMetrics(b, cwm, 100)
+	b.ResetTimer()
+	for range b.N {
+		_ = cwm.GetSummary()
+	}
+}
+
+func BenchmarkGetSummary_1000Windows(b *testing.B) {
+	cwm := newTestWindowMetrics(2000)
+	populateWindowMetrics(b, cwm, 1000)
+	b.ResetTimer()
+	for range b.N {
+		_ = cwm.GetSummary()
+	}
+}
+
+// BenchmarkCleanupOldWindows_1000Windows measures the O(n^2) bubble-sort
+// cleanup pass when the store holds 1000 windows and needs to evict down to
+// 900. This catches regressions in the cleanup algorithm before they affect
+// long-running nodes.
+func BenchmarkCleanupOldWindows_1000Windows(b *testing.B) {
+	const maxWindows uint64 = 900
+
+	for range b.N {
+		b.StopTimer()
+		cwm := newTestWindowMetrics(maxWindows)
+		for i := uint64(1); i <= 1000; i++ {
+			cwm.windows[i] = &windowMetrics{WindowIndex: i}
+		}
+		b.StartTimer()
+		cwm.cleanupOldWindows()
+	}
+}

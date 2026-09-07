@@ -1,6 +1,7 @@
 package tbtcpg
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/big"
@@ -17,29 +18,10 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// Use the worst-case 126-byte deposit script with embedded extra data for estimation.
-// This will ensure that deposit sweep transaction fees are not underestimated.
-const depositScriptByteSize = 126
-
-// minSweepTxSatPerVByteFee is the minimum fee rate, in sat/vByte, applied to
-// deposit sweep transactions. A fee oracle can return an unusably low estimate
-// (down to the 1 sat/vByte relay floor enforced by the Electrum client) in an
-// uncongested mempool. Because a sweep consolidates significant wallet value
-// and is not RBF-enabled, it cannot be replaced once broadcast, so a floor-rate
-// sweep can get stuck in the mempool and jam the wallet: no new sweep can be
-// built while the previous one is unconfirmed. This minimum keeps the sweep fee
-// safely above the relay floor while remaining far below the Bridge's
-// per-deposit maximum fee. The value is intentionally conservative and could be
-// made configurable; see threshold-network/keep-core#4171.
-//
-// NOTE: this static floor and the 25% buffer applied below are a stopgap for
-// the current fire-and-forget, non-RBF sweep path: because a stuck sweep cannot
-// be fee-bumped, the fee must be right on the first broadcast. Once RBF /
-// fee-bumping lands (Part B, tracked in #4171) the safety net shifts to
-// monitor-and-bump, and this policy should be revisited rather than carried
-// forward unchanged: the defensive buffer can be dropped and the floor relaxed
-// toward the live estimate, keeping only a small relay-propagation minimum.
-const minSweepTxSatPerVByteFee = 5
+// DepositScriptByteSize is the worst-case 126-byte deposit script with embedded
+// extra data used for transaction size estimation. This ensures that deposit
+// sweep transaction fees are not underestimated.
+const DepositScriptByteSize = 126
 
 // DepositSweepLookBackBlocks is the look-back period in blocks used
 // when searching for submitted deposit-related events. It's equal to
@@ -259,7 +241,10 @@ func findDeposits(
 			continue
 		}
 
-		confirmations, err := btcChain.GetTransactionConfirmations(event.FundingTxHash)
+		confirmations, err := btcChain.GetTransactionConfirmations(
+			context.Background(),
+			event.FundingTxHash,
+		)
 		if err != nil {
 			taskLogger.Errorf(
 				"failed to get bitcoin transaction confirmations: [%v]",
@@ -495,10 +480,11 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 	if fee <= 0 {
 		taskLogger.Infof("estimating sweep transaction fee")
 		var err error
-		_, _, perDepositMaxFee, _, err := dst.chain.GetDepositParameters()
+		depositParameters, err := dst.chain.GetDepositParameters()
 		if err != nil {
 			return nil, fmt.Errorf("cannot get deposit tx max fee: [%w]", err)
 		}
+		perDepositMaxFee := depositParameters.TxMaxFee
 
 		estimatedFee, _, err := estimateDepositsSweepFee(
 			dst.btcChain,
@@ -510,7 +496,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 			// the deposits stay unswept. Log it distinctly at WARN so operators
 			// can tell this apart from a benign "no deposits to sweep" outcome;
 			// in particular, a safe-minimum-fee abort (see
-			// minSweepTxSatPerVByteFee) can indicate a misconfigured, too-low
+			// MinWalletTxSatPerVByteFee) can indicate a misconfigured, too-low
 			// per-deposit maximum fee that will strand deposits until governance
 			// raises it.
 			taskLogger.Warnf("cannot estimate sweep transaction fee: [%v]", err)
@@ -574,9 +560,9 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 //   - 1 P2WPKH output
 //
 // An error is returned if any estimated fee exceeds the maximum fee allowed by
-// the Bridge contract, or if the minimum safe sweep fee (see
-// minSweepTxSatPerVByteFee) required to avoid a stuck, unbumpable sweep would
-// itself exceed that Bridge maximum.
+// the Bridge contract, or if the minimum safe fee (see MinWalletTxSatPerVByteFee)
+// required to avoid a stuck, unbumpable sweep would itself exceed that Bridge
+// maximum.
 func EstimateDepositsSweepFee(
 	chain Chain,
 	btcChain bitcoin.Chain,
@@ -588,10 +574,11 @@ func EstimateDepositsSweepFee(
 	},
 	error,
 ) {
-	_, _, perDepositMaxFee, _, err := chain.GetDepositParameters()
+	depositParameters, err := chain.GetDepositParameters()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get deposit tx max fee: [%v]", err)
 	}
+	perDepositMaxFee := depositParameters.TxMaxFee
 
 	fees := make(map[int]struct {
 		TotalFee       int64
@@ -604,7 +591,7 @@ func EstimateDepositsSweepFee(
 	} else {
 		sweepMaxSize, err := chain.GetDepositSweepMaxSize()
 		if err != nil {
-			return nil, fmt.Errorf("cannot get sweep max size: [%v]", err)
+			return nil, fmt.Errorf("cannot get sweep max size: [%w]", err)
 		}
 
 		for i := 1; i <= int(sweepMaxSize); i++ {
@@ -647,7 +634,7 @@ func estimateDepositsSweepFee(
 		// 1 P2WPKH main UTXO input.
 		AddPublicKeyHashInputs(1, true).
 		// depositsCount P2WSH deposit inputs.
-		AddScriptHashInputs(depositsCount, depositScriptByteSize, true).
+		AddScriptHashInputs(depositsCount, DepositScriptByteSize, true).
 		// 1 P2WPKH output.
 		AddPublicKeyHashOutputs(1, true).
 		VirtualSize()
@@ -671,24 +658,9 @@ func estimateDepositsSweepFee(
 		return 0, 0, fmt.Errorf("estimated fee exceeds the maximum fee")
 	}
 
-	// A sweep must never be broadcast below a safe minimum fee rate, or it may
-	// get stuck in the mempool and jam the wallet (see minSweepTxSatPerVByteFee).
-	// If even that minimum fee exceeds the Bridge maximum, a safe sweep cannot be
-	// constructed; return an error rather than silently broadcasting an
-	// underpriced transaction.
-	if uint64(minSweepTxSatPerVByteFee*transactionSize) > totalMaxFee {
-		return 0, 0, fmt.Errorf(
-			"minimum safe sweep fee [%d] exceeds the maximum fee [%d]",
-			minSweepTxSatPerVByteFee*transactionSize,
-			totalMaxFee,
-		)
-	}
-
-	// Add a 25% buffer over the oracle estimate so there is margin during the
-	// estimate-to-broadcast delay and the fee stays adaptive under congestion
-	// (see threshold-network/keep-core#4171), then enforce the minimum floor and
-	// bound the result by the Bridge maximum (which the floor cannot exceed, per
-	// the check above).
+	// Enforce the safe minimum fee rate and 25% buffer, bounded by the Bridge
+	// maximum, so a sweep is never broadcast below the floor where it could get
+	// stuck and jam the wallet. Errors if even the floor exceeds the maximum.
 	//
 	// Caveat: transactionSize assumes all deposit inputs are witness (P2WSH), per
 	// this function's doc comment. A sweep that includes legacy P2SH deposits has
@@ -696,20 +668,9 @@ func estimateDepositsSweepFee(
 	// can land slightly below the floor for such (rare) sweeps. It still dominates
 	// the 1 sat/vByte relay floor this fix targets; a fully accurate floor would
 	// require deposit-type-aware sizing.
-	// rate is an exact integer here because EstimateFee returns totalFee as
-	// satPerVByteFee * transactionSize (an exact multiple of the size), so the
-	// buffer is applied without truncation loss. If that contract changes, apply
-	// the buffer to totalFee directly instead of to the truncated rate.
-	rate := totalFee / transactionSize
-	rate = (rate*5 + 3) / 4 // ceil(rate * 1.25)
-	if rate < minSweepTxSatPerVByteFee {
-		rate = minSweepTxSatPerVByteFee
-	}
-	totalFee = rate * transactionSize
-	if uint64(totalFee) > totalMaxFee {
-		// totalMaxFee is bounded by Bitcoin's total supply (~2.1e15 sat), far
-		// below math.MaxInt64, so this narrowing cast cannot overflow.
-		totalFee = int64(totalMaxFee)
+	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, totalMaxFee)
+	if err != nil {
+		return 0, 0, err
 	}
 
 	// Compute the actual sat/vbyte fee for informational purposes.

@@ -1,1 +1,0 @@
-= Terms used in beacon output generation

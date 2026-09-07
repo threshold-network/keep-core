@@ -9,10 +9,10 @@ propose changes to this document in a pull request.
 
 == Getting started
 
-1. Fork https://github.com/keep-network/keep-core[`keep-network/keep-core`]
+1. Fork https://github.com/threshold-network/keep-core[`threshold-network/keep-core`]
 2. Clone your fork
 3. Follow the
-   https://github.com/keep-network/keep-core/tree/main/docs/development[installation
+   https://github.com/threshold-network/keep-core/tree/main/docs/development[installation
    & build steps] in the developer documentation.
 4. Set up the <<Development Tooling>>.
 5. Open a PR against the `main` branch and describe the change you
@@ -23,7 +23,7 @@ Before marking the PR as ready for review, make sure:
 * It passes the linter checks (run `npm run lint` from `solidity/ecdsa` or
   `solidity/random-beacon` as appropriate; see <<Pre-commit>> to make this
   automatic).
-* It passes the https://github.com/keep-network/keep-core/actions[continuous
+* It passes the https://github.com/threshold-network/keep-core/actions[continuous
   integration tests].
 * Your changes have sufficient test coverage (e.g regression tests have
   been added for bug fixes, unit tests for new features)
@@ -36,7 +36,7 @@ be signed].
 
 === Continuous Integration
 
-Keep uses https://github.com/keep-network/keep-core/actions[Github Actions] for
+Keep uses https://github.com/threshold-network/keep-core/actions[Github Actions] for
 continuous integration. All jobs must be green to merge a PR.
 
 === Pre-commit

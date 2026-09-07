@@ -58,7 +58,7 @@ var testConfigs = map[string]testConfig{
 			URL:                 "tcp://electrum.blockstream.info:60001",
 			Network:             bitcoin.Testnet,
 			RequestTimeout:      requestTimeout * 2,
-			RequestRetryTimeout: requestRetryTimeout * 2,
+			RequestRetryTimeout: requestRetryTimeout * 6, // allow slower public electrum responses
 		},
 		network: bitcoin.Testnet,
 	},
@@ -67,7 +67,7 @@ var testConfigs = map[string]testConfig{
 			URL:                 "ssl://electrum.blockstream.info:60002",
 			Network:             bitcoin.Testnet,
 			RequestTimeout:      requestTimeout * 2,
-			RequestRetryTimeout: requestRetryTimeout * 2,
+			RequestRetryTimeout: requestRetryTimeout * 6, // allow slower public electrum responses
 		},
 		network: bitcoin.Testnet,
 	},
@@ -230,7 +230,7 @@ func TestGetTransactionConfirmations_Integration(t *testing.T) {
 				}
 				expectedConfirmations := latestBlockHeight - tx.BlockHeight
 
-				result, err := electrum.GetTransactionConfirmations(tx.TxHash)
+				result, err := electrum.GetTransactionConfirmations(context.Background(), tx.TxHash)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -252,7 +252,7 @@ func TestGetTransactionConfirmations_Negative_Integration(t *testing.T) {
 		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
 		defer cancelCtx()
 
-		_, err := electrum.GetTransactionConfirmations(invalidTxID)
+		_, err := electrum.GetTransactionConfirmations(context.Background(), invalidTxID)
 		if shouldSkipElectrumIntegrationError(err) {
 			t.Skipf("skipping due to transient electrum error: %v", err)
 		}
@@ -275,7 +275,7 @@ func TestGetTransactionConfirmations_Negative_Integration(t *testing.T) {
 
 // TODO: We should uncomment this test once https://github.com/checksum0/go-electrum/issues/10
 // is fixed. This test was added to validate the fix of the following issue
-// https://github.com/keep-network/keep-core/issues/3699 but at the same time
+// https://github.com/threshold-network/keep-core/issues/3699 but at the same time
 // made `panic: assignment to entry in nil map` happen very frequently which is
 // disturbing during the development and running the existing integration tests.
 

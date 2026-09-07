@@ -1,9 +1,0 @@
-*.aux
-*.log
-*.gz
-*.pdf
-*.fls
-*.out
-*.fdb_latexmk
-img/generated
-*.html

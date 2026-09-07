@@ -302,20 +302,7 @@ type BridgeChain interface {
 
 	// GetMovingFundsParameters gets the current value of parameters relevant
 	// for the moving funds process.
-	GetMovingFundsParameters() (
-		txMaxTotalFee uint64,
-		dustThreshold uint64,
-		timeoutResetDelay uint32,
-		timeout uint32,
-		timeoutSlashingAmount *big.Int,
-		timeoutNotifierRewardMultiplier uint32,
-		commitmentGasOffset uint16,
-		sweepTxMaxTotalFee uint64,
-		sweepTimeout uint32,
-		sweepTimeoutSlashingAmount *big.Int,
-		sweepTimeoutNotifierRewardMultiplier uint32,
-		err error,
-	)
+	GetMovingFundsParameters() (MovingFundsParameters, error)
 
 	// PastMovingFundsCommitmentSubmittedEvents fetches past moving funds
 	// commitment submitted events according to the provided filter or

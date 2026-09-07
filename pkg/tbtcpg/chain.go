@@ -25,16 +25,7 @@ type Chain interface {
 
 	// GetWalletParameters gets the current value of parameters relevant to
 	// wallet.
-	GetWalletParameters() (
-		creationPeriod uint32,
-		creationMinBtcBalance uint64,
-		creationMaxBtcBalance uint64,
-		closureMinBtcBalance uint64,
-		maxAge uint32,
-		maxBtcTransfer uint64,
-		closingPeriod uint32,
-		err error,
-	)
+	GetWalletParameters() (tbtc.WalletParameters, error)
 
 	// GetLiveWalletsCount gets the current count of live wallets.
 	GetLiveWalletsCount() (uint32, error)
@@ -45,13 +36,7 @@ type Chain interface {
 
 	// GetDepositParameters gets the current value of parameters relevant
 	// for the depositing process.
-	GetDepositParameters() (
-		dustThreshold uint64,
-		treasuryFeeDivisor uint64,
-		txMaxFee uint64,
-		revealAheadPeriod uint32,
-		err error,
-	)
+	GetDepositParameters() (tbtc.DepositParameters, error)
 
 	// PastRedemptionRequestedEvents fetches past redemption requested events according
 	// to the provided filter or unfiltered if the filter is nil. Returned
@@ -71,16 +56,7 @@ type Chain interface {
 
 	// GetRedemptionParameters gets the current value of parameters relevant
 	// for the redemption process.
-	GetRedemptionParameters() (
-		dustThreshold uint64,
-		treasuryFeeDivisor uint64,
-		txMaxFee uint64,
-		txMaxTotalFee uint64,
-		timeout uint32,
-		timeoutSlashingAmount *big.Int,
-		timeoutNotifierRewardMultiplier uint32,
-		err error,
-	)
+	GetRedemptionParameters() (tbtc.RedemptionParameters, error)
 
 	// GetRedemptionMaxSize gets the maximum number of redemption requests that
 	// can be a part of a redemption sweep proposal.

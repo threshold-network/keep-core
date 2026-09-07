@@ -3,7 +3,7 @@
 
 = Keep Random Beacon v2
 
-https://github.com/keep-network/keep-core/actions/workflows/contracts-random-beacon.yml[image:https://img.shields.io/github/actions/workflow/status/keep-network/keep-core/contracts-random-beacon.yml?branch=main&event=push&label=Random%20Beacon%20contracts%20build[Random Beacon contracts build status]]
+https://github.com/threshold-network/keep-core/actions/workflows/contracts-random-beacon.yml[image:https://img.shields.io/github/actions/workflow/status/threshold-network/keep-core/contracts-random-beacon.yml?branch=main&event=push&label=Random%20Beacon%20contracts%20build[Random Beacon contracts build status]]
 
 The Keep Network requires a trusted source of randomness for the process of
 trustless group selection. While the network requires that randomness to function
@@ -41,7 +41,7 @@ blockchain. The basic functioning of the relay is:
 == Prior Work
 
 Smart contracts for the first version of the random beacon are available in
-link:https://github.com/keep-network/keep-core/tree/main/solidity-v1[`solidity-v1` directory].
+link:https://github.com/threshold-network/keep-core-v1/tree/main/solidity[the `keep-core-v1` repository].
 The new version uses the same approach for BLS signatures as v1 but replaces
 ticket-based group selection with an optimistic sortition pool call. It also
 redesigns staker rewards and offers a more operator-friendly approach for

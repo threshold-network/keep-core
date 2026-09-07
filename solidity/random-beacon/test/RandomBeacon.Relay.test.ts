@@ -19,7 +19,7 @@ import { fakeTokenStaking } from "./mocks/staking"
 
 import type { Groups } from "../typechain/RandomBeacon"
 import type { Operator, OperatorID } from "./utils/operators"
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 import type {
   RandomBeacon,
   RandomBeaconStub,
@@ -904,24 +904,21 @@ describe("RandomBeacon - Relay", () => {
         }
       )
 
-      // FIXME: Blocked by https://github.com/defi-wonderland/smock/issues/101
-      context.skip("when token staking seize call fails", async () => {
-        let tokenStakingFake: FakeContract<TokenStaking>
+      context("when token staking seize call fails", async () => {
+        let tokenStakingFake: Mock<TokenStaking>
         let tx: Promise<ContractTransaction>
 
         before(async () => {
           await createSnapshot()
 
           tokenStakingFake = await fakeTokenStaking(randomBeacon)
-          tokenStakingFake.seize.reverts("faked function revert")
+          await tokenStakingFake.seize.reverts("faked function revert")
 
           tx = randomBeacon.reportRelayEntryTimeout(membersIDs)
         })
 
         after(async () => {
           await restoreSnapshot()
-
-          tokenStakingFake.seize.reset()
         })
 
         it("should succeed", async () => {
@@ -1042,16 +1039,15 @@ describe("RandomBeacon - Relay", () => {
         })
       })
 
-      // FIXME: Blocked by https://github.com/defi-wonderland/smock/issues/101
-      context.skip("when token staking seize call fails", async () => {
-        let tokenStakingFake: FakeContract<TokenStaking>
+      context("when token staking seize call fails", async () => {
+        let tokenStakingFake: Mock<TokenStaking>
         let tx: Promise<ContractTransaction>
 
         before(async () => {
           await createSnapshot()
 
           tokenStakingFake = await fakeTokenStaking(randomBeacon)
-          tokenStakingFake.seize.reverts("faked function revert")
+          await tokenStakingFake.seize.reverts("faked function revert")
 
           const notifierSignature = await bls.sign(
             notifier.address,
@@ -1064,8 +1060,6 @@ describe("RandomBeacon - Relay", () => {
 
         after(async () => {
           await restoreSnapshot()
-
-          tokenStakingFake.seize.reset()
         })
 
         it("should succeed", async () => {

@@ -324,13 +324,14 @@ func (mfst *MovedFundsSweepTask) ProposeMovedFundsSweep(
 	if fee <= 0 {
 		taskLogger.Infof("estimating moved funds sweep transaction fee")
 
-		_, _, _, _, _, _, _, sweepTxMaxTotalFee, _, _, _, err := mfst.chain.GetMovingFundsParameters()
+		movingFundsParameters, err := mfst.chain.GetMovingFundsParameters()
 		if err != nil {
 			return nil, fmt.Errorf(
 				"cannot get moved funds sweep tx max total fee: [%w]",
 				err,
 			)
 		}
+		sweepTxMaxTotalFee := movingFundsParameters.SweepTxMaxTotalFee
 
 		estimatedFee, err := EstimateMovedFundsSweepFee(
 			mfst.btcChain,

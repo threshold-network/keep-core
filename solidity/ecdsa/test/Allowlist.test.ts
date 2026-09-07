@@ -1,9 +1,10 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions, no-restricted-syntax, no-await-in-loop */
 import { ethers, helpers } from "hardhat"
-import { smock } from "@defi-wonderland/smock"
 import { expect } from "chai"
 
-import type { FakeContract } from "@defi-wonderland/smock"
+import { createMock, expectCalledWith } from "./helpers/mock"
+
+import type { Mock } from "./helpers/mock"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { Allowlist, WalletRegistry } from "../typechain"
 
@@ -13,7 +14,7 @@ const ZERO_ADDRESS = ethers.constants.AddressZero
 
 describe("Allowlist", () => {
   let allowlist: Allowlist
-  let walletRegistry: FakeContract<WalletRegistry>
+  let walletRegistry: Mock<WalletRegistry>
   let governance: SignerWithAddress
   let stakingProvider1: SignerWithAddress
   let stakingProvider2: SignerWithAddress
@@ -29,7 +30,7 @@ describe("Allowlist", () => {
 
   beforeEach(async () => {
     // Create fake WalletRegistry
-    walletRegistry = await smock.fake<WalletRegistry>("WalletRegistry")
+    walletRegistry = await createMock<WalletRegistry>("WalletRegistry")
 
     const [deployer, sp1, sp2, tp] = await ethers.getSigners()
 
@@ -126,11 +127,11 @@ describe("Allowlist", () => {
           .connect(governance)
           .addStakingProvider(stakingProvider2.address, weight)
 
-        expect(walletRegistry.authorizationIncreased).to.have.been.calledWith(
+        await expectCalledWith(walletRegistry.authorizationIncreased, [
           stakingProvider2.address,
           0,
-          weight
-        )
+          weight,
+        ])
       })
 
       it("should revert if staking provider already exists", async () => {
@@ -213,13 +214,11 @@ describe("Allowlist", () => {
           .connect(governance)
           .requestWeightDecrease(stakingProvider1.address, newWeight)
 
-        expect(
-          walletRegistry.authorizationDecreaseRequested
-        ).to.have.been.calledWith(
+        await expectCalledWith(walletRegistry.authorizationDecreaseRequested, [
           stakingProvider1.address,
           initialWeight,
-          newWeight
-        )
+          newWeight,
+        ])
       })
 
       it("should allow setting weight to zero", async () => {

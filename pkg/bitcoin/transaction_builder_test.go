@@ -1,11 +1,15 @@
 package bitcoin
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 )
@@ -107,6 +111,24 @@ func TestTransactionBuilder_AddPublicKeyHashInput(t *testing.T) {
 				Witness:         nil,
 				Sequence:        0xffffffff,
 			})
+			// Assert the Add* method also registered the UTXO in the
+			// prevOuts fetcher, not just in sigHashArgs and internal.TxIn.
+			// Without this direct assertion, the completeness check in
+			// ComputeSignatureHashes is exercised only indirectly via
+			// downstream sighash-fixture comparisons.
+			outpointHash := chainhash.Hash(inputTransactionUtxo.Outpoint.TransactionHash)
+			registered := builder.prevOuts.FetchPrevOutput(
+				wire.OutPoint{Hash: outpointHash, Index: inputTransactionUtxo.Outpoint.OutputIndex},
+			)
+			if registered == nil {
+				t.Fatal("expected prev-out to be registered in builder.prevOuts")
+			}
+			testutils.AssertIntsEqual(
+				t,
+				"registered prev-out value",
+				int(test.value),
+				int(registered.Value),
+			)
 		})
 	}
 }
@@ -228,6 +250,21 @@ func TestTransactionBuilder_AddScriptHashInput(t *testing.T) {
 				Witness:         expectedWitness,
 				Sequence:        0xffffffff,
 			})
+			// Mirror the M9 assertion from AddPublicKeyHashInput: confirm
+			// the script-hash path also registers the UTXO in prevOuts.
+			outpointHash := chainhash.Hash(inputTransactionUtxo.Outpoint.TransactionHash)
+			registered := builder.prevOuts.FetchPrevOutput(
+				wire.OutPoint{Hash: outpointHash, Index: inputTransactionUtxo.Outpoint.OutputIndex},
+			)
+			if registered == nil {
+				t.Fatal("expected prev-out to be registered in builder.prevOuts")
+			}
+			testutils.AssertIntsEqual(
+				t,
+				"registered prev-out value",
+				int(test.value),
+				int(registered.Value),
+			)
 		})
 	}
 }
@@ -533,4 +570,112 @@ func assertInternalOutput(
 	)
 
 	testutils.AssertBytesEqual(t, expected.PublicKeyScript, internalOutput.PkScript)
+}
+
+// TestTransactionBuilder_ComputeSignatureHashesMissingPrevOut exercises the
+// completeness check in ComputeSignatureHashes by appending a TxIn directly
+// via the internal transaction (bypassing the Add* methods that would also
+// register a prev-out) and asserts the exact "missing previous output for
+// input [0]" error. Without this test, the new defensive branch replacing
+// an unhandled panic is unreachable through any public API and untested.
+func TestTransactionBuilder_ComputeSignatureHashesMissingPrevOut(t *testing.T) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	// Construct a TxIn that has no matching entry in builder.prevOuts.
+	// We use a non-coinbase outpoint (zero hash + index 0); coinbase
+	// inputs are skipped by NewTxSigHashes, so the completeness check
+	// would not fire for them.
+	builder.internal.AddTxIn(
+		wire.NewTxIn(
+			&wire.OutPoint{Hash: chainhash.Hash{}, Index: 0},
+			nil,
+			nil,
+		),
+	)
+
+	_, err := builder.ComputeSignatureHashes()
+	if err == nil {
+		t.Fatal("expected missing previous output error")
+	}
+	if !strings.Contains(err.Error(), "missing previous output for input [0]") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+// --- Benchmarks ---
+
+// witnessP2WPKHTxHex is a P2WPKH transaction whose output[0] (value=35400)
+// is used as the UTXO source for ComputeSignatureHashes benchmarks.
+// https://live.blockcypher.com/btc-testnet/tx/f8eaf242a55ea15e602f9f990e33f67f99dfbe25d1802bbde63cc1caabf99668
+const witnessP2WPKHTxHex = "01000000000102bc187be612bc3db8cfcdec56b75e9bc0262ab6eacfe27cc1a699bacd53e3d07400000000c948304502210089a89aaf3fec97ac9ffa91cdff59829f0cb3ef852a468153e2c0e2b473466d2e022072902bb923ef016ac52e941ced78f816bf27991c2b73211e227db27ec200bc0a012103989d253b17a6a0f41838b84ff0d20e8898f9d7b1a98f2564da4cc29dcf8581d94c5c14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d000395237576a9148db50eb52063ea9d98b3eac91489a90f738986f68763ac6776a914e257eccafbc07c381642ce6e7e55120fb077fbed8804e0250162b175ac68ffffffffdc557e737b6688c5712649b86f7757a722dc3d42786f23b2fa826394dfec545c0000000000ffffffff01488a0000000000001600148db50eb52063ea9d98b3eac91489a90f738986f6000347304402203747f5ee31334b11ebac6a2a156b1584605de8d91a654cd703f9c8438634997402202059d680211776f93c25636266b02e059ed9fcc6209f7d3d9926c49a0d8750ed012103989d253b17a6a0f41838b84ff0d20e8898f9d7b1a98f2564da4cc29dcf8581d95c14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d000395237576a9148db50eb52063ea9d98b3eac91489a90f738986f68763ac6776a914e257eccafbc07c381642ce6e7e55120fb077fbed8804e0250162b175ac6800000000"
+
+// buildSigHashBuilder constructs a TransactionBuilder with n inputs all
+// pointing to the same P2WPKH UTXO. ComputeSignatureHashes is non-mutating so
+// the same builder can be reused across b.N iterations.
+func buildSigHashBuilder(b *testing.B, n int) *TransactionBuilder {
+	b.Helper()
+
+	txBytes, err := hex.DecodeString(witnessP2WPKHTxHex)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	tx := new(Transaction)
+	if err := tx.Deserialize(txBytes); err != nil {
+		b.Fatal(err)
+	}
+
+	localChain := newLocalChain()
+	if err := localChain.addTransaction(tx); err != nil {
+		b.Fatal(err)
+	}
+
+	builder := NewTransactionBuilder(localChain)
+	utxo := &UnspentTransactionOutput{
+		Outpoint: &TransactionOutpoint{
+			TransactionHash: tx.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 35400,
+	}
+	for i := 0; i < n; i++ {
+		if err := builder.AddPublicKeyHashInput(utxo); err != nil {
+			b.Fatal(err)
+		}
+	}
+	return builder
+}
+
+func BenchmarkComputeSignatureHashes_1Input(b *testing.B) {
+	builder := buildSigHashBuilder(b, 1)
+	if _, err := builder.ComputeSignatureHashes(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = builder.ComputeSignatureHashes()
+	}
+}
+
+func BenchmarkComputeSignatureHashes_5Inputs(b *testing.B) {
+	builder := buildSigHashBuilder(b, 5)
+	if _, err := builder.ComputeSignatureHashes(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = builder.ComputeSignatureHashes()
+	}
+}
+
+func BenchmarkComputeSignatureHashes_20Inputs(b *testing.B) {
+	builder := buildSigHashBuilder(b, 20)
+	if _, err := builder.ComputeSignatureHashes(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = builder.ComputeSignatureHashes()
+	}
 }

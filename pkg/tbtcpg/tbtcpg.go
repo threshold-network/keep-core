@@ -1,3 +1,16 @@
+// Package tbtcpg implements the proposal-generation half of the tBTC
+// wallet-action domain. For each wallet action (deposit sweep, redemption,
+// moving funds, moved funds sweep, heartbeat) it inspects the host chain and
+// Bitcoin state and produces the corresponding proposal for the wallet
+// coordinator to consider.
+//
+// Its counterpart is pkg/maintainer/spv, the proof-maintenance half, which
+// submits SPV proofs for the transactions these actions ultimately produce.
+// The two packages deliberately mirror each other's file layout: for the
+// actions that result in an on-chain transaction, a file here
+// (deposit_sweep.go, redemptions.go, moving_funds.go, moved_funds_sweep.go)
+// generates the proposal whose resulting transaction is proven by the
+// same-named file there.
 package tbtcpg
 
 import (

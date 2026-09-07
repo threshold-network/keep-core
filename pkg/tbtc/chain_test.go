@@ -32,20 +32,6 @@ const (
 	stakingProvider      = chain.Address("0x1111111111111111111111111111111111111111")
 )
 
-type movingFundsParameters = struct {
-	txMaxTotalFee                        uint64
-	dustThreshold                        uint64
-	timeoutResetDelay                    uint32
-	timeout                              uint32
-	timeoutSlashingAmount                *big.Int
-	timeoutNotifierRewardMultiplier      uint32
-	commitmentGasOffset                  uint16
-	sweepTxMaxTotalFee                   uint64
-	sweepTimeout                         uint32
-	sweepTimeoutSlashingAmount           *big.Int
-	sweepTimeoutNotifierRewardMultiplier uint32
-}
-
 type localChain struct {
 	dkgResultSubmissionHandlersMutex sync.Mutex
 	dkgResultSubmissionHandlers      map[int]func(submission *DKGResultSubmittedEvent)
@@ -109,7 +95,7 @@ type localChain struct {
 	depositRequests      map[[32]byte]*DepositChainRequest
 
 	movingFundsParametersMutex sync.Mutex
-	movingFundsParameters      movingFundsParameters
+	movingFundsParameters      MovingFundsParameters
 
 	eligibleStakesMutex sync.Mutex
 	eligibleStakes      map[chain.Address]*big.Int
@@ -1303,35 +1289,11 @@ func buildMovedFundsSweepProposalValidationKey(
 	return sha256.Sum256(buffer.Bytes()), nil
 }
 
-func (lc *localChain) GetMovingFundsParameters() (
-	txMaxTotalFee uint64,
-	dustThreshold uint64,
-	timeoutResetDelay uint32,
-	timeout uint32,
-	timeoutSlashingAmount *big.Int,
-	timeoutNotifierRewardMultiplier uint32,
-	commitmentGasOffset uint16,
-	sweepTxMaxTotalFee uint64,
-	sweepTimeout uint32,
-	sweepTimeoutSlashingAmount *big.Int,
-	sweepTimeoutNotifierRewardMultiplier uint32,
-	err error,
-) {
+func (lc *localChain) GetMovingFundsParameters() (MovingFundsParameters, error) {
 	lc.movingFundsParametersMutex.Lock()
 	defer lc.movingFundsParametersMutex.Unlock()
 
-	return lc.movingFundsParameters.txMaxTotalFee,
-		lc.movingFundsParameters.dustThreshold,
-		lc.movingFundsParameters.timeoutResetDelay,
-		lc.movingFundsParameters.timeout,
-		lc.movingFundsParameters.timeoutSlashingAmount,
-		lc.movingFundsParameters.timeoutNotifierRewardMultiplier,
-		lc.movingFundsParameters.commitmentGasOffset,
-		lc.movingFundsParameters.sweepTxMaxTotalFee,
-		lc.movingFundsParameters.sweepTimeout,
-		lc.movingFundsParameters.sweepTimeoutSlashingAmount,
-		lc.movingFundsParameters.sweepTimeoutNotifierRewardMultiplier,
-		nil
+	return lc.movingFundsParameters, nil
 }
 
 func (lc *localChain) SetMovingFundsParameters(
@@ -1350,18 +1312,18 @@ func (lc *localChain) SetMovingFundsParameters(
 	lc.movingFundsParametersMutex.Lock()
 	defer lc.movingFundsParametersMutex.Unlock()
 
-	lc.movingFundsParameters = movingFundsParameters{
-		txMaxTotalFee:                        txMaxTotalFee,
-		dustThreshold:                        dustThreshold,
-		timeoutResetDelay:                    timeoutResetDelay,
-		timeout:                              timeout,
-		timeoutSlashingAmount:                timeoutSlashingAmount,
-		timeoutNotifierRewardMultiplier:      timeoutNotifierRewardMultiplier,
-		commitmentGasOffset:                  commitmentGasOffset,
-		sweepTxMaxTotalFee:                   sweepTxMaxTotalFee,
-		sweepTimeout:                         sweepTimeout,
-		sweepTimeoutSlashingAmount:           sweepTimeoutSlashingAmount,
-		sweepTimeoutNotifierRewardMultiplier: sweepTimeoutNotifierRewardMultiplier,
+	lc.movingFundsParameters = MovingFundsParameters{
+		TxMaxTotalFee:                        txMaxTotalFee,
+		DustThreshold:                        dustThreshold,
+		TimeoutResetDelay:                    timeoutResetDelay,
+		Timeout:                              timeout,
+		TimeoutSlashingAmount:                timeoutSlashingAmount,
+		TimeoutNotifierRewardMultiplier:      timeoutNotifierRewardMultiplier,
+		CommitmentGasOffset:                  commitmentGasOffset,
+		SweepTxMaxTotalFee:                   sweepTxMaxTotalFee,
+		SweepTimeout:                         sweepTimeout,
+		SweepTimeoutSlashingAmount:           sweepTimeoutSlashingAmount,
+		SweepTimeoutNotifierRewardMultiplier: sweepTimeoutNotifierRewardMultiplier,
 	}
 }
 

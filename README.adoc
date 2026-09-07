@@ -1,8 +1,8 @@
 = keep-core
 
-https://github.com/keep-network/keep-core/actions/workflows/contracts-ecdsa.yml[image:https://img.shields.io/github/actions/workflow/status/keep-network/keep-core/contracts-ecdsa.yml?branch=main&event=push&label=ECDSA%20contracts%20build[ECDSA contracts build status]]
-https://github.com/keep-network/keep-core/actions/workflows/contracts-random-beacon.yml[image:https://img.shields.io/github/actions/workflow/status/keep-network/keep-core/contracts-random-beacon.yml?branch=main&event=push&label=Random%20Beacon%20contracts%20build[Random Beacon contracts build status]]
-https://github.com/keep-network/keep-core/actions/workflows/client.yml[image:https://img.shields.io/github/actions/workflow/status/keep-network/keep-core/client.yml?branch=main&event=push&label=Client build[Go client build status]]
+https://github.com/threshold-network/keep-core/actions/workflows/contracts-ecdsa.yml[image:https://img.shields.io/github/actions/workflow/status/threshold-network/keep-core/contracts-ecdsa.yml?branch=main&event=push&label=ECDSA%20contracts%20build[ECDSA contracts build status]]
+https://github.com/threshold-network/keep-core/actions/workflows/contracts-random-beacon.yml[image:https://img.shields.io/github/actions/workflow/status/threshold-network/keep-core/contracts-random-beacon.yml?branch=main&event=push&label=Random%20Beacon%20contracts%20build[Random Beacon contracts build status]]
+https://github.com/threshold-network/keep-core/actions/workflows/client.yml[image:https://img.shields.io/github/actions/workflow/status/threshold-network/keep-core/client.yml?branch=main&event=push&label=Client build[Go client build status]]
 https://docs.threshold.network[image:https://img.shields.io/badge/docs-website-green.svg[Docs]]
 https://discord.gg/threshold[image:https://img.shields.io/badge/chat-Discord-5865f2.svg[Chat with us on Discord]]
 
@@ -41,14 +41,15 @@ A good place to start is link:docs/[the docs directory].
 To run your own node in the Keep Network, follow the
 link:docs/run-keep-node.adoc[Run Keep Node] doc. Feedback
 on this process and the documentation
-https://github.com/keep-network/keep-core/issues[is appreciated!]
+https://github.com/threshold-network/keep-core/issues[is appreciated!]
 
 === Moving to a new random beacon
 
-The legacy core contracts of the random beacon are moved to the
-link:solidity-v1/[`solidity-v1/`] directory which can be referred as "v1". The
-newest "v2" random beacon contracts can be found in
-link:solidity/random-beacon/[`solidity/random-beacon`] directory. The full
+The legacy "v1" random beacon contracts have been moved out of this repository
+and now live in
+https://github.com/threshold-network/keep-core-v1[`threshold-network/keep-core-v1`]
+(under its `solidity/` directory). The current "v2" random beacon contracts can
+be found in link:solidity/random-beacon/[`solidity/random-beacon`]. The full
 specification of the "v2" random beacon is written in
 link:/docs/rfc/rfc-19-random-beacon-v2.adoc[`rfc-19-random-beacon-v2.adoc`].
 Retired KEEP-era packages and operational tooling are listed in
@@ -59,12 +60,11 @@ link:docs/retired-components.md[`docs/retired-components.md`].
 dApp developers will be most interested in the smart contracts exposing Keep's
 on-chain facilities.
 
-The core contracts can be found in the link:solidity-v1/[`solidity-v1/`]
-directory. They can be used to request
-link:solidity-v1/contracts/IRandomBeacon.sol[miner-resistant random numbers], as
-well as creating and managing keeps. To generate new ECDSA key material and
-request signatures, the contracts can be found in
-link:solidity/ecdsa/contracts/[`solidity/ecdsa/contracts/`].
+The legacy v1 core contracts (miner-resistant random numbers, keep creation and
+management) live in
+https://github.com/threshold-network/keep-core-v1[`threshold-network/keep-core-v1`].
+To generate new ECDSA key material and request signatures, the contracts can be
+found in link:solidity/ecdsa/contracts/[`solidity/ecdsa/contracts/`].
 
 === Client Developers
 
@@ -85,35 +85,33 @@ keep-core/
   solidity/ <1>
     ecdsa/
     random-beacon/
-  solidity-v1/ <2>
-  cmd/ <3>
-  pkg/ <4>
+  cmd/ <2>
+  pkg/ <3>
     net/
-      net.go, *.go <5>
+      net.go, *.go <4>
       libp2p/
     chain/
-      chain.go, *.go <5>
+      chain.go, *.go <4>
       ethereum/
         gen/
-          gen.go <6>
+          gen.go <5>
     relay/
       relay.go, *.go
 ```
 <1> Core contracts of the Keep contracts. Random beacon contracts are stored
     under `/solidity/random-beacon` whereas ECDSA under `/solidity/ecdsa`.
-<2> Legacy core contracts of the random beacon (v1). While the Keep network only
-    uses Solidity at the moment, the directory structure allows for other
-    contract languages.
-<3> Keep client subcommands are implemented here, though they should be minimal
+    Legacy v1 contracts live in the separate
+    https://github.com/threshold-network/keep-core-v1[`keep-core-v1`] repo.
+<2> Keep client subcommands are implemented here, though they should be minimal
     and deal solely with user interaction. The meat of the commands should exist
     in a package fit for the appropriate purpose.
-<4> All additional packages live in `pkg/`.
-<5> The high-level interfaces for a package `mypackage` live in `mypackage.go`.
+<3> All additional packages live in `pkg/`.
+<4> The high-level interfaces for a package `mypackage` live in `mypackage.go`.
     `net` and `chain` are interface packages that expose a common interface to
     network and blockchain layers. Their subpackages provide particular
     implementations of these common interfaces. Only `cmd/` and the main package
     should interact with the implementations directly.
-<6> When a package requires generated code, it should have a subpackage named
+<5> When a package requires generated code, it should have a subpackage named
     `gen/`. This subpackage should contain a single file, `gen.go`, with a `//
     go:generate` annotation to trigger appropriate code generation. All code
     generation is done with a single invocation of `go generate` at build time.

@@ -12,9 +12,6 @@
 *.swp
 *.swo
 
-# Infrastructure
-/infrastructure/gcp/service-accounts*
-
 # Secret directory used in Kubernetes configurations
 /infrastructure/kube/**/.secret/
 /infrastructure/kube/**/*.secret
@@ -79,3 +76,6 @@ venv/
 target/
 dist/
 .DS_Store
+
+# Yarn 4 local state (not for zero-installs)
+.yarn/install-state.gz

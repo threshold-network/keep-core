@@ -2,6 +2,7 @@
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
+import { expectCalledWith } from "./helpers/mock"
 import { params, walletRegistryFixture } from "./fixtures"
 import { submitRelayEntry } from "./utils/randomBeacon"
 import { signAndSubmitCorrectDkgResult } from "./utils/dkg"
@@ -9,7 +10,7 @@ import ecdsaData from "./data/ecdsa"
 
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { DkgResult } from "./utils/dkg"
-import type { FakeContract } from "@defi-wonderland/smock"
+import type { Mock } from "./helpers/mock"
 import type {
   IWalletOwner,
   WalletRegistry,
@@ -34,7 +35,7 @@ describe("WalletRegistry - Wallet Owner", async () => {
   const walletID: string = ethers.utils.keccak256(groupPublicKey)
 
   let walletRegistry: WalletRegistryStub & WalletRegistry
-  let walletOwner: FakeContract<IWalletOwner>
+  let walletOwner: Mock<IWalletOwner>
 
   before("load test fixture", async () => {
     // eslint-disable-next-line @typescript-eslint/no-extra-semi
@@ -75,7 +76,7 @@ describe("WalletRegistry - Wallet Owner", async () => {
       before(async () => {
         await createSnapshot()
 
-        walletOwner.__ecdsaWalletCreatedCallback.reverts(
+        await walletOwner.__ecdsaWalletCreatedCallback.reverts(
           "wallet owner internal error"
         )
 
@@ -115,11 +116,11 @@ describe("WalletRegistry - Wallet Owner", async () => {
       it("should call wallet owner", async () => {
         await tx
 
-        await expect(walletOwner.__ecdsaWalletCreatedCallback).to.be.calledWith(
+        await expectCalledWith(walletOwner.__ecdsaWalletCreatedCallback, [
           walletID,
           groupPublicKeyX,
-          groupPublicKeyY
-        )
+          groupPublicKeyY,
+        ])
       })
     })
   })

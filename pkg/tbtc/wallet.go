@@ -293,6 +293,31 @@ type walletTransactionExecutor struct {
 	signingExecutor walletSigningExecutor
 
 	waitForBlockFn waitForBlockFn
+
+	// transactionMonitor is optional. When set, successfully broadcast
+	// transactions are registered with it so they can be watched for
+	// confirmation and alerted on if they get stuck.
+	transactionMonitor *transactionMonitor
+}
+
+// setTransactionMonitor wires an optional transaction monitor that is notified
+// of successfully broadcast transactions.
+func (wte *walletTransactionExecutor) setTransactionMonitor(
+	monitor *transactionMonitor,
+) {
+	wte.transactionMonitor = monitor
+}
+
+// trackTransaction registers a broadcast transaction with the transaction
+// monitor, if one is configured. It is safe to call multiple times for the
+// same transaction.
+func (wte *walletTransactionExecutor) trackTransaction(txHash bitcoin.Hash) {
+	if wte.transactionMonitor != nil {
+		wte.transactionMonitor.track(
+			txHash,
+			bitcoin.PublicKeyHash(wte.executingWallet.publicKey),
+		)
+	}
 }
 
 func newWalletTransactionExecutor(
@@ -413,6 +438,10 @@ func (wte *walletTransactionExecutor) broadcastTransaction(
 				)
 			} else {
 				broadcastTxLogger.Infof("broadcasting completed")
+				// Register the transaction for stuck-transaction monitoring as
+				// soon as the broadcast succeeds, without waiting on the
+				// confirmation lookup below (which may itself fail).
+				wte.trackTransaction(txHash)
 			}
 
 			broadcastTxLogger.Infof(
@@ -431,7 +460,10 @@ func (wte *walletTransactionExecutor) broadcastTransaction(
 				"checking whether the transaction is known on Bitcoin chain",
 			)
 
-			_, err = wte.btcChain.GetTransactionConfirmations(txHash)
+			_, err = wte.btcChain.GetTransactionConfirmations(
+				broadcastCtx,
+				txHash,
+			)
 			if err != nil {
 				broadcastTxLogger.Warnf(
 					"cannot say whether the transaction is known "+
@@ -442,6 +474,12 @@ func (wte *walletTransactionExecutor) broadcastTransaction(
 			}
 
 			broadcastTxLogger.Infof("transaction is known on Bitcoin chain")
+
+			// Also register here in case this operator's own broadcast call
+			// errored but the transaction is nonetheless known on-chain (e.g.
+			// broadcast by another operator). trackTransaction is idempotent.
+			wte.trackTransaction(txHash)
+
 			return nil
 		}
 	}

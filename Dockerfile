@@ -32,8 +32,11 @@ RUN mkdir -p $APP_DIR $TEST_RESULTS_DIR
 
 WORKDIR $APP_DIR
 
-# Get dependencies.
+# Get dependencies. The third_party directory holds an in-tree module served
+# by a directory `replace` in go.mod, so it must be present before the module
+# graph can be resolved.
 COPY go.mod go.sum $APP_DIR/
+COPY ./third_party $APP_DIR/third_party
 RUN go mod download
 
 # Copy source code for generation.

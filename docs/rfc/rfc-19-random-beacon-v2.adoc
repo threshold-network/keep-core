@@ -13,7 +13,7 @@
 
 The last release of the random beacon got its genesis Sep 16th 2020 and worked
 until November 11th when it was stopped with a panic button as a result of an
-unannounced https://github.com/keep-network/keep-core/blob/main/docs/status-reports/2020-11-11-retro-geth-hardfork.adoc[Ethereum
+unannounced https://github.com/threshold-network/keep-core-v1/blob/main/docs/status-reports/2020-11-11-retro-geth-hardfork.adoc[Ethereum
 hard fork].
 
 For the time it was working, the beacon produced more than 1700 relay entries
