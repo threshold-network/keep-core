@@ -1,6 +1,7 @@
 package tbtcpg
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/big"
@@ -239,7 +240,10 @@ func findDeposits(
 			continue
 		}
 
-		confirmations, err := btcChain.GetTransactionConfirmations(event.FundingTxHash)
+		confirmations, err := btcChain.GetTransactionConfirmations(
+			context.Background(),
+			event.FundingTxHash,
+		)
 		if err != nil {
 			fnLogger.Errorf(
 				"failed to get bitcoin transaction confirmations: [%v]",

@@ -59,7 +59,7 @@ func (f *fakeBitcoinChain) GetBlockHeader(blockHeight uint) (*bitcoin.BlockHeade
 func (f *fakeBitcoinChain) GetTransaction(transactionHash bitcoin.Hash) (*bitcoin.Transaction, error) {
 	panic("not needed in rpc_health tests")
 }
-func (f *fakeBitcoinChain) GetTransactionConfirmations(transactionHash bitcoin.Hash) (uint, error) {
+func (f *fakeBitcoinChain) GetTransactionConfirmations(_ context.Context, transactionHash bitcoin.Hash) (uint, error) {
 	panic("not needed in rpc_health tests")
 }
 func (f *fakeBitcoinChain) BroadcastTransaction(transaction *bitcoin.Transaction) error {

@@ -40,6 +40,12 @@ func (n *node) runCoordinationLayer(
 	ctx context.Context,
 	settings ...*coordinationLayerSettings,
 ) error {
+	// Start the background monitor that alerts on stuck (long-unconfirmed)
+	// wallet transactions.
+	if n.transactionMonitor != nil {
+		go n.transactionMonitor.run(ctx)
+	}
+
 	// Resolve settings for the coordination layer.
 	var cls *coordinationLayerSettings
 	switch len(settings) {

@@ -1,6 +1,7 @@
 package tbtc
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
@@ -105,6 +106,7 @@ func newDepositSweepAction(
 	proposalProcessingStartBlock uint64,
 	proposalExpiryBlock uint64,
 	waitForBlockFn waitForBlockFn,
+	transactionMonitor *transactionMonitor,
 ) *depositSweepAction {
 	transactionExecutor := newWalletTransactionExecutor(
 		btcChain,
@@ -112,6 +114,8 @@ func newDepositSweepAction(
 		signingExecutor,
 		waitForBlockFn,
 	)
+
+	transactionExecutor.setTransactionMonitor(transactionMonitor)
 
 	return &depositSweepAction{
 		logger:                           logger,
@@ -340,6 +344,7 @@ func ValidateDepositSweepProposal(
 		)
 
 		confirmations, err := btcChain.GetTransactionConfirmations(
+			context.Background(),
 			depositKey.FundingTxHash,
 		)
 		if err != nil {

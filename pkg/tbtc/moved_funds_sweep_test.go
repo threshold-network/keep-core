@@ -112,6 +112,7 @@ func TestMovedFundsSweepAction_Execute(t *testing.T) {
 				func(ctx context.Context, blockHeight uint64) error {
 					return nil
 				},
+				nil,
 			)
 
 			// Modify the default parameters of the action to make

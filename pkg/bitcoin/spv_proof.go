@@ -2,6 +2,7 @@ package bitcoin
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -39,6 +40,7 @@ func AssembleSpvProof(
 	btcChain Chain,
 ) (*Transaction, *SpvProof, error) {
 	confirmations, err := btcChain.GetTransactionConfirmations(
+		context.Background(),
 		transactionHash,
 	)
 	if err != nil {

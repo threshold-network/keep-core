@@ -337,6 +337,7 @@ func getProofInfo(
 	}
 
 	accumulatedConfirmations, err := btcChain.GetTransactionConfirmations(
+		context.Background(),
 		transactionHash,
 	)
 	if err != nil {

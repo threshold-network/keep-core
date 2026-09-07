@@ -137,6 +137,7 @@ func newRedemptionAction(
 	proposalProcessingStartBlock uint64,
 	proposalExpiryBlock uint64,
 	waitForBlockFn waitForBlockFn,
+	transactionMonitor *transactionMonitor,
 ) *redemptionAction {
 	transactionExecutor := newWalletTransactionExecutor(
 		btcChain,
@@ -146,6 +147,8 @@ func newRedemptionAction(
 	)
 
 	feeDistribution := withRedemptionTotalFee(proposal.RedemptionTxFee.Int64())
+
+	transactionExecutor.setTransactionMonitor(transactionMonitor)
 
 	return &redemptionAction{
 		logger:                           logger,

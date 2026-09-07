@@ -230,7 +230,7 @@ func TestGetTransactionConfirmations_Integration(t *testing.T) {
 				}
 				expectedConfirmations := latestBlockHeight - tx.BlockHeight
 
-				result, err := electrum.GetTransactionConfirmations(tx.TxHash)
+				result, err := electrum.GetTransactionConfirmations(context.Background(), tx.TxHash)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -252,7 +252,7 @@ func TestGetTransactionConfirmations_Negative_Integration(t *testing.T) {
 		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
 		defer cancelCtx()
 
-		_, err := electrum.GetTransactionConfirmations(invalidTxID)
+		_, err := electrum.GetTransactionConfirmations(context.Background(), invalidTxID)
 		if shouldSkipElectrumIntegrationError(err) {
 			t.Skipf("skipping due to transient electrum error: %v", err)
 		}

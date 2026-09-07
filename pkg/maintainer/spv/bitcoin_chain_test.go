@@ -2,6 +2,7 @@ package spv
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math/big"
 	"sync"
@@ -72,7 +73,7 @@ func (lbc *localBitcoinChain) GetTransaction(transactionHash bitcoin.Hash) (
 	return nil, fmt.Errorf("transaction not found")
 }
 
-func (lbc *localBitcoinChain) GetTransactionConfirmations(transactionHash bitcoin.Hash) (
+func (lbc *localBitcoinChain) GetTransactionConfirmations(_ context.Context, transactionHash bitcoin.Hash) (
 	uint,
 	error,
 ) {

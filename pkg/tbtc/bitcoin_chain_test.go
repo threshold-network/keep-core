@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 
@@ -39,6 +40,7 @@ func (lbc *localBitcoinChain) GetTransaction(
 }
 
 func (lbc *localBitcoinChain) GetTransactionConfirmations(
+	_ context.Context,
 	transactionHash bitcoin.Hash,
 ) (uint, error) {
 	for index, transaction := range lbc.transactions {

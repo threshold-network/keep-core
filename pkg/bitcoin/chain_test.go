@@ -1,6 +1,7 @@
 package bitcoin
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -101,6 +102,7 @@ func (lc *localChain) GetTransactionMerkleProof(
 }
 
 func (lc *localChain) GetTransactionConfirmations(
+	_ context.Context,
 	transactionHash Hash,
 ) (uint, error) {
 	lc.transactionConfirmationsMutex.Lock()
