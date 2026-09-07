@@ -134,6 +134,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricRedemptionExecutionsTotal,
 		MetricRedemptionExecutionsSuccessTotal,
 		MetricRedemptionExecutionsFailedTotal,
+		MetricRedemptionProposalGenerationTotal,
+		MetricRedemptionProposalGenerationFailedTotal,
+		MetricRedemptionProposalGenerationSuccessTotal,
+		MetricRedemptionProposalBroadcastTotal,
+		MetricRedemptionProposalBroadcastFailedTotal,
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
@@ -544,6 +549,14 @@ const (
 	MetricRedemptionExecutionsSuccessTotal = "redemption_executions_success_total"
 	MetricRedemptionExecutionsFailedTotal  = "redemption_executions_failed_total"
 	MetricRedemptionActionDurationSeconds  = "redemption_action_duration_seconds"
+
+	// Redemption proposal counters distinguish task generation from P2P broadcast.
+	// Recorded only when the node is acting as coordination leader for the wallet/window.
+	MetricRedemptionProposalGenerationTotal        = "redemption_proposal_generation_total"
+	MetricRedemptionProposalGenerationFailedTotal  = "redemption_proposal_generation_failed_total"
+	MetricRedemptionProposalGenerationSuccessTotal = "redemption_proposal_generation_success_total"
+	MetricRedemptionProposalBroadcastTotal         = "redemption_proposal_broadcast_total"
+	MetricRedemptionProposalBroadcastFailedTotal   = "redemption_proposal_broadcast_failed_total"
 
 	// Redemption Proof Submission Metrics (SPV maintainer)
 	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"
