@@ -53,8 +53,6 @@ spec:
             - keep-client
             - maintainer
           args:
-            - --clientInfo.port
-            - "9601"
             - --$(NETWORK)
             - --ethereum.url
             - $(ETH_WS_URL)

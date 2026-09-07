@@ -11,8 +11,10 @@ complement the tBTC event monitor's redemption request and timeout notifications
    maintainer overlay's image tag to that release. The production overlay still
    pins `v2.1.0`; this configuration change does not publish or select a new image.
 2. Render the applicable overlay, review it, and apply it through the usual
-   deployment process. The template enables `--clientInfo.port 9601` and exposes
-   `/metrics` through the internal `keep-maintainer-metrics` ClusterIP service.
+   deployment process. The upgraded client defaults to client-info port 9601;
+   the template exposes `/metrics` through the internal `keep-maintainer-metrics`
+   ClusterIP service. No new CLI flag is passed, preserving compatibility with
+   older images until the image rollout. Metrics require the upgraded image.
    Production rendering requires the existing local `.secret` files. The template
    alone can be rendered without credentials:
    `kubectl kustomize infrastructure/kube/templates/keep-maintainer`.
@@ -73,4 +75,5 @@ promtool test rules rules.test.yml
 Tests cover healthy operation, unavailable/missing telemetry, RPC failures and
 hung probes, configured long backoffs, first-scrape task failures and recovery,
 and both difficulty skip reasons. Remove the scrape job and rule file to roll
-back monitoring; remove the Service and port flag if disabling the endpoint.
+back monitoring. On the upgraded client, use `--clientInfo.port=0` to disable the
+endpoint, and remove the metrics Service and container port declaration.
