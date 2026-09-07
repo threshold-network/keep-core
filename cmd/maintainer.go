@@ -77,7 +77,7 @@ func maintainers(cmd *cobra.Command, args []string) error {
 		)
 	}
 
-	metricsRecorder := initializeMaintainerMetrics(ctx, blockCounter, btcChain)
+	metricsRecorder := initializeMaintainerMetrics(ctx, blockCounter, tbtcChain, btcChain)
 
 	maintainer.Initialize(
 		ctx,
@@ -99,6 +99,7 @@ func maintainers(cmd *cobra.Command, args []string) error {
 func initializeMaintainerMetrics(
 	ctx context.Context,
 	blockCounter chain.BlockCounter,
+	ethRPC clientinfo.EthereumRPC,
 	btcChain bitcoin.Chain,
 ) spv.MetricsRecorder {
 	registry, isConfigured := clientinfo.Initialize(
@@ -121,7 +122,7 @@ func initializeMaintainerMetrics(
 	registry.ObserveBtcConnectivity(btcChain, clientConfig.ClientInfo.BitcoinMetricsTick)
 	registry.RegisterBtcChainInfoSource(btcChain)
 	healthChecker := clientinfo.NewRPCHealthChecker(
-		registry, blockCounter, btcChain, clientConfig.ClientInfo.RPCHealthCheckInterval,
+		registry, ethRPC, btcChain, clientConfig.ClientInfo.RPCHealthCheckInterval,
 	)
 	// An unavailable RPC must not delay starting the maintainer's control loop.
 	go healthChecker.Start(ctx)

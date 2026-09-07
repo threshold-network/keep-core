@@ -21,7 +21,7 @@ func TestInitializeMaintainerMetricsDisabledWhenPortUnset(t *testing.T) {
 
 	// The block counter is only touched on the configured (enabled) path, so a
 	// nil value is safe for the disabled path under test.
-	recorder := initializeMaintainerMetrics(context.Background(), nil, nil)
+	recorder := initializeMaintainerMetrics(context.Background(), nil, nil, nil)
 
 	if recorder != nil {
 		t.Errorf(

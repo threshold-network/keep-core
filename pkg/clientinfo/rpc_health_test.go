@@ -18,25 +18,13 @@ import (
 
 // --- fakes ---
 
-type fakeBlockCounter struct {
+type fakeEthereumRPC struct {
 	currentBlock uint64
 	err          error
 }
 
-func (f *fakeBlockCounter) CurrentBlock() (uint64, error) {
+func (f *fakeEthereumRPC) LatestBlockNumber(context.Context) (uint64, error) {
 	return f.currentBlock, f.err
-}
-
-func (f *fakeBlockCounter) WaitForBlockHeight(blockNumber uint64) error { return nil }
-func (f *fakeBlockCounter) BlockHeightWaiter(blockNumber uint64) (<-chan uint64, error) {
-	ch := make(chan uint64)
-	close(ch)
-	return ch, nil
-}
-func (f *fakeBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
-	ch := make(chan uint64)
-	go func() { <-ctx.Done(); close(ch) }()
-	return ch
 }
 
 type fakeBitcoinChain struct {
@@ -92,18 +80,18 @@ func (f *fakeBitcoinChain) GetCoinbaseTxHash(blockHeight uint) (bitcoin.Hash, er
 
 // --- helpers ---
 
-func newTestChecker(eth *fakeBlockCounter, btc *fakeBitcoinChain) *RPCHealthChecker {
+func newTestChecker(eth *fakeEthereumRPC, btc *fakeBitcoinChain) *RPCHealthChecker {
 	return &RPCHealthChecker{
-		ethBlockCounter: eth,
-		btcChain:        btc,
-		checkInterval:   time.Minute, // not used in direct call tests
+		ethRPC:        eth,
+		btcChain:      btc,
+		checkInterval: time.Minute, // not used in direct call tests
 	}
 }
 
 // --- Ethereum health tests ---
 
 func TestRPCHealthChecker_EthereumHealthy(t *testing.T) {
-	checker := newTestChecker(&fakeBlockCounter{currentBlock: 12345678}, nil)
+	checker := newTestChecker(&fakeEthereumRPC{currentBlock: 12345678}, nil)
 
 	checker.checkEthereumHealth(context.Background())
 
@@ -125,7 +113,7 @@ func TestRPCHealthChecker_EthereumHealthy(t *testing.T) {
 
 func TestRPCHealthChecker_EthereumUnhealthy_RPCError(t *testing.T) {
 	rpcErr := fmt.Errorf("connection refused")
-	checker := newTestChecker(&fakeBlockCounter{err: rpcErr}, nil)
+	checker := newTestChecker(&fakeEthereumRPC{err: rpcErr}, nil)
 
 	checker.checkEthereumHealth(context.Background())
 
@@ -143,7 +131,7 @@ func TestRPCHealthChecker_EthereumUnhealthy_RPCError(t *testing.T) {
 }
 
 func TestRPCHealthChecker_EthereumUnhealthy_ZeroBlock(t *testing.T) {
-	checker := newTestChecker(&fakeBlockCounter{currentBlock: 0}, nil)
+	checker := newTestChecker(&fakeEthereumRPC{currentBlock: 0}, nil)
 
 	checker.checkEthereumHealth(context.Background())
 
@@ -157,28 +145,28 @@ func TestRPCHealthChecker_EthereumUnhealthy_ZeroBlock(t *testing.T) {
 	}
 }
 
-func TestRPCHealthChecker_EthereumNilBlockCounter(t *testing.T) {
-	// Use a nil interface directly -- not a nil *fakeBlockCounter, which would
+func TestRPCHealthChecker_EthereumNilRPC(t *testing.T) {
+	// Use a nil interface directly -- not a nil *fakeEthereumRPC, which would
 	// create a non-nil interface wrapping a nil pointer and bypass the guard.
 	checker := &RPCHealthChecker{
-		ethBlockCounter: nil, // true nil interface
-		checkInterval:   time.Minute,
+		ethRPC:        nil, // true nil interface
+		checkInterval: time.Minute,
 	}
 
-	// Should not panic when ethBlockCounter is nil.
+	// Should not panic when ethRPC is nil.
 	checker.checkEthereumHealth(context.Background())
 
 	healthy, lastCheck, _, _, _ := checker.GetEthereumHealthStatus()
 	if healthy {
-		t.Error("expected not healthy with nil block counter")
+		t.Error("expected not healthy with nil Ethereum RPC")
 	}
 	if !lastCheck.IsZero() {
-		t.Error("lastCheck should not be set when block counter is nil")
+		t.Error("lastCheck should not be set when Ethereum RPC is nil")
 	}
 }
 
 func TestRPCHealthChecker_EthereumHealthTransition(t *testing.T) {
-	eth := &fakeBlockCounter{currentBlock: 100}
+	eth := &fakeEthereumRPC{currentBlock: 100}
 	checker := newTestChecker(eth, nil)
 
 	// First check: healthy.
@@ -532,7 +520,7 @@ func TestRPCHealthChecker_StartIdempotent(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	eth := &fakeBlockCounter{currentBlock: 12345}
+	eth := &fakeEthereumRPC{currentBlock: 12345}
 	btc := &fakeBitcoinChain{latestHeight: 800000}
 	checker := NewRPCHealthChecker(registry, eth, btc, time.Hour)
 

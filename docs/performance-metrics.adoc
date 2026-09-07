@@ -322,6 +322,13 @@ the SPV loop. Initial RPC probes run asynchronously so an unavailable endpoint
 does not prevent the maintainer from starting. Set `clientInfo.port=0` to disable
 the endpoint and metric recording.
 
+Ethereum health probes fetch the latest header through the chain's RPC client
+on every check. They do not use the subscription-backed block counter, which
+can retain a height after disconnecting. Probes pass cancellation and a
+30-second deadline to the RPC; queuing in the client's rate limiter can delay
+completion. The last-check timestamp advances only after the probe returns.
+A successful response confirms connectivity, not synchronization with chain tip.
+
 All names below have the `performance_` prefix on `/metrics`:
 
 [%header,cols="1,2"]
