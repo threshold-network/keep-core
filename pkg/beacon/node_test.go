@@ -5,10 +5,74 @@ import (
 	"math/big"
 	"testing"
 
+	"go.uber.org/zap"
+
+	beaconchain "github.com/keep-network/keep-core/pkg/beacon/chain"
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
+	"github.com/keep-network/keep-core/pkg/generator"
+	"github.com/keep-network/keep-core/pkg/net"
+	"github.com/keep-network/keep-core/pkg/operator"
 )
 
 var relayEntryTimeout = uint64(15)
+
+// filterErrorChannel is a broadcast channel whose SetFilter result is
+// controllable, used to exercise the membership-filter abort path.
+type filterErrorChannel struct {
+	net.BroadcastChannel
+	setFilterErr error
+}
+
+func (c *filterErrorChannel) SetFilter(net.BroadcastChannelFilter) error {
+	return c.setFilterErr
+}
+
+func (c *filterErrorChannel) Name() string {
+	return "test-channel"
+}
+
+// TestSetBroadcastChannelFilter verifies that the membership filter is required
+// before a node proceeds on a group channel: when the filter cannot be set the
+// helper surfaces the error so the caller aborts, rather than proceeding on an
+// unfiltered channel that would accept messages from operators outside the
+// group.
+func TestSetBroadcastChannelFilter(t *testing.T) {
+	filter := func(*operator.PublicKey) bool { return true }
+
+	tests := map[string]struct {
+		setFilterErr error
+		expectError  bool
+	}{
+		"filter set successfully": {
+			setFilterErr: nil,
+			expectError:  false,
+		},
+		"filter cannot be set": {
+			setFilterErr: fmt.Errorf("cannot set filter"),
+			expectError:  true,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			channel := &filterErrorChannel{setFilterErr: test.setFilterErr}
+
+			err := setBroadcastChannelFilter(
+				zap.NewNop().Sugar(),
+				channel,
+				filter,
+			)
+
+			if test.expectError && err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !test.expectError && err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+		})
+	}
+}
 
 func TestMonitorRelayEntryOnChain_EntrySubmitted(t *testing.T) {
 	localChain := local_v1.Connect(5, 3)
@@ -108,4 +172,69 @@ func TestMonitorRelayEntryOnChain_EntryNotSubmitted(t *testing.T) {
 			timeoutsReport[0],
 		)
 	}
+}
+
+// selectGroupChain wraps a beaconchain.Interface and overrides SelectGroup,
+// which the embedded implementation does not support, so that a
+// deterministic set of selected operators can be returned for
+// JoinDKGIfEligible tests.
+type selectGroupChain struct {
+	beaconchain.Interface
+	selectedOperators chain.Addresses
+}
+
+func (c *selectGroupChain) SelectGroup(seed *big.Int) (chain.Addresses, error) {
+	return c.selectedOperators, nil
+}
+
+// fakeNetProvider is a net.Provider that always returns the given channel
+// from BroadcastChannelFor, regardless of the requested channel name.
+type fakeNetProvider struct {
+	net.Provider
+	channel net.BroadcastChannel
+}
+
+func (p *fakeNetProvider) BroadcastChannelFor(
+	name string,
+) (net.BroadcastChannel, error) {
+	return p.channel, nil
+}
+
+// TestJoinDKGIfEligible_AbortsWhenFilterCannotBeSet verifies that, for an
+// otherwise-eligible operator, a SetFilter failure on the broadcast channel
+// causes JoinDKGIfEligible to return before spawning any DKG protocol
+// goroutine. The fake broadcast channel embeds a nil net.BroadcastChannel, so
+// a goroutine that incorrectly used it to run the DKG protocol would panic;
+// groupRegistry is left nil for the same reason, since RegisterGroup is only
+// reached from within that goroutine.
+func TestJoinDKGIfEligible_AbortsWhenFilterCannotBeSet(t *testing.T) {
+	localChain := local_v1.Connect(5, 3)
+
+	_, operatorPublicKey, err := localChain.OperatorKeyPair()
+	if err != nil {
+		t.Fatalf("failed to get operator key pair: [%v]", err)
+	}
+
+	operatorAddress, err := localChain.Signing().PublicKeyToAddress(operatorPublicKey)
+	if err != nil {
+		t.Fatalf("failed to get operator address: [%v]", err)
+	}
+
+	beaconChain := &selectGroupChain{
+		Interface:         localChain,
+		selectedOperators: chain.Addresses{operatorAddress},
+	}
+
+	testNode := &node{
+		beaconChain: beaconChain,
+		netProvider: &fakeNetProvider{
+			channel: &filterErrorChannel{
+				setFilterErr: fmt.Errorf("cannot set filter"),
+			},
+		},
+		groupRegistry: nil,
+		protocolLatch: generator.NewProtocolLatch(),
+	}
+
+	testNode.JoinDKGIfEligible(big.NewInt(1), 0)
 }

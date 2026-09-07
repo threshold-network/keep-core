@@ -610,3 +610,62 @@ func (ms *mockSubscription) Next(ctx context.Context) (*pubsub.Message, error) {
 }
 
 func (ms *mockSubscription) Cancel() {}
+
+// --- Benchmarks ---
+
+// BenchmarkChannelDeliver_SingleHandler measures deliver() latency with a
+// single registered handler. The handler's buffer fills after messageHandlerThrottle
+// calls; subsequent iterations take the non-blocking default branch. Both paths
+// exercise the same mutex lock and snapshot copy overhead.
+func BenchmarkChannelDeliver_SingleHandler(b *testing.B) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch := &channel{}
+	ch.messageHandlers = []*messageHandler{
+		{ctx: ctx, channel: make(chan net.Message, messageHandlerThrottle)},
+	}
+	msg := &mockNetMessage{}
+	b.ResetTimer()
+	for range b.N {
+		ch.deliver(msg)
+	}
+}
+
+// BenchmarkChannelDeliver_10Handlers measures deliver() fan-out cost across 10
+// concurrent handlers -- representative of a node with multiple active protocol
+// subscriptions on the same channel.
+func BenchmarkChannelDeliver_10Handlers(b *testing.B) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch := &channel{}
+	handlers := make([]*messageHandler, 10)
+	for i := range handlers {
+		handlers[i] = &messageHandler{
+			ctx:     ctx,
+			channel: make(chan net.Message, messageHandlerThrottle),
+		}
+	}
+	ch.messageHandlers = handlers
+	msg := &mockNetMessage{}
+	b.ResetTimer()
+	for range b.N {
+		ch.deliver(msg)
+	}
+}
+
+// BenchmarkProcessPubsubMessage measures the raw throughput of
+// processPubsubMessage with an empty message. proto.Unmarshal succeeds on empty
+// input; the call returns early with "couldn't find unmarshaler", giving a
+// baseline for the per-message overhead before any application logic runs.
+func BenchmarkProcessPubsubMessage(b *testing.B) {
+	ch := &channel{
+		unmarshalersByType: make(map[string]func() net.TaggedUnmarshaler),
+	}
+	msg := &pubsub.Message{Message: &pubsubpb.Message{}}
+	b.ResetTimer()
+	for range b.N {
+		_ = ch.processPubsubMessage(msg)
+	}
+}

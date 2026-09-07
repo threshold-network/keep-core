@@ -2,7 +2,9 @@ package clientinfo
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -284,6 +286,10 @@ func TestHistogramBucketPlacement(t *testing.T) {
 		{1000 * time.Second, 0, false},        // > 600s (overflow)
 	}
 
+	pm.histogramsMutex.Lock()
+	pm.histograms[metricName] = &histogram{buckets: make(map[float64]float64)}
+	pm.histogramsMutex.Unlock()
+
 	for _, tc := range testCases {
 		pm.RecordDuration(metricName, tc.duration)
 	}
@@ -338,7 +344,6 @@ func TestMetricsInitialization(t *testing.T) {
 
 	// Test gauges
 	gauges := []string{
-		MetricCPUUtilization,
 		MetricMemoryUsageMB,
 		MetricGoroutineCount,
 		MetricCPULoadPercent,
@@ -396,6 +401,29 @@ func TestNetworkJoinFailureMetricName(t *testing.T) {
 	}
 }
 
+// assertCounterExportedInRegistry verifies that counterName is actually
+// exposed through the metrics registry (not just tracked in pm's internal
+// counters map) by attempting to register the same gauge name again: a
+// registration that was silently skipped (e.g. because
+// ObserveApplicationSource was never called, or was called with the wrong
+// metric name) would succeed here instead of failing with "already exists".
+func assertCounterExportedInRegistry(
+	t *testing.T,
+	registry *Registry,
+	counterName string,
+) {
+	t.Helper()
+
+	metricName := fmt.Sprintf("performance_%s", counterName)
+	if _, err := registry.NewMetricGauge(metricName); err == nil ||
+		!strings.Contains(err.Error(), "already exists") {
+		t.Errorf(
+			"counter %s should be exported in the metrics registry as %s",
+			counterName, metricName,
+		)
+	}
+}
+
 // TestJoinFailureAndOnChainCountersRegistered tests that the per-reason join
 // failure counters and the firewall on-chain checks counter are registered
 // upfront so they appear in the metrics endpoint before any increment.
@@ -419,6 +447,87 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 			t.Errorf("counter %s should be registered upfront", counterName)
 			continue
 		}
+
+		assertCounterExportedInRegistry(t, registry, counterName)
+
+		if value := pm.GetCounterValue(counterName); value != 0 {
+			t.Errorf("counter %s should start at 0, got %v", counterName, value)
+		}
+
+		pm.IncrementCounter(counterName, 1)
+		if value := pm.GetCounterValue(counterName); value != 1 {
+			t.Errorf("counter %s should increment to 1, got %v", counterName, value)
+		}
+	}
+}
+
+// TestDepositSweepProofSubmissionCountersRegistered tests that the
+// deposit-sweep proof-submission counters are registered upfront so they
+// appear in the metrics endpoint before any increment.
+func TestDepositSweepProofSubmissionCountersRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry)
+
+	expectedCounters := []string{
+		MetricDepositSweepProofSubmissionsTotal,
+		MetricDepositSweepProofSubmissionsSuccessTotal,
+		MetricDepositSweepProofSubmissionsFailedTotal,
+	}
+
+	for _, counterName := range expectedCounters {
+		pm.countersMutex.RLock()
+		_, exists := pm.counters[counterName]
+		pm.countersMutex.RUnlock()
+		if !exists {
+			t.Errorf("counter %s should be registered upfront", counterName)
+			continue
+		}
+
+		assertCounterExportedInRegistry(t, registry, counterName)
+
+		if value := pm.GetCounterValue(counterName); value != 0 {
+			t.Errorf("counter %s should start at 0, got %v", counterName, value)
+		}
+
+		pm.IncrementCounter(counterName, 1)
+		if value := pm.GetCounterValue(counterName); value != 1 {
+			t.Errorf("counter %s should increment to 1, got %v", counterName, value)
+		}
+	}
+}
+
+// TestSpvProofSkipCountersRegistered tests that the SPV proof-skip counters
+// are registered upfront so they appear in the metrics endpoint before any
+// increment. The spv.go maintainer emits IncrementCounter calls for these
+// counters from the relay-range and exceeded-max-headers skip branches; a
+// missing upfront registration would cause the values to be silently dropped
+// from /metrics because the lazy-create-without-register path in
+// IncrementCounter never calls ObserveApplicationSource.
+func TestSpvProofSkipCountersRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry)
+
+	expectedCounters := []string{
+		MetricSpvProofSkippedOutsideRelayRangeTotal,
+		MetricSpvProofSkippedExceededMaxHeadersTotal,
+	}
+
+	for _, counterName := range expectedCounters {
+		pm.countersMutex.RLock()
+		_, exists := pm.counters[counterName]
+		pm.countersMutex.RUnlock()
+		if !exists {
+			t.Errorf("counter %s should be registered upfront", counterName)
+			continue
+		}
+
+		assertCounterExportedInRegistry(t, registry, counterName)
 
 		if value := pm.GetCounterValue(counterName); value != 0 {
 			t.Errorf("counter %s should start at 0, got %v", counterName, value)

@@ -295,9 +295,7 @@ func (bdc *BitcoinDifficultyChain) RetargetWithRefund(headers []*bitcoin.BlockHe
 		)
 	}
 
-	// Add 20% to the gas estimate as the transaction tends to fail with the
-	// original gas estimate.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	// Update Bitcoin difficulty via LightRelayMaintainerProxy.
 	tx, err := bdc.lightRelayMaintainerProxy.Retarget(

@@ -344,13 +344,13 @@ func (bc *baseChain) GetBlockNumberByTimestamp(
 		return 0, fmt.Errorf("cannot get current block: [%v]", err)
 	}
 
-	if block.Time() < timestamp {
+	if block.Time < timestamp {
 		return 0, fmt.Errorf("requested timestamp is in the future")
 	}
 
 	// Corner case shortcut.
-	if block.Time() == timestamp {
-		return block.NumberU64(), nil
+	if block.Time == timestamp {
+		return block.Number.Uint64(), nil
 	}
 
 	// The Ethereum average block time (https://etherscan.io/chart/blocktime)
@@ -366,9 +366,9 @@ func (bc *baseChain) GetBlockNumberByTimestamp(
 	// the better one.
 	const averageBlockTime = 13
 
-	for block.Time() > timestamp {
+	for block.Time > timestamp {
 		// timeDiff is always >0 due to the for-loop condition.
-		timeDiff := block.Time() - timestamp
+		timeDiff := block.Time - timestamp
 		// blockDiff is an integer whose value can be:
 		// - >=1 if timeDiff >= averageBlockTime
 		// - ==0 if timeDiff < averageBlockTime
@@ -380,21 +380,21 @@ func (bc *baseChain) GetBlockNumberByTimestamp(
 			break
 		}
 
-		block, err = bc.blockByNumber(block.NumberU64() - blockDiff)
+		block, err = bc.blockByNumber(block.Number.Uint64() - blockDiff)
 		if err != nil {
 			return 0, fmt.Errorf("cannot get block: [%v]", err)
 		}
 	}
 
 	// Once we quit the above for-loop, the following cases are possible:
-	// - Case 1: block.Time() < timestamp
-	// - Case 2: block.Time() > timestamp (difference is < averageBlockTime)
-	// - Case 3: block.Time() == timestamp
+	// - Case 1: block.Time < timestamp
+	// - Case 2: block.Time > timestamp (difference is < averageBlockTime)
+	// - Case 3: block.Time == timestamp
 	//
 	// First, try to reduce Case 1 by walking forward block by block until
 	// we achieve Case 2 or 3.
-	for block.Time() < timestamp {
-		block, err = bc.blockByNumber(block.NumberU64() + 1)
+	for block.Time < timestamp {
+		block, err = bc.blockByNumber(block.Number.Uint64() + 1)
 		if err != nil {
 			return 0, fmt.Errorf("cannot get block: [%v]", err)
 		}
@@ -402,16 +402,16 @@ func (bc *baseChain) GetBlockNumberByTimestamp(
 	// At this point, only Case 2 or 3 are possible. If we have Case 2,
 	// just get the previous block and compare which one lies closer to
 	// the requested timestamp.
-	if block.Time() > timestamp {
-		previousBlock, err := bc.blockByNumber(block.NumberU64() - 1)
+	if block.Time > timestamp {
+		previousBlock, err := bc.blockByNumber(block.Number.Uint64() - 1)
 		if err != nil {
 			return 0, fmt.Errorf("cannot get block: [%v]", err)
 		}
 
-		return closerBlock(timestamp, previousBlock, block).NumberU64(), nil
+		return closerBlock(timestamp, previousBlock, block).Number.Uint64(), nil
 	}
 
-	return block.NumberU64(), nil
+	return block.Number.Uint64(), nil
 }
 
 // GetBlockHashByNumber gets the block hash for the given block number.
@@ -427,8 +427,11 @@ func (bc *baseChain) GetBlockHashByNumber(blockNumber uint64) (
 	return header.Hash(), nil
 }
 
-// currentBlock fetches the current block.
-func (bc *baseChain) currentBlock() (*types.Block, error) {
+// currentBlock fetches the current block header. Times out if the underlying
+// client call takes more than 30 seconds. The returned *types.Header carries
+// only header fields; callers that need transactions, uncles or receipts must
+// fetch the full block separately.
+func (bc *baseChain) currentBlock() (*types.Header, error) {
 	// Use the latest header instead of block counter state. Some modern mainnet
 	// blocks contain transaction types not supported by older block-counting
 	// code paths, while this method only needs the latest block number/time as an
@@ -436,21 +439,16 @@ func (bc *baseChain) currentBlock() (*types.Block, error) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelCtx()
 
-	header, err := bc.client.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return types.NewBlockWithHeader(header), nil
+	return bc.client.HeaderByNumber(ctx, nil)
 }
 
-// blockByNumber returns the block for the given block number. Times out
+// blockByNumber returns the header for the given block number. Times out
 // if the underlying client call takes more than 30 seconds.
-func (bc *baseChain) blockByNumber(number uint64) (*types.Block, error) {
+func (bc *baseChain) blockByNumber(number uint64) (*types.Header, error) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelCtx()
 
-	return bc.client.BlockByNumber(ctx, big.NewInt(int64(number)))
+	return bc.client.HeaderByNumber(ctx, big.NewInt(int64(number)))
 }
 
 // headerByNumber returns the header for the given block number. Times out
@@ -462,10 +460,10 @@ func (bc *baseChain) headerByNumber(number uint64) (*types.Header, error) {
 	return bc.client.HeaderByNumber(ctx, big.NewInt(int64(number)))
 }
 
-// closerBlock check timestamps of blocks b1 and b2 and returns the block
-// whose timestamp lies closer to the requested timestamp. If the distance
-// is same for both blocks, the block with greater block number is returned.
-func closerBlock(timestamp uint64, b1, b2 *types.Block) *types.Block {
+// closerBlock check timestamps of block headers b1 and b2 and returns the one
+// whose timestamp lies closer to the requested timestamp. If the distance is
+// the same for both headers, the one with greater block number is returned.
+func closerBlock(timestamp uint64, b1, b2 *types.Header) *types.Header {
 	abs := func(x int64) int64 {
 		if x < 0 {
 			return -x
@@ -473,12 +471,12 @@ func closerBlock(timestamp uint64, b1, b2 *types.Block) *types.Block {
 		return x
 	}
 
-	b1Diff := abs(int64(b1.Time() - timestamp))
-	b2Diff := abs(int64(b2.Time() - timestamp))
+	b1Diff := abs(int64(b1.Time - timestamp))
+	b2Diff := abs(int64(b2.Time - timestamp))
 
 	// If the differences are same, return the block with greater number.
 	if b1Diff == b2Diff {
-		if b2.NumberU64() > b1.NumberU64() {
+		if b2.Number.Uint64() > b1.Number.Uint64() {
 			return b2
 		}
 		return b1
@@ -530,4 +528,13 @@ func decryptKey(config ethereum.Config) (*keystore.Key, error) {
 		config.Account.KeyFile,
 		config.Account.KeyFilePassword,
 	)
+}
+
+// gasEstimateWithMargin returns the given gas estimate multiplied by a fixed
+// 20% safety margin. The original contract estimates for some transactions
+// (notably reimbursement flows) turned out to be too low and caused the
+// calls to run out of gas before reimbursement completed.
+func gasEstimateWithMargin(gasEstimate uint64) uint64 {
+	const marginMultiplier = 1.2
+	return uint64(float64(gasEstimate) * marginMultiplier)
 }

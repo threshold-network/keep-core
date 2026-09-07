@@ -22,6 +22,7 @@ import (
 	ethereumEcdsa "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen"
 	ethereumTbtc "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen"
 	ethereumThreshold "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen"
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 var cmdFlagsTests = map[string]struct {
@@ -224,6 +225,20 @@ var cmdFlagsTests = map[string]struct {
 		flagValue:             "101",
 		expectedValueFromFlag: 101,
 		defaultValue:          runtime.GOMAXPROCS(0),
+	},
+	"tbtc.walletTxSatPerVByteFloor": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.WalletTxSatPerVByteFloor },
+		flagName:              "--tbtc.walletTxSatPerVByteFloor",
+		flagValue:             "7",
+		expectedValueFromFlag: 7,
+		defaultValue:          tbtc.DefaultWalletTxSatPerVByteFloor,
+	},
+	"tbtc.walletTxFeeBufferPercent": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.WalletTxFeeBufferPercent },
+		flagName:              "--tbtc.walletTxFeeBufferPercent",
+		flagValue:             "30",
+		expectedValueFromFlag: 30,
+		defaultValue:          tbtc.DefaultWalletTxFeeBufferPercent,
 	},
 	"maintainer.bitcoinDifficulty": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Maintainer.BitcoinDifficulty.Enabled },

@@ -186,10 +186,7 @@ func TestCoordinationMessage_MarshalingRoundtrip(t *testing.T) {
 		},
 		"with deposit sweep proposal": {
 			proposal: &DepositSweepProposal{
-				DepositsKeys: []struct {
-					FundingTxHash      bitcoin.Hash
-					FundingOutputIndex uint32
-				}{
+				DepositsKeys: []DepositKey{
 					{
 						FundingTxHash:      parseHash("709b55bd3da0f5a838125bd0ee20c5bfdd7caba173912d4281cae816b79a201b"),
 						FundingOutputIndex: 0,
