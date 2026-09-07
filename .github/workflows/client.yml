@@ -61,7 +61,12 @@ jobs:
           filters: |
             path-filter:
               - './config/_electrum_urls/**'
-              - './pkg/bitcoin/electrum/**'
+              - './config/electrum*.go'
+              - './pkg/bitcoin/**'
+              - './internal/testdata/bitcoin/**'
+              - './go.mod'
+              - './go.sum'
+              - './third_party/**'
   btcec-vendor-byte-identity:
     # Enforces the VENDOR.md byte-identity recipe and runs the
     # vendored upstream test suite. The root module's `go test ./...`
@@ -489,4 +494,18 @@ jobs:
             -e ETHEREUM_MAINNET_RPC_URL \
             --workdir /go/src/github.com/keep-network/keep-core \
             go-build-env \
-            gotestsum -- -timeout 20m -tags=integration ./...
+            sh -ec 'packages=$(go list ./...);
+              packages=$(printf "%s\n" "$packages" | grep -v "/pkg/bitcoin/electrum$");
+              gotestsum -- -timeout 20m -tags=integration $packages'
+
+      # Public Electrum servers can time out independently of this PR. Run
+      # their tests separately so they cannot mask other integration failures.
+      # They remain required for Bitcoin client/config/dependency changes and
+      # for every push, scheduled run, and manual run.
+      - name: Run public Electrum integration tests
+        continue-on-error: ${{ github.event_name == 'pull_request' && needs.electrum-integration-detect-changes.outputs.path-filter == 'false' }}
+        run: |
+          docker run \
+            --workdir /go/src/github.com/keep-network/keep-core \
+            go-build-env \
+            gotestsum -- -timeout 20m -tags=integration ./pkg/bitcoin/electrum
