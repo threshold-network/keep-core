@@ -11,11 +11,15 @@ import (
 // SubmitMovedFundsSweepProof prepares moved funds sweep proof for the given
 // transaction and submits it to the on-chain contract. If the number of
 // required confirmations is `0`, an error is returned.
+// The metricsRecorder parameter is accepted to satisfy transactionProofSubmitter
+// but is currently unused: moved funds sweep proof submissions are not yet
+// instrumented with metrics.
 func SubmitMovedFundsSweepProof(
 	transactionHash bitcoin.Hash,
 	requiredConfirmations uint,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
+	_ MetricsRecorder,
 ) error {
 	return submitMovedFundsSweepProof(
 		transactionHash,

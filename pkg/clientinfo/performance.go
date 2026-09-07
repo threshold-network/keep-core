@@ -123,6 +123,18 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricStuckWalletTransactionsTotal,
 		MetricUnmonitoredWalletTransactionsTotal,
 
+		// ----- SPV proof-skip counters -----
+		MetricRedemptionProofSubmissionsTotal,
+		MetricRedemptionProofSubmissionsSuccessTotal,
+		MetricRedemptionProofSubmissionsFailedTotal,
+		MetricDepositSweepProofSubmissionsTotal,
+		MetricDepositSweepProofSubmissionsSuccessTotal,
+		MetricDepositSweepProofSubmissionsFailedTotal,
+		MetricSpvProofSkippedOutsideRelayRangeTotal,
+		MetricSpvProofSkippedExceededMaxHeadersTotal,
+		MetricSpvProofTaskFailuresTotal,
+		MetricRedemptionProofTaskFailuresTotal,
+
 		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
 		MetricSigningSuccessTotal,
@@ -317,6 +329,11 @@ func (pm *PerformanceMetrics) registerHistogramMetrics() {
 // registerGaugeMetrics registers all gauge metrics with 0 initial values.
 func (pm *PerformanceMetrics) registerGaugeMetrics() {
 	gauges := []string{
+		MetricSpvMaintainerActive,
+		MetricSpvMaintainerLastActivityTimestamp,
+		MetricSpvMaintainerLastSuccessTimestamp,
+		MetricSpvMaintainerLastFailureTimestamp,
+		MetricSpvMaintainerMaxBackoffSeconds,
 		MetricWalletDispatcherActiveActions,
 		MetricIncomingMessageQueueSize,
 		MetricMessageHandlerQueueSize,
@@ -565,6 +582,38 @@ const (
 	MetricRedemptionProposalGenerationSuccessTotal = "redemption_proposal_generation_success_total"
 	MetricRedemptionProposalBroadcastTotal         = "redemption_proposal_broadcast_total"
 	MetricRedemptionProposalBroadcastFailedTotal   = "redemption_proposal_broadcast_failed_total"
+	// Redemption Proof Submission Metrics (SPV maintainer)
+	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"
+	MetricRedemptionProofSubmissionsSuccessTotal = "redemption_proof_submissions_success_total"
+	MetricRedemptionProofSubmissionsFailedTotal  = "redemption_proof_submissions_failed_total"
+
+	// Deposit Sweep Proof Submission Metrics (SPV maintainer)
+	MetricDepositSweepProofSubmissionsTotal        = "deposit_sweep_proof_submissions_total"
+	MetricDepositSweepProofSubmissionsSuccessTotal = "deposit_sweep_proof_submissions_success_total"
+	MetricDepositSweepProofSubmissionsFailedTotal  = "deposit_sweep_proof_submissions_failed_total"
+
+	// SPV Maintainer Health Metrics (proof-task failures and control-loop
+	// lifecycle gauges)
+	// MetricSpvProofTaskFailuresTotal and MetricRedemptionProofTaskFailuresTotal
+	// cover discovery and proof-info errors, not just submission failures.
+	MetricSpvProofTaskFailuresTotal          = "spv_proof_task_failures_total"
+	MetricRedemptionProofTaskFailuresTotal   = "redemption_proof_task_failures_total"
+	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"
+	MetricSpvMaintainerActive                = "spv_maintainer_active"
+	MetricSpvMaintainerLastActivityTimestamp = "spv_maintainer_last_activity_timestamp_seconds"
+	MetricSpvMaintainerLastSuccessTimestamp  = "spv_maintainer_last_success_timestamp_seconds"
+	MetricSpvMaintainerMaxBackoffSeconds     = "spv_maintainer_max_backoff_seconds"
+
+	// SPV Proof Skip Metrics (SPV maintainer)
+	// MetricSpvProofSkippedOutsideRelayRangeTotal counts the number of
+	// transactions whose SPV proofs were skipped because no relay range
+	// contained the transaction.
+	MetricSpvProofSkippedOutsideRelayRangeTotal = "spv_proof_skipped_outside_relay_range_total"
+	// MetricSpvProofSkippedExceededMaxHeadersTotal counts the number of
+	// transactions whose SPV proofs were skipped because the chain header
+	// count exceeded the configured maximum.
+	MetricSpvProofSkippedExceededMaxHeadersTotal = "spv_proof_skipped_exceeded_max_headers_total"
+
 	// Wallet Action Metrics (aggregate)
 	MetricWalletActionsTotal                 = "wallet_actions_total"
 	MetricWalletActionSuccessTotal           = "wallet_action_success_total"

@@ -11,11 +11,15 @@ import (
 // SubmitMovingFundsProof prepares moving funds proof for the given
 // transaction and submits it to the on-chain contract. If the number of
 // required confirmations is `0`, an error is returned.
+// The metricsRecorder parameter is accepted to satisfy transactionProofSubmitter
+// but is currently unused: moving funds proof submissions are not yet
+// instrumented with metrics.
 func SubmitMovingFundsProof(
 	transactionHash bitcoin.Hash,
 	requiredConfirmations uint,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
+	_ MetricsRecorder,
 ) error {
 	return submitMovingFundsProof(
 		transactionHash,

@@ -23,14 +23,16 @@ import (
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/maintainer/btcdiff"
 )
 
 var logger = log.Logger("keep-maintainer-spv")
 
 // proofSkipReason explains why an SPV proof cannot be assembled for a
-// transaction in the current cycle. It lets callers log the specific cause
-// instead of collapsing every skip into one generic message.
+// transaction in the current cycle. It lets callers log and record metrics
+// with the specific cause instead of collapsing every skip into one generic
+// message.
 type proofSkipReason int
 
 const (
@@ -52,18 +54,29 @@ const (
 	proofSkipExceededMaxHeaders
 )
 
+// MetricsRecorder records proof counters and maintainer health gauges. It is
+// satisfied by *clientinfo.PerformanceMetrics. A nil MetricsRecorder is a valid
+// argument that disables metrics recording: callers must treat nil as "metrics
+// off" and guard every invocation against it.
+type MetricsRecorder interface {
+	IncrementCounter(name string, value float64)
+	SetGauge(name string, value float64)
+}
+
 func Initialize(
 	ctx context.Context,
 	config Config,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
 	btcChain bitcoin.Chain,
+	metricsRecorder MetricsRecorder,
 ) {
 	spvMaintainer := &spvMaintainer{
-		config:       config,
-		spvChain:     spvChain,
-		btcDiffChain: btcDiffChain,
-		btcChain:     btcChain,
+		config:          config,
+		spvChain:        spvChain,
+		btcDiffChain:    btcDiffChain,
+		btcChain:        btcChain,
+		metricsRecorder: metricsRecorder,
 	}
 
 	go spvMaintainer.startControlLoop(ctx)
@@ -94,21 +107,33 @@ var proofTypes = map[tbtc.WalletActionType]struct {
 }
 
 type spvMaintainer struct {
-	config       Config
-	spvChain     Chain
-	btcDiffChain btcdiff.Chain
-	btcChain     bitcoin.Chain
+	config          Config
+	spvChain        Chain
+	btcDiffChain    btcdiff.Chain
+	btcChain        bitcoin.Chain
+	metricsRecorder MetricsRecorder
 }
 
 func (sm *spvMaintainer) startControlLoop(ctx context.Context) {
 	logger.Info("starting SPV maintainer")
+	sm.setHealthGauge(clientinfo.MetricSpvMaintainerActive, 1)
+	sm.recordActivity()
+	maxBackoff := sm.config.RestartBackoffTime
+	if sm.config.IdleBackoffTime > maxBackoff {
+		maxBackoff = sm.config.IdleBackoffTime
+	}
+	sm.setHealthGauge(clientinfo.MetricSpvMaintainerMaxBackoffSeconds, maxBackoff.Seconds())
 
 	defer func() {
+		sm.setHealthGauge(clientinfo.MetricSpvMaintainerActive, 0)
 		logger.Info("stopping SPV maintainer")
 	}()
 
 	for {
 		err := sm.maintainSpv(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			logger.Errorf(
 				"error while maintaining SPV: [%v]; restarting maintainer",
@@ -127,9 +152,13 @@ func (sm *spvMaintainer) startControlLoop(ctx context.Context) {
 func (sm *spvMaintainer) maintainSpv(ctx context.Context) error {
 	for {
 		for action, v := range proofTypes {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			logger.Infof("starting [%s] proof task execution...", action)
 
-			if err := sm.proveTransactions(
+			if err := sm.runProofTask(
+				action,
 				v.unprovenTransactionsGetter,
 				v.transactionProofSubmitter,
 			); err != nil {
@@ -142,6 +171,8 @@ func (sm *spvMaintainer) maintainSpv(ctx context.Context) error {
 
 			logger.Infof("[%s] proof task completed", action)
 		}
+
+		sm.setHealthGauge(clientinfo.MetricSpvMaintainerLastSuccessTimestamp, float64(time.Now().Unix()))
 
 		logger.Infof(
 			"proof tasks completed; next run in [%s]",
@@ -175,6 +206,7 @@ type transactionProofSubmitter func(
 	requiredConfirmations uint,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
+	metricsRecorder MetricsRecorder,
 ) error
 
 // proveTransactions gets unproven Bitcoin transactions using the provided
@@ -227,7 +259,12 @@ func (sm *spvMaintainer) proveTransactions(
 					"current difficulty epochs as seen by the relay",
 				transactionHashStr,
 			)
-
+			if recorder := sm.metricsRecorder; recorder != nil {
+				recorder.IncrementCounter(
+					clientinfo.MetricSpvProofSkippedOutsideRelayRangeTotal,
+					1,
+				)
+			}
 			continue
 		case proofSkipExceededMaxHeaders:
 			// No decisive header was found and not enough difficulty
@@ -242,7 +279,12 @@ func (sm *spvMaintainer) proveTransactions(
 				transactionHashStr,
 				sm.config.MaxProofHeaders,
 			)
-
+			if recorder := sm.metricsRecorder; recorder != nil {
+				recorder.IncrementCounter(
+					clientinfo.MetricSpvProofSkippedExceededMaxHeadersTotal,
+					1,
+				)
+			}
 			continue
 		case proofSkipNone:
 			// The proof is within range and assemblable; proceed to the
@@ -275,6 +317,7 @@ func (sm *spvMaintainer) proveTransactions(
 			requiredConfirmations,
 			sm.btcChain,
 			sm.spvChain,
+			sm.metricsRecorder,
 		)
 		if err != nil {
 			return err
