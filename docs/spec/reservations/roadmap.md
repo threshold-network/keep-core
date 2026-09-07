@@ -1052,19 +1052,42 @@ and are recorded as resolved rather than deleted.
 1. Is a rails release with **no reachable in-kind exit** acceptable in front
    of design partners, given the promise rests on an m2 governance action?
    B sharpens this: there is no dissolution either, so a position has **no
-   owner-side exit at any age** in m1 (§6, reversed item 2).
+   owner-side exit at any age** in m1 (§6, reversed item 2). **RESOLVED
+   2026-09-07:** accept as-is, ship under the existing pause-flag +
+   active-position-cap mitigations (`m1-b-implementation.md` §4.1, §5);
+   disclose the no-exit-until-m2 risk explicitly as part of design-partner
+   activation. No new code.
 2. Concrete cap values — `reservationMaxTotalAmount`, and now also
    `maxActiveReservations` (`m1-b-implementation.md` §4.1), which must sit
    below `liveWalletsCount x maxReservationsPerWallet` with margin.
+   **RESOLVED 2026-09-07:** add the on-chain relational check
+   (`activeReservationsCount < maxActiveReservations <=
+   liveWalletsCount x maxReservationsPerWallet`), **enforced at acceptance
+   time** (alongside the existing `activeReservationsCount <
+   maxActiveReservations` check) rather than only at `updateReservationCaps`
+   set-time — `liveWalletsCount` shrinks as wallets terminate, so a
+   set-time-only check goes stale silently with no re-check. Tbtc-v2
+   implementation pending, separate repo/scope.
+   **Flag:** `98_generate_reservation_mainnet_calldata.ts`'s
+   placeholder values (`maxReservationsPerWallet=10`, 1000 BTC total)
+   contradict the decided launch posture (`=1`, tiny total) — a live risk if
+   run unedited before this is caught downstream, independent of this fix.
 3. Should reservation-eligible **wallets be allowlisted** at activation?
    Depositors pick the designated wallet at reveal, so any Live wallet can be
    selected; an allowlist adds surface no current PR has. B raises the stakes:
    every accepted position permanently occupies a wallet slot until that
-   wallet is terminated.
+   wallet is terminated. **RESOLVED 2026-09-07:** add a governance-set
+   allowlist, reusing the existing `isVaultTrusted`/`isSpvMaintainer` shape
+   (mapping + `onlyGovernance` setter + event) for wallets, checked alongside
+   the existing `Live`-state gate. Tbtc-v2 implementation pending, separate
+   repo/scope.
 4. **Does m2 restore re-anchor's `< dissolutionEligibleAt` gate?** New,
    created by the decision. B deletes it to make re-anchor unbounded; when
    dissolution returns, leaving it out means a position can be rotated
    indefinitely past its eligibility date (`m1-b-implementation.md` §6).
+   **REVIEWED 2026-09-07:** left exactly as-is — already correctly tracked
+   as an inherited decision m2 must make once its dissolution design exists;
+   forcing an answer now would be speculative. Revisit at m2 design kickoff.
 5. **Post-m1 commitment, created by the 2026-08-23 step-3 decision: a
    structural bound on re-anchor fee loss as a *fraction* of the claim.**
    Milestone 1 accepts lever 4 of `pr-review-followups.md` item 7, leaving
@@ -1084,7 +1107,22 @@ and are recorded as resolved rather than deleted.
    aggregate in-kind fee debt has no ceiling, no automatic reduction path, and
    only voluntary repayment; reverting on settlement is explicitly off the
    table, so the answer cannot be a `require`. Independent of `vault.md`'s open
-   sweep-safety decision, which never touches the debt.
+   sweep-safety decision, which never touches the debt. **RESOLVED
+   2026-09-07 (corrected twice — see `pr-review-followups.md` item 8 for the
+   full trail):** `sweepFees` does apply reserve balance to the debt before
+   releasing excess to treasury, but `_burnFromReserve` burns from the full
+   balance with no floor at `feeReserveTarget`, and the following
+   `require(balance > feeReserveTarget)` reverts the whole call once debt is
+   large enough to breach it — undoing the repayment too. The mechanism is
+   inert in exactly the high-debt regime this item raises. Final decision:
+   cap debt repayment at the reserve target in `sweepFees` so it degrades to
+   partial repayment instead of reverting. Tbtc-v2 implementation pending,
+   separate repo/scope.
+   Scope note: this caps *repayment*, not *financing* — `financeInKindFee`
+   is unchanged and still burns the reserve to zero unconditionally (how
+   debt arises); if fee income stops, debt never fully clears under the
+   capped rule either. See `pr-review-followups.md` item 8's "Scope note"
+   for the regression-test implications.
 
 ### Settled by the B decision
 

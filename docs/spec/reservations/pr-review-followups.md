@@ -116,6 +116,12 @@ blocks vault rotation indefinitely. This is a genuine accepted-tradeoff/
 policy question, not a code defect — item stays OPEN pending a governance
 decision (e.g., a governance-forced dissolution override), not a fix.
 
+**Decided 2026-09-07 (session decision, via `unblock-gaps`):** accept as-is
+for m1; revisit once m2's dissolution executor exists. A governance-forced
+dissolution override cannot be built before dissolution itself, which is out
+of m1 scope — so no code fix is available before m2 regardless of the
+policy answer. Documented as an accepted m1 liveness tradeoff.
+
 ## 3. No permissionless fallback if the SPV maintainer stalls
 **Severity: High.** In #1088, all four reservation lifecycle proofs
 (Acceptance/Redemption/Reanchor/Dissolution) route through one
@@ -155,6 +161,15 @@ itself is declared-only per `m1-b-implementation.md`), so the live-today risk
 is specifically re-anchor: a stalled SPV maintainer blocks re-anchor proof
 submission with no fallback. Item stays OPEN — a genuine design/policy gap,
 not a code defect to patch here.
+
+**Decided 2026-09-07 (session decision, via `unblock-gaps`):** accept for m1
+plus an operational mitigation — governance sets a multisig/multi-operator
+maintainer set (not a single EOA) for `isSpvMaintainer`, plus
+monitoring/alerting on re-anchor proof-submission latency so a stall is
+caught before it compounds. `isSpvMaintainer` (`BridgeState.sol:302`) is
+pre-existing shared Bridge state, not reservations-specific infrastructure
+that needs building — governance already has the lever to set it.
+Documented as an accepted m1 risk with an operational (not code) mitigation.
 
 ## 4. Live (non-snapshotted) governance parameters applied retroactively
 **Severity: High.** `updateReservationParameters` in #1088 changes
@@ -552,6 +567,47 @@ them as reserve; or add a governance-set alarm threshold that emits rather than
 blocks. Until then, add an observability assertion on the debt to the item 7
 characterization test, so growth is visible in CI rather than discovered later.
 
+**Re-verified 2026-09-07 against live `reservations-upgrade` (tip
+`52bf2822`):** the "no debt-first logic" claim above is stale.
+`ReservationVault.sol` relocated from `bridge/` to `vault/` since the
+`e63b2a48` reference, and `sweepFees` (`:377-396`) now burns down
+`inKindFeeDebtSat` from the reserve before releasing any excess above
+`feeReserveTarget` to the treasury — debt-first ordering already exists,
+gated on governance calling `sweepFees`. `financeInKindFee` still
+accumulates debt unconditionally with no ceiling (unchanged), and nothing
+repays it between sweeps, but the sweep itself is no longer "manual and
+unrelated to the debt."
+
+**Further correction 2026-09-07 (same session):** the debt-first mechanism
+described above is inert once debt is large. `_burnFromReserve` (`:546-561`)
+burns `min(debt, full current balance)` with no floor at `feeReserveTarget`,
+and `sweepFees`'s `require(balance > feeReserveTarget)` (`:391`) runs on the
+*post-burn* balance. A Solidity revert unwinds the whole call, so whenever
+debt is large enough that repaying it would drag balance to or below
+`feeReserveTarget`, `sweepFees` reverts entirely — undoing the repayment
+attempt too. The debt-first mechanism only functions in the low-debt
+regime; it is completely inert in the high-debt regime this item exists to
+address.
+
+**Decided 2026-09-07 (session decision, via `unblock-gaps`, corrected
+twice):** fix `_burnFromReserve`'s call site in `sweepFees` to cap debt
+repayment at the reserve target — repay `min(debt, balance -
+feeReserveTarget)` instead of `min(debt, balance)`. A large debt then
+degrades to slow partial repayment across many sweeps rather than making
+`sweepFees` revert outright; ordinary fee sweeping keeps working regardless
+of debt size. tbtc-v2 implementation pending, separate repo/scope. Add the
+observability assertion from the Action paragraph above regardless.
+
+**Scope note for the implementer:** this caps *repayment* against the
+target, not *financing* — `financeInKindFee` is unchanged and still burns
+the reserve down to zero to cover miner fees unconditionally (that is how
+debt arises in the first place). If fee income stops entirely, debt never
+fully clears under the capped rule either, since repayment is bounded by
+whatever sits above the target. The regression test needs both cases: the
+previously-reverting scenario now succeeding with partial repayment, and
+the no-excess scenario where repayment is correctly a no-op rather than a
+revert.
+
 ## 9. Permissionless re-anchor requests let an outsider dictate migration targets
 **Severity: Low, rising to Medium for any wallet operator whose signing policy
 forbids executing a transaction it did not itself propose. Provenance: step-3
@@ -597,3 +653,25 @@ restricting the permissionless path itself would reverse a deliberate design
 decision asserted by `Bridge.Reservation.test.ts:3473` ("allows a
 permissionless migration re-anchor before dissolution is due"), so that route
 needs the design decision re-litigated first.
+
+**Documented 2026-09-07 (session decision, via `unblock-gaps`) — the
+operational escape:** if a wallet operator receives an unsolicited
+`requestReservationReanchor` naming a target it did not choose, the correct
+response is to **execute it**, not refuse it. The request is a fulfillable
+authorization with no funds at risk (every target must be a registered
+`Live` wallet, and the source-wallet transition itself is protocol-driven,
+not attacker-created) — refusing is what turns this finding from Low into
+Medium, since a refusal-driven stall is what actually blocks the operator's
+own retirement path. Evaluating a bound on re-anchor generations per
+reservation, or a cooldown after a timed-out re-anchor, remains post-m1
+work; restricting the permissionless path itself would reverse the
+deliberate design decision at `Bridge.Reservation.test.ts:3473` and needs
+that decision re-litigated first, independent of this note.
+
+**Caveat:** "execute it" depends on the SPV maintainer actually submitting
+the re-anchor proof — the step item 3 above just accepted as a live stall
+risk with no permissionless fallback. The operational escape is only
+available while the maintainer is responsive; a stalled maintainer
+collapses this finding back to the Medium case even for a fully
+cooperating operator, since the operator can build the transaction but
+cannot submit it themselves.

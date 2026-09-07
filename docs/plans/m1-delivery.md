@@ -55,7 +55,7 @@ working scratchpad.
 | PR | Branch → base | Status | Notes |
 |----|---------------|--------|-------|
 | [#4238](https://github.com/threshold-network/keep-core/pull/4238) `feat/utxo-reservation-wallet-support` → `reservations-epic` | OPEN, `mergeable: CONFLICTING`/`mergeState: DIRTY` | 22 commits, `+3779/-37` across 15 files. Base ref still pinned to the pre-H epic base (`a7ac8989`) — never rebased across 6 merged PRs since. Parallel branch, not part of the H chain. **Reconcile-or-supersede decision is a human call** (blocked, see todo). |
-| [#4282](https://github.com/threshold-network/keep-core/pull/4282) `reservations-epic` → `dev` | OPEN, `mergeable: CONFLICTING`/`mergeState: DIRTY` | Diff now `+34034/-307` across 110 files (full epic payload). Real conflicts against `dev` this time (not just a stale label) — touches `.github/workflows/client.yml`, `cmd/start.go`, `config/config_test.go`, `pkg/chain/ethereum/tbtc.go`, and generated `pkg/chain/ethereum/tbtc/gen/**` files, all likely touched independently on `dev`. `reservations-epic` was 63 ahead / 68 behind `dev` as of last count; needs an explicit merge/rebase decision, not a trivial fast-forward. |
+| [#4282](https://github.com/threshold-network/keep-core/pull/4282) `reservations-epic` → `dev` | OPEN, `mergeable: MERGEABLE`/`mergeState: CLEAN` (re-verified 2026-09-07) | **Corrected 2026-09-07 — this row was stale.** `dev` was merged into `reservations-epic` (confirmed: `dev` is an ancestor of the branch tip), clearing the conflict recorded here on 2026-09-04. Diff now `+34417/-311` across 113 files (full epic payload plus this session's round-2 review-fix commits). 18/18 CI checks SUCCESS/SKIPPED, but those ran against pushed tip `4e2169eb7` — round-2 review-fix commit `d1697f558` (local-only, 1 commit ahead, not yet pushed) has not been through CI, only local `gofmt`/`build`/`vet` + `go test -race` (1088 tests, 27 packages). No merge/rebase decision needed — mergeable as-is. See `agent-docs/gap-inventory.md` for the fix trail. |
 
 **Incidentally on the epic chain, not reservation content (keep-core):** [#4284](https://github.com/threshold-network/keep-core/pull/4284) `fix(net/local): bound release-boundary settle drain in TestReleaseBroadcastChannel` — base `reservations-epic` (not `main`), 1-file/+3-1, **MERGED** 2026-09-03T15:37:48Z (before #4280, does not change current tip). Flaky-test fix that happened to branch off the epic's working tip; unrelated to reservations logic.
 
@@ -224,7 +224,28 @@ working scratchpad.
   2026-08-26 dry-run re-verification (all seven tbtc-v2 branches merge clean at current tips, no
   manual conflicts, 28/28 passing, Bridge bytecode 22,791 B — see item 9 above).
 - **Post-m1: structural bound on re-anchor fee ratio** — `roadmap.md` §7 item 5, committed for post-m1 work.
-- **Should fee revenue pay down `inKindFeeDebtSat` first?** — `roadmap.md` §7 item 6, independent of `vault.md`'s sweep-safety decision, not blocking m1.
+- **Should fee revenue pay down `inKindFeeDebtSat` first?** **RESOLVED
+  2026-09-07 (corrected twice).** First pass wrongly called the existing
+  `sweepFees` mechanism sufficient; precise trace showed it reverts entirely
+  once debt is large enough to breach `feeReserveTarget`, undoing its own
+  repayment attempt. Decided fix: cap debt repayment at the reserve target in
+  `sweepFees` so it degrades to partial repayment instead of reverting.
+  Tbtc-v2 implementation pending (tracked below). See `roadmap.md` §7 item 6
+  / `pr-review-followups.md` item 8 for the full trail.
+- **tbtc-v2 work decided 2026-09-07, not yet implemented** (separate repo,
+  no PR opened yet):
+  1. `sweepFees`/`_burnFromReserve` — cap debt repayment at `feeReserveTarget`
+     instead of burning the full balance (item above).
+  2. `updateReservationCaps` / `requestReservationAcceptance` — add
+     `maxActiveReservations <= liveWalletsCount x maxReservationsPerWallet`,
+     enforced at acceptance time, not just at cap-set time (`roadmap.md` §7
+     item 2).
+  3. Bridge/`ReservationVault` — add a governance-set wallet allowlist
+     (`isReservationEligibleWallet`, mirroring `isVaultTrusted`), checked
+     alongside the existing `Live`-state gate (`roadmap.md` §7 item 3).
+  4. `98_generate_reservation_mainnet_calldata.ts` — placeholder cap values
+     contradict the decided launch posture; needs a comment fix or a
+     hard-fail guard before real use (`roadmap.md` §7 item 2 flag).
 
 ## Key documents (read these before doing anything)
 

@@ -358,6 +358,27 @@ This script deploys `MaintainerProxyV2` (for SPV proof submission). Its closing 
 
 7. **DECISION NEEDED: Is `sweepFees` safe to call in m1?** If initiation is disabled and no fees have accrued, the vault TBTC balance is zero and `sweepFees` will revert on `require(balance > feeReserveTarget)`. This is fine (accounting-path may revert). But if `feeReserveTarget` is set to zero and some residual TBTC exists, `sweepFees` could drain the reserve needed for re-anchor fee financing. Should m1 enforce a non-zero `feeReserveTarget` before enabling re-anchor? The deploy script lists `updateFeeReserveTarget` as a required step (step 3), implying yes.
 
+   **Finding 2026-09-07 (new failure mode, this question stays open):**
+   the real failure mode is an unconditional revert, not a drain.
+   `_burnFromReserve` ignores `feeReserveTarget` entirely when repaying
+   debt — it burns `min(amount, full current balance)` with no floor.
+   `sweepFees`'s debt-first repayment (`:380-388`) calls it with the full
+   `inKindFeeDebtSat`, so the burn attempts past the target regardless of
+   how `feeReserveTarget` is configured. The *following*
+   `require(balance > feeReserveTarget)` (`:391`), checked against the
+   *post-burn* balance, is what stops that attempt from persisting — a
+   revert here unwinds the whole call, repayment included, per normal
+   Solidity semantics. Net effect: the reserve itself is never actually
+   drained (a nonzero target still protects the *outcome*), but once
+   `inKindFeeDebtSat` is large enough to breach it, `sweepFees` becomes
+   unconditionally uncallable — not "may drain the reserve" (the original
+   framing), but "always reverts, blocking ordinary fee sweeping along with
+   debt repayment" until either fresh fee income grows the balance or
+   someone calls `repayInKindFeeDebt` directly. Decided fix
+   (`pr-review-followups.md` item 8, `roadmap.md` §7 item 6): cap debt
+   repayment at `feeReserveTarget` so the burn itself never attempts past
+   it. Not yet implemented.
+
 8. **Not covered by stated rules: Does the m1 rewrite preserve the exact storage layout?** Since the vault is not upgradeable, storage layout matters only if a migration is planned (which requires total quiescence, unreachable in m1). But if m1 is a rewrite ("variant B"), the new contract has a fresh address and fresh storage. The question is whether any m1 caller (Bridge, Bank, governance) stores the vault address and whether re-pointing is blocked by active reservations. It is (see re-point gate). So the m1 rewrite deploys at a new address and cannot be re-pointed until quiescence. This is the fundamental constraint driving the ship-everything-now rule.
 
 9. **Not covered by stated rules: Who is the `renewalGuardian` in m1?** The deploy script says appointing a guardian is optional (step 4). If no guardian is appointed, `renewalGuardian` is `address(0)` and the restrictive setters (`pauseRenewals`, `blockRenewal`) are callable only by the owner. Is that acceptable for m1, or must a guardian be appointed before activation?
