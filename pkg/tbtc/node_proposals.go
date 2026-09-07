@@ -152,6 +152,7 @@ func (n *node) handleDepositSweepProposal(
 		startBlock,
 		expiryBlock,
 		n.waitForBlockHeight,
+		n.transactionMonitor,
 	)
 
 	// Wire metrics recorder if available
@@ -225,6 +226,7 @@ func (n *node) handleRedemptionProposal(
 		startBlock,
 		expiryBlock,
 		n.waitForBlockHeight,
+		n.transactionMonitor,
 	)
 
 	// Wire metrics recorder if available
@@ -298,6 +300,7 @@ func (n *node) handleMovingFundsProposal(
 		startBlock,
 		expiryBlock,
 		n.waitForBlockHeight,
+		n.transactionMonitor,
 	)
 
 	err = n.walletDispatcher.dispatch(action)
@@ -366,6 +369,7 @@ func (n *node) handleMovedFundsSweepProposal(
 		startBlock,
 		expiryBlock,
 		n.waitForBlockHeight,
+		n.transactionMonitor,
 	)
 
 	err = n.walletDispatcher.dispatch(action)

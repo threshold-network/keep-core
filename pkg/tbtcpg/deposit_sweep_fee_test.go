@@ -13,7 +13,7 @@ import (
 // with the given number of deposit inputs, mirroring the sizing that
 // EstimateDepositsSweepFee performs internally: 1 P2WPKH main-UTXO input,
 // depositsCount P2WSH deposit inputs, and 1 P2WPKH output. 126 ==
-// depositScriptByteSize.
+// DepositScriptByteSize.
 func sweepVirtualSize(t *testing.T, depositsCount int) int64 {
 	t.Helper()
 	size, err := bitcoin.NewTransactionSizeEstimator().
@@ -152,6 +152,13 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 					t.Fatalf(
 						"expected error containing [%s]; got [%v]",
 						test.expectErrorContains, err,
+					)
+				}
+				if test.sweepMaxSizeErr != nil &&
+					!errors.Is(err, test.sweepMaxSizeErr) {
+					t.Fatalf(
+						"expected error to wrap [%v]; got [%v]",
+						test.sweepMaxSizeErr, err,
 					)
 				}
 				return

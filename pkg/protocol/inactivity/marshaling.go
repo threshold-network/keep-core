@@ -1,3 +1,4 @@
+// marshaling.go: protobuf (un)marshaling for the public types in this package.
 package inactivity
 
 import (

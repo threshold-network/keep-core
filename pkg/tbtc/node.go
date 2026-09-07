@@ -113,6 +113,10 @@ type node struct {
 
 	// windowMetricsTracker tracks detailed metrics for individual coordination windows
 	windowMetricsTracker *coordinationWindowMetrics
+
+	// transactionMonitor watches broadcast wallet transactions and alerts on
+	// ones that remain unconfirmed long enough to be considered stuck.
+	transactionMonitor *transactionMonitor
 }
 
 func newNode(
@@ -150,6 +154,7 @@ func newNode(
 		inactivityClaimExecutors: make(map[string]*inactivityClaimExecutor),
 		coordinationExecutors:    make(map[string]*coordinationExecutor),
 		proposalGenerator:        proposalGenerator,
+		transactionMonitor:       newTransactionMonitor(btcChain),
 	}
 
 	// Archive any wallets that might have been closed or terminated while the
@@ -199,6 +204,10 @@ func (n *node) setPerformanceMetrics(metrics interface {
 	// Keep metrics for the last 100 windows (approximately 25 hours at 900 blocks per window)
 	if perfMetrics, ok := metrics.(clientinfo.PerformanceMetricsRecorder); ok {
 		n.windowMetricsTracker = newCoordinationWindowMetrics(perfMetrics, 100)
+
+		if n.transactionMonitor != nil {
+			n.transactionMonitor.setMetricsRecorder(perfMetrics)
+		}
 	}
 
 	if n.walletDispatcher != nil {

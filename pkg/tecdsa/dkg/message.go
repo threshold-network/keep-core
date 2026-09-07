@@ -1,7 +1,6 @@
 package dkg
 
 import (
-	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -26,7 +25,7 @@ type message interface {
 type ephemeralPublicKeyMessage struct {
 	senderID group.MemberIndex
 
-	ephemeralPublicKeys map[group.MemberIndex]*ephemeral.PublicKey
+	ephemeralPublicKeys map[group.MemberIndex][]byte
 	sessionID           string
 }
 

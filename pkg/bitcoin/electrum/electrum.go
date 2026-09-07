@@ -83,6 +83,7 @@ func (c *Connection) GetTransaction(
 	txID := transactionHash.Hex(bitcoin.ReversedByteOrder)
 
 	rawTransaction, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(ctx context.Context, client *electrum.Client) (string, error) {
 			// We cannot use `GetTransaction` to get the the transaction details
@@ -130,6 +131,7 @@ func (c *Connection) GetTransaction(
 // transaction with the given transaction hash. If the transaction with the
 // given hash was not found on the chain, this function returns an error.
 func (c *Connection) GetTransactionConfirmations(
+	ctx context.Context,
 	transactionHash bitcoin.Hash,
 ) (uint, error) {
 	txID := transactionHash.Hex(bitcoin.ReversedByteOrder)
@@ -138,7 +140,16 @@ func (c *Connection) GetTransactionConfirmations(
 		zap.String("txID", txID),
 	)
 
+	// Bound the network calls below by both the caller's context and the
+	// connection lifetime context, so a cancelled caller aborts the lookup while
+	// connection shutdown still cancels it as before.
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopOnParentDone := context.AfterFunc(c.parentCtx, cancel)
+	defer stopOnParentDone()
+
 	rawTransaction, err := requestWithRetry(
+		reqCtx,
 		c,
 		func(ctx context.Context, client *electrum.Client) (string, error) {
 			// We cannot use `GetTransaction` to get the transaction details
@@ -208,6 +219,7 @@ txOutLoop:
 		reversedScriptHashString := hex.EncodeToString(reversedScriptHash)
 
 		scriptHashHistory, err := requestWithRetry(
+			reqCtx,
 			c,
 			func(
 				ctx context.Context,
@@ -296,6 +308,7 @@ func (c *Connection) BroadcastTransaction(
 	var response string
 
 	response, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(ctx context.Context, client *electrum.Client) (string, error) {
 			return client.BroadcastTransaction(ctx, rawTx)
@@ -315,6 +328,7 @@ func (c *Connection) BroadcastTransaction(
 // latest block was not determined, this function returns an error.
 func (c *Connection) GetLatestBlockHeight() (uint, error) {
 	blockHeight, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(ctx context.Context, client *electrum.Client) (int32, error) {
 			tip, err := client.SubscribeHeadersSingle(ctx)
@@ -344,6 +358,7 @@ func (c *Connection) GetBlockHeader(
 	blockHeight uint,
 ) (*bitcoin.BlockHeader, error) {
 	getBlockHeaderResult, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(
 			ctx context.Context,
@@ -375,6 +390,7 @@ func (c *Connection) GetTransactionMerkleProof(
 	txID := transactionHash.Hex(bitcoin.ReversedByteOrder)
 
 	getMerkleProofResult, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(
 			ctx context.Context,
@@ -514,6 +530,7 @@ func (c *Connection) getConfirmedScriptHistory(
 	reversedScriptHashString := hex.EncodeToString(reversedScriptHash)
 
 	items, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(
 			ctx context.Context,
@@ -577,6 +594,7 @@ func (c *Connection) getConfirmedScriptHistory(
 // block height.
 func (c *Connection) GetCoinbaseTxHash(blockHeight uint) (bitcoin.Hash, error) {
 	txHashString, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(
 			ctx context.Context,
@@ -683,6 +701,7 @@ func (c *Connection) getScriptMempool(
 	reversedScriptHashString := hex.EncodeToString(reversedScriptHash)
 
 	items, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(
 			ctx context.Context,
@@ -885,6 +904,7 @@ func (c *Connection) getScriptUtxos(
 	reversedScriptHashString := hex.EncodeToString(reversedScriptHash)
 
 	items, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(
 			ctx context.Context,
@@ -1173,6 +1193,7 @@ func (c *Connection) verifyServer() error {
 	}
 
 	server, err := requestWithRetry(
+		c.parentCtx,
 		c,
 		func(ctx context.Context, client *electrum.Client) (*Server, error) {
 			serverVersion, protocolVersion, err := client.ServerVersion(ctx)
@@ -1213,6 +1234,7 @@ func (c *Connection) keepAlive() {
 		select {
 		case <-ticker.C:
 			_, err := requestWithRetry(
+				c.parentCtx,
 				c,
 				func(ctx context.Context, client *electrum.Client) (interface{}, error) {
 					return nil, client.Ping(ctx)
@@ -1265,6 +1287,7 @@ func connectWithRetry(
 }
 
 func requestWithRetry[K any](
+	parentCtx context.Context,
 	c *Connection,
 	requestFn func(ctx context.Context, client *electrum.Client) (K, error),
 	requestName string,
@@ -1275,7 +1298,7 @@ func requestWithRetry[K any](
 	var result K
 
 	err := wrappers.DoWithDefaultRetry(
-		c.parentCtx,
+		parentCtx,
 		c.config.RequestRetryTimeout,
 		func(ctx context.Context) error {
 			if err := c.reconnectIfShutdown(); err != nil {

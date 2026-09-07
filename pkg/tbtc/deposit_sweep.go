@@ -1,6 +1,7 @@
 package tbtc
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
@@ -49,6 +50,11 @@ const (
 	// the transaction is known on the Bitcoin chain. This delay is needed
 	// as spreading the transaction over the Bitcoin network takes time.
 	depositSweepBroadcastCheckDelay = 1 * time.Minute
+	// DepositScriptByteSize mirrors tbtcpg.DepositScriptByteSize, the worst-case
+	// deposit script size used to estimate the sweep transaction virtual size.
+	// Exported for the external tbtc_test package to compare it against the
+	// canonical tbtcpg value (guarded by TestSweepFeeConstantsMirrorTbtcpg).
+	DepositScriptByteSize = 126
 )
 
 // DepositKey identifies a deposit by the outpoint of its funding transaction.
@@ -60,6 +66,20 @@ const (
 // so code outside this module that builds a DepositSweepProposal from the
 // old anonymous struct literal must switch to constructing []DepositKey
 // values instead.
+//
+// Migrating from the old anonymous-struct literal:
+//
+//	// Before:
+//	DepositsKeys: []struct{
+//	    FundingTxHash:      chain.Hash(...),
+//	    FundingOutputIndex: 0,
+//	}{...},
+//
+//	// After:
+//	DepositsKeys: []DepositKey{
+//	    {FundingTxHash: chain.Hash(...), FundingOutputIndex: 0},
+//	    ...
+//	},
 type DepositKey struct {
 	FundingTxHash      bitcoin.Hash
 	FundingOutputIndex uint32
@@ -116,6 +136,7 @@ func newDepositSweepAction(
 	proposalProcessingStartBlock uint64,
 	proposalExpiryBlock uint64,
 	waitForBlockFn waitForBlockFn,
+	transactionMonitor *transactionMonitor,
 ) *depositSweepAction {
 	transactionExecutor := newWalletTransactionExecutor(
 		btcChain,
@@ -123,6 +144,8 @@ func newDepositSweepAction(
 		signingExecutor,
 		waitForBlockFn,
 	)
+
+	transactionExecutor.setTransactionMonitor(transactionMonitor)
 
 	return &depositSweepAction{
 		logger:                           logger,
@@ -351,6 +374,7 @@ func ValidateDepositSweepProposal(
 		)
 
 		confirmations, err := btcChain.GetTransactionConfirmations(
+			context.Background(),
 			depositKey.FundingTxHash,
 		)
 		if err != nil {
@@ -471,6 +495,42 @@ func ValidateDepositSweepProposal(
 	validateProposalLogger.Infof(
 		"deposit sweep proposal is valid",
 	)
+
+	// Follower-side soft check on the proposed fee. The on-chain
+	// WalletProposalValidator only bounds the sweep fee from above, not below,
+	// so a misbehaving or unpatched leader can propose a fee at the ~1 sat/vByte
+	// relay floor that this node would otherwise sign - the same underpricing
+	// that jams the wallet (see threshold-network/keep-core#4171). We recompute
+	// the safe minimum (applying the 25% safety buffer that
+	// tbtcpg.applyWalletTxFeeFloor would also enforce on the leader side) and
+	// warn if the proposal is below it.
+	//
+	// This is intentionally log-only, not a rejection: rejecting a below-floor
+	// proposal here would, during a mixed-version rollout, split signers (patched
+	// nodes reject, unpatched nodes sign) and could stall signing. Hard
+	// enforcement belongs on-chain in the WalletProposalValidator, or behind a
+	// coordinated all-nodes upgrade. The threshold is recomputed in
+	// warnIfProposedWalletTxFeeBelowBufferedFloor (proposal_fee_check.go); keep
+	// the size estimator below in sync with the leader-side estimator in
+	// tbtcpg/deposit_sweep.go.
+	if sweepTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddScriptHashInputs(len(proposal.DepositsKeys), DepositScriptByteSize, true).
+		AddPublicKeyHashOutputs(1, true).
+		VirtualSize(); sizeErr != nil {
+		validateProposalLogger.Warnf(
+			"cannot estimate sweep tx size for the fee sanity check: [%v]",
+			sizeErr,
+		)
+	} else {
+		warnIfProposedWalletTxFeeBelowBufferedFloor(
+			validateProposalLogger,
+			MinWalletTxSatPerVByteFee,
+			sweepTxSize,
+			proposal.SweepTxFee,
+			"deposit sweep",
+		)
+	}
 
 	deposits := make([]*Deposit, len(depositExtraInfo))
 	for i, dei := range depositExtraInfo {

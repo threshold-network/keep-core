@@ -12,7 +12,7 @@ import (
 
 // timestampMockClient is a minimal ethutil.EthereumClient used to exercise the
 // timestamp-based block search. It embeds the interface so it satisfies the
-// full contract while only the two methods used by GetBlockNumberByTimestamp
+// full contract while only the method used by GetBlockNumberByTimestamp
 // are implemented; any other call would panic, which keeps the test honest
 // about what the searched code actually touches.
 type timestampMockClient struct {
@@ -52,17 +52,6 @@ func (m *timestampMockClient) HeaderByNumber(
 		return m.header(m.latest)
 	}
 	return m.header(number.Uint64())
-}
-
-func (m *timestampMockClient) BlockByNumber(
-	_ context.Context,
-	number *big.Int,
-) (*types.Block, error) {
-	header, err := m.header(number.Uint64())
-	if err != nil {
-		return nil, err
-	}
-	return types.NewBlockWithHeader(header), nil
 }
 
 var errBlockOutOfRange = errors.New("block out of range")
@@ -185,16 +174,16 @@ func TestGetBlockNumberByTimestamp_ForwardCompensation(t *testing.T) {
 }
 
 func TestCloserBlock(t *testing.T) {
-	block := func(number, time uint64) *types.Block {
-		return types.NewBlockWithHeader(&types.Header{
+	block := func(number, time uint64) *types.Header {
+		return &types.Header{
 			Number: new(big.Int).SetUint64(number),
 			Time:   time,
-		})
+		}
 	}
 
 	tests := map[string]struct {
 		timestamp      uint64
-		b1, b2         *types.Block
+		b1, b2         *types.Header
 		expectedNumber uint64
 	}{
 		"first block closer": {
@@ -226,11 +215,11 @@ func TestCloserBlock(t *testing.T) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			result := closerBlock(test.timestamp, test.b1, test.b2)
-			if result.NumberU64() != test.expectedNumber {
+			if result.Number.Uint64() != test.expectedNumber {
 				t.Errorf(
 					"unexpected block number\nexpected: [%d]\nactual:   [%d]",
 					test.expectedNumber,
-					result.NumberU64(),
+					result.Number.Uint64(),
 				)
 			}
 		})

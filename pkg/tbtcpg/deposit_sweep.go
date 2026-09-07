@@ -1,6 +1,7 @@
 package tbtcpg
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/big"
@@ -17,9 +18,10 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// Use the worst-case 126-byte deposit script with embedded extra data for estimation.
-// This will ensure that deposit sweep transaction fees are not underestimated.
-const depositScriptByteSize = 126
+// DepositScriptByteSize is the worst-case 126-byte deposit script with embedded
+// extra data used for transaction size estimation. This ensures that deposit
+// sweep transaction fees are not underestimated.
+const DepositScriptByteSize = 126
 
 // DepositSweepLookBackBlocks is the look-back period in blocks used
 // when searching for submitted deposit-related events. It's equal to
@@ -239,7 +241,10 @@ func findDeposits(
 			continue
 		}
 
-		confirmations, err := btcChain.GetTransactionConfirmations(event.FundingTxHash)
+		confirmations, err := btcChain.GetTransactionConfirmations(
+			context.Background(),
+			event.FundingTxHash,
+		)
 		if err != nil {
 			taskLogger.Errorf(
 				"failed to get bitcoin transaction confirmations: [%v]",
@@ -491,7 +496,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 			// the deposits stay unswept. Log it distinctly at WARN so operators
 			// can tell this apart from a benign "no deposits to sweep" outcome;
 			// in particular, a safe-minimum-fee abort (see
-			// minWalletTxSatPerVByteFee) can indicate a misconfigured, too-low
+			// MinWalletTxSatPerVByteFee) can indicate a misconfigured, too-low
 			// per-deposit maximum fee that will strand deposits until governance
 			// raises it.
 			taskLogger.Warnf("cannot estimate sweep transaction fee: [%v]", err)
@@ -555,7 +560,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 //   - 1 P2WPKH output
 //
 // An error is returned if any estimated fee exceeds the maximum fee allowed by
-// the Bridge contract, or if the minimum safe fee (see minWalletTxSatPerVByteFee)
+// the Bridge contract, or if the minimum safe fee (see MinWalletTxSatPerVByteFee)
 // required to avoid a stuck, unbumpable sweep would itself exceed that Bridge
 // maximum.
 func EstimateDepositsSweepFee(
@@ -586,7 +591,7 @@ func EstimateDepositsSweepFee(
 	} else {
 		sweepMaxSize, err := chain.GetDepositSweepMaxSize()
 		if err != nil {
-			return nil, fmt.Errorf("cannot get sweep max size: [%v]", err)
+			return nil, fmt.Errorf("cannot get sweep max size: [%w]", err)
 		}
 
 		for i := 1; i <= int(sweepMaxSize); i++ {
@@ -629,7 +634,7 @@ func estimateDepositsSweepFee(
 		// 1 P2WPKH main UTXO input.
 		AddPublicKeyHashInputs(1, true).
 		// depositsCount P2WSH deposit inputs.
-		AddScriptHashInputs(depositsCount, depositScriptByteSize, true).
+		AddScriptHashInputs(depositsCount, DepositScriptByteSize, true).
 		// 1 P2WPKH output.
 		AddPublicKeyHashOutputs(1, true).
 		VirtualSize()

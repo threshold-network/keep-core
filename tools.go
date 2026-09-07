@@ -1,9 +1,10 @@
 //go:build tools
 
-// tools.go pins build-time-only dependencies that would otherwise be dropped
-// by `go mod tidy`. They are anchored here with blank imports so they remain in
-// go.mod and go.sum for reproducible builds, even though they are not
-// referenced directly by runtime or generated code.
+// tools.go pins dependencies that `go mod tidy` would otherwise drop
+// because they are only referenced under the `tools` build tag (or are
+// no longer referenced at all). They remain in go.mod / go.sum so version
+// resolution stays reproducible for codegen and tooling that does pull
+// them in.
 package tools
 
 import (
