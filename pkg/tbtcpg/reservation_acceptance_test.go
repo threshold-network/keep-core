@@ -140,7 +140,7 @@ func (ralc *reservationAcceptanceLocalChain) GetWallet(
 //
 // The embedded LocalChain.GetReservation errors for a reservation key that
 // was never registered via SetReservation, but the real chain adapter
-// (pkg/chain/ethereum/tbtc.go's GetReservation) reads a Solidity mapping,
+// (pkg/chain/ethereum/tbtc_reservation.go's GetReservation) reads a Solidity mapping,
 // which never errors for an absent key -- it returns the zero-value
 // struct (State == ReservationStateUnknown, RequestNonce == 0). This
 // override normalizes the embedded mock's "not found" error into that

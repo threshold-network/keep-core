@@ -12,6 +12,10 @@ import (
 )
 
 const (
+	// reservationLookBackBlocks bounds how far back the reservation anchor
+	// action's DepositRevealed event lookup scans. 216000 blocks is ~30
+	// days at 12s/block, the same convention used by
+	// MovingFundsCommitmentLookBackBlocks in moving_funds.go.
 	reservationLookBackBlocks = uint64(216000)
 
 	// reservationAnchorProposalValidityBlocks determines the reservation
@@ -218,7 +222,9 @@ type ReservationAnchorProposal struct {
 	// DepositFundingOutputIndex is the funding output index of the reserved
 	// deposit to anchor.
 	DepositFundingOutputIndex uint32
-	// RequestNonce is the acceptance authorization generation being executed.
+	// RequestNonce is the acceptance authorization generation being
+	// executed. Nonces are 1-indexed; zero means no generation has been
+	// requested and is rejected on the unmarshal path as a missing field.
 	RequestNonce uint64
 	// AnchorTxFee is the proposed BTC fee for the anchor transaction.
 	AnchorTxFee *big.Int
@@ -241,7 +247,9 @@ func (rap *ReservationAnchorProposal) ValidityBlocks() uint64 {
 type ReservationReanchorProposal struct {
 	// ReservationKey is the key of the reservation to re-anchor.
 	ReservationKey *big.Int
-	// RequestNonce is the re-anchor authorization generation being executed.
+	// RequestNonce is the re-anchor authorization generation being
+	// executed. Nonces are 1-indexed; zero means no generation has been
+	// requested and is rejected on the unmarshal path as a missing field.
 	RequestNonce uint64
 	// TargetWalletPublicKeyHash is the 20-byte public key hash of the wallet
 	// receiving the anchor.

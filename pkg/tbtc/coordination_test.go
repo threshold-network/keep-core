@@ -307,6 +307,7 @@ type coordinationReport struct {
 // in each caller verifies all three balanced their Lock/Unlock) the same
 // way a real node would have each operator drive its own executor in a
 // separate process. Fails the test if not every operator reports within the
+// 30-second deadline.
 func runCoordinationRound(
 	t *testing.T,
 	operators []*coordinationOperatorFixture,
@@ -522,8 +523,9 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 	)
 }
 
-// TestCoordinationExecutor_Coordinate_ReservationProposals is the M1
-// multi-signer simulated integration test for Milestone 3: it scales
+// TestCoordinationExecutor_Coordinate_ReservationProposals is the
+// multi-signer simulated integration test for the reservation anchor and
+// re-anchor proposals: it scales
 // TestCoordinationExecutor_Coordinate's 3-operator, real-broadcast-channel,
 // real-leader-election harness to the two reservation proposal types,
 // proving the leader/follower coordination round-trip (checklist generation
@@ -761,14 +763,15 @@ func TestCoordinationExecutor_GetLeader(t *testing.T) {
 }
 
 func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
-	// All test cases below exercise the pre-activation code path because
-	// their coordination blocks are below both
-	// DepositSweepEveryWindowActivationBlock and
-	// ReservationsActivationBlock. In this mode, DepositSweep,
+	// All test cases below exercise the pre-activation code path. Reservation
+	// activation is per-network: this test sets ethereumNetwork to Mainnet,
+	// for which reservationsActivationBlock returns math.MaxUint64, so no
+	// real block height activates reservations here. Reservation actions
+	// therefore never appear in any expectedChecklist below; see
+	// TestCoordinationExecutor_GetActionsChecklist_Reservations for the
+	// activation-block gate itself. In this mode DepositSweep,
 	// MovedFundsSweep, and MovingFunds are all gated to every 4th
-	// coordination window, and reservation actions never appear at all
-	// (see TestCoordinationExecutor_GetActionsChecklist_Reservations for
-	// the activation-block gate itself).
+	// coordination window.
 	tests := map[string]struct {
 		coordinationBlock uint64
 		expectedChecklist []WalletActionType

@@ -47,7 +47,6 @@ type PerformanceMetrics struct {
 	// execution itself is not gated on it - see registerAllMetrics.
 	reservationsEnabled bool
 
-	// Counters track cumulative counts of events
 	countersMutex sync.RWMutex
 	counters      map[string]*counter
 
@@ -235,9 +234,10 @@ func (pm *PerformanceMetrics) registerWalletActionMetrics() {
 	// action execution in node_proposals.go is not itself gated on
 	// Tbtc.Reservations.LeaderDutiesEnabled, so an operator running with the flag
 	// disabled can still execute anchor/re-anchor actions post-activation.
-	// Gating registration here would leave those wallet_action_reservation_*
-	// counters created (by IncrementCounter's slow path) but never
-	// exported, silently losing observability.
+	// Gating registration here would leave increments to those
+	// wallet_action_reservation_* counters silently dropped
+	// (IncrementCounter no-ops on an unregistered name), losing
+	// observability without any signal.
 	actionTypes := append(GetAllWalletActionTypes(), GetReservationWalletActionTypes()...)
 
 	for _, actionType := range actionTypes {
@@ -431,11 +431,8 @@ func (pm *PerformanceMetrics) IncrementCounter(name string, value float64) {
 	if !ok {
 		// Counter not pre-registered. Pre-registration is enforced by
 		// registerAllMetrics() and tested by the *_CountersRegistered
-		// tests. The original slow path lazily added the counter to
-		// pm.counters on first increment but never called
-		// ObserveApplicationSource, so the value lived in memory but
-		// never reached /metrics; the current code silently ignores
-		// the increment. Review the registration list if a counter
+		// tests; an unregistered name is silently dropped here rather
+		// than created. Review the registration list if a counter
 		// appears here unexpectedly.
 		return
 	}
@@ -735,9 +732,9 @@ const (
 
 	// Reservation Metrics (m1 reservations feature; only registered when
 	// reservationsEnabled - see NewPerformanceMetrics). These are leading
-	// indicators of the §4.1 saturation cliff: without them, an operator
-	// cannot see reservation capacity approaching its cap before
-	// acceptances silently stop.
+	// indicators of reservation capacity approaching its cap: without
+	// them, an operator cannot see acceptances approaching the cap before
+	// they silently stop.
 	MetricReservationActiveReservationsCount = "active_reservations_count"
 	MetricReservationMaxActiveReservations   = "max_active_reservations"
 	MetricReservationLiveWalletsCount        = "live_wallets_count"

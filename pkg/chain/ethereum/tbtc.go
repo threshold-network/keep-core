@@ -435,7 +435,7 @@ func (tc *TbtcChain) ReservationParameters() (
 // TODO(test-coverage): ValidateReservationAnchorProposal has no direct unit
 // test coverage. It requires go-ethereum simulated-backend infrastructure
 // that does not exist anywhere in pkg/chain/ethereum today; blocked on that
-// infra landing. See PR #4280 and its linked gap-analysis doc.
+// infra landing. See PR #4280.
 // ValidateReservationAnchorProposal asks the WalletProposalValidator
 // whether the given anchor proposal is valid for the given wallet and
 // reserved deposit. The validator is a separate contract reached at its
@@ -478,6 +478,10 @@ func (tc *TbtcChain) ValidateReservationAnchorProposal(
 // ValidateReservationAnchorProposal so the field mapping can be unit
 // tested directly, mirroring the reverse-direction converters below
 // (convertReservationFromAbiType et al.).
+//
+// TODO(test-coverage): like ValidateReservationAnchorProposal above, this
+// has no direct unit test coverage pending go-ethereum simulated-backend
+// infrastructure. See PR #4280.
 func buildReservationAnchorProposalAbi(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationAnchorProposal,
@@ -878,8 +882,8 @@ func (tc *TbtcChain) SubmitReservationProof(
 	// The original estimate for this contract call is too low; the
 	// reservation proof path dispatches into ReservationProofs.submit*Proof,
 	// which performs a non-trivial amount of storage I/O. Apply a 20%
-	// margin mirroring the existing SubmitRedemptionProofWithReimbursement
-	// pattern in this file.
+	// margin, mirroring the existing pattern in
+	// SubmitRedemptionProofWithReimbursement (tbtc_redemption.go).
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
 	_, err = tc.reservationRouter.SubmitReservationProof(
@@ -1191,7 +1195,7 @@ func (tc *TbtcChain) IsReservedDeposit(
 // subscription filters against the Bridge's address (the binding is bound
 // to the Bridge address; delegatecall preserves the caller's address
 // context so events emitted by router code carry the Bridge's address).
-// Precondition: the bridge binding must be set via Connect before this is called.
+// Connect must be called before this method is used.
 func (tc *TbtcChain) OnReservationAcceptanceRequested(
 	handler func(event *tbtc.ReservationAcceptanceRequestedEvent),
 ) subscription.EventSubscription {
@@ -1272,7 +1276,7 @@ func (tc *TbtcChain) PastReservationAcceptanceRequestedEvents(
 
 // OnReservationReanchorRequested registers a callback that is invoked
 // when an on-chain ReservationReanchorRequested event is seen.
-// Precondition: the bridge binding must be set via Connect before this is called.
+// Connect must be called before this method is used.
 func (tc *TbtcChain) OnReservationReanchorRequested(
 	handler func(event *tbtc.ReservationReanchorRequestedEvent),
 ) subscription.EventSubscription {

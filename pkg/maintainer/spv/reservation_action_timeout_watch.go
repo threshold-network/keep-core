@@ -278,8 +278,8 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			now-item.notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds()) {
 			// A timeout notification was attempted recently for this
 			// action generation while it remains Pending; give it time
-			// to land before resubmitting NotifyReservationActionTimeout
-			// on every poll tick. If the prior attempt's transaction was
+			// to land before resubmitting a timeout notification on
+			// every poll tick. If the prior attempt's transaction was
 			// dropped or reverted, the action is still Pending once
 			// actionTimeoutRenotifyInterval elapses and this branch is
 			// skipped, so the next tick retries below.

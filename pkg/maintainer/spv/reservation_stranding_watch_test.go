@@ -156,12 +156,12 @@ func TestReservationStrandingWatcher_MultipleReservations(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// The watcher must notify only for reservations in the Active state
-	// (finding #27's allow-list fix): closed, pending, and stranded
-	// reservations must all be skipped - a stranded reservation has
-	// already been notified once and re-notifying it is redundant, and a
-	// closed reservation was already resolved through in-kind redemption
-	// or another terminal path, not stranding.
+	// The watcher must notify only for reservations in the Active state:
+	// closed, pending, and stranded reservations must all be skipped - a
+	// stranded reservation has already been notified once and
+	// re-notifying it is redundant, and a closed reservation was already
+	// resolved through in-kind redemption or another terminal path, not
+	// stranding.
 	calls := spvChain.getSubmittedReservationStrandedKeys()
 	if len(calls) != 1 {
 		t.Fatalf(

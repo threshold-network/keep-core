@@ -88,10 +88,10 @@ func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testin
 }
 
 // TestReservationActionTimeoutWatcher_NotifiesAcceptanceTimeoutViaDedicatedEntryPoint
-// covers Finding 1: an Acceptance-type pending action must be reported
-// through NotifyReservationAcceptanceTimedOut, the Bridge's dedicated
-// Acceptance entry point, and never through NotifyReservationActionTimeout
-// (which is Reanchor-only and hard-reverts for Acceptance actions).
+// verifies that an Acceptance-type pending action is reported through
+// NotifyReservationAcceptanceTimedOut, the Bridge's dedicated Acceptance
+// entry point, and never through NotifyReservationActionTimeout (which is
+// Reanchor-only and hard-reverts for Acceptance actions).
 func TestReservationActionTimeoutWatcher_NotifiesAcceptanceTimeoutViaDedicatedEntryPoint(t *testing.T) {
 	spvChain := newLocalChain()
 
@@ -133,11 +133,11 @@ func TestReservationActionTimeoutWatcher_NotifiesAcceptanceTimeoutViaDedicatedEn
 	}
 }
 
-// TestReservationActionTimeoutWatcher_SkipsUnrecognizedActionType covers
-// Finding 1's defensive default branch: Redemption and Dissolution are
-// m2+ scope and should never reach a Pending, timed-out state in m1, but
-// an unrecognized ActionType must be logged and skipped rather than
-// causing an ill-formed Bridge call or a panic.
+// TestReservationActionTimeoutWatcher_SkipsUnrecognizedActionType verifies
+// the defensive default branch: Redemption and Dissolution are m2+ scope
+// and should never reach a Pending, timed-out state in m1, but an
+// unrecognized ActionType must be logged and skipped rather than causing
+// an ill-formed Bridge call or a panic.
 func TestReservationActionTimeoutWatcher_SkipsUnrecognizedActionType(t *testing.T) {
 	spvChain := newLocalChain()
 
@@ -319,7 +319,7 @@ func TestReservationActionTimeoutWatcher_SkipsReservationWithoutWallet(t *testin
 }
 
 // TestReservationActionTimeoutWatcher_ReanchorNotifiesUnconditionally
-// covers Finding 3: a Reanchor timeout is the permissionless path for a
+// verifies that a Reanchor timeout is the permissionless path for a
 // wallet the operator no longer locally tracks as open (e.g.
 // Closed/Terminated and archived out of the wallet registry cache), so it
 // must notify unconditionally with an empty member IDs slice regardless
@@ -434,7 +434,7 @@ func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 }
 
 // TestReservationActionTimeoutWatcher_StalePreloadNonceMismatchFallsBackToFreshRead
-// covers Finding 14: a preloadedAction fetched at a since-superseded nonce
+// verifies that a preloadedAction fetched at a since-superseded nonce
 // must not be trusted just because it is non-nil. The reservation's
 // on-chain RequestNonce has advanced to 2 (a fresh, Pending, overdue
 // generation) but the caller passes a stale preload captured at nonce 1
@@ -491,12 +491,10 @@ func TestReservationActionTimeoutWatcher_StalePreloadNonceMismatchFallsBackToFre
 }
 
 // TestReservationActionTimeoutWatcher_PollPendingActions_SkipsNotifiedAtStampOnSkip
-// covers Finding 13: pollPendingActions must stamp item.notifiedAt only
-// when checkReservationActionTimeout reports notified=true, never merely
-// because it returned a nil error. An unrecognized ActionType is a
-// Pending, overdue action that reaches the Bridge-call switch and is
-// skipped there without ever calling the Bridge; the prior bug stamped
-// notifiedAt=now for every nil-error return, including this one.
+// verifies that pollPendingActions stamps item.notifiedAt only when
+// checkReservationActionTimeout reports notified=true, never merely
+// because it returned a nil error (such as when an unrecognized
+// ActionType is skipped without calling the Bridge).
 func TestReservationActionTimeoutWatcher_PollPendingActions_SkipsNotifiedAtStampOnSkip(t *testing.T) {
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
@@ -555,12 +553,10 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_SkipsNotifiedAtStamp
 }
 
 // TestReservationActionTimeoutWatcher_PollPendingActions_RetainsEntryAcrossLoadFailures
-// covers Finding 4: consecutive GetReservationAction poll-pass failures
-// must never evict a tracked entry - only an actually-observed on-chain
-// State transition away from Pending may remove it. Before the fix,
-// maxActionTimeoutLoadRetries (3) consecutive failures would have deleted
-// the entry permanently, taking it out of timeout coverage for the rest
-// of the process lifetime.
+// verifies that consecutive GetReservationAction poll-pass failures never
+// evict a tracked entry - only an actually-observed on-chain State
+// transition away from Pending may remove it, ensuring temporary RPC
+// outages do not take actions out of timeout coverage.
 func TestReservationActionTimeoutWatcher_PollPendingActions_RetainsEntryAcrossLoadFailures(t *testing.T) {
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
@@ -607,8 +603,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_RetainsEntryAcrossLo
 		t.Fatalf("key1 should be tracked after discovery, even though its first load failed")
 	}
 
-	// Several more consecutive failures - well past the formerly-fatal
-	// count of 3 - must never evict the entry.
+	// Several more consecutive failures must never evict the entry.
 	for i := range 5 {
 		if err := ratw.pollPendingActions(); err != nil {
 			t.Fatalf("unexpected error on retry %d: %v", i, err)
@@ -802,8 +797,9 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 	}
 }
 
-// Verifies a successful notification remains tracked while the action
-// stays Pending and suppresses duplicate calls within the
+// TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending
+// verifies that a successful notification remains tracked while the
+// action stays Pending and suppresses duplicate calls within the
 // re-notification interval.
 func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *testing.T) {
 	spvChain := newLocalChain()

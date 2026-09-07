@@ -81,12 +81,12 @@ const (
 	// reservationsActivationBlock never activates the feature for it
 	// (see that function) instead of silently defaulting to block 0.
 	//
-	// NOTE: Neither mainnet nor Sepolia has an entry below yet. Both fall
-	// through to math.MaxUint64 (never activates) until a real rollout
-	// height is chosen for each network. Adding a placeholder number here
-	// would be exactly the kind of silently-live landmine this table exists
-	// to prevent - an invented height is indistinguishable at runtime from
-	// a real one.
+	// Each public network's rollout block must be added to
+	// reservationsActivationBlocks only when a real height is chosen; an
+	// invented placeholder is indistinguishable at runtime from a real one
+	// and is exactly the silently-live landmine this table exists to
+	// prevent. Networks without an entry fall through to math.MaxUint64
+	// and never activate.
 )
 
 // reservationsActivationBlocks maps each Ethereum network to its

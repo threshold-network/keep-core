@@ -83,8 +83,8 @@ func (rrt *ReservationReanchorTask) ActionType() tbtc.WalletActionType {
 // re-anchor only once it has entered the StateMovingFunds state (the
 // wallet is migrating and reservations must be released to a live
 // wallet); tbtc-v2's Reservation.requestReservationReanchor requires a
-// privileged (governance) caller for StateLive sources
-// (Reservation.sol:742-746, ReservationRouter.sol:269-277), which the
+// privileged (governance) caller for StateLive sources (enforced on-chain
+// in the tbtc-v2 contracts repo, outside keep-core), which the
 // client's ordinary operator key can never satisfy, so no below-dust
 // re-anchor trigger is attempted for Live wallets.
 //
