@@ -12,9 +12,9 @@ import (
 
 // timestampMockClient is a minimal ethutil.EthereumClient used to exercise the
 // timestamp-based block search. It embeds the interface so it satisfies the
-// full contract while only the two methods used by GetBlockNumberByTimestamp
-// are implemented; any other call would panic, which keeps the test honest
-// about what the searched code actually touches.
+// full contract while implementing only HeaderByNumber and BlockByNumber;
+// any other call would panic, which keeps the test honest about what the
+// searched code actually touches.
 type timestampMockClient struct {
 	ethutil.EthereumClient
 	// blockTimes maps a block number to its timestamp.
@@ -166,7 +166,7 @@ func TestGetBlockNumberByTimestamp_ForwardCompensation(t *testing.T) {
 	// Target a point 7s after block 50 (t=+757), between block 50 (t=+750) and
 	// block 51 (t=+765). The backward jump from the tip lands on block 43
 	// (t=+645, before the target), so the forward loop walks 43->51 and the
-	// closer-block tie-break then selects block 50 (7s away vs. 8s).
+	// closer-block comparison then selects block 50 (7s away vs. 8s).
 	timestamp := baseTime + 50*spacing + 7
 	expectedBlock := uint64(50)
 

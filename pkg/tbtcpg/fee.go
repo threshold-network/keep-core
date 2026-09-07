@@ -199,11 +199,12 @@ func applyWalletTxFeeFloor(
 }
 
 // estimateCappedFee estimates the transaction fee for a transaction of the
-// virtual size produced by the given size estimator. It returns
-// feeTooHighErr if the estimated fee exceeds maxTotalFee. Otherwise, it
-// applies the non-RBF wallet transaction fee buffer and minimum fee-rate
-// floor via applyWalletTxFeeFloor, without exceeding maxTotalFee, and can
-// return ErrMaxFeeTooLow or a validation error from that call.
+// virtual size produced by the given size estimator, returning an error if
+// the size or fee estimation itself fails. It returns feeTooHighErr if the
+// estimated fee exceeds maxTotalFee. Otherwise, it applies the non-RBF
+// wallet transaction fee buffer and minimum fee-rate floor via
+// applyWalletTxFeeFloor, without exceeding maxTotalFee, and can return
+// ErrMaxFeeTooLow or a validation error from that call.
 func estimateCappedFee(
 	btcChain bitcoin.Chain,
 	sizeEstimator *bitcoin.TransactionSizeEstimator,

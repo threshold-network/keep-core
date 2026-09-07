@@ -29,8 +29,8 @@ import (
 var logger = log.Logger("keep-maintainer-spv")
 
 // proofSkipReason explains why an SPV proof cannot be assembled for a
-// transaction in the current cycle. It lets callers log and record metrics with
-// the specific cause instead of collapsing every skip into one generic message.
+// transaction in the current cycle. It lets callers log the specific cause
+// instead of collapsing every skip into one generic message.
 type proofSkipReason int
 
 const (
