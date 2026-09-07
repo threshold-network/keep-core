@@ -329,6 +329,7 @@ func (pm *PerformanceMetrics) registerGaugeMetrics() {
 		MetricSpvMaintainerActive,
 		MetricSpvMaintainerLastActivityTimestamp,
 		MetricSpvMaintainerLastSuccessTimestamp,
+		MetricSpvMaintainerLastFailureTimestamp,
 		MetricSpvMaintainerMaxBackoffSeconds,
 		MetricWalletDispatcherActiveActions,
 		MetricIncomingMessageQueueSize,
@@ -584,6 +585,7 @@ const (
 	// Maintainer processing metrics cover discovery and proof-info errors too.
 	MetricSpvProofTaskFailuresTotal          = "spv_proof_task_failures_total"
 	MetricRedemptionProofTaskFailuresTotal   = "redemption_proof_task_failures_total"
+	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"
 	MetricSpvMaintainerActive                = "spv_maintainer_active"
 	MetricSpvMaintainerLastActivityTimestamp = "spv_maintainer_last_activity_timestamp_seconds"
 	MetricSpvMaintainerLastSuccessTimestamp  = "spv_maintainer_last_success_timestamp_seconds"

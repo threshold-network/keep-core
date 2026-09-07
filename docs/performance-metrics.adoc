@@ -343,6 +343,9 @@ that stops advancing indicates stalled processing, even if the HTTP server works
 |`spv_maintainer_last_success_timestamp_seconds`
 |Time of the last complete successful pass over all proof tasks. A pass with no
 pending proofs is successful; this metric does not imply a proof was submitted.
+|`spv_maintainer_last_failure_timestamp_seconds`
+|Time of the most recent failed proof task. Compare with the last successful
+cycle to detect failures occurring before the first Prometheus scrape.
 |`spv_maintainer_max_backoff_seconds`
 |The larger of the configured restart and idle backoffs. Allow this interval plus
 a processing margin when alerting on stale activity.

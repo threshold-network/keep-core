@@ -35,6 +35,9 @@ func TestProofTaskFailuresBeforeSubmission(t *testing.T) {
 				t.Fatal("expected a task error")
 			}
 			if enabled {
+				if recorder.gauges[clientinfo.MetricSpvMaintainerLastFailureTimestamp] == 0 {
+					t.Fatal("first task failure timestamp was not recorded")
+				}
 				for _, name := range []string{clientinfo.MetricSpvProofTaskFailuresTotal, clientinfo.MetricRedemptionProofTaskFailuresTotal} {
 					if recorder.counters[name] != 1 {
 						t.Errorf("expected one %s failure, got %v", name, recorder.counters[name])

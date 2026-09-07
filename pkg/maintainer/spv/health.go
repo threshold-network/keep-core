@@ -29,6 +29,7 @@ func (sm *spvMaintainer) runProofTask(
 	err := sm.proveTransactions(getter, submitter)
 	sm.recordActivity()
 	if err != nil && sm.metricsRecorder != nil {
+		sm.setHealthGauge(clientinfo.MetricSpvMaintainerLastFailureTimestamp, float64(time.Now().Unix()))
 		sm.metricsRecorder.IncrementCounter(clientinfo.MetricSpvProofTaskFailuresTotal, 1)
 		if action == tbtc.ActionRedemption {
 			sm.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProofTaskFailuresTotal, 1)

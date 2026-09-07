@@ -52,6 +52,7 @@ func TestMaintainerMetricsRegistered(t *testing.T) {
 	for _, name := range []string{
 		MetricSpvMaintainerActive, MetricSpvMaintainerLastActivityTimestamp,
 		MetricSpvMaintainerLastSuccessTimestamp, MetricSpvMaintainerMaxBackoffSeconds,
+		MetricSpvMaintainerLastFailureTimestamp,
 		MetricSpvProofTaskFailuresTotal, MetricRedemptionProofTaskFailuresTotal,
 	} {
 		assertCounterExportedInRegistry(t, registry, name)
