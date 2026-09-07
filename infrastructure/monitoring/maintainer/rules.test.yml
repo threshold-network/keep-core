@@ -1,0 +1,997 @@
+# Run with: promtool test rules rules.test.yml
+rule_files: [rules.yml]
+evaluation_interval: 1m
+tests:
+  - name: "healthy service"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "scrape failure waits two minutes"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerDown
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: critical
+            exp_annotations:
+              summary: "Maintainer maintainer:9601 cannot be scraped"
+      - eval_time: 2m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "an old endpoint is missing required telemetry"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: critical
+            exp_annotations:
+              summary: "Maintainer maintainer:9601 is missing required telemetry"
+      - eval_time: 5m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "SPV disabled"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: critical
+            exp_annotations:
+              summary: "SPV processing is inactive on maintainer:9601"
+      - eval_time: 5m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "Ethereum RPC fails"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: critical
+            exp_annotations:
+              summary: "Ethereum RPC is unhealthy on maintainer:9601"
+      - eval_time: 5m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "Bitcoin RPC fails"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: critical
+            exp_annotations:
+              summary: "Bitcoin RPC is unhealthy on maintainer:9601"
+      - eval_time: 5m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "Ethereum probe hangs after a healthy result"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: critical
+            exp_annotations:
+              summary: "Ethereum RPC probes stopped completing on maintainer:9601"
+      - eval_time: 10m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "Bitcoin probe hangs after a healthy result"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: critical
+            exp_annotations:
+              summary: "Bitcoin RPC probes stopped completing on maintainer:9601"
+      - eval_time: 10m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "SPV task hangs beyond its processing allowance"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "600+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: critical
+            exp_annotations:
+              summary: "SPV processing stopped making progress on maintainer:9601"
+      - eval_time: 52m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "configured long backoff is healthy"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "7200+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "failure before first scrape clears after successful cycle"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x4 300+60x115"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "10+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: warning
+            exp_annotations:
+              summary: "SPV processing has not recovered from a task failure on maintainer:9601"
+      - eval_time: 3m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "relay range skip is distinct from failure"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+1x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: warning
+            exp_annotations:
+              summary: "SPV proofs exceed the relay difficulty range on maintainer:9601"
+      - eval_time: 2m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts: []
+  - name: "header limit skip is distinct from failure"
+    interval: 1m
+    input_series:
+      - series: "up{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_spv_maintainer_active{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_eth_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_btc_healthy{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1+0x120"
+      - series: "performance_rpc_health_check_interval_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "60+0x120"
+      - series: "performance_rpc_eth_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_rpc_btc_last_check_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_activity_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_success_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+60x120"
+      - series: "performance_spv_maintainer_last_failure_timestamp_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_maintainer_max_backoff_seconds{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "1800+0x120"
+      - series: "performance_spv_proof_skipped_outside_relay_range_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+0x120"
+      - series: "performance_spv_proof_skipped_exceeded_max_headers_total{job=\"keep-maintainer\", instance=\"maintainer:9601\"}"
+        values: "0+1x120"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: KeepMaintainerDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerTelemetryMissing
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerSPVInactive
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerEthereumRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerBitcoinRPCUnhealthy
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerEthereumProbeStalled
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerBitcoinProbeStalled
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerSPVStalled
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerProofTaskFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerProofOutsideRelayRange
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KeepMaintainerProofExceedsHeaderLimit
+        exp_alerts:
+          - exp_labels:
+              job: keep-maintainer
+              instance: maintainer:9601
+              component: keep-maintainer
+              severity: critical
+            exp_annotations:
+              summary: "SPV proofs exceed the supported header count on maintainer:9601"
