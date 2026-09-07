@@ -1,0 +1,16 @@
+# Merge these sections into the Prometheus configuration serving this cluster.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - rules.yml
+
+scrape_configs:
+  - job_name: keep-maintainer
+    static_configs:
+      - targets: [keep-maintainer-metrics.default.svc.cluster.local:9601]
+        labels:
+          environment: mainnet
+
+# Configure alerting.alertmanagers and an Alertmanager receiver before rollout.

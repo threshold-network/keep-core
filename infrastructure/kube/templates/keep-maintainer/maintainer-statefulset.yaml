@@ -11,6 +11,9 @@ spec:
         - name: keep-maintainer
           image: keep-maintainer:latest
           imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9601
           resources:
             requests:
               cpu: 1500m
@@ -50,6 +53,8 @@ spec:
             - keep-client
             - maintainer
           args:
+            - --clientInfo.port
+            - "9601"
             - --$(NETWORK)
             - --ethereum.url
             - $(ETH_WS_URL)
