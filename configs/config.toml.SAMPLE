@@ -118,6 +118,19 @@ Port = 9601
 # PreParamsGenerationConcurrency = 1
 # KeyGenerationConcurrency = 1
 
+# Stuck wallet transaction monitoring. Values shown are the defaults.
+# Zero selects the default; negative values are rejected. MaxTrackingAge must
+# be at least StuckThreshold. These settings apply when the node starts.
+# Command-line overrides use --tbtc.transactionMonitor.<setting>, for example
+# --tbtc.transactionMonitor.stuckThreshold=30m.
+#
+# [tbtc.transactionMonitor]
+# StuckThreshold = "6h"
+# CheckInterval = "5m"
+# MaxTracked = 1000
+# MaxTrackingAge = "24h"
+# CheckBudget = "2m"
+
 # Developer options to work with locally deployed contracts
 #
 # [developer]
