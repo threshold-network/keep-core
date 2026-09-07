@@ -628,45 +628,6 @@ func (mft *MovingFundsTask) ActionType() tbtc.WalletActionType {
 	return tbtc.ActionMovingFunds
 }
 
-// estimateCappedFee estimates the transaction fee for a transaction of the
-// virtual size produced by the given size estimator. It returns feeTooHighErr
-// if the estimated fee exceeds maxTotalFee.
-func estimateCappedFee(
-	btcChain bitcoin.Chain,
-	sizeEstimator *bitcoin.TransactionSizeEstimator,
-	maxTotalFee uint64,
-	feeTooHighErr error,
-) (int64, error) {
-	transactionSize, err := sizeEstimator.VirtualSize()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"cannot estimate transaction virtual size: [%v]",
-			err,
-		)
-	}
-
-	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
-
-	totalFee, err := feeEstimator.EstimateFee(transactionSize)
-	if err != nil {
-		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
-	}
-
-	if uint64(totalFee) > maxTotalFee {
-		return 0, feeTooHighErr
-	}
-
-	// Enforce the safe minimum fee rate and buffer so a non-RBF moving funds
-	// transaction is never broadcast below the floor where it could get stuck
-	// and jam the wallet.
-	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, maxTotalFee)
-	if err != nil {
-		return 0, err
-	}
-
-	return totalFee, nil
-}
-
 // EstimateMovingFundsFee estimates fee for the moving funds transaction that
 // moves funds from the source wallet to target wallets.
 func EstimateMovingFundsFee(

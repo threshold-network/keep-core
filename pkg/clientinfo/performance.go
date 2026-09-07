@@ -125,16 +125,6 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricStuckWalletTransactionsTotal,
 		MetricUnmonitoredWalletTransactionsTotal,
 
-		// ----- SPV proof-skip counters -----
-		MetricRedemptionProofSubmissionsTotal,
-		MetricRedemptionProofSubmissionsSuccessTotal,
-		MetricRedemptionProofSubmissionsFailedTotal,
-		MetricDepositSweepProofSubmissionsTotal,
-		MetricDepositSweepProofSubmissionsSuccessTotal,
-		MetricDepositSweepProofSubmissionsFailedTotal,
-		MetricSpvProofSkippedOutsideRelayRangeTotal,
-		MetricSpvProofSkippedExceededMaxHeadersTotal,
-
 		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
 		MetricSigningSuccessTotal,
@@ -564,26 +554,6 @@ const (
 	MetricRedemptionExecutionsSuccessTotal = "redemption_executions_success_total"
 	MetricRedemptionExecutionsFailedTotal  = "redemption_executions_failed_total"
 	MetricRedemptionActionDurationSeconds  = "redemption_action_duration_seconds"
-
-	// Redemption Proof Submission Metrics (SPV maintainer)
-	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"
-	MetricRedemptionProofSubmissionsSuccessTotal = "redemption_proof_submissions_success_total"
-	MetricRedemptionProofSubmissionsFailedTotal  = "redemption_proof_submissions_failed_total"
-
-	// Deposit Sweep Proof Submission Metrics (SPV maintainer)
-	MetricDepositSweepProofSubmissionsTotal        = "deposit_sweep_proof_submissions_total"
-	MetricDepositSweepProofSubmissionsSuccessTotal = "deposit_sweep_proof_submissions_success_total"
-	MetricDepositSweepProofSubmissionsFailedTotal  = "deposit_sweep_proof_submissions_failed_total"
-
-	// SPV Proof Skip Metrics (SPV maintainer)
-	// MetricSpvProofSkippedOutsideRelayRangeTotal counts the number of
-	// transactions whose SPV proofs were skipped because no relay range
-	// contained the transaction.
-	MetricSpvProofSkippedOutsideRelayRangeTotal = "spv_proof_skipped_outside_relay_range_total"
-	// MetricSpvProofSkippedExceededMaxHeadersTotal counts the number of
-	// transactions whose SPV proofs were skipped because the chain header
-	// count exceeded the configured maximum.
-	MetricSpvProofSkippedExceededMaxHeadersTotal = "spv_proof_skipped_exceeded_max_headers_total"
 
 	// Wallet Action Metrics (aggregate)
 	MetricWalletActionsTotal                 = "wallet_actions_total"

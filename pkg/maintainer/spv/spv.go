@@ -23,7 +23,6 @@ import (
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/maintainer/btcdiff"
 )
 
@@ -95,9 +94,6 @@ var proofTypes = map[tbtc.WalletActionType]struct {
 }
 
 type spvMaintainer struct {
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-	}
 	config       Config
 	spvChain     Chain
 	btcDiffChain btcdiff.Chain
@@ -231,12 +227,6 @@ func (sm *spvMaintainer) proveTransactions(
 					"current difficulty epochs as seen by the relay",
 				transactionHashStr,
 			)
-			if recorder := sm.metricsRecorder; recorder != nil {
-				recorder.IncrementCounter(
-					clientinfo.MetricSpvProofSkippedOutsideRelayRangeTotal,
-					1,
-				)
-			}
 			continue
 		case proofSkipExceededMaxHeaders:
 			// No decisive header was found and not enough difficulty
@@ -251,12 +241,6 @@ func (sm *spvMaintainer) proveTransactions(
 				transactionHashStr,
 				sm.config.MaxProofHeaders,
 			)
-			if recorder := sm.metricsRecorder; recorder != nil {
-				recorder.IncrementCounter(
-					clientinfo.MetricSpvProofSkippedExceededMaxHeadersTotal,
-					1,
-				)
-			}
 			continue
 		case proofSkipNone:
 			// The proof is within range and assemblable; proceed to the
