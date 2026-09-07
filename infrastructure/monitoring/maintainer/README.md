@@ -76,4 +76,6 @@ Tests cover healthy operation, unavailable/missing telemetry, RPC failures and
 hung probes, configured long backoffs, first-scrape task failures and recovery,
 and both difficulty skip reasons. Remove the scrape job and rule file to roll
 back monitoring. On the upgraded client, use `--clientInfo.port=0` to disable the
-endpoint, and remove the metrics Service and container port declaration.
+endpoint, and remove the metrics Service and container port declaration, along
+with the `- maintainer-service.yaml` entry in
+`infrastructure/kube/templates/keep-maintainer/kustomization.yaml`.

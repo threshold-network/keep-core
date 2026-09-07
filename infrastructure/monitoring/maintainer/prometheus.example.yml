@@ -8,6 +8,7 @@ rule_files:
 
 scrape_configs:
   - job_name: keep-maintainer
+    scrape_interval: 30s
     static_configs:
       - targets: [keep-maintainer-metrics.default.svc.cluster.local:9601]
         labels:
