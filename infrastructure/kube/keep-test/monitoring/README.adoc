@@ -242,23 +242,29 @@ missing from the previous 9.2.5 image. Updating the manifests does not update an
 already running instance; complete and verify the rollout in each environment.
 
 1. Record the running image, configuration, installed plugins, dashboards and
-alerting state. Check the database for legacy alerting before crossing Grafana
-11: if it is still in use, migrate through Grafana 10.4 first using the
+alerting state. Stop Grafana before taking a consistent backup of the complete
+`grafana-pvc` volume, configuration and required secrets. Take this backup before
+starting any migration, including Grafana 10.4, and retain it unchanged with the
+original image reference until the upgrade is verified.
+2. Restore the backup to a separate volume and rehearse the complete upgrade
+there, with outbound alert notifications disabled or routed to a test receiver.
+Check the restored database for legacy alerting before crossing Grafana 11: if it
+is still in use, migrate the restored copy through Grafana 10.4 first using the
 link:https://grafana.com/docs/grafana/latest/breaking-changes/breaking-changes-v11-0/[vendor migration procedure].
-Keep any intermediate migration instance isolated from public traffic.
-2. Stop Grafana before taking a consistent backup of the complete `grafana-pvc`
-volume, configuration and required secrets. Retain the original image reference
-with the backup. Test the upgrade against a separate restored copy first, with
-outbound alert notifications disabled or routed to a test receiver.
-3. Check plugins retained on the volume for Grafana 12 compatibility, including
-any separately installed image renderer. Angular plugins are no longer
-supported. Verify the Kubernetes Deployments dashboard's legacy graph panels
-migrate and render correctly; inspect dashboards saved only in the database too.
-4. Render the target environment's configuration with `kubectl kustomize grafana`
-from its monitoring directory, then apply it using `kubectl apply -k grafana`
-after the backup and migration checks pass. The `Recreate` deployment strategy
-prevents old and new Grafana pods writing to the same database during rollout.
-Expect a Grafana outage while the single replica restarts and migrates storage.
+Keep all rehearsal and intermediate migration instances isolated from public
+traffic.
+3. On the restored copy, check plugins retained on the volume for Grafana 12
+compatibility, including any separately installed image renderer. Angular plugins
+are no longer supported. Verify the Kubernetes Deployments dashboard's legacy
+graph panels migrate and render correctly; inspect dashboards saved only in the
+database too.
+4. Once the rehearsal and compatibility checks pass, repeat any required Grafana
+10.4 migration on the original volume. Render the target environment's
+configuration with `kubectl kustomize grafana` from its monitoring directory, then
+apply it using `kubectl apply -k grafana` after that migration succeeds. The
+`Recreate` deployment strategy prevents old and new Grafana pods writing to the
+same database during rollout. Expect a Grafana outage while the single replica
+restarts and migrates storage.
 5. Confirm the running image digest and `/grafana/api/health` version. Check
 Google sign-in and existing roles, GitHub sign-in in `keep-test`, dashboard
 queries through Trickster, existing public dashboard links and alert delivery.
@@ -267,9 +273,10 @@ normal traffic. A successful pod health check alone does not establish these
 behaviors.
 
 Grafana 12.4 can migrate dashboards, folders and playlists to unified storage.
-To roll back, stop the new instance, restore the complete pre-upgrade volume and
-configuration, and start the recorded previous image. Do not run an older image
-against the migrated database. See the
+To roll back from any upgrade stage, including Grafana 10.4, stop Grafana, restore
+the complete pre-upgrade volume and configuration from the unchanged original
+backup, and start the recorded previous image. Do not run an older image against
+the migrated database. See the
 link:https://grafana.com/docs/grafana/latest/upgrade-guide/upgrade-v12.4/[Grafana upgrade guide]
 for backup and migration details.
 
