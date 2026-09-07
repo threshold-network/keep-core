@@ -447,8 +447,9 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 	)
 }
 
-// recordingMetricsRecorder captures IncrementCounter calls for assertions.
-// proveTransactions invokes it synchronously, so no locking is needed.
+// recordingMetricsRecorder captures IncrementCounter and SetGauge calls for
+// assertions. proveTransactions and the maintainer control loop invoke it
+// synchronously, so no locking is needed.
 type recordingMetricsRecorder struct {
 	counters map[string]float64
 	gauges   map[string]float64

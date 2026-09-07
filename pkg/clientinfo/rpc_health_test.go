@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -534,5 +535,71 @@ func TestRPCHealthChecker_StartIdempotent(t *testing.T) {
 	healthy, _, _, _, _ := checker.GetEthereumHealthStatus()
 	if !healthy {
 		t.Error("expected healthy after Start")
+	}
+}
+
+// countingEthereumRPC wraps fakeEthereumRPC to count LatestBlockNumber calls,
+// used to detect whether the periodic health-check goroutine keeps running.
+type countingEthereumRPC struct {
+	fakeEthereumRPC
+	calls *int32
+}
+
+func (f *countingEthereumRPC) LatestBlockNumber(ctx context.Context) (uint64, error) {
+	atomic.AddInt32(f.calls, 1)
+	return f.fakeEthereumRPC.LatestBlockNumber(ctx)
+}
+
+// countingBitcoinChain wraps fakeBitcoinChain to count GetLatestBlockHeight
+// calls, used to detect whether the periodic health-check goroutine keeps
+// running.
+type countingBitcoinChain struct {
+	fakeBitcoinChain
+	calls *int32
+}
+
+func (f *countingBitcoinChain) GetLatestBlockHeight() (uint, error) {
+	atomic.AddInt32(f.calls, 1)
+	return f.fakeBitcoinChain.GetLatestBlockHeight()
+}
+
+// TestRPCHealthChecker_GoroutinesStopOnCancel verifies that
+// runEthereumHealthChecks and runBitcoinHealthChecks actually exit on
+// ctx.Done() instead of leaking: it lets several ticks elapse to confirm the
+// periodic goroutines are running, cancels the context, then asserts no
+// further probes occur even though the check interval would otherwise have
+// fired several more times.
+func TestRPCHealthChecker_GoroutinesStopOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var ethCalls, btcCalls int32
+	eth := &countingEthereumRPC{fakeEthereumRPC: fakeEthereumRPC{currentBlock: 100}, calls: &ethCalls}
+	btc := &countingBitcoinChain{fakeBitcoinChain: fakeBitcoinChain{latestHeight: 100}, calls: &btcCalls}
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	checker := NewRPCHealthChecker(registry, eth, btc, 5*time.Millisecond)
+	checker.Start(ctx)
+
+	// Let several ticks elapse so both periodic goroutines are confirmed
+	// running before cancellation.
+	time.Sleep(50 * time.Millisecond)
+	if atomic.LoadInt32(&ethCalls) < 2 || atomic.LoadInt32(&btcCalls) < 2 {
+		t.Fatal("expected multiple periodic health checks before cancellation")
+	}
+
+	cancel()
+	// Allow any tick already in flight at cancellation time to complete.
+	time.Sleep(20 * time.Millisecond)
+	ethAtCancel := atomic.LoadInt32(&ethCalls)
+	btcAtCancel := atomic.LoadInt32(&btcCalls)
+
+	// Wait long enough that several more ticks would have fired had the
+	// goroutines not exited on ctx.Done().
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt32(&ethCalls); got != ethAtCancel {
+		t.Fatalf("runEthereumHealthChecks kept probing after cancellation: %d -> %d", ethAtCancel, got)
+	}
+	if got := atomic.LoadInt32(&btcCalls); got != btcAtCancel {
+		t.Fatalf("runBitcoinHealthChecks kept probing after cancellation: %d -> %d", btcAtCancel, got)
 	}
 }
