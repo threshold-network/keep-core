@@ -36,10 +36,10 @@ const (
 	// tracking table and starving monitoring of new transactions (~24 hours).
 	transactionMonitorMaxTrackingAge = 24 * time.Hour
 
-	// transactionMonitorCheckBudget bounds the wall-clock time of a single check
-	// pass so that a slow chain call cannot stall monitoring of every remaining
-	// transaction; transactions not reached within the budget are handled on the
-	// next pass.
+	// transactionMonitorCheckBudget bounds the confirmation scan so that a slow
+	// chain call cannot stall monitoring of every remaining transaction. Local
+	// persistence retries run before this budget starts; confirmation lookups
+	// not reached within the budget are handled on the next pass.
 	transactionMonitorCheckBudget = 2 * time.Minute
 )
 
@@ -213,6 +213,23 @@ func (tm *transactionMonitor) checkWithBudget(
 	ctx context.Context,
 	checkBudget time.Duration,
 ) {
+	ordered := tm.snapshotByAge()
+	// Retry every pending storage operation before starting confirmation
+	// lookups. Otherwise an older transaction's lookup can exhaust the budget
+	// on every pass and indefinitely starve persistence of newer transactions.
+	for _, t := range ordered {
+		if ctx.Err() != nil {
+			return
+		}
+		if t.pendingRemoval {
+			tm.remove(t.hash)
+		} else if t.dirty {
+			tm.mu.Lock()
+			tm.persist(t.hash)
+			tm.mu.Unlock()
+		}
+	}
+
 	checkCtx, cancelCheck := context.WithTimeout(
 		ctx,
 		checkBudget,
@@ -225,19 +242,14 @@ func (tm *transactionMonitor) checkWithBudget(
 	// hits its time budget never starves the transactions closest to the stuck
 	// threshold; only the newest, furthest-from-alerting ones are deferred to the
 	// next pass. Chain calls are made on the copy, outside the lock.
-	for _, t := range tm.snapshotByAge() {
+	for _, t := range ordered {
 		txHash := t.hash
 		if ctx.Err() != nil {
 			return
 		}
 		if t.pendingRemoval {
-			tm.remove(txHash)
+			// The storage pass handles these entries, even if deletion fails.
 			continue
-		}
-		if t.dirty {
-			tm.mu.Lock()
-			tm.persist(txHash)
-			tm.mu.Unlock()
 		}
 		// The chain call is bounded by checkCtx, so a slow or hung backend cannot
 		// keep this run loop blocked past the check budget: when the budget

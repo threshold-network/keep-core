@@ -180,6 +180,69 @@ func TestTransactionMonitor_RetriesFailedRegistration(t *testing.T) {
 	}
 }
 
+func TestTransactionMonitor_RetriesPersistenceDespiteConfirmationTimeouts(t *testing.T) {
+	for _, operation := range []string{"registration", "alert", "deletion"} {
+		t.Run(operation, func(t *testing.T) {
+			handle, _ := transactionMonitorDisk(t)
+			failing := &failingTransactionMonitorPersistence{BasicHandle: handle}
+			blockedHash := bitcoin.Hash{1}
+			chain := newBlockingTransactionConfirmationsChain(blockedHash)
+			defer close(chain.lookupRelease)
+			monitor := newTransactionMonitor(chain, failing)
+			newerTx := &bitcoin.Transaction{}
+			newerHash := newerTx.Hash()
+
+			if operation == "registration" {
+				failing.failSave = true
+			}
+			monitor.track(newerHash, [20]byte{2})
+			switch operation {
+			case "alert":
+				ageTransaction(monitor, newerHash, 7*time.Hour)
+				failing.failSave = true
+				monitor.check(context.Background())
+			case "deletion":
+				failing.failDeleteName = transactionMonitorRecordName(newerHash, false)
+				if err := chain.BroadcastTransaction(newerTx); err != nil {
+					t.Fatal(err)
+				}
+				monitor.check(context.Background())
+			}
+			original := monitor.snapshotByAge()[0]
+			if !original.dirty && !original.pendingRemoval {
+				t.Fatal("expected a failed storage operation awaiting retry")
+			}
+
+			// Storage recovers, but an older transaction now consumes the entire
+			// confirmation budget on every pass. Local retries must still finish.
+			failing.failSave = false
+			failing.failDeleteName = ""
+			monitor.track(blockedHash, [20]byte{3})
+			ageTransaction(monitor, blockedHash, time.Since(original.broadcastAt)+time.Hour)
+			for i := 0; i < 3; i++ {
+				monitor.checkWithBudget(context.Background(), 20*time.Millisecond)
+			}
+			if got := chain.getLookupCount(); got != 3 {
+				t.Fatalf("expected three timed-out lookups for the older transaction; got %d", got)
+			}
+
+			restarted := newTransactionMonitor(chain, handle)
+			if operation == "deletion" {
+				if isTracked(monitor, newerHash) || isTracked(restarted, newerHash) {
+					t.Fatal("confirmation timeouts starved deletion of the newer transaction")
+				}
+				return
+			}
+			got, ok := restarted.tracked[newerHash]
+			if !ok || !got.broadcastAt.Equal(original.broadcastAt) ||
+				got.walletPublicKeyHash != original.walletPublicKeyHash ||
+				got.alerted != original.alerted {
+				t.Fatalf("confirmation timeouts starved persistence of the newer transaction: %+v", got)
+			}
+		})
+	}
+}
+
 func TestTransactionMonitor_PartialAlertWritePreservesRegistration(t *testing.T) {
 	handle, _ := transactionMonitorDisk(t)
 	chain := newLocalBitcoinChain()
