@@ -18,6 +18,11 @@ The monitoring stack has the following components:
 
 The production monitoring is based on the configuration described in the link:../../keep-test/monitoring/README.adoc[keep-test monitoring documentation].
 
+Before updating Grafana, follow the
+link:../../keep-test/monitoring/README.adoc#upgrading-grafana[Grafana upgrade procedure],
+including the legacy alerting check and stopped-volume backup. Validate the
+upgrade in `keep-test` before applying it to production.
+
 Resources are exposed publicly under the following URLs:
 
 [cols="^1s,2m"]
