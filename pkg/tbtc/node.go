@@ -228,6 +228,13 @@ func (n *node) setPerformanceMetrics(metrics interface {
 	}); ok {
 		pg.SetRedemptionMetricsRecorder(metrics)
 	}
+	if pg, ok := n.proposalGenerator.(interface {
+		SetProposalMetricsRecorder(recorder interface {
+			IncrementCounter(name string, value float64)
+		})
+	}); ok {
+		pg.SetProposalMetricsRecorder(metrics)
+	}
 
 	// Update metrics recorder for all cached coordination executors
 	// This is important because executors may be created before metrics are set
