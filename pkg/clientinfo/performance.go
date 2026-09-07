@@ -134,6 +134,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricRedemptionExecutionsTotal,
 		MetricRedemptionExecutionsSuccessTotal,
 		MetricRedemptionExecutionsFailedTotal,
+		MetricRedemptionProposalGenerationAttemptsTotal,
+		MetricRedemptionProposalGenerationFailuresTotal,
+		MetricRedemptionProposalsGeneratedTotal,
+		MetricRedemptionProposalsBroadcastTotal,
+		MetricRedemptionProposalBroadcastFailuresTotal,
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
@@ -544,6 +549,13 @@ const (
 	MetricRedemptionExecutionsSuccessTotal = "redemption_executions_success_total"
 	MetricRedemptionExecutionsFailedTotal  = "redemption_executions_failed_total"
 	MetricRedemptionActionDurationSeconds  = "redemption_action_duration_seconds"
+
+	// Redemption proposal counters distinguish task generation from P2P broadcast.
+	MetricRedemptionProposalGenerationAttemptsTotal = "redemption_proposal_generation_attempts_total"
+	MetricRedemptionProposalGenerationFailuresTotal = "redemption_proposal_generation_failures_total"
+	MetricRedemptionProposalsGeneratedTotal         = "redemption_proposals_generated_total"
+	MetricRedemptionProposalsBroadcastTotal         = "redemption_proposals_broadcast_total"
+	MetricRedemptionProposalBroadcastFailuresTotal  = "redemption_proposal_broadcast_failures_total"
 
 	// Redemption Proof Submission Metrics (SPV maintainer)
 	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"
