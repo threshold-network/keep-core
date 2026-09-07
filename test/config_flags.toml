@@ -20,3 +20,10 @@ Dir = "/my/secure/location"
 [clientinfo]
 # Port is expected to be read from the file, not passed as a flag.
 Port = 3097
+
+[tbtc.transactionMonitor]
+# StuckThreshold is overridden by a flag; the other values come from this file.
+StuckThreshold = "1h"
+CheckInterval = "45s"
+MaxTracked = 50
+MaxTrackingAge = "12h"

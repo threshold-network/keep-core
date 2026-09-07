@@ -329,6 +329,37 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 			"(bufferedRate = ceil(rawRate * (100+Percent) / 100)); "+
 			"0 means use the default.",
 	)
+
+	cmd.Flags().DurationVar(
+		&cfg.Tbtc.TransactionMonitor.StuckThreshold,
+		"tbtc.transactionMonitor.stuckThreshold",
+		tbtc.DefaultTransactionMonitorStuckThreshold,
+		"Unconfirmed transaction age before a stuck-transaction alert; 0 uses the default.",
+	)
+	cmd.Flags().DurationVar(
+		&cfg.Tbtc.TransactionMonitor.CheckInterval,
+		"tbtc.transactionMonitor.checkInterval",
+		tbtc.DefaultTransactionMonitorCheckInterval,
+		"Polling interval for wallet transaction confirmations; 0 uses the default.",
+	)
+	cmd.Flags().IntVar(
+		&cfg.Tbtc.TransactionMonitor.MaxTracked,
+		"tbtc.transactionMonitor.maxTracked",
+		tbtc.DefaultTransactionMonitorMaxTracked,
+		"Maximum number of wallet transactions tracked in memory; 0 uses the default.",
+	)
+	cmd.Flags().DurationVar(
+		&cfg.Tbtc.TransactionMonitor.MaxTrackingAge,
+		"tbtc.transactionMonitor.maxTrackingAge",
+		tbtc.DefaultTransactionMonitorMaxTrackingAge,
+		"Maximum age of a tracked transaction; must be at least stuckThreshold; 0 uses the default.",
+	)
+	cmd.Flags().DurationVar(
+		&cfg.Tbtc.TransactionMonitor.CheckBudget,
+		"tbtc.transactionMonitor.checkBudget",
+		tbtc.DefaultTransactionMonitorCheckBudget,
+		"Time budget for one transaction confirmation-check pass; 0 uses the default.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.
