@@ -345,7 +345,14 @@ All names below have the `performance_` prefix on `/metrics`:
 |Unix time of the last completed probe, including failures. Zero means no probe
 has completed. Combine freshness with the health value to detect a hung RPC.
 |`rpc_health_check_interval_seconds`
-|Configured probe interval (30 seconds by default).
+|Configured probe interval (60 seconds by default).
+|`rpc_eth_response_time_seconds`, `rpc_btc_response_time_seconds`
+|Duration in seconds of the most recent successful probe; not updated on
+failure.
+|`rpc_btc_health_check_benign_errors_total`
+|Count of known-benign -32602 (`cp_height` not supported) `GetBlockHeader`
+responses. These still mark `rpc_btc_healthy` unhealthy; the counter only
+distinguishes benign header-support gaps from other RPC failures.
 |`spv_maintainer_active`
 |1 while the SPV control loop is running, including its normal backoff; 0 when
 disabled or stopped. Use scrape availability to detect a stopped process.
@@ -356,8 +363,9 @@ that stops advancing indicates stalled processing, even if the HTTP server works
 |Time of the last complete successful pass over all proof tasks. A pass with no
 pending proofs is successful; this metric does not imply a proof was submitted.
 |`spv_maintainer_last_failure_timestamp_seconds`
-|Time of the most recent failed proof task. Compare with the last successful
-cycle to detect failures occurring before the first Prometheus scrape.
+|Time of the most recent failed proof task; zero if none has failed yet.
+Compare against the last-success timestamp to see whether the most recent
+cycle failed or succeeded.
 |`spv_maintainer_max_backoff_seconds`
 |The larger of the configured restart and idle backoffs. Allow this interval plus
 a processing margin when alerting on stale activity.
@@ -372,5 +380,7 @@ Relay-range skips and proof-header-limit skips retain their separate
 `spv_proof_skipped_outside_relay_range_total` and
 `spv_proof_skipped_exceeded_max_headers_total` counters. They are not task failures.
 These counters count attempts, so the same transaction can be counted again in a
-later cycle. Check logs for the affected transaction hashes. Metrics are sampled
-once per minute; allow for that delay when setting alert thresholds.
+later cycle. Check logs for the affected transaction hashes. All SPV maintainer
+gauges and counters update immediately when the underlying event occurs, with
+no polling delay. Only the `rpc_*` health-status metrics above are sampled on
+a 1-minute poll; allow for that delay when alerting on RPC health.

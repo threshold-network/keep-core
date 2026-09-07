@@ -582,7 +582,10 @@ const (
 	MetricDepositSweepProofSubmissionsSuccessTotal = "deposit_sweep_proof_submissions_success_total"
 	MetricDepositSweepProofSubmissionsFailedTotal  = "deposit_sweep_proof_submissions_failed_total"
 
-	// Maintainer processing metrics cover discovery and proof-info errors too.
+	// SPV Maintainer Health Metrics (proof-task failures and control-loop
+	// lifecycle gauges)
+	// MetricSpvProofTaskFailuresTotal and MetricRedemptionProofTaskFailuresTotal
+	// cover discovery and proof-info errors, not just submission failures.
 	MetricSpvProofTaskFailuresTotal          = "spv_proof_task_failures_total"
 	MetricRedemptionProofTaskFailuresTotal   = "redemption_proof_task_failures_total"
 	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"

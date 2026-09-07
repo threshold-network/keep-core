@@ -85,7 +85,10 @@ func NewRPCHealthChecker(
 	checkInterval time.Duration,
 ) *RPCHealthChecker {
 	if checkInterval == 0 {
-		checkInterval = 30 * time.Second // Default: check every 30 seconds
+		// Default kept comfortably above ethereumRPCProbeTimeout so a probe
+		// that consumes the full deadline during an outage still leaves an
+		// idle gap before the next tick, instead of re-probing back-to-back.
+		checkInterval = 60 * time.Second
 	}
 
 	return &RPCHealthChecker{
@@ -202,8 +205,8 @@ func (r *RPCHealthChecker) checkEthereumHealth(ctx context.Context) {
 // by making actual RPC calls to verify the service is working properly.
 // It checks:
 // 1. Latest block height retrieval
-// 2. Block header retrieval for the latest block (verifies RPC can retrieve block data)
-// 3. Block height is reasonable (not 0)
+// 2. Block height is reasonable (not 0)
+// 3. Block header retrieval for the latest block (verifies RPC can retrieve block data)
 func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 	if r.btcChain == nil {
 		return
@@ -214,8 +217,9 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 	// First check: Get latest block height
 	latestHeight, err := r.btcChain.GetLatestBlockHeight()
 	if err != nil {
+		completedAt := time.Now()
 		r.btcMutex.Lock()
-		r.btcLastCheck = startTime
+		r.btcLastCheck = completedAt
 		r.btcLastError = err
 		r.btcMutex.Unlock()
 		rpcHealthLogger.Warnf(
@@ -229,8 +233,9 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 	// Second check: Verify block height is reasonable
 	if latestHeight == 0 {
 		heightErr := fmt.Errorf("block height is 0, node may not be synced")
+		completedAt := time.Now()
 		r.btcMutex.Lock()
-		r.btcLastCheck = startTime
+		r.btcLastCheck = completedAt
 		r.btcLastError = heightErr
 		r.btcMutex.Unlock()
 		rpcHealthLogger.Warnf(
@@ -247,8 +252,9 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 	if err != nil {
 		headerErr := fmt.Errorf("failed to get block header for height %d: %w", latestHeight, err)
 		benign := isKnownBenignBtcHeaderError(err)
+		completedAt := time.Now()
 		r.btcMutex.Lock()
-		r.btcLastCheck = startTime
+		r.btcLastCheck = completedAt
 		r.btcLastError = headerErr
 		if benign {
 			r.btcBenignHeaderErrors++
@@ -272,11 +278,12 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 		return
 	}
 
-	duration := time.Since(startTime)
+	completedAt := time.Now()
+	duration := completedAt.Sub(startTime)
 
 	r.btcMutex.Lock()
-	r.btcLastCheck = startTime
-	r.btcLastSuccess = time.Now()
+	r.btcLastCheck = completedAt
+	r.btcLastSuccess = completedAt
 	r.btcLastError = nil
 	r.btcLastDuration = duration
 	r.btcMutex.Unlock()

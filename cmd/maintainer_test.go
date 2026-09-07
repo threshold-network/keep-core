@@ -5,6 +5,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
@@ -37,6 +38,92 @@ func (stubBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
 	return ch
 }
 
+// stubEthereumRPC is a minimal clientinfo.EthereumRPC implementation used to
+// exercise the enabled path of initializeMaintainerMetrics without wiring a
+// real Ethereum RPC client. The background RPC health checker goroutine
+// invokes LatestBlockNumber; a nil interface would panic there instead.
+type stubEthereumRPC struct{}
+
+func (stubEthereumRPC) LatestBlockNumber(context.Context) (uint64, error) {
+	return 0, nil
+}
+
+// stubBitcoinChain is a minimal bitcoin.Chain implementation used to
+// exercise the enabled path of initializeMaintainerMetrics without wiring a
+// real Bitcoin chain connection. Only GetLatestBlockHeight is ever invoked
+// (from the registry's background btc-connectivity observer and the RPC
+// health checker); the other methods exist solely to satisfy the interface.
+type stubBitcoinChain struct{}
+
+func (stubBitcoinChain) GetTransaction(bitcoin.Hash) (*bitcoin.Transaction, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) GetTransactionConfirmations(
+	context.Context,
+	bitcoin.Hash,
+) (uint, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) BroadcastTransaction(*bitcoin.Transaction) error {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) GetLatestBlockHeight() (uint, error) {
+	return 0, nil
+}
+
+func (stubBitcoinChain) GetBlockHeader(uint) (*bitcoin.BlockHeader, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) GetTransactionMerkleProof(
+	bitcoin.Hash,
+	uint,
+) (*bitcoin.TransactionMerkleProof, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) GetTransactionsForPublicKeyHash(
+	[20]byte,
+	int,
+) ([]*bitcoin.Transaction, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) GetTxHashesForPublicKeyHash(
+	[20]byte,
+) ([]bitcoin.Hash, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) GetMempoolForPublicKeyHash(
+	[20]byte,
+) ([]*bitcoin.Transaction, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) GetUtxosForPublicKeyHash(
+	[20]byte,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) GetMempoolUtxosForPublicKeyHash(
+	[20]byte,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) EstimateSatPerVByteFee(uint32) (int64, error) {
+	panic("unsupported")
+}
+
+func (stubBitcoinChain) GetCoinbaseTxHash(uint) (bitcoin.Hash, error) {
+	panic("unsupported")
+}
+
 // TestInitializeMaintainerMetricsDisabledWhenPortUnset verifies the metrics
 // on/off gate: when the client info port is 0 (unset), the maintainer boot path
 // must report the endpoint as not configured and return a genuinely nil
@@ -51,8 +138,8 @@ func TestInitializeMaintainerMetricsDisabledWhenPortUnset(t *testing.T) {
 
 	clientConfig.ClientInfo.Port = 0
 
-	// The block counter is only touched on the configured (enabled) path, so a
-	// nil value is safe for the disabled path under test.
+	// blockCounter, ethRPC, and btcChain are only touched on the configured
+	// (enabled) path, so nil values are safe for the disabled path under test.
 	recorder := initializeMaintainerMetrics(context.Background(), nil, nil, nil)
 
 	if recorder != nil {
@@ -95,10 +182,16 @@ func TestInitializeMaintainerMetricsEnabledWhenPortSet(t *testing.T) {
 
 	clientConfig.ClientInfo.Port = port
 
-	// A stub block counter is used instead of nil: the enabled path starts a
-	// background goroutine that immediately calls blockCounter.CurrentBlock,
-	// which would panic on a nil chain.BlockCounter interface.
-	recorder := initializeMaintainerMetrics(context.Background(), stubBlockCounter{})
+	// Stub block counter, RPC, and chain are used instead of nil: the enabled
+	// path starts background goroutines that immediately call
+	// blockCounter.CurrentBlock, ethRPC.LatestBlockNumber, and
+	// btcChain.GetLatestBlockHeight, which would panic on nil interfaces.
+	recorder := initializeMaintainerMetrics(
+		context.Background(),
+		stubBlockCounter{},
+		stubEthereumRPC{},
+		stubBitcoinChain{},
+	)
 
 	if recorder == nil {
 		t.Fatal("expected a non-nil recorder when the client info port is set")
