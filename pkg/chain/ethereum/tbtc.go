@@ -434,8 +434,9 @@ func (tc *TbtcChain) ReservationParameters() (
 
 // TODO(test-coverage): ValidateReservationAnchorProposal has no direct unit
 // test coverage. It requires go-ethereum simulated-backend infrastructure
-// that does not exist anywhere in pkg/chain/ethereum today; blocked on that
-// infra landing. See PR #4280.
+// that does not exist anywhere in pkg/chain/ethereum today. PR #4280
+// explicitly deferred this pending that infra (see 01-gap-analysis.md's
+// Minor row); the infra itself is not yet built and has no owning PR.
 // ValidateReservationAnchorProposal asks the WalletProposalValidator
 // whether the given anchor proposal is valid for the given wallet and
 // reserved deposit. The validator is a separate contract reached at its
@@ -480,8 +481,8 @@ func (tc *TbtcChain) ValidateReservationAnchorProposal(
 // (convertReservationFromAbiType et al.).
 //
 // TODO(test-coverage): like ValidateReservationAnchorProposal above, this
-// has no direct unit test coverage pending go-ethereum simulated-backend
-// infrastructure. See PR #4280.
+// has no direct unit test coverage - same missing go-ethereum
+// simulated-backend infrastructure, same deferral (see the TODO above).
 func buildReservationAnchorProposalAbi(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationAnchorProposal,
