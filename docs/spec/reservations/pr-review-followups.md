@@ -69,6 +69,20 @@ action). Description matches this finding closely. **Action: confirm
 paths above, not only from the graceful-closing path** — the catalog entry
 doesn't distinguish which termination triggers it covers.
 
+**Re-verified 2026-09-07 against live `reservations-upgrade` (post #1088-#1122,
+tip `52bf2822`):** confirmed, unchanged. The three call sites are unchanged at
+`Wallets.sol:468, 502, 545` (`notifyWalletMovingFundsTimeout`,
+`notifyWalletMovedFundsSweepTimeout`, `notifyWalletFraudChallengeDefeatTimeout`)
+— all still call `terminateWallet` (`Wallets.sol:693-716`) with no
+reservation-count guard. The graceful path (`finalizeWalletClosing`,
+`Wallets.sol:666-682`) still has the `walletReservationInfo[wallet].count ==
+0` require. `notifyReservationStranded`'s underlying `strandReservation` call
+(`ReservationProofs.sol:238-239,267-268`) triggers on wallet state `Closed`
+**or** `Terminated` with no distinction by which of the three paths produced
+the `Terminated` state — so the recovery path is confirmed reachable from all
+three, not only the graceful one. Item CLOSED: verified as claimed, no
+further action needed.
+
 ## 2. Vault rotation is blocked while any reservation is outstanding
 **Severity: High.** `updateReservationParameters` refuses to change
 `reservationVault` while `reservationTotalAmount != 0`
@@ -89,6 +103,18 @@ already-Active reservations sitting on the old vault, not just pending
 deposits** — these read as two different facets of the same "vault
 migration is unsafe with live state" problem, and the catalog only
 confirms one is fixed.
+
+**Re-verified 2026-09-07 against live `reservations-upgrade` (tip
+`52bf2822`):** confirmed, unchanged in substance (line numbers moved to
+`Reservation.sol:1289-1296`). The guard now visibly also checks
+`self.pendingReservedDeposits == 0` in the same `if` block — so the M-04
+pending-deposit fix and this Active-reservation guard live side by side in
+one function, not stacked or superseding one another. Both are real,
+independent gates. The liveness cost stands exactly as described: a single
+active reservation (min size) that its owner never redeems or lets dissolve
+blocks vault rotation indefinitely. This is a genuine accepted-tradeoff/
+policy question, not a code defect — item stays OPEN pending a governance
+decision (e.g., a governance-forced dissolution override), not a fix.
 
 ## 3. No permissionless fallback if the SPV maintainer stalls
 **Severity: High.** In #1088, all four reservation lifecycle proofs
@@ -115,6 +141,20 @@ custodies. Enumerate the mainnet `isSpvMaintainer` set before launch;
 `MaintainerProxy.sol` wraps the four pooled-path proofs but has no
 `submitReservationProof` wrapper, so reservation settlement may have no
 mainnet submitter wired at all as of #1091 — verify against #1094/#1095.
+
+**Re-verified 2026-09-07 against live `reservations-upgrade` (tip
+`52bf2822`):** confirmed, unchanged. `ReservationRouter.submitReservationProof`
+(`ReservationRouter.sol:250-257`) is the single external entry point for
+every reservation proof type (dispatched via `proofType`) and remains gated
+`onlySpvMaintainer` (`ReservationRouter.sol:194-198`) with no alternate or
+permissionless entry point found anywhere in `ReservationRouter.sol` or
+`ReservationProofs.sol`. Re-anchor proof submission
+(`submitReservationReanchorProof`, `ReservationProofs.sol:671`) goes through
+this same gate. Dissolution's proof path is not yet wired in m1 (dissolution
+itself is declared-only per `m1-b-implementation.md`), so the live-today risk
+is specifically re-anchor: a stalled SPV maintainer blocks re-anchor proof
+submission with no fallback. Item stays OPEN — a genuine design/policy gap,
+not a code defect to patch here.
 
 ## 4. Live (non-snapshotted) governance parameters applied retroactively
 **Severity: High.** `updateReservationParameters` in #1088 changes

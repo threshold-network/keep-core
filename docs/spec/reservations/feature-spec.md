@@ -1070,27 +1070,34 @@ gap the runbook's keep-core follow-up section calls out.
   into `feat/utxo-reservation-core`); the `#1091+` event carries no fee
   fields, so a monitor on the merged base has the fee-bearing variant*). Decision
   deferred to the #1093 backing review.
-- **Stranding reachability from all three termination paths: verify,
-  don't assume.** H-06's fix requires wallet `Terminated`, which the
-  moving-funds / moved-funds-sweep / fraud-challenge-defeat timeout paths
-  all reach — but `walletReservationsCount == 0` is checked only on the
-  graceful closing path, and naively porting it onto the punitive paths
-  would be griefable (a dust reservation blocking deserved slashing).
-  Confirm `notifyReservationStranded` is reachable and un-griefable on all
-  three paths, not only the graceful one (followups item 1).
+- **Stranding reachability from all three termination paths: CONFIRMED
+  (re-verified 2026-09-07).** The three punitive/timeout paths
+  (`notifyWalletMovingFundsTimeout`, `notifyWalletMovedFundsSweepTimeout`,
+  `notifyWalletFraudChallengeDefeatTimeout`) all call `terminateWallet`
+  unconditionally, with no reservation-count guard; only the graceful path
+  (`finalizeWalletClosing`) checks `walletReservationInfo[wallet].count ==
+  0`. `notifyReservationStranded`'s `strandReservation` triggers on wallet
+  state `Closed` **or** `Terminated` with no distinction by which path
+  produced `Terminated` — reachability confirmed on all three. Griefability
+  of the release path itself was not re-examined this pass (followups item
+  1).
 - **Re-anchor/dissolution proof-submission gating after the authorize/prove
-  split: verify.** `requestReservationDissolution` / `requestReservationReanchor`
-  are permissionless on the request side, but whether the submit-proof
-  entry points remain SPV-maintainer-gated (no parallel of
-  `notifyRedemptionTimeout` for these) is unconfirmed in the split. If still
-  maintainer-gated, an SPV-maintainer stall blocks dissolution with no
-  permissionless fallback (followups item 3).
+  split: CONFIRMED still maintainer-gated (re-verified 2026-09-07).**
+  `ReservationRouter.submitReservationProof` is the single external entry
+  point for every proof type and remains `onlySpvMaintainer`-gated, with no
+  permissionless fallback found. Re-anchor is live in m1 and exposed to
+  this; dissolution's proof path is not yet wired (dissolution itself is
+  declared-only in m1). A stalled SPV maintainer blocks re-anchor proof
+  submission today, with no in-protocol fallback (followups item 3).
 - **Vault rotation can be blocked by a single active owner (governance-
-  liveness cost).** The vault-change guard is `reservationTotalAmount != 0` —
-  any one reservation owner who never redeems can block rotation
-  indefinitely. M-04's #1094 fix covers pending-deposit safety, not the
-  already-Active blocking facet (followups item 2). Accepted tradeoff or
-  needs policy — verify #1094 doesn't rely on the pending-only guard.
+  liveness cost): CONFIRMED (re-verified 2026-09-07).** The guard is
+  `reservationTotalAmount == 0` (`Reservation.sol:1289-1296`), checked
+  alongside an independent `pendingReservedDeposits == 0` check in the same
+  block — M-04's pending-deposit fix and this Active-reservation guard are
+  both present and neither supersedes the other. Any single active
+  reservation (min size) whose owner never redeems or lets dissolve blocks
+  vault rotation indefinitely. Confirmed as a genuine accepted-tradeoff/
+  policy question, not a code defect (followups item 2).
 - **No live-state migration path exists** for any live `ReservationAction`
   record written by an intermediate implementation — the runbook's
   deploy-inert-then-activate-last sequencing exists specifically to avoid
