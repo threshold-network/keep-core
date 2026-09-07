@@ -134,6 +134,8 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricDepositSweepProofSubmissionsFailedTotal,
 		MetricSpvProofSkippedOutsideRelayRangeTotal,
 		MetricSpvProofSkippedExceededMaxHeadersTotal,
+		MetricSpvProofTaskFailuresTotal,
+		MetricRedemptionProofTaskFailuresTotal,
 
 		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
@@ -324,6 +326,11 @@ func (pm *PerformanceMetrics) registerHistogramMetrics() {
 // registerGaugeMetrics registers all gauge metrics with 0 initial values.
 func (pm *PerformanceMetrics) registerGaugeMetrics() {
 	gauges := []string{
+		MetricSpvMaintainerActive,
+		MetricSpvMaintainerLastActivityTimestamp,
+		MetricSpvMaintainerLastSuccessTimestamp,
+		MetricSpvMaintainerLastFailureTimestamp,
+		MetricSpvMaintainerMaxBackoffSeconds,
 		MetricWalletDispatcherActiveActions,
 		MetricIncomingMessageQueueSize,
 		MetricMessageHandlerQueueSize,
@@ -574,6 +581,15 @@ const (
 	MetricDepositSweepProofSubmissionsTotal        = "deposit_sweep_proof_submissions_total"
 	MetricDepositSweepProofSubmissionsSuccessTotal = "deposit_sweep_proof_submissions_success_total"
 	MetricDepositSweepProofSubmissionsFailedTotal  = "deposit_sweep_proof_submissions_failed_total"
+
+	// Maintainer processing metrics cover discovery and proof-info errors too.
+	MetricSpvProofTaskFailuresTotal          = "spv_proof_task_failures_total"
+	MetricRedemptionProofTaskFailuresTotal   = "redemption_proof_task_failures_total"
+	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"
+	MetricSpvMaintainerActive                = "spv_maintainer_active"
+	MetricSpvMaintainerLastActivityTimestamp = "spv_maintainer_last_activity_timestamp_seconds"
+	MetricSpvMaintainerLastSuccessTimestamp  = "spv_maintainer_last_success_timestamp_seconds"
+	MetricSpvMaintainerMaxBackoffSeconds     = "spv_maintainer_max_backoff_seconds"
 
 	// SPV Proof Skip Metrics (SPV maintainer)
 	// MetricSpvProofSkippedOutsideRelayRangeTotal counts the number of

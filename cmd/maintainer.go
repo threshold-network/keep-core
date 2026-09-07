@@ -8,6 +8,7 @@ import (
 
 	"github.com/keep-network/keep-core/build"
 	"github.com/keep-network/keep-core/config"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum"
@@ -76,7 +77,7 @@ func maintainers(cmd *cobra.Command, args []string) error {
 		)
 	}
 
-	metricsRecorder := initializeMaintainerMetrics(ctx, blockCounter)
+	metricsRecorder := initializeMaintainerMetrics(ctx, blockCounter, tbtcChain, btcChain)
 
 	maintainer.Initialize(
 		ctx,
@@ -98,6 +99,8 @@ func maintainers(cmd *cobra.Command, args []string) error {
 func initializeMaintainerMetrics(
 	ctx context.Context,
 	blockCounter chain.BlockCounter,
+	ethRPC clientinfo.EthereumRPC,
+	btcChain bitcoin.Chain,
 ) spv.MetricsRecorder {
 	registry, isConfigured := clientinfo.Initialize(
 		ctx,
@@ -116,6 +119,13 @@ func initializeMaintainerMetrics(
 		clientConfig.ClientInfo.EthereumMetricsTick,
 	)
 	registry.RegisterEthChainInfoSource(blockCounter)
+	registry.ObserveBtcConnectivity(btcChain, clientConfig.ClientInfo.BitcoinMetricsTick)
+	registry.RegisterBtcChainInfoSource(btcChain)
+	healthChecker := clientinfo.NewRPCHealthChecker(
+		registry, ethRPC, btcChain, clientConfig.ClientInfo.RPCHealthCheckInterval,
+	)
+	// An unavailable RPC must not delay starting the maintainer's control loop.
+	go healthChecker.Start(ctx)
 
 	logger.Infof(
 		"enabled client info endpoint on port [%v]",

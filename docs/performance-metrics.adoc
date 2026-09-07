@@ -313,3 +313,59 @@ endpoint to be configured.
 *Type*: Counter
 *Description*: Total number of relay entry timeouts reported on-chain
 *Labels*: None
+
+== Maintainer health
+
+The `maintainer` command exposes client-info metrics when `clientInfo.port` is
+nonzero (default `9601`). Ethereum and Bitcoin connectivity checks run alongside
+the SPV loop. Initial RPC probes run asynchronously so an unavailable endpoint
+does not prevent the maintainer from starting. Set `clientInfo.port=0` to disable
+the endpoint and metric recording.
+
+Ethereum health probes fetch the latest header through the chain's RPC client
+on every check. They do not use the subscription-backed block counter, which
+can retain a height after disconnecting. Probes pass cancellation and a
+30-second deadline to the RPC; queuing in the client's rate limiter can delay
+completion. The last-check timestamp advances only after the probe returns.
+A successful response confirms connectivity, not synchronization with chain tip.
+
+All names below have the `performance_` prefix on `/metrics`:
+
+[%header,cols="1,2"]
+|===
+|Metric |Meaning
+|`rpc_eth_healthy`, `rpc_btc_healthy`
+|1 after a successful probe; 0 before the first probe or after a failed probe.
+|`rpc_eth_last_check_timestamp_seconds`, `rpc_btc_last_check_timestamp_seconds`
+|Unix time of the last completed probe, including failures. Zero means no probe
+has completed. Combine freshness with the health value to detect a hung RPC.
+|`rpc_health_check_interval_seconds`
+|Configured probe interval (30 seconds by default).
+|`spv_maintainer_active`
+|1 while the SPV control loop is running, including its normal backoff; 0 when
+disabled or stopped. Use scrape availability to detect a stopped process.
+|`spv_maintainer_last_activity_timestamp_seconds`
+|Updated at loop startup and at the start and end of each proof task. A timestamp
+that stops advancing indicates stalled processing, even if the HTTP server works.
+|`spv_maintainer_last_success_timestamp_seconds`
+|Time of the last complete successful pass over all proof tasks. A pass with no
+pending proofs is successful; this metric does not imply a proof was submitted.
+|`spv_maintainer_last_failure_timestamp_seconds`
+|Time of the most recent failed proof task. Compare with the last successful
+cycle to detect failures occurring before the first Prometheus scrape.
+|`spv_maintainer_max_backoff_seconds`
+|The larger of the configured restart and idle backoffs. Allow this interval plus
+a processing margin when alerting on stale activity.
+|`spv_proof_task_failures_total`, `redemption_proof_task_failures_total`
+|Failed proof tasks, including discovery and proof-info errors before submission.
+The second counter includes redemption tasks only. A failed submission increments
+both its existing submission-failure counter and these task counters, so do not
+sum them as independent failures.
+|===
+
+Relay-range skips and proof-header-limit skips retain their separate
+`spv_proof_skipped_outside_relay_range_total` and
+`spv_proof_skipped_exceeded_max_headers_total` counters. They are not task failures.
+These counters count attempts, so the same transaction can be counted again in a
+later cycle. Check logs for the affected transaction hashes. Metrics are sampled
+once per minute; allow for that delay when setting alert thresholds.
