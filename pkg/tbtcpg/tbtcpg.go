@@ -126,17 +126,23 @@ func (pg *ProposalGenerator) Generate(
 		}
 
 		if action == tbtc.ActionRedemption && pg.proposalMetrics != nil {
-			pg.proposalMetrics.IncrementCounter(clientinfo.MetricRedemptionProposalGenerationAttemptsTotal, 1)
+			pg.proposalMetrics.IncrementCounter(clientinfo.MetricRedemptionProposalGenerationTotal, 1)
 		}
 		proposal, ok, err := pg.tasks[taskIndex].Run(request)
 		if err != nil {
 			if action == tbtc.ActionRedemption && pg.proposalMetrics != nil {
-				pg.proposalMetrics.IncrementCounter(clientinfo.MetricRedemptionProposalGenerationFailuresTotal, 1)
+				pg.proposalMetrics.IncrementCounter(clientinfo.MetricRedemptionProposalGenerationFailedTotal, 1)
 			}
-			walletLogger.With(
+			taskFailedLogger := walletLogger.With(
 				zap.String("action", action.String()),
 				zap.Error(err),
-			).Error("proposal task failed; continuing with next task")
+			)
+			if action == tbtc.ActionRedemption {
+				taskFailedLogger = taskFailedLogger.With(
+					zap.String("event", "redemption_proposal_generation_failed"),
+				)
+			}
+			taskFailedLogger.Error("proposal task failed; continuing with next task")
 			taskErrors = append(taskErrors, fmt.Errorf("task [%s]: [%w]", action, err))
 			continue
 		}
@@ -148,8 +154,9 @@ func (pg *ProposalGenerator) Generate(
 			)
 			continue
 		}
+
 		if action == tbtc.ActionRedemption && pg.proposalMetrics != nil {
-			pg.proposalMetrics.IncrementCounter(clientinfo.MetricRedemptionProposalsGeneratedTotal, 1)
+			pg.proposalMetrics.IncrementCounter(clientinfo.MetricRedemptionProposalGenerationSuccessTotal, 1)
 		}
 
 		walletLogger.Infof(

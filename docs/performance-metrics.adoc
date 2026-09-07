@@ -197,6 +197,39 @@ For each action type, the following metrics are available:
 *Description*: Total count of coordination duration samples
 *Labels*: None
 
+=== Redemption Proposal Metrics
+
+These counters are recorded only by the node acting as coordination leader
+for a given wallet and coordination window; a node with no leader elections
+in the observed window will show no increase on these counters.
+
+==== `performance_redemption_proposal_generation_total`
+*Type*: Counter
+*Description*: Total number of redemption proposal generation task invocations, including retries (leader-only)
+*Labels*: None
+
+==== `performance_redemption_proposal_generation_failed_total`
+*Type*: Counter
+*Description*: Total number of failed redemption proposal generation tasks, even when a later action succeeds or returns no-op (leader-only)
+*Labels*: None
+
+==== `performance_redemption_proposal_generation_success_total`
+*Type*: Counter
+*Description*: Total number of redemption proposal generation tasks that produced a proposal (leader-only)
+*Labels*: None
+
+==== `performance_redemption_proposal_broadcast_total`
+*Type*: Counter
+*Description*: Total number of generated redemption proposals accepted by the local broadcast channel (leader-only)
+*Labels*: None
+
+==== `performance_redemption_proposal_broadcast_failed_total`
+*Type*: Counter
+*Description*: Total number of failed attempts to broadcast a generated redemption proposal (leader-only)
+*Labels*: None
+
+See docs/redemption-proposal-monitoring.adoc for alerting guidance.
+
 === Network Metrics
 
 ==== `performance_incoming_message_queue_size`

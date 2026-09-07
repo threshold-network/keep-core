@@ -64,7 +64,7 @@ func TestRedemptionProposalBroadcastMetrics(t *testing.T) {
 			if channel.message == nil || channel.message.coordinationBlock != 900 || channel.message.proposal != test.proposal {
 				t.Fatal("expected the original proposal to be passed to broadcast")
 			}
-			if recorder[clientinfo.MetricRedemptionProposalsBroadcastTotal] != test.sent || recorder[clientinfo.MetricRedemptionProposalBroadcastFailuresTotal] != test.failed {
+			if recorder[clientinfo.MetricRedemptionProposalBroadcastTotal] != test.sent || recorder[clientinfo.MetricRedemptionProposalBroadcastFailedTotal] != test.failed {
 				t.Fatalf("unexpected broadcast counters: %v", recorder)
 			}
 		})

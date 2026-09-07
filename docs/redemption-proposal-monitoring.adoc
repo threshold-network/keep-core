@@ -12,11 +12,11 @@ The client-info `/metrics` endpoint exposes these counters with the
 [cols="1,2",options="header"]
 |===
 | Counter | Meaning
-| `redemption_proposal_generation_attempts_total` | Redemption task invocations, including retries.
-| `redemption_proposal_generation_failures_total` | Failed redemption tasks, even when a later action succeeds or returns no-op.
-| `redemption_proposals_generated_total` | Tasks that produced a redemption proposal.
-| `redemption_proposals_broadcast_total` | Generated redemption proposals accepted by the local broadcast channel.
-| `redemption_proposal_broadcast_failures_total` | Failed attempts to send a generated redemption proposal.
+| `redemption_proposal_generation_total` | Redemption task invocations, including retries.
+| `redemption_proposal_generation_failed_total` | Failed redemption tasks, even when a later action succeeds or returns no-op.
+| `redemption_proposal_generation_success_total` | Tasks that produced a redemption proposal.
+| `redemption_proposal_broadcast_total` | Generated redemption proposals accepted by the local broadcast channel.
+| `redemption_proposal_broadcast_failed_total` | Failed attempts to send a generated redemption proposal.
 |===
 
 A successful check with no pending requests increments only the attempt counter.
@@ -24,6 +24,7 @@ Other wallet actions do not increment these counters. Broadcast success does not
 prove peer receipt, signing, Bitcoin confirmation, or Ethereum proof acceptance.
 Counters aggregate across wallets on the node and reset on process restart;
 they do not add wallet or redemption IDs as metric labels.
+These counters are recorded only by the node acting as coordination leader for a given wallet and coordination window, so a node with no leader elections in the observed window reports no attempts/successes; absence of increase on a single node is not itself a signal. Alerting must key on the failure counters (as the doc already does) rather than on missing successes.
 
 For a notification for each proposal, consume the structured `keep-tbtc` log
 event `event="redemption_proposal_broadcast"`. It includes `walletPKH` and
@@ -34,17 +35,13 @@ whether metrics are enabled. Retransmissions do not produce additional events.
 Enable JSON logging (`GOLOG_LOG_FMT=json`) in the collector's deployment.
 
 For failure alerts, evaluate
-`increase(performance_redemption_proposal_generation_failures_total[15m]) > 0`
+`increase(performance_redemption_proposal_generation_failed_total[15m]) > 0`
 and
-`increase(performance_redemption_proposal_broadcast_failures_total[15m]) > 0`
+`increase(performance_redemption_proposal_broadcast_failed_total[15m]) > 0`
 per node, and route them to the existing on-call receiver. Tune the window to
 the coordination schedule and retain `instance` and network labels. Counter
 alerts require an observed increase; inspect initial values during rollout.
 Use the structured log event for individual proposal notifications because an
 aggregate counter alert cannot identify each proposal.
 
-Before completing issue #3664, deploy a client containing this telemetry,
-configure the log collector and receiver, and verify one proposal notification,
-a failed task/broadcast notification, and deduplication in staging. Pair these
-with the on-chain monitor's redemption request, completion, and timeout events.
-No receiver credentials or notification delivery are configured by this code.
+See issue #3664 for rollout verification.

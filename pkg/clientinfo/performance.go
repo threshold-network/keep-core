@@ -134,11 +134,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricRedemptionExecutionsTotal,
 		MetricRedemptionExecutionsSuccessTotal,
 		MetricRedemptionExecutionsFailedTotal,
-		MetricRedemptionProposalGenerationAttemptsTotal,
-		MetricRedemptionProposalGenerationFailuresTotal,
-		MetricRedemptionProposalsGeneratedTotal,
-		MetricRedemptionProposalsBroadcastTotal,
-		MetricRedemptionProposalBroadcastFailuresTotal,
+		MetricRedemptionProposalGenerationTotal,
+		MetricRedemptionProposalGenerationFailedTotal,
+		MetricRedemptionProposalGenerationSuccessTotal,
+		MetricRedemptionProposalBroadcastTotal,
+		MetricRedemptionProposalBroadcastFailedTotal,
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
@@ -551,11 +551,12 @@ const (
 	MetricRedemptionActionDurationSeconds  = "redemption_action_duration_seconds"
 
 	// Redemption proposal counters distinguish task generation from P2P broadcast.
-	MetricRedemptionProposalGenerationAttemptsTotal = "redemption_proposal_generation_attempts_total"
-	MetricRedemptionProposalGenerationFailuresTotal = "redemption_proposal_generation_failures_total"
-	MetricRedemptionProposalsGeneratedTotal         = "redemption_proposals_generated_total"
-	MetricRedemptionProposalsBroadcastTotal         = "redemption_proposals_broadcast_total"
-	MetricRedemptionProposalBroadcastFailuresTotal  = "redemption_proposal_broadcast_failures_total"
+	// Recorded only when the node is acting as coordination leader for the wallet/window.
+	MetricRedemptionProposalGenerationTotal        = "redemption_proposal_generation_total"
+	MetricRedemptionProposalGenerationFailedTotal  = "redemption_proposal_generation_failed_total"
+	MetricRedemptionProposalGenerationSuccessTotal = "redemption_proposal_generation_success_total"
+	MetricRedemptionProposalBroadcastTotal         = "redemption_proposal_broadcast_total"
+	MetricRedemptionProposalBroadcastFailedTotal   = "redemption_proposal_broadcast_failed_total"
 
 	// Redemption Proof Submission Metrics (SPV maintainer)
 	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"

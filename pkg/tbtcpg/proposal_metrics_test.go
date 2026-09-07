@@ -53,9 +53,9 @@ func TestProposalGenerationMetrics(t *testing.T) {
 			}
 			_, _ = generator.Generate(&tbtc.CoordinationProposalRequest{WalletPublicKeyHash: walletPKH, ActionsChecklist: checklist})
 			expected := map[string]float64{
-				clientinfo.MetricRedemptionProposalGenerationAttemptsTotal: test.attempts,
-				clientinfo.MetricRedemptionProposalGenerationFailuresTotal: test.failures,
-				clientinfo.MetricRedemptionProposalsGeneratedTotal:         test.generated,
+				clientinfo.MetricRedemptionProposalGenerationTotal:        test.attempts,
+				clientinfo.MetricRedemptionProposalGenerationFailedTotal:  test.failures,
+				clientinfo.MetricRedemptionProposalGenerationSuccessTotal: test.generated,
 			}
 			for name, value := range expected {
 				if recorder[name] != value {

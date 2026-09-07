@@ -677,14 +677,22 @@ func (ce *coordinationExecutor) executeLeaderRoutine(
 		net.BackoffRetransmissionStrategy,
 	)
 	if err != nil {
-		if proposal.ActionType() == ActionRedemption && ce.metricsRecorder != nil {
-			ce.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProposalBroadcastFailuresTotal, 1)
+		if proposal.ActionType() == ActionRedemption {
+			if ce.metricsRecorder != nil {
+				ce.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProposalBroadcastFailedTotal, 1)
+			}
+			logger.With(
+				zap.String("event", "redemption_proposal_broadcast_failed"),
+				zap.String("walletPKH", fmt.Sprintf("0x%x", walletPublicKeyHash)),
+				zap.Uint64("coordinationBlock", coordinationBlock),
+				zap.Error(err),
+			).Error("redemption proposal broadcast to wallet coordination channel failed")
 		}
 		return nil, fmt.Errorf("failed to send coordination message: [%v]", err)
 	}
 	if proposal.ActionType() == ActionRedemption {
 		if ce.metricsRecorder != nil {
-			ce.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProposalsBroadcastTotal, 1)
+			ce.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProposalBroadcastTotal, 1)
 		}
 		logger.With(
 			zap.String("event", "redemption_proposal_broadcast"),
