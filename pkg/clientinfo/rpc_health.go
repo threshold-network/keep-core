@@ -10,10 +10,18 @@ import (
 	"github.com/ipfs/go-log"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/chain"
 )
 
 var rpcHealthLogger = log.Logger("keep-rpc-health")
+
+const ethereumRPCProbeTimeout = 30 * time.Second
+
+// EthereumRPC provides an uncached Ethereum endpoint probe. Implementations must
+// contact the endpoint on every call and forward ctx to the underlying RPC.
+// A subscription-backed BlockCounter.CurrentBlock() is not a health probe.
+type EthereumRPC interface {
+	LatestBlockNumber(ctx context.Context) (uint64, error)
+}
 
 // benignBtcHeaderErrorPattern matches the JSON-RPC error code -32602
 // ("invalid params") returned by some Electrum servers that reject the
@@ -43,7 +51,7 @@ type RPCHealthChecker struct {
 	registry *Registry
 
 	// Ethereum health check
-	ethBlockCounter chain.BlockCounter
+	ethRPC          EthereumRPC
 	ethLastCheck    time.Time
 	ethLastSuccess  time.Time
 	ethLastError    error
@@ -72,7 +80,7 @@ type RPCHealthChecker struct {
 // NewRPCHealthChecker creates a new RPC health checker instance.
 func NewRPCHealthChecker(
 	registry *Registry,
-	ethBlockCounter chain.BlockCounter,
+	ethRPC EthereumRPC,
 	btcChain bitcoin.Chain,
 	checkInterval time.Duration,
 ) *RPCHealthChecker {
@@ -81,10 +89,10 @@ func NewRPCHealthChecker(
 	}
 
 	return &RPCHealthChecker{
-		registry:        registry,
-		ethBlockCounter: ethBlockCounter,
-		btcChain:        btcChain,
-		checkInterval:   checkInterval,
+		registry:      registry,
+		ethRPC:        ethRPC,
+		btcChain:      btcChain,
+		checkInterval: checkInterval,
 	}
 }
 
@@ -141,58 +149,47 @@ func (r *RPCHealthChecker) runBitcoinHealthChecks(ctx context.Context) {
 	}
 }
 
-// checkEthereumHealth performs a comprehensive health check on the Ethereum RPC endpoint
-// by making actual RPC calls to verify the service is working properly.
-// It checks:
-// 1. Current block number retrieval
-// 2. Block number is reasonable (not stuck at 0 or extremely old)
+// checkEthereumHealth probes the Ethereum endpoint for a nonzero latest block.
+// The caller's cancellation and a probe deadline are forwarded to the RPC.
+// A successful response confirms connectivity, not chain synchronization.
 func (r *RPCHealthChecker) checkEthereumHealth(ctx context.Context) {
-	if r.ethBlockCounter == nil {
+	if r.ethRPC == nil {
 		return
 	}
 
 	startTime := time.Now()
+	probeCtx, cancel := context.WithTimeout(ctx, ethereumRPCProbeTimeout)
+	defer cancel()
 
-	// First check: Get current block number
-	currentBlock, err := r.ethBlockCounter.CurrentBlock()
-	if err != nil {
-		r.ethMutex.Lock()
-		r.ethLastCheck = startTime
-		r.ethLastError = err
-		r.ethMutex.Unlock()
-		rpcHealthLogger.Warnf(
-			"Ethereum RPC health check failed (CurrentBlock): [%v] (duration: %v)",
-			err,
-			time.Since(startTime),
-		)
-		return
+	currentBlock, err := r.ethRPC.LatestBlockNumber(probeCtx)
+	if err == nil {
+		// Never count a response received after cancellation/deadline as healthy.
+		err = probeCtx.Err()
+	}
+	if err == nil && currentBlock == 0 {
+		err = fmt.Errorf("block number is 0, node may not be synced")
 	}
 
-	// Second check: Verify block number is reasonable
-	// Block number should be > 0 (unless on a very new testnet)
-	// For mainnet/testnet, block numbers should be in thousands/millions
-	if currentBlock == 0 {
-		blockErr := fmt.Errorf("block number is 0, node may not be synced")
-		r.ethMutex.Lock()
-		r.ethLastCheck = startTime
-		r.ethLastError = blockErr
-		r.ethMutex.Unlock()
-		rpcHealthLogger.Warnf(
-			"Ethereum RPC health check failed (block number is 0): [%v] (duration: %v)",
-			blockErr,
-			time.Since(startTime),
-		)
-		return
-	}
-
-	duration := time.Since(startTime)
+	completedAt := time.Now()
+	duration := completedAt.Sub(startTime)
 
 	r.ethMutex.Lock()
-	r.ethLastCheck = startTime
-	r.ethLastSuccess = time.Now()
-	r.ethLastError = nil
-	r.ethLastDuration = duration
+	r.ethLastCheck = completedAt
+	r.ethLastError = err
+	if err == nil {
+		r.ethLastSuccess = completedAt
+		r.ethLastDuration = duration
+	}
 	r.ethMutex.Unlock()
+
+	if err != nil {
+		rpcHealthLogger.Warnf(
+			"Ethereum RPC health check failed (LatestBlockNumber): [%v] (duration: %v)",
+			err,
+			duration,
+		)
+		return
+	}
 
 	rpcHealthLogger.Debugf(
 		"Ethereum RPC health check succeeded (block: %d, duration: %v)",
