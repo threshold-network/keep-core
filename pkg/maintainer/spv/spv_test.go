@@ -451,10 +451,18 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 // proveTransactions invokes it synchronously, so no locking is needed.
 type recordingMetricsRecorder struct {
 	counters map[string]float64
+	gauges   map[string]float64
 }
 
 func (r *recordingMetricsRecorder) IncrementCounter(name string, value float64) {
 	r.counters[name] += value
+}
+
+func (r *recordingMetricsRecorder) SetGauge(name string, value float64) {
+	if r.gauges == nil {
+		r.gauges = make(map[string]float64)
+	}
+	r.gauges[name] = value
 }
 
 // TestProveTransactions covers the caller-side handling of each proofSkipReason
@@ -489,6 +497,7 @@ func TestProveTransactions(t *testing.T) {
 		transactionConfirmations uint
 		expectSubmitted          bool
 		expectedCounter          string
+		submissionError          bool
 	}{
 		// Decisive header (difficulty 8) matches neither epoch -> skipped.
 		"outside relay range is skipped and metered": {
@@ -505,6 +514,13 @@ func TestProveTransactions(t *testing.T) {
 			transactionConfirmations: 150,
 			expectSubmitted:          false,
 			expectedCounter:          "spv_proof_skipped_exceeded_max_headers_total",
+		},
+		"submission failure is counted": {
+			headerDifficultyAt:       func(uint) *big.Int { return big.NewInt(32) },
+			headersTo:                proofStart + 19,
+			transactionConfirmations: 20,
+			expectSubmitted:          true,
+			submissionError:          true,
 		},
 		// All headers at the current epoch difficulty -> proof is submitted.
 		"assemblable proof is submitted": {
@@ -573,11 +589,24 @@ func TestProveTransactions(t *testing.T) {
 					t.Fatal("proof submitter did not receive the maintainer recorder")
 				}
 				submitted = append(submitted, hash)
+				if test.submissionError {
+					return fmt.Errorf("submission failed")
+				}
 				return nil
 			}
 
-			if err := sm.proveTransactions(getter, submitter); err != nil {
-				t.Fatal(err)
+			err := sm.runProofTask(tbtc.ActionRedemption, getter, submitter)
+			if (err != nil) != test.submissionError {
+				t.Fatalf("unexpected task error: %v", err)
+			}
+			wantFailures := float64(0)
+			if test.submissionError {
+				wantFailures = 1
+			}
+			for _, name := range []string{"spv_proof_task_failures_total", "redemption_proof_task_failures_total"} {
+				if got := recorder.counters[name]; got != wantFailures {
+					t.Errorf("%s: want %v, got %v", name, wantFailures, got)
+				}
 			}
 
 			if test.expectSubmitted {
