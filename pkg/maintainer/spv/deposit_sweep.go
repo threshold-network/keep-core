@@ -20,6 +20,7 @@ func SubmitDepositSweepProof(
 	requiredConfirmations uint,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
+	metricsRecorder MetricsRecorder,
 ) error {
 	return submitDepositSweepProof(
 		transactionHash,
@@ -27,7 +28,7 @@ func SubmitDepositSweepProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		nil,
+		metricsRecorder,
 	)
 }
 
@@ -37,9 +38,7 @@ func submitDepositSweepProof(
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	spvProofAssembler spvProofAssembler,
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-	},
+	metricsRecorder MetricsRecorder,
 ) error {
 	// Record proof submission attempt
 	if metricsRecorder != nil {

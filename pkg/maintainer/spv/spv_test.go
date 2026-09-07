@@ -567,7 +567,11 @@ func TestProveTransactions(t *testing.T) {
 				_ uint,
 				_ bitcoin.Chain,
 				_ Chain,
+				metrics MetricsRecorder,
 			) error {
+				if metrics != recorder {
+					t.Fatal("proof submitter did not receive the maintainer recorder")
+				}
 				submitted = append(submitted, hash)
 				return nil
 			}

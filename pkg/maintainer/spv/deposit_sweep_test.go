@@ -10,8 +10,23 @@ import (
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
+
+// fakeMetricsRecorder is a test double for MetricsRecorder that accumulates the
+// counter increments it receives, so tests can assert on them.
+type fakeMetricsRecorder struct {
+	counters map[string]float64
+}
+
+func newFakeMetricsRecorder() *fakeMetricsRecorder {
+	return &fakeMetricsRecorder{counters: make(map[string]float64)}
+}
+
+func (f *fakeMetricsRecorder) IncrementCounter(name string, value float64) {
+	f.counters[name] += value
+}
 
 func TestSubmitDepositSweepProof(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
@@ -90,13 +105,15 @@ func TestSubmitDepositSweepProof(t *testing.T) {
 		return nil, nil, fmt.Errorf("error while assembling spv proof")
 	}
 
+	recorder := newFakeMetricsRecorder()
+
 	err := submitDepositSweepProof(
 		depositSweepTransaction.Hash(),
 		requiredConfirmations,
 		btcChain,
 		spvChain,
 		mockSpvProofAssembler,
-		nil,
+		recorder,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +148,116 @@ func TestSubmitDepositSweepProof(t *testing.T) {
 		t,
 		expectedVault[:],
 		submittedProof.vault[:],
+	)
+
+	// A successful submission must record one attempt and one success, and
+	// must not record a failure.
+	testutils.AssertIntsEqual(
+		t,
+		"total submissions counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"success counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"failed counter",
+		0,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsFailedTotal]),
+	)
+}
+
+// TestSubmitDepositSweepProofRecordsFailureMetrics verifies that a rejected
+// submission (here, zero required confirmations) records both an attempt and a
+// failure, but no success. This is the metrics seam that the maintainer boot
+// path activates in production by passing a real recorder.
+func TestSubmitDepositSweepProofRecordsFailureMetrics(t *testing.T) {
+	recorder := newFakeMetricsRecorder()
+
+	err := submitDepositSweepProof(
+		bitcoin.Hash{},
+		0, // zero required confirmations forces an early failure
+		nil,
+		nil,
+		nil,
+		recorder,
+	)
+	if err == nil {
+		t.Fatal("expected an error for zero required confirmations")
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"total submissions counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"failed counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsFailedTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"success counter",
+		0,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal]),
+	)
+}
+
+// TestSubmitDepositSweepProofRecordsAssembleFailureMetrics verifies that a
+// failure occurring after the initial attempt is counted as a failure and not a
+// success. Here the SPV proof assembler errors out, exercising a deeper
+// failed-counter branch than the early zero-confirmations reject. The
+// parse-inputs and on-chain-submit branches share this same guard idiom; the
+// local chain double cannot be forced to fail the on-chain submit, so that
+// branch is left to the shared pattern.
+func TestSubmitDepositSweepProofRecordsAssembleFailureMetrics(t *testing.T) {
+	recorder := newFakeMetricsRecorder()
+
+	failingAssembler := func(
+		bitcoin.Hash,
+		uint,
+		bitcoin.Chain,
+	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
+		return nil, nil, fmt.Errorf("error while assembling spv proof")
+	}
+
+	err := submitDepositSweepProof(
+		bitcoin.Hash{},
+		6, // non-zero, so the failure comes from proof assembly
+		nil,
+		nil,
+		failingAssembler,
+		recorder,
+	)
+	if err == nil {
+		t.Fatal("expected an error from the failing proof assembler")
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"total submissions counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"failed counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsFailedTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"success counter",
+		0,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal]),
 	)
 }
 
