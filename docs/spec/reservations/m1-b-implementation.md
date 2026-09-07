@@ -212,6 +212,13 @@ delay, retry credit, renewal window, `dissolutionEligibleAt`,
 `walletPendingDissolution`. This is what makes m2 an upgrade rather than a
 migration.
 
+**Implementation status (2026-09-04).** The fee ceiling is deferred to m2:
+`maxCumulativeReanchorFee` is declared in `BridgeState.Storage` (fold-lineage
+description as load-bearing) but has no governance setter and no enforcement
+check in m1 — re-anchor fee-grinding is bounded per position only by the action
+timeout/cooldown. As part of m2's redemption/dissolution work, this field will be
+wired into `requestReservationReanchor`/settlement with a governance setter.
+
 ## 5. Operational duties
 
 B's duty list is longer than A+'s because nothing closes a position on its own.
@@ -232,6 +239,39 @@ B's duty list is longer than A+'s because nothing closes a position on its own.
 Note what B does **not** need: a dissolution executor. That saving is the
 decision's operational upside, and it is real — but it is a saving of
 ~300-500 production Go lines against the duties above.
+
+**Implementation status (2026-09-03, PR #4282 review).** The free-slot and
+occupancy monitors above are deferred past m1's first PR, not built. Only
+per-action execution counters (acceptance/re-anchor attempts, successes,
+failures) exist in `pkg/clientinfo/performance.go` today. Wiring the two
+leading-indicator gauges (`active_reservations_count` /
+`max_active_reservations` and per-wallet `wallet_reservations_count` /
+`live_wallets_count`) requires threading a new chain-read dependency
+through `clientinfo.NewPerformanceMetrics` (a periodic-poll interface, or a
+push from the acceptance task's existing `ActiveReservationsCount`/wallet
+lookups) and updating every call site — the same shape of change was
+attempted directly in `pkg/clientinfo/performance.go` during PR #4282 review
+remediation and reverted after it broke the package build with an
+unresolved call-site signature mismatch. Given the P2 severity (this is an
+observability gap, not a correctness defect — §4.1's `maxActiveReservations`
+cap still enforces the safety property without the gauge) and the real risk
+of a half-wired chain dependency, the gauges are deferred to a follow-up PR
+that adds the chain interface deliberately, with its own tests, rather than
+bolted onto an unrelated review-fix pass. Tracked as an open item, not a
+silently-dropped one.
+
+**Implementation status (2026-09-07, PR #4282 round-2 review).** The
+in-kind fee reserve and `inKindFeeDebtSat` watch (duty row above) has no
+recorded deferral decision, unlike the free-slot/occupancy monitors noted
+above: a repo-wide search finds zero references to `InKindFeeDebt` or
+`FeeReserve` anywhere in `pkg/`. It was not built and, until now, was not
+explicitly deferred either — this note exists so the gap is a tracked
+decision rather than a silent one. Wiring it requires a chain-read for the
+reserve/debt balance (no such accessor exists on any Chain interface today)
+plus a gauge, mirroring the shape of the free-slot/occupancy gauges above;
+deferred to the same follow-up PR for the same reason - it should get its
+own chain interface and tests, not be bolted onto an unrelated review-fix
+pass.
 
 ## 6. What m2 must then build
 
