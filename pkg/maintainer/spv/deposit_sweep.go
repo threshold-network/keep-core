@@ -103,6 +103,7 @@ func submitDepositSweepProof(
 	if metricsRecorder != nil {
 		metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal, 1)
 	}
+
 	return nil
 }
 

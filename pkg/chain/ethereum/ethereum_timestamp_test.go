@@ -54,7 +54,6 @@ func (m *timestampMockClient) HeaderByNumber(
 	return m.header(number.Uint64())
 }
 
-
 var errBlockOutOfRange = errors.New("block out of range")
 
 func TestGetBlockNumberByTimestamp(t *testing.T) {

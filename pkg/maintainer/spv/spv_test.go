@@ -447,10 +447,20 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 	)
 }
 
+// recordingMetricsRecorder captures IncrementCounter calls for assertions.
+// proveTransactions invokes it synchronously, so no locking is needed.
+type recordingMetricsRecorder struct {
+	counters map[string]float64
+}
+
+func (r *recordingMetricsRecorder) IncrementCounter(name string, value float64) {
+	r.counters[name] += value
+}
+
 // TestProveTransactions covers the caller-side handling of each proofSkipReason
 // in proveTransactions. The safety property under test is that a skip reason
 // never results in a proof submission, and that an assemblable proof is
-// submitted.
+// submitted; the per-reason metric counter is asserted as a secondary check.
 func TestProveTransactions(t *testing.T) {
 	const proofStart = 790270
 
@@ -478,20 +488,23 @@ func TestProveTransactions(t *testing.T) {
 		headersTo                uint
 		transactionConfirmations uint
 		expectSubmitted          bool
+		expectedCounter          string
 	}{
 		// Decisive header (difficulty 8) matches neither epoch -> skipped.
-		"outside relay range is skipped": {
+		"outside relay range is skipped and metered": {
 			headerDifficultyAt:       func(uint) *big.Int { return big.NewInt(8) },
 			headersTo:                proofStart + 19,
 			transactionConfirmations: 20,
 			expectSubmitted:          false,
+			expectedCounter:          "spv_proof_skipped_outside_relay_range_total",
 		},
 		// A run of DIFF1 headers longer than the bound never binds -> skipped.
-		"exceeded max headers is skipped": {
+		"exceeded max headers is skipped and metered": {
 			headerDifficultyAt:       func(uint) *big.Int { return big.NewInt(1) },
 			headersTo:                proofStart + 149,
 			transactionConfirmations: 150,
 			expectSubmitted:          false,
+			expectedCounter:          "spv_proof_skipped_exceeded_max_headers_total",
 		},
 		// All headers at the current epoch difficulty -> proof is submitted.
 		"assemblable proof is submitted": {
@@ -499,6 +512,7 @@ func TestProveTransactions(t *testing.T) {
 			headersTo:                proofStart + 19,
 			transactionConfirmations: 20,
 			expectSubmitted:          true,
+			expectedCounter:          "",
 		},
 	}
 
@@ -527,11 +541,16 @@ func TestProveTransactions(t *testing.T) {
 				big.NewInt(32),
 			)
 
+			recorder := &recordingMetricsRecorder{
+				counters: make(map[string]float64),
+			}
+
 			sm := &spvMaintainer{
-				config:       Config{MaxProofHeaders: DefaultMaxProofHeaders},
-				spvChain:     localChain,
-				btcDiffChain: localChain,
-				btcChain:     btcChain,
+				metricsRecorder: recorder,
+				config:          Config{MaxProofHeaders: DefaultMaxProofHeaders},
+				spvChain:        localChain,
+				btcDiffChain:    localChain,
+				btcChain:        btcChain,
 			}
 
 			var submitted []bitcoin.Hash
@@ -548,7 +567,11 @@ func TestProveTransactions(t *testing.T) {
 				_ uint,
 				_ bitcoin.Chain,
 				_ Chain,
+				metrics MetricsRecorder,
 			) error {
+				if metrics != recorder {
+					t.Fatal("proof submitter did not receive the maintainer recorder")
+				}
 				submitted = append(submitted, hash)
 				return nil
 			}
@@ -570,6 +593,16 @@ func TestProveTransactions(t *testing.T) {
 					"expected no submission on skip, got [%d]",
 					len(submitted),
 				)
+			}
+
+			if test.expectedCounter != "" {
+				if got := recorder.counters[test.expectedCounter]; got != 1 {
+					t.Errorf(
+						"expected counter [%s] to be 1, got [%v]",
+						test.expectedCounter,
+						got,
+					)
+				}
 			}
 		})
 	}
@@ -909,6 +942,7 @@ func TestUnprovenSearchStartBlock(t *testing.T) {
 		})
 	}
 }
+
 // stubTransactionChain overrides GetTransactionsForPublicKeyHash on the local
 // Bitcoin chain so that collectUnprovenWalletTransactions can be exercised with
 // a controlled set of transactions and error, independently of how the local

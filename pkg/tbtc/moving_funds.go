@@ -389,7 +389,6 @@ func ValidateMovingFundsProposal(
 	return nil
 }
 
-
 // movingFundsSafetyMarginChain is the chain interface required to evaluate the
 // moving funds safety margin and to determine whether a wallet is a pending
 // moving funds target.
