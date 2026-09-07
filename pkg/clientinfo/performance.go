@@ -99,7 +99,16 @@ func (pm *PerformanceMetrics) Stop() {
 // registerAllMetrics registers all performance metrics with 0 values
 // so they appear in the /metrics endpoint even before operations occur.
 func (pm *PerformanceMetrics) registerAllMetrics() {
-	// ----- counter metrics -----
+	pm.registerCounterMetrics()
+	pm.registerWalletActionMetrics()
+	pm.registerHistogramMetrics()
+	pm.registerGaugeMetrics()
+}
+
+// registerCounterMetrics registers all counter metrics with 0 initial values.
+// Map entries are populated before observers are registered so that observer
+// callbacks never read the map while it is being written concurrently.
+func (pm *PerformanceMetrics) registerCounterMetrics() {
 	counters := []string{
 		// ----- DKG counters -----
 		MetricDKGJoinedTotal,
@@ -184,7 +193,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// ----- wallet action metrics -----
+}
+
+// registerWalletActionMetrics registers per-action-type wallet counters and
+// duration histograms with 0 initial values.
+func (pm *PerformanceMetrics) registerWalletActionMetrics() {
 	// For each action type, register: total, success_total, failed_total, duration_seconds
 	for _, actionType := range GetAllWalletActionTypes() {
 		actionCounters := []string{
@@ -245,7 +258,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// ----- histogram metrics -----
+}
+
+// registerHistogramMetrics registers standalone duration/histogram metrics with
+// 0 initial values.
+func (pm *PerformanceMetrics) registerHistogramMetrics() {
 	// These use the actual metric names as used in the codebase.
 	durationMetrics := []string{
 		MetricDKGDurationSeconds,
@@ -302,7 +319,10 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		pm.registry.ObserveApplicationSource("performance", sources)
 	}
 
-	// ----- gauge metrics -----
+}
+
+// registerGaugeMetrics registers all gauge metrics with 0 initial values.
+func (pm *PerformanceMetrics) registerGaugeMetrics() {
 	gauges := []string{
 		MetricWalletDispatcherActiveActions,
 		MetricIncomingMessageQueueSize,

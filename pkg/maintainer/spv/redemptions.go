@@ -24,7 +24,7 @@ func SubmitRedemptionProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		getMetricsRecorder(),
+		nil,
 	)
 }
 
@@ -160,19 +160,10 @@ func getUnprovenRedemptionTransactions(
 	[]*bitcoin.Transaction,
 	error,
 ) {
-	blockCounter, err := spvChain.BlockCounter()
+	startBlock, err := unprovenSearchStartBlock(historyDepth, spvChain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block counter: [%v]", err)
+		return nil, err
 	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	// Calculate the starting block of the range in which the events will be
-	// searched for.
-	startBlock := currentBlock - historyDepth
 
 	events, err :=
 		spvChain.PastRedemptionRequestedEvents(
@@ -214,40 +205,28 @@ func getUnprovenRedemptionTransactions(
 			continue
 		}
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		unproven, err := collectUnprovenWalletTransactions(
 			walletPublicKeyHash,
 			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenRedemptionTransaction(
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenRedemptionTransaction(
 					transaction,
 					walletPublicKeyHash,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven redemption "+
-						"transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenRedemptionTransactions = append(
-					unprovenRedemptionTransactions,
-					transaction,
-				)
-			}
+			},
+			false,
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenRedemptionTransactions = append(
+			unprovenRedemptionTransactions,
+			unproven...,
+		)
 	}
 
 	return unprovenRedemptionTransactions, nil
