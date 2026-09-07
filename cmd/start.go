@@ -139,7 +139,7 @@ func start(cmd *cobra.Command) error {
 
 			rpcHealthChecker := clientinfo.NewRPCHealthChecker(
 				clientInfoRegistry,
-				blockCounter,
+				tbtcChain,
 				btcChain,
 				clientConfig.ClientInfo.RPCHealthCheckInterval,
 			)
