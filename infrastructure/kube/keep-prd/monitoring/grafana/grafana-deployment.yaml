@@ -49,6 +49,11 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 2
+          startupProbe:
+            tcpSocket:
+              port: grafana
+            periodSeconds: 10
+            failureThreshold: 60
           livenessProbe:
             initialDelaySeconds: 30
             tcpSocket:
@@ -72,6 +77,8 @@ spec:
               mountPath: /var/lib/grafana
             - name: grafana-dashboards-keep
               mountPath: /var/lib/grafana/dashboards/keep
+            - name: grafana-tmp
+              mountPath: /tmp
           securityContext:
             readOnlyRootFilesystem: true
       volumes:
@@ -99,3 +106,5 @@ spec:
             items:
               - key: grafana.ini
                 path: grafana.ini
+        - name: grafana-tmp
+          emptyDir: {}

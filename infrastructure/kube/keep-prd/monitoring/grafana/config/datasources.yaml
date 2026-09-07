@@ -1,6 +1,7 @@
 apiVersion: 1
 datasources:
   - name: Trickster
+    uid: P09205B1DD12FB1C6
     type: prometheus
     access: proxy
     editable: true

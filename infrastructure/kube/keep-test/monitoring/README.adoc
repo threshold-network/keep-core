@@ -256,21 +256,92 @@ traffic.
 3. On the restored copy, check plugins retained on the volume for Grafana 12
 compatibility, including any separately installed image renderer. Angular plugins
 are no longer supported. Verify the Kubernetes Deployments dashboard's legacy
-graph panels migrate and render correctly; inspect dashboards saved only in the
-database too.
-4. Once the rehearsal and compatibility checks pass, repeat any required Grafana
-10.4 migration on the original volume. Render the target environment's
-configuration with `kubectl kustomize grafana` from its monitoring directory, then
-apply it using `kubectl apply -k grafana` after that migration succeeds. The
-`Recreate` deployment strategy prevents old and new Grafana pods writing to the
-same database during rollout. Expect a Grafana outage while the single replica
-restarts and migrates storage.
-5. Confirm the running image digest and `/grafana/api/health` version. Check
+graph panels render via Grafana's compatibility shim; this dashboard is file-
+provisioned from a read-only ConfigMap mount, so Grafana can never persist a
+graph-to-timeseries conversion back to the JSON -- it re-derives from disk on
+every load. Converting the 4 `type: graph` panels to `timeseries` directly in
+the repo JSON is the durable fix and is tracked as follow-up work, not a gate
+on this upgrade; inspect dashboards saved only in the database too, since
+those genuinely do persist their migration.
+Record peak container memory during this rehearsal; if it approaches the
+`1Gi` limit set in `grafana-deployment.yaml`, raise the limit before the
+production rollout.
+4. Once the rehearsal and compatibility checks pass, scale the running
+Deployment to zero and wait for its pod to terminate before touching the
+original volume:
++
+[source,bash]
+----
+kubectl scale deployment/grafana --replicas=0 -n monitoring
+kubectl wait --for=delete pod -l app=grafana -n monitoring --timeout=120s
+----
++
+If a Grafana 10.4 migration is still required (see step 2), run it as a
+one-shot ad-hoc Pod against the original `grafana-pvc`, not the pinned
+12.4.10 manifest -- `kubectl apply -k grafana` only ever renders 12.4.10:
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: grafana-migrate-10-4
+  namespace: monitoring
+spec:
+  restartPolicy: Never
+  containers:
+    - name: grafana
+      image: grafana/grafana:10.4.x@sha256:<pinned-digest> # pin a verified digest, as above
+      volumeMounts:
+        - name: grafana-storage
+          mountPath: /var/lib/grafana
+        - name: grafana-grafana-ini
+          mountPath: /etc/grafana/grafana.ini
+          subPath: grafana.ini
+  volumes:
+    - name: grafana-storage
+      persistentVolumeClaim:
+        claimName: grafana-pvc
+    - name: grafana-grafana-ini
+      configMap:
+        name: grafana-config
+        items:
+          - key: grafana.ini
+            path: grafana.ini
+----
++
+This is a bare Pod, not a Job: the Grafana server process never exits on its
+own, so there is no automated completion to track. Watch the pod's logs until
+they show the migration completed, then delete it manually
+(`kubectl delete pod grafana-migrate-10-4 -n monitoring`) before continuing.
++
+Render the target environment's configuration with `kubectl kustomize grafana`
+from its monitoring directory. Before applying, remove the `rollingUpdate`
+subobject the API server defaulted onto the existing Deployment the first time
+it was created without `spec.strategy`; the API rejects `type: Recreate` while
+that subobject is still present:
++
+[source,bash]
+----
+kubectl patch deployment grafana -n monitoring --type=json \
+  -p '[{"op":"remove","path":"/spec/strategy/rollingUpdate"}]' || true
+kubectl apply -k grafana
+----
++
+The `Recreate` deployment strategy prevents old and new Grafana pods writing to
+the same database during rollout. Expect a Grafana outage while the single
+replica restarts and migrates storage.
+5. Because the GKE Ingress derives its backend health check from the
+readiness probe, public traffic resumes on the new pod automatically the
+moment it passes -- there is no manual pause before cutover. Keep the
+previous image reference and the step-1 backup staged and immediately
+restorable before starting step 4, then run these checks right after cutover:
+confirm the running image digest and `/grafana/api/health` version, check
 Google sign-in and existing roles, GitHub sign-in in `keep-test`, dashboard
-queries through Trickster, existing public dashboard links and alert delivery.
-Check logs for database, plugin and provisioning failures before restoring
-normal traffic. A successful pod health check alone does not establish these
-behaviors.
+queries through Trickster, existing public dashboard links and alert
+delivery, and check logs for database, plugin and provisioning failures. A
+successful pod health check alone does not establish these behaviors; if any
+check fails, restore the staged backup and previous image immediately.
 
 Grafana 12.4 can migrate dashboards, folders and playlists to unified storage.
 To roll back from any upgrade stage, including Grafana 10.4, stop Grafana, restore
