@@ -229,6 +229,7 @@ in the observed window will show no increase on these counters.
 *Labels*: None
 
 See docs/redemption-proposal-monitoring.adoc for alerting guidance.
+
 === SPV Proof Submission Metrics (Maintainer)
 
 These metrics are recorded by the SPV maintainer (the `maintainer` command) when
