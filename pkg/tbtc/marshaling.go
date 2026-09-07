@@ -567,6 +567,12 @@ func (rrp *ReservationReanchorProposal) Unmarshal(data []byte) error {
 	if len(pbMsg.ReservationKey) == 0 {
 		return fmt.Errorf("reservation key is required")
 	}
+	if len(pbMsg.ReservationKey) > 32 {
+		return fmt.Errorf(
+			"invalid reservation key byte length: [%v]",
+			len(pbMsg.ReservationKey),
+		)
+	}
 	if pbMsg.RequestNonce == 0 {
 		return fmt.Errorf("request nonce is required")
 	}

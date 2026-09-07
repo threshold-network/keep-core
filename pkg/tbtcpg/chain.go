@@ -188,8 +188,8 @@ type Chain interface {
 
 	// RequestReservationAcceptance requests a reservation acceptance action
 	// generation for the given reservation. The reservation must be in a
-	// state that allows acceptance; the operator-side guard is enforced at
-	// the chain layer.
+	// state that allows acceptance.
+	// Eligibility is checked by the reservation proposal builder and enforced by the Bridge.
 	RequestReservationAcceptance(
 		reservationKey *big.Int,
 		walletPublicKeyHash [20]byte,
@@ -213,13 +213,10 @@ type Chain interface {
 		mainUtxo *bitcoin.UnspentTransactionOutput,
 	) error
 
-	// GetReservation gets the on-chain reservation record for the given
-	// reservation key. Returns an error if the reservation was not found.
+	// GetReservation returns the on-chain reservation record. An absent key is represented by ReservationStateUnknown; errors report chain-call or conversion failures.
 	GetReservation(reservationKey *big.Int) (*tbtc.Reservation, error)
 
-	// GetReservationAction gets the on-chain action record for the given
-	// reservation key and request nonce. Returns an error if the action
-	// generation was not found.
+	// GetReservationAction returns the nonce-bound on-chain action record. An absent generation is represented by ReservationActionStateUnknown; errors report chain-call or conversion failures.
 	GetReservationAction(
 		reservationKey *big.Int,
 		requestNonce uint64,

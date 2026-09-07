@@ -1352,9 +1352,12 @@ func TestReservationAcceptanceTask_DepositNotReserved(t *testing.T) {
 }
 
 // TestReservationAcceptanceTask_GetWalletError exercises the GetWallet
-// error passthrough inside checkReservationAcceptanceEligibility: a
+// error propagation inside findReservationAcceptanceCandidate: a
 // reserved deposit candidate is discovered and matches the reservation
-// vault, but the candidate wallet's chain data fails to load.
+// vault, but the candidate wallet's chain data fails to load. Production
+// now propagates this RPC failure instead of masking it as "no eligible
+// candidate", so the coordinator can retry rather than silently treating
+// a transient chain-read failure as a benign no-op.
 func TestReservationAcceptanceTask_GetWalletError(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
 
@@ -1364,8 +1367,6 @@ func TestReservationAcceptanceTask_GetWalletError(t *testing.T) {
 	currentBlock := uint64(300000)
 
 	// getWalletErr forces GetWallet to fail for the candidate wallet.
-	// Production logs and swallows the GetWallet error, so Run must
-	// return (nil, false, nil).
 	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, func(ralc *reservationAcceptanceLocalChain) {
 		ralc.getWalletErr = fmt.Errorf("boom")
 	})
@@ -1384,8 +1385,17 @@ func TestReservationAcceptanceTask_GetWalletError(t *testing.T) {
 	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
 		WalletPublicKeyHash: walletPublicKeyHash,
 	})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	expectedErr := "cannot find reservation acceptance candidate: " +
+		"[failed to load wallet chain data: [boom]]"
+	if err.Error() != expectedErr {
+		t.Errorf(
+			"unexpected error\nexpected: %v\nactual:   %v",
+			expectedErr,
+			err,
+		)
 	}
 	if shouldExecute {
 		t.Errorf("expected shouldExecute=false, got true")

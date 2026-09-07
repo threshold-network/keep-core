@@ -93,27 +93,29 @@ type localChain struct {
 	// relevant big.Int (see bigIntKey/buildReservationActionKey);
 	// reservationAnchorUtxoIndex and walletReservations use fixed-size
 	// byte-array keys since they are not keyed by a single big.Int.
-	walletReservations         map[[20]byte][]*big.Int
-	reservations               map[string]*tbtc.Reservation
-	reservationActions         map[string]*tbtc.ReservationAction
-	reservedDeposits           map[string]*reservedDepositRecord
-	submittedStrandedKeys      []*big.Int
-	submittedStaleDeposits     []*big.Int
-	submittedActionTimeouts    []*submittedReservationActionTimeout
-	reservationParameters      *tbtc.ReservationParameters
-	reservationAnchorUtxoIndex map[[36]byte]*big.Int
+	walletReservations          map[[20]byte][]*big.Int
+	reservations                map[string]*tbtc.Reservation
+	reservationActions          map[string]*tbtc.ReservationAction
+	reservedDeposits            map[string]*reservedDepositRecord
+	submittedStrandedKeys       []*big.Int
+	submittedStaleDeposits      []*big.Int
+	submittedActionTimeouts     []*submittedReservationActionTimeout
+	submittedAcceptanceTimeouts []*big.Int
+	reservationParameters       *tbtc.ReservationParameters
+	reservationAnchorUtxoIndex  map[[36]byte]*big.Int
 
 	// Error-injection fields for the reservation watcher chain-error
 	// passthrough tests: nil (the default) means the corresponding method
 	// falls through to its normal, table-driven behavior.
-	getReservationActionErr           error
-	walletReservationsErr             error
-	isReservedDepositErr              error
-	reservedDepositWalletErr          error
-	notifyReservationActionTimeoutErr error
-	notifyStaleReservedDepositErr     error
-	pastNewWalletRegisteredEventsErr  error
-	notifyReservationStrandedErrByKey map[string]error
+	getReservationActionErr                error
+	walletReservationsErr                  error
+	isReservedDepositErr                   error
+	reservedDepositWalletErr               error
+	notifyReservationActionTimeoutErr      error
+	notifyReservationAcceptanceTimedOutErr error
+	notifyStaleReservedDepositErr          error
+	pastNewWalletRegisteredEventsErr       error
+	notifyReservationStrandedErrByKey      map[string]error
 
 	// Wallet registration and pending-action-request event state for the
 	// watcher dispatch and reservation proof loop tests.
@@ -900,6 +902,40 @@ func (lc *localChain) getSubmittedReservationActionTimeouts() []*submittedReserv
 	return out
 }
 
+// NotifyReservationAcceptanceTimedOut records the notification for
+// assertion in tests. The action-timeout watcher builder invokes this
+// through the Chain interface to drive the Acceptance-type timeout
+// notification path (a separate on-chain entry point from
+// NotifyReservationActionTimeout, which is Reanchor-only).
+func (lc *localChain) NotifyReservationAcceptanceTimedOut(
+	reservationKey *big.Int,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.notifyReservationAcceptanceTimedOutErr != nil {
+		return lc.notifyReservationAcceptanceTimedOutErr
+	}
+
+	lc.submittedAcceptanceTimeouts = append(
+		lc.submittedAcceptanceTimeouts,
+		reservationKey,
+	)
+
+	return nil
+}
+
+// getSubmittedAcceptanceTimeouts returns the recorded acceptance-timeout
+// notifications in submission order.
+func (lc *localChain) getSubmittedAcceptanceTimeouts() []*big.Int {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	out := make([]*big.Int, len(lc.submittedAcceptanceTimeouts))
+	copy(out, lc.submittedAcceptanceTimeouts)
+	return out
+}
+
 // NotifyStaleReservedDeposit records the notification for assertion in
 // tests. The stale-deposit watcher builder invokes this through the
 // Chain interface to drive the notification path.
@@ -957,8 +993,7 @@ func (lc *localChain) getSubmittedReservationStrandedKeys() []*big.Int {
 }
 
 // GetReservation returns the reservation previously installed via
-// setReservation. Returns an error if the reservation is not set, matching
-// the production contract behavior.
+// setReservation. Returns an error when no test record is installed.
 func (lc *localChain) GetReservation(
 	reservationKey *big.Int,
 ) (*tbtc.Reservation, error) {

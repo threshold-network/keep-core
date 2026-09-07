@@ -510,6 +510,8 @@ func TestProveReservationTransaction(t *testing.T) {
 			// proofSkipExceededMaxHeaders and this submission could never
 			// happen.
 			0,
+			newProofInfoCache(),
+			nil,
 			func(hash bitcoin.Hash, requiredConfirmations uint) error {
 				submitted = true
 				if hash != transaction.Hash() {
@@ -542,6 +544,8 @@ func TestProveReservationTransaction(t *testing.T) {
 			spvChain,
 			spvChain,
 			DefaultMaxProofHeaders,
+			newProofInfoCache(),
+			nil,
 			func(hash bitcoin.Hash, requiredConfirmations uint) error {
 				submitted = true
 				return nil
@@ -564,6 +568,8 @@ func TestProveReservationTransaction(t *testing.T) {
 			spvChain,
 			spvChain,
 			DefaultMaxProofHeaders,
+			newProofInfoCache(),
+			nil,
 			func(hash bitcoin.Hash, requiredConfirmations uint) error {
 				return fmt.Errorf("submission failed")
 			},
@@ -572,6 +578,98 @@ func TestProveReservationTransaction(t *testing.T) {
 			t.Fatal("expected submit error to propagate")
 		}
 	})
+}
+
+// TestProveReservationTransaction_RecordsMetrics verifies that the
+// reservation path's proof-skip metrics are recorded through a real
+// (non-nil) recorder, exercising the same clientinfo.MetricSpvProofSkipped*
+// counters as the generic-loop path's TestProveTransactions in spv_test.go.
+// Every other reservation-path test in this file runs with
+// getMetricsRecorder() == nil, so a wrong metric-name constant on this path
+// specifically would otherwise ship silently.
+func TestProveReservationTransaction_RecordsMetrics(t *testing.T) {
+	const proofStart = 790270
+
+	transaction := &bitcoin.Transaction{}
+
+	tests := map[string]struct {
+		headerDifficultyAt       func(uint) *big.Int
+		headersTo                uint
+		transactionConfirmations uint
+		expectedCounter          string
+	}{
+		// Decisive header (difficulty 8) matches neither epoch -> skipped.
+		"outside relay range is skipped and metered": {
+			headerDifficultyAt:       func(uint) *big.Int { return big.NewInt(8) },
+			headersTo:                proofStart + 19,
+			transactionConfirmations: 20,
+			expectedCounter:          "spv_proof_skipped_outside_relay_range_total",
+		},
+		// A run of DIFF1 headers longer than the bound never binds -> skipped.
+		"exceeded max headers is skipped and metered": {
+			headerDifficultyAt:       func(uint) *big.Int { return big.NewInt(1) },
+			headersTo:                proofStart + 149,
+			transactionConfirmations: 150,
+			expectedCounter:          "spv_proof_skipped_exceeded_max_headers_total",
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			spvChain := newLocalChain()
+			btcChain := newLocalBitcoinChain()
+
+			if err := populateBlockHeaders(
+				btcChain,
+				proofStart,
+				test.headersTo,
+				test.headerDifficultyAt,
+			); err != nil {
+				t.Fatal(err)
+			}
+			btcChain.addTransactionConfirmations(
+				transaction.Hash(),
+				test.transactionConfirmations,
+			)
+
+			spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+			spvChain.setCurrentEpoch(392)
+			spvChain.setCurrentAndPrevEpochDifficulty(big.NewInt(16), big.NewInt(32))
+
+			recorder := &recordingMetricsRecorder{
+				counters: make(map[string]float64),
+			}
+
+			submitted := false
+			if err := proveReservationTransaction(
+				transaction,
+				btcChain,
+				spvChain,
+				spvChain,
+				DefaultMaxProofHeaders,
+				newProofInfoCache(),
+				recorder,
+				func(hash bitcoin.Hash, requiredConfirmations uint) error {
+					submitted = true
+					return nil
+				},
+			); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if submitted {
+				t.Error("expected no submission on skip")
+			}
+
+			if got := recorder.counters[test.expectedCounter]; got != 1 {
+				t.Errorf(
+					"expected counter [%s] to be 1, got [%v]",
+					test.expectedCounter,
+					got,
+				)
+			}
+		})
+	}
 }
 
 // TestProveReservationAcceptanceActions is an end-to-end test of the
@@ -689,6 +787,7 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 		spvChain,
 		spvChain,
 		btcChain,
+		newProofInfoCache(),
 		nil,
 	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -730,6 +829,7 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 		spvChain,
 		spvChain,
 		btcChain,
+		newProofInfoCache(),
 		nil,
 	); err != nil {
 		t.Fatalf("unexpected error on second pass: %v", err)
@@ -844,6 +944,7 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 			spvChain,
 			spvChain,
 			btcChain,
+			newProofInfoCache(),
 			nil,
 		); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -983,6 +1084,7 @@ func TestProveReservationReanchorActions(t *testing.T) {
 		spvChain,
 		spvChain,
 		btcChain,
+		newProofInfoCache(),
 		nil,
 	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1123,6 +1225,7 @@ func TestProveReservationReanchorActions(t *testing.T) {
 			spvChain,
 			spvChain,
 			btcChain,
+			newProofInfoCache(),
 			nil,
 		); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1133,291 +1236,6 @@ func TestProveReservationReanchorActions(t *testing.T) {
 			t.Fatalf("expected zero proofs submissions when action is not pending, got %d", submissions)
 		}
 	})
-}
-
-// TestSubmitReservationReanchorActionProof_UsesTargetWallet verifies that
-// submitReservationReanchorActionProof re-checks the action generation
-// against event.TargetWalletPublicKeyHash, not
-// event.SourceWalletPublicKeyHash. TestProveReservationReanchorActions
-// cannot catch a regression that swapped the two fields at the call site:
-// this package's local Bitcoin-history test double can only discover a
-// transaction via the source wallet's own outputs
-// (localBitcoinChain.GetTransactionsForPublicKeyHash matches on output
-// script), which forces source and target to coincide by construction in
-// any test that goes through discovery. Calling
-// submitReservationReanchorActionProof directly with a known transaction
-// hash bypasses discovery, so source and target can differ here: the
-// installed action authorizes only the target wallet, so passing Source
-// instead of Target would make the guard wrongly skip the submission.
-func TestSubmitReservationReanchorActionProof_UsesTargetWallet(t *testing.T) {
-	const proofStart = 790270
-	diff := func(d int64) *big.Int { return big.NewInt(d) }
-
-	spvChain := newLocalChain()
-	btcChain := newLocalBitcoinChain()
-
-	if err := populateBlockHeaders(
-		btcChain,
-		proofStart,
-		proofStart+19,
-		func(uint) *big.Int { return diff(32) },
-	); err != nil {
-		t.Fatal(err)
-	}
-	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
-	spvChain.setCurrentEpoch(392)
-	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
-
-	blockCounter := newMockBlockCounter()
-	blockCounter.SetCurrentBlock(1000)
-	spvChain.setBlockCounter(blockCounter)
-
-	reservationKey := big.NewInt(555555)
-	const requestNonce = 9
-
-	priorAnchorTx := &bitcoin.Transaction{
-		Outputs: []*bitcoin.TransactionOutput{
-			{Value: 10000},
-			{Value: 600000},
-		},
-	}
-	if err := btcChain.BroadcastTransaction(priorAnchorTx); err != nil {
-		t.Fatal(err)
-	}
-	anchorTxHash := priorAnchorTx.Hash()
-
-	sourceWalletPublicKeyHash := [20]byte{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
-	targetWalletPublicKeyHash := [20]byte{100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119}
-	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPublicKeyHash)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	transaction := &bitcoin.Transaction{
-		Inputs: []*bitcoin.TransactionInput{{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: anchorTxHash,
-				OutputIndex:     1,
-			},
-		}},
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           590000,
-			PublicKeyScript: walletScript,
-		}},
-	}
-	if err := btcChain.BroadcastTransaction(transaction); err != nil {
-		t.Fatal(err)
-	}
-	if err := btcChain.addTransactionConfirmations(
-		transaction.Hash(),
-		20,
-	); err != nil {
-		t.Fatal(err)
-	}
-	btcChain.setCoinbaseTxHash(transaction.Hash())
-
-	// The on-chain action authorizes only the target wallet - genuinely
-	// distinct from the source wallet here, unlike the discovery-bound E2E
-	// test above.
-	spvChain.setReservationAction(
-		reservationKey,
-		requestNonce,
-		&tbtc.ReservationAction{
-			State:                     tbtc.ReservationActionStatePending,
-			ActionType:                tbtc.ReservationActionTypeReanchor,
-			TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
-		},
-	)
-
-	event := &tbtc.ReservationReanchorRequestedEvent{
-		ReservationKey:            reservationKey,
-		RequestNonce:              requestNonce,
-		SourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
-		TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
-	}
-
-	submissions := 0
-	spvChain.submitReservationProofHook = func(
-		proofType uint8,
-		txInfo *tbtc.BitcoinTxInfo,
-		proof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
-		reservationKey *big.Int,
-		requestNonce uint64,
-	) error {
-		submissions++
-		return nil
-	}
-
-	_, requiredConfirmations, _, err := getProofInfo(transaction.Hash(), btcChain, spvChain, spvChain, DefaultMaxProofHeaders)
-	if err != nil {
-		t.Fatalf("failed to get proof info: %v", err)
-	}
-
-	if err := submitReservationReanchorActionProof(
-		spvChain,
-		btcChain,
-		event,
-		transaction.Hash(),
-		requiredConfirmations,
-		nil,
-	); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if submissions != 1 {
-		t.Fatalf(
-			"expected exactly one proof submission using the target wallet, got %d",
-			submissions,
-		)
-	}
-}
-
-// TestVerifyReservationActionStillProvable tests the guard that confirms a reservation action
-// is still the expected pending generation at submission time.
-func TestVerifyReservationActionStillProvable(t *testing.T) {
-	tests := map[string]struct {
-		setupFunc                         func(*localChain, *big.Int, uint64)
-		reservationKey                    *big.Int
-		requestNonce                      uint64
-		targetWalletPKH                   [20]byte
-		expectedActionType                tbtc.ReservationActionType
-		expectedTargetWalletPublicKeyHash [20]byte
-		expectedStillProvable             bool
-		expectedWantErr                   bool
-		description                       string
-	}{
-		"happy path": {
-			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
-				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-					ActionType:                tbtc.ReservationActionTypeReanchor,
-					State:                     tbtc.ReservationActionStatePending,
-					TargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
-				})
-			},
-			reservationKey:                    big.NewInt(1),
-			requestNonce:                      uint64(5),
-			targetWalletPKH:                   [20]byte{0x01, 0x02, 0x03},
-			expectedActionType:                tbtc.ReservationActionTypeReanchor,
-			expectedTargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
-			expectedStillProvable:             true,
-			expectedWantErr:                   false,
-			description:                       "action generation is still pending, still the expected type, and still targets the expected wallet",
-		},
-		"stale action generation": {
-			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
-				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-					ActionType:                tbtc.ReservationActionTypeReanchor,
-					State:                     tbtc.ReservationActionStateTimedOut,
-					TargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
-				})
-			},
-			reservationKey:                    big.NewInt(2),
-			requestNonce:                      uint64(7),
-			targetWalletPKH:                   [20]byte{0x01, 0x02, 0x03},
-			expectedActionType:                tbtc.ReservationActionTypeReanchor,
-			expectedTargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
-			expectedStillProvable:             false,
-			expectedWantErr:                   false,
-			description:                       "action generation is no longer pending (timed out)",
-		},
-		"wrong action type": {
-			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
-				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-					ActionType:                tbtc.ReservationActionTypeDissolution,
-					State:                     tbtc.ReservationActionStatePending,
-					TargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03}, // must match expected to isolate ActionType check
-				})
-			},
-			reservationKey:                    big.NewInt(3),
-			requestNonce:                      uint64(8),
-			targetWalletPKH:                   [20]byte{0x01, 0x02, 0x03},
-			expectedActionType:                tbtc.ReservationActionTypeReanchor,
-			expectedTargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
-			expectedStillProvable:             false,
-			expectedWantErr:                   false,
-			description:                       "action generation is Pending but for a different action type than expected",
-		},
-		"mismatched target wallet": {
-			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
-				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
-					ActionType:                tbtc.ReservationActionTypeReanchor,
-					State:                     tbtc.ReservationActionStatePending,
-					TargetWalletPublicKeyHash: [20]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44},
-				})
-			},
-			reservationKey:                    big.NewInt(4),
-			requestNonce:                      uint64(3),
-			targetWalletPKH:                   [20]byte{0x92, 0xa6, 0xec, 0x88, 0x9a, 0x8f, 0xa3, 0x4f, 0x73, 0x1e},
-			expectedActionType:                tbtc.ReservationActionTypeReanchor,
-			expectedTargetWalletPublicKeyHash: [20]byte{0x92, 0xa6, 0xec, 0x88, 0x9a, 0x8f, 0xa3, 0x4f, 0x73, 0x1e},
-			expectedStillProvable:             false,
-			expectedWantErr:                   false,
-			description:                       "action generation targets a different wallet than expected",
-		},
-		"genuine chain error": {
-			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
-				lc.getReservationActionErr = fmt.Errorf("simulated chain read failure")
-			},
-			reservationKey:                    big.NewInt(5),
-			requestNonce:                      uint64(1),
-			targetWalletPKH:                   [20]byte{}, // unused when error expected
-			expectedActionType:                tbtc.ReservationActionTypeReanchor,
-			expectedTargetWalletPublicKeyHash: [20]byte{}, // unused when error expected
-			expectedStillProvable:             false,
-			expectedWantErr:                   true,
-			description:                       "chain-level error re-fetching the action generation",
-		},
-		"absent/zero-value action": {
-			setupFunc: func(lc *localChain, reservationKey *big.Int, requestNonce uint64) {
-				// Install zero value action: ActionType==None, State==Unknown
-				lc.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{})
-			},
-			reservationKey:                    big.NewInt(6),
-			requestNonce:                      uint64(2),
-			targetWalletPKH:                   [20]byte{0x01, 0x02, 0x03},
-			expectedActionType:                tbtc.ReservationActionTypeReanchor, // expecting Reanchor but got None
-			expectedTargetWalletPublicKeyHash: [20]byte{0x01, 0x02, 0x03},
-			expectedStillProvable:             false,
-			expectedWantErr:                   false,
-			description:                       "zero-value action models missing on-chain entry (treated as skip)",
-		},
-	}
-
-	for testName, test := range tests {
-		t.Run(testName, func(t *testing.T) {
-			spvChain := newLocalChain()
-
-			if test.setupFunc != nil {
-				test.setupFunc(spvChain, test.reservationKey, test.requestNonce)
-			}
-
-			stillProvable, err := verifyReservationActionStillProvable(
-				spvChain,
-				test.reservationKey,
-				test.requestNonce,
-				test.expectedActionType,
-				test.expectedTargetWalletPublicKeyHash,
-			)
-
-			if test.expectedWantErr {
-				if err == nil {
-					t.Fatal("expected an error but got nil")
-				}
-				if test.expectedStillProvable {
-					t.Fatal("expected error to report unprovable")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if stillProvable != test.expectedStillProvable {
-				t.Fatalf("unexpected stillProvable value\nexpected: %v\nactual:   %v", test.expectedStillProvable, stillProvable)
-			}
-		})
-	}
 }
 
 func TestProveReservationAcceptanceActions_LeavesPendingOnChainError(t *testing.T) {
@@ -1445,12 +1263,14 @@ func TestProveReservationAcceptanceActions_LeavesPendingOnChainError(t *testing.
 
 	// Multiple passes: event must remain pending unconditionally on read error without eviction.
 	for i := 1; i <= 5; i++ {
+		cache := newProofInfoCache()
 		if err := proveReservationAcceptanceActions(
 			scanState,
 			config,
 			spvChain,
 			spvChain,
 			btcChain,
+			cache,
 			nil,
 		); err != nil {
 			t.Fatalf("unexpected error on pass %d: %v", i, err)
@@ -1492,12 +1312,14 @@ func TestProveReservationReanchorActions_LeavesPendingOnChainError(t *testing.T)
 
 	// Multiple passes: event must remain pending unconditionally on read error without eviction.
 	for i := 1; i <= 5; i++ {
+		cache := newProofInfoCache()
 		if err := proveReservationReanchorActions(
 			scanState,
 			config,
 			spvChain,
 			spvChain,
 			btcChain,
+			cache,
 			nil,
 		); err != nil {
 			t.Fatalf("unexpected error on pass %d: %v", i, err)

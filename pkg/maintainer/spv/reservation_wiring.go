@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/subscription"
@@ -47,7 +48,7 @@ type WalletClosedChain interface {
 }
 
 // WireReservationWatchers is the integration entry point that cmd/start.go
-// calls directly when config.Reservations.Enabled is true. It constructs
+// calls directly when config.Reservations.LeaderDutiesEnabled is true. It constructs
 // the three reservation watchers (stranding, stale-deposit, action-timeout),
 // wires their Bridge-facing notifiers to the chain, and subscribes/starts
 // each watcher against its source.
@@ -60,7 +61,6 @@ func WireReservationWatchers(
 	ctx context.Context,
 	walletClosedChain WalletClosedChain,
 	spvChain Chain,
-	walletMembersResolver tbtc.WalletMembersResolver,
 ) error {
 	if walletClosedChain == nil {
 		return fmt.Errorf("wallet closed chain must not be nil")
@@ -68,12 +68,9 @@ func WireReservationWatchers(
 	if spvChain == nil {
 		return fmt.Errorf("spv chain must not be nil")
 	}
-	if walletMembersResolver == nil {
-		return fmt.Errorf("wallet members resolver must not be nil")
-	}
 
 	reservationWiringLogger.Infof(
-		"wiring reservation watchers; ensure Maintainer.Spv.Reservations.Enabled " +
+		"wiring reservation watchers; ensure Maintainer.Spv.Reservations.LeaderDutiesEnabled " +
 			"is also enabled in the SPV maintainer config for end-to-end operation",
 	)
 
@@ -114,12 +111,28 @@ func WireReservationWatchers(
 		)
 	} else {
 		for _, event := range registeredEvents {
-			wallet, err := spvChain.GetWallet(event.WalletPublicKeyHash)
-			if err != nil {
+			var wallet *tbtc.WalletChainData
+			var walletErr error
+			for attempt := 0; attempt < 3; attempt++ {
+				wallet, walletErr = spvChain.GetWallet(event.WalletPublicKeyHash)
+				if walletErr == nil {
+					break
+				}
 				reservationWiringLogger.Warnf(
-					"stranding startup scan failed to fetch wallet [0x%x]: [%v]",
+					"stranding startup scan attempt %d/3 failed to fetch wallet [0x%x]: [%v]",
+					attempt+1,
 					event.WalletPublicKeyHash,
-					err,
+					walletErr,
+				)
+			}
+			if walletErr != nil {
+				reservationWiringLogger.Warnf(
+					"stranding startup scan giving up on wallet [0x%x] after "+
+						"3 fetch attempts; assuming Live so the wallet is "+
+						"skipped here and left to the live OnWalletClosed "+
+						"subscription: [%v]",
+					event.WalletPublicKeyHash,
+					walletErr,
 				)
 				continue
 			}
@@ -127,13 +140,29 @@ func WireReservationWatchers(
 				wallet.State != tbtc.StateTerminated {
 				continue
 			}
-			if err := strandingWatcher.checkReservationStrandingForWallet(
-				event.WalletPublicKeyHash,
-			); err != nil {
-				reservationWiringLogger.Warnf(
-					"stranding startup scan failed to check wallet [0x%x]: [%v]",
+			var checkErr error
+			for attempt := 0; attempt < 3; attempt++ {
+				checkErr = strandingWatcher.checkReservationStrandingForWallet(
 					event.WalletPublicKeyHash,
-					err,
+				)
+				if checkErr == nil {
+					break
+				}
+				reservationWiringLogger.Warnf(
+					"stranding startup scan attempt %d/3 failed to check "+
+						"wallet [0x%x]: [%v]",
+					attempt+1,
+					event.WalletPublicKeyHash,
+					checkErr,
+				)
+			}
+			if checkErr != nil {
+				reservationWiringLogger.Warnf(
+					"stranding startup scan giving up on wallet [0x%x] "+
+						"after 3 check attempts; its stranded reservations, "+
+						"if any, will not be notified by this startup scan: [%v]",
+					event.WalletPublicKeyHash,
+					checkErr,
 				)
 				continue
 			}
@@ -144,7 +173,6 @@ func WireReservationWatchers(
 
 	actionTimeoutWatcher := NewReservationActionTimeoutWatcher(
 		spvChain,
-		walletMembersResolver,
 		DefaultReservationActionTimeoutPollInterval,
 	)
 
@@ -334,7 +362,7 @@ func startStaleDepositPoll(
 			}
 
 			for _, event := range events {
-				if event.Vault == nil || *event.Vault != params.ReservationVault {
+				if event.Vault == nil || !strings.EqualFold(string(*event.Vault), string(params.ReservationVault)) {
 					continue
 				}
 

@@ -577,11 +577,7 @@ func buildReservationReanchorProposalAbi(
 //
 // Field omissions (intentional, mirroring the Solidity-to-Go struct shrink):
 //
-//   - `CumulativeReanchorFee`: written by every re-anchor hop but not
-//     exposed through the Go-side reservation; m1 has no fee-ceiling
-//     enforcement, so the field is dropped on the Go boundary. A later
-//     milestone that adds a fee ceiling should re-export this field on
-//     `tbtc.Reservation`.
+//   - CumulativeReanchorFee: maintained and enforced by the reservation contracts; keep-core does not consume it, so it is omitted from tbtc.Reservation.
 //
 // Anchor shape reassembly: the on-chain request splits the anchor UTXO into
 // `anchorAmount`, `anchorTxHash`, and `anchorTxOutputIndex`; the Go-side
@@ -979,6 +975,32 @@ func (tc *TbtcChain) NotifyReservationStranded(
 	return err
 }
 
+// NotifyReservationAcceptanceTimedOut notifies the Bridge that the
+// acceptance-type action timeout has elapsed for the given reservation.
+// Connect must be called before this method is used.
+func (tc *TbtcChain) NotifyReservationAcceptanceTimedOut(
+	reservationKey *big.Int,
+) error {
+	gasEstimate, err := tc.reservationRouter.NotifyReservationAcceptanceTimedOutGasEstimate(
+		reservationKey,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Here we add a 20% margin to overcome the gas problems.
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.reservationRouter.NotifyReservationAcceptanceTimedOut(
+		reservationKey,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
 // NotifyMovingFundsBelowDust notifies the Bridge that the given wallet's
 // main UTXO has fallen below the moving funds dust threshold, ending the
 // moving funds process and starting wallet closing immediately. This call
@@ -1169,6 +1191,7 @@ func (tc *TbtcChain) IsReservedDeposit(
 // subscription filters against the Bridge's address (the binding is bound
 // to the Bridge address; delegatecall preserves the caller's address
 // context so events emitted by router code carry the Bridge's address).
+// Precondition: the bridge binding must be set via Connect before this is called.
 func (tc *TbtcChain) OnReservationAcceptanceRequested(
 	handler func(event *tbtc.ReservationAcceptanceRequestedEvent),
 ) subscription.EventSubscription {
@@ -1249,6 +1272,7 @@ func (tc *TbtcChain) PastReservationAcceptanceRequestedEvents(
 
 // OnReservationReanchorRequested registers a callback that is invoked
 // when an on-chain ReservationReanchorRequested event is seen.
+// Precondition: the bridge binding must be set via Connect before this is called.
 func (tc *TbtcChain) OnReservationReanchorRequested(
 	handler func(event *tbtc.ReservationReanchorRequestedEvent),
 ) subscription.EventSubscription {

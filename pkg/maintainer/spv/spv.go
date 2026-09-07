@@ -79,10 +79,10 @@ func Initialize(
 		metricsRecorder: metricsRecorder,
 	}
 
-	if config.Reservations.Enabled {
+	if config.Reservations.LeaderDutiesEnabled {
 		logger.Infof(
 			"SPV maintainer reservation proof submission is enabled; " +
-				"ensure the paired Tbtc.Reservations.Enabled flag is also " +
+				"ensure the paired Tbtc.Reservations.LeaderDutiesEnabled flag is also " +
 				"enabled in the client config for end-to-end operation",
 		)
 		// Reservation acceptance/re-anchor proofs run on a dedicated loop,
@@ -245,6 +245,10 @@ func (sm *spvMaintainer) proveTransactions(
 
 	logger.Infof("found [%d] unproven transaction(s)", len(transactions))
 
+	// One cache per pass, shared by every transaction's getProofInfo call
+	// below; see proofInfoCache.
+	cache := newProofInfoCache()
+
 	for _, transaction := range transactions {
 		// Print the transaction in the same endianness as block explorers do.
 		transactionHashStr := transaction.Hash().Hex(bitcoin.ReversedByteOrder)
@@ -260,6 +264,7 @@ func (sm *spvMaintainer) proveTransactions(
 			sm.spvChain,
 			sm.btcDiffChain,
 			sm.config.MaxProofHeaders,
+			cache,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to get proof info: [%v]", err)
@@ -392,42 +397,56 @@ func isInputCurrentWalletsMainUTXO(
 	return bytes.Equal(mainUtxoHash[:], wallet.MainUtxoHash[:]), nil
 }
 
-// getProofInfo returns information about the SPV proof: the accumulated number
-// of confirmations, the required number of confirmations, and a proofSkipReason
-// indicating whether the proof can be assembled (proofSkipNone) or why it must
-// be skipped this cycle. The confirmation counts are meaningful only when the
-// reason is proofSkipNone.
-func getProofInfo(
-	transactionHash bitcoin.Hash,
+// proofInfoCache holds proof-invariant data - the Bitcoin chain tip, the SPV
+// proof difficulty factor, and the relay's current/previous epoch
+// difficulties - loaded once per proof-loop pass and shared by getProofInfo
+// across every candidate transaction proved in that pass, together with a
+// pass-local cache of already-fetched Bitcoin block headers keyed by height.
+// A transaction's proof walk is still bounded by its own maxProofHeaders
+// argument; only the underlying chain reads are memoized and shared, never
+// the per-transaction walk logic itself.
+//
+// Both getProofInfo callers - spvMaintainer.proveTransactions and the
+// reservation proof loop's proveReservationAcceptanceActions /
+// proveReservationReanchorActions - create one proofInfoCache per pass and
+// thread it through every getProofInfo call in that pass.
+//
+// A proofInfoCache is not safe for concurrent use: callers create one per
+// pass and drive it from a single goroutine.
+type proofInfoCache struct {
+	loaded                  bool
+	latestBlockHeight       uint
+	txProofDifficultyFactor *big.Int
+	currentEpochDifficulty  *big.Int
+	previousEpochDifficulty *big.Int
+
+	headers map[uint64]*bitcoin.BlockHeader
+}
+
+// newProofInfoCache creates an empty proofInfoCache for one proof-loop pass.
+func newProofInfoCache() *proofInfoCache {
+	return &proofInfoCache{headers: make(map[uint64]*bitcoin.BlockHeader)}
+}
+
+// load populates the proof-invariant chain reads on first use and is a
+// no-op on every subsequent call for the lifetime of the cache.
+func (c *proofInfoCache) load(
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
-	maxProofHeaders uint,
-) (
-	uint, uint, proofSkipReason, error,
-) {
-	latestBlockHeight, err := btcChain.GetLatestBlockHeight()
-	if err != nil {
-		return 0, 0, proofSkipNone, fmt.Errorf(
-			"failed to get latest block height: [%v]",
-			err,
-		)
+) error {
+	if c.loaded {
+		return nil
 	}
 
-	accumulatedConfirmations, err := btcChain.GetTransactionConfirmations(
-		context.Background(),
-		transactionHash,
-	)
+	latestBlockHeight, err := btcChain.GetLatestBlockHeight()
 	if err != nil {
-		return 0, 0, proofSkipNone, fmt.Errorf(
-			"failed to get transaction confirmations: [%v]",
-			err,
-		)
+		return fmt.Errorf("failed to get latest block height: [%v]", err)
 	}
 
 	txProofDifficultyFactor, err := spvChain.TxProofDifficultyFactor()
 	if err != nil {
-		return 0, 0, proofSkipNone, fmt.Errorf(
+		return fmt.Errorf(
 			"failed to get transaction proof difficulty factor: [%v]",
 			err,
 		)
@@ -436,8 +455,85 @@ func getProofInfo(
 	currentEpochDifficulty, previousEpochDifficulty, err :=
 		btcDiffChain.GetCurrentAndPrevEpochDifficulty()
 	if err != nil {
-		return 0, 0, proofSkipNone, fmt.Errorf(
+		return fmt.Errorf(
 			"failed to get Bitcoin epoch difficulties: [%v]",
+			err,
+		)
+	}
+
+	c.latestBlockHeight = latestBlockHeight
+	c.txProofDifficultyFactor = txProofDifficultyFactor
+	c.currentEpochDifficulty = currentEpochDifficulty
+	c.previousEpochDifficulty = previousEpochDifficulty
+	c.loaded = true
+
+	return nil
+}
+
+// blockHeader returns the block header at height, fetching and caching it on
+// first request and returning the cached header on every subsequent request
+// for the same height within the same pass.
+func (c *proofInfoCache) blockHeader(
+	btcChain bitcoin.Chain,
+	height uint64,
+) (*bitcoin.BlockHeader, error) {
+	if header, ok := c.headers[height]; ok {
+		return header, nil
+	}
+
+	header, err := btcChain.GetBlockHeader(uint(height))
+	if err != nil {
+		return nil, err
+	}
+
+	c.headers[height] = header
+
+	return header, nil
+}
+
+// getProofInfo returns information about the SPV proof: the accumulated number
+// of confirmations, the required number of confirmations, and a proofSkipReason
+// indicating whether the proof can be assembled (proofSkipNone) or why it must
+// be skipped this cycle. The confirmation counts are meaningful only when the
+// reason is proofSkipNone.
+//
+// maxProofHeaders == 0 is normalized to DefaultMaxProofHeaders here - the
+// single place both the generic SPV loop and the reservation proof loop
+// funnel through - so a Config built programmatically without going through
+// flag registration (which applies the 144 default; see cmd/flags.go)
+// behaves identically to one that was.
+//
+// cache holds the pass-invariant chain tip, proof difficulty factor, epoch
+// difficulties, and already-fetched block headers; see proofInfoCache.
+func getProofInfo(
+	transactionHash bitcoin.Hash,
+	btcChain bitcoin.Chain,
+	spvChain Chain,
+	btcDiffChain btcdiff.Chain,
+	maxProofHeaders uint,
+	cache *proofInfoCache,
+) (
+	uint, uint, proofSkipReason, error,
+) {
+	if maxProofHeaders == 0 {
+		maxProofHeaders = DefaultMaxProofHeaders
+	}
+
+	if err := cache.load(btcChain, spvChain, btcDiffChain); err != nil {
+		return 0, 0, proofSkipNone, err
+	}
+	latestBlockHeight := cache.latestBlockHeight
+	txProofDifficultyFactor := cache.txProofDifficultyFactor
+	currentEpochDifficulty := cache.currentEpochDifficulty
+	previousEpochDifficulty := cache.previousEpochDifficulty
+
+	accumulatedConfirmations, err := btcChain.GetTransactionConfirmations(
+		context.Background(),
+		transactionHash,
+	)
+	if err != nil {
+		return 0, 0, proofSkipNone, fmt.Errorf(
+			"failed to get transaction confirmations: [%v]",
 			err,
 		)
 	}
@@ -481,7 +577,7 @@ func getProofInfo(
 			return accumulatedConfirmations, headerCount + 1, proofSkipNone, nil
 		}
 
-		header, err := btcChain.GetBlockHeader(uint(blockHeight))
+		header, err := cache.blockHeader(btcChain, blockHeight)
 		if err != nil {
 			return 0, 0, proofSkipNone, fmt.Errorf(
 				"failed to get block header at height [%v]: [%v]",

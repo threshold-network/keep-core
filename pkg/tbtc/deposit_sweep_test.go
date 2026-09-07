@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc/internal/test"
 )
 
@@ -359,6 +361,21 @@ func (depositSweepFeeCheckChain) GetDepositRequest(
 	return nil, false, nil
 }
 
+func (depositSweepFeeCheckChain) BuildDepositKey(
+	fundingTxHash bitcoin.Hash,
+	fundingOutputIndex uint32,
+) *big.Int {
+	return new(big.Int)
+}
+
+func (depositSweepFeeCheckChain) IsReservedDeposit(*big.Int) (bool, error) {
+	return false, nil
+}
+
+func (depositSweepFeeCheckChain) ReservationParameters() (*ReservationParameters, error) {
+	return nil, fmt.Errorf("reservation parameters not configured in this stub")
+}
+
 // TestValidateDepositSweepProposal_SweepFeeSoftCheck exercises the
 // follower-side soft check on the leader-proposed sweep fee. The check is
 // log-only by design (see threshold-network/keep-core#4171): it must warn
@@ -457,5 +474,303 @@ func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+// TestValidateDepositSweepProposal_RejectsReservedDeposit exercises the
+// follower-side defense-in-depth check: a deposit revealed against the
+// reservation vault must be rejected here even if the leader (running a
+// pre-reservations binary, or simply buggy) proposed sweeping it anyway.
+func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
+	scenarios, err := test.LoadDepositSweepTestScenarios()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scenarios) == 0 {
+		t.Fatal("no deposit sweep test scenarios available")
+	}
+	scenario := scenarios[0]
+	if len(scenario.Deposits) == 0 {
+		t.Fatal("scenario has no deposits to reserve")
+	}
+
+	hostChain := Connect()
+	bitcoinChain := newLocalBitcoinChain()
+
+	wallet := wallet{publicKey: scenario.WalletPublicKey}
+	walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
+
+	for _, transaction := range scenario.InputTransactions {
+		if err := bitcoinChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	depositsKeys := make([]DepositKey, len(scenario.Deposits))
+	depositsExtraInfo := make([]struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	}, len(scenario.Deposits))
+	depositsRevealBlocks := make([]*big.Int, len(scenario.Deposits))
+
+	reservationVault := chain.Address("0xReservationVaultForFollowerTest0000001")
+
+	for i, deposit := range scenario.Deposits {
+		fundingTxHash := deposit.Utxo.Outpoint.TransactionHash
+		fundingOutputIndex := deposit.Utxo.Outpoint.OutputIndex
+
+		fundingTx, err := bitcoinChain.GetTransaction(fundingTxHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		depositsKeys[i] = DepositKey{
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+		}
+		depositsExtraInfo[i] = struct {
+			*Deposit
+			FundingTx *bitcoin.Transaction
+		}{
+			Deposit:   (*Deposit)(deposit),
+			FundingTx: fundingTx,
+		}
+
+		depositRevealBlock := uint64(100 * i)
+		depositsRevealBlocks[i] = big.NewInt(int64(depositRevealBlock))
+
+		eventVault := deposit.Vault
+		if i == 0 {
+			// The first deposit's vault is overridden to match the
+			// reservation vault configured below, so the pre-filter
+			// lets it reach the IsReservedDeposit check this test
+			// exercises. Other deposits keep their scenario-fixture
+			// vault, which does not match, proving they sweep
+			// unaffected.
+			eventVault = &reservationVault
+		}
+
+		err = hostChain.setPastDepositRevealedEvents(
+			&DepositRevealedEventFilter{
+				StartBlock:          depositRevealBlock,
+				EndBlock:            &depositRevealBlock,
+				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+			},
+			[]*DepositRevealedEvent{
+				{
+					FundingTxHash:       fundingTxHash,
+					FundingOutputIndex:  fundingOutputIndex,
+					Depositor:           deposit.Depositor,
+					Amount:              uint64(deposit.Utxo.Value),
+					BlindingFactor:      deposit.BlindingFactor,
+					WalletPublicKeyHash: deposit.WalletPublicKeyHash,
+					RefundPublicKeyHash: deposit.RefundPublicKeyHash,
+					RefundLocktime:      deposit.RefundLocktime,
+					Vault:               eventVault,
+					BlockNumber:         depositRevealBlock,
+				},
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hostChain.setDepositRequest(
+			fundingTxHash,
+			fundingOutputIndex,
+			&DepositChainRequest{
+				Depositor: deposit.Depositor,
+				Amount:    uint64(deposit.Utxo.Value),
+				Vault:     deposit.Vault,
+				ExtraData: deposit.ExtraData,
+			},
+		)
+	}
+
+	proposal := &DepositSweepProposal{
+		DepositsKeys:         depositsKeys,
+		SweepTxFee:           big.NewInt(scenario.Fee),
+		DepositsRevealBlocks: depositsRevealBlocks,
+	}
+
+	if err := hostChain.setDepositSweepProposalValidationResult(
+		walletPublicKeyHash,
+		proposal,
+		depositsExtraInfo,
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mark the first deposit's key as reserved. Everything else about the
+	// proposal remains identical to a scenario the existing
+	// TestDepositSweepAction_Execute suite already proves validates and
+	// sweeps cleanly when nothing is reserved.
+	reservedKey := hostChain.BuildDepositKey(
+		depositsKeys[0].FundingTxHash,
+		depositsKeys[0].FundingOutputIndex,
+	)
+	hostChain.setReservedDeposit(reservedKey, true)
+	hostChain.setReservationParameters(&ReservationParameters{
+		ReservationVault: reservationVault,
+	})
+
+	_, err = ValidateDepositSweepProposal(
+		&capturingLogger{},
+		walletPublicKeyHash,
+		proposal,
+		0,
+		hostChain,
+		bitcoinChain,
+	)
+	if err == nil {
+		t.Fatal("expected validation to reject a proposal containing a reserved deposit")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("expected error to mention the reserved deposit, got: [%v]", err)
+	}
+}
+
+// TestValidateDepositSweepProposal_SweepsWhenReservationParametersUnavailable
+// mirrors tbtcpg's TestFindDepositsToSweep_ReservationParametersUnavailableSweepsAll
+// on the follower side: when ReservationParameters() itself is
+// unavailable (unconfigured here, mirroring a pre-upgrade Bridge), the
+// whole reserved-deposit filter must be skipped rather than rejecting
+// the proposal - even for a deposit IsReservedDeposit would otherwise
+// flag, since without the reservation vault address the vault-match
+// prefilter can never even run.
+func TestValidateDepositSweepProposal_SweepsWhenReservationParametersUnavailable(t *testing.T) {
+	scenarios, err := test.LoadDepositSweepTestScenarios()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scenarios) == 0 {
+		t.Fatal("no deposit sweep test scenarios available")
+	}
+	scenario := scenarios[0]
+	if len(scenario.Deposits) == 0 {
+		t.Fatal("scenario has no deposits to reserve")
+	}
+
+	hostChain := Connect()
+	bitcoinChain := newLocalBitcoinChain()
+
+	wallet := wallet{publicKey: scenario.WalletPublicKey}
+	walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
+
+	for _, transaction := range scenario.InputTransactions {
+		if err := bitcoinChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	depositsKeys := make([]DepositKey, len(scenario.Deposits))
+	depositsExtraInfo := make([]struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	}, len(scenario.Deposits))
+	depositsRevealBlocks := make([]*big.Int, len(scenario.Deposits))
+
+	for i, deposit := range scenario.Deposits {
+		fundingTxHash := deposit.Utxo.Outpoint.TransactionHash
+		fundingOutputIndex := deposit.Utxo.Outpoint.OutputIndex
+
+		fundingTx, err := bitcoinChain.GetTransaction(fundingTxHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		depositsKeys[i] = DepositKey{
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+		}
+		depositsExtraInfo[i] = struct {
+			*Deposit
+			FundingTx *bitcoin.Transaction
+		}{
+			Deposit:   (*Deposit)(deposit),
+			FundingTx: fundingTx,
+		}
+
+		depositRevealBlock := uint64(100 * i)
+		depositsRevealBlocks[i] = big.NewInt(int64(depositRevealBlock))
+
+		err = hostChain.setPastDepositRevealedEvents(
+			&DepositRevealedEventFilter{
+				StartBlock:          depositRevealBlock,
+				EndBlock:            &depositRevealBlock,
+				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+			},
+			[]*DepositRevealedEvent{
+				{
+					FundingTxHash:       fundingTxHash,
+					FundingOutputIndex:  fundingOutputIndex,
+					Depositor:           deposit.Depositor,
+					Amount:              uint64(deposit.Utxo.Value),
+					BlindingFactor:      deposit.BlindingFactor,
+					WalletPublicKeyHash: deposit.WalletPublicKeyHash,
+					RefundPublicKeyHash: deposit.RefundPublicKeyHash,
+					RefundLocktime:      deposit.RefundLocktime,
+					Vault:               deposit.Vault,
+					BlockNumber:         depositRevealBlock,
+				},
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hostChain.setDepositRequest(
+			fundingTxHash,
+			fundingOutputIndex,
+			&DepositChainRequest{
+				Depositor: deposit.Depositor,
+				Amount:    uint64(deposit.Utxo.Value),
+				Vault:     deposit.Vault,
+				ExtraData: deposit.ExtraData,
+			},
+		)
+	}
+
+	proposal := &DepositSweepProposal{
+		DepositsKeys:         depositsKeys,
+		SweepTxFee:           big.NewInt(scenario.Fee),
+		DepositsRevealBlocks: depositsRevealBlocks,
+	}
+
+	if err := hostChain.setDepositSweepProposalValidationResult(
+		walletPublicKeyHash,
+		proposal,
+		depositsExtraInfo,
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mark the first deposit as reserved. It must sweep anyway: without
+	// ReservationParameters, the vault-match prefilter cannot run at
+	// all, so IsReservedDeposit is never even called for it.
+	reservedKey := hostChain.BuildDepositKey(
+		depositsKeys[0].FundingTxHash,
+		depositsKeys[0].FundingOutputIndex,
+	)
+	hostChain.setReservedDeposit(reservedKey, true)
+	// Deliberately not calling setReservationParameters: hostChain's
+	// ReservationParameters() returns an error until it's configured,
+	// mirroring a pre-upgrade Bridge.
+
+	if _, err := ValidateDepositSweepProposal(
+		&capturingLogger{},
+		walletPublicKeyHash,
+		proposal,
+		0,
+		hostChain,
+		bitcoinChain,
+	); err != nil {
+		t.Fatalf(
+			"expected validation to succeed when reservation parameters "+
+				"are unavailable, got: [%v]",
+			err,
+		)
 	}
 }

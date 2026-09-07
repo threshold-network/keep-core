@@ -167,6 +167,26 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 
 			btcChain.SetEstimateSatPerVByteFee(1, scenario.EstimateSatPerVByteFee)
 
+			// Unconditionally register the source wallet itself in the
+			// same past-registration-events bucket findTargetWallet
+			// queries (filter{StartBlock: 0}), even for scenarios with no
+			// target wallet. findLiveWalletFromRegistrationEvents always
+			// skips a registration matching the source wallet, so this is
+			// inert for target selection; its only purpose is to give the
+			// mock chain a populated entry so PastNewWalletRegisteredEvents
+			// returns an (empty-after-filtering) slice instead of its
+			// "nothing ever registered for this filter" sentinel error --
+			// matching a real chain's behavior of returning an empty event
+			// list, never an error, when nothing matches.
+			if err := tbtcChain.AddPastNewWalletRegisteredEvent(
+				&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
+				&tbtc.NewWalletRegisteredEvent{
+					WalletPublicKeyHash: scenario.SourceWalletPublicKeyHash,
+				},
+			); err != nil {
+				t.Fatal(err)
+			}
+
 			if scenario.TargetWalletPublicKeyHash != [20]byte{} {
 				err := tbtcChain.AddPastNewWalletRegisteredEvent(
 					&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
@@ -580,17 +600,88 @@ func TestReservationReanchorTask_Run_SkipNonActiveReservations(t *testing.T) {
 	}
 }
 
+// reservationReanchorLocalChain is a test-only wrapper around the shared
+// LocalChain mock that adds support for injecting past reservation
+// acceptance-requested events, filtered by wallet. It exists as a
+// separate type so this test file does not need to edit the shared
+// chain_test.go fixture (mirrors reservationAcceptanceLocalChain in
+// reservation_acceptance_test.go).
+type reservationReanchorLocalChain struct {
+	*tbtcpg.LocalChain
+
+	acceptanceEvents []*tbtc.ReservationAcceptanceRequestedEvent
+
+	// pastNewWalletRegisteredEventsCalls counts calls to
+	// PastNewWalletRegisteredEvents, letting tests assert on how many
+	// times findTargetWallet's registration-event scan actually ran
+	// (e.g. that a cached target wallet suppressed a repeat scan).
+	pastNewWalletRegisteredEventsCalls int
+}
+
+func newReservationReanchorLocalChain() *reservationReanchorLocalChain {
+	return &reservationReanchorLocalChain{LocalChain: tbtcpg.NewLocalChain()}
+}
+
+// markReservationTouched records walletPublicKeyHash as having accepted a
+// reservation at some point, satisfying
+// ReservationReanchorTask.walletHasReservationHistory's gate.
+func (rrlc *reservationReanchorLocalChain) markReservationTouched(
+	walletPublicKeyHash [20]byte,
+) {
+	rrlc.acceptanceEvents = append(
+		rrlc.acceptanceEvents,
+		&tbtc.ReservationAcceptanceRequestedEvent{
+			WalletPublicKeyHash: walletPublicKeyHash,
+		},
+	)
+}
+
+func (rrlc *reservationReanchorLocalChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	var results []*tbtc.ReservationAcceptanceRequestedEvent
+	for _, event := range rrlc.acceptanceEvents {
+		if filter != nil && len(filter.WalletPublicKeyHash) > 0 {
+			matched := false
+			for _, w := range filter.WalletPublicKeyHash {
+				if w == event.WalletPublicKeyHash {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		results = append(results, event)
+	}
+	return results, nil
+}
+
+func (rrlc *reservationReanchorLocalChain) PastNewWalletRegisteredEvents(
+	filter *tbtc.NewWalletRegisteredEventFilter,
+) ([]*tbtc.NewWalletRegisteredEvent, error) {
+	rrlc.pastNewWalletRegisteredEventsCalls++
+	return rrlc.LocalChain.PastNewWalletRegisteredEvents(filter)
+}
+
 // TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust is a
 // regression test for the NotifyMovingFundsBelowDust wiring: once a
-// MovingFunds wallet has no reservations left and its main UTXO is below
-// the moving funds dust threshold, Run must call NotifyMovingFundsBelowDust
-// exactly once with the wallet's resolved main UTXO. A wallet above the
-// dust threshold must not trigger any notification.
+// reservation-touched MovingFunds wallet has no reservations left and its
+// main UTXO is below the moving funds dust threshold, Run must call
+// NotifyMovingFundsBelowDust exactly once with the wallet's resolved main
+// UTXO. A wallet above the dust threshold must not trigger any
+// notification, nor must a wallet the reservation subsystem never
+// touched, nor one that still has reservations remaining.
 func TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust(t *testing.T) {
 	walletPublicKeyHash := hexToByte20("ffb3f7538bfa98a511495dd96027cfbd57baf2fa")
 
-	newFixture := func(mainUtxoValue int64) (*tbtcpg.LocalChain, *tbtcpg.LocalBitcoinChain) {
-		tbtcChain := tbtcpg.NewLocalChain()
+	newFixture := func(
+		mainUtxoValue int64,
+		reservationKeys []*big.Int,
+		reservationTouched bool,
+	) (*reservationReanchorLocalChain, *tbtcpg.LocalBitcoinChain) {
+		tbtcChain := newReservationReanchorLocalChain()
 		btcChain := tbtcpg.NewLocalBitcoinChain()
 
 		walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
@@ -626,13 +717,16 @@ func TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust(t *testing.T) 
 		tbtcChain.SetMovingFundsParameters(
 			1000000, 1000000, 0, 0, nil, 0, 0, 0, 0, nil, 0,
 		)
-		tbtcChain.SetWalletReservations(walletPublicKeyHash, nil)
+		tbtcChain.SetWalletReservations(walletPublicKeyHash, reservationKeys)
+		if reservationTouched {
+			tbtcChain.markReservationTouched(walletPublicKeyHash)
+		}
 
 		return tbtcChain, btcChain
 	}
 
 	t.Run("below dust threshold: notifies exactly once", func(t *testing.T) {
-		tbtcChain, btcChain := newFixture(500000)
+		tbtcChain, btcChain := newFixture(500000, nil, true)
 		task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
 
 		prop, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
@@ -662,7 +756,7 @@ func TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust(t *testing.T) 
 	})
 
 	t.Run("above dust threshold: no notification", func(t *testing.T) {
-		tbtcChain, btcChain := newFixture(2000000)
+		tbtcChain, btcChain := newFixture(2000000, nil, true)
 		task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
 
 		if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
@@ -675,4 +769,112 @@ func TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust(t *testing.T) 
 			t.Fatalf("expected no below-dust notifications, got %d", len(notifications))
 		}
 	})
+
+	t.Run("wallet never reservation-touched: no notification even below dust", func(t *testing.T) {
+		tbtcChain, btcChain := newFixture(500000, nil, false)
+		task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+
+		if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: walletPublicKeyHash,
+		}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if notifications := tbtcChain.GetBelowDustNotifications(); len(notifications) != 0 {
+			t.Fatalf(
+				"expected no below-dust notifications for a never-touched wallet, got %d",
+				len(notifications),
+			)
+		}
+	})
+
+	t.Run("reservations remaining and main UTXO below dust: no notification", func(t *testing.T) {
+		reservationKey := big.NewInt(9001)
+		tbtcChain, btcChain := newFixture(500000, []*big.Int{reservationKey}, true)
+		// No live target wallet is available, so the re-anchor attempt
+		// itself resolves to a benign no-op right after the reservations
+		// check; the point under test is that a non-empty
+		// WalletReservations result must suppress the below-dust
+		// notification path entirely, regardless of how the re-anchor
+		// attempt for the remaining reservation turns out.
+		tbtcChain.SetLiveWalletsCount(0)
+
+		task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+
+		if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: walletPublicKeyHash,
+		}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if notifications := tbtcChain.GetBelowDustNotifications(); len(notifications) != 0 {
+			t.Fatalf(
+				"expected no below-dust notifications while reservations remain, got %d",
+				len(notifications),
+			)
+		}
+	})
+}
+
+// TestReservationReanchorTask_FindTargetWallet_CachesAcrossRuns is a
+// regression test for the target-wallet cache added to findTargetWallet:
+// once a re-anchor target wallet has been selected for a source wallet, a
+// subsequent Run call for the same source wallet must reuse the cached
+// target -- validating only that one wallet via GetWallet -- instead of
+// repeating the O(W) GetWallet-per-registration scan.
+func TestReservationReanchorTask_FindTargetWallet_CachesAcrossRuns(t *testing.T) {
+	walletA := hexToByte20("1111111111111111111111111111111111111111")
+	walletB := hexToByte20("2222222222222222222222222222222222222222")
+
+	tbtcChain := newReservationReanchorLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	tbtcChain.SetBlockCounter(blockCounter)
+
+	if err := tbtcChain.AddPastNewWalletRegisteredEvent(
+		&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
+		&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: walletB},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	tbtcChain.SetWallet(walletA, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
+	tbtcChain.SetWallet(walletB, &tbtc.WalletChainData{State: tbtc.StateLive})
+	tbtcChain.SetLiveWalletsCount(1)
+
+	// A Stranded reservation is always skipped by Run's per-reservation
+	// loop without ever being mutated (RequestReservationReanchor is
+	// never called), so its state stays identical across repeated Run
+	// calls -- letting this test isolate the target-selection cache from
+	// the unrelated per-reservation proposal machinery.
+	resKey := big.NewInt(5001)
+	tbtcChain.SetReservation(resKey, &tbtc.Reservation{
+		WalletPublicKeyHash: walletA,
+		State:               tbtc.ReservationStateStranded,
+	})
+	tbtcChain.SetWalletReservations(walletA, []*big.Int{resKey})
+
+	task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+
+	for i := range 2 {
+		_, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: walletA,
+		})
+		if err != nil {
+			t.Fatalf("run %d: unexpected error: %v", i, err)
+		}
+		if ok {
+			t.Fatalf("run %d: expected no proposal (stranded reservation is skipped)", i)
+		}
+	}
+
+	if got := tbtcChain.pastNewWalletRegisteredEventsCalls; got != 1 {
+		t.Errorf(
+			"expected exactly 1 registration-event scan across 2 runs "+
+				"(cached target reused on the second), got %d",
+			got,
+		)
+	}
 }

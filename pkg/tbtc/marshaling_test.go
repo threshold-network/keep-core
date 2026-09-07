@@ -540,6 +540,36 @@ func TestReservationAnchorProposal_Unmarshal_ZeroHash(t *testing.T) {
 		t.Errorf("unexpected error: [%v]", err)
 	}
 }
+
+func TestReservationReanchorProposal_Unmarshal_OversizedReservationKey(t *testing.T) {
+	// ReservationKey is a 256-bit EVM uint, so its big-endian encoding must
+	// not exceed 32 bytes. A peer-supplied key longer than 32 bytes would be
+	// silently truncated by ABI packing; the Unmarshal function must reject
+	// it instead.
+	pbMsg := &pb.ReservationReanchorProposal{
+		ReservationKey:            make([]byte, 33), // one byte over the 32-byte limit
+		RequestNonce:              1,
+		TargetWalletPublicKeyHash: make([]byte, 20),
+		ReanchorTxFee:             big.NewInt(1200).Bytes(),
+	}
+	// Set a non-zero key and PKH so only the length check fires.
+	pbMsg.ReservationKey[0] = 0x01
+	pbMsg.TargetWalletPublicKeyHash[0] = 0x01
+
+	data, err := proto.Marshal(pbMsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proposal := &ReservationReanchorProposal{}
+	err = proposal.Unmarshal(data)
+	if err == nil {
+		t.Fatal("expected error when unmarshaling proposal with oversized reservation key")
+	}
+	if !strings.Contains(err.Error(), "invalid reservation key byte length") {
+		t.Errorf("unexpected error message: [%v]", err)
+	}
+}
 func TestFuzzCoordinationMessage_Unmarshaler(t *testing.T) {
 	pbutils.FuzzUnmarshaler(&coordinationMessage{})
 }

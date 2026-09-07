@@ -48,10 +48,10 @@ RestartBackoffTime = "2h"
 IdleBackoffTime = "15m"
 
 [maintainer.Spv.Reservations]
-Enabled = true
+LeaderDutiesEnabled = true
 
 [tbtc.reservations]
-Enabled = true
+LeaderDutiesEnabled = true
 
 [developer]
 RandomBeaconAddress = "0xcf64c2a367341170cb4e09cf8c0ed137d8473ceb"

@@ -15,14 +15,6 @@ import (
 // 30 days at 12s/block.
 const reservationActionTimeoutLookBackBlocks = uint64(216000)
 
-// maxActionTimeoutLoadRetries is the maximum number of consecutive
-// GetReservationAction poll-pass failures a tracked pendingAction entry
-// may accumulate before it is evicted from pendingActions. Mirrors the
-// maxReservationActionLoadRetries convention in reservation_proof_loop.go,
-// kept as a separate local constant rather than a shared one since the two
-// loops track independent pending-action sets.
-const maxActionTimeoutLoadRetries = 3
-
 // actionTimeoutRenotifyInterval bounds how often a still-Pending action
 // generation is re-offered to NotifyReservationActionTimeout once one
 // attempt has already been made. Mirrors DefaultIdleBackOffTime's 10
@@ -46,18 +38,20 @@ const actionTimeoutRenotifyInterval = 10 * time.Minute
 // fallback to owner late-settlement) and ensures the state machine can move
 // forward.
 //
-// In m1 the operator-side penalty is a no-op; NotifyReservationActionTimeout
-// is still called with the wallet member IDs as required by the Bridge
-// function signature so that m2+ integrations only need to add the slashing
-// logic without changing the call shape.
+// The Bridge exposes two distinct timeout entry points depending on the
+// action generation's type: NotifyReservationAcceptanceTimedOut for
+// Acceptance-type actions, and NotifyReservationActionTimeout (which
+// takes a wallet member IDs slice the router ignores for Reanchor
+// timeouts) for Reanchor-type actions. checkReservationActionTimeout
+// branches on action.ActionType to call the correct entry point; an
+// unexpected action type (Redemption and Dissolution are out of m1
+// scope) is logged and skipped rather than causing an ill-formed call.
 //
-// The members resolver maps a wallet public key hash to the operator IDs
-// composing that wallet's signing group. In production, node.ResolveWalletMembers
-// resolves members for wallets the local operator co-signs and returns an error
-// ("wallet not found") for other on-chain wallets. The watcher treats resolver
-// errors for non-member wallets as an expected non-member condition and skips
-// them silently at Debug log level, so the watcher only meaningfully monitors
-// reservation action timeouts for wallets the local operator co-signs.
+// Reanchor timeouts are the permissionless path for a wallet the
+// operator no longer locally tracks as open (e.g. Closed/Terminated and
+// archived out of the wallet registry cache): NotifyReservationActionTimeout
+// is called with an empty member IDs slice unconditionally, requiring no
+// cooperation from the dead wallet.
 type ReservationActionTimeoutWatcher struct {
 	spvChain Chain
 	// nowFn returns the current UNIX timestamp the watcher treats as "now"
@@ -72,12 +66,6 @@ type ReservationActionTimeoutWatcher struct {
 	// whenever Run is used; tests that call CheckReservationActionTimeouts
 	// directly, without starting Run, may leave it zero.
 	interval time.Duration
-	// membersResolver turns a wallet public key hash into the operator IDs
-	// the Bridge expects for the slashing argument. The resolver is
-	// injected to keep the watcher independent of the chain interface used
-	// to look up operator addresses (the SPV maintainer chain interface
-	// does not expose GetOperatorID today).
-	membersResolver tbtc.WalletMembersResolver
 
 	acceptanceLastScannedBlock uint64
 	reanchorLastScannedBlock   uint64
@@ -90,23 +78,17 @@ type ReservationActionTimeoutWatcher struct {
 type pendingAction struct {
 	reservationKey *big.Int
 	requestNonce   uint64
-	// loadFailures counts consecutive GetReservationAction failures for
-	// this entry across successive poll passes. Reset to 0 on a
-	// successful load; once it reaches maxActionTimeoutLoadRetries the
-	// entry is evicted so a permanently unreadable action does not
-	// accumulate forever in pendingActions.
-	loadFailures int
-	// notifiedAt is the UNIX timestamp of the last attempted (and locally
-	// reported successful) NotifyReservationActionTimeout call for this
-	// action generation, or 0 if none has been attempted yet. It is NOT
-	// treated as proof the notification landed: a submitted-but-dropped
-	// or reverted transaction still leaves the on-chain action Pending,
-	// so pollPendingActions re-attempts the notification once
-	// actionTimeoutRenotifyInterval has elapsed since notifiedAt rather
-	// than treating one local send as permanent evidence of success.
-	// Eviction still happens only once action.State actually leaves
-	// Pending, which is the real on-chain evidence the notification took
-	// effect.
+	// notifiedAt is the UNIX timestamp of the last successful
+	// NotifyReservationAcceptanceTimedOut or NotifyReservationActionTimeout
+	// call for this action generation, or 0 if neither has ever
+	// succeeded. It is NOT treated as proof the notification landed: a
+	// submitted-but-dropped or reverted transaction still leaves the
+	// on-chain action Pending, so pollPendingActions re-attempts the
+	// notification once actionTimeoutRenotifyInterval has elapsed since
+	// notifiedAt rather than treating one local send as permanent
+	// evidence of success. Eviction still happens only once
+	// action.State actually leaves Pending, which is the real on-chain
+	// evidence the notification took effect.
 	notifiedAt uint32
 }
 
@@ -116,11 +98,7 @@ func actionEventKey(reservationKey *big.Int, requestNonce uint64) string {
 }
 
 // NewReservationActionTimeoutWatcher constructs a watcher bound to the
-// given chain, members resolver, and poll interval.
-//
-// The members resolver is mandatory: the watcher will refuse to operate
-// without it because emitting NotifyReservationActionTimeout with a nil
-// or empty member slice would be ill-formed on the Bridge side.
+// given chain and poll interval.
 //
 // pollInterval must be positive whenever Run is used to drive the
 // background loop. Production always uses Run, via
@@ -129,15 +107,13 @@ func actionEventKey(reservationKey *big.Int, requestNonce uint64) string {
 // CheckReservationActionTimeouts.
 func NewReservationActionTimeoutWatcher(
 	spvChain Chain,
-	membersResolver tbtc.WalletMembersResolver,
 	pollInterval time.Duration,
 ) *ReservationActionTimeoutWatcher {
 	return &ReservationActionTimeoutWatcher{
-		spvChain:        spvChain,
-		nowFn:           defaultActionTimeoutNowFn,
-		interval:        pollInterval,
-		membersResolver: membersResolver,
-		pendingActions:  make(map[string]*pendingAction),
+		spvChain:       spvChain,
+		nowFn:          defaultActionTimeoutNowFn,
+		interval:       pollInterval,
+		pendingActions: make(map[string]*pendingAction),
 	}
 }
 
@@ -185,11 +161,6 @@ func (ratw *ReservationActionTimeoutWatcher) nextScanRange(
 // removes actions that are no longer pending, and calls
 // CheckReservationActionTimeouts on any overdue pending action.
 func (ratw *ReservationActionTimeoutWatcher) Run(ctx context.Context) error {
-	if ratw.membersResolver == nil {
-		return fmt.Errorf(
-			"action-timeout watcher requires a non-nil members resolver",
-		)
-	}
 	if ratw.interval <= 0 {
 		return fmt.Errorf(
 			"action-timeout watcher requires a positive poll interval",
@@ -289,26 +260,14 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			item.requestNonce,
 		)
 		if err != nil {
-			item.loadFailures++
 			logger.Errorf(
 				"failed to load reservation action [%v]/%d: [%v]",
 				item.reservationKey,
 				item.requestNonce,
 				err,
 			)
-			if item.loadFailures >= maxActionTimeoutLoadRetries {
-				logger.Errorf(
-					"evicting reservation action [%v]/%d from tracking "+
-						"after %d consecutive load failures",
-					item.reservationKey,
-					item.requestNonce,
-					item.loadFailures,
-				)
-				delete(ratw.pendingActions, key)
-			}
 			continue
 		}
-		item.loadFailures = 0
 
 		if action.State != tbtc.ReservationActionStatePending {
 			delete(ratw.pendingActions, key)
@@ -328,17 +287,20 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 		}
 
 		if now > action.TimeoutAt {
-			if err := ratw.checkReservationActionTimeout(
+			notified, err := ratw.checkReservationActionTimeout(
 				item.reservationKey,
 				now,
 				action,
-			); err != nil {
+				item.requestNonce,
+			)
+			if err != nil {
 				logger.Errorf(
 					"action-timeout watcher failed to check reservation [%v]: [%v]",
 					item.reservationKey,
 					err,
 				)
-			} else {
+			}
+			if notified {
 				item.notifiedAt = now
 			}
 		}
@@ -359,47 +321,53 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 //   - now: a UNIX timestamp used to compare against TimeoutAt. Tests pass
 //     an explicit value; production passes time.Now().Unix() cast to uint32.
 //
-// The function resolves the custodying wallet, looks up the operator member
-// IDs through the injected resolver, then inspects only the action
-// generation at reservation.RequestNonce. By the Bridge invariant, only the
-// most-recent action generation can be Pending - older nonces have already
-// settled, timed out, or been superseded - so a single lookup suffices; no
-// walk from nonce 0 is needed. A RequestNonce of 0 means no action
-// generation has ever been requested against the reservation, so there is
-// nothing to check.
+// The function resolves the custodying wallet, then inspects only the
+// action generation at reservation.RequestNonce. By the Bridge
+// invariant, only the most-recent action generation can be Pending -
+// older nonces have already settled, timed out, or been superseded -
+// so a single lookup suffices; no walk from nonce 0 is needed. A
+// RequestNonce of 0 means no action generation has ever been requested
+// against the reservation, so there is nothing to check.
 func (ratw *ReservationActionTimeoutWatcher) CheckReservationActionTimeouts(
 	reservationKey *big.Int,
 	now uint32,
 ) error {
-	return ratw.checkReservationActionTimeout(reservationKey, now, nil)
+	_, err := ratw.checkReservationActionTimeout(reservationKey, now, nil, 0)
+	return err
 }
 
 // checkReservationActionTimeout is the shared implementation behind
-// CheckReservationActionTimeouts. When preloadedAction is non-nil, it is
-// used in place of a second GetReservationAction RPC: pollPendingActions
-// already loads the action for (reservationKey, requestNonce) once per
-// poll pass to decide whether the entry is overdue, and by the Bridge
-// invariant documented above that loaded action is the same one
-// reservation.RequestNonce resolves to whenever its state is still
-// Pending, so re-fetching it here would be a redundant RPC for the exact
-// same value.
+// CheckReservationActionTimeouts. When preloadedAction is non-nil and
+// preloadedActionNonce matches the reservation's freshly-read
+// RequestNonce, it is used in place of a second GetReservationAction
+// RPC: pollPendingActions already loads the action for
+// (reservationKey, requestNonce) once per poll pass to decide whether
+// the entry is overdue, and by the Bridge invariant documented above
+// that loaded action is the same one reservation.RequestNonce resolves
+// to whenever its state is still Pending, so re-fetching it here would
+// be a redundant RPC for the exact same value. A nonce mismatch means
+// the preload was fetched against a since-superseded action generation,
+// so the fresh nonce is used to re-fetch instead of trusting the stale
+// preload.
+//
+// The returned bool is true only immediately after a Bridge timeout
+// notification call (NotifyReservationAcceptanceTimedOut or
+// NotifyReservationActionTimeout) itself succeeds; it is false on every
+// skip path and on any error, letting callers distinguish "nothing
+// needed to happen" from "a notification was actually sent".
 func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 	reservationKey *big.Int,
 	now uint32,
 	preloadedAction *tbtc.ReservationAction,
-) error {
-	if ratw.membersResolver == nil {
-		return fmt.Errorf(
-			"action-timeout watcher requires a non-nil members resolver",
-		)
-	}
+	preloadedActionNonce uint64,
+) (bool, error) {
 	if reservationKey == nil {
-		return fmt.Errorf("reservation key must not be nil")
+		return false, fmt.Errorf("reservation key must not be nil")
 	}
 
 	reservation, err := ratw.spvChain.GetReservation(reservationKey)
 	if err != nil {
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"failed to load reservation [%v]: [%v]",
 			reservationKey,
 			err,
@@ -408,22 +376,22 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 
 	if reservation.RequestNonce == 0 {
 		// No action generation has ever been requested; nothing pending.
-		return nil
+		return false, nil
 	}
 
 	walletPublicKeyHash := reservation.WalletPublicKeyHash
 	if walletPublicKeyHash == ([20]byte{}) {
 		logger.Debugf("reservation [%v] has no wallet; skipping", reservationKey)
-		return nil
+		return false, nil
 	}
 
 	nonce := reservation.RequestNonce
 
 	action := preloadedAction
-	if action == nil {
+	if action == nil || nonce != preloadedActionNonce {
 		action, err = ratw.spvChain.GetReservationAction(reservationKey, nonce)
 		if err != nil {
-			return fmt.Errorf(
+			return false, fmt.Errorf(
 				"failed to load action for reservation [%v] at nonce %d: [%v]",
 				reservationKey,
 				nonce,
@@ -440,7 +408,7 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 			nonce,
 			action.State,
 		)
-		return nil
+		return false, nil
 	}
 
 	if now <= action.TimeoutAt {
@@ -452,51 +420,72 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 			action.TimeoutAt,
 			now,
 		)
-		return nil
+		return false, nil
 	}
 
-	memberIDs, err := ratw.membersResolver.ResolveWalletMembers(walletPublicKeyHash)
-	if err != nil {
-		logger.Debugf(
-			"operator is not a member of wallet [0x%x]; skipping action timeout check for reservation [%v]: [%v]",
-			walletPublicKeyHash,
+	switch action.ActionType {
+	case tbtc.ReservationActionTypeAcceptance:
+		if err := ratw.spvChain.NotifyReservationAcceptanceTimedOut(
 			reservationKey,
-			err,
-		)
-		return nil
-	}
+		); err != nil {
+			return false, fmt.Errorf(
+				"failed to notify acceptance timeout for "+
+					"reservation [%v] nonce %d: [%v]",
+				reservationKey,
+				nonce,
+				err,
+			)
+		}
 
-	if len(memberIDs) == 0 {
-		logger.Debugf(
-			"wallet [0x%x] members resolver returned an empty set; "+
-				"skipping action timeout check for reservation [%v]",
-			walletPublicKeyHash,
-			reservationKey,
-		)
-		return nil
-	}
-
-	if err := ratw.spvChain.NotifyReservationActionTimeout(
-		reservationKey,
-		memberIDs,
-	); err != nil {
-		return fmt.Errorf(
-			"failed to notify action timeout for "+
-				"reservation [%v] nonce %d: [%v]",
+		logger.Infof(
+			"notified acceptance timeout for reservation [%v] nonce %d "+
+				"(timeout=%d)",
 			reservationKey,
 			nonce,
-			err,
+			action.TimeoutAt,
 		)
+
+		return true, nil
+	case tbtc.ReservationActionTypeReanchor:
+		// The router ignores the member-IDs parameter for Reanchor-type
+		// timeouts, and the action-timeout watcher is the permissionless
+		// path that must not depend on cooperation from the (possibly
+		// dead) custodying wallet, so an empty slice is passed
+		// unconditionally rather than resolving wallet members.
+		if err := ratw.spvChain.NotifyReservationActionTimeout(
+			reservationKey,
+			[]uint32{},
+		); err != nil {
+			return false, fmt.Errorf(
+				"failed to notify action timeout for "+
+					"reservation [%v] nonce %d: [%v]",
+				reservationKey,
+				nonce,
+				err,
+			)
+		}
+
+		logger.Infof(
+			"notified action timeout for reservation [%v] nonce %d "+
+				"(timeout=%d)",
+			reservationKey,
+			nonce,
+			action.TimeoutAt,
+		)
+
+		return true, nil
+	default:
+		// Redemption and Dissolution are m2+ scope and should never
+		// reach a Pending, timed-out state here; handle defensively
+		// rather than assuming only Acceptance and Reanchor exist.
+		logger.Warnf(
+			"reservation [%v] action nonce %d has unexpected action "+
+				"type %s; skipping timeout notification",
+			reservationKey,
+			nonce,
+			action.ActionType,
+		)
+
+		return false, nil
 	}
-
-	logger.Infof(
-		"notified action timeout for reservation [%v] nonce %d "+
-			"(timeout=%d, members=%d)",
-		reservationKey,
-		nonce,
-		action.TimeoutAt,
-		len(memberIDs),
-	)
-
-	return nil
 }

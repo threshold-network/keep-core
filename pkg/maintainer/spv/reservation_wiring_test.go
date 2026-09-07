@@ -188,14 +188,6 @@ func TestCheckStaleReservedDeposit_Resolution(t *testing.T) {
 	}
 }
 
-type mockWalletMembersResolver struct {
-	resolveFn func(walletPublicKeyHash [20]byte) ([]uint32, error)
-}
-
-func (m *mockWalletMembersResolver) ResolveWalletMembers(walletPublicKeyHash [20]byte) ([]uint32, error) {
-	return m.resolveFn(walletPublicKeyHash)
-}
-
 type mockWalletClosedChain struct {
 	onWalletClosedHandler func(event *tbtc.WalletClosedEvent)
 }
@@ -217,13 +209,7 @@ func TestWireReservationWatchers(t *testing.T) {
 	blockCounter.SetCurrentBlock(1000)
 	spvChain.setBlockCounter(blockCounter)
 
-	resolver := &mockWalletMembersResolver{
-		resolveFn: func(walletPublicKeyHash [20]byte) ([]uint32, error) {
-			return []uint32{1, 2, 3}, nil
-		},
-	}
-
-	if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, resolver); err != nil {
+	if err := WireReservationWatchers(ctx, walletClosedChain, spvChain); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -234,30 +220,18 @@ func TestWireReservationWatchers_NilParameters(t *testing.T) {
 
 	walletClosedChain := &mockWalletClosedChain{}
 	spvChain := newLocalChain()
-	resolver := &mockWalletMembersResolver{
-		resolveFn: func(walletPublicKeyHash [20]byte) ([]uint32, error) {
-			return []uint32{1}, nil
-		},
-	}
 
 	t.Run("nil wallet closed chain", func(t *testing.T) {
-		err := WireReservationWatchers(ctx, nil, spvChain, resolver)
+		err := WireReservationWatchers(ctx, nil, spvChain)
 		if err == nil {
 			t.Fatal("expected error for nil wallet closed chain")
 		}
 	})
 
 	t.Run("nil spv chain", func(t *testing.T) {
-		err := WireReservationWatchers(ctx, walletClosedChain, nil, resolver)
+		err := WireReservationWatchers(ctx, walletClosedChain, nil)
 		if err == nil {
 			t.Fatal("expected error for nil spv chain")
-		}
-	})
-
-	t.Run("nil wallet members resolver", func(t *testing.T) {
-		err := WireReservationWatchers(ctx, walletClosedChain, spvChain, nil)
-		if err == nil {
-			t.Fatal("expected error for nil wallet members resolver")
 		}
 	})
 }
@@ -277,12 +251,6 @@ func TestWireReservationWatchers_StartupCatchUpScan_TransientErrorsDoNotAbort(t 
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(5000)
 	spvChain.setBlockCounter(blockCounter)
-
-	resolver := &mockWalletMembersResolver{
-		resolveFn: func(walletPublicKeyHash [20]byte) ([]uint32, error) {
-			return []uint32{1, 2, 3}, nil
-		},
-	}
 
 	walletTransientError := walletPKHAt(0x01)
 	walletClosed := walletPKHAt(0x02)
@@ -343,7 +311,7 @@ func TestWireReservationWatchers_StartupCatchUpScan_TransientErrorsDoNotAbort(t 
 
 	// WireReservationWatchers must succeed without returning an error despite
 	// walletTransientError failing GetWallet.
-	err := WireReservationWatchers(ctx, walletClosedChain, spvChain, resolver)
+	err := WireReservationWatchers(ctx, walletClosedChain, spvChain)
 	if err != nil {
 		t.Fatalf("expected WireReservationWatchers to succeed despite transient wallet error: %v", err)
 	}

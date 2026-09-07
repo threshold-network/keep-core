@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"reflect"
 	"sync"
@@ -1085,22 +1086,32 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 // operators' local configs diverge.
 func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 	tests := map[string]struct {
+		network                    ethereum.Network
 		coordinationBlock          uint64
 		windowIndex                uint64
 		expectedReservationActions []WalletActionType
 	}{
-		"below activation": {
-			coordinationBlock:          reservationsActivationBlocks[ethereum.Mainnet] - 1,
+		// Mainnet has no entry in reservationsActivationBlocks and falls
+		// through to math.MaxUint64 (never activates). Any real block
+		// height is below MaxUint64, so reservation actions must never
+		// appear on mainnet until a real rollout height is set.
+		"mainnet never activates (fallthrough)": {
+			network:                    ethereum.Mainnet,
+			coordinationBlock:          26500000,
 			windowIndex:                4,
 			expectedReservationActions: nil,
 		},
-		"at activation, non-4th window": {
-			coordinationBlock:          reservationsActivationBlocks[ethereum.Mainnet],
+		// ethereum.Developer activates immediately at block 0, so
+		// reservation actions appear on every window.
+		"developer at activation, non-4th window": {
+			network:                    ethereum.Developer,
+			coordinationBlock:          0,
 			windowIndex:                5,
 			expectedReservationActions: []WalletActionType{ActionReservationAnchor, ActionReservationReanchor},
 		},
-		"at activation, 4th window": {
-			coordinationBlock:          reservationsActivationBlocks[ethereum.Mainnet],
+		"developer at activation, 4th window": {
+			network:                    ethereum.Developer,
+			coordinationBlock:          0,
 			windowIndex:                4,
 			expectedReservationActions: []WalletActionType{ActionReservationAnchor, ActionReservationReanchor},
 		},
@@ -1108,7 +1119,7 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
-			executor := &coordinationExecutor{ethereumNetwork: ethereum.Mainnet}
+			executor := &coordinationExecutor{ethereumNetwork: test.network}
 
 			// We don't care about the seed for this test, as it only affects
 			// the ActionHeartbeat which is not the focus here.
@@ -1136,18 +1147,21 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 }
 
 func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
-	// Reference Ethereum mainnet block height as of 2026-09-02 (~25,880,000).
-	// reservationsActivationBlocks[ethereum.Mainnet] must be set to a future
-	// block height ahead of chain tip before release. If this test fails,
-	// both the reference height and that value must be updated.
-	const referenceMainnetBlockHeight = uint64(25880000)
-
-	mainnetActivationBlock := reservationsActivationBlocks[ethereum.Mainnet]
-	if mainnetActivationBlock <= referenceMainnetBlockHeight {
+	// Mainnet must have no entry in reservationsActivationBlocks so that
+	// reservationsActivationBlock returns math.MaxUint64 (never activates)
+	// until a real rollout height is chosen. A placeholder value here would
+	// be a silently-live landmine: a real height and an invented one are
+	// indistinguishable at runtime.
+	if _, ok := reservationsActivationBlocks[ethereum.Mainnet]; ok {
+		t.Error("reservationsActivationBlocks must not contain a mainnet entry " +
+			"until a real rollout height is chosen; remove the placeholder and " +
+			"let it fall through to math.MaxUint64")
+	}
+	if got := reservationsActivationBlock(ethereum.Mainnet); got != math.MaxUint64 {
 		t.Errorf(
-			"mainnet reservationsActivationBlock [%d] must be ahead of the reference mainnet block height [%d]",
-			mainnetActivationBlock,
-			referenceMainnetBlockHeight,
+			"reservationsActivationBlock(ethereum.Mainnet) = %d, want %d",
+			got,
+			uint64(math.MaxUint64),
 		)
 	}
 }

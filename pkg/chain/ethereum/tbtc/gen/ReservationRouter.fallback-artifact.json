@@ -497,6 +497,19 @@
       "inputs": [
         {
           "internalType": "uint256",
+          "name": "reservationKey",
+          "type": "uint256"
+        }
+      ],
+      "name": "notifyReservationAcceptanceTimedOut",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
           "name": "depositKey",
           "type": "uint256"
         }

@@ -30,7 +30,7 @@ func newReservationStrandingWatcher(spvChain Chain) *reservationStrandingWatcher
 }
 
 // checkReservationStrandingForWallet walks the reservations currently
-// custodied by walletPublicKeyHash and forwards a stray notification to the
+// custodied by walletPublicKeyHash and forwards a stranding notification to the
 // Bridge for every reservation whose state is Active.
 //
 // This is the single-shot form used both by tests and by the integration

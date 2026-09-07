@@ -585,8 +585,8 @@ type Chain interface {
 type ReservationChain interface {
 	// RequestReservationAcceptance requests a reservation acceptance action
 	// generation for the given reservation. The reservation must be in a
-	// state that allows acceptance; the operator-side guard is enforced at
-	// the chain layer.
+	// state that allows acceptance.
+	// Eligibility is checked by the reservation proposal builder and enforced by the Bridge.
 	RequestReservationAcceptance(
 		reservationKey *big.Int,
 		walletPublicKeyHash [20]byte,
@@ -623,6 +623,13 @@ type ReservationChain interface {
 		walletMembersIDs []uint32,
 	) error
 
+	// NotifyReservationAcceptanceTimedOut notifies the Bridge that the
+	// acceptance-type action timeout has elapsed for the given reservation
+	// without the SPV proof being submitted. Unlike
+	// NotifyReservationActionTimeout (Reanchor-only on-chain), this entry
+	// point is hard-gated to Acceptance-type actions by the Bridge.
+	NotifyReservationAcceptanceTimedOut(reservationKey *big.Int) error
+
 	// NotifyStaleReservedDeposit notifies the Bridge that the given reserved
 	// deposit's wallet did not anchor it within the reservation-action
 	// timeout and should be released back to the default sweeping path.
@@ -634,13 +641,10 @@ type ReservationChain interface {
 	// reservations whose wallet is no longer live.
 	NotifyReservationStranded(reservationKey *big.Int) error
 
-	// GetReservation gets the on-chain reservation record for the given
-	// reservation key. Returns an error if the reservation was not found.
+	// GetReservation returns the on-chain reservation record. An absent key is represented by ReservationStateUnknown; errors report chain-call or conversion failures.
 	GetReservation(reservationKey *big.Int) (*Reservation, error)
 
-	// GetReservationAction gets the on-chain action record for the given
-	// reservation key and request nonce. Returns an error if the action
-	// generation was not found.
+	// GetReservationAction returns the nonce-bound on-chain action record. An absent generation is represented by ReservationActionStateUnknown; errors report chain-call or conversion failures.
 	GetReservationAction(
 		reservationKey *big.Int,
 		requestNonce uint64,

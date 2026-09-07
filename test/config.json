@@ -52,13 +52,13 @@
             "RestartBackoffTime": "2h",
             "IdleBackoffTime": "15m",
             "Reservations": {
-                "Enabled": true
+                "LeaderDutiesEnabled": true
             }
         }
     },
     "Tbtc": {
         "Reservations": {
-            "Enabled": true
+            "LeaderDutiesEnabled": true
         }
     },
 

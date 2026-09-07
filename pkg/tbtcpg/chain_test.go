@@ -1715,8 +1715,6 @@ func (lc *LocalChain) SetWalletReservations(
 	lc.reservationWalletKeys[walletPublicKeyHash] = copy
 }
 
-// Reservations is a stub mirroring the Bridge view. Tests that need this
-// data should populate it explicitly via custom extensions.
 // ActiveReservationsCount reports zero active reservations by default.
 func (lc *LocalChain) ActiveReservationsCount() (
 	count uint32,

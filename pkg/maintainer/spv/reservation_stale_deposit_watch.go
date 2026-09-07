@@ -43,6 +43,27 @@ type ReservationStaleDepositWatcher struct {
 	spvChain        Chain
 	notified        map[string]struct{}
 	memoizedTimeout map[string]staleDepositTimeoutMemo
+
+	// walletTickCache memoizes GetWallet results within a single poll
+	// tick, keyed by wallet public key hash. The poller computes `now`
+	// once per tick and passes that identical value to every deposit
+	// check in the tick (see startStaleDepositPoll in
+	// reservation_wiring.go), so a `now` that differs from
+	// walletTickCacheNow signals a new tick and invalidates the cache; a
+	// repeated `now` signals the same tick and reuses it. This lets
+	// deposits assigned to the same wallet share one GetWallet call per
+	// tick instead of paying for one per deposit.
+	walletTickCacheValid bool
+	walletTickCacheNow   uint32
+	walletTickCache      map[[20]byte]walletFetchResult
+}
+
+// walletFetchResult caches the outcome of a single GetWallet call,
+// including an error, so a failed fetch for a wallet is not retried for
+// every deposit sharing that wallet within the same poll tick.
+type walletFetchResult struct {
+	wallet *tbtc.WalletChainData
+	err    error
 }
 
 // staleDepositTimeoutMemo caches a reveal-derived staleness deadline
@@ -64,6 +85,7 @@ func NewReservationStaleDepositWatcher(
 		spvChain:        spvChain,
 		notified:        make(map[string]struct{}),
 		memoizedTimeout: make(map[string]staleDepositTimeoutMemo),
+		walletTickCache: make(map[[20]byte]walletFetchResult),
 	}
 }
 
@@ -144,7 +166,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 		return StaleDepositResolutionDrop, nil
 	}
 
-	wallet, err := rsdw.spvChain.GetWallet(walletPublicKeyHash)
+	wallet, err := rsdw.getWalletForTick(walletPublicKeyHash, now)
 	if err != nil {
 		return StaleDepositResolutionUnknown, fmt.Errorf(
 			"failed to fetch wallet [0x%x] for reserved deposit [%v]: [%v]",
@@ -266,6 +288,36 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	)
 
 	return StaleDepositResolutionNotified, nil
+}
+
+// getWalletForTick fetches the given wallet's on-chain state, memoizing
+// the result for the duration of one poll tick so every deposit assigned
+// to the same wallet reuses a single GetWallet call instead of issuing
+// one per deposit. `now` identifies the tick: the poller computes it once
+// and passes the identical value to every deposit checked in that tick
+// (see startStaleDepositPoll in reservation_wiring.go), so a `now` value
+// that differs from the cached one signals a new tick and the cache is
+// dropped and rebuilt from scratch.
+func (rsdw *ReservationStaleDepositWatcher) getWalletForTick(
+	walletPublicKeyHash [20]byte,
+	now uint32,
+) (*tbtc.WalletChainData, error) {
+	if !rsdw.walletTickCacheValid || now != rsdw.walletTickCacheNow {
+		rsdw.walletTickCacheValid = true
+		rsdw.walletTickCacheNow = now
+		rsdw.walletTickCache = make(map[[20]byte]walletFetchResult)
+	}
+
+	if cached, ok := rsdw.walletTickCache[walletPublicKeyHash]; ok {
+		return cached.wallet, cached.err
+	}
+
+	wallet, err := rsdw.spvChain.GetWallet(walletPublicKeyHash)
+	rsdw.walletTickCache[walletPublicKeyHash] = walletFetchResult{
+		wallet: wallet,
+		err:    err,
+	}
+	return wallet, err
 }
 
 // forgetDeposit clears any cached notification state and memoized

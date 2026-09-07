@@ -28,6 +28,13 @@ const DepositScriptByteSize = 126
 // 30 days assuming 12 seconds per block.
 const DepositSweepLookBackBlocks = uint64(216000)
 
+// reservationParametersFetchRetries bounds how many consecutive
+// ReservationParameters attempts findDeposits makes before concluding
+// reservations are not currently active. See the call site for the
+// reasoning behind treating repeated failure, not a single one, as that
+// signal.
+const reservationParametersFetchRetries = 3
+
 // DepositSweepTask is a task that may produce a deposit sweep proposal.
 type DepositSweepTask struct {
 	chain    Chain
@@ -200,6 +207,41 @@ func findDeposits(
 	// Capture time now for computations.
 	timeNow := time.Now()
 
+	// Determine the reservation vault once, not per deposit. Retry a
+	// bounded number of times before concluding reservations are not
+	// currently active: a reservation-related Bridge call that doesn't
+	// exist yet on the deployed contract (pre-upgrade) fails
+	// deterministically on every attempt, while a transient RPC hiccup
+	// against an otherwise-live reservation system usually recovers
+	// within a few - and the consequence of guessing wrong the other way
+	// (sweeping a genuinely reserved deposit as a default one) is
+	// irreversible, so a single failed attempt is not enough evidence to
+	// draw that conclusion. Mirrors the bounded-retry convention already
+	// used for this class of RPC flake in reservation_wiring.go.
+	reservationsActive := true
+	var reservationParams *tbtc.ReservationParameters
+	for attempt := 1; attempt <= reservationParametersFetchRetries; attempt++ {
+		reservationParams, err = chain.ReservationParameters()
+		if err == nil {
+			break
+		}
+		taskLogger.Debugf(
+			"failed to fetch reservation parameters (attempt %d/%d): [%v]",
+			attempt,
+			reservationParametersFetchRetries,
+			err,
+		)
+	}
+	if err != nil {
+		taskLogger.Infof(
+			"reservation parameters unavailable after %d attempts, "+
+				"skipping reserved deposit filter: [%v]",
+			reservationParametersFetchRetries,
+			err,
+		)
+		reservationsActive = false
+	}
+
 	result := make([]*Deposit, 0, resultSliceCapacity)
 	for _, event := range depositRevealedEvents {
 		if len(result) == cap(result) {
@@ -209,18 +251,20 @@ func findDeposits(
 		depositKey := chain.BuildDepositKey(event.FundingTxHash, event.FundingOutputIndex)
 		depositKeyStr := depositKey.Text(16)
 
-		isReserved, err := chain.IsReservedDeposit(depositKey)
-		if err != nil {
-			taskLogger.Errorf(
-				"failed to check if deposit [%s] is reserved: [%v]",
-				depositKeyStr,
-				err,
-			)
-			continue
-		}
-		if isReserved {
-			taskLogger.Infof("skipping reserved deposit [%s]", depositKeyStr)
-			continue
+		if reservationsActive && depositTargetsReservationVault(event.Vault, reservationParams.ReservationVault) {
+			isReserved, err := chain.IsReservedDeposit(depositKey)
+			if err != nil {
+				taskLogger.Errorf(
+					"failed to check if deposit [%s] is reserved: [%v]",
+					depositKeyStr,
+					err,
+				)
+				continue
+			}
+			if isReserved {
+				taskLogger.Infof("skipping reserved deposit [%s]", depositKeyStr)
+				continue
+			}
 		}
 
 		taskLogger.Debugf("getting details of deposit [%s]", depositKeyStr)

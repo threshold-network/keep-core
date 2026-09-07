@@ -13,25 +13,6 @@ import (
 	"github.com/go-test/deep"
 )
 
-// recordingActionTimeoutMembers is a test double for the
-// tbtc.WalletMembersResolver interface. It returns the operator IDs configured
-// at construction time and records the wallet PKHs it was asked to resolve.
-type recordingActionTimeoutMembers struct {
-	walletIDs map[[20]byte][]uint32
-	calls     [][20]byte
-	errByPKH  map[[20]byte]error
-}
-
-func (r *recordingActionTimeoutMembers) ResolveWalletMembers(
-	walletPublicKeyHash [20]byte,
-) ([]uint32, error) {
-	r.calls = append(r.calls, walletPublicKeyHash)
-	if err, ok := r.errByPKH[walletPublicKeyHash]; ok {
-		return nil, err
-	}
-	return r.walletIDs[walletPublicKeyHash], nil
-}
-
 // seededReservation installs a reservation and (optionally) a list of
 // action generations under spvChain for use in the action-timeout watcher
 // tests. Helper reduces per-test noise. actions[0] is stored as generation
@@ -61,11 +42,7 @@ func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testin
 
 	wallet := walletPKH()
 	key := reservationKey(0xC001)
-	members := []uint32{11, 22, 33}
 
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet: members},
-	}
 	seededReservation(
 		t,
 		spvChain,
@@ -73,14 +50,15 @@ func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testin
 		wallet,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
 			},
 		},
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,14 +70,111 @@ func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testin
 	if diff := deep.Equal(key, calls[0].reservationKey); diff != nil {
 		t.Errorf("unexpected notified key: %v", diff)
 	}
-	if diff := deep.Equal(members, calls[0].walletMembersIDs); diff != nil {
-		t.Errorf("unexpected notified members: %v", diff)
+	// Reanchor timeouts must not depend on wallet member resolution: the
+	// router ignores the member-IDs parameter for this action type, so an
+	// empty slice is passed unconditionally.
+	if len(calls[0].walletMembersIDs) != 0 {
+		t.Errorf(
+			"expected empty member IDs for a Reanchor timeout, got %v",
+			calls[0].walletMembersIDs,
+		)
 	}
-	// The resolver must be consulted exactly once per Check call, not per
-	// nonce, because the Bridge requires the member IDs to be consistent
-	// across all notifications emitted in response to a single reservation.
-	if len(resolver.calls) != 1 {
-		t.Errorf("expected resolver to be called once, got %d", len(resolver.calls))
+	if acceptanceCalls := spvChain.getSubmittedAcceptanceTimeouts(); len(acceptanceCalls) != 0 {
+		t.Errorf(
+			"Reanchor timeout must not call the Acceptance entry point, got %d calls",
+			len(acceptanceCalls),
+		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_NotifiesAcceptanceTimeoutViaDedicatedEntryPoint
+// covers Finding 1: an Acceptance-type pending action must be reported
+// through NotifyReservationAcceptanceTimedOut, the Bridge's dedicated
+// Acceptance entry point, and never through NotifyReservationActionTimeout
+// (which is Reanchor-only and hard-reverts for Acceptance actions).
+func TestReservationActionTimeoutWatcher_NotifiesAcceptanceTimeoutViaDedicatedEntryPoint(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	key := reservationKey(0xC00C)
+
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeAcceptance,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
+	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	acceptanceCalls := spvChain.getSubmittedAcceptanceTimeouts()
+	if len(acceptanceCalls) != 1 {
+		t.Fatalf("expected one acceptance-timeout notification, got %d", len(acceptanceCalls))
+	}
+	if diff := deep.Equal(key, acceptanceCalls[0]); diff != nil {
+		t.Errorf("unexpected notified key: %v", diff)
+	}
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
+		t.Errorf(
+			"acceptance timeout must not call the Reanchor-only entry point, got %d calls",
+			len(calls),
+		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_SkipsUnrecognizedActionType covers
+// Finding 1's defensive default branch: Redemption and Dissolution are
+// m2+ scope and should never reach a Pending, timed-out state in m1, but
+// an unrecognized ActionType must be logged and skipped rather than
+// causing an ill-formed Bridge call or a panic.
+func TestReservationActionTimeoutWatcher_SkipsUnrecognizedActionType(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	key := reservationKey(0xC00D)
+
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeRedemption,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
+	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
+		t.Errorf(
+			"unrecognized action type must not call NotifyReservationActionTimeout, got %d calls",
+			len(calls),
+		)
+	}
+	if calls := spvChain.getSubmittedAcceptanceTimeouts(); len(calls) != 0 {
+		t.Errorf(
+			"unrecognized action type must not call NotifyReservationAcceptanceTimedOut, got %d calls",
+			len(calls),
+		)
 	}
 }
 
@@ -109,9 +184,6 @@ func TestReservationActionTimeoutWatcher_DoesNotNotifyBeforeTimeout(t *testing.T
 	wallet := walletPKH()
 	key := reservationKey(0xC002)
 
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet: {1, 2}},
-	}
 	seededReservation(
 		t,
 		spvChain,
@@ -119,14 +191,15 @@ func TestReservationActionTimeoutWatcher_DoesNotNotifyBeforeTimeout(t *testing.T
 		wallet,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 10_000,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  10_000,
 			},
 		},
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,15 +218,8 @@ func TestReservationActionTimeoutWatcher_IgnoresSettledOlderGeneration(t *testin
 	wallet := walletPKH()
 	key := reservationKey(0xC003)
 
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet: {1, 2}},
-	}
-	// Generation 1 (an old re-anchor, say) is already Settled; generation 2
-	// is the current pending generation and is past its deadline. The
-	// watcher must inspect only the current generation (RequestNonce = 2)
-	// and notify for it - this is the fix for the bug where an older
-	// walk-from-zero implementation stopped at the first non-pending
-	// generation and never reached the real timed-out one.
+	// Only the current generation (RequestNonce = 2) is eligible; an
+	// older non-pending generation must not stop the lookup.
 	seededReservation(
 		t,
 		spvChain,
@@ -161,18 +227,20 @@ func TestReservationActionTimeoutWatcher_IgnoresSettledOlderGeneration(t *testin
 		wallet,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStateSettled,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStateSettled,
+				TimeoutAt:  100,
 			},
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
 			},
 		},
 		2,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,9 +260,6 @@ func TestReservationActionTimeoutWatcher_NotifiesCurrentGenerationOnly(t *testin
 	wallet := walletPKH()
 	key := reservationKey(0xC004)
 
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet: {7, 8, 9}},
-	}
 	// Generation 1 is still pending and NOT past its deadline; generation 2
 	// is the current pending generation and IS past its deadline. Only
 	// generation 2 (RequestNonce) is ever inspected, so exactly one
@@ -206,18 +271,20 @@ func TestReservationActionTimeoutWatcher_NotifiesCurrentGenerationOnly(t *testin
 		wallet,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 10_000,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  10_000,
 			},
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
 			},
 		},
 		2,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -236,13 +303,12 @@ func TestReservationActionTimeoutWatcher_SkipsReservationWithoutWallet(t *testin
 	key := reservationKey(0xC005)
 	// No wallet PKH assigned.
 
-	resolver := &recordingActionTimeoutMembers{}
 	spvChain.setReservation(key, &tbtc.Reservation{
 		WalletPublicKeyHash: [20]byte{},
 		RequestNonce:        0,
 	})
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,24 +316,21 @@ func TestReservationActionTimeoutWatcher_SkipsReservationWithoutWallet(t *testin
 	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
 		t.Fatalf("zero-wallet reservation must skip, got %d notifications", len(calls))
 	}
-	if len(resolver.calls) != 0 {
-		t.Fatalf("resolver must not be called for zero-wallet reservation, got %d calls", len(resolver.calls))
-	}
 }
 
-func TestReservationActionTimeoutWatcher_MembersResolverError(t *testing.T) {
+// TestReservationActionTimeoutWatcher_ReanchorNotifiesUnconditionally
+// covers Finding 3: a Reanchor timeout is the permissionless path for a
+// wallet the operator no longer locally tracks as open (e.g.
+// Closed/Terminated and archived out of the wallet registry cache), so it
+// must notify unconditionally with an empty member IDs slice regardless
+// of any relationship between the operator and the custodying wallet -
+// there is no members resolver in this watcher at all.
+func TestReservationActionTimeoutWatcher_ReanchorNotifiesUnconditionally(t *testing.T) {
 	spvChain := newLocalChain()
 
-	wallet := walletPKH()
+	wallet := walletPKHAt(0xEE)
 	key := reservationKey(0xC006)
 
-	// In production, node.ResolveWalletMembers errors ("wallet not found") for
-	// wallets the local operator is not a signing member of. The watcher must
-	// treat this as an expected non-membership condition and skip cleanly without
-	// returning an error or notifying.
-	resolver := &recordingActionTimeoutMembers{
-		errByPKH: map[[20]byte]error{wallet: errors.New("wallet not found")},
-	}
 	seededReservation(
 		t,
 		spvChain,
@@ -275,84 +338,44 @@ func TestReservationActionTimeoutWatcher_MembersResolverError(t *testing.T) {
 		wallet,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
 			},
 		},
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
-		t.Fatalf("expected nil error on resolver non-member error, got: %v", err)
+		t.Fatalf("expected nil error, got: %v", err)
 	}
-	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
-		t.Fatalf("no notifications should fire on resolver error, got %d", len(calls))
+
+	calls := spvChain.getSubmittedReservationActionTimeouts()
+	if len(calls) != 1 {
+		t.Fatalf(
+			"expected the Reanchor timeout to notify unconditionally, got %d calls",
+			len(calls),
+		)
 	}
-}
-
-func TestReservationActionTimeoutWatcher_MembersResolverEmpty(t *testing.T) {
-	spvChain := newLocalChain()
-
-	wallet := walletPKH()
-	key := reservationKey(0xC007)
-
-	// An empty member set must also skip cleanly without emitting a notification.
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet: {}},
-	}
-	seededReservation(
-		t,
-		spvChain,
-		key,
-		wallet,
-		[]*tbtc.ReservationAction{
-			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
-			},
-		},
-		1,
-	)
-
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
-	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
-		t.Fatalf("expected nil error on empty member set, got: %v", err)
-	}
-	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
-		t.Fatalf("no notifications should fire on empty member set, got %d", len(calls))
-	}
-}
-
-func TestReservationActionTimeoutWatcher_NilResolverError(t *testing.T) {
-	spvChain := newLocalChain()
-
-	watcher := NewReservationActionTimeoutWatcher(spvChain, nil, 0)
-	if err := watcher.CheckReservationActionTimeouts(reservationKey(0xC008), 5_000); err == nil {
-		t.Fatal("expected error for nil resolver, got nil")
+	if len(calls[0].walletMembersIDs) != 0 {
+		t.Errorf("expected empty member IDs, got %v", calls[0].walletMembersIDs)
 	}
 }
 
 func TestReservationActionTimeoutWatcher_NilKeyError(t *testing.T) {
 	spvChain := newLocalChain()
-	resolver := &recordingActionTimeoutMembers{}
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
 	if err := watcher.CheckReservationActionTimeouts(nil, 5_000); err == nil {
 		t.Fatal("expected error for nil reservation key, got nil")
 	}
 }
 
 func TestReservationActionTimeoutWatcher_SkipsWalletZeroBranch(t *testing.T) {
-	// Isolates the wallet-zero skip branch from the RequestNonce == 0 skip
-	// branch: RequestNonce is nonzero (a real action generation exists) but
-	// WalletPublicKeyHash is zero, so the reservation exists yet has no
-	// wallet assigned. This must skip via the wallet-zero check, not be
-	// short-circuited by the (separate) RequestNonce == 0 check that an
-	// earlier version of this test file conflated by zeroing both fields
-	// together.
+	// WalletPublicKeyHash is zero while RequestNonce remains nonzero,
+	// isolating the wallet-zero guard.
 	spvChain := newLocalChain()
-	resolver := &recordingActionTimeoutMembers{}
 
 	key := reservationKey(0xC00B)
 	spvChain.setReservation(key, &tbtc.Reservation{
@@ -360,16 +383,13 @@ func TestReservationActionTimeoutWatcher_SkipsWalletZeroBranch(t *testing.T) {
 		RequestNonce:        1,
 	})
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
 		t.Fatalf("zero-wallet reservation must skip, got %d notifications", len(calls))
-	}
-	if len(resolver.calls) != 0 {
-		t.Fatalf("resolver must not be called for zero-wallet reservation, got %d calls", len(resolver.calls))
 	}
 }
 
@@ -380,9 +400,6 @@ func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 	wallet := walletPKH()
 	key := reservationKey(0xC00A)
 
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet: {1, 2, 3}},
-	}
 	// The current generation is pending and past its deadline, but the
 	// Bridge notify call fails. With only one generation ever inspected per
 	// Check call, the failure must surface as an error from
@@ -397,14 +414,15 @@ func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 		wallet,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
 			},
 		},
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, 0)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
 	err := watcher.CheckReservationActionTimeouts(key, 5_000)
 	if err == nil {
 		t.Fatal("expected the notifier error to propagate, got nil")
@@ -415,13 +433,215 @@ func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 	}
 }
 
+// TestReservationActionTimeoutWatcher_StalePreloadNonceMismatchFallsBackToFreshRead
+// covers Finding 14: a preloadedAction fetched at a since-superseded nonce
+// must not be trusted just because it is non-nil. The reservation's
+// on-chain RequestNonce has advanced to 2 (a fresh, Pending, overdue
+// generation) but the caller passes a stale preload captured at nonce 1
+// (Settled - if wrongly trusted, it would skip instead of notifying); the
+// nonce mismatch must force a fresh GetReservationAction read that finds
+// the real, current generation and notifies it.
+func TestReservationActionTimeoutWatcher_StalePreloadNonceMismatchFallsBackToFreshRead(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	key := reservationKey(0xC00E)
+
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStateSettled,
+				TimeoutAt:  100,
+			},
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		2,
+	)
+
+	stalePreload := &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeReanchor,
+		State:      tbtc.ReservationActionStateSettled,
+		TimeoutAt:  100,
+	}
+
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0)
+	notified, err := watcher.checkReservationActionTimeout(key, 5_000, stalePreload, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !notified {
+		t.Fatal(
+			"expected the nonce mismatch to trigger a fresh read and " +
+				"notify the current generation",
+		)
+	}
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
+		t.Fatalf("expected exactly one notification for the fresh generation, got %d", len(calls))
+	}
+}
+
+// TestReservationActionTimeoutWatcher_PollPendingActions_SkipsNotifiedAtStampOnSkip
+// covers Finding 13: pollPendingActions must stamp item.notifiedAt only
+// when checkReservationActionTimeout reports notified=true, never merely
+// because it returned a nil error. An unrecognized ActionType is a
+// Pending, overdue action that reaches the Bridge-call switch and is
+// skipped there without ever calling the Bridge; the prior bug stamped
+// notifiedAt=now for every nil-error return, including this one.
+func TestReservationActionTimeoutWatcher_PollPendingActions_SkipsNotifiedAtStampOnSkip(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	wallet1 := walletPKH()
+
+	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute)
+	ratw.nowFn = func() uint32 { return 500 }
+
+	key1 := reservationKey(0x3001)
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            key1,
+		RequestNonce:              1,
+		SourceWalletPublicKeyHash: wallet1,
+		BlockNumber:               500,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		key1,
+		wallet1,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeRedemption,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100, // Timed out (now=500 > 100)
+			},
+		},
+		1,
+	)
+
+	if err := ratw.pollPendingActions(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
+		t.Fatalf("unrecognized action type must never notify, got %d calls", len(calls))
+	}
+	if calls := spvChain.getSubmittedAcceptanceTimeouts(); len(calls) != 0 {
+		t.Fatalf("unrecognized action type must never notify, got %d calls", len(calls))
+	}
+
+	key1EventKey := actionEventKey(key1, 1)
+	item, ok := ratw.pendingActions[key1EventKey]
+	if !ok {
+		t.Fatalf("key1 should remain tracked in pendingActions (still Pending on-chain)")
+	}
+	if item.notifiedAt != 0 {
+		t.Errorf(
+			"notifiedAt must stay 0 when no notification was actually sent, got %d",
+			item.notifiedAt,
+		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_PollPendingActions_RetainsEntryAcrossLoadFailures
+// covers Finding 4: consecutive GetReservationAction poll-pass failures
+// must never evict a tracked entry - only an actually-observed on-chain
+// State transition away from Pending may remove it. Before the fix,
+// maxActionTimeoutLoadRetries (3) consecutive failures would have deleted
+// the entry permanently, taking it out of timeout coverage for the rest
+// of the process lifetime.
+func TestReservationActionTimeoutWatcher_PollPendingActions_RetainsEntryAcrossLoadFailures(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	wallet1 := walletPKH()
+
+	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute)
+	currentNow := uint32(500)
+	ratw.nowFn = func() uint32 { return currentNow }
+
+	key1 := reservationKey(0x4001)
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            key1,
+		RequestNonce:              1,
+		SourceWalletPublicKeyHash: wallet1,
+		BlockNumber:               500,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		key1,
+		wallet1,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	// First tick discovers key1 via the reanchor event; its first load
+	// attempt fails immediately.
+	spvChain.getReservationActionErr = errors.New("transient RPC failure")
+	if err := ratw.pollPendingActions(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	key1EventKey := actionEventKey(key1, 1)
+	if _, ok := ratw.pendingActions[key1EventKey]; !ok {
+		t.Fatalf("key1 should be tracked after discovery, even though its first load failed")
+	}
+
+	// Several more consecutive failures - well past the formerly-fatal
+	// count of 3 - must never evict the entry.
+	for i := range 5 {
+		if err := ratw.pollPendingActions(); err != nil {
+			t.Fatalf("unexpected error on retry %d: %v", i, err)
+		}
+		if _, ok := ratw.pendingActions[key1EventKey]; !ok {
+			t.Fatalf(
+				"key1 should remain tracked despite %d consecutive load "+
+					"failures; it must only be evicted once its on-chain "+
+					"state is actually observed to have left Pending",
+				i+1,
+			)
+		}
+	}
+
+	// Recovery: once reads succeed again, the entry is still there to
+	// be checked and notified on the very next tick - there is no
+	// backoff window to wait out.
+	spvChain.getReservationActionErr = nil
+	if err := ratw.pollPendingActions(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
+		t.Fatalf("expected exactly one notification after recovery, got %d", len(calls))
+	}
+}
+
 func TestReservationActionTimeoutWatcher_NextScanRange(t *testing.T) {
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
 	spvChain.setBlockCounter(blockCounter)
 
-	resolver := &recordingActionTimeoutMembers{}
-	watcher := NewReservationActionTimeoutWatcher(spvChain, resolver, time.Minute)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, time.Minute)
 
 	// Case 1: First scan (lastScannedBlock == 0) and currentBlock > lookback.
 	blockCounter.SetCurrentBlock(300_000)
@@ -471,15 +691,10 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 	spvChain.setBlockCounter(blockCounter)
 
 	wallet1 := walletPKH()
-	members := []uint32{1, 2, 3}
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet1: members},
-	}
 
 	pollInterval := 10 * time.Millisecond
 	ratw := NewReservationActionTimeoutWatcher(
 		spvChain,
-		resolver,
 		pollInterval,
 	)
 	ratw.nowFn = func() uint32 { return 500 }
@@ -502,8 +717,9 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 		wallet1,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100, // Timed out (now=500 > 100)
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100, // Timed out (now=500 > 100)
 			},
 		},
 		1,
@@ -529,8 +745,9 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 	// Tick 2: key1 is now settled (no longer pending), and a reanchor event
 	// arrives for key2 (nonce 2) at block 1500.
 	spvChain.setReservationAction(key1, 1, &tbtc.ReservationAction{
-		State:     tbtc.ReservationActionStateSettled,
-		TimeoutAt: 100,
+		ActionType: tbtc.ReservationActionTypeReanchor,
+		State:      tbtc.ReservationActionStateSettled,
+		TimeoutAt:  100,
 	})
 
 	blockCounter.SetCurrentBlock(2000)
@@ -548,12 +765,14 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 		wallet1,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStateSettled,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStateSettled,
+				TimeoutAt:  100,
 			},
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 200, // Timed out (now=500 > 200)
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  200, // Timed out (now=500 > 200)
 			},
 		},
 		2,
@@ -583,18 +802,9 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 	}
 }
 
-// TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending
-// covers the dedup guarantee TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking
-// does not: it never flips the tracked action's state away from Pending,
-// so eviction-on-settlement cannot be what is suppressing repeat
-// notifications. Two poll windows elapse (several 10ms ticks each) while
-// the action stays Pending and past its deadline; the notifier must still
-// show exactly one call, and the entry must still be present in
-// pendingActions (not evicted) after both windows. Both assertions depend
-// on Finding A's fix: the prior unconditional
-// delete-after-successful-check would also happen to leave the call count
-// at one, but only because it deletes the entry outright on tick 1 - it
-// would fail the "still tracked" assertion below.
+// Verifies a successful notification remains tracked while the action
+// stays Pending and suppresses duplicate calls within the
+// re-notification interval.
 func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *testing.T) {
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
@@ -602,15 +812,10 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 	spvChain.setBlockCounter(blockCounter)
 
 	wallet1 := walletPKH()
-	members := []uint32{1, 2, 3}
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet1: members},
-	}
 
 	pollInterval := 10 * time.Millisecond
 	ratw := NewReservationActionTimeoutWatcher(
 		spvChain,
-		resolver,
 		pollInterval,
 	)
 	ratw.nowFn = func() uint32 { return 500 }
@@ -632,8 +837,9 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 		wallet1,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100, // Timed out (now=500 > 100)
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100, // Timed out (now=500 > 100)
 			},
 		},
 		1,
@@ -708,15 +914,10 @@ func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t 
 	spvChain.setBlockCounter(blockCounter)
 
 	wallet1 := walletPKH()
-	members := []uint32{1, 2, 3}
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet1: members},
-	}
 
 	pollInterval := 10 * time.Millisecond
 	ratw := NewReservationActionTimeoutWatcher(
 		spvChain,
-		resolver,
 		pollInterval,
 	)
 
@@ -747,8 +948,9 @@ func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t 
 		wallet1,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
 			},
 		},
 		1,
@@ -806,15 +1008,10 @@ func TestReservationActionTimeoutWatcher_RunLoop_BoundedFirstScan(t *testing.T) 
 	spvChain.setBlockCounter(blockCounter)
 
 	wallet1 := walletPKH()
-	members := []uint32{1, 2, 3}
-	resolver := &recordingActionTimeoutMembers{
-		walletIDs: map[[20]byte][]uint32{wallet1: members},
-	}
 
 	pollInterval := 10 * time.Millisecond
 	ratw := NewReservationActionTimeoutWatcher(
 		spvChain,
-		resolver,
 		pollInterval,
 	)
 	ratw.nowFn = func() uint32 { return 500 }
@@ -837,8 +1034,9 @@ func TestReservationActionTimeoutWatcher_RunLoop_BoundedFirstScan(t *testing.T) 
 		wallet1,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
 			},
 		},
 		1,
@@ -859,8 +1057,9 @@ func TestReservationActionTimeoutWatcher_RunLoop_BoundedFirstScan(t *testing.T) 
 		wallet1,
 		[]*tbtc.ReservationAction{
 			{
-				State:     tbtc.ReservationActionStatePending,
-				TimeoutAt: 100,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
 			},
 		},
 		1,

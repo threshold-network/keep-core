@@ -699,3 +699,121 @@ func TestReservationStaleDepositWatcher_ExactTimeoutBoundaryDoesNotNotify(t *tes
 		)
 	}
 }
+
+// walletCallCountingChain wraps a Chain and counts GetWallet invocations,
+// delegating every other method to the embedded Chain. It is used to
+// assert that CheckStaleReservedDeposit deduplicates wallet-state reads
+// within a single poll tick (calls sharing the same `now`) instead of
+// issuing one GetWallet call per deposit.
+type walletCallCountingChain struct {
+	Chain
+	walletCallCount int
+}
+
+func (w *walletCallCountingChain) GetWallet(
+	walletPublicKeyHash [20]byte,
+) (*tbtc.WalletChainData, error) {
+	w.walletCallCount++
+	return w.Chain.GetWallet(walletPublicKeyHash)
+}
+
+// TestReservationStaleDepositWatcher_DedupesWalletFetchWithinTick verifies
+// that N deposits assigned to the same wallet, checked with the identical
+// `now` value (as the poller does for every deposit within one poll
+// tick), result in exactly one GetWallet call rather than one per
+// deposit.
+func TestReservationStaleDepositWatcher_DedupesWalletFetchWithinTick(t *testing.T) {
+	inner := newLocalChain()
+	spvChain := &walletCallCountingChain{Chain: inner}
+
+	wallet := walletPKH()
+	inner.setWallet(wallet, &tbtc.WalletChainData{
+		State: tbtc.StateUnknown,
+	})
+	inner.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	const depositCount = 3
+	keys := make([]*big.Int, depositCount)
+	for i := range depositCount {
+		key := reservationDepositKey(0xC000 + uint64(i))
+		keys[i] = key
+		inner.setReservedDeposit(key, wallet, true)
+		inner.setReservation(key, &tbtc.Reservation{
+			RequestNonce: 1,
+		})
+		// now (5_000) < action.TimeoutAt (10_000): every deposit resolves
+		// to Keep, so the loop below checks all three deposits without
+		// any being forgotten, isolating the assertion to the wallet
+		// fetch count.
+		inner.setReservationAction(key, 1, &tbtc.ReservationAction{
+			State:     tbtc.ReservationActionStatePending,
+			TimeoutAt: 10_000,
+		})
+	}
+
+	watcher := NewReservationStaleDepositWatcher(spvChain)
+
+	const now = uint32(5_000)
+	for _, key := range keys {
+		res, err := watcher.CheckStaleReservedDeposit(key, now)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res != StaleDepositResolutionKeep {
+			t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
+		}
+	}
+
+	if spvChain.walletCallCount != 1 {
+		t.Fatalf(
+			"expected exactly one GetWallet call for %d deposits sharing "+
+				"a wallet within one poll tick, got %d",
+			depositCount,
+			spvChain.walletCallCount,
+		)
+	}
+}
+
+// TestReservationStaleDepositWatcher_WalletFetchRefreshesAcrossTicks
+// verifies that the wallet-state cache is scoped to a single poll tick,
+// not permanent: a new `now` value (signaling the next tick) must trigger
+// a fresh GetWallet call rather than reusing a previous tick's cached
+// wallet state indefinitely.
+func TestReservationStaleDepositWatcher_WalletFetchRefreshesAcrossTicks(t *testing.T) {
+	inner := newLocalChain()
+	spvChain := &walletCallCountingChain{Chain: inner}
+
+	wallet := walletPKH()
+	inner.setWallet(wallet, &tbtc.WalletChainData{
+		State: tbtc.StateUnknown,
+	})
+	inner.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	key := reservationDepositKey(0xC100)
+	inner.setReservedDeposit(key, wallet, true)
+	inner.setReservation(key, &tbtc.Reservation{RequestNonce: 1})
+	inner.setReservationAction(key, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStatePending,
+		TimeoutAt: 10_000,
+	})
+
+	watcher := NewReservationStaleDepositWatcher(spvChain)
+
+	if _, err := watcher.CheckStaleReservedDeposit(key, 5_000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := watcher.CheckStaleReservedDeposit(key, 5_001); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if spvChain.walletCallCount != 2 {
+		t.Fatalf(
+			"expected one GetWallet call per distinct poll tick, got %d",
+			spvChain.walletCallCount,
+		)
+	}
+}

@@ -512,6 +512,28 @@ func (raa *reservationAnchorAction) execute() error {
 		return fmt.Errorf("cannot validate reservation anchor proposal: [%v]", err)
 	}
 
+	// Follower-side soft check on the proposed anchor fee. Mirrors the
+	// fee-floor check performed in ValidateDepositSweepProposal and
+	// ValidateRedemptionProposal; log-only (never rejects) for the same
+	// mixed-version rollout reasons described in those validators.
+	if anchorTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
+		AddScriptHashInputs(1, DepositScriptByteSize, true).
+		AddPublicKeyHashOutputs(1, true).
+		VirtualSize(); sizeErr != nil {
+		raa.logger.Warnf(
+			"cannot estimate anchor tx size for the fee sanity check: [%v]",
+			sizeErr,
+		)
+	} else {
+		warnIfProposedWalletTxFeeBelowBufferedFloor(
+			raa.logger,
+			MinWalletTxSatPerVByteFee,
+			anchorTxSize,
+			raa.proposal.AnchorTxFee,
+			"reservation anchor",
+		)
+	}
+
 	unsignedTx, err := AssembleReservationAnchorTransaction(
 		raa.btcChain,
 		deposit,
@@ -628,6 +650,28 @@ func (rra *reservationReanchorAction) execute() error {
 	)
 	if err != nil {
 		return fmt.Errorf("cannot validate reservation reanchor proposal: [%v]", err)
+	}
+
+	// Follower-side soft check on the proposed re-anchor fee. Mirrors the
+	// fee-floor check performed in ValidateDepositSweepProposal and
+	// ValidateRedemptionProposal; log-only (never rejects) for the same
+	// mixed-version rollout reasons described in those validators.
+	if reanchorTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddPublicKeyHashOutputs(1, true).
+		VirtualSize(); sizeErr != nil {
+		rra.logger.Warnf(
+			"cannot estimate re-anchor tx size for the fee sanity check: [%v]",
+			sizeErr,
+		)
+	} else {
+		warnIfProposedWalletTxFeeBelowBufferedFloor(
+			rra.logger,
+			MinWalletTxSatPerVByteFee,
+			reanchorTxSize,
+			rra.proposal.ReanchorTxFee,
+			"reservation re-anchor",
+		)
 	}
 
 	unsignedTx, err := AssembleReservationReanchorTransaction(

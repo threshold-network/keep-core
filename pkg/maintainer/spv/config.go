@@ -87,7 +87,7 @@ type Config struct {
 	//
 	// OPERATOR NOTE: This flag only controls SPV proof submission in the
 	// maintainer process. Proposal generation and watcher wiring in the client
-	// process are gated by the separate Tbtc.Reservations.Enabled flag.
+	// process are gated by the separate Tbtc.Reservations.LeaderDutiesEnabled flag.
 	// An operator MUST enable BOTH flags ([Tbtc.Reservations] in the client
 	// and [Maintainer.Spv.Reservations] in the maintainer) for the reservation
 	// feature to work end-to-end.

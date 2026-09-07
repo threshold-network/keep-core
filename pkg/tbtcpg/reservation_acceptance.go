@@ -291,12 +291,56 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 
 	wallet, err := rat.chain.GetWallet(walletPublicKeyHash)
 	if err != nil {
-		taskLogger.Errorf(
-			"failed to load wallet chain data: [%v]",
+		return nil, fmt.Errorf(
+			"failed to load wallet chain data: [%w]",
 			err,
 		)
-		return nil, nil
 	}
+
+	// wallet_reservations_count / active_reservations_count /
+	// max_active_reservations are published unconditionally on every
+	// findReservationAcceptanceCandidate pass, mirroring the sibling
+	// live_wallets_count gauge that ReservationReanchorTask publishes every
+	// coordination window: they must not depend on the StateLive guard
+	// below, which is false for a wallet mid-rotation (moving funds or
+	// closing) -- exactly when gauge staleness matters most. Gating the
+	// publish on that guard would leave these gauges stuck at their
+	// registered-zero value for as long as the wallet is not Live.
+	walletReservationsCount, err := rat.chain.WalletReservationsCount(
+		walletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get wallet reservations count: [%w]",
+			err,
+		)
+	}
+	if rat.metricsRecorder != nil {
+		rat.metricsRecorder.SetGauge(
+			"wallet_reservations_count",
+			float64(walletReservationsCount),
+		)
+	}
+
+	activeReservationsCount, maxActiveReservations, err :=
+		rat.chain.ActiveReservationsCount()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get active reservations count: [%w]",
+			err,
+		)
+	}
+	if rat.metricsRecorder != nil {
+		rat.metricsRecorder.SetGauge(
+			"active_reservations_count",
+			float64(activeReservationsCount),
+		)
+		rat.metricsRecorder.SetGauge(
+			"max_active_reservations",
+			float64(maxActiveReservations),
+		)
+	}
+
 	if wallet.State != tbtc.StateLive {
 		taskLogger.Infof(
 			"wallet is not live (state=%v); cannot accept reservation",
@@ -326,22 +370,6 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		)
 	}
 
-	walletReservationsCount, err := rat.chain.WalletReservationsCount(
-		walletPublicKeyHash,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get wallet reservations count: [%w]",
-			err,
-		)
-	}
-	if rat.metricsRecorder != nil {
-		rat.metricsRecorder.SetGauge(
-			"wallet_reservations_count",
-			float64(walletReservationsCount),
-		)
-	}
-
 	walletReservationsAmount, err := rat.chain.WalletReservationsAmount(
 		walletPublicKeyHash,
 	)
@@ -349,25 +377,6 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		return nil, fmt.Errorf(
 			"failed to get wallet reservations amount: [%w]",
 			err,
-		)
-	}
-
-	activeReservationsCount, maxActiveReservations, err :=
-		rat.chain.ActiveReservationsCount()
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get active reservations count: [%w]",
-			err,
-		)
-	}
-	if rat.metricsRecorder != nil {
-		rat.metricsRecorder.SetGauge(
-			"active_reservations_count",
-			float64(activeReservationsCount),
-		)
-		rat.metricsRecorder.SetGauge(
-			"max_active_reservations",
-			float64(maxActiveReservations),
 		)
 	}
 
@@ -403,6 +412,20 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		return depositRevealedEvents[i].BlockNumber < depositRevealedEvents[j].BlockNumber
 	})
 
+	// The anchor fee is identical for every candidate examined below (same
+	// fixed-size 1-input-1-output anchor transaction, same fee-rate oracle
+	// and cap). It is estimated at most once per Run() call -- on the
+	// first candidate that survives every earlier per-candidate gate --
+	// and the result is cached in anchorFee/anchorFeeComputed for reuse by
+	// every subsequent candidate, instead of being unconditionally
+	// recomputed for each of the up to
+	// maxReservationAcceptanceCandidatesPerRun candidates examined by the
+	// loop. It is intentionally not computed further up in this function:
+	// a wallet with no candidate that reaches this gate (e.g. no reserved
+	// deposits at all) must remain a clean no-op, without paying for a fee
+	// estimate it will never use.
+	var anchorFee int64
+	anchorFeeComputed := false
 	now := time.Now()
 
 	candidatesExamined := 0
@@ -579,25 +602,27 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			requestNonce = reservation.RequestNonce + 1
 		}
 
-		// Estimate the anchor fee and check net-of-fee viability here, as
-		// part of candidate selection, rather than after a single candidate
-		// has already been chosen. A candidate that fails this check is
-		// skipped in favor of the next one; nothing marks it retried, so
-		// leaving this check in proposeReservationAcceptance (which is
-		// called for exactly one already-selected candidate) would cause
-		// the same doomed deposit to be re-selected and abort on every
-		// subsequent Run() until it aged out of the look-back window.
-		anchorFee, err := estimateReservationAcceptanceFee(
-			rat.btcChain,
-			reservationParameters.ReservationTxMaxFee,
-		)
-		if err != nil {
-			taskLogger.Errorf(
-				"failed to estimate reservation acceptance transaction fee for [%v]: [%v]",
-				depositKey,
-				err,
+		// Check net-of-fee viability here, as part of candidate selection,
+		// rather than after a single candidate has already been chosen. A
+		// candidate that fails this check is skipped in favor of the next
+		// one; nothing marks it retried, so leaving this check in
+		// proposeReservationAcceptance (which is called for exactly one
+		// already-selected candidate) would cause the same doomed deposit
+		// to be re-selected and abort on every subsequent Run() until it
+		// aged out of the look-back window.
+		if !anchorFeeComputed {
+			var feeErr error
+			anchorFee, feeErr = estimateReservationAcceptanceFee(
+				rat.btcChain,
+				reservationParameters.ReservationTxMaxFee,
 			)
-			continue
+			if feeErr != nil {
+				return nil, fmt.Errorf(
+					"failed to estimate reservation acceptance transaction fee: [%w]",
+					feeErr,
+				)
+			}
+			anchorFeeComputed = true
 		}
 
 		anchorValue := int64(depositRequest.Amount) - anchorFee

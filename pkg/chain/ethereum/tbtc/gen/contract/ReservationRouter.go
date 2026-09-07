@@ -391,6 +391,144 @@ func (rr *ReservationRouter) NotifyReservationStrandedGasEstimate(
 }
 
 // Transaction submission.
+func (rr *ReservationRouter) NotifyReservationAcceptanceTimedOut(
+	arg_reservationKey *big.Int,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	rrLogger.Debug(
+		"submitting transaction notifyReservationAcceptanceTimedOut",
+		" params: ",
+		fmt.Sprint(
+			arg_reservationKey,
+		),
+	)
+
+	rr.transactionMutex.Lock()
+	defer rr.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *rr.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := rr.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := rr.contract.NotifyReservationAcceptanceTimedOut(
+		transactorOptions,
+		arg_reservationKey,
+	)
+	if err != nil {
+		return transaction, rr.errorResolver.ResolveError(
+			err,
+			rr.transactorOptions.From,
+			nil,
+			"notifyReservationAcceptanceTimedOut",
+			arg_reservationKey,
+		)
+	}
+
+	rrLogger.Infof(
+		"submitted transaction notifyReservationAcceptanceTimedOut with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go rr.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := rr.contract.NotifyReservationAcceptanceTimedOut(
+				newTransactorOptions,
+				arg_reservationKey,
+			)
+			if err != nil {
+				return nil, rr.errorResolver.ResolveError(
+					err,
+					rr.transactorOptions.From,
+					nil,
+					"notifyReservationAcceptanceTimedOut",
+					arg_reservationKey,
+				)
+			}
+
+			rrLogger.Infof(
+				"submitted transaction notifyReservationAcceptanceTimedOut with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	rr.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (rr *ReservationRouter) CallNotifyReservationAcceptanceTimedOut(
+	arg_reservationKey *big.Int,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		rr.transactorOptions.From,
+		blockNumber, nil,
+		rr.contractABI,
+		rr.caller,
+		rr.errorResolver,
+		rr.contractAddress,
+		"notifyReservationAcceptanceTimedOut",
+		&result,
+		arg_reservationKey,
+	)
+
+	return err
+}
+
+func (rr *ReservationRouter) NotifyReservationAcceptanceTimedOutGasEstimate(
+	arg_reservationKey *big.Int,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		rr.callerOptions.From,
+		rr.contractAddress,
+		"notifyReservationAcceptanceTimedOut",
+		rr.contractABI,
+		rr.transactor,
+		arg_reservationKey,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
 func (rr *ReservationRouter) NotifyStaleReservedDeposit(
 	arg_depositKey *big.Int,
 

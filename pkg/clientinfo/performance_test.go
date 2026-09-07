@@ -645,10 +645,10 @@ func TestWalletActionMetricsRegistered(t *testing.T) {
 
 // TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag verifies
 // wallet_action_reservation_* counters and histograms are registered even
-// when Tbtc.Reservations.Enabled is false. Reservation action execution
-// (anchor/re-anchor co-signing) is not itself gated on that flag - only
-// proposal generation, watcher wiring, and the reservation gauges are - so
-// gating this registration would silently drop observability for the
+// when Tbtc.Reservations.LeaderDutiesEnabled is false. Reservation action
+// execution (anchor/re-anchor co-signing) is not itself gated on that flag -
+// only proposal generation, watcher wiring, and the reservation gauges are -
+// so gating this registration would silently drop observability for the
 // operators most likely to see unconditional execution.
 func TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -758,8 +758,10 @@ func TestReservationGaugesRegistered(t *testing.T) {
 
 // TestReservationGaugesNotRegisteredWhenReservationsDisabled verifies the
 // four reservation saturation gauges are absent (not just zero) when the
-// m1 reservations feature is disabled, mirroring the wallet-action-metrics
-// gating in TestWalletActionMetricsNotRegisteredWhenReservationsDisabled.
+// m1 reservations feature is disabled. Unlike these gauges, the
+// wallet_action_reservation_* counters and histograms remain registered
+// regardless of the flag (see TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag)
+// since reservation action execution itself is not gated on it.
 func TestReservationGaugesNotRegisteredWhenReservationsDisabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -54,9 +54,9 @@ func ParseWalletActionType(value uint8) (WalletActionType, error) {
 		return ActionMovingFunds, nil
 	case ActionMovedFundsSweep:
 		return ActionMovedFundsSweep, nil
-	case 6:
+	case ActionReservationAnchor:
 		return ActionReservationAnchor, nil
-	case 8:
+	case ActionReservationReanchor:
 		return ActionReservationReanchor, nil
 	// NOTE: Action types 7 and 9 are reserved wire slots (formerly ActionReservedRedemption
 	// and ActionReservationDissolution). Their client-side scaffolding was removed but the

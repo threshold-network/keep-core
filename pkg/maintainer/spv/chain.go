@@ -109,6 +109,11 @@ type Chain interface {
 		walletMembersIDs []uint32,
 	) error
 
+	// NotifyReservationAcceptanceTimedOut notifies the Bridge that the
+	// acceptance-type action timeout has elapsed for the given reservation
+	// without the SPV proof being submitted.
+	NotifyReservationAcceptanceTimedOut(reservationKey *big.Int) error
+
 	// NotifyStaleReservedDeposit notifies the Bridge that the given reserved
 	// deposit's wallet did not anchor it within the reservation-action
 	// timeout and should be released back to the default sweeping path.
@@ -119,13 +124,10 @@ type Chain interface {
 	// the anchor is therefore stranded.
 	NotifyReservationStranded(reservationKey *big.Int) error
 
-	// GetReservation gets the on-chain reservation record for the given
-	// reservation key. Returns an error if the reservation was not found.
+	// GetReservation returns the on-chain reservation record. An absent key is represented by ReservationStateUnknown; errors report chain-call or conversion failures.
 	GetReservation(reservationKey *big.Int) (*tbtc.Reservation, error)
 
-	// GetReservationAction gets the on-chain action record for the given
-	// reservation key and request nonce. Returns an error if the action
-	// generation was not found.
+	// GetReservationAction returns the nonce-bound on-chain action record. An absent generation is represented by ReservationActionStateUnknown; errors report chain-call or conversion failures.
 	GetReservationAction(
 		reservationKey *big.Int,
 		requestNonce uint64,

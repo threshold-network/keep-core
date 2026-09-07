@@ -74,6 +74,12 @@ type localChain struct {
 	depositSweepProposalValidationsMutex sync.Mutex
 	depositSweepProposalValidations      map[[32]byte]bool
 
+	reservedDepositsMutex sync.Mutex
+	reservedDeposits      map[string]bool
+
+	reservationParamsMutex sync.Mutex
+	reservationParams      *ReservationParameters
+
 	pendingRedemptionRequestsMutex sync.Mutex
 	pendingRedemptionRequests      map[[32]byte]*RedemptionRequest
 
@@ -1501,8 +1507,28 @@ func (lc *localChain) setReservationAction(action *ReservationAction) {
 	lc.reservationAction = action
 }
 
+// ReservationParameters returns the value installed via
+// setReservationParameters, or an error by default (mirroring a
+// pre-upgrade Bridge that doesn't yet expose reservation parameters at
+// all) so tests that never touch reservations - e.g. the full deposit
+// sweep scenario suite - degrade to the normal-sweep path unaffected.
 func (lc *localChain) ReservationParameters() (*ReservationParameters, error) {
-	panic("unsupported")
+	lc.reservationParamsMutex.Lock()
+	defer lc.reservationParamsMutex.Unlock()
+
+	if lc.reservationParams == nil {
+		return nil, fmt.Errorf("reservation parameters not set")
+	}
+	return lc.reservationParams, nil
+}
+
+// setReservationParameters installs the value ReservationParameters
+// returns.
+func (lc *localChain) setReservationParameters(params *ReservationParameters) {
+	lc.reservationParamsMutex.Lock()
+	defer lc.reservationParamsMutex.Unlock()
+
+	lc.reservationParams = params
 }
 
 // ValidateReservationAnchorProposal returns the error previously installed
@@ -1571,6 +1597,11 @@ func (lc *localChain) NotifyReservationActionTimeout(
 ) error {
 	panic("unsupported")
 }
+func (lc *localChain) NotifyReservationAcceptanceTimedOut(
+	reservationKey *big.Int,
+) error {
+	panic("unsupported")
+}
 
 func (lc *localChain) NotifyStaleReservedDeposit(
 	depositKey *big.Int,
@@ -1620,10 +1651,30 @@ func (lc *localChain) ActiveReservationsCount() (uint32, uint32, error) {
 	return 0, 0, fmt.Errorf("unsupported")
 }
 
+// IsReservedDeposit reports whether depositKey was previously marked
+// reserved via setReservedDeposit. Defaults to false (not reserved) for
+// any key that was never marked, matching production's "unmatched vault
+// address means not reserved" semantics and letting the many existing
+// deposit-sweep tests that never touch reservations proceed unaffected.
 func (lc *localChain) IsReservedDeposit(
 	depositKey *big.Int,
 ) (bool, error) {
-	return false, fmt.Errorf("unsupported")
+	lc.reservedDepositsMutex.Lock()
+	defer lc.reservedDepositsMutex.Unlock()
+
+	return lc.reservedDeposits[depositKey.String()], nil
+}
+
+// setReservedDeposit marks depositKey as reserved (or not) for
+// IsReservedDeposit to report.
+func (lc *localChain) setReservedDeposit(depositKey *big.Int, reserved bool) {
+	lc.reservedDepositsMutex.Lock()
+	defer lc.reservedDepositsMutex.Unlock()
+
+	if lc.reservedDeposits == nil {
+		lc.reservedDeposits = make(map[string]bool)
+	}
+	lc.reservedDeposits[depositKey.String()] = reserved
 }
 
 func (lc *localChain) OnReservationAcceptanceRequested(
