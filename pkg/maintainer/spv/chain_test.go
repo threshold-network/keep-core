@@ -63,6 +63,10 @@ type localChain struct {
 	currentEpoch            uint64
 	currentEpochDifficulty  *big.Int
 	previousEpochDifficulty *big.Int
+
+	// Error fields for testing on-chain submit failure metrics
+	submitDepositSweepProofErr error
+	submitRedemptionProofErr   error
 }
 
 func newLocalChain() *localChain {
@@ -88,6 +92,11 @@ func (lc *localChain) SubmitDepositSweepProofWithReimbursement(
 ) error {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
+
+	// Allow tests to force an error from this method
+	if lc.submitDepositSweepProofErr != nil {
+		return lc.submitDepositSweepProofErr
+	}
 
 	lc.submittedDepositSweepProofs = append(
 		lc.submittedDepositSweepProofs,
@@ -263,6 +272,11 @@ func (lc *localChain) SubmitRedemptionProofWithReimbursement(
 ) error {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
+
+	// Allow tests to force an error from this method
+	if lc.submitRedemptionProofErr != nil {
+		return lc.submitRedemptionProofErr
+	}
 
 	lc.submittedRedemptionProofs = append(
 		lc.submittedRedemptionProofs,

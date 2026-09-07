@@ -261,6 +261,188 @@ func TestSubmitDepositSweepProofRecordsAssembleFailureMetrics(t *testing.T) {
 	)
 }
 
+// TestSubmitDepositSweepProofRecordsParseFailureMetrics verifies that a
+// failure during transaction input parsing (here, a transaction with more than
+// one output) records both an attempt and a failure, but no success. This
+// covers the parse-input-error branch specifically, distinct from the already-
+// tested zero-confirmations and assembly-failure branches.
+func TestSubmitDepositSweepProofRecordsParseFailureMetrics(t *testing.T) {
+	recorder := newFakeMetricsRecorder()
+
+	// Create a transaction with 2 outputs (parseDepositSweepTransactionInputs
+	// requires exactly 1 output)
+	parseFailingTransaction := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{
+			{},
+			{},
+		},
+	}
+
+	mockSpvProofAssembler := func(
+		hash bitcoin.Hash,
+		confirmations uint,
+		btcChain bitcoin.Chain,
+	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
+		// Return a transaction with wrong output count to trigger parse failure
+		return parseFailingTransaction, &bitcoin.SpvProof{}, nil
+	}
+
+	err := submitDepositSweepProof(
+		bitcoin.Hash{},
+		6, // non-zero, so the failure comes from parsing, not zero confirmations
+		nil,
+		nil,
+		mockSpvProofAssembler,
+		recorder,
+	)
+	if err == nil {
+		t.Fatal("expected an error from the parse failure")
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"total submissions counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"failed counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsFailedTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"success counter",
+		0,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal]),
+	)
+}
+
+// TestSubmitDepositSweepProofRecordsSubmitFailureMetrics verifies that a
+// failure occurring during on-chain submission records both an attempt and a
+// failure, but no success. This test was previously untestable because the
+// local chain's SubmitDepositSweepProofWithReimbursement method always
+// returned nil. This is now made testable via the injected error field.
+func TestSubmitDepositSweepProofRecordsSubmitFailureMetrics(t *testing.T) {
+	bytesFromHex := func(str string) []byte {
+		value, err := hex.DecodeString(str)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return value
+	}
+
+	txFromHex := func(str string) *bitcoin.Transaction {
+		transaction := new(bitcoin.Transaction)
+		err := transaction.Deserialize(bytesFromHex(str))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return transaction
+	}
+
+	requiredConfirmations := uint(6)
+
+	btcChain := newLocalBitcoinChain()
+	// Use the local chain with error injection capability
+	spvChain := newLocalChain()
+
+	// Take an arbitrary deposit sweep transaction:
+	// https://live.blockcypher.com/btc-testnet/tx/435d4aff6d4bc34134877bd3213c17970142fdd04d4113d534120033b9eecb2e/
+	depositSweepTransaction := txFromHex("010000000001036896f9abcac13ce6bd2b80d125bedf997ff6330e999f2f605ea15ea542f2eaf80000000000ffffffffed0ae94da996c6f3b89dfe967675d4808251db93e81022ae9e038d06f92efed400000000c948304502210092327ddff69a2b8c7ae787c5d590a2f14586089e6339e942d56e82aa42052cd902204c0d1700ba1ac617da27fee032a57937c9607f0187199ed3c46954df845643d7012103989d253b17a6a0f41838b84ff0d20e8898f9d7b1a98f2564da4cc29dcf8581d94c5c14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d000395237576a9148db50eb52063ea9d98b3eac91489a90f738986f68763ac6776a914e257eccafbc07c381642ce6e7e55120fb077fbed8804e0250162b175ac68ffffffffe37f552fc23fa0032bfd00c8eef5f5c22bf85fe4c6e735857719ff8a4ff66eb80000000000ffffffff0180ed0000000000001600148db50eb52063ea9d98b3eac91489a90f738986f602483045022100baf754252d0d6a49aceba7eb0ec40b4cc568e8c659e168b96598a11cf56dc078022051117466ee998a3fc72221006817e8cfe9c2e71ad622ff811a0bf100d888d49c012103989d253b17a6a0f41838b84ff0d20e8898f9d7b1a98f2564da4cc29dcf8581d90003473044022014a535eb334656665ac69a678dbf7c019c4f13262e9ea4d195c61a00cd5f698d022023c0062913c4614bdff07f94475ceb4c585df53f71611776c3521ed8f8785913012103989d253b17a6a0f41838b84ff0d20e8898f9d7b1a98f2564da4cc29dcf8581d95c14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d000395237576a9148db50eb52063ea9d98b3eac91489a90f738986f68763ac6776a914e257eccafbc07c381642ce6e7e55120fb077fbed8804e0250162b175ac6800000000")
+
+	// Set the transactions that created the inputs of the deposit sweep
+	// transaction. It is necessary as the tested function logic fetches its
+	// data to determine the wallet's main UTXO and the deposit vault.
+	inputTransactions := []*bitcoin.Transaction{
+		// main UTXO input: https://live.blockcypher.com/btc-testnet/tx/f8eaf242a55ea15e602f9f990e33f67f99dfbe25d1802bbde63cc1caabf99668/
+		txFromHex("01000000000102bc187be612bc3db8cfcdec56b75e9bc0262ab6eacfe27cc1a699bacd53e3d07400000000c948304502210089a89aaf3fec97ac9ffa91cdff59829f0cb3ef852a468153e2c0e2b473466d2e022072902bb923ef016ac52e941ced78f816bf27991c2b73211e227db27ec200bc0a012103989d253b17a6a0f41838b84ff0d20e8898f9d7b1a98f2564da4cc29dcf8581d94c5c14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d000395237576a9148db50eb52063ea9d98b3eac91489a90f738986f68763ac6776a914e257eccafbc07c381642ce6e7e55120fb077fbed8804e0250162b175ac68ffffffffdc557e737b6688c5712649b86f7757a722dc3d42786f23b2fa826394dfec545c0000000000ffffffff01488a0000000000001600148db50eb52063ea9d98b3eac91489a90f738986f6000347304402203747f5ee31334b11ebac6a2a156b1584605de8d91a654cd703f9c8438634997402202059d680211776f93c25636266b02e059ed9fcc6209f7d3d9926c49a0d8750ed012103989d253b17a6a0f41838b84ff0d20e8898f9d7b1a98f2564da4cc29dcf8581d95c14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d000395237576a9148db50eb52063ea9d98b3eac91489a90f738986f68763ac6776a914e257eccafbc07c381642ce6e7e55120fb077fbed8804e0250162b175ac6800000000"),
+		// deposit input: https://live.blockcypher.com/btc-testnet/tx/d4fe2ef9068d039eae2210e893db518280d4757696fe9db8f3c696a94de90aed/
+		txFromHex("01000000000101e37f552fc23fa0032bfd00c8eef5f5c22bf85fe4c6e735857719ff8a4ff66eb80100000000ffffffff02684200000000000017a9143ec459d0f3c29286ae5df5fcc421e2786024277e8742b7100000000000160014e257eccafbc07c381642ce6e7e55120fb077fbed0248304502210084eb60347b9aa48d9a53c6ab0fc2c2357a0df430d193507facfb2238e46f034502202a29d11e128dba3ff3a8ad9a1e820a3b58e89e37fa90d1cc2b3f05207599fef00121039d61d62dcd048d3f8550d22eb90b4af908db60231d117aeede04e7bc11907bfa00000000"),
+		// deposit input: https://live.blockcypher.com/btc-testnet/tx/b86ef64f8aff19778535e7c6e45ff82bc2f5f5eec800fd2b03a03fc22f557fe3/
+		txFromHex("01000000000101dc557e737b6688c5712649b86f7757a722dc3d42786f23b2fa826394dfec545c0100000000ffffffff02102700000000000022002086a303cdd2e2eab1d1679f1a813835dc5a1b65321077cdccaf08f98cbf04ca962cff100000000000160014e257eccafbc07c381642ce6e7e55120fb077fbed02473044022050759dde2c84bccf3c1502b0e33a6acb570117fd27a982c0c2991c9f9737508e02201fcba5d6f6c0ab780042138a9110418b3f589d8d09a900f20ee28cfcdb14d2970121039d61d62dcd048d3f8550d22eb90b4af908db60231d117aeede04e7bc11907bfa00000000"),
+	}
+	for _, transaction := range inputTransactions {
+		err := btcChain.BroadcastTransaction(transaction)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Set deposit request information for the transaction's deposit inputs.
+	for i := 1; i < len(depositSweepTransaction.Inputs); i++ {
+		spvChain.setDepositRequest(
+			depositSweepTransaction.Inputs[i].Outpoint.TransactionHash,
+			depositSweepTransaction.Inputs[i].Outpoint.OutputIndex,
+			&tbtc.DepositChainRequest{
+				RevealedAt: time.Unix(1000, 0),
+				SweptAt:    time.Unix(0, 0),
+			},
+		)
+	}
+
+	// Just a mock proof.
+	proof := &bitcoin.SpvProof{
+		MerkleProof:    []byte{0x01},
+		TxIndexInBlock: 2,
+		BitcoinHeaders: []byte{0x03},
+	}
+
+	mockSpvProofAssembler := func(
+		hash bitcoin.Hash,
+		confirmations uint,
+		btcChain bitcoin.Chain,
+	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
+		if hash == depositSweepTransaction.Hash() && confirmations == requiredConfirmations {
+			return depositSweepTransaction, proof, nil
+		}
+
+		return nil, nil, fmt.Errorf("error while assembling spv proof")
+	}
+
+	recorder := newFakeMetricsRecorder()
+
+	// Force an error from the on-chain submit method
+	spvChain.submitDepositSweepProofErr = fmt.Errorf("forced on-chain submit error")
+
+	err := submitDepositSweepProof(
+		depositSweepTransaction.Hash(),
+		requiredConfirmations,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+		recorder,
+	)
+	if err == nil {
+		t.Fatal("expected an error from the forced on-chain submit failure")
+	}
+
+	submittedProofs := spvChain.getSubmittedDepositSweepProofs()
+	testutils.AssertIntsEqual(t, "proofs count", 0, len(submittedProofs))
+
+	testutils.AssertIntsEqual(
+		t,
+		"total submissions counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"failed counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsFailedTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"success counter",
+		0,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal]),
+	)
+}
+
 func TestGetUnprovenDepositSweepTransactions(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
 		value, err := hex.DecodeString(str)

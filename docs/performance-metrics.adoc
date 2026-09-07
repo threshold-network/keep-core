@@ -203,6 +203,11 @@ These metrics are recorded by the SPV maintainer (the `maintainer` command) when
 it submits Bitcoin SPV proofs to the host chain. They require the client info
 endpoint to be configured.
 
+NOTE: Running the `maintainer` command starts the client-info HTTP endpoint on
+all interfaces on port `9601` by default. Set `ClientInfo.Port` to `0` in
+configuration, or pass `--clientInfo.port=0`, to disable the endpoint and
+these metrics.
+
 ==== `performance_deposit_sweep_proof_submissions_total`
 *Type*: Counter
 *Description*: Total number of deposit sweep proof submissions attempted
