@@ -527,7 +527,6 @@ func TestProveTransactions(t *testing.T) {
 				big.NewInt(32),
 			)
 
-
 			sm := &spvMaintainer{
 				config:       Config{MaxProofHeaders: DefaultMaxProofHeaders},
 				spvChain:     localChain,

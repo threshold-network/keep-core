@@ -460,4 +460,3 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 		}
 	}
 }
-
