@@ -684,8 +684,9 @@ func (lc *localChain) GetMovedFundsSweepRequest(
 }
 
 type mockBlockCounter struct {
-	mutex        sync.Mutex
-	currentBlock uint64
+	mutex           sync.Mutex
+	currentBlock    uint64
+	currentBlockErr error
 }
 
 func newMockBlockCounter() *mockBlockCounter {
@@ -707,6 +708,10 @@ func (mbc *mockBlockCounter) CurrentBlock() (uint64, error) {
 	mbc.mutex.Lock()
 	defer mbc.mutex.Unlock()
 
+	if mbc.currentBlockErr != nil {
+		return 0, mbc.currentBlockErr
+	}
+
 	return mbc.currentBlock, nil
 }
 
@@ -717,6 +722,25 @@ func (mbc *mockBlockCounter) SetCurrentBlock(block uint64) {
 	mbc.currentBlock = block
 }
 
+func (mbc *mockBlockCounter) SetCurrentBlockErr(err error) {
+	mbc.mutex.Lock()
+	defer mbc.mutex.Unlock()
+
+	mbc.currentBlockErr = err
+}
+
 func (mbc *mockBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
 	panic("unsupported")
+}
+
+// errorBlockCounterChain overrides BlockCounter on the local chain so that
+// unprovenSearchStartBlock can be exercised against a spvChain.BlockCounter()
+// failure, independently of the chain's normal blockCounter plumbing.
+type errorBlockCounterChain struct {
+	*localChain
+	err error
+}
+
+func (c *errorBlockCounterChain) BlockCounter() (chain.BlockCounter, error) {
+	return nil, c.err
 }

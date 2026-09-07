@@ -447,20 +447,10 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 	)
 }
 
-// recordingMetricsRecorder captures IncrementCounter calls for assertions.
-// proveTransactions invokes it synchronously, so no locking is needed.
-type recordingMetricsRecorder struct {
-	counters map[string]float64
-}
-
-func (r *recordingMetricsRecorder) IncrementCounter(name string, value float64) {
-	r.counters[name] += value
-}
-
 // TestProveTransactions covers the caller-side handling of each proofSkipReason
 // in proveTransactions. The safety property under test is that a skip reason
 // never results in a proof submission, and that an assemblable proof is
-// submitted; the per-reason metric counter is asserted as a secondary check.
+// submitted.
 func TestProveTransactions(t *testing.T) {
 	const proofStart = 790270
 
@@ -488,23 +478,20 @@ func TestProveTransactions(t *testing.T) {
 		headersTo                uint
 		transactionConfirmations uint
 		expectSubmitted          bool
-		expectedCounter          string
 	}{
 		// Decisive header (difficulty 8) matches neither epoch -> skipped.
-		"outside relay range is skipped and metered": {
+		"outside relay range is skipped": {
 			headerDifficultyAt:       func(uint) *big.Int { return big.NewInt(8) },
 			headersTo:                proofStart + 19,
 			transactionConfirmations: 20,
 			expectSubmitted:          false,
-			expectedCounter:          "spv_proof_skipped_outside_relay_range_total",
 		},
 		// A run of DIFF1 headers longer than the bound never binds -> skipped.
-		"exceeded max headers is skipped and metered": {
+		"exceeded max headers is skipped": {
 			headerDifficultyAt:       func(uint) *big.Int { return big.NewInt(1) },
 			headersTo:                proofStart + 149,
 			transactionConfirmations: 150,
 			expectSubmitted:          false,
-			expectedCounter:          "spv_proof_skipped_exceeded_max_headers_total",
 		},
 		// All headers at the current epoch difficulty -> proof is submitted.
 		"assemblable proof is submitted": {
@@ -512,7 +499,6 @@ func TestProveTransactions(t *testing.T) {
 			headersTo:                proofStart + 19,
 			transactionConfirmations: 20,
 			expectSubmitted:          true,
-			expectedCounter:          "",
 		},
 	}
 
@@ -541,11 +527,6 @@ func TestProveTransactions(t *testing.T) {
 				big.NewInt(32),
 			)
 
-			recorder := &recordingMetricsRecorder{
-				counters: make(map[string]float64),
-			}
-			SetMetricsRecorder(recorder)
-			defer SetMetricsRecorder(nil)
 
 			sm := &spvMaintainer{
 				config:       Config{MaxProofHeaders: DefaultMaxProofHeaders},
@@ -590,16 +571,6 @@ func TestProveTransactions(t *testing.T) {
 					"expected no submission on skip, got [%d]",
 					len(submitted),
 				)
-			}
-
-			if test.expectedCounter != "" {
-				if got := recorder.counters[test.expectedCounter]; got != 1 {
-					t.Errorf(
-						"expected counter [%s] to be 1, got [%v]",
-						test.expectedCounter,
-						got,
-					)
-				}
 			}
 		})
 	}
@@ -823,6 +794,118 @@ func TestIsInputCurrentWalletsMainUTXO(t *testing.T) {
 				"is current main UTXO",
 				test.expectedIsCurrentMainUtxo,
 				isCurrentMainUtxo,
+			)
+		})
+	}
+}
+
+// TestUnprovenSearchStartBlock exercises the clamp guard and error paths of
+// unprovenSearchStartBlock directly. The action-level integration tests only
+// ever exercise it with a historyDepth well below the current block, so the
+// error branches and the clamp boundary are otherwise untested.
+func TestUnprovenSearchStartBlock(t *testing.T) {
+	blockCounterErr := fmt.Errorf("block counter unavailable")
+	currentBlockErr := fmt.Errorf("current block unavailable")
+
+	tests := map[string]struct {
+		historyDepth    uint64
+		currentBlock    uint64
+		blockCounterErr error
+		currentBlockErr error
+		expectedStart   uint64
+		expectedErr     string
+	}{
+		"history depth below current block": {
+			historyDepth:  100,
+			currentBlock:  1000,
+			expectedStart: 900,
+		},
+		"history depth equal to current block": {
+			// The clamp guard is strictly historyDepth > currentBlock, so
+			// equal values must fall through to the plain subtraction, not
+			// the clamp branch. Both yield 0 here, pinning the off-by-one.
+			historyDepth:  1000,
+			currentBlock:  1000,
+			expectedStart: 0,
+		},
+		"history depth one above current block": {
+			// The first value that DOES trigger the clamp guard; paired with
+			// the equal case above, this pins the exact boundary.
+			historyDepth:  1001,
+			currentBlock:  1000,
+			expectedStart: 0,
+		},
+		"history depth far exceeds current block": {
+			historyDepth:  1_000_000,
+			currentBlock:  5,
+			expectedStart: 0,
+		},
+		"zero current block and zero history depth": {
+			historyDepth:  0,
+			currentBlock:  0,
+			expectedStart: 0,
+		},
+		"block counter unavailable": {
+			historyDepth:    100,
+			blockCounterErr: blockCounterErr,
+			expectedErr:     "failed to get block counter",
+		},
+		"current block unavailable": {
+			historyDepth:    100,
+			currentBlock:    1000,
+			currentBlockErr: currentBlockErr,
+			expectedErr:     "failed to get current block",
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			var spvChain Chain
+
+			if test.blockCounterErr != nil {
+				spvChain = &errorBlockCounterChain{
+					localChain: newLocalChain(),
+					err:        test.blockCounterErr,
+				}
+			} else {
+				localChain := newLocalChain()
+				blockCounter := newMockBlockCounter()
+				blockCounter.SetCurrentBlock(test.currentBlock)
+				if test.currentBlockErr != nil {
+					blockCounter.SetCurrentBlockErr(test.currentBlockErr)
+				}
+				localChain.setBlockCounter(blockCounter)
+				spvChain = localChain
+			}
+
+			start, err := unprovenSearchStartBlock(test.historyDepth, spvChain)
+
+			if test.expectedErr != "" {
+				if err == nil {
+					t.Fatalf(
+						"expected error containing [%s], got nil",
+						test.expectedErr,
+					)
+				}
+				if !strings.Contains(err.Error(), test.expectedErr) {
+					t.Errorf(
+						"unexpected error\nexpected to contain: [%s]\nactual:              [%v]",
+						test.expectedErr,
+						err,
+					)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+
+			testutils.AssertUintsEqual(
+				t,
+				"search start block",
+				test.expectedStart,
+				start,
 			)
 		})
 	}

@@ -9,7 +9,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
-	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
 // SubmitDepositSweepProof prepares deposit sweep proof for the given
@@ -27,7 +26,6 @@ func SubmitDepositSweepProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		nil,
 	)
 }
 
@@ -37,19 +35,8 @@ func submitDepositSweepProof(
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	spvProofAssembler spvProofAssembler,
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-	},
 ) error {
-	// Record proof submission attempt
-	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsTotal, 1)
-	}
-
 	if requiredConfirmations == 0 {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
-		}
 		return fmt.Errorf(
 			"provided required confirmations count must be greater than 0",
 		)
@@ -61,9 +48,6 @@ func submitDepositSweepProof(
 		btcChain,
 	)
 	if err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
-		}
 		return fmt.Errorf(
 			"failed to assemble transaction spv proof: [%v]",
 			err,
@@ -76,9 +60,6 @@ func submitDepositSweepProof(
 		transaction,
 	)
 	if err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
-		}
 		return fmt.Errorf(
 			"error while parsing transaction inputs: [%v]",
 			err,
@@ -91,18 +72,10 @@ func submitDepositSweepProof(
 		mainUTXO,
 		vault,
 	); err != nil {
-		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
-		}
 		return fmt.Errorf(
 			"failed to submit deposit sweep proof with reimbursement: [%v]",
 			err,
 		)
-	}
-
-	// Record successful proof submission
-	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal, 1)
 	}
 
 	return nil
