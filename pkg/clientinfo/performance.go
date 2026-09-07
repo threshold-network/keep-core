@@ -126,12 +126,7 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricUnmonitoredWalletTransactionsTotal,
 
 		// ----- SPV proof-skip counters -----
-		MetricRedemptionProofSubmissionsTotal,
-		MetricRedemptionProofSubmissionsSuccessTotal,
-		MetricRedemptionProofSubmissionsFailedTotal,
-		MetricDepositSweepProofSubmissionsTotal,
-		MetricDepositSweepProofSubmissionsSuccessTotal,
-		MetricDepositSweepProofSubmissionsFailedTotal,
+
 		MetricSpvProofSkippedOutsideRelayRangeTotal,
 		MetricSpvProofSkippedExceededMaxHeadersTotal,
 		MetricSpvProofTaskFailuresTotal,
