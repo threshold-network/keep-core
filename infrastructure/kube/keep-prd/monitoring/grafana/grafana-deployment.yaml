@@ -5,6 +5,8 @@ metadata:
   name: grafana
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: grafana
@@ -17,7 +19,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: grafana
-          image: grafana/grafana:9.2.5
+          image: grafana/grafana:12.4.10@sha256:c132a683b2430fff9115a29b2a79c8ab97540cdcc90846e3c81878c778ca3596
           env:
             - name: GF_SERVER_DOMAIN
               value: monitoring.threshold.network
