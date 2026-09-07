@@ -53,12 +53,13 @@ const (
 	proofSkipExceededMaxHeaders
 )
 
-// MetricsRecorder records counter metrics for SPV proof submissions. It is
+// MetricsRecorder records proof counters and maintainer health gauges. It is
 // satisfied by *clientinfo.PerformanceMetrics. A nil MetricsRecorder is a valid
 // argument that disables metrics recording: callers must treat nil as "metrics
 // off" and guard every invocation against it.
 type MetricsRecorder interface {
 	IncrementCounter(name string, value float64)
+	SetGauge(name string, value float64)
 }
 
 func Initialize(
@@ -114,13 +115,24 @@ type spvMaintainer struct {
 
 func (sm *spvMaintainer) startControlLoop(ctx context.Context) {
 	logger.Info("starting SPV maintainer")
+	sm.setHealthGauge(clientinfo.MetricSpvMaintainerActive, 1)
+	sm.recordActivity()
+	maxBackoff := sm.config.RestartBackoffTime
+	if sm.config.IdleBackoffTime > maxBackoff {
+		maxBackoff = sm.config.IdleBackoffTime
+	}
+	sm.setHealthGauge(clientinfo.MetricSpvMaintainerMaxBackoffSeconds, maxBackoff.Seconds())
 
 	defer func() {
+		sm.setHealthGauge(clientinfo.MetricSpvMaintainerActive, 0)
 		logger.Info("stopping SPV maintainer")
 	}()
 
 	for {
 		err := sm.maintainSpv(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			logger.Errorf(
 				"error while maintaining SPV: [%v]; restarting maintainer",
@@ -139,9 +151,13 @@ func (sm *spvMaintainer) startControlLoop(ctx context.Context) {
 func (sm *spvMaintainer) maintainSpv(ctx context.Context) error {
 	for {
 		for action, v := range proofTypes {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			logger.Infof("starting [%s] proof task execution...", action)
 
-			if err := sm.proveTransactions(
+			if err := sm.runProofTask(
+				action,
 				v.unprovenTransactionsGetter,
 				v.transactionProofSubmitter,
 			); err != nil {
@@ -154,6 +170,8 @@ func (sm *spvMaintainer) maintainSpv(ctx context.Context) error {
 
 			logger.Infof("[%s] proof task completed", action)
 		}
+
+		sm.setHealthGauge(clientinfo.MetricSpvMaintainerLastSuccessTimestamp, float64(time.Now().Unix()))
 
 		logger.Infof(
 			"proof tasks completed; next run in [%s]",

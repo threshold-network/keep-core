@@ -98,6 +98,9 @@ func (r *RPCHealthChecker) Start(ctx context.Context) {
 
 // start is the internal implementation of Start. Use Start() for public API.
 func (r *RPCHealthChecker) start(ctx context.Context) {
+	// Export unknown health before making calls, including when an RPC hangs.
+	r.registerMetrics()
+
 	// Perform initial health checks immediately
 	r.checkEthereumHealth(ctx)
 	r.checkBitcoinHealth(ctx)
@@ -106,8 +109,6 @@ func (r *RPCHealthChecker) start(ctx context.Context) {
 	go r.runEthereumHealthChecks(ctx)
 	go r.runBitcoinHealthChecks(ctx)
 
-	// Register metrics observers
-	r.registerMetrics()
 }
 
 // runEthereumHealthChecks runs periodic Ethereum RPC health checks.
@@ -319,6 +320,7 @@ func (r *RPCHealthChecker) GetBitcoinBenignHeaderErrorCount() float64 {
 
 // registerMetrics registers metrics observers for RPC health status.
 func (r *RPCHealthChecker) registerMetrics() {
+	r.registry.ObserveApplicationSource("performance", r.healthSources())
 	// Ethereum RPC response time
 	r.registry.ObserveApplicationSource(
 		"performance",
@@ -351,4 +353,33 @@ func (r *RPCHealthChecker) registerMetrics() {
 			},
 		},
 	)
+}
+
+// healthSources distinguishes a failed RPC from a probe that stopped completing.
+func (r *RPCHealthChecker) healthSources() map[string]Source {
+	health := func(getStatus func() (bool, time.Time, time.Time, error, time.Duration)) Source {
+		return func() float64 {
+			ok, _, _, _, _ := getStatus()
+			if ok {
+				return 1
+			}
+			return 0
+		}
+	}
+	lastCheck := func(getStatus func() (bool, time.Time, time.Time, error, time.Duration)) Source {
+		return func() float64 {
+			_, checked, _, _, _ := getStatus()
+			if checked.IsZero() {
+				return 0
+			}
+			return float64(checked.Unix())
+		}
+	}
+	return map[string]Source{
+		"rpc_eth_healthy":                      health(r.GetEthereumHealthStatus),
+		"rpc_btc_healthy":                      health(r.GetBitcoinHealthStatus),
+		"rpc_eth_last_check_timestamp_seconds": lastCheck(r.GetEthereumHealthStatus),
+		"rpc_btc_last_check_timestamp_seconds": lastCheck(r.GetBitcoinHealthStatus),
+		"rpc_health_check_interval_seconds":    func() float64 { return r.checkInterval.Seconds() },
+	}
 }
