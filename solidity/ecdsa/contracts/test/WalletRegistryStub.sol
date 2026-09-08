@@ -13,13 +13,15 @@ contract WalletRegistryStub is WalletRegistry {
     using Wallets for Wallets.Data;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(SortitionPool _sortitionPool, IStaking _staking)
-        WalletRegistry(_sortitionPool, _staking)
-    {}
+    constructor(
+        SortitionPool _sortitionPool,
+        IStaking _staking
+    ) WalletRegistry(_sortitionPool, _staking) {}
 
-    function forceAddWallet(bytes calldata groupPubKey, bytes32 membersIdsHash)
-        external
-    {
+    function forceAddWallet(
+        bytes calldata groupPubKey,
+        bytes32 membersIdsHash
+    ) external {
         wallets.addWallet(membersIdsHash, groupPubKey);
     }
 

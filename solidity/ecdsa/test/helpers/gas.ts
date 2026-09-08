@@ -10,10 +10,10 @@ const { BigNumber } = ethers
 export async function assertGasUsed(
   tx: ContractTransaction,
   expectedGasUsed: number,
-  delta = 1000
+  delta = 1000,
 ): Promise<void> {
   expect((await tx.wait()).gasUsed, "invalid gas used").to.be.closeTo(
     BigNumber.from(expectedGasUsed),
-    delta
+    delta,
   )
 }

@@ -12,7 +12,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const existingWalletRegistry = await deployments.getOrNull("WalletRegistry")
   if (existingWalletRegistry) {
     console.log(
-      `using existing WalletRegistry at ${existingWalletRegistry.address}`
+      `using existing WalletRegistry at ${existingWalletRegistry.address}`,
     )
     return true
   }
@@ -52,13 +52,13 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
         unsafeAllow: ["external-library-linking"],
         kind: "transparent",
       },
-    }
+    },
   )
 
   await helpers.ownable.transferOwnership(
     "EcdsaSortitionPool",
     walletRegistry.address,
-    deployer
+    deployer,
   )
 
   if (
@@ -83,7 +83,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       hre.tenderly.verify({
         name: "WalletRegistry",
         address: walletRegistry.address,
-      })
+      }),
     )
   }
 

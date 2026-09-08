@@ -103,7 +103,7 @@ program
       try {
         const weight = await allowlist.authorizedStake(
           operator,
-          ethers.constants.AddressZero
+          ethers.constants.AddressZero,
         )
         const entity = ENTITY_MAPPINGS[operator.toLowerCase()] || "UNKNOWN"
 
@@ -117,8 +117,8 @@ program
           : "✅ KEEP"
         console.log(
           `${operator} (${entity}): ${ethers.utils.formatEther(
-            weight
-          )} T ${status}`
+            weight,
+          )} T ${status}`,
         )
       } catch (error: any) {
         console.error(`❌ Error checking ${operator}: ${error.message}`)
@@ -128,7 +128,7 @@ program
 
     // Validation
     const missingOperators = allOperators.filter(
-      (op) => !currentStates[op] || currentStates[op].weight === "0.0"
+      (op) => !currentStates[op] || currentStates[op].weight === "0.0",
     )
 
     if (missingOperators.length > 0) {
@@ -239,16 +239,16 @@ program
       console.log("\n⚠️  NEXT STEPS:")
       console.log("- Weight decreases have been requested")
       console.log(
-        "- WalletRegistry will approve these after the decrease delay"
+        "- WalletRegistry will approve these after the decrease delay",
       )
       console.log(
-        "- Operators will be unable to create new wallets once approved"
+        "- Operators will be unable to create new wallets once approved",
       )
       console.log(
-        "- Existing wallets will continue operating and drain naturally"
+        "- Existing wallets will continue operating and drain naturally",
       )
       console.log(
-        "- Monitor progress monthly until operators reach zero custody"
+        "- Monitor progress monthly until operators reach zero custody",
       )
     }
 
@@ -271,8 +271,8 @@ program
           results,
         },
         null,
-        2
-      )
+        2,
+      ),
     )
 
     console.log(`\n💾 Results saved to: ${resultsFile}`)
@@ -299,7 +299,7 @@ program
       const entity = ENTITY_MAPPINGS[operator.toLowerCase()] || "UNKNOWN"
       const weight = await allowlist.authorizedStake(
         operator,
-        ethers.constants.AddressZero
+        ethers.constants.AddressZero,
       )
       const providerInfo = await allowlist.stakingProviders(operator)
       const pendingWeight = providerInfo.pendingNewWeight

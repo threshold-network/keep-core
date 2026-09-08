@@ -41,7 +41,7 @@ function resolveRandomBeaconExport(subdir: "deploy" | "artifacts"): string {
   if (subdir === "deploy") {
     const bundledDeploy = path.join(
       __dirname,
-      "external/random-beacon-export/deploy"
+      "external/random-beacon-export/deploy",
     )
     if (fs.existsSync(bundledDeploy)) {
       return bundledDeploy
@@ -50,7 +50,7 @@ function resolveRandomBeaconExport(subdir: "deploy" | "artifacts"): string {
   return path.join(
     __dirname,
     "node_modules/@keep-network/random-beacon/export",
-    subdir
+    subdir,
   )
 }
 
@@ -237,7 +237,7 @@ const config: HardhatUserConfig = {
       development: [
         "node_modules/@threshold-network/solidity-contracts/deployments/development",
         fs.existsSync(
-          path.join(__dirname, "../random-beacon/deployments/development")
+          path.join(__dirname, "../random-beacon/deployments/development"),
         )
           ? path.join(__dirname, "../random-beacon/deployments/development")
           : "node_modules/@keep-network/random-beacon/deployments/development",
@@ -298,7 +298,7 @@ task(TASK_CHECK_ACCOUNTS_COUNT, "Checks accounts count").setAction(async () => {
     throw new Error(
       "not enough accounts predefined for configured group size: " +
         `expected group size: ${constants.groupSize} ` +
-        `number of predefined accounts: ${testConfig.operatorsCount}`
+        `number of predefined accounts: ${testConfig.operatorsCount}`,
     )
   }
 })

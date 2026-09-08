@@ -13,7 +13,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       args: [dao, esdm],
       log: true,
       waitConfirmations: 1,
-    }
+    },
   )
 
   const WalletRegistry = await deployments.get("WalletRegistry")
@@ -25,7 +25,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       .connect(await ethers.getSigner(esdm))
       .changeProxyAdmin(
         WalletRegistry.address,
-        WalletRegistryProxyAdminWithDeputy.address
+        WalletRegistryProxyAdminWithDeputy.address,
       )
   ).wait()
 }

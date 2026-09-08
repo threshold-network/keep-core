@@ -27,11 +27,11 @@ const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 describe("EcdsaDkgValidator", () => {
   const dkgSeed: BigNumber = BigNumber.from(
-    "31415926535897932384626433832795028841971693993751058209749445923078164062862"
+    "31415926535897932384626433832795028841971693993751058209749445923078164062862",
   )
   const dkgStartBlock = 1337
   const groupPublicKey: string = ethers.utils.hexValue(
-    ecdsaData.group1.publicKey
+    ecdsaData.group1.publicKey,
   )
 
   let selectedOperators: Operator[]
@@ -44,7 +44,7 @@ describe("EcdsaDkgValidator", () => {
     _startBlock: number,
     _numberOfSignatures?: number,
     _submitterIndex?: number,
-    _membersHash?: string
+    _membersHash?: string,
   ) => Promise<DkgResult>
 
   let walletRegistry: WalletRegistry
@@ -70,7 +70,7 @@ describe("EcdsaDkgValidator", () => {
       _startBlock: number,
       _numberOfSignatures = 51,
       _submitterIndex = 1,
-      _membersHash?: string
+      _membersHash?: string,
     ): Promise<DkgResult> => {
       const { signingMembersIndices, signaturesBytes } = await signDkgResult(
         _signers,
@@ -78,7 +78,7 @@ describe("EcdsaDkgValidator", () => {
         _misbehaved,
         _startBlock,
         _submitterIndex,
-        _numberOfSignatures
+        _numberOfSignatures,
       )
 
       const dkgResult: DkgResult = {
@@ -92,7 +92,7 @@ describe("EcdsaDkgValidator", () => {
           _membersHash ||
           hashDKGMembers(
             _groupMembers.map((m) => m.id),
-            _misbehaved
+            _misbehaved,
           ),
       }
 
@@ -106,7 +106,7 @@ describe("EcdsaDkgValidator", () => {
       _signers: Operator[],
       _groupPublicKey: string,
       _misbehaved: number[],
-      _membersHash: string
+      _membersHash: string,
     ) => {
       const dkgResult = await prepareDkgResult(
         _groupMembers,
@@ -116,7 +116,7 @@ describe("EcdsaDkgValidator", () => {
         dkgStartBlock,
         undefined,
         undefined,
-        _membersHash
+        _membersHash,
       )
 
       const result = await validator.validate(dkgResult, dkgSeed, dkgStartBlock)
@@ -151,7 +151,7 @@ describe("EcdsaDkgValidator", () => {
               selectedOperators,
               groupPublicKey,
               misbehavedMemberIds,
-              hashUint32Array(expectedMembersIds)
+              hashUint32Array(expectedMembersIds),
             )
 
             await expect(result.isValid).to.be.true
@@ -172,7 +172,7 @@ describe("EcdsaDkgValidator", () => {
               selectedOperators,
               groupPublicKey,
               misbehavedMemberIds,
-              hashUint32Array(expectedMembersIds)
+              hashUint32Array(expectedMembersIds),
             )
 
             await expect(result.isValid).to.be.true
@@ -191,7 +191,7 @@ describe("EcdsaDkgValidator", () => {
               selectedOperators,
               groupPublicKey,
               misbehavedMemberIds,
-              hashUint32Array(expectedMembersIds)
+              hashUint32Array(expectedMembersIds),
             )
 
             await expect(result.isValid).to.be.true
@@ -211,7 +211,7 @@ describe("EcdsaDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             misbehavedMemberIndices,
-            hashUint32Array(invalidMembersIndices)
+            hashUint32Array(invalidMembersIndices),
           )
 
           await expect(result.isValid).to.be.false
@@ -227,7 +227,7 @@ describe("EcdsaDkgValidator", () => {
           selectedOperators,
           groupPublicKey,
           noMisbehaved,
-          hashUint32Array(selectedOperators.map((m) => m.id))
+          hashUint32Array(selectedOperators.map((m) => m.id)),
         )
 
         await expect(result.isValid).to.be.true
@@ -247,7 +247,7 @@ describe("EcdsaDkgValidator", () => {
           shuffledOperators,
           groupPublicKey,
           noMisbehaved,
-          hashUint32Array(selectedOperators.map((m) => m.id))
+          hashUint32Array(selectedOperators.map((m) => m.id)),
         )
 
         await expect(result.isValid).to.be.false
@@ -267,7 +267,7 @@ describe("EcdsaDkgValidator", () => {
           shuffledOperators,
           groupPublicKey,
           noMisbehaved,
-          hashUint32Array(selectedOperators.map((m) => m.id))
+          hashUint32Array(selectedOperators.map((m) => m.id)),
         )
 
         await expect(result.isValid).to.be.false
@@ -281,7 +281,7 @@ describe("EcdsaDkgValidator", () => {
       _groupMembers: Operator[],
       _groupPublicKey: string,
       _misbehaved: number[],
-      _numberOfSignatures = 51
+      _numberOfSignatures = 51,
     ) => {
       const dkgResult = await prepareDkgResult(
         _groupMembers,
@@ -289,7 +289,7 @@ describe("EcdsaDkgValidator", () => {
         _groupPublicKey,
         _misbehaved,
         dkgStartBlock,
-        _numberOfSignatures
+        _numberOfSignatures,
       )
 
       const result = await validator.validateFields(dkgResult)
@@ -305,7 +305,7 @@ describe("EcdsaDkgValidator", () => {
         const result = await testValidateFields(
           selectedOperators,
           groupPublicKey,
-          noMisbehaved
+          noMisbehaved,
         )
 
         await expect(result.isValid).to.be.true
@@ -320,7 +320,7 @@ describe("EcdsaDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             empty,
-            noMisbehaved
+            noMisbehaved,
           )
 
           await expect(result.isValid).to.be.false
@@ -332,12 +332,12 @@ describe("EcdsaDkgValidator", () => {
         it("should return validation error", async () => {
           const tooShort = groupPublicKey.substring(
             0,
-            groupPublicKey.length - 2
+            groupPublicKey.length - 2,
           )
           const result = await testValidateFields(
             selectedOperators,
             tooShort,
-            noMisbehaved
+            noMisbehaved,
           )
 
           await expect(result.isValid).to.be.false
@@ -351,7 +351,7 @@ describe("EcdsaDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             tooLong,
-            noMisbehaved
+            noMisbehaved,
           )
 
           await expect(result.isValid).to.be.false
@@ -367,12 +367,12 @@ describe("EcdsaDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             groupPublicKey,
-            lessThanOne
+            lessThanOne,
           )
 
           await expect(result.isValid).to.be.false
           await expect(result.errorMsg).to.equal(
-            "Corrupted misbehaved members indices"
+            "Corrupted misbehaved members indices",
           )
         })
       })
@@ -383,12 +383,12 @@ describe("EcdsaDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             groupPublicKey,
-            higherThanGroupSize
+            higherThanGroupSize,
           )
 
           await expect(result.isValid).to.be.false
           await expect(result.errorMsg).to.equal(
-            "Corrupted misbehaved members indices"
+            "Corrupted misbehaved members indices",
           )
         })
       })
@@ -399,12 +399,12 @@ describe("EcdsaDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             groupPublicKey,
-            unsorted
+            unsorted,
           )
 
           await expect(result.isValid).to.be.false
           await expect(result.errorMsg).to.equal(
-            "Corrupted misbehaved members indices"
+            "Corrupted misbehaved members indices",
           )
         })
       })
@@ -415,12 +415,12 @@ describe("EcdsaDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             groupPublicKey,
-            duplicated
+            duplicated,
           )
 
           await expect(result.isValid).to.be.false
           await expect(result.errorMsg).to.equal(
-            "Corrupted misbehaved members indices"
+            "Corrupted misbehaved members indices",
           )
         })
       })
@@ -431,12 +431,12 @@ describe("EcdsaDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             groupPublicKey,
-            tooMany
+            tooMany,
           )
 
           await expect(result.isValid).to.be.false
           await expect(result.errorMsg).to.equal(
-            "Too many members misbehaving during DKG"
+            "Too many members misbehaving during DKG",
           )
         })
       })
@@ -450,7 +450,7 @@ describe("EcdsaDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             noMisbehaved,
-            noSignatures
+            noSignatures,
           )
 
           await expect(result.isValid).to.be.false
@@ -465,7 +465,7 @@ describe("EcdsaDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             noMisbehaved,
-            dkgStartBlock
+            dkgStartBlock,
           )
           dkgResult.signatures += "ff"
           const result = await validator.validateFields(dkgResult)
@@ -483,7 +483,7 @@ describe("EcdsaDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             noMisbehaved,
-            dkgStartBlock
+            dkgStartBlock,
           )
           dkgResult.signatures += "f".repeat(signatureHexStrLength)
           const result = await validator.validateFields(dkgResult)
@@ -500,7 +500,7 @@ describe("EcdsaDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             noMisbehaved,
-            tooFewSignatures
+            tooFewSignatures,
           )
 
           await expect(result.isValid).to.be.false
@@ -518,7 +518,7 @@ describe("EcdsaDkgValidator", () => {
             groupPublicKey,
             noMisbehaved,
             dkgStartBlock,
-            maxSignatures
+            maxSignatures,
           )
           dkgResult.signatures += "f".repeat(signatureHexStrLength)
           dkgResult.signingMembersIndices.push(maxSignatures + 1)
@@ -537,7 +537,7 @@ describe("EcdsaDkgValidator", () => {
           selectedOperators,
           groupPublicKey,
           noMisbehaved,
-          dkgStartBlock
+          dkgStartBlock,
         )
 
         dkgResult.signingMembersIndices = _signingMembersIndices
@@ -561,7 +561,7 @@ describe("EcdsaDkgValidator", () => {
 
           await expect(result.isValid).to.be.false
           await expect(result.errorMsg).to.equal(
-            "Corrupted signing member indices"
+            "Corrupted signing member indices",
           )
         })
       })
@@ -577,7 +577,7 @@ describe("EcdsaDkgValidator", () => {
 
           await expect(result.isValid).to.be.false
           await expect(result.errorMsg).to.equal(
-            "Corrupted signing member indices"
+            "Corrupted signing member indices",
           )
         })
       })
@@ -593,7 +593,7 @@ describe("EcdsaDkgValidator", () => {
 
           await expect(result.isValid).to.be.false
           await expect(result.errorMsg).to.equal(
-            "Corrupted signing member indices"
+            "Corrupted signing member indices",
           )
         })
       })
@@ -607,7 +607,7 @@ describe("EcdsaDkgValidator", () => {
         _groupMembers,
         groupPublicKey,
         noMisbehaved,
-        dkgStartBlock
+        dkgStartBlock,
       )
 
       return validator.validateGroupMembers(dkgResult, dkgSeed)
@@ -623,7 +623,7 @@ describe("EcdsaDkgValidator", () => {
     context("when there are operators other then selected", () => {
       it("should fail the validation", async () => {
         const isValid = await testValidateGroupMembers(
-          shuffle(selectedOperators)
+          shuffle(selectedOperators),
         )
         await expect(isValid).to.be.false
       })
@@ -633,14 +633,14 @@ describe("EcdsaDkgValidator", () => {
   describe("validateSignatures", () => {
     const testValidateSignatures = async (
       _groupMembers: Operator[],
-      _signers: Operator[]
+      _signers: Operator[],
     ) => {
       const dkgResult = await prepareDkgResult(
         _groupMembers,
         _signers,
         groupPublicKey,
         noMisbehaved,
-        dkgStartBlock
+        dkgStartBlock,
       )
 
       return validator.validateSignatures(dkgResult, dkgStartBlock)
@@ -650,7 +650,7 @@ describe("EcdsaDkgValidator", () => {
       it("should pass", async () => {
         const isValid = await testValidateSignatures(
           selectedOperators,
-          selectedOperators
+          selectedOperators,
         )
 
         await expect(isValid).to.be.true
@@ -662,16 +662,16 @@ describe("EcdsaDkgValidator", () => {
       () => {
         it("should fail the validation", async () => {
           const maliciousSigners = Array(constants.groupSize).fill(
-            selectedOperators[0]
+            selectedOperators[0],
           )
           const isValid = await testValidateSignatures(
             selectedOperators,
-            maliciousSigners
+            maliciousSigners,
           )
 
           await expect(isValid).to.be.false
         })
-      }
+      },
     )
 
     context("when signatures do not matching signers", () => {
@@ -681,7 +681,7 @@ describe("EcdsaDkgValidator", () => {
           selectedOperators,
           groupPublicKey,
           noMisbehaved,
-          dkgStartBlock
+          dkgStartBlock,
         )
         // reverse order of signers
         ;[
@@ -693,7 +693,7 @@ describe("EcdsaDkgValidator", () => {
         ]
         const isValid = await validator.validateSignatures(
           dkgResult,
-          dkgStartBlock
+          dkgStartBlock,
         )
 
         await expect(isValid).to.be.false
@@ -710,14 +710,14 @@ describe("EcdsaDkgValidator", () => {
               groupPublicKey,
               noMisbehaved,
               dkgStartBlock + 12345,
-            ]
-          )
+            ],
+          ),
         )
         const signatures = []
         for (let i = 0; i < signingOperators.length; i++) {
           const { signer: ethersSigner } = signingOperators[i]
           const signature = await ethersSigner.signMessage(
-            ethers.utils.arrayify(wrongResultHash)
+            ethers.utils.arrayify(wrongResultHash),
           )
           signatures.push(signature)
         }
@@ -733,14 +733,14 @@ describe("EcdsaDkgValidator", () => {
           groupPublicKey,
           noMisbehaved,
           dkgStartBlock,
-          numberOfSignatures
+          numberOfSignatures,
         )
         dkgResult.signatures = await signWithWrongResultHash(
-          selectedOperators.slice(numberOfSignatures - 1)
+          selectedOperators.slice(numberOfSignatures - 1),
         )
         const isValid = await validator.validateSignatures(
           dkgResult,
-          dkgStartBlock
+          dkgStartBlock,
         )
 
         await expect(isValid).to.be.false
@@ -757,15 +757,15 @@ describe("EcdsaDkgValidator", () => {
           groupPublicKey,
           noMisbehaved,
           dkgStartBlock,
-          numberOfSignatures
+          numberOfSignatures,
         )
         const wrongSignatures = `0x${"a".repeat(
-          signatureHexStrLength * numberOfSignatures
+          signatureHexStrLength * numberOfSignatures,
         )}`
         dkgResult.signatures = wrongSignatures
 
         await expect(
-          validator.validateSignatures(dkgResult, dkgStartBlock)
+          validator.validateSignatures(dkgResult, dkgStartBlock),
         ).to.be.revertedWith("ECDSA: invalid signature 's' value")
       })
     })
