@@ -307,6 +307,7 @@ pub(crate) struct StateWitness {
     pub(crate) state_image_digest: [u8; 32],
 }
 
+#[derive(Debug)]
 pub(crate) struct LoadedStateImage {
     pub(crate) bytes: Option<Vec<u8>>,
     pub(crate) digest: [u8; 32],
@@ -1346,6 +1347,7 @@ impl StateFileLock {
     }
 
     pub(crate) fn identity(&mut self) -> Result<DurableStoreIdentity, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         Ok(self.identity.clone())
@@ -1359,6 +1361,7 @@ impl StateFileLock {
     /// validating every held descriptor and the witness journal.
     #[cfg(unix)]
     pub(crate) fn identity_for_load(&mut self) -> Result<DurableStoreIdentity, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.settle_pending_state_witness_rotation()?;
         self.revalidate_store_entries()?;
@@ -1371,9 +1374,9 @@ impl StateFileLock {
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
     }
-
     #[cfg(all(test, unix))]
     pub(crate) fn read_state(&mut self) -> Result<Option<Vec<u8>>, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         let Some(state_file) = self.current_state_file.as_ref() else {
@@ -1389,6 +1392,7 @@ impl StateFileLock {
     /// which always fails closed.
     #[cfg(unix)]
     pub(crate) fn read_state_for_load(&mut self) -> Result<LoadedStateImage, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.settle_pending_state_witness_rotation()?;
         self.revalidate_store_entries()?;
@@ -1864,7 +1868,25 @@ impl StateFileLock {
             "signer state witness journal",
         )?;
         validate_secure_regular_file(&self.witness_file, "signer state witness journal")?;
-        self.verify_state_witness_journal_fully()?;
+        // A full content re-parse of the witness journal is intentionally
+        // NOT performed here. This function is the shared descriptor
+        // liveness check reached by every stateful operation - every write
+        // through `replace_state`, the `identity()` front door called on
+        // every `state()` access, startup, and rotation settlement - so
+        // re-verifying the entire journal on every call here made every
+        // one of those operations cost O(current journal length), which is
+        // unacceptable at the configured record ceiling. The one entrypoint
+        // that must catch tampering anywhere in the journal before
+        // returning a result - `state_witness_tip()`, the primary public
+        // read entrypoint - performs its own unconditional
+        // `verify_state_witness_journal_fully` before this function ever
+        // runs (and before its own `reconcile_pending_witness` can act on
+        // an unverified journal). The accepted narrower tradeoff: a
+        // same-length corruption of an earlier record injected between two
+        // of this store's own writes, with no `state_witness_tip()` call in
+        // between, is caught at the next `state_witness_tip()` call or at
+        // the next fresh `StateFileLock::acquire` - both of which always
+        // fully re-parse - rather than immediately.
         if self
             .trust_journal
             .as_ref()
@@ -2045,7 +2067,16 @@ impl StateFileLock {
         ))
     }
 
+    /// The primary public read entrypoint. Every call fully re-parses and
+    /// re-verifies the witness journal against the in-memory history before
+    /// `reconcile_pending_witness` can act, so tampering anywhere in the
+    /// journal is caught before returning a result regardless of whether
+    /// reconciliation goes on to append a COMMIT/ABORT record. This is the
+    /// one entrypoint that keeps the full guarantee the store's own writes
+    /// no longer pay for on every append; see `revalidate_store_entries`.
+    #[cfg(unix)]
     pub(crate) fn state_witness_tip(&mut self) -> Result<StateWitness, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         self.witness_history.last().cloned().ok_or_else(|| {
@@ -2053,10 +2084,18 @@ impl StateFileLock {
         })
     }
 
+    #[cfg(not(unix))]
+    pub(crate) fn state_witness_tip(&mut self) -> Result<StateWitness, EngineError> {
+        Err(EngineError::Internal(
+            "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
+        ))
+    }
+
     #[cfg(unix)]
     pub(crate) fn state_witness_tip_snapshot(
         &mut self,
     ) -> Result<StateWitnessTipSnapshot, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         self.normalize_published_pending_anchor()?;
@@ -2082,11 +2121,11 @@ impl StateFileLock {
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
     }
-
     #[cfg(unix)]
     pub(crate) fn state_anchor_trust_head_snapshot(
         &mut self,
     ) -> Result<StateAnchorTrustTransitionStoreOutcome, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         self.normalize_published_pending_anchor()?;
@@ -2105,6 +2144,7 @@ impl StateFileLock {
     pub(crate) fn state_anchor_bootstrap_facts_snapshot(
         &mut self,
     ) -> Result<([u8; 32], StateWitness), EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.revalidate()?;
         self.validate_bootstrap_facts_pristine()?;
         let tip = self.witness_history.last().cloned().ok_or_else(|| {
@@ -3516,10 +3556,6 @@ impl StateFileLock {
         record_type: u8,
         witness: &StateWitness,
     ) -> Result<(), EngineError> {
-        // Validate the exact pre-append journal first: this fully re-parses
-        // and re-verifies the journal against the in-memory history before
-        // any new record is appended.
-        self.verify_state_witness_journal_fully()?;
         self.reserve_witness_record_capacity(1)?;
         self.append_witness_record_unchecked(record_type, witness)
     }
@@ -3532,6 +3568,20 @@ impl StateFileLock {
     /// `reserve_witness_record_capacity`, which re-triggers compaction and
     /// recurses without bound. Every other caller must go through
     /// `append_witness_record`.
+    ///
+    /// This does NOT re-parse or re-verify the rest of the journal: doing so
+    /// on every append is what made writes cost O(current journal length).
+    /// Instead it checks exactly the two things an O(1) "extend the trusted
+    /// view by one record" operation needs: the pre-append size still
+    /// matches the in-memory length (an external truncation/growth would
+    /// otherwise be silently overwritten or appended past), and the bytes
+    /// that land on disk after the fsynced append are read back and compared
+    /// byte-for-byte against what was written (a concurrent same-uid writer
+    /// racing this exact append at this exact offset would otherwise go
+    /// unnoticed). Catching corruption of an EARLIER, already-committed
+    /// record is intentionally out of scope here - that is
+    /// `state_witness_tip()`'s and a fresh `StateFileLock::acquire`'s job,
+    /// both of which always fully re-parse.
     #[cfg(unix)]
     fn append_witness_record_unchecked(
         &mut self,
@@ -3556,6 +3606,20 @@ impl StateFileLock {
                 "failed to sync signer state witness journal: {error}"
             ))
         })?;
+        let appended = read_file_range_at(
+            &self.witness_file,
+            self.witness_length,
+            record.len(),
+            "signer state witness journal",
+        )?;
+        #[cfg(test)]
+        WITNESS_VERIFIED_BYTES_READ
+            .fetch_add(appended.len() as u64, std::sync::atomic::Ordering::SeqCst);
+        if appended != record {
+            return Err(EngineError::Internal(
+                "signer state witness journal append did not read back as written".to_string(),
+            ));
+        }
         self.witness_length += record.len();
         self.last_chain_hash
             .copy_from_slice(&record[record.len() - 32..]);
