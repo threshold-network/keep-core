@@ -87,6 +87,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@bytecodealliance/preview2-shim@npm:^0.19.0":
+  version: 0.19.0
+  resolution: "@bytecodealliance/preview2-shim@npm:0.19.0"
+  checksum: 10c0/c15b6aff80dfcb8cd2c2fb532f7b5a35bef0031d1df1f08064d8ef591668621ce379e5a285a3f48d2de5101fbc5a8e6badc935eaaa97eeb9ccb73d60c280c74d
+  languageName: node
+  linkType: hard
+
 "@cacheable/memory@npm:^2.2.0":
   version: 2.2.0
   resolution: "@cacheable/memory@npm:2.2.0"
@@ -1404,9 +1411,9 @@ __metadata:
     hardhat-dependency-compiler: "npm:^1.1.2"
     hardhat-deploy: "npm:^0.11.11"
     hardhat-gas-reporter: "npm:^2.3.0"
-    prettier: "npm:^2.5.1"
-    prettier-plugin-sh: "npm:^0.8.1"
-    prettier-plugin-solidity: "npm:^1.0.0-beta.19"
+    prettier: "npm:^3.9.6"
+    prettier-plugin-sh: "npm:^0.19.0"
+    prettier-plugin-solidity: "npm:^2.4.1"
     solhint: "npm:^3.3.6"
     solhint-config-keep: "https://codeload.github.com/keep-network/solhint-config-keep/tar.gz/5e1751e58c0f1c507305ffc8c7f6c58047657ada"
     solidity-docgen: "npm:^0.6.0-beta.35"
@@ -1689,6 +1696,15 @@ __metadata:
   peerDependencies:
     hardhat: ^2.26.0
   checksum: 10c0/daf420f4fdbbcbfe117077c5950d39ba5126bc57abc360ba2de55756bce4a455fe53f61ad0edcd04c9e2440cc3f8197631c586cfe5ad781efa5da2f79d7ccd19
+  languageName: node
+  linkType: hard
+
+"@nomicfoundation/slang@npm:1.3.8":
+  version: 1.3.8
+  resolution: "@nomicfoundation/slang@npm:1.3.8"
+  dependencies:
+    "@bytecodealliance/preview2-shim": "npm:^0.19.0"
+  checksum: 10c0/ec97aff9bc16bffcecddaca99e1c264e3b54138f148c72b41e033c17a269e62c6862ed05efee42a1f4f6bdda5726f0c804cdea56279630c26f529d35266c255d
   languageName: node
   linkType: hard
 
@@ -1996,6 +2012,57 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@reteps/dockerfmt-darwin-arm64@npm:0.5.4":
+  version: 0.5.4
+  resolution: "@reteps/dockerfmt-darwin-arm64@npm:0.5.4"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@reteps/dockerfmt-darwin-x64@npm:0.5.4":
+  version: 0.5.4
+  resolution: "@reteps/dockerfmt-darwin-x64@npm:0.5.4"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@reteps/dockerfmt-linux-arm64@npm:0.5.4":
+  version: 0.5.4
+  resolution: "@reteps/dockerfmt-linux-arm64@npm:0.5.4"
+  conditions: os=linux & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@reteps/dockerfmt-linux-x64@npm:0.5.4":
+  version: 0.5.4
+  resolution: "@reteps/dockerfmt-linux-x64@npm:0.5.4"
+  conditions: os=linux & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@reteps/dockerfmt@npm:^0.5.4":
+  version: 0.5.4
+  resolution: "@reteps/dockerfmt@npm:0.5.4"
+  dependencies:
+    "@reteps/dockerfmt-darwin-arm64": "npm:0.5.4"
+    "@reteps/dockerfmt-darwin-x64": "npm:0.5.4"
+    "@reteps/dockerfmt-linux-arm64": "npm:0.5.4"
+    "@reteps/dockerfmt-linux-x64": "npm:0.5.4"
+  dependenciesMeta:
+    "@reteps/dockerfmt-darwin-arm64":
+      optional: true
+    "@reteps/dockerfmt-darwin-x64":
+      optional: true
+    "@reteps/dockerfmt-linux-arm64":
+      optional: true
+    "@reteps/dockerfmt-linux-x64":
+      optional: true
+  bin:
+    dockerfmt: dist/launcher.js
+  checksum: 10c0/b6f3037042d258bd3b84d53f879cffb0286fe245f41da54508870866b9bf2c97bb1a2e15c6f29a610ed70ce43ffb1d6e7281002325cd9b01a08aeb3f391ba12a
+  languageName: node
+  linkType: hard
+
 "@scure/base@npm:~1.1.0":
   version: 1.1.1
   resolution: "@scure/base@npm:1.1.1"
@@ -2187,7 +2254,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@solidity-parser/parser@npm:^0.14.0, @solidity-parser/parser@npm:^0.14.1":
+"@solidity-parser/parser@npm:^0.14.1":
   version: 0.14.5
   resolution: "@solidity-parser/parser@npm:0.14.5"
   dependencies:
@@ -2196,7 +2263,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@solidity-parser/parser@npm:^0.20.1":
+"@solidity-parser/parser@npm:^0.20.1, @solidity-parser/parser@npm:^0.20.2":
   version: 0.20.2
   resolution: "@solidity-parser/parser@npm:0.20.2"
   checksum: 10c0/23b0b7ed343a4fa55cb8621cf4fc81b0bdd791a4ee7e96ced7778db07de66d4e418db2c2dc1525b1f82fc0310ac829c78382327292b37e35cb30a19961fcb429
@@ -4759,13 +4826,6 @@ __metadata:
     minimalistic-assert: "npm:^1.0.1"
     minimalistic-crypto-utils: "npm:^1.0.1"
   checksum: 10c0/8b24ef782eec8b472053793ea1e91ae6bee41afffdfcb78a81c0a53b191e715cbe1292aa07165958a9bbe675bd0955142560b1a007ffce7d6c765bcaf951a867
-  languageName: node
-  linkType: hard
-
-"emoji-regex@npm:^10.0.0":
-  version: 10.0.0
-  resolution: "emoji-regex@npm:10.0.0"
-  checksum: 10c0/9fdfe2c4d5e74a61ca90776a848a1ecc0f177742d1cfe616a29c4690db89f2e39215f5e642aab675820402d0bc0756f2a6f31ef8b93755e6499ad670a7e58a7e
   languageName: node
   linkType: hard
 
@@ -8011,13 +8071,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"mvdan-sh@npm:^0.5.0":
-  version: 0.5.0
-  resolution: "mvdan-sh@npm:0.5.0"
-  checksum: 10c0/78cdf4f8b2a1a9595f52de99492c0d1a1a670846a300e6601b89e0dea6dcd7380170052f5ede78a8989ddb031f7f7e2fc29812e8385a369468dc66a70640913c
-  languageName: node
-  linkType: hard
-
 "nan@npm:^2.14.0":
   version: 2.16.0
   resolution: "nan@npm:2.16.0"
@@ -8690,30 +8743,28 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prettier-plugin-sh@npm:^0.8.1":
-  version: 0.8.1
-  resolution: "prettier-plugin-sh@npm:0.8.1"
+"prettier-plugin-sh@npm:^0.19.0":
+  version: 0.19.0
+  resolution: "prettier-plugin-sh@npm:0.19.0"
   dependencies:
-    mvdan-sh: "npm:^0.5.0"
+    "@reteps/dockerfmt": "npm:^0.5.4"
+    sh-syntax: "npm:^0.6.0"
   peerDependencies:
-    prettier: ^2.0.0
-  checksum: 10c0/9b9e983e2041244cdbde6847675ae8aed1bca2e5a67d23b62c402a0e233cf188d3214dedc1b9fae898e8bbb4ae5d31a9ba6d201d35080ab7ad0acbfb4666246d
+    prettier: ^3.6.0
+  checksum: 10c0/47a152ea7049743d8080749eaeebc05ade1c224e27537b03aa1cb7d6680b28f5bd6d6539f4289fc724f52ea7baed22a4b027e8f7cd6ec28a60c24d9eaae7a79b
   languageName: node
   linkType: hard
 
-"prettier-plugin-solidity@npm:^1.0.0-beta.19":
-  version: 1.0.0-beta.19
-  resolution: "prettier-plugin-solidity@npm:1.0.0-beta.19"
+"prettier-plugin-solidity@npm:^2.4.1":
+  version: 2.4.1
+  resolution: "prettier-plugin-solidity@npm:2.4.1"
   dependencies:
-    "@solidity-parser/parser": "npm:^0.14.0"
-    emoji-regex: "npm:^10.0.0"
-    escape-string-regexp: "npm:^4.0.0"
-    semver: "npm:^7.3.5"
-    solidity-comments-extractor: "npm:^0.0.7"
-    string-width: "npm:^4.2.3"
+    "@nomicfoundation/slang": "npm:1.3.8"
+    "@solidity-parser/parser": "npm:^0.20.2"
+    semver: "npm:^7.8.5"
   peerDependencies:
-    prettier: ^2.3.0
-  checksum: 10c0/f0fcfb61afeb3c9cda4bc0d49ddb81a730faa4398dd06459d39d1a93b345a2ab9eeb227b4f68c6278b19f053e4b4ac4ab239889691ac7924f620407ef698a426
+    prettier: ">=3.0.0"
+  checksum: 10c0/20ea46e5e9e406d5eb6df50335b5c08be098afc6cc392d32b8bb0e140c2a41d02c8e83a8da79ce5a1223e361d7a497e86e95bfe6caf1eb8546c4f6ff3d085a76
   languageName: node
   linkType: hard
 
@@ -8735,12 +8786,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prettier@npm:^2.5.1":
-  version: 2.5.1
-  resolution: "prettier@npm:2.5.1"
+"prettier@npm:^3.9.6":
+  version: 3.9.6
+  resolution: "prettier@npm:3.9.6"
   bin:
-    prettier: bin-prettier.js
-  checksum: 10c0/fa9750193b3fcdb4bd54ba4e57996d335de4cd492d277539b6ffb6d146c8b6d3c3dc264b75021914c99c91574643637f607da08ef4588ef30a7b78d14326f470
+    prettier: bin/prettier.cjs
+  checksum: 10c0/9f7ddae234035868f3daab3dc34e6de7e54622185afb017378029f0c09a9c023248ccf6f34def0b17a0538e18c47aa1b3188bab72965d1bf735919baa0747e99
   languageName: node
   linkType: hard
 
@@ -9275,7 +9326,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"semver@npm:^7.7.1, semver@npm:^7.7.2, semver@npm:^7.7.3":
+"semver@npm:^7.7.1, semver@npm:^7.7.2, semver@npm:^7.7.3, semver@npm:^7.8.5":
   version: 7.8.5
   resolution: "semver@npm:7.8.5"
   bin:
@@ -9371,6 +9422,13 @@ __metadata:
   version: 1.2.0
   resolution: "setprototypeof@npm:1.2.0"
   checksum: 10c0/68733173026766fa0d9ecaeb07f0483f4c2dc70ca376b3b7c40b7cda909f94b0918f6c5ad5ce27a9160bdfb475efaa9d5e705a11d8eaae18f9835d20976028bc
+  languageName: node
+  linkType: hard
+
+"sh-syntax@npm:^0.6.0":
+  version: 0.6.0
+  resolution: "sh-syntax@npm:0.6.0"
+  checksum: 10c0/495c660a23c67725cdee077b423ca974521ae580302ee62eda9309c84f6cf31722560cdf55bbea5ca98ba7dd7ac352d59f3eed61612d42b1f8a41cfc7673ba9f
   languageName: node
   linkType: hard
 
@@ -9623,13 +9681,6 @@ __metadata:
   version: 0.4.59
   resolution: "solidity-ast@npm:0.4.59"
   checksum: 10c0/d296ea890bfb026580b0b87623a1450d7de5be417395c1b017778b390e978c717e26c79fddcfb25d36134c425d4a4f813d60a1532ecc53c704ce5c9d4e322215
-  languageName: node
-  linkType: hard
-
-"solidity-comments-extractor@npm:^0.0.7":
-  version: 0.0.7
-  resolution: "solidity-comments-extractor@npm:0.0.7"
-  checksum: 10c0/57fb166ff71812404288ae1a386bb9bbb6330662aedc3b45d89f6f0ce51ee0e36c9f4b9d4fd363c2b37fbf607e42df088e734c532fb93e2f345601b429813d9e
   languageName: node
   linkType: hard
 
