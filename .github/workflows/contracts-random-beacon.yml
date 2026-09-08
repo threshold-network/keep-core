@@ -5,6 +5,11 @@ on:
     branches:
       - main
       - dev
+    paths:
+      - "solidity/random-beacon/**"
+      - ".github/workflows/contracts-random-beacon.yml"
+      - ".github/actions/install-yarn-deps/**"
+      - ".github/actions/docker-build-push/**"
   # We intend to use `workflow dispatch` in two different situations/paths:
   # 1. If a workflow will be manually dispatched from branch named
   #    `dapp-development`, workflow will deploy the contracts on the selected
@@ -53,9 +58,9 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
           node-version: "24.11.1"
 
       - uses: ./.github/actions/install-yarn-deps
@@ -79,9 +84,9 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
           node-version: "24.11.1"
 
       - uses: actions/setup-python@v4
@@ -119,9 +124,9 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
           node-version: "24.11.1"
 
       - uses: ./.github/actions/install-yarn-deps
@@ -146,9 +151,9 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
           node-version: "24.11.1"
 
       - uses: ./.github/actions/install-yarn-deps
@@ -179,9 +184,9 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
           node-version: "24.11.1"
           registry-url: "https://registry.npmjs.org"
 
@@ -277,9 +282,9 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
           node-version: "24.11.1"
           registry-url: "https://registry.npmjs.org"
 

@@ -25,9 +25,9 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 may cause issues with the
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877.
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
           node-version: "24.11.1"
           registry-url: "https://registry.npmjs.org"
 
