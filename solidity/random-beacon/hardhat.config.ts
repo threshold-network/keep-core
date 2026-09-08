@@ -1,4 +1,4 @@
-import "@nomiclabs/hardhat-etherscan"
+import "@nomicfoundation/hardhat-verify"
 import "@keep-network/hardhat-local-networks-config"
 import "@keep-network/hardhat-helpers"
 import "@nomiclabs/hardhat-ethers"
