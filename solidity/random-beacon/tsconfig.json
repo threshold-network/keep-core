@@ -11,6 +11,8 @@
   ],
   "compilerOptions": {
     "strict": true,
+    // ts-node also needs an explicit target; its fallback is ES5.
+    "target": "ES2020",
     // TypeScript 6 stopped including every `node_modules/@types` package
     // automatically, which silently drops the mocha and chai globals. These
     // are the three that contribute globals here.
@@ -19,17 +21,8 @@
     // directories. `--noEmit` does not need it, but ts-node's emit path does,
     // so hardhat will not start without it.
     "rootDir": ".",
-    // Two deprecations are silenced here, both belonging to the published
-    // `export/` bundle that `prepack` builds through tsconfig.export.json:
-    // `target: es5` itself, and `downlevelIteration`, which still changes
-    // emit at that target. Both are removed in TypeScript 7, so the export
-    // target has to be raised before then; doing it is its own change, and
-    // guessing that the option is inert would alter an artifact downstream
-    // packages consume.
-    "ignoreDeprecations": "6.0",
     "esModuleInterop": true,
     "noImplicitAny": true,
-    "downlevelIteration": true,
     "skipLibCheck": true
   }
 }
