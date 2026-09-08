@@ -67,6 +67,7 @@ jobs:
               - './go.mod'
               - './go.sum'
               - './third_party/**'
+              - './.github/workflows/client.yml'
   btcec-vendor-byte-identity:
     # Enforces the VENDOR.md byte-identity recipe and runs the
     # vendored upstream test suite. The root module's `go test ./...`

@@ -31,12 +31,9 @@ jobs:
           node-version: "24.11.1"
           registry-url: "https://registry.npmjs.org"
 
-      - uses: ./.github/actions/setup-git-for-yarn
-
-      - name: Enable Yarn 4 (packageManager)
-        run: |
-          corepack enable
-          yarn --version
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/random-beacon
 
       - name: Resolve latest contracts
         # `@threshold-network/solidity-contracts` is pinned to 1.3.0-dev.11
