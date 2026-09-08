@@ -82,6 +82,93 @@ async function main() {
     deletePreviousDeployments: false,
     writeDeploymentsToFiles: true,
   }
+
+  // A failed explorer request happens after deployment and ownership transfer
+  // have persisted. Every retry must verify the libraries and beacon without
+  // sending another transaction, including a retry after Tenderly fails.
+  const beaconVerificationNames = [
+    "BLS",
+    "BeaconAuthorization",
+    "BeaconDkg",
+    "BeaconInactivity",
+    "RandomBeacon",
+  ]
+  const verify = hre.helpers.etherscan.verify
+  const tenderly = hre.tenderly
+  const tenderlyTag = network.tags.tenderly
+  let verificationFailure
+  let verificationAttempts
+  let tenderlyAttempts
+  hre.helpers.etherscan.verify = async (deployment) => {
+    await verify(deployment)
+    for (const name of beaconVerificationNames) {
+      const record = await deployments.getOrNull(name)
+      if (record && record.address === deployment.address) {
+        verificationAttempts.push(name)
+        if (verificationFailure === name) {
+          throw new Error(`injected verification failure: ${name}`)
+        }
+      }
+    }
+  }
+  network.tags.tenderly = true
+  hre.tenderly = {
+    verify: async (deployment) => {
+      if (deployment.name === "RandomBeacon") {
+        equalAddress(deployment.address, await address("RandomBeacon"))
+        tenderlyAttempts += 1
+        if (verificationFailure === "Tenderly") {
+          throw new Error("injected verification failure: Tenderly")
+        }
+      }
+    },
+  }
+  try {
+    let deployedNonces
+    let deployedAddresses
+    for (const failure of ["BLS", "RandomBeacon", "Tenderly", undefined]) {
+      verificationFailure = failure
+      verificationAttempts = []
+      tenderlyAttempts = 0
+      if (failure) {
+        await assert.rejects(
+          deployments.run("RandomBeacon", options),
+          new RegExp(`injected verification failure: ${failure}`)
+        )
+      } else {
+        await deployments.run("RandomBeacon", options)
+      }
+      assert.deepEqual(
+        verificationAttempts,
+        failure === "BLS" ? ["BLS"] : beaconVerificationNames
+      )
+      assert.equal(
+        tenderlyAttempts,
+        failure === "BLS" || failure === "RandomBeacon" ? 0 : 1
+      )
+      equalAddress(
+        await read("BeaconSortitionPool", "owner"),
+        await address("RandomBeacon")
+      )
+      const deployed = await Promise.all(beaconVerificationNames.map(address))
+      if (deployedNonces) {
+        assert.deepEqual(
+          await nonces(),
+          deployedNonces,
+          "verification retry sent transactions"
+        )
+        assert.deepEqual(deployed, deployedAddresses)
+      } else {
+        deployedNonces = await nonces()
+        deployedAddresses = deployed
+      }
+    }
+  } finally {
+    hre.helpers.etherscan.verify = verify
+    hre.tenderly = tenderly
+    if (tenderlyTag === undefined) delete network.tags.tenderly
+    else network.tags.tenderly = tenderlyTag
+  }
   await deployments.run(undefined, options)
 
   const beacon = await address("RandomBeacon")
@@ -205,15 +292,24 @@ async function main() {
         execute,
       },
     })
-    for (const info of [
-      { status: 1 },
-      { status: 1n },
-      [1],
-      [{ toString: () => "1" }],
-    ]) {
-      await approve(context(tokenStaking.abi, info))
+    const humanReadableAbi = [
+      "function approveApplication(address application)",
+      "function applicationInfo(address application) view returns (uint8 status)",
+    ]
+    for (const abi of [tokenStaking.abi, humanReadableAbi]) {
+      for (const info of [
+        { status: 1 },
+        { status: 1n },
+        [1],
+        [{ toString: () => "1" }],
+      ]) {
+        await approve(context(abi, info))
+      }
     }
     await approve(context([], new Error("no getter")))
+    await approve(
+      context(["event approveApplication(address application)"], null)
+    )
     assert.equal(calls, 0)
     await approve(context(tokenStaking.abi, new Error("getter unavailable")))
     await approve(
@@ -224,6 +320,10 @@ async function main() {
     )
     await approve(context(tokenStaking.abi, { status: 0 }))
     assert.equal(calls, 3)
+    await approve(context(humanReadableAbi, { status: 0 }))
+    await approve(context(humanReadableAbi, new Error("getter unavailable")))
+    await approve(context([humanReadableAbi[0]], null))
+    assert.equal(calls, 6)
     await assert.rejects(
       approve(
         context(tokenStaking.abi, new Error("getter unavailable"), async () => {
@@ -236,7 +336,7 @@ async function main() {
   console.log(
     `PASS: published exports, ethers ${
       require("ethers").version
-    }, fresh deploy + replay + governance recovery + approval variants`
+    }, fresh deploy + verification retries + replay + governance recovery + approval variants`
   )
 }
 main().then(

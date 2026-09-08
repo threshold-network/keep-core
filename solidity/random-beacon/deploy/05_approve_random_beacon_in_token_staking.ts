@@ -2,15 +2,20 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
 
 const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
-  const { getNamedAccounts, deployments } = hre
+  const { getNamedAccounts, deployments, ethers } = hre
   const { deployer } = await getNamedAccounts()
   const { execute, get, read, log } = deployments
 
   const application = await get("RandomBeacon")
   const TokenStaking = await get("TokenStaking")
+  // Normalize both JSON and human-readable ABIs using the consumer's ethers.
+  const tokenStaking = await ethers.getContractAt(
+    TokenStaking.abi,
+    TokenStaking.address
+  )
   const hasFunction = (name: string) =>
-    TokenStaking.abi.some(
-      (entry) => entry.type === "function" && entry.name === name
+    tokenStaking.interface.fragments.some(
+      (fragment) => fragment.type === "function" && fragment.name === name
     )
 
   if (!hasFunction("approveApplication")) {

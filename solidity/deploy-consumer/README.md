@@ -32,6 +32,9 @@ then replays through hardhat-deploy and clears the migration journal to
 cover consumers that only copy deployment JSON. Account nonces must remain unchanged.
 It also tests recovery of a missing governance deployment and legacy approval ABI,
 result-shape and read-failure cases. Approval transaction failures still propagate.
+Both JSON and human-readable approval ABIs are exercised. Injected library,
+beacon and Tenderly verification failures must be retried without changing
+deployment addresses or sending transactions.
 
 `ALLOWLIST_WEIGHTS_FILE` can select a consumer-owned weights JSON. If unset,
 script 16 uses the packaged network-specific data under `export/deploy-data`.
