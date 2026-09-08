@@ -1209,7 +1209,7 @@ func (c *Connection) electrumConnect(ctx context.Context) error {
 		if err == nil {
 			err = verifyServer(ctx, client, url)
 			if err != nil {
-				client.Shutdown()
+				shutdownClientAsync(client)
 			}
 		}
 		if err != nil {
@@ -1251,15 +1251,17 @@ func (c *Connection) nextServer() {
 	c.serverIndex = (c.serverIndex + 1) % len(c.serverURLs)
 }
 
-func (c *Connection) failover(ctx context.Context) {
+func (c *Connection) failover(callerCtx context.Context) {
 	// Cancellation belongs to the caller, not to the server's health. A single
 	// configured URL remains pinned and retains the existing retry behavior.
-	if ctx.Err() != nil || c.parentCtx.Err() != nil || len(c.serverURLs) < 2 {
+	// An expired internal retry budget must still retire an unresponsive server.
+	if callerCtx.Err() != nil || c.parentCtx.Err() != nil || len(c.serverURLs) < 2 {
 		return
 	}
-	c.client.Shutdown()
+	client := c.client
 	c.client = nil
 	c.nextServer()
+	shutdownClientAsync(client)
 	logger.Warn("electrum request failed; trying the next configured server")
 }
 
@@ -1290,11 +1292,12 @@ func (c *Connection) keepAlive() {
 			}
 		case <-c.parentCtx.Done():
 			c.clientMutex.Lock()
-			if c.client != nil {
-				c.client.Shutdown()
-				c.client = nil
-			}
+			client := c.client
+			c.client = nil
 			c.clientMutex.Unlock()
+			if client != nil {
+				client.Shutdown()
+			}
 			return
 		}
 	}
@@ -1356,7 +1359,7 @@ func requestWithRetry[K any](
 			r, err := requestFn(requestCtx, c.client)
 
 			if err != nil {
-				c.failover(ctx)
+				c.failover(parentCtx)
 				return fmt.Errorf("request failed: [%w]", err)
 			}
 

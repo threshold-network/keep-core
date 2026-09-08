@@ -23,3 +23,10 @@ type electrumClient interface {
 	Shutdown()
 	IsShutdown() bool
 }
+
+// shutdownClientAsync closes a retired client without delaying a request or
+// holding clientMutex through a WebSocket close handshake. The client must no
+// longer be reachable by requests before cleanup starts.
+func shutdownClientAsync(client electrumClient) {
+	go client.Shutdown()
+}

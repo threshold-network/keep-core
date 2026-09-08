@@ -19,17 +19,46 @@ type failoverTestClient struct {
 	versions   atomic.Int32
 	shutdowns  atomic.Int32
 	versionErr error
+	version    func(context.Context) error
+	shutdown   func()
 	header     func(context.Context) (*electrum.SubscribeHeadersResult, error)
 	ping       func(context.Context) error
 	fee        func(context.Context) (float32, error)
 }
 
-func (c *failoverTestClient) ServerVersion(context.Context) (string, string, error) {
+func (c *failoverTestClient) ServerVersion(ctx context.Context) (string, string, error) {
 	c.versions.Add(1)
+	if c.version != nil {
+		return "test", "1.4", c.version(ctx)
+	}
 	return "test", "1.4", c.versionErr
 }
-func (c *failoverTestClient) Shutdown()        { c.shutdowns.Add(1); c.stopped.Store(true) }
+func (c *failoverTestClient) Shutdown() {
+	c.shutdowns.Add(1)
+	c.stopped.Store(true)
+	if c.shutdown != nil {
+		c.shutdown()
+	}
+}
 func (c *failoverTestClient) IsShutdown() bool { return c.stopped.Load() }
+
+func (c *failoverTestClient) awaitShutdown(t *testing.T) {
+	t.Helper()
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for c.shutdowns.Load() == 0 {
+		select {
+		case <-tick.C:
+		case <-timeout.C:
+			t.Fatal("retired client was not closed")
+		}
+	}
+	if c.shutdowns.Load() != 1 {
+		t.Fatal("retired client was closed more than once")
+	}
+}
 func (c *failoverTestClient) SubscribeHeadersSingle(ctx context.Context) (*electrum.SubscribeHeadersResult, error) {
 	if c.header != nil {
 		return c.header(ctx)
@@ -89,8 +118,8 @@ func TestConnectFailover(t *testing.T) {
 			if second.versions.Load() != 1 {
 				t.Fatal("fallback server was not verified")
 			}
-			if handshakeFailure && first.shutdowns.Load() != 1 {
-				t.Fatal("failed handshake connection was not closed")
+			if handshakeFailure {
+				first.awaitShutdown(t)
 			}
 		})
 	}
@@ -128,7 +157,8 @@ func TestRequestFailover(t *testing.T) {
 			if err != nil || height != 42 {
 				t.Fatalf("fallback request: %d, %v", height, err)
 			}
-			if first.shutdowns.Load() != 1 || second.versions.Load() != 1 {
+			first.awaitShutdown(t)
+			if second.versions.Load() != 1 {
 				t.Fatal("connection lifecycle was not preserved")
 			}
 		})
@@ -161,7 +191,7 @@ func TestExplicitElectrumURLRemainsPinned(t *testing.T) {
 	if _, err := connection.GetLatestBlockHeight(); err == nil {
 		t.Fatal("expected request failure")
 	}
-	if client.IsShutdown() || connections.Load() != 1 {
+	if connection.client != client || client.IsShutdown() || connections.Load() != 1 {
 		t.Fatal("RPC failure changed the explicit connection")
 	}
 }
@@ -187,7 +217,8 @@ func TestCallerCancellationDoesNotFailover(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected cancellation")
 	}
-	if first.IsShutdown() || connections.Load() != 1 {
+	if connection.client != first || connection.serverIndex != 0 ||
+		first.IsShutdown() || connections.Load() != 1 {
 		t.Fatal("caller cancellation changed server health")
 	}
 }
@@ -250,9 +281,7 @@ func TestKeepAliveFailover(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("keepalive did not reach the fallback server")
 	}
-	if first.shutdowns.Load() != 1 {
-		t.Fatal("failed server was not closed")
-	}
+	first.awaitShutdown(t)
 }
 
 func TestConcurrentRequestsShareFailover(t *testing.T) {
@@ -307,7 +336,7 @@ func TestFeeOracleFailureDoesNotFailover(t *testing.T) {
 	if _, err := connection.getFeeBtcPerKbOnce(1); err == nil {
 		t.Fatal("expected unavailable fee estimate")
 	}
-	if client.IsShutdown() {
+	if connection.client != client || connection.serverIndex != 0 || client.IsShutdown() {
 		t.Fatal("missing fee data incorrectly marked the server unhealthy")
 	}
 }
@@ -347,7 +376,8 @@ func TestFeeRequestFailover(t *testing.T) {
 	if fee, err := connection.getFeeBtcPerKbOnce(6); err != nil || fee != 0.001 {
 		t.Fatalf("fee request on fallback: %v, %v", fee, err)
 	}
-	if first.shutdowns.Load() != 1 || second.versions.Load() != 1 {
+	first.awaitShutdown(t)
+	if second.versions.Load() != 1 {
 		t.Fatal("fee request did not switch servers")
 	}
 }
