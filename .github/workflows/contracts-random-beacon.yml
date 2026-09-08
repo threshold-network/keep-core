@@ -36,58 +36,60 @@ jobs:
   contracts-detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      path-filter: ${{ steps.set-output.outputs.path-filter }}
+      path-filter: ${{ steps.filter.outputs.path-filter }}
     steps:
-      - name: Set path-filter output
-        id: set-output
-        run: echo "path-filter=true" >> $GITHUB_OUTPUT
+      - uses: actions/checkout@v3
+        if: github.event_name == 'pull_request'
+      - uses: dorny/paths-filter@v2
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            path-filter:
+              - './solidity/random-beacon/**'
+              - './.github/workflows/contracts-random-beacon.yml'
 
   contracts-lint:
     needs: contracts-detect-changes
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./solidity/random-beacon
     steps:
       - uses: actions/checkout@v3
-
       - uses: actions/setup-node@v3
         with:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "22.23.1"
-
       - uses: ./.github/actions/install-yarn-deps
         with:
           working-directory: ./solidity/random-beacon
-
       - name: Build
         run: yarn build
-
       - name: Lint
         run: yarn lint
 
   contracts-slither:
     needs: contracts-detect-changes
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./solidity/random-beacon
     steps:
       - uses: actions/checkout@v3
-
       - uses: actions/setup-node@v3
         with:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "22.23.1"
-
       - uses: actions/setup-python@v4
         with:
           python-version: 3.10.8
-
       - name: Install Solidity
         env:
           SOLC_VERSION: 0.8.9 # according to solidity.version in hardhat.config.js
@@ -95,21 +97,19 @@ jobs:
           pip3 install solc-select
           solc-select install $SOLC_VERSION
           solc-select use $SOLC_VERSION
-
       - name: Install Slither
         env:
           SLITHER_VERSION: 0.8.3
         run: pip3 install slither-analyzer==$SLITHER_VERSION
-
       - uses: ./.github/actions/install-yarn-deps
         with:
           working-directory: ./solidity/random-beacon
-
       - name: Run Slither
         run: slither .
 
   contracts-build-and-test:
     needs: contracts-detect-changes
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -137,6 +137,7 @@ jobs:
 
   contracts-deployment-dry-run:
     needs: contracts-detect-changes
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -164,6 +165,71 @@ jobs:
           imageName: keep-random-beacon-hardhat
           context: ./solidity/random-beacon
           push: false
+
+  # Enforces the core safety constraint stated in issue #4216 for the
+  # hardhat-deploy v1 upgrade: `export/` and `export.json` (the deploy
+  # artifacts consumed downstream by @keep-network/tbtc-v2) must stay
+  # byte-identical across hardhat-deploy versions and future changes.
+  # Both paths are gitignored (no committed baseline to diff against in
+  # git), so this job regenerates them on every gated run and compares
+  # a checksum manifest against the committed baseline file. A mismatch
+  # means the deploy/export artifact shape changed; if intentional,
+  # regenerate solidity/random-beacon/export-baseline.sha256 with the
+  # same commands below and commit it alongside the change.
+  #
+  # Note: the manifest covers the full export/ tree, including artifacts
+  # of external dependencies deployed onto the local test network
+  # (@keep-network/sortition-pools, @openzeppelin/*, @thesis/*,
+  # @threshold-network/*). This is safe from upstream-publish flakiness:
+  # install-yarn-deps runs `yarn install --immutable` against the
+  # committed yarn.lock, which pins each of these to a concrete resolved
+  # version (e.g. `@keep-network/sortition-pools@npm:^2.0.0-pre.16`
+  # resolves to a fixed `2.0.0-pre.16` in yarn.lock, not whatever the
+  # range currently resolves to upstream) - external artifacts only
+  # change when yarn.lock itself changes. So a diff under
+  # export/artifacts/@* means a dependency version bump landed in this
+  # PR/branch; regenerate the baseline as part of that same change, the
+  # same way as any other intentional export-shape change described
+  # above.
+  contracts-export-byte-identity:
+    needs: contracts-detect-changes
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./solidity/random-beacon
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          # Using fixed version, because 18.16 was sometimes causing issues with
+          # artifacts generation during `hardhat compile` - see
+          # https://github.com/NomicFoundation/hardhat/issues/3877
+          node-version: "22.23.1"
+
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/random-beacon
+
+      - name: Deploy and export contracts
+        run: yarn deploy:test --network hardhat --export export.json
+
+      - name: Generate packed export artifacts
+        run: yarn prepack
+
+      - name: Verify export byte-identity against baseline
+        run: |
+          set -e
+          sha256sum export.json > /tmp/manifest.txt
+          find export -type f | sort | xargs sha256sum >> /tmp/manifest.txt
+          if ! diff -q export-baseline.sha256 /tmp/manifest.txt > /dev/null; then
+            echo '::error::export.json/export/ artifact byte-identity mismatch against solidity/random-beacon/export-baseline.sha256.'
+            echo '::error::If this change is intentional, regenerate the baseline locally (see the job comment above) and commit it alongside this change.'
+            diff export-baseline.sha256 /tmp/manifest.txt
+            exit 1
+          fi
+          echo 'export byte-identity OK'
 
   contracts-deployment-testnet:
     needs: [contracts-build-and-test]
