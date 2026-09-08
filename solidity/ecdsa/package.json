@@ -34,7 +34,7 @@
     "deploy": "hardhat deploy --export export.json",
     "deploy:test": "USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_ECDSA=true hardhat deploy",
     "prepack": "tsc -p tsconfig.export.json && hardhat export-artifacts --including-no-public-functions export/artifacts",
-    "prepublishOnly": "hardhat prepare-artifacts --network $npm_config_network"
+    "prepublishOnly": "hardhat export-deployment-artifacts --network \"${npm_config_network:-hardhat}\""
   },
   "devDependencies": {
     "@keep-network/hardhat-helpers": "patch:@keep-network/hardhat-helpers@npm%3A0.7.2#~/.yarn/patches/@keep-network-hardhat-helpers-npm-0.7.2-086cf3da54.patch",

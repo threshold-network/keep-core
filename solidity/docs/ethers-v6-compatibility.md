@@ -143,6 +143,25 @@ sibling-build capture and ignore those code differences. The bundled JavaScript
 itself must exactly match the newly compiled source. The full ECDSA suite is also
 run with the sibling export unavailable.
 
+## Publication lifecycle
+
+Both `prepublishOnly` hooks use helpers 0.7.2's `export-deployment-artifacts`
+task. They honor npm's `--network` option and default to `hardhat` when it is
+omitted. From a fresh copy of either package with dependencies installed:
+
+```sh
+yarn deploy:test --network hardhat --write true
+npm publish --dry-run --offline --registry=http://127.0.0.1:1 \
+  --access=public --tag=development --network=hardhat
+```
+
+This exercises `prepublishOnly`, `prepack`, and ECDSA's `prepare` without
+publishing a package. The deployment export requires an empty `artifacts/`
+directory. Check that the exported records match `deployments/hardhat/` and
+appear in npm's package contents. Use separate fresh copies to check the
+omitted-network default and `--network=sepolia` with the checked-in Sepolia
+deployment snapshots.
+
 ## Limits and release gates
 
 These checks do not deploy to mainnet/Sepolia, contact explorer verification
