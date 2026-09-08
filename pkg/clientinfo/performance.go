@@ -106,6 +106,8 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 }
 
 // registerCounterMetrics registers all counter metrics with 0 initial values.
+// Map entries are populated before observers are registered so that observer
+// callbacks never read the map while it is being written concurrently.
 func (pm *PerformanceMetrics) registerCounterMetrics() {
 	counters := []string{
 		// ----- DKG counters -----
@@ -124,12 +126,7 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricUnmonitoredWalletTransactionsTotal,
 
 		// ----- SPV proof-skip counters -----
-		MetricRedemptionProofSubmissionsTotal,
-		MetricRedemptionProofSubmissionsSuccessTotal,
-		MetricRedemptionProofSubmissionsFailedTotal,
-		MetricDepositSweepProofSubmissionsTotal,
-		MetricDepositSweepProofSubmissionsSuccessTotal,
-		MetricDepositSweepProofSubmissionsFailedTotal,
+
 		MetricSpvProofSkippedOutsideRelayRangeTotal,
 		MetricSpvProofSkippedExceededMaxHeadersTotal,
 		MetricSpvProofTaskFailuresTotal,
@@ -148,6 +145,13 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricRedemptionProposalGenerationSuccessTotal,
 		MetricRedemptionProposalBroadcastTotal,
 		MetricRedemptionProposalBroadcastFailedTotal,
+		MetricRedemptionProofSubmissionsTotal,
+		MetricRedemptionProofSubmissionsSuccessTotal,
+		MetricRedemptionProofSubmissionsFailedTotal,
+		MetricDepositSweepProofSubmissionsTotal,
+		MetricDepositSweepProofSubmissionsSuccessTotal,
+		MetricDepositSweepProofSubmissionsFailedTotal,
+
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,

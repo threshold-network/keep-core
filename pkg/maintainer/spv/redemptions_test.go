@@ -157,7 +157,6 @@ func TestSubmitRedemptionProofRecordsParseFailureMetrics(t *testing.T) {
 		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsSuccessTotal]),
 	)
 }
-
 func TestSubmitRedemptionProof(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
 		value, err := hex.DecodeString(str)
