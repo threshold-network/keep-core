@@ -43,8 +43,8 @@
   "devDependencies": {
     "@keep-network/hardhat-helpers": "^0.6.0-pre.15",
     "@keep-network/hardhat-local-networks-config": "github:threshold-network/hardhat-local-networks-config#6dff5bc8648127ca5d8696c321076bddb6d4142a",
+    "@nomicfoundation/hardhat-verify": "^2.1.3",
     "@nomiclabs/hardhat-ethers": "^2.0.6",
-    "@nomiclabs/hardhat-etherscan": "^3.1.0",
     "@nomiclabs/hardhat-waffle": "^2.0.1",
     "@openzeppelin/hardhat-upgrades": "^1.20.0",
     "@tenderly/hardhat-tenderly": "1.0.12",
