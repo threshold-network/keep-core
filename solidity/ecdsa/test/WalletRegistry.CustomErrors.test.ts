@@ -10,6 +10,7 @@ import { noMisbehaved, signAndSubmitUnrecoverableDkgResult } from "./utils/dkg"
 
 import type {
   IWalletOwner,
+  SortitionPool,
   WalletRegistry,
   WalletRegistryStub,
   WalletRegistryGovernance,
@@ -103,13 +104,13 @@ describe("WalletRegistry - Custom Errors", () => {
     })
   })
 
-  describe("CallerNotGovernance", () => {
+  describe("governance access", () => {
     it("should reject updating DKG parameters", async () => {
       await expect(
         walletRegistry
           .connect(unauthorized)
           .updateDkgParameters(100, 100, 50000, 100, 10)
-      ).to.be.revertedWithCustomError(walletRegistry, "CallerNotGovernance")
+      ).to.be.revertedWith("Caller is not the governance")
     })
 
     it("should reject updating authorization parameters", async () => {
@@ -117,6 +118,14 @@ describe("WalletRegistry - Custom Errors", () => {
         walletRegistry
           .connect(unauthorized)
           .updateAuthorizationParameters(to1e18(40000), 3888000, 3888000)
+      ).to.be.revertedWith("Caller is not the governance")
+    })
+
+    it("should reject updating the reimbursement pool with CallerNotGovernance", async () => {
+      await expect(
+        walletRegistry
+          .connect(unauthorized)
+          .updateReimbursementPool(await walletRegistry.reimbursementPool())
       ).to.be.revertedWithCustomError(walletRegistry, "CallerNotGovernance")
     })
   })
@@ -283,7 +292,7 @@ describe("WalletRegistry - Custom Errors", () => {
       .finalizeDkgResultChallengeExtraGasUpdate()
     await walletRegistry.connect(walletOwner.wallet).requestNewWallet()
     const { startBlock, dkgSeed } = await submitRelayEntry(walletRegistry)
-    const sortitionPool = await helpers.contracts.getContract(
+    const sortitionPool: SortitionPool = await helpers.contracts.getContract(
       "EcdsaSortitionPool"
     )
     const { dkgResult } = await signAndSubmitUnrecoverableDkgResult(

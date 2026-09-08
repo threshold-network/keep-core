@@ -2636,8 +2636,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   ).to.equal(params.minimumAuthorization)
                 })
 
-                it("should use close to 462 000 gas", async () => {
-                  await assertGasUsed(challengeTx, 462_000, 30_000)
+              it("should use close to 420 000 gas", async () => {
+                await assertGasUsed(challengeTx, 420_000, 30_000)
                 })
               }
             )

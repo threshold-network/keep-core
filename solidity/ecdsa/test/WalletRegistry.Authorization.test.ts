@@ -37,6 +37,12 @@ describe("WalletRegistry - Allowlist Authorization", () => {
   const providerWeight = to1e18(1000000)
   const { minimumAuthorization } = params
 
+  // Deploy separately so a cold run and the 100-operator setup each have their
+  // own hook timeout.
+  before("deploy contracts", async () => {
+    await deployments.fixture()
+  })
+
   before("load Allowlist fixture", async () => {
     const fixture = await walletRegistryFixture({ useAllowlist: true })
     ;({
@@ -2588,7 +2594,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         .requestWeightDecrease(stakingProvider.address, minimumAuthorization)
       await expect(
         walletRegistry.updateOperatorStatus(operator.address)
-      ).to.be.revertedWith("Sortition pool is locked")
+      ).to.be.revertedWith("Sortition pool locked")
       expect(
         await walletRegistry.remainingAuthorizationDecreaseDelay(
           stakingProvider.address
