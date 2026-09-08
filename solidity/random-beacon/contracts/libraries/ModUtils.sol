@@ -97,7 +97,7 @@ library ModUtils {
                     return x;
                 }
 
-                gs = modExp(g, uint256(2)**(r - m - 1), p);
+                gs = modExp(g, uint256(2) ** (r - m - 1), p);
                 g = (gs * gs) % p;
                 x = (x * gs) % p;
                 b = (b * g) % p;

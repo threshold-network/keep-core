@@ -83,7 +83,7 @@ export async function randomBeaconDeployment(): Promise<DeployedContracts> {
   const { deployer, chaosnetOwner } = await helpers.signers.getNamedSigners()
 
   const sortitionPool: SortitionPool = await helpers.contracts.getContract(
-    "BeaconSortitionPool"
+    "BeaconSortitionPool",
   )
   const randomBeaconGovernance: RandomBeaconGovernance =
     await helpers.contracts.getContract("RandomBeaconGovernance")
@@ -96,9 +96,8 @@ export async function randomBeaconDeployment(): Promise<DeployedContracts> {
     value: ethers.utils.parseEther("100.0"), // Send 100.0 ETH
   })
 
-  const randomBeacon: RandomBeaconStub = await helpers.contracts.getContract(
-    "RandomBeacon"
-  )
+  const randomBeacon: RandomBeaconStub =
+    await helpers.contracts.getContract("RandomBeacon")
 
   await updateTokenStakingParams(t, staking, deployer)
   await setFixtureParameters(randomBeacon)
@@ -120,7 +119,7 @@ export async function randomBeaconDeployment(): Promise<DeployedContracts> {
 async function updateTokenStakingParams(
   t: T,
   staking: TokenStaking,
-  deployer: SignerWithAddress
+  deployer: SignerWithAddress,
 ) {
   // initialNotifierTreasury should be configured high enough to execute all the
   // slashing in test suites.
@@ -138,7 +137,7 @@ async function updateTokenStakingParams(
   }
   if (typeof stakingAsRecord.setNotificationReward === "function") {
     await stakingAsRecord.setNotificationReward(
-      constants.tokenStakingNotificationReward
+      constants.tokenStakingNotificationReward,
     )
   }
 }
@@ -157,7 +156,7 @@ async function setFixtureParameters(randomBeacon: RandomBeaconStub) {
   await randomBeaconGovernance
     .connect(governance)
     .beginAuthorizationDecreaseChangePeriodUpdate(
-      params.authorizationDecreaseChangePeriod
+      params.authorizationDecreaseChangePeriod,
     )
 
   await randomBeaconGovernance
@@ -173,22 +172,22 @@ async function setFixtureParameters(randomBeacon: RandomBeaconStub) {
   await randomBeaconGovernance
     .connect(governance)
     .beginSortitionPoolRewardsBanDurationUpdate(
-      params.sortitionPoolRewardsBanDuration
+      params.sortitionPoolRewardsBanDuration,
     )
   await randomBeaconGovernance
     .connect(governance)
     .beginRelayEntryTimeoutNotificationRewardMultiplierUpdate(
-      params.relayEntryTimeoutNotificationRewardMultiplier
+      params.relayEntryTimeoutNotificationRewardMultiplier,
     )
   await randomBeaconGovernance
     .connect(governance)
     .beginUnauthorizedSigningNotificationRewardMultiplierUpdate(
-      params.unauthorizedSigningNotificationRewardMultiplier
+      params.unauthorizedSigningNotificationRewardMultiplier,
     )
   await randomBeaconGovernance
     .connect(governance)
     .beginDkgMaliciousResultNotificationRewardMultiplierUpdate(
-      params.dkgMaliciousResultNotificationRewardMultiplier
+      params.dkgMaliciousResultNotificationRewardMultiplier,
     )
 
   await randomBeaconGovernance
@@ -200,7 +199,7 @@ async function setFixtureParameters(randomBeacon: RandomBeaconStub) {
   await randomBeaconGovernance
     .connect(governance)
     .beginDkgResultChallengePeriodLengthUpdate(
-      params.dkgResultChallengePeriodLength
+      params.dkgResultChallengePeriodLength,
     )
   await randomBeaconGovernance
     .connect(governance)
@@ -208,23 +207,23 @@ async function setFixtureParameters(randomBeacon: RandomBeaconStub) {
   await randomBeaconGovernance
     .connect(governance)
     .beginDkgSubmitterPrecedencePeriodLengthUpdate(
-      params.dkgSubmitterPrecedencePeriodLength
+      params.dkgSubmitterPrecedencePeriodLength,
     )
 
   await randomBeaconGovernance
     .connect(governance)
     .beginRelayEntrySubmissionFailureSlashingAmountUpdate(
-      params.relayEntrySubmissionFailureSlashingAmount
+      params.relayEntrySubmissionFailureSlashingAmount,
     )
   await randomBeaconGovernance
     .connect(governance)
     .beginMaliciousDkgResultSlashingAmountUpdate(
-      params.maliciousDkgResultSlashingAmount
+      params.maliciousDkgResultSlashingAmount,
     )
   await randomBeaconGovernance
     .connect(governance)
     .beginUnauthorizedSigningSlashingAmountUpdate(
-      params.unauthorizedSigningSlashingAmount
+      params.unauthorizedSigningSlashingAmount,
     )
 
   await helpers.time.increaseTime(params.governanceDelay)

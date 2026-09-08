@@ -9,7 +9,7 @@ export async function authorize(
   owner: string,
   provider: string,
   authorizer?: string,
-  authorization?: BigNumberish
+  authorization?: BigNumberish,
 ): Promise<void> {
   const { ethers, helpers } = hre
   const ownerAddress = ethers.utils.getAddress(owner)
@@ -18,7 +18,7 @@ export async function authorize(
   const application = await helpers.contracts.getContract(deploymentName)
 
   console.log(
-    `Authorizing provider's ${providerAddress} stake in ${deploymentName} application (${application.address})`
+    `Authorizing provider's ${providerAddress} stake in ${deploymentName} application (${application.address})`,
   )
 
   // Authorizer can equal to the owner if not set otherwise. This simplification
@@ -36,12 +36,12 @@ export async function authorize(
 
   const currentAuthorization = await staking.authorizedStake(
     providerAddress,
-    application.address
+    application.address,
   )
 
   if (currentAuthorization.gte(authorizationBN)) {
     console.log(
-      `Authorized stake is already ${from1e18(currentAuthorization)} T`
+      `Authorized stake is already ${from1e18(currentAuthorization)} T`,
     )
     return
   }
@@ -50,8 +50,8 @@ export async function authorize(
 
   console.log(
     `Increasing authorization by ${from1e18(increaseAmount)} T to ${from1e18(
-      authorizationBN
-    )} T...`
+      authorizationBN,
+    )} T...`,
   )
 
   await (
@@ -60,7 +60,7 @@ export async function authorize(
       .increaseAuthorization(
         providerAddress,
         application.address,
-        increaseAmount
+        increaseAmount,
       )
   ).wait()
 }

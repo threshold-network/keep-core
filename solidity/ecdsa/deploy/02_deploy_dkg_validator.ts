@@ -51,7 +51,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
           "once-only, so a validator-only redeploy would desync " +
           `deployments/${hre.network.name}/EcdsaDkgValidator.json from the ` +
           "on-chain binding. Wipe and redeploy the WalletRegistry in the same " +
-          "run (e.g. full-redeploy-sepolia-stack.sh) before redeploying the validator."
+          "run (e.g. full-redeploy-sepolia-stack.sh) before redeploying the validator.",
       )
     }
   }
@@ -69,7 +69,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     process.env.DISABLE_HARDHAT_VERIFY !== "true"
   ) {
     await verifyOnEtherscanOrContinue(hre, () =>
-      helpers.etherscan.verify(EcdsaDkgValidator)
+      helpers.etherscan.verify(EcdsaDkgValidator),
     )
   }
 
@@ -78,7 +78,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       hre.tenderly.verify({
         name: "EcdsaDkgValidator",
         address: EcdsaDkgValidator.address,
-      })
+      }),
     )
   }
 

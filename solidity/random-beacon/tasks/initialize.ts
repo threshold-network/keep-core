@@ -29,7 +29,7 @@ const TASK_ADD_BETA_OPERATOR_BEACON = `${TASK_ADD_BETA_OPERATOR}:beacon`
 
 task(
   TASK_INITIALIZE,
-  "Initializes staking and the Random Beacon application for a staking provider and an operator"
+  "Initializes staking and the Random Beacon application for a staking provider and an operator",
 )
   .addParam("owner", "Stake Owner address", undefined, types.string)
   .addParam("provider", "Staking Provider", undefined, types.string)
@@ -41,7 +41,7 @@ task(
     "authorization",
     "Authorization amount (default: minimumAuthorization)",
     undefined,
-    types.int
+    types.int,
   )
   .setAction(async (args, hre) => {
     // Initialize staking
@@ -62,7 +62,7 @@ task(TASK_INITIALIZE_STAKING, "Initializes staking for a service provider")
     const tokensToMint = await calculateTokensNeededForStake(
       hre,
       args.provider,
-      args.amount
+      args.amount,
     )
 
     if (!tokensToMint.isZero()) {
@@ -92,7 +92,7 @@ task(TASK_STAKE, "Stakes T tokens")
       args.provider,
       args.amount,
       args.beneficiary,
-      args.authorizer
+      args.authorizer,
     )
   })
 
@@ -100,7 +100,7 @@ task(TASK_INITIALIZE_BEACON, "Initializes operator for Beacon").setAction(
   async (args, hre) => {
     await hre.run(TASK_AUTHORIZE_BEACON, args)
     await hre.run(TASK_REGISTER_BEACON, args)
-  }
+  },
 )
 
 task(TASK_AUTHORIZE_BEACON, "Sets authorization for Beacon")
@@ -111,7 +111,7 @@ task(TASK_AUTHORIZE_BEACON, "Sets authorization for Beacon")
     "authorization",
     "Authorization amount (default: minimumAuthorization)",
     undefined,
-    types.int
+    types.int,
   )
   .setAction(async (args, hre) => {
     await authorize(
@@ -120,13 +120,13 @@ task(TASK_AUTHORIZE_BEACON, "Sets authorization for Beacon")
       args.owner,
       args.provider,
       args.authorizer,
-      args.authorization
+      args.authorization,
     )
   })
 
 task(
   TASK_REGISTER_BEACON,
-  "Registers an operator for a staking provider in Beacon"
+  "Registers an operator for a staking provider in Beacon",
 )
   .addParam("provider", "Staking Provider", undefined, types.string)
   .addParam("operator", "Operator Address", undefined, types.string)
@@ -136,7 +136,7 @@ task(
 
 task(
   TASK_ADD_BETA_OPERATOR_BEACON,
-  "Adds an operator to the set of beta operators in Beacon"
+  "Adds an operator to the set of beta operators in Beacon",
 )
   .addParam("operator", "Operator Address", undefined, types.string)
   .setAction(async (args, hre) => {

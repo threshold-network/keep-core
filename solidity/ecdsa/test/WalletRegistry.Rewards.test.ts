@@ -27,13 +27,13 @@ const { createSnapshot, restoreSnapshot } = helpers.snapshot
 async function rewardsBeneficiaryAddress(
   walletRegistry: WalletRegistry,
   staking: TokenStaking,
-  stakingProvider: string
+  stakingProvider: string,
 ): Promise<string> {
   const allowlistAddr = await walletRegistry.allowlist()
   if (allowlistAddr !== ethers.constants.AddressZero) {
     const al = (await ethers.getContractAt(
       "Allowlist",
-      allowlistAddr
+      allowlistAddr,
     )) as Allowlist
     const r = await al.rolesOf(stakingProvider)
     return r.beneficiary
@@ -80,7 +80,7 @@ describe("WalletRegistry - Rewards", () => {
       walletRegistry,
       walletOwner.wallet,
       randomBeacon,
-      walletPublicKey
+      walletPublicKey,
     ))
 
     membersIDs = members.map((member) => member.id)
@@ -90,7 +90,7 @@ describe("WalletRegistry - Rewards", () => {
     context("when called for an unknown operator", () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.withdrawRewards(thirdParty.address)
+          walletRegistry.withdrawRewards(thirdParty.address),
         ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
       })
     })
@@ -104,13 +104,12 @@ describe("WalletRegistry - Rewards", () => {
         await createSnapshot()
 
         operator = members[0].signer.address
-        stakingProvider = await walletRegistry.operatorToStakingProvider(
-          operator
-        )
+        stakingProvider =
+          await walletRegistry.operatorToStakingProvider(operator)
         beneficiary = await rewardsBeneficiaryAddress(
           walletRegistry,
           staking,
-          stakingProvider
+          stakingProvider,
         )
 
         // Allocate sortition pool rewards
@@ -147,7 +146,7 @@ describe("WalletRegistry - Rewards", () => {
     context("when called for an unknown operator", () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.availableRewards(thirdParty.address)
+          walletRegistry.availableRewards(thirdParty.address),
         ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
       })
     })
@@ -161,13 +160,12 @@ describe("WalletRegistry - Rewards", () => {
         await createSnapshot()
 
         operator = members[0].signer.address
-        stakingProvider = await walletRegistry.operatorToStakingProvider(
-          operator
-        )
+        stakingProvider =
+          await walletRegistry.operatorToStakingProvider(operator)
         beneficiary = await rewardsBeneficiaryAddress(
           walletRegistry,
           staking,
-          stakingProvider
+          stakingProvider,
         )
 
         // Allocate sortition pool rewards
@@ -182,9 +180,8 @@ describe("WalletRegistry - Rewards", () => {
       })
 
       it("should return the amount of available rewards", async () => {
-        let availableAmount = await walletRegistry.availableRewards(
-          stakingProvider
-        )
+        let availableAmount =
+          await walletRegistry.availableRewards(stakingProvider)
 
         const balanceBefore = await tToken.balanceOf(beneficiary)
         await walletRegistry.withdrawRewards(stakingProvider)
@@ -208,7 +205,7 @@ describe("WalletRegistry - Rewards", () => {
         await expect(
           walletRegistry
             .connect(thirdParty)
-            .withdrawIneligibleRewards(thirdParty.address)
+            .withdrawIneligibleRewards(thirdParty.address),
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
@@ -227,7 +224,7 @@ describe("WalletRegistry - Rewards", () => {
             walletPublicKey,
             heartbeatFailed,
             inactiveMembersIndices,
-            groupThreshold
+            groupThreshold,
           )
 
         await walletRegistry.connect(claimSender).notifyOperatorInactivity(
@@ -239,7 +236,7 @@ describe("WalletRegistry - Rewards", () => {
             signingMembersIndices,
           },
           0,
-          membersIDs
+          membersIDs,
         )
 
         // Allocate sortition pool rewards
@@ -254,9 +251,8 @@ describe("WalletRegistry - Rewards", () => {
         // the balance of "ineligible rewards" available for withdrawal from
         // the Sortition Pool
         const operator = members[0].signer.address
-        const stakingProvider = await walletRegistry.operatorToStakingProvider(
-          operator
-        )
+        const stakingProvider =
+          await walletRegistry.operatorToStakingProvider(operator)
         await walletRegistry.withdrawRewards(stakingProvider)
 
         expect(await tToken.balanceOf(thirdParty.address)).to.equal(0)

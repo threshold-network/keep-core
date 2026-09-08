@@ -48,14 +48,14 @@ describe("RandomBeaconGovernance", () => {
 
     before(async () => {
       RandomBeaconGovernance = await ethers.getContractFactory(
-        "RandomBeaconGovernance"
+        "RandomBeaconGovernance",
       )
     })
 
     context("when random beacon is 0-address", () => {
       it("should revert", async () => {
         await expect(
-          RandomBeaconGovernance.deploy(ZERO_ADDRESS, 1)
+          RandomBeaconGovernance.deploy(ZERO_ADDRESS, 1),
         ).to.be.revertedWith("Zero-address reference")
       })
     })
@@ -63,7 +63,7 @@ describe("RandomBeaconGovernance", () => {
     context("when governance delay is 0", () => {
       it("should revert", async () => {
         await expect(
-          RandomBeaconGovernance.deploy(randomBeacon.address, 0)
+          RandomBeaconGovernance.deploy(randomBeacon.address, 0),
         ).to.be.revertedWith("No governance delay")
       })
     })
@@ -75,7 +75,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginGovernanceDelayUpdate(1)
+            .beginGovernanceDelayUpdate(1),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -97,13 +97,13 @@ describe("RandomBeaconGovernance", () => {
 
       it("should not update the governance delay", async () => {
         expect(await randomBeaconGovernance.governanceDelay()).to.be.equal(
-          governanceDelay
+          governanceDelay,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingGovernanceDelayUpdateTime()
+          await randomBeaconGovernance.getRemainingGovernanceDelayUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -124,7 +124,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeGovernanceDelayUpdate()
+            .finalizeGovernanceDelayUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -134,7 +134,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeGovernanceDelayUpdate()
+            .finalizeGovernanceDelayUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -158,7 +158,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeGovernanceDelayUpdate()
+            .finalizeGovernanceDelayUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
       })
     })
@@ -188,7 +188,7 @@ describe("RandomBeaconGovernance", () => {
 
         it("should update the governance delay", async () => {
           expect(await randomBeaconGovernance.governanceDelay()).to.be.equal(
-            7331
+            7331,
           )
         })
 
@@ -200,10 +200,10 @@ describe("RandomBeaconGovernance", () => {
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingGovernanceDelayUpdateTime()
+            randomBeaconGovernance.getRemainingGovernanceDelayUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -214,8 +214,8 @@ describe("RandomBeaconGovernance", () => {
           randomBeaconGovernance
             .connect(thirdParty)
             .beginRandomBeaconGovernanceTransfer(
-              "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537"
-            )
+              "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537",
+            ),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -229,7 +229,7 @@ describe("RandomBeaconGovernance", () => {
         tx = await randomBeaconGovernance
           .connect(governance)
           .beginRandomBeaconGovernanceTransfer(
-            "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537"
+            "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537",
           )
       })
 
@@ -242,22 +242,24 @@ describe("RandomBeaconGovernance", () => {
           await expect(
             randomBeaconGovernance
               .connect(governance)
-              .beginRandomBeaconGovernanceTransfer(ethers.constants.AddressZero)
+              .beginRandomBeaconGovernanceTransfer(
+                ethers.constants.AddressZero,
+              ),
           ).to.be.revertedWith(
-            "New random beacon governance address cannot be zero"
+            "New random beacon governance address cannot be zero",
           )
         })
       })
 
       it("should not transfer the governance", async () => {
         expect(await randomBeacon.governance()).to.be.equal(
-          randomBeaconGovernance.address
+          randomBeaconGovernance.address,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingRandomBeaconGovernanceTransferDelayTime()
+          await randomBeaconGovernance.getRemainingRandomBeaconGovernanceTransferDelayTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -268,11 +270,11 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "RandomBeaconGovernanceTransferStarted"
+            "RandomBeaconGovernanceTransferStarted",
           )
           .withArgs(
             "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537",
-            blockTimestamp
+            blockTimestamp,
           )
       })
     })
@@ -284,7 +286,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeRandomBeaconGovernanceTransfer()
+            .finalizeRandomBeaconGovernanceTransfer(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -294,7 +296,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRandomBeaconGovernanceTransfer()
+            .finalizeRandomBeaconGovernanceTransfer(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -306,7 +308,7 @@ describe("RandomBeaconGovernance", () => {
         await randomBeaconGovernance
           .connect(governance)
           .beginRandomBeaconGovernanceTransfer(
-            "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537"
+            "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537",
           )
 
         await helpers.time.increaseTime(governanceDelay - 60) // -1min
@@ -320,7 +322,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRandomBeaconGovernanceTransfer()
+            .finalizeRandomBeaconGovernanceTransfer(),
         ).to.be.revertedWith("Governance delay has not elapsed")
       })
     })
@@ -336,7 +338,7 @@ describe("RandomBeaconGovernance", () => {
           await randomBeaconGovernance
             .connect(governance)
             .beginRandomBeaconGovernanceTransfer(
-              "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537"
+              "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537",
             )
 
           await helpers.time.increaseTime(governanceDelay)
@@ -352,7 +354,7 @@ describe("RandomBeaconGovernance", () => {
 
         it("should transfer random beacon governance", async () => {
           expect(await randomBeacon.governance()).to.be.equal(
-            "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537"
+            "0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537",
           )
         })
 
@@ -360,17 +362,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "RandomBeaconGovernanceTransferred"
+              "RandomBeaconGovernanceTransferred",
             )
             .withArgs("0x00Ea7D21bcCEeD400aCe08B583554aA619D3e537")
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingRandomBeaconGovernanceTransferDelayTime()
+            randomBeaconGovernance.getRemainingRandomBeaconGovernanceTransferDelayTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -380,7 +382,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginRelayEntrySoftTimeoutUpdate(1)
+            .beginRelayEntrySoftTimeoutUpdate(1),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -390,7 +392,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginRelayEntrySoftTimeoutUpdate(0)
+            .beginRelayEntrySoftTimeoutUpdate(0),
         ).to.be.revertedWith("Relay entry soft timeout must be > 0")
       })
     })
@@ -435,7 +437,7 @@ describe("RandomBeaconGovernance", () => {
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingRelayEntrySoftTimeoutUpdateTime()
+          await randomBeaconGovernance.getRemainingRelayEntrySoftTimeoutUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -456,7 +458,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeRelayEntrySoftTimeoutUpdate()
+            .finalizeRelayEntrySoftTimeoutUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -466,7 +468,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntrySoftTimeoutUpdate()
+            .finalizeRelayEntrySoftTimeoutUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -484,7 +486,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntrySoftTimeoutUpdate()
+            .finalizeRelayEntrySoftTimeoutUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -528,10 +530,10 @@ describe("RandomBeaconGovernance", () => {
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingRelayEntrySoftTimeoutUpdateTime()
+            randomBeaconGovernance.getRemainingRelayEntrySoftTimeoutUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -541,7 +543,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginRelayEntryHardTimeoutUpdate(123)
+            .beginRelayEntryHardTimeoutUpdate(123),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -569,7 +571,7 @@ describe("RandomBeaconGovernance", () => {
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingRelayEntryHardTimeoutUpdateTime()
+          await randomBeaconGovernance.getRemainingRelayEntryHardTimeoutUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -590,7 +592,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeRelayEntryHardTimeoutUpdate()
+            .finalizeRelayEntryHardTimeoutUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -600,7 +602,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntryHardTimeoutUpdate()
+            .finalizeRelayEntryHardTimeoutUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -618,7 +620,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntryHardTimeoutUpdate()
+            .finalizeRelayEntryHardTimeoutUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -662,10 +664,10 @@ describe("RandomBeaconGovernance", () => {
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingRelayEntryHardTimeoutUpdateTime()
+            randomBeaconGovernance.getRemainingRelayEntryHardTimeoutUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -675,7 +677,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginCallbackGasLimitUpdate(123)
+            .beginCallbackGasLimitUpdate(123),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -685,7 +687,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginCallbackGasLimitUpdate(0)
+            .beginCallbackGasLimitUpdate(0),
         ).to.be.revertedWith("Callback gas limit must be > 0 and <= 1000000")
       })
     })
@@ -712,7 +714,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginCallbackGasLimitUpdate(1000001)
+            .beginCallbackGasLimitUpdate(1000001),
         ).to.be.revertedWith("Callback gas limit must be > 0 and <= 1000000")
       })
     })
@@ -753,7 +755,7 @@ describe("RandomBeaconGovernance", () => {
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingCallbackGasLimitUpdateTime()
+          await randomBeaconGovernance.getRemainingCallbackGasLimitUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -774,7 +776,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeCallbackGasLimitUpdate()
+            .finalizeCallbackGasLimitUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -784,7 +786,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeCallbackGasLimitUpdate()
+            .finalizeCallbackGasLimitUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -802,7 +804,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeCallbackGasLimitUpdate()
+            .finalizeCallbackGasLimitUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -845,10 +847,10 @@ describe("RandomBeaconGovernance", () => {
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingCallbackGasLimitUpdateTime()
+            randomBeaconGovernance.getRemainingCallbackGasLimitUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -858,7 +860,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginGroupCreationFrequencyUpdate(1)
+            .beginGroupCreationFrequencyUpdate(1),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -868,7 +870,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginGroupCreationFrequencyUpdate(0)
+            .beginGroupCreationFrequencyUpdate(0),
         ).to.be.revertedWith("Group creation frequency must be > 0")
       })
     })
@@ -909,13 +911,13 @@ describe("RandomBeaconGovernance", () => {
         const { groupCreationFrequency } =
           await randomBeacon.groupCreationParameters()
         expect(groupCreationFrequency).to.be.equal(
-          params.groupCreationFrequency
+          params.groupCreationFrequency,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingGroupCreationFrequencyUpdateTime()
+          await randomBeaconGovernance.getRemainingGroupCreationFrequencyUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -926,7 +928,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "GroupCreationFrequencyUpdateStarted"
+            "GroupCreationFrequencyUpdateStarted",
           )
           .withArgs(1, blockTimestamp)
       })
@@ -939,7 +941,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeGroupCreationFrequencyUpdate()
+            .finalizeGroupCreationFrequencyUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -949,7 +951,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeGroupCreationFrequencyUpdate()
+            .finalizeGroupCreationFrequencyUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -967,7 +969,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeGroupCreationFrequencyUpdate()
+            .finalizeGroupCreationFrequencyUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -1011,10 +1013,10 @@ describe("RandomBeaconGovernance", () => {
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingGroupCreationFrequencyUpdateTime()
+            randomBeaconGovernance.getRemainingGroupCreationFrequencyUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -1026,7 +1028,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginGroupLifetimeUpdate(newGroupLifetime)
+            .beginGroupLifetimeUpdate(newGroupLifetime),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1034,7 +1036,9 @@ describe("RandomBeaconGovernance", () => {
     context("when the update value is zero", () => {
       it("should revert", async () => {
         await expect(
-          randomBeaconGovernance.connect(governance).beginGroupLifetimeUpdate(0)
+          randomBeaconGovernance
+            .connect(governance)
+            .beginGroupLifetimeUpdate(0),
         ).to.be.revertedWith("Group lifetime must be greater than 0")
       })
     })
@@ -1061,7 +1065,7 @@ describe("RandomBeaconGovernance", () => {
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingGroupLifetimeUpdateTime()
+          await randomBeaconGovernance.getRemainingGroupLifetimeUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -1084,7 +1088,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeGroupLifetimeUpdate()
+            .finalizeGroupLifetimeUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1094,7 +1098,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeGroupLifetimeUpdate()
+            .finalizeGroupLifetimeUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -1112,7 +1116,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeGroupLifetimeUpdate()
+            .finalizeGroupLifetimeUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -1155,10 +1159,10 @@ describe("RandomBeaconGovernance", () => {
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingGroupLifetimeUpdateTime()
+            randomBeaconGovernance.getRemainingGroupLifetimeUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -1168,7 +1172,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginDkgResultChallengePeriodLengthUpdate(11)
+            .beginDkgResultChallengePeriodLengthUpdate(11),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1178,7 +1182,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginDkgResultChallengePeriodLengthUpdate(9)
+            .beginDkgResultChallengePeriodLengthUpdate(9),
         ).to.be.revertedWith("DKG result challenge period length must be >= 10")
       })
     })
@@ -1219,13 +1223,13 @@ describe("RandomBeaconGovernance", () => {
         const { dkgResultChallengePeriodLength } =
           await randomBeacon.groupCreationParameters()
         expect(dkgResultChallengePeriodLength).to.be.equal(
-          params.dkgResultChallengePeriodLength
+          params.dkgResultChallengePeriodLength,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingDkgResultChallengePeriodLengthUpdateTime()
+          await randomBeaconGovernance.getRemainingDkgResultChallengePeriodLengthUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -1236,7 +1240,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "DkgResultChallengePeriodLengthUpdateStarted"
+            "DkgResultChallengePeriodLengthUpdateStarted",
           )
           .withArgs(11, blockTimestamp)
       })
@@ -1249,7 +1253,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeDkgResultChallengePeriodLengthUpdate()
+            .finalizeDkgResultChallengePeriodLengthUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1259,7 +1263,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultChallengePeriodLengthUpdate()
+            .finalizeDkgResultChallengePeriodLengthUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -1277,7 +1281,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultChallengePeriodLengthUpdate()
+            .finalizeDkgResultChallengePeriodLengthUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -1317,17 +1321,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "DkgResultChallengePeriodLengthUpdated"
+              "DkgResultChallengePeriodLengthUpdated",
             )
             .withArgs(11)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingDkgResultChallengePeriodLengthUpdateTime()
+            randomBeaconGovernance.getRemainingDkgResultChallengePeriodLengthUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -1337,7 +1341,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginDkgResultChallengeExtraGasUpdate(1337)
+            .beginDkgResultChallengeExtraGasUpdate(1337),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1361,13 +1365,13 @@ describe("RandomBeaconGovernance", () => {
         const { dkgResultChallengeExtraGas } =
           await randomBeacon.groupCreationParameters()
         expect(dkgResultChallengeExtraGas).to.be.equal(
-          params.dkgResultChallengeExtraGas
+          params.dkgResultChallengeExtraGas,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingDkgResultChallengeExtraGasUpdateTime()
+          await randomBeaconGovernance.getRemainingDkgResultChallengeExtraGasUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -1378,7 +1382,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "DkgResultChallengeExtraGasUpdateStarted"
+            "DkgResultChallengeExtraGasUpdateStarted",
           )
           .withArgs(1337, blockTimestamp)
       })
@@ -1391,7 +1395,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeDkgResultChallengeExtraGasUpdate()
+            .finalizeDkgResultChallengeExtraGasUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1401,7 +1405,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultChallengeExtraGasUpdate()
+            .finalizeDkgResultChallengeExtraGasUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -1419,7 +1423,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultChallengeExtraGasUpdate()
+            .finalizeDkgResultChallengeExtraGasUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -1459,17 +1463,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "DkgResultChallengeExtraGasUpdated"
+              "DkgResultChallengeExtraGasUpdated",
             )
             .withArgs(1337)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingDkgResultChallengeExtraGasUpdateTime()
+            randomBeaconGovernance.getRemainingDkgResultChallengeExtraGasUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -1479,7 +1483,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginDkgResultSubmissionTimeoutUpdate(1)
+            .beginDkgResultSubmissionTimeoutUpdate(1),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1489,7 +1493,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginDkgResultSubmissionTimeoutUpdate(0)
+            .beginDkgResultSubmissionTimeoutUpdate(0),
         ).to.be.revertedWith("DKG result submission timeout must be > 0")
       })
     })
@@ -1530,13 +1534,13 @@ describe("RandomBeaconGovernance", () => {
         const { dkgResultSubmissionTimeout } =
           await randomBeacon.groupCreationParameters()
         expect(dkgResultSubmissionTimeout).to.be.equal(
-          params.dkgResultSubmissionTimeout
+          params.dkgResultSubmissionTimeout,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingDkgResultSubmissionTimeoutUpdateTime()
+          await randomBeaconGovernance.getRemainingDkgResultSubmissionTimeoutUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -1547,7 +1551,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "DkgResultSubmissionTimeoutUpdateStarted"
+            "DkgResultSubmissionTimeoutUpdateStarted",
           )
           .withArgs(1, blockTimestamp)
       })
@@ -1560,7 +1564,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeDkgResultSubmissionTimeoutUpdate()
+            .finalizeDkgResultSubmissionTimeoutUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1570,7 +1574,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultSubmissionTimeoutUpdate()
+            .finalizeDkgResultSubmissionTimeoutUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -1588,7 +1592,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultSubmissionTimeoutUpdate()
+            .finalizeDkgResultSubmissionTimeoutUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -1629,17 +1633,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "DkgResultSubmissionTimeoutUpdated"
+              "DkgResultSubmissionTimeoutUpdated",
             )
             .withArgs(newValue)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingDkgResultSubmissionTimeoutUpdateTime()
+            randomBeaconGovernance.getRemainingDkgResultSubmissionTimeoutUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -1649,7 +1653,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginDkgSubmitterPrecedencePeriodLengthUpdate(1)
+            .beginDkgSubmitterPrecedencePeriodLengthUpdate(1),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1659,9 +1663,9 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginDkgSubmitterPrecedencePeriodLengthUpdate(0)
+            .beginDkgSubmitterPrecedencePeriodLengthUpdate(0),
         ).to.be.revertedWith(
-          "DKG submitter precedence period length must be > 0"
+          "DKG submitter precedence period length must be > 0",
         )
       })
     })
@@ -1673,13 +1677,13 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginDkgSubmitterPrecedencePeriodLengthUpdate(1)
+            .beginDkgSubmitterPrecedencePeriodLengthUpdate(1),
         ).not.to.be.reverted
 
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginDkgSubmitterPrecedencePeriodLengthUpdate(2)
+            .beginDkgSubmitterPrecedencePeriodLengthUpdate(2),
         ).not.to.be.reverted
 
         await restoreSnapshot()
@@ -1705,13 +1709,13 @@ describe("RandomBeaconGovernance", () => {
         const { dkgSubmitterPrecedencePeriodLength } =
           await randomBeacon.groupCreationParameters()
         expect(dkgSubmitterPrecedencePeriodLength).to.be.equal(
-          params.dkgSubmitterPrecedencePeriodLength
+          params.dkgSubmitterPrecedencePeriodLength,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingDkgSubmitterPrecedencePeriodLengthUpdateTime()
+          await randomBeaconGovernance.getRemainingDkgSubmitterPrecedencePeriodLengthUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -1722,7 +1726,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "DkgSubmitterPrecedencePeriodLengthUpdateStarted"
+            "DkgSubmitterPrecedencePeriodLengthUpdateStarted",
           )
           .withArgs(1, blockTimestamp)
       })
@@ -1735,7 +1739,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeDkgSubmitterPrecedencePeriodLengthUpdate()
+            .finalizeDkgSubmitterPrecedencePeriodLengthUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1745,7 +1749,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgSubmitterPrecedencePeriodLengthUpdate()
+            .finalizeDkgSubmitterPrecedencePeriodLengthUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -1763,7 +1767,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgSubmitterPrecedencePeriodLengthUpdate()
+            .finalizeDkgSubmitterPrecedencePeriodLengthUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -1803,17 +1807,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "DkgSubmitterPrecedencePeriodLengthUpdated"
+              "DkgSubmitterPrecedencePeriodLengthUpdated",
             )
             .withArgs(1)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingDkgSubmitterPrecedencePeriodLengthUpdateTime()
+            randomBeaconGovernance.getRemainingDkgSubmitterPrecedencePeriodLengthUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -1823,7 +1827,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginRelayEntrySubmissionFailureSlashingAmountUpdate(123)
+            .beginRelayEntrySubmissionFailureSlashingAmountUpdate(123),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1847,13 +1851,13 @@ describe("RandomBeaconGovernance", () => {
         const { relayEntrySubmissionFailureSlashingAmount } =
           await randomBeacon.slashingParameters()
         expect(relayEntrySubmissionFailureSlashingAmount).to.be.equal(
-          params.relayEntrySubmissionFailureSlashingAmount
+          params.relayEntrySubmissionFailureSlashingAmount,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingRelayEntrySubmissionFailureSlashingAmountUpdateTime()
+          await randomBeaconGovernance.getRemainingRelayEntrySubmissionFailureSlashingAmountUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -1864,7 +1868,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "RelayEntrySubmissionFailureSlashingAmountUpdateStarted"
+            "RelayEntrySubmissionFailureSlashingAmountUpdateStarted",
           )
           .withArgs(123, blockTimestamp)
       })
@@ -1877,7 +1881,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeRelayEntrySubmissionFailureSlashingAmountUpdate()
+            .finalizeRelayEntrySubmissionFailureSlashingAmountUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1887,7 +1891,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntrySubmissionFailureSlashingAmountUpdate()
+            .finalizeRelayEntrySubmissionFailureSlashingAmountUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -1905,7 +1909,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntrySubmissionFailureSlashingAmountUpdate()
+            .finalizeRelayEntrySubmissionFailureSlashingAmountUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -1945,17 +1949,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "RelayEntrySubmissionFailureSlashingAmountUpdated"
+              "RelayEntrySubmissionFailureSlashingAmountUpdated",
             )
             .withArgs(123)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingRelayEntrySubmissionFailureSlashingAmountUpdateTime()
+            randomBeaconGovernance.getRemainingRelayEntrySubmissionFailureSlashingAmountUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -1965,7 +1969,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginUnauthorizedSigningSlashingAmountUpdate(123)
+            .beginUnauthorizedSigningSlashingAmountUpdate(123),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -1989,13 +1993,13 @@ describe("RandomBeaconGovernance", () => {
         const { unauthorizedSigningSlashingAmount } =
           await randomBeacon.slashingParameters()
         expect(unauthorizedSigningSlashingAmount).to.be.equal(
-          params.unauthorizedSigningSlashingAmount
+          params.unauthorizedSigningSlashingAmount,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingUnauthorizedSigningSlashingAmountUpdateTime()
+          await randomBeaconGovernance.getRemainingUnauthorizedSigningSlashingAmountUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -2006,7 +2010,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "UnauthorizedSigningSlashingAmountUpdateStarted"
+            "UnauthorizedSigningSlashingAmountUpdateStarted",
           )
           .withArgs(123, blockTimestamp)
       })
@@ -2019,7 +2023,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeUnauthorizedSigningSlashingAmountUpdate()
+            .finalizeUnauthorizedSigningSlashingAmountUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2029,7 +2033,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeUnauthorizedSigningSlashingAmountUpdate()
+            .finalizeUnauthorizedSigningSlashingAmountUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -2047,7 +2051,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeUnauthorizedSigningSlashingAmountUpdate()
+            .finalizeUnauthorizedSigningSlashingAmountUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -2087,17 +2091,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "UnauthorizedSigningSlashingAmountUpdated"
+              "UnauthorizedSigningSlashingAmountUpdated",
             )
             .withArgs(123)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingUnauthorizedSigningSlashingAmountUpdateTime()
+            randomBeaconGovernance.getRemainingUnauthorizedSigningSlashingAmountUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -2107,7 +2111,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginMaliciousDkgResultSlashingAmountUpdate(123)
+            .beginMaliciousDkgResultSlashingAmountUpdate(123),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2131,13 +2135,13 @@ describe("RandomBeaconGovernance", () => {
         const { maliciousDkgResultSlashingAmount } =
           await randomBeacon.slashingParameters()
         expect(maliciousDkgResultSlashingAmount).to.be.equal(
-          params.maliciousDkgResultSlashingAmount
+          params.maliciousDkgResultSlashingAmount,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingMaliciousDkgResultSlashingAmountUpdateTime()
+          await randomBeaconGovernance.getRemainingMaliciousDkgResultSlashingAmountUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -2148,7 +2152,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "MaliciousDkgResultSlashingAmountUpdateStarted"
+            "MaliciousDkgResultSlashingAmountUpdateStarted",
           )
           .withArgs(123, blockTimestamp)
       })
@@ -2161,7 +2165,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeMaliciousDkgResultSlashingAmountUpdate()
+            .finalizeMaliciousDkgResultSlashingAmountUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2171,7 +2175,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeMaliciousDkgResultSlashingAmountUpdate()
+            .finalizeMaliciousDkgResultSlashingAmountUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -2189,7 +2193,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeMaliciousDkgResultSlashingAmountUpdate()
+            .finalizeMaliciousDkgResultSlashingAmountUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -2229,17 +2233,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "MaliciousDkgResultSlashingAmountUpdated"
+              "MaliciousDkgResultSlashingAmountUpdated",
             )
             .withArgs(123)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingMaliciousDkgResultSlashingAmountUpdateTime()
+            randomBeaconGovernance.getRemainingMaliciousDkgResultSlashingAmountUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -2249,7 +2253,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginSortitionPoolRewardsBanDurationUpdate(123)
+            .beginSortitionPoolRewardsBanDurationUpdate(123),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2273,13 +2277,13 @@ describe("RandomBeaconGovernance", () => {
         const { sortitionPoolRewardsBanDuration } =
           await randomBeacon.rewardParameters()
         expect(sortitionPoolRewardsBanDuration).to.be.equal(
-          params.sortitionPoolRewardsBanDuration
+          params.sortitionPoolRewardsBanDuration,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingSortitionPoolRewardsBanDurationUpdateTime()
+          await randomBeaconGovernance.getRemainingSortitionPoolRewardsBanDurationUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -2290,7 +2294,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "SortitionPoolRewardsBanDurationUpdateStarted"
+            "SortitionPoolRewardsBanDurationUpdateStarted",
           )
           .withArgs(123, blockTimestamp)
       })
@@ -2303,7 +2307,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeSortitionPoolRewardsBanDurationUpdate()
+            .finalizeSortitionPoolRewardsBanDurationUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2313,7 +2317,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeSortitionPoolRewardsBanDurationUpdate()
+            .finalizeSortitionPoolRewardsBanDurationUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -2331,7 +2335,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeSortitionPoolRewardsBanDurationUpdate()
+            .finalizeSortitionPoolRewardsBanDurationUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -2371,17 +2375,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "SortitionPoolRewardsBanDurationUpdated"
+              "SortitionPoolRewardsBanDurationUpdated",
             )
             .withArgs(123)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingSortitionPoolRewardsBanDurationUpdateTime()
+            randomBeaconGovernance.getRemainingSortitionPoolRewardsBanDurationUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -2391,7 +2395,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginUnauthorizedSigningNotificationRewardMultiplierUpdate(100)
+            .beginUnauthorizedSigningNotificationRewardMultiplierUpdate(100),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2401,7 +2405,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginUnauthorizedSigningNotificationRewardMultiplierUpdate(101)
+            .beginUnauthorizedSigningNotificationRewardMultiplierUpdate(101),
         ).to.be.revertedWith("Maximum value is 100")
       })
     })
@@ -2425,13 +2429,13 @@ describe("RandomBeaconGovernance", () => {
         const { unauthorizedSigningNotificationRewardMultiplier } =
           await randomBeacon.rewardParameters()
         expect(unauthorizedSigningNotificationRewardMultiplier).to.be.equal(
-          params.unauthorizedSigningNotificationRewardMultiplier
+          params.unauthorizedSigningNotificationRewardMultiplier,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingUnauthorizedSigningNotificationRewardMultiplierUpdateTime()
+          await randomBeaconGovernance.getRemainingUnauthorizedSigningNotificationRewardMultiplierUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -2442,7 +2446,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "UnauthorizedSigningNotificationRewardMultiplierUpdateStarted"
+            "UnauthorizedSigningNotificationRewardMultiplierUpdateStarted",
           )
           .withArgs(100, blockTimestamp)
       })
@@ -2455,7 +2459,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeUnauthorizedSigningNotificationRewardMultiplierUpdate()
+            .finalizeUnauthorizedSigningNotificationRewardMultiplierUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2465,7 +2469,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeUnauthorizedSigningNotificationRewardMultiplierUpdate()
+            .finalizeUnauthorizedSigningNotificationRewardMultiplierUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -2483,7 +2487,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeUnauthorizedSigningNotificationRewardMultiplierUpdate()
+            .finalizeUnauthorizedSigningNotificationRewardMultiplierUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -2517,7 +2521,7 @@ describe("RandomBeaconGovernance", () => {
           const { unauthorizedSigningNotificationRewardMultiplier } =
             await randomBeacon.rewardParameters()
           expect(unauthorizedSigningNotificationRewardMultiplier).to.be.equal(
-            100
+            100,
           )
         })
 
@@ -2525,17 +2529,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "UnauthorizedSigningNotificationRewardMultiplierUpdated"
+              "UnauthorizedSigningNotificationRewardMultiplierUpdated",
             )
             .withArgs(100)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingUnauthorizedSigningNotificationRewardMultiplierUpdateTime()
+            randomBeaconGovernance.getRemainingUnauthorizedSigningNotificationRewardMultiplierUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -2545,7 +2549,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginRelayEntryTimeoutNotificationRewardMultiplierUpdate(100)
+            .beginRelayEntryTimeoutNotificationRewardMultiplierUpdate(100),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2555,7 +2559,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginRelayEntryTimeoutNotificationRewardMultiplierUpdate(101)
+            .beginRelayEntryTimeoutNotificationRewardMultiplierUpdate(101),
         ).to.be.revertedWith("Maximum value is 100")
       })
     })
@@ -2579,13 +2583,13 @@ describe("RandomBeaconGovernance", () => {
         const { relayEntryTimeoutNotificationRewardMultiplier } =
           await randomBeacon.rewardParameters()
         expect(relayEntryTimeoutNotificationRewardMultiplier).to.be.equal(
-          params.relayEntryTimeoutNotificationRewardMultiplier
+          params.relayEntryTimeoutNotificationRewardMultiplier,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingRelayEntryTimeoutNotificationRewardMultiplierUpdateTime()
+          await randomBeaconGovernance.getRemainingRelayEntryTimeoutNotificationRewardMultiplierUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -2596,7 +2600,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "RelayEntryTimeoutNotificationRewardMultiplierUpdateStarted"
+            "RelayEntryTimeoutNotificationRewardMultiplierUpdateStarted",
           )
           .withArgs(100, blockTimestamp)
       })
@@ -2609,7 +2613,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeRelayEntryTimeoutNotificationRewardMultiplierUpdate()
+            .finalizeRelayEntryTimeoutNotificationRewardMultiplierUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2619,7 +2623,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntryTimeoutNotificationRewardMultiplierUpdate()
+            .finalizeRelayEntryTimeoutNotificationRewardMultiplierUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -2637,7 +2641,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntryTimeoutNotificationRewardMultiplierUpdate()
+            .finalizeRelayEntryTimeoutNotificationRewardMultiplierUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -2678,17 +2682,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "RelayEntryTimeoutNotificationRewardMultiplierUpdated"
+              "RelayEntryTimeoutNotificationRewardMultiplierUpdated",
             )
             .withArgs(100)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingRelayEntryTimeoutNotificationRewardMultiplierUpdateTime()
+            randomBeaconGovernance.getRemainingRelayEntryTimeoutNotificationRewardMultiplierUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -2698,7 +2702,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginMinimumAuthorizationUpdate(123)
+            .beginMinimumAuthorizationUpdate(123),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2720,13 +2724,13 @@ describe("RandomBeaconGovernance", () => {
 
       it("should not update the minimum authorization amount", async () => {
         expect(await randomBeacon.minimumAuthorization()).to.be.equal(
-          params.minimumAuthorization
+          params.minimumAuthorization,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingMimimumAuthorizationUpdateTime()
+          await randomBeaconGovernance.getRemainingMimimumAuthorizationUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -2747,7 +2751,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeMinimumAuthorizationUpdate()
+            .finalizeMinimumAuthorizationUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2757,7 +2761,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeMinimumAuthorizationUpdate()
+            .finalizeMinimumAuthorizationUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -2775,7 +2779,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeMinimumAuthorizationUpdate()
+            .finalizeMinimumAuthorizationUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -2817,10 +2821,10 @@ describe("RandomBeaconGovernance", () => {
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingMimimumAuthorizationUpdateTime()
+            randomBeaconGovernance.getRemainingMimimumAuthorizationUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -2830,7 +2834,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginAuthorizationDecreaseDelayUpdate(123)
+            .beginAuthorizationDecreaseDelayUpdate(123),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2854,13 +2858,13 @@ describe("RandomBeaconGovernance", () => {
         const { authorizationDecreaseDelay } =
           await randomBeacon.authorizationParameters()
         expect(authorizationDecreaseDelay).to.be.equal(
-          params.authorizationDecreaseDelay
+          params.authorizationDecreaseDelay,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingAuthorizationDecreaseDelayUpdateTime()
+          await randomBeaconGovernance.getRemainingAuthorizationDecreaseDelayUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -2871,7 +2875,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "AuthorizationDecreaseDelayUpdateStarted"
+            "AuthorizationDecreaseDelayUpdateStarted",
           )
           .withArgs(123, blockTimestamp)
       })
@@ -2884,7 +2888,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeAuthorizationDecreaseDelayUpdate()
+            .finalizeAuthorizationDecreaseDelayUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2894,7 +2898,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeAuthorizationDecreaseDelayUpdate()
+            .finalizeAuthorizationDecreaseDelayUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -2910,7 +2914,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeAuthorizationDecreaseDelayUpdate()
+            .finalizeAuthorizationDecreaseDelayUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -2950,17 +2954,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "AuthorizationDecreaseDelayUpdated"
+              "AuthorizationDecreaseDelayUpdated",
             )
             .withArgs(123)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingAuthorizationDecreaseDelayUpdateTime()
+            randomBeaconGovernance.getRemainingAuthorizationDecreaseDelayUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -2970,7 +2974,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginAuthorizationDecreaseChangePeriodUpdate(123)
+            .beginAuthorizationDecreaseChangePeriodUpdate(123),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -2994,13 +2998,13 @@ describe("RandomBeaconGovernance", () => {
         const { authorizationDecreaseChangePeriod } =
           await randomBeacon.authorizationParameters()
         expect(authorizationDecreaseChangePeriod).to.be.equal(
-          params.authorizationDecreaseChangePeriod
+          params.authorizationDecreaseChangePeriod,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingAuthorizationDecreaseChangePeriodUpdateTime()
+          await randomBeaconGovernance.getRemainingAuthorizationDecreaseChangePeriodUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -3011,7 +3015,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "AuthorizationDecreaseChangePeriodUpdateStarted"
+            "AuthorizationDecreaseChangePeriodUpdateStarted",
           )
           .withArgs(123, blockTimestamp)
       })
@@ -3024,7 +3028,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeAuthorizationDecreaseChangePeriodUpdate()
+            .finalizeAuthorizationDecreaseChangePeriodUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3034,7 +3038,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeAuthorizationDecreaseChangePeriodUpdate()
+            .finalizeAuthorizationDecreaseChangePeriodUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -3050,7 +3054,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeAuthorizationDecreaseChangePeriodUpdate()
+            .finalizeAuthorizationDecreaseChangePeriodUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -3090,17 +3094,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "AuthorizationDecreaseChangePeriodUpdated"
+              "AuthorizationDecreaseChangePeriodUpdated",
             )
             .withArgs(123)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingAuthorizationDecreaseChangePeriodUpdateTime()
+            randomBeaconGovernance.getRemainingAuthorizationDecreaseChangePeriodUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -3110,13 +3114,13 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .setRequesterAuthorization(thirdPartyContract.address, true)
+            .setRequesterAuthorization(thirdPartyContract.address, true),
         ).to.be.revertedWith("Ownable: caller is not the owner")
 
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .setRequesterAuthorization(thirdPartyContract.address, false)
+            .setRequesterAuthorization(thirdPartyContract.address, false),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3124,7 +3128,7 @@ describe("RandomBeaconGovernance", () => {
     context("when the caller is the owner", () => {
       it("should update requester authorization", async () => {
         let isAuthorized = await randomBeacon.authorizedRequesters(
-          thirdPartyContract.address
+          thirdPartyContract.address,
         )
         await expect(isAuthorized).to.be.false
 
@@ -3133,7 +3137,7 @@ describe("RandomBeaconGovernance", () => {
           .setRequesterAuthorization(thirdPartyContract.address, true)
 
         isAuthorized = await randomBeacon.authorizedRequesters(
-          thirdPartyContract.address
+          thirdPartyContract.address,
         )
         await expect(isAuthorized).to.be.true
 
@@ -3142,7 +3146,7 @@ describe("RandomBeaconGovernance", () => {
           .setRequesterAuthorization(thirdPartyContract.address, false)
 
         isAuthorized = await randomBeacon.authorizedRequesters(
-          thirdPartyContract.address
+          thirdPartyContract.address,
         )
         await expect(isAuthorized).to.be.false
       })
@@ -3155,7 +3159,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginDkgMaliciousResultNotificationRewardMultiplierUpdate(100)
+            .beginDkgMaliciousResultNotificationRewardMultiplierUpdate(100),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3165,7 +3169,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .beginDkgMaliciousResultNotificationRewardMultiplierUpdate(101)
+            .beginDkgMaliciousResultNotificationRewardMultiplierUpdate(101),
         ).to.be.revertedWith("Maximum value is 100")
       })
     })
@@ -3190,13 +3194,13 @@ describe("RandomBeaconGovernance", () => {
           await randomBeacon.rewardParameters()
 
         expect(dkgMaliciousResultNotificationRewardMultiplier).to.be.equal(
-          params.dkgMaliciousResultNotificationRewardMultiplier
+          params.dkgMaliciousResultNotificationRewardMultiplier,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingDkgMaliciousResultNotificationRewardMultiplierUpdateTime()
+          await randomBeaconGovernance.getRemainingDkgMaliciousResultNotificationRewardMultiplierUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -3207,7 +3211,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "DkgMaliciousResultNotificationRewardMultiplierUpdateStarted"
+            "DkgMaliciousResultNotificationRewardMultiplierUpdateStarted",
           )
           .withArgs(100, blockTimestamp)
       })
@@ -3220,7 +3224,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeDkgMaliciousResultNotificationRewardMultiplierUpdate()
+            .finalizeDkgMaliciousResultNotificationRewardMultiplierUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3230,7 +3234,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgMaliciousResultNotificationRewardMultiplierUpdate()
+            .finalizeDkgMaliciousResultNotificationRewardMultiplierUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -3248,7 +3252,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgMaliciousResultNotificationRewardMultiplierUpdate()
+            .finalizeDkgMaliciousResultNotificationRewardMultiplierUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -3282,7 +3286,7 @@ describe("RandomBeaconGovernance", () => {
           const { dkgMaliciousResultNotificationRewardMultiplier } =
             await randomBeacon.rewardParameters()
           expect(dkgMaliciousResultNotificationRewardMultiplier).to.be.equal(
-            100
+            100,
           )
         })
 
@@ -3290,17 +3294,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "DkgMaliciousResultNotificationRewardMultiplierUpdated"
+              "DkgMaliciousResultNotificationRewardMultiplierUpdated",
             )
             .withArgs(100)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingDkgMaliciousResultNotificationRewardMultiplierUpdateTime()
+            randomBeaconGovernance.getRemainingDkgMaliciousResultNotificationRewardMultiplierUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -3310,7 +3314,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginDkgResultSubmissionGasUpdate(100)
+            .beginDkgResultSubmissionGasUpdate(100),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3333,13 +3337,13 @@ describe("RandomBeaconGovernance", () => {
       it("should not update DKG result submission gas", async () => {
         const { dkgResultSubmissionGas } = await randomBeacon.gasParameters()
         expect(dkgResultSubmissionGas).to.be.equal(
-          params.dkgResultSubmissionGas
+          params.dkgResultSubmissionGas,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingDkgResultSubmissionGasUpdateTime()
+          await randomBeaconGovernance.getRemainingDkgResultSubmissionGasUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -3350,7 +3354,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "DkgResultSubmissionGasUpdateStarted"
+            "DkgResultSubmissionGasUpdateStarted",
           )
           .withArgs(1337, blockTimestamp)
       })
@@ -3363,7 +3367,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeDkgResultSubmissionGasUpdate()
+            .finalizeDkgResultSubmissionGasUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3373,7 +3377,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultSubmissionGasUpdate()
+            .finalizeDkgResultSubmissionGasUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -3391,7 +3395,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultSubmissionGasUpdate()
+            .finalizeDkgResultSubmissionGasUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -3434,10 +3438,10 @@ describe("RandomBeaconGovernance", () => {
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingDkgResultSubmissionGasUpdateTime()
+            randomBeaconGovernance.getRemainingDkgResultSubmissionGasUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -3447,7 +3451,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginDkgResultApprovalGasOffsetUpdate(1337)
+            .beginDkgResultApprovalGasOffsetUpdate(1337),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3471,13 +3475,13 @@ describe("RandomBeaconGovernance", () => {
         const { dkgResultApprovalGasOffset } =
           await randomBeacon.gasParameters()
         expect(dkgResultApprovalGasOffset).to.be.equal(
-          params.dkgResultApprovalGasOffset
+          params.dkgResultApprovalGasOffset,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingDkgResultApprovalGasOffsetUpdateTime()
+          await randomBeaconGovernance.getRemainingDkgResultApprovalGasOffsetUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -3488,7 +3492,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "DkgResultApprovalGasOffsetUpdateStarted"
+            "DkgResultApprovalGasOffsetUpdateStarted",
           )
           .withArgs(1337, blockTimestamp)
       })
@@ -3501,7 +3505,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeDkgResultApprovalGasOffsetUpdate()
+            .finalizeDkgResultApprovalGasOffsetUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3511,7 +3515,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultApprovalGasOffsetUpdate()
+            .finalizeDkgResultApprovalGasOffsetUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -3529,7 +3533,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeDkgResultApprovalGasOffsetUpdate()
+            .finalizeDkgResultApprovalGasOffsetUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -3569,17 +3573,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "DkgResultApprovalGasOffsetUpdated"
+              "DkgResultApprovalGasOffsetUpdated",
             )
             .withArgs(7331)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingDkgResultApprovalGasOffsetUpdateTime()
+            randomBeaconGovernance.getRemainingDkgResultApprovalGasOffsetUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -3589,7 +3593,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginNotifyOperatorInactivityGasOffsetUpdate(100)
+            .beginNotifyOperatorInactivityGasOffsetUpdate(100),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3613,13 +3617,13 @@ describe("RandomBeaconGovernance", () => {
         const { notifyOperatorInactivityGasOffset } =
           await randomBeacon.gasParameters()
         expect(notifyOperatorInactivityGasOffset).to.be.equal(
-          params.notifyOperatorInactivityGasOffset
+          params.notifyOperatorInactivityGasOffset,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingNotifyOperatorInactivityGasOffsetUpdateTime()
+          await randomBeaconGovernance.getRemainingNotifyOperatorInactivityGasOffsetUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -3630,7 +3634,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "NotifyOperatorInactivityGasOffsetUpdateStarted"
+            "NotifyOperatorInactivityGasOffsetUpdateStarted",
           )
           .withArgs(100, blockTimestamp)
       })
@@ -3643,7 +3647,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeNotifyOperatorInactivityGasOffsetUpdate()
+            .finalizeNotifyOperatorInactivityGasOffsetUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3653,7 +3657,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeNotifyOperatorInactivityGasOffsetUpdate()
+            .finalizeNotifyOperatorInactivityGasOffsetUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -3671,7 +3675,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeNotifyOperatorInactivityGasOffsetUpdate()
+            .finalizeNotifyOperatorInactivityGasOffsetUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -3711,17 +3715,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "NotifyOperatorInactivityGasOffsetUpdated"
+              "NotifyOperatorInactivityGasOffsetUpdated",
             )
             .withArgs(100)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingNotifyOperatorInactivityGasOffsetUpdateTime()
+            randomBeaconGovernance.getRemainingNotifyOperatorInactivityGasOffsetUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -3731,7 +3735,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .beginRelayEntrySubmissionGasOffsetUpdate(997)
+            .beginRelayEntrySubmissionGasOffsetUpdate(997),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3755,13 +3759,13 @@ describe("RandomBeaconGovernance", () => {
         const { relayEntrySubmissionGasOffset } =
           await randomBeacon.gasParameters()
         expect(relayEntrySubmissionGasOffset).to.be.equal(
-          params.relayEntrySubmissionGasOffset
+          params.relayEntrySubmissionGasOffset,
         )
       })
 
       it("should start the governance delay timer", async () => {
         expect(
-          await randomBeaconGovernance.getRemainingRelayEntrySubmissionGasOffsetUpdateTime()
+          await randomBeaconGovernance.getRemainingRelayEntrySubmissionGasOffsetUpdateTime(),
         ).to.be.equal(governanceDelay)
       })
 
@@ -3772,7 +3776,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
-            "RelayEntrySubmissionGasOffsetUpdateStarted"
+            "RelayEntrySubmissionGasOffsetUpdateStarted",
           )
           .withArgs(997, blockTimestamp)
       })
@@ -3785,7 +3789,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .finalizeRelayEntrySubmissionGasOffsetUpdate()
+            .finalizeRelayEntrySubmissionGasOffsetUpdate(),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -3795,7 +3799,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntrySubmissionGasOffsetUpdate()
+            .finalizeRelayEntrySubmissionGasOffsetUpdate(),
         ).to.be.revertedWith("Change not initiated")
       })
     })
@@ -3813,7 +3817,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(governance)
-            .finalizeRelayEntrySubmissionGasOffsetUpdate()
+            .finalizeRelayEntrySubmissionGasOffsetUpdate(),
         ).to.be.revertedWith("Governance delay has not elapsed")
 
         await restoreSnapshot()
@@ -3853,17 +3857,17 @@ describe("RandomBeaconGovernance", () => {
           await expect(tx)
             .to.emit(
               randomBeaconGovernance,
-              "RelayEntrySubmissionGasOffsetUpdated"
+              "RelayEntrySubmissionGasOffsetUpdated",
             )
             .withArgs(997)
         })
 
         it("should reset the governance delay timer", async () => {
           await expect(
-            randomBeaconGovernance.getRemainingRelayEntrySubmissionGasOffsetUpdateTime()
+            randomBeaconGovernance.getRemainingRelayEntrySubmissionGasOffsetUpdateTime(),
           ).to.be.revertedWith("Change not initiated")
         })
-      }
+      },
     )
   })
 
@@ -3873,7 +3877,7 @@ describe("RandomBeaconGovernance", () => {
         await expect(
           randomBeaconGovernance
             .connect(thirdParty)
-            .withdrawIneligibleRewards(thirdParty.address)
+            .withdrawIneligibleRewards(thirdParty.address),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })

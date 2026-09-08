@@ -101,11 +101,9 @@ contract BeaconDkgValidator {
     ///         ranges, and order of arrays.
     /// @return isValid true if the result is valid, false otherwise
     /// @return errorMsg validation error message; empty for a valid result
-    function validateFields(DKG.Result calldata result)
-        public
-        pure
-        returns (bool isValid, string memory errorMsg)
-    {
+    function validateFields(
+        DKG.Result calldata result
+    ) public pure returns (bool isValid, string memory errorMsg) {
         // Group public key needs to be 128 bytes long.
         if (result.groupPubKey.length != 128) {
             return (false, "Malformed group public key");
@@ -123,7 +121,7 @@ contract BeaconDkgValidator {
             if (
                 misbehavedMembersIndices[0] < 1 ||
                 misbehavedMembersIndices[misbehavedMembersIndices.length - 1] >
-                groupSize
+                    groupSize
             ) {
                 return (false, "Corrupted misbehaved members indices");
             }
@@ -181,11 +179,10 @@ contract BeaconDkgValidator {
     ///         result against group members selected by the sortition pool.
     /// @param seed seed used to start the DKG and select group members
     /// @return true if group members matches; false otherwise
-    function validateGroupMembers(DKG.Result calldata result, uint256 seed)
-        public
-        view
-        returns (bool)
-    {
+    function validateGroupMembers(
+        DKG.Result calldata result,
+        uint256 seed
+    ) public view returns (bool) {
         uint32[] calldata resultMembers = result.members;
         uint32[] memory actualGroupMembers = sortitionPool.selectGroup(
             groupSize,
@@ -209,11 +206,10 @@ contract BeaconDkgValidator {
     ///         together with `validateGroupMembers`.
     /// @param startBlock DKG start block
     /// @return true if group members matches; false otherwise
-    function validateSignatures(DKG.Result calldata result, uint256 startBlock)
-        public
-        view
-        returns (bool)
-    {
+    function validateSignatures(
+        DKG.Result calldata result,
+        uint256 startBlock
+    ) public view returns (bool) {
         bytes32 hash = keccak256(
             abi.encode(
                 block.chainid,
@@ -258,11 +254,9 @@ contract BeaconDkgValidator {
     /// @param result DKG result
     /// @return true if result's group members hash matches with the one that is
     ///         challenged.
-    function validateMembersHash(DKG.Result calldata result)
-        public
-        pure
-        returns (bool)
-    {
+    function validateMembersHash(
+        DKG.Result calldata result
+    ) public pure returns (bool) {
         if (result.misbehavedMembersIndices.length > 0) {
             // members that generated a group signing key
             uint32[] memory groupMembers = new uint32[](
