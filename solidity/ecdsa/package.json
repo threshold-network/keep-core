@@ -53,6 +53,7 @@
     "@types/node": "^24.13.3",
     "chai": "^4.3.4",
     "chai-as-promised": "^7.1.1",
+    "commander": "^14.0.3",
     "eslint": "^10.10.0",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import-x": "^4.17.1",

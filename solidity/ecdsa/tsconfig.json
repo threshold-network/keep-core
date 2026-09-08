@@ -1,6 +1,13 @@
 {
   "files": ["./hardhat.config.ts"],
-  "include": ["./deploy", "./tasks", "./test", "./typechain", "./types"],
+  "include": [
+    "./deploy",
+    "./tasks",
+    "./test",
+    "./typechain",
+    "./types",
+    "./scripts"
+  ],
   "compilerOptions": {
     "strict": true,
     // ts-node also needs an explicit target; its fallback is ES5.
