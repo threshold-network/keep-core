@@ -39,8 +39,8 @@ second multi-agent-review pass (`agent-docs/reviews/codex-signer-store-identity-
   analysis this implies (the chain is CT-log-like — tamper-evident against a
   previously-observed head, not a tamper-resistance guarantee absent an
   external anchor).
-- **Test coverage:** `mid_journal_chain_hash_tamper`,
-  `wrong_domain_separator`, `retired_v2_journals_are_recognized_by_magic_alone`,
+- **Test coverage:** `mid_journal_chain_hash_tamper_is_detected_on_reopen`,
+  `wrong_domain_separator_recomputation_is_rejected`, `retired_v2_journals_are_recognized_by_magic_alone`,
   `rotated_segment_chain_hash_is_segment_scoped_to_header_commitment`, and a
   frozen cross-language vector (`record_chain_hash_matches_frozen_go_v3_vector`)
   in `store.rs`.
@@ -64,20 +64,33 @@ second multi-agent-review pass (`agent-docs/reviews/codex-signer-store-identity-
   zero-signature in-band marker `parse_state_witness_segment_header`
   recognizes and treats as the un-signed local-compaction case, distinct from
   an externally-signed checkpoint), atomically renames the current
-  `.state-witness` to `.state-witness.previous` (retained indefinitely, never
-  auto-deleted — see the recovery runbook below), and creates a fresh
-  `.state-witness` seeded from the compaction record so the chain stays
-  provable across the compaction boundary. Crash recovery
+  `.state-witness` to `.state-witness.previous` (immediately unlinked after
+  the rename completes — **no forensic recovery of the pre-compaction journal
+  is possible without an external operator-taken directory snapshot**), and
+  creates a fresh `.state-witness` seeded from the compaction record so the
+  chain stays provable across the compaction boundary. Crash recovery
   (`recover_state_witness_compaction`) follows the same create-then-verify-then-rename
-  pattern as `rotate_state_witness_segment_inner` and runs unconditionally at
-  store-open, mirroring how rotation recovery is wired in.
-  The old ceiling error message, which pointed operators at a checkpoint ABI
-  with zero FFI exports in this build, is gone — local compaction now
-  succeeds instead of failing in the unanchored case; the anchored case is
-  unaffected and continues to use the signed-checkpoint rotation path.
+  pattern as `rotate_state_witness_segment_inner`. It is invoked at store-open
+  specifically when `anchor_configuration.is_none() && mode == Ordinary`
+  (unanchored signer opening in the ordinary acquire mode) — not
+  unconditionally across every acquire mode. Before the parallel P0-1 fix in
+  this same file, the underlying failure mode was broader than that guard
+  implies: an unresolved compaction crash artifact caused
+  `recover_state_witness_rotation` to hard-error universally across ALL
+  acquire modes for an unanchored store, not scoped to any particular
+  inspection/transition mode.
+  **Retention of `.state-witness.previous` was considered and rejected in
+  code**; there is no rollback procedure available after compaction
+  completes.
+  The old ceiling error message, which pointed operators at a checkpoint ABI with zero FFI
+  exports in this build, is gone — local compaction now succeeds instead of
+  failing in the unanchored case; the anchored case is unaffected and
+  continues to use the signed-checkpoint rotation path.
 - **Operator runbook:** `docs/signer-store-compaction-runbook.md` (new) —
-  covers when local compaction activates, how to inspect/verify a retained
-  `.state-witness.previous`, and the recovery procedure.
+  covers when local compaction activates and explicitly states that
+  `.state-witness.previous` is immediately and irreversibly removed; operators
+  needing forensic recovery capability must snapshot the directory before
+  triggering compaction.
 
 ## P1 — High
 

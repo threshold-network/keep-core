@@ -1,7 +1,7 @@
 # Signer API Contract Decision Brief
 
 Date: February 23, 2026
-Status: Partially adopted — see corrected FFI-surface description above
+Status: Partially adopted — see corrected FFI-surface description below
 
 Purpose: capture the API-contract direction before further implementation work.
 
@@ -69,9 +69,11 @@ uniformly key on `session_id`:
     `(session_id, attempt_id, member_identifier)` per the frozen Phase 7
     interactive-session spec.
 - Wire-contract version: the `frost_tbtc_abi_version` export reports
-  `abi_major = 3, abi_minor = 0` (per `TBTC_SIGNER_ABI_MAJOR` /
-  `TBTC_SIGNER_ABI_MINOR` in `lib.rs`). Earlier references in this crate's
-  docs to an `ABI 4.0` value for the same major are stale.
+  `abi_major = 5, abi_minor = 0` (per `TBTC_SIGNER_ABI_MAJOR` /
+  `TBTC_SIGNER_ABI_MINOR` in `lib.rs`). Earlier references to ABI 4.x are
+  stale; this build reports ABI major 5 (bumped from 4 to reflect this
+  PR's FFI symbol removals in addition to the RefreshShares terminal-error
+  semantics that originally justified major 4).
 
 The "already exposes RunDKG / StartSignRound / FinalizeSignRound" claim in
 the earlier draft of this brief is therefore an oversimplification: the

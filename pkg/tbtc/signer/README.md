@@ -29,10 +29,12 @@ in `docs/rust-rewrite-bootstrap.md`.
     `NewSigningPackageRequest { message_hex, commitments }` with no
     `session_id`.
   The wire-contract version reported by `frost_tbtc_abi_version` is
-  `abi_major = 3, abi_minor = 0` (see `TBTC_SIGNER_ABI_MAJOR` /
+  `abi_major = 5, abi_minor = 0` (see `TBTC_SIGNER_ABI_MAJOR` /
   `TBTC_SIGNER_ABI_MINOR` in `pkg/tbtc/signer/src/lib.rs`). Earlier
-  references in this crate's docs to an `ABI 4.0` value for the same
-  major are stale and should be read as ABI 3.
+  references to ABI 4.x are stale; this build reports ABI major 5
+  (bumped from 4 to reflect this PR's FFI symbol removals in addition to
+  the RefreshShares terminal-error semantics that originally justified
+  major 4).
 - Exposes fine-grained interactive (member-custodied nonce) signing via:
   - `InteractiveSessionOpen`
   - `InteractiveRound1`

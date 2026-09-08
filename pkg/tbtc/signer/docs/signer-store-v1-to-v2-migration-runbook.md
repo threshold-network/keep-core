@@ -1,5 +1,11 @@
 # Sign-Store v1 to v2 Migration Runbook
 
+> **NOTE: This document describes the historical v1-to-v2 migration for a prior
+> release. It does NOT apply to the current build, which is on v3.** The
+> current build writes `TBTCWITNESSv3` journals and fails closed on both v1
+> and v2 magic. For migration guidance applicable to the current build, see
+> `signer-store-v2-to-v3-migration-runbook.md`.
+
 ## Audience
 
 Operators handling a signer node that fails to start because its durable store
@@ -79,17 +85,13 @@ line.
    The v1 journal is preserved byte-for-byte on disk under the new name and
    remains available for forensic analysis or rollback.
 
-3. **Restart the signer with the new ABI.** The new build will find the
-   `.state-witness` slot empty and regenerate the journal from scratch at
+3. **Restart the signer with the new ABI.** The new build will open the
+   fresh `.state-witness` and regenerate the journal from scratch at
    generation 1, accepting the v1→v2 break as a one-time migration event.
    `.store-id` and any state image are preserved; only the anti-rollback
-   chain is reset.
-
-4. **Verify the migration.** After restart, confirm the new journal's genesis
-   fingerprint matches the v2 fingerprint derived from the existing `.store-id`
-   bytes. The signer logs the store fingerprint on startup; it MUST equal the
-   v2 fingerprint for the existing `.store-id`. If the printed fingerprint
-   does not match, halt and roll back from backup — do NOT continue signing.
+   chain is reset. Confirm the new journal's magic-byte header reads
+   `TBTCWITNESSv2\0\0\0` (see *Verification* below) as evidence the
+   migration completed.
 
 ## Verification
 
@@ -102,11 +104,8 @@ After the signer restarts, confirm the migration succeeded:
       head -c 16 .state-witness | od -An -tx1
       # 54 42 54 43 57 49 54 4e 45 53 53 76 32 00 00 00
 
-- The startup log includes the v2 store fingerprint derived from the existing
-  `.store-id`. The fingerprint MUST match the v2 transcript computation over
-  the unchanged `.store-id` bytes; if the operator has tooling to recompute
-  the v2 fingerprint, compare it directly. Any mismatch means the migration
-  is incomplete.
+- The `.store-id` file is byte-for-byte unchanged from before migration
+  (compare against a pre-migration snapshot if one was taken).
 - The first committed record is at generation 1 with a `PREPARE` and `COMMIT`
   pair, not a continuation of the v1 chain.
 
@@ -135,19 +134,13 @@ from the top of this runbook.
 
 ## Network coordination
 
-The anti-rollback chain is local to each signer; the on-chain threshold set
-does not enforce a coordinated migration. However:
-
-- **Every signer in a threshold set MUST complete this migration before any
-  signer runs the new v2 build under load.** A partial-upgrade state is not
-  safe for signing: a signer still on v1 cannot verify a v2 commitment, and
-  a signer already on v2 will reject the v1 commitments still being produced
-  by its peers. Cross-version signing attempts will fail closed.
-- **Migrate during a planned maintenance window** so the threshold set is
-  either fully on v1 or fully on v2 at every instant.
-- **Coordinate the rollout order** so an operator of any single signer can
-  roll back to v1 (via backup restore) without leaving the threshold set in
-  a cross-version state.
+The `.state-witness` journal is local to each signer and is never
+exchanged over the signing protocol. The journal format (v1 or v2) does
+not appear in any cross-signer message or FFI response. Therefore,
+signers may migrate independently; there is no requirement for lockstep
+timing across the threshold set. Coordinate only the downtime needed to
+preserve threshold availability (i.e., ensure enough signers remain online
+to meet the threshold during the migration window).
 
 ## References
 

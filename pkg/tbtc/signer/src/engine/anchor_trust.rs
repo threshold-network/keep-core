@@ -54,11 +54,11 @@ pub(crate) const STATE_ANCHOR_TRUST_MAX_RECORD_LENGTH: usize = 128 * 1024;
 pub(crate) const STATE_ANCHOR_TRUST_MAX_CERTIFICATE_JSON_LENGTH: usize = 120 * 1024;
 pub(crate) const STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH: usize = 256 * 1024 * 1024;
 /// Records-based fail-closed ceiling for the trust journal, paired with
-/// [`STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH`]. Trust-journal records vary in
-/// size, so the parser enforces this through an upper bound derived from the
-/// byte length: a journal at the byte cap with all minimum-size records
-/// would still be capped here, preventing the abuse case where many small
-/// records fill the byte cap while escaping the records-based bound.
+/// [`STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH`]. The parser enforces this as an
+/// exact count of records walked one at a time in the parse loop, after
+/// header validation has already succeeded, so a legitimate journal whose
+/// records are larger than the minimum fixed size is never penalized for
+/// byte length alone.
 pub(crate) const STATE_ANCHOR_TRUST_MAX_RECORDS: usize = 1_024;
 const TRUST_INTENT_MAGIC: &[u8; 16] = b"TBTCTRUSTINTNT1\0";
 const TRUST_INTENT_VERSION: u32 = 1;
@@ -369,23 +369,6 @@ pub(crate) fn parse_state_anchor_trust_journal(
             bytes.len()
         )));
     }
-    // Records-based ceiling paired with the byte cap above. Trust-journal
-    // records vary in size, so this is an upper bound derived from the byte
-    // length rather than a precise count from the loop. It catches the abuse
-    // case where many minimum-size records fit the byte cap while bypassing
-    // a records-based ceiling; realistic journals (well below the byte cap
-    // with records of typical size) are unaffected.
-    let upper_bound_records = bytes
-        .len()
-        .saturating_sub(STATE_ANCHOR_TRUST_JOURNAL_HEADER_LENGTH)
-        / TRUST_JOURNAL_RECORD_FIXED_LENGTH;
-    if upper_bound_records > STATE_ANCHOR_TRUST_MAX_RECORDS {
-        return Err(EngineError::Internal(format!(
-            "state-anchor trust journal can hold up to [{upper_bound_records}] records under \
-             the byte cap, exceeding the configured fail-closed ceiling \
-             [{STATE_ANCHOR_TRUST_MAX_RECORDS}]"
-        )));
-    }
     if &bytes[..16] != TRUST_JOURNAL_MAGIC
         || u32::from_be_bytes(
             bytes[16..20]
@@ -413,7 +396,15 @@ pub(crate) fn parse_state_anchor_trust_journal(
     let mut committed: Vec<VerifiedStateAnchorTrustCertificate> = Vec::new();
     let mut pending: Vec<VerifiedStateAnchorTrustCertificate> = Vec::new();
     let mut next_commit_index = 0usize;
+    let mut record_count = 0usize;
     while offset < bytes.len() {
+        record_count += 1;
+        if record_count > STATE_ANCHOR_TRUST_MAX_RECORDS {
+            return Err(EngineError::Internal(format!(
+                "state-anchor trust journal exceeds the configured fail-closed records ceiling \
+                 [{STATE_ANCHOR_TRUST_MAX_RECORDS}]"
+            )));
+        }
         if bytes.len() - offset < 4 {
             return Err(EngineError::Internal(
                 "state-anchor trust journal has a truncated record length".to_string(),
@@ -2591,29 +2582,27 @@ mod tests {
     }
 
     #[test]
-    fn trust_journal_exceeding_records_ceiling_is_rejected_under_byte_cap() {
-        // Padded header-only journal whose byte length implies more than
-        // [`STATE_ANCHOR_TRUST_MAX_RECORDS`] minimum-size records. The total
-        // remains well below [`STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH`], so
-        // the byte cap alone would not catch this journal; the records
-        // ceiling must.
+    fn trust_journal_header_validation_precedes_records_ceiling_check() {
+        // A garbage journal whose byte length would have implied more than
+        // [`STATE_ANCHOR_TRUST_MAX_RECORDS`] minimum-size records under the
+        // old byte-length proxy must still fail on header validation first:
+        // the records ceiling is enforced by the parse loop after header
+        // validation succeeds, not as a byte-length pre-check.
         let store_fingerprint = [0x42u8; 32];
-        let mut bytes = encode_state_anchor_trust_journal_header(&store_fingerprint);
         let padded_records = STATE_ANCHOR_TRUST_MAX_RECORDS + 1;
         let padded_length = STATE_ANCHOR_TRUST_JOURNAL_HEADER_LENGTH
             + padded_records * TRUST_JOURNAL_RECORD_FIXED_LENGTH;
-        bytes.resize(padded_length, 0);
+        let bytes = vec![0u8; padded_length];
         assert!(
             bytes.len() < STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH,
-            "test journal must remain under the byte cap to prove the records ceiling fires"
+            "test journal must remain under the byte cap to prove header validation runs first"
         );
-        let error = parse_state_anchor_trust_journal(&bytes, &store_fingerprint).expect_err(
-            "a journal whose upper-bound record count exceeds the ceiling must fail closed",
-        );
+        let error = parse_state_anchor_trust_journal(&bytes, &store_fingerprint)
+            .expect_err("an all-zero blob must fail header validation, not a records ceiling");
         let rendered = error.to_string();
         assert!(
-            rendered.contains("ceiling"),
-            "rejection must reference the configured records ceiling; got [{rendered}]"
+            rendered.contains("header"),
+            "rejection must reference header validation, not the records ceiling; got [{rendered}]"
         );
     }
 

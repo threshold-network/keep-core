@@ -21,15 +21,20 @@ rewrite architecture.
 - Added `pkg/tbtc/signer` Rust crate that builds a `cdylib` named
   `libfrost_tbtc`.
 - Added a C ABI contract in `pkg/tbtc/signer/include/frost_tbtc.h`.
-- Implemented coarse request/response operations keyed by `session_id`:
-  - `frost_tbtc_run_dkg`
-  - `frost_tbtc_start_sign_round`
-  - `frost_tbtc_finalize_sign_round`
-  - `frost_tbtc_build_taproot_tx`
-  - `frost_tbtc_refresh_shares` (symbol retained, but ABI 3 fails closed; the
-    one-shot request cannot perform cryptographic FROST share refresh, and the
-    major bump prevents ABI-3 consumers from accepting the changed response
-    semantics)
+- Implements a hybrid C ABI surface (see `README.md` for the full inventory):
+  - `session_id`-keyed subset: `frost_tbtc_build_taproot_tx`,
+    `frost_tbtc_refresh_shares` (symbol retained, but ABI 3 fails closed
+    with `cryptographic_refresh_not_supported`; the one-shot request cannot
+    perform cryptographic FROST share refresh), `frost_tbtc_verify_signature_share`,
+    and the hardened interactive signing session ops
+    (`frost_tbtc_interactive_session_open`, `frost_tbtc_interactive_round1`,
+    `frost_tbtc_interactive_round2`, `frost_tbtc_interactive_session_abort`,
+    `frost_tbtc_interactive_aggregate`), all keyed by
+    `(session_id, attempt_id, member_identifier)`.
+  - Round-level subset (NOT `session_id`-keyed): `frost_tbtc_dkg_part1` /
+    `_dkg_part2` / `_dkg_part3` (single round of DKG, no `session_id`), and
+    `frost_tbtc_new_signing_package` (`NewSigningPackageRequest { message_hex,
+    commitments }`, no `session_id`).
 - Implemented idempotency and conflict checks for retried operations under the
   same session ID.
 - Added file-backed persistent session-state adapter with atomic writes and

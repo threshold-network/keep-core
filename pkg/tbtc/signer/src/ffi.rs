@@ -54,14 +54,7 @@ fn install_redacting_panic_hook() {
     INSTALLED.call_once(|| {
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let development_profile =
-                crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
-                    .map(|raw| {
-                        raw.trim()
-                            .eq_ignore_ascii_case(crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT)
-                    })
-                    .unwrap_or(false);
-            if development_profile {
+            if crate::engine::development_profile_active() {
                 default_hook(info);
             } else if let Some(location) = info.location() {
                 eprintln!(
@@ -115,14 +108,7 @@ where
 // profile. Re-validating the profile here could otherwise turn a handled
 // panic into a second panic on the FFI error path and unwind into C.
 fn panic_boundary_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    let development_profile = crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
-        .map(|raw| {
-            raw.trim()
-                .eq_ignore_ascii_case(crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT)
-        })
-        .unwrap_or(false);
-
-    if development_profile {
+    if crate::engine::development_profile_active() {
         format!(
             "panic crossed FFI boundary: {}",
             panic_payload_message(payload)
@@ -255,6 +241,11 @@ fn error_response_bytes(error: &EngineError, message: String) -> Vec<u8> {
 /// malformed profile, which would convert this FFI error path into a second
 /// panic across the C boundary - exactly the failure mode the panic hook
 /// exists to prevent.
+///
+/// Outside the development profile, the full rendered `Internal` message is
+/// still emitted to stderr before it is replaced by the fixed redacted
+/// string, so the "(see server log)" pointer in that string names a real
+/// diagnostic sink rather than an artifact that never gets written.
 fn ffi_redacted_message(error: &EngineError) -> String {
     let rendered = error.to_string();
     if !matches!(error, EngineError::Internal(_)) {
@@ -263,6 +254,7 @@ fn ffi_redacted_message(error: &EngineError) -> String {
     if crate::engine::development_profile_active() {
         rendered
     } else {
+        eprintln!("signer error detail (redacted from FFI response): {rendered}");
         "signer error detail redacted (see server log)".to_string()
     }
 }

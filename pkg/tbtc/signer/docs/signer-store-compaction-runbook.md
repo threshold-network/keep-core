@@ -37,19 +37,29 @@ follow-up branch implements a minimum-viable compaction path that:
 The compaction record is itself a witness record (with its own `chain_hash`
 link into the prior chain), so the live journal's last entry on disk is
 still the verifiable tip of the pre-compaction chain, and the new genesis
-header is rooted in it. The previous journal is retained indefinitely; see
-*Inspection and recovery* below.
+header is rooted in it. **The previous journal (`.state-witness.previous`)
+is unlinked immediately after the rename pair completes — it is NOT retained
+on disk. No forensic recovery of the pre-compaction journal is possible
+without an external operator-taken directory snapshot taken before compaction.**
 
 ## When this activates
 
 The compaction path activates automatically when the unanchored record
 ceiling is reached AND no signed anchor checkpoint is configured. The
-ceiling is the same `state_witness_rotation_threshold` knob that already
-governs segment rotation, exposed under a new ceiling name for the
-compaction path. In a topology that has a signed anchor checkpoint, the
-existing segment-rotation path is preferred over compaction: rotation
-produces a signed header that external observers can verify, while
-compaction produces only a local record.
+ceiling is governed by `TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS` (the
+`witness_max_records` setting, always present). The separate knob
+`state_witness_rotation_threshold` (env `TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS`)
+is an anchor-only setting that **must be unset** for compaction to trigger at
+all — it is not a control over compaction timing.
+
+**Important:** In this build, the checkpoint-delivery FFI exports
+(`frost_tbtc_acknowledge_state_witness_checkpoint`,
+`frost_tbtc_recover_state_witness_checkpoint`) have been removed — no host
+can currently deliver a signed checkpoint. Anchored topology configuration
+remains settable via env/config, but the signed-checkpoint rotation path is
+unreachable. Local compaction is therefore the only reachable journal-lifecycle
+path in this build. The "preferred path" framing should be revisited once
+checkpoint symbols are re-exposed.
 
 If a signer is configured to anchor, the operator should not see this
 runbook's behavior on a healthy node. If a compacted `.state-witness.previous`
@@ -60,20 +70,21 @@ the next state write.
 
 1. Locate the durable store directory (the directory containing the
    `.state-witness` journal for the affected signer).
-2. Confirm a compaction has happened by listing the journal slot:
-
-       ls -la .state-witness .state-witness.previous 2>/dev/null
-
-   On a healthy pre-compaction node, only `.state-witness` exists. After a
-   compaction, both exist and `.state-witness.previous` is the older
-   journal preserved byte-for-byte on disk under the new name. The rename
-   is operator-visible: `stat .state-witness.previous` shows the
-   mtime/ctime of the original write, and `stat .state-witness` shows a
-   later mtime/ctime from the fresh start.
-3. Confirm `.store-id` exists in the same directory and is exactly 32 bytes
+2. Confirm `.store-id` exists in the same directory and is exactly 32 bytes
    long. Compaction does NOT change the store fingerprint; the new genesis
    header chains to the same `.store-id` that the pre-compaction chain
    anchored against.
+3. Optionally, list the journal slot to confirm compaction state:
+
+       ls -la .state-witness .state-witness.previous 2>/dev/null
+
+   **Note:** A transient `ENOENT` on `.state-witness` is possible during the
+   nanosecond-to-microsecond window between the two rename operations of an
+   in-progress compaction. If the signer process is confirmed still running,
+   retry the `ls` once — this is not evidence of corruption.
+
+   After compaction completes, `.state-witness.previous` is immediately
+   unlinked and will not appear.
 4. Stop the signer process before any further action. The store's
    exclusive lock must be released before any operator touches the journal
    files directly.
@@ -88,21 +99,7 @@ two runbooks.
    the store's exclusive lock is released before touching any file in the
    store directory.
 
-2. **Do NOT delete `.state-witness.previous`.** The previous journal is
-   retained indefinitely. It is the only on-disk evidence of the
-   pre-compaction chain, and an operator can recover pre-compaction
-   history from it. Treat the file as a forensic record: rename it
-   aside only if your incident response workflow requires a non-default
-   name, and never modify it in place.
-
-       # The default retain name is .state-witness.previous; do not delete it.
-       # If your environment requires a timestamped name instead, rename it
-       # rather than copying or moving its contents:
-       mv .state-witness.previous .state-witness.previous-$(date -u +%Y%m%dT%H%M%SZ)
-
-   The file is preserved byte-for-byte under either name.
-
-3. **Verify the live journal's first 16 bytes are the v3 magic.** The new
+2. **Verify the live journal's first 16 bytes are the v3 magic.** The new
    `.state-witness` must begin with `TBTCWITNESSv3\0\0\0`:
 
        head -c 16 .state-witness | od -An -tx1
@@ -111,68 +108,60 @@ two runbooks.
    A non-v3 magic on a freshly-compacted live journal indicates that the
    compaction path did not run as expected; halt and investigate.
 
-4. **Restart the signer with the unchanged ABI.** The new build will open
+3. **Restart the signer with the unchanged ABI.** The new build will open
    the fresh `.state-witness` and start a new chain at generation 1,
    preserving the store fingerprint. State writes resume against the new
    chain. `.store-id` and any state image are preserved.
 
 ## Inspection and recovery
 
-### Verify a `.state-witness.previous` file is intact
+**The previous journal (`.state-witness.previous`) is unlinked immediately
+after compaction completes. It is NOT retained on disk and cannot be
+inspected or recovered after the fact. Operators who need forensic recovery
+capability MUST take a directory snapshot BEFORE triggering compaction
+(i.e., before the signer reaches the `witness_max_records` ceiling).**
 
-The previous journal's magic, length, and trailing chain hash can be read
-with shell commands only. Treat the read-only commands as a fingerprint
-check before you trust the file for forensic recovery.
+There is no rollback procedure for compaction. Once `compact_witness_journal_local`
+returns successfully, the pre-compaction journal is gone. The only recovery
+is from an external directory snapshot taken prior to compaction.
 
-1. Magic check — the previous journal must also begin with the v3 magic
-   (compaction is only meaningful on v3 journals):
+### Verifying a snapshotted copy of `.state-witness.previous`
+
+If an operator preserved a copy of `.state-witness.previous` in a directory
+snapshot taken before compaction, its magic, length, and trailing chain hash
+can be checked with shell commands only:
+
+1. Magic check — the previous journal begins with either the v3 signed
+   segment magic (`TBTCWITNESSSEG1\0`, if it has ever rotated/compacted
+   before) or the plain v3 magic (`TBTCWITNESSv3\0\0\0`, if it is a
+   never-rotated genesis journal):
 
        head -c 16 .state-witness.previous | od -An -tx1
-       # 54 42 54 43 57 49 54 4e 45 53 53 76 33 00 00 00
-       # ^ the first four bytes spell TBTC; the trailing bytes must include v3\0\0\0
 
-2. Length check — the previous journal is 472 bytes (signed segment header)
-   plus 137 bytes per record. The total length modulo 137 must equal 472
-   once the header is subtracted:
+2. Length check — **branch on which magic matched above** before applying
+   the modulo-137 check, since the header length differs:
 
        prev_len=$(stat -c %s .state-witness.previous)
-       body=$((prev_len - 472))
+       magic=$(head -c 16 .state-witness.previous)
+       if [ "$magic" = "$(printf 'TBTCWITNESSSEG1\0')" ]; then
+         header=472  # signed segment header
+       else
+         header=48   # plain magic header (16-byte magic + 32-byte store-id);
+                     # this is the case for a never-rotated genesis journal,
+                     # exactly the journal a FIRST compaction renames aside
+       fi
+       body=$((prev_len - header))
        if [ $((body % 137)) -ne 0 ]; then
-         echo "previous journal length is not 472 + N*137: corrupt"
+         echo "previous journal length is not header + N*137: corrupt"
        fi
 
+   Applying the 472-byte-header formula unconditionally reports a healthy
+   first-compaction file (48-byte header) as corrupt.
+
 3. Trailing chain hash check — the last 32 bytes of the previous journal
-   are the chain hash of its final record. Print them and compare against
-   the on-the-fly recomputation if you have tooling that knows the
-   per-record chain domain. A mismatch is evidence of in-place tampering.
+   are the chain hash of its final record:
 
        tail -c 32 .state-witness.previous | od -An -tx1 -v
-
-4. Compaction record check — the last record of `.state-witness.previous`
-   is the compaction record that committed to the new genesis header.
-   Confirm the new `.state-witness`'s 472-byte segment header's
-   `header_commitment` field matches the last record's commitment; this
-   is the link the live journal inherits. (The exact byte offsets for the
-   commitment field are the same as the v2-to-v3 runbook's segment
-   header layout.)
-
-If any of these checks fail, treat the previous journal as suspect. Do
-NOT delete it; rename it aside (for example
-`.state-witness.previous.suspect-<timestamp>`) and escalate.
-
-### Recovering pre-compaction history
-
-The previous journal is the canonical pre-compaction record. To recover
-historical state-commitment data from it, restart the signer with an
-operator-side tool that reads `.state-witness.previous` in read-only mode
-and walks the records via their 137-byte fixed width. Do not modify the
-file in place; copy it to a working directory and operate on the copy.
-
-If a future build supports replaying the previous journal into a fresh
-state image, the on-disk file under `.state-witness.previous` is the input
-the replay tool expects. The replay tool must verify the per-record
-`chain_hash` link from the genesis header forward, and the segment header
-signature over the `header_commitment`, before accepting any record.
 
 ## Verification
 
@@ -185,43 +174,14 @@ After the signer restarts, confirm the post-compaction chain is healthy:
       head -c 16 .state-witness | od -An -tx1
       # 54 42 54 43 57 49 54 4e 45 53 53 76 33 00 00 00
 
-- `.state-witness.previous` still exists in the same directory and is
-  byte-for-byte unchanged from before the restart.
-- The startup log includes the v3 store fingerprint derived from the
-  existing `.store-id`. The fingerprint MUST match the v3 transcript
-  computation over the unchanged `.store-id` bytes (the same transcript
-  the v2-to-v3 runbook documents). A post-compaction restart against a
-  different `.store-id` would change the fingerprint, which is the wrong
-  outcome.
+- The `.store-id` file is byte-for-byte unchanged from before compaction
+  (compare against a pre-compaction snapshot if one was taken).
 - The first committed record on the new chain is at generation 1 with a
   PREPARE and COMMIT pair, anchored on the new genesis header that the
   compaction record committed to.
 
 If verification fails, the compaction is incomplete. Do not bring the
-signer into a threshold set until the failure is diagnosed; see
-*Rollback* below.
-
-## Rollback
-
-Compaction is local and additive. Rolling back is straightforward:
-
-- Stop the signer process.
-- Delete the new `.state-witness` (it contains only a fresh genesis +
-  zero or a handful of records, none of which have anchored external
-  commitments because the unanchored topology has no signed anchor
-  checkpoint).
-- Rename `.state-witness.previous` back to `.state-witness`:
-
-      mv .state-witness.previous .state-witness
-
-- Restart the signer. The pre-compaction chain resumes from its last
-  record.
-
-If the previous journal itself is corrupt, the only recovery is from a
-prior snapshot of the store directory that contains an intact pre-rotation
-journal. The compaction path does not modify the previous journal's bytes,
-so any snapshot taken before the compaction (or a snapshot taken of the
-directory as it stands after the compaction) is sufficient.
+signer into a threshold set until the failure is diagnosed.
 
 ## Network coordination
 
@@ -247,9 +207,8 @@ set does not enforce a coordinated compaction. However:
 
 Compaction produces a local record; it is not a signed commitment. An
 attacker with same-uid access to the store directory who can rewrite
-`.state-witness.previous` can rewrite the pre-compaction chain without
-detection, and can also rewrite the post-compaction chain up to the next
-compaction or anchor. The chain is tamper-evident against an
+`.state-witness` (the live journal) can rewrite the post-compaction chain
+up to the next compaction or anchor. The chain is tamper-evident against an
 independently-observed prior head (e.g. an external anchor checkpoint or
 a snapshot taken before the compaction), not tamper-RESISTANT by itself.
 

@@ -1,4 +1,4 @@
-//! Retained FROST key-package readiness and dynamic state-witness readbackback.
+//! Retained FROST key-package readiness and dynamic state-witness readback.
 //!
 
 use super::*;

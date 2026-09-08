@@ -36,7 +36,19 @@ const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
 // and results carry the ordered BIP-341 key-spend SIGHASH_DEFAULT messages. The
 // required request field is an incompatible wire-contract change, so bridges and
 // the signer library must move from major 2 to major 3 in lockstep.
-const TBTC_SIGNER_ABI_MAJOR: u32 = 3;
+//
+// Major 5: this value was briefly renumbered back to 3 by a follow-up change that
+// also removed 11 durable-store / state-witness / anchor-trust FFI symbols added
+// under the old major-4 minor line. Removing exported symbols is itself an
+// incompatible ABI change (an old bridge fails dlsym instead of a clean version
+// check), and RefreshShares still fails closed with the terminal
+// cryptographic_refresh_not_supported error that originally justified major 4
+// (RefreshShares no longer returns synthetic replacement material for a valid
+// request; it fails closed until a real multi-round protocol exists). Neither
+// break was reflected by reusing 3, so this bumps straight to 5 - strictly newer
+// than both the reused 3 and the original 4 - rather than reusing a number that
+// previously meant something else.
+const TBTC_SIGNER_ABI_MAJOR: u32 = 5;
 const TBTC_SIGNER_ABI_MINOR: u32 = 0;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
@@ -759,8 +771,11 @@ mod tests {
         // / transcript-audit / blame-proof / refresh-cadence / differential-fuzz / free-buffer
         // symbols - the durable store identity, retained key package inventory, state
         // witness proof, state anchor trust transition/head, and durable DKG retirement
-        // symbols are no longer on the wire contract, so they do not register as bumps.
-        assert_eq!(abi.abi_major, 3);
+        // symbols were removed from the wire contract, which is itself an incompatible
+        // change (an old bridge fails dlsym, not a clean version check) on top of the
+        // still-unchanged RefreshShares terminal-error semantics that originally
+        // justified major 4 - hence major 5, not a reuse of 3 or 4.
+        assert_eq!(abi.abi_major, 5);
         assert_eq!(abi.abi_minor, 0);
     }
 

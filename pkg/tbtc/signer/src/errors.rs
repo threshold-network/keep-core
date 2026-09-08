@@ -109,6 +109,7 @@ pub enum EngineError {
     },
     /// The requested witness ancestor predates the independently acknowledged
     /// retained base. It cannot be recovered by retrying this signer; the host
+    /// must use its independent checkpoint/anchor evidence.
     #[error(
         "state witness history pruned: requested generation [{requested_generation}] precedes retained base [{witness_base_generation}]"
     )]

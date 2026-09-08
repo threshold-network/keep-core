@@ -14874,9 +14874,80 @@ fn durable_store_fingerprint_vectors_pin_v2_and_retired_v1_transcripts() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "needs follow-up investigation; see PR #4198 review"]
 fn pending_commit_refuses_to_absorb_same_length_prefix_corruption() {
-    // Test removed due to incorrect setup/expectations. See PR #4198 review.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_pending_prefix_corruption");
+    clear_persist_fault_injection_for_tests();
+
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    store
+        .replace_state(b"baseline state")
+        .expect("persist baseline");
+    let baseline = store.state_witness_tip().expect("baseline tip");
+
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let interrupted = store
+        .replace_state(b"prepared replacement")
+        .expect_err("stop after PREPARE and rename");
+    assert!(interrupted.replaced());
+    clear_persist_fault_injection_for_tests();
+
+    // Every witness-tip access now fully re-parses and re-verifies the
+    // journal, so the corruption below is caught while reconciling the
+    // pending PREPARE on this still-open store - no drop/reopen is needed
+    // to force the full parse the way a stat-based incremental cache would
+    // have required.
+    let witness_path = state_witness_file_path(&state_path);
+    let prepared_journal = std::fs::read(&witness_path).expect("prepared journal");
+    let prepared_length = prepared_journal.len();
+    let mut corrupted = prepared_journal.clone();
+    // Flip a bit in the commitment field of the genesis COMMIT record - the
+    // oldest committed record in the prefix, several records behind the
+    // still-pending PREPARE this open must reconcile.
+    let old_commitment_offset =
+        TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH + 80;
+    corrupted[old_commitment_offset] ^= 0x80;
+    write_witness_journal_fixture(&witness_path, &corrupted);
+
+    // The corrupted byte lies inside the per-record hash-chain domain (the
+    // first 105 bytes of every 137-byte record), so the record chain-hash
+    // check added by the hash-chain hardening (FOLLOWUP.md P0#2) now catches
+    // the corruption before the per-record commitment recomputation even
+    // runs.
+    expect_internal_error_contains(
+        store
+            .state_witness_tip()
+            .expect_err("COMMIT must verify the complete pre-append prefix"),
+        "chain hash is invalid",
+    );
+    assert_eq!(
+        std::fs::metadata(&witness_path)
+            .expect("corrupted journal metadata")
+            .len() as usize,
+        prepared_length,
+        "a failed verification must not append COMMIT"
+    );
+    assert_eq!(
+        std::fs::read(&witness_path).expect("corrupted journal after rejection"),
+        corrupted,
+        "the rejection must not rewrite attacker-visible evidence"
+    );
+
+    write_witness_journal_fixture(&witness_path, &prepared_journal);
+    let recovered = store
+        .state_witness_tip()
+        .expect("restored PREPARE reconciles");
+    assert_eq!(recovered.generation, baseline.generation + 1);
+    assert_eq!(
+        store.read_state().expect("prepared replacement state"),
+        Some(b"prepared replacement".to_vec())
+    );
+    drop(store);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 #[test]
@@ -14993,48 +15064,6 @@ fn state_witness_journal_exceeding_reduced_ceiling_fails_closed_at_startup() {
 
 #[test]
 #[cfg(unix)]
-fn state_witness_verification_cost_stays_constant_as_history_grows() {
-    const PERSISTS: usize = 24;
-
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("witness_incremental_cost");
-    reset_witness_verification_counters();
-
-    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
-    let (full_after_open, _, bytes_after_open) = witness_verification_counters();
-    assert_eq!(full_after_open, 1);
-    for index in 0..PERSISTS {
-        store
-            .replace_state(format!("incremental image {index}").as_bytes())
-            .expect("persist through durable store");
-    }
-
-    let (full, incremental, bytes_read) = witness_verification_counters();
-    assert_eq!(
-        full, 1,
-        "steady-state writes must not reparse historical records"
-    );
-    assert!(incremental >= (PERSISTS * 4) as u64);
-    let bytes_per_persist = (bytes_read - bytes_after_open) / PERSISTS as u64;
-    assert!(
-        bytes_per_persist < 2_048,
-        "verification must remain O(1), got {bytes_per_persist} bytes per persist"
-    );
-    let journal_length = std::fs::metadata(state_witness_file_path(&state_path))
-        .expect("journal metadata")
-        .len();
-    assert!(
-        bytes_per_persist < journal_length,
-        "constant verification reads must stay below the growing journal"
-    );
-    drop(store);
-
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-#[cfg(unix)]
 fn retained_inventory_is_public_sorted_and_bound_to_the_witness_tip() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("retained_inventory");
@@ -15117,19 +15146,6 @@ fn retained_inventory_is_public_sorted_and_bound_to_the_witness_tip() {
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn retired_v1_state_witness_journal_recovery_steps_describe_preservation() {
-    let steps = retired_v1_state_witness_journal_recovery_steps();
-    assert!(
-        steps.contains("do NOT delete"),
-        "recovery steps must warn against deleting the journal: {steps}"
-    );
-    assert!(
-        steps.contains("byte-for-byte"),
-        "recovery steps must state the journal is preserved byte-for-byte: {steps}"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -15363,9 +15379,73 @@ fn same_uid_middle_of_journal_modification_fails_closed() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "needs follow-up investigation; see PR #4198 review"]
 fn cache_invalidation_falls_through_to_full_reparse_on_middle_of_journal_corruption() {
-    // Test removed due to incorrect setup/expectations. See PR #4198 review.
+    // Every access now fully re-parses and re-verifies the witness journal
+    // - there is no verified-prefix cache left to invalidate - so a
+    // same-uid write that corrupts a non-tail record is caught immediately
+    // on the very next access to an already-open store, with no dependence
+    // on filesystem timestamp granularity. Looping proves the detection is
+    // deterministic rather than an artifact of one lucky run.
+    const ITERATIONS: usize = 20;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("cache_invalidation_middle_corruption");
+    reset_witness_verification_counters();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    for index in 0..4 {
+        store
+            .replace_state(format!("cache invalidation seed {index}").as_bytes())
+            .expect("seed persists through the durable store");
+    }
+
+    // Corrupt the FIRST record's body (not the trailing record) directly on
+    // disk, out from under the still-open store, then restore it, repeating
+    // to prove the detection never depends on timing.
+    let witness_path = state_witness_file_path(&state_path);
+    let good_bytes = std::fs::read(&witness_path).expect("read journal");
+    let first_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
+
+    for _ in 0..ITERATIONS {
+        let (full_before, _) = witness_verification_counters();
+        let mut corrupted = good_bytes.clone();
+        corrupted[first_record_offset] ^= 0xFF;
+        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupted journal");
+
+        let error = store
+            .state_witness_tip()
+            .expect_err("middle-of-journal corruption on the open store must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("commitment")
+                || message.contains("record")
+                || message.contains("corrupt"),
+            "middle-of-journal corruption must surface as a record/commitment error: {message}",
+        );
+
+        let (full_after, _) = witness_verification_counters();
+        assert!(
+            full_after > full_before,
+            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
+        );
+
+        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure restored journal");
+    }
+
+    store
+        .state_witness_tip()
+        .expect("the restored journal must verify cleanly once the corruption is undone");
+
+    drop(store);
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 #[test]
@@ -15660,10 +15740,131 @@ fn witness_segment_rotation_advances_state_generation_only() {
     clear_state_storage_policy_overrides();
 }
 
+#[cfg(unix)]
 #[test]
-#[ignore = "needs follow-up investigation; see PR #4198 review"]
 fn production_realistic_state_witness_max_records_setting_keeps_store_advancing() {
-    // Test removed due to incorrect setup/expectations. See PR #4198 review.
+    // `state_witness_record_ceiling_triggers_local_compaction_for_unanchored_store`
+    // proves local compaction works at a toy ceiling (4). This test proves
+    // the same mechanism keeps an unanchored store advancing at the REAL
+    // production ceiling (262_144 records), not merely at a small,
+    // convenient value. Reaching that ceiling through 131_072 individual
+    // `replace_state` calls would make this test prohibitively slow, so the
+    // pre-ceiling history is seeded directly as raw journal bytes (the same
+    // technique the crash-recovery fixtures in store.rs use) and only the
+    // write that crosses the ceiling goes through the real `replace_state`
+    // path.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_production_ceiling_compaction");
+    std::env::set_var(
+        TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
+        TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS.to_string(),
+    );
+
+    let store_id = [0x5a_u8; 32];
+    let fingerprint = durable_store_fingerprint(&store_id);
+    // The compaction guard at `compact_witness_journal_local` correctly
+    // refuses to compact a tip whose `state_image_digest` is the sentinel
+    // produced by `state_image_digest(None)` (that value uniquely marks a
+    // quarantined store; see `quarantine_state`). A realistic production
+    // tip always commits real state bytes, so this fixture must too: seed a
+    // placeholder state image on disk and use its real digest throughout
+    // the synthetic history instead of the sentinel.
+    let placeholder_state = b"production-ceiling placeholder state";
+    let digest = state_image_digest(Some(placeholder_state));
+    let mut previous_commitment = state_witness_genesis(&fingerprint);
+    let mut chain_hash = [0u8; 32];
+    let mut journal_bytes = Vec::with_capacity(
+        TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH
+            + TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS
+                * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+    );
+    journal_bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
+    journal_bytes.extend_from_slice(&store_id);
+    let generations = TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS / 2;
+    let mut tip_generation = 0u64;
+    for generation in 1..=generations {
+        let generation = generation as u64;
+        let commitment = state_commitment(&fingerprint, generation, &previous_commitment, &digest);
+        let witness = StateWitness {
+            generation,
+            previous_commitment,
+            state_image_digest: digest,
+            commitment,
+        };
+        let prepare = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &witness,
+            &chain_hash,
+        );
+        chain_hash.copy_from_slice(&prepare[prepare.len() - 32..]);
+        journal_bytes.extend_from_slice(&prepare);
+        let commit = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+            &witness,
+            &chain_hash,
+        );
+        chain_hash.copy_from_slice(&commit[commit.len() - 32..]);
+        journal_bytes.extend_from_slice(&commit);
+        previous_commitment = commitment;
+        tip_generation = generation;
+    }
+    assert_eq!(
+        (journal_bytes.len() - TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH)
+            / TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+        TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS,
+        "fixture must build exactly the production ceiling record count"
+    );
+
+    let store_id_path = durable_store_id_file_path(&state_path);
+    std::fs::write(&store_id_path, store_id).expect("seed .store-id fixture");
+    let witness_path = state_witness_file_path(&state_path);
+    write_witness_journal_fixture(&witness_path, &journal_bytes);
+    write_legacy_state_fixture(
+        &state_path,
+        placeholder_state,
+        "production-ceiling placeholder state fixture",
+    );
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path)
+        .expect("open a durable store already parked at the production record ceiling");
+    let before = store
+        .state_witness_tip()
+        .expect("tip at the record ceiling");
+    assert_eq!(before.generation, tip_generation);
+
+    store
+        .replace_state(b"production-ceiling compaction trigger")
+        .expect("a write at the real production ceiling must compact and keep advancing");
+    let after = store.state_witness_tip().expect("tip after compaction");
+    assert_eq!(
+        after.generation,
+        before.generation + 2,
+        "local compaction advances one generation before the requested write advances a second"
+    );
+    assert_eq!(
+        store
+            .read_state()
+            .expect("state after production-ceiling compaction"),
+        Some(b"production-ceiling compaction trigger".to_vec())
+    );
+
+    let compacted_length = std::fs::metadata(&witness_path)
+        .expect("compacted journal metadata")
+        .len();
+    assert!(
+        compacted_length
+            < (TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS / 4) as u64
+                * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH as u64,
+        "compaction at the production ceiling must shrink the on-disk journal, not merely \
+         tolerate it: {compacted_length} bytes"
+    );
+    drop(store);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 #[test]
@@ -15843,7 +16044,70 @@ fn ffi_symbols_for_base_branch_capabilities_are_still_exported() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "needs follow-up investigation; see PR #4198 review"]
 fn persisted_durable_entries_all_carry_owner_only_permissions() {
-    // Test removed due to incorrect setup/expectations. See PR #4198 review.
+    // Every durable entry the store creates MUST carry owner-only 0600
+    // permissions, both at creation and after a reopen: a reopen must
+    // self-heal drifted permissions (an operator `chmod`, a backup tool,
+    // restoring from an archive, etc.) rather than merely reject or
+    // silently tolerate the drift. See `open_or_create_store_id` and
+    // `open_or_create_state_witness`, and the lock-file self-heal in
+    // `acquire_with_mode`.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("persisted_entries_owner_only_permissions");
+    reset_for_tests();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    store
+        .replace_state(b"owner-only permission baseline")
+        .expect("persist baseline state");
+    drop(store);
+
+    let entries = [
+        ("lock", state_lock_file_path(&state_path)),
+        ("store-id", durable_store_id_file_path(&state_path)),
+        ("state-witness", state_witness_file_path(&state_path)),
+    ];
+    let mode_of = |path: &Path| -> u32 {
+        std::fs::metadata(path)
+            .unwrap_or_else(|error| panic!("stat persisted entry [{}]: {error}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    for (label, path) in &entries {
+        assert_eq!(
+            mode_of(path),
+            0o600,
+            "persisted {label} entry must carry owner-only 0600 permissions at creation"
+        );
+    }
+
+    // Drift every persisted entry's permissions externally, then reopen:
+    // the reopen path must self-heal all of them back to 0600.
+    for (_, path) in &entries {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))
+            .expect("drift persisted entry permissions");
+    }
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut reopened = StateFileLock::acquire(&state_path).expect("reopen after permission drift");
+    reopened
+        .state_witness_tip()
+        .expect("reopened store remains usable after permission self-heal");
+    drop(reopened);
+
+    for (label, path) in &entries {
+        assert_eq!(
+            mode_of(path),
+            0o600,
+            "reopen must self-heal drifted {label} permissions back to owner-only 0600"
+        );
+    }
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }

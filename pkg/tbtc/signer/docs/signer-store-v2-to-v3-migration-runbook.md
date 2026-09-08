@@ -99,30 +99,14 @@ line.
    in place - the migration error is built on the assumption that the bytes
    on disk are exactly the bytes that were originally written under v2.
 
-3. **Restart the signer with the new ABI.** The new build will find the
-   `.state-witness` slot empty and regenerate the journal from scratch at
+3. **Restart the signer with the new ABI.** The new build will open the
+   fresh `.state-witness` and regenerate the journal from scratch at
    generation 1, accepting the v2-to-v3 break as a one-time migration event.
    `.store-id` and any state image are preserved; only the anti-rollback
    chain is reset and the new chain is anchored on a per-record hash chain
-   from the new genesis onwards.
-
-4. **Verify the migration.** After restart, confirm the new journal's
-   genesis fingerprint matches the v3 fingerprint derived from the existing
-   `.store-id` bytes. The signer logs the store fingerprint on startup; it
-   MUST equal the v3 fingerprint for the existing `.store-id`. The v3
-   fingerprint is computed by:
-
-       SHA-256(
-         "tbtc-signer-durable-session-store-fingerprint-v2\0" ||
-         length_prefixed("tbtc-signer-durable-session-store-identity/v2") ||
-         length_prefixed("encrypted-file-v1") ||
-         length_prefixed(store_id_bytes)
-       )
-
-   where `length_prefixed(x)` is the SHA-256 length-prefix convention used
-   elsewhere in this build (four-byte big-endian length followed by the
-   bytes). If the printed fingerprint does not match, halt and roll back
-   from backup - do NOT continue signing.
+   from the new genesis onwards. Confirm the new journal's magic-byte header
+   reads `TBTCWITNESSv3\0\0\0` (see *Verification* below) and that `.store-id`
+   is byte-for-byte unchanged as evidence the migration completed.
 
 ## Verification
 
@@ -135,11 +119,8 @@ After the signer restarts, confirm the migration succeeded:
       head -c 16 .state-witness | od -An -tx1
       # 54 42 54 43 57 49 54 4e 45 53 53 76 33 00 00 00
 
-- The startup log includes the v3 store fingerprint derived from the
-  existing `.store-id`. The fingerprint MUST match the v3 transcript
-  computation over the unchanged `.store-id` bytes; if the operator has
-  tooling to recompute the v3 fingerprint, compare it directly. Any
-  mismatch means the migration is incomplete.
+- The `.store-id` file is byte-for-byte unchanged from before migration
+  (compare against a pre-migration snapshot if one was taken).
 - The first committed record is at generation 1 with a `PREPARE` and
   `COMMIT` pair, not a continuation of the v2 chain. The new `COMMIT`
   record carries a 32-byte `chain_hash` field at offset 105..137; verify
@@ -173,23 +154,13 @@ re-attempted from the top of this runbook.
 
 ## Network coordination
 
-The anti-rollback chain is local to each signer; the on-chain threshold set
-does not enforce a coordinated migration. However:
-
-- **Every signer in a threshold set MUST complete this migration before any
-  signer runs the new v3 build under load.** A partial-upgrade state is not
-  safe for signing: a signer still on v2 cannot produce a v3-compatible
-  chain, and a signer already on v3 will reject the v2-format journals of
-  its peers. Cross-version signing attempts will fail closed.
-- **Migrate during a planned maintenance window** so the threshold set is
-  either fully on v2 or fully on v3 at every instant.
-- **Coordinate the rollout order** so an operator of any single signer can
-  roll back to v2 (via backup restore) without leaving the threshold set
-  in a cross-version state.
-- **The Go-side coordinator MUST be pinned to a v2-compatible build until
-  every signer has completed the migration.** Until the Go side accepts v3
-  per-record chain hashes, the cross-language commitment checks at the Go
-  boundary will fail for any record produced by a v3 signer.
+The `.state-witness` journal is local to each signer and is never
+exchanged over the signing protocol. The journal format (v2 or v3) does
+not appear in any cross-signer message or FFI response. Therefore,
+signers may migrate independently; there is no requirement for lockstep
+timing across the threshold set. Coordinate only the downtime needed to
+preserve threshold availability (i.e., ensure enough signers remain online
+to meet the threshold during the migration window).
 
 ## Security model / limitations
 
@@ -204,9 +175,14 @@ on an unanchored signer, up to the next local compaction.
 The chain is CT-log-like: it detects rewrites against an
 independently-observed prior head (a previously-seen segment header
 commitment, a signed anchor checkpoint, a snapshot of the journal
-taken before the rewrite, or a compaction's pre-state journal kept
-under `.state-witness.previous`). It does NOT provide a cryptographic
+taken before the rewrite). It does NOT provide a cryptographic
 tamper-resistance guarantee absent one of those external anchors.
+
+**Note:** The compaction path does NOT retain `.state-witness.previous`
+on disk — it is unlinked immediately after compaction completes. A
+snapshot taken before compaction is the only way to preserve the
+pre-compaction journal for forensic analysis; see
+`signer-store-compaction-runbook.md` for details.
 
 Operators who need tamper-resistance rather than tamper-evidence
 must ensure the signer is configured to anchor: a signed anchor

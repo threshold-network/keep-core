@@ -2430,6 +2430,27 @@ mod persistence_unix {
         Ok(())
     }
 
+    /// Clears the C library's errno immediately before a `readdir` call.
+    /// POSIX leaves errno unspecified when `readdir` returns NULL at
+    /// legitimate end-of-directory, so a stale nonzero value left over from
+    /// an earlier, unrelated syscall would otherwise be indistinguishable
+    /// from a real mid-iteration failure. `libc` exposes no portable
+    /// setter, so this is implemented per errno-pointer symbol; unix
+    /// targets outside these two are treated as best-effort (NULL is
+    /// still read as end-of-directory, matching prior behavior).
+    #[cfg(target_os = "linux")]
+    unsafe fn clear_errno() {
+        *libc::__errno_location() = 0;
+    }
+
+    #[cfg(target_os = "macos")]
+    unsafe fn clear_errno() {
+        *libc::__error() = 0;
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    unsafe fn clear_errno() {}
+
     /// Lists directory entries by name and modification time without
     /// resolving the directory through any followable path. The caller
     /// holds the no-follow directory fd; `fdopendir` consumes a duplicate
@@ -2463,9 +2484,25 @@ mod persistence_unix {
 
         let mut entries: Vec<(OsString, std::time::SystemTime)> = Vec::new();
         loop {
+            // POSIX requires clearing errno before `readdir` to distinguish
+            // a real error from legitimate end-of-directory: both return
+            // NULL, and errno is only meaningful for the former.
+            unsafe {
+                clear_errno();
+            }
             // SAFETY: `dir_ptr` is a live DIR* returned by `fdopendir` above.
             let raw_dirent = unsafe { libc::readdir(dir_ptr) };
             if raw_dirent.is_null() {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error().is_some_and(|errno| errno != 0) {
+                    unsafe {
+                        libc::closedir(dir_ptr);
+                    }
+                    return Err(EngineError::Internal(format!(
+                        "failed to enumerate signer state directory entries mid-iteration: \
+                         {error}"
+                    )));
+                }
                 break;
             }
             // SAFETY: `readdir` returned a non-null pointer to a `dirent`
@@ -2484,12 +2521,23 @@ mod persistence_unix {
             }
             let name_osstring = OsStr::from_bytes(name_bytes).to_os_string();
 
-            // `fstatat` against the held directory fd; seconds-granularity
-            // mtime is sufficient for the backup-eviction sort (sub-second
-            // ties fall back to a path tie-breaker).
+            // `fstatat` against the held directory fd with
+            // `AT_SYMLINK_NOFOLLOW`, consistent with the module's
+            // never-follow-symlinks design: a same-uid attacker who plants
+            // a symlink named with the backup prefix must not be able to
+            // skew the LRU eviction sort by pointing it at a target with a
+            // controlled mtime. Seconds-granularity mtime is sufficient
+            // for the backup-eviction sort (sub-second ties fall back to a
+            // path tie-breaker).
             let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-            let stat_result =
-                unsafe { libc::fstatat(directory_fd, dirent.d_name.as_ptr(), &mut stat, 0) };
+            let stat_result = unsafe {
+                libc::fstatat(
+                    directory_fd,
+                    dirent.d_name.as_ptr(),
+                    &mut stat,
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
             let modified = if stat_result == 0 {
                 let secs = if stat.st_mtime < 0 {
                     0
@@ -2510,5 +2558,50 @@ mod persistence_unix {
             libc::closedir(dir_ptr);
         }
         Ok(entries)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod persistence_unix_tests {
+    use super::*;
+
+    // Only `sorted_corrupted_state_backups` is exercised here (rather than
+    // reaching into `persistence_unix` directly): it is the pub(crate) entry
+    // point that drives `open_state_directory_nofollow` +
+    // `read_dir_entries_via_fd`, so a symlink planted at the state file's
+    // parent directory location exercises the exact O_NOFOLLOW-hardened path
+    // production code takes.
+    #[test]
+    fn corrupted_state_backup_enumeration_rejects_symlinked_parent_directory() {
+        let root = tempfile::tempdir().expect("create tempdir root");
+        let state_filename = "state.json";
+
+        // A real directory an attacker controls (same uid), pre-populated
+        // with a backup-prefixed file. If the O_NOFOLLOW hardening were
+        // bypassed, enumeration would list this file.
+        let attacker_target = root.path().join("attacker-target");
+        fs::create_dir(&attacker_target).expect("create attacker target dir");
+        let backup_prefix = corrupted_state_backup_prefix(Path::new(state_filename));
+        fs::write(
+            attacker_target.join(format!("{backup_prefix}hostile")),
+            b"hostile",
+        )
+        .expect("write hostile backup file");
+
+        // The state file's parent directory entry is a symlink to the
+        // attacker's directory rather than a real directory.
+        let symlinked_parent = root.path().join("state-dir");
+        std::os::unix::fs::symlink(&attacker_target, &symlinked_parent)
+            .expect("create symlinked parent directory");
+
+        let state_path = symlinked_parent.join(state_filename);
+
+        let result = sorted_corrupted_state_backups(&state_path);
+        assert!(
+            result.is_err(),
+            "corrupted-state backup enumeration must fail closed when the state \
+             directory entry is a symlink, not follow it into an attacker-controlled \
+             directory: {result:?}"
+        );
     }
 }
