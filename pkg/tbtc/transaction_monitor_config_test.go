@@ -41,6 +41,7 @@ func TestTransactionMonitorConfig_Validation(t *testing.T) {
 		"threshold above default age": {TransactionMonitorConfig{StuckThreshold: 25 * time.Hour}, "maxTrackingAge"},
 		"equal threshold and age":     {TransactionMonitorConfig{StuckThreshold: time.Hour, MaxTrackingAge: time.Hour}, ""},
 		"partial override":            {TransactionMonitorConfig{CheckInterval: time.Minute}, ""},
+		"capacity above ceiling":      {TransactionMonitorConfig{MaxTracked: maxTransactionMonitorMaxTracked + 1}, "maxTracked"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -346,7 +346,7 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		&cfg.Tbtc.TransactionMonitor.MaxTracked,
 		"tbtc.transactionMonitor.maxTracked",
 		tbtc.DefaultTransactionMonitorMaxTracked,
-		"Maximum number of wallet transactions tracked in memory; 0 uses the default.",
+		"Maximum number of wallet transactions tracked in memory; must not exceed 100000; 0 uses the default.",
 	)
 	cmd.Flags().DurationVar(
 		&cfg.Tbtc.TransactionMonitor.MaxTrackingAge,

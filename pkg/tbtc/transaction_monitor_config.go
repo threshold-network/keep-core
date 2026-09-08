@@ -18,10 +18,17 @@ const (
 	DefaultTransactionMonitorMaxTrackingAge = 24 * time.Hour
 	// DefaultTransactionMonitorCheckBudget bounds one confirmation-check pass.
 	DefaultTransactionMonitorCheckBudget = 2 * time.Minute
+
+	// maxTransactionMonitorMaxTracked is the highest allowed in-memory
+	// tracking table size; guards against unbounded memory growth from a
+	// misconfigured deployment.
+	maxTransactionMonitorMaxTracked = 100_000
 )
 
 // TransactionMonitorConfig configures monitoring of broadcast wallet
-// transactions. Zero values select the defaults; negative values are invalid.
+// transactions. Zero values select the defaults; negative values are
+// invalid. MaxTrackingAge must be at least the effective StuckThreshold
+// after defaults are applied.
 type TransactionMonitorConfig struct {
 	StuckThreshold time.Duration
 	CheckInterval  time.Duration
@@ -69,8 +76,17 @@ func (c TransactionMonitorConfig) Validate() error {
 	if c.MaxTracked < 0 {
 		return fmt.Errorf("tbtc.transactionMonitor.maxTracked must not be negative")
 	}
+	if c.MaxTracked > maxTransactionMonitorMaxTracked {
+		return fmt.Errorf(
+			"tbtc.transactionMonitor.maxTracked must not exceed %d",
+			maxTransactionMonitorMaxTracked,
+		)
+	}
 	if c.MaxTrackingAge < c.StuckThreshold {
-		return fmt.Errorf("tbtc.transactionMonitor.maxTrackingAge must be at least stuckThreshold")
+		return fmt.Errorf(
+			"tbtc.transactionMonitor.maxTrackingAge (%s) must be at least stuckThreshold (%s)",
+			c.MaxTrackingAge, c.StuckThreshold,
+		)
 	}
 	return nil
 }

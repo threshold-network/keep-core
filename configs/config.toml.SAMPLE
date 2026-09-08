@@ -119,8 +119,9 @@ Port = 9601
 # KeyGenerationConcurrency = 1
 
 # Stuck wallet transaction monitoring. Values shown are the defaults.
-# Zero selects the default; negative values are rejected. MaxTrackingAge must
-# be at least StuckThreshold. These settings apply when the node starts.
+# Zero selects the default; negative values are rejected. MaxTracked must
+# not exceed 100000. MaxTrackingAge must be at least StuckThreshold. These
+# settings apply when the node starts.
 # Command-line overrides use --tbtc.transactionMonitor.<setting>, for example
 # --tbtc.transactionMonitor.stuckThreshold=30m.
 #
