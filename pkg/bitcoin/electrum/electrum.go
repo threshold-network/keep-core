@@ -1221,9 +1221,21 @@ func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error
 				// Verification is an RPC with its own timeout, independent of
 				// dialing but still bounded by the caller and retry deadlines.
 				requestCtx, requestCancel := context.WithTimeout(ctx, c.config.RequestTimeout)
+				// A provisional client's write may not observe its RPC context.
+				// Abort its transport when verification exhausts any deadline.
+				stopVerification := context.AfterFunc(requestCtx, client.Abort)
 				err = requestCtx.Err()
 				if err == nil {
 					err = verifyServer(requestCtx, client, url)
+				}
+				// Stop before cancelling or retaining the client. An expired
+				// context must not leave an aborted client published as healthy.
+				stopVerification()
+				if err == nil {
+					err = requestCtx.Err()
+				}
+				if err == nil {
+					err = c.parentCtx.Err()
 				}
 				requestCancel()
 				if err != nil {

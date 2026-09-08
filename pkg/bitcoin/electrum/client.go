@@ -2,7 +2,6 @@ package electrum
 
 import (
 	"context"
-	"sync"
 
 	"github.com/checksum0/go-electrum/electrum"
 )
@@ -21,23 +20,20 @@ type electrumClient interface {
 	GetFee(context.Context, uint32) (float32, error)
 	ServerVersion(context.Context) (string, string, error)
 	Ping(context.Context) error
+	Abort()
 	Shutdown()
 	IsShutdown() bool
 }
 
-// watchClientCancellation closes client when ctx is cancelled, independently of
+// watchClientCancellation aborts client when ctx is cancelled, independently of
 // the request mutex and keepalive loop. It also covers clients being verified.
 // The returned function unregisters the callback and retires the client without
-// waiting for a WebSocket close handshake. Both paths share a single shutdown.
+// waiting for cleanup. Abort must be idempotent and safe during active writes.
 func watchClientCancellation(ctx context.Context, client electrumClient) func() {
-	shutdown := sync.OnceFunc(func() {
-		if !client.IsShutdown() {
-			client.Shutdown()
-		}
-	})
-	stop := context.AfterFunc(ctx, shutdown)
+	stop := context.AfterFunc(ctx, client.Abort)
 	return func() {
-		stop()
-		go shutdown()
+		if stop() {
+			go client.Abort()
+		}
 	}
 }

@@ -18,6 +18,7 @@ type failoverTestClient struct {
 	stopped    atomic.Bool
 	versions   atomic.Int32
 	shutdowns  atomic.Int32
+	abortOnce  sync.Once
 	versionErr error
 	version    func(context.Context) error
 	shutdown   func()
@@ -41,6 +42,14 @@ func (c *failoverTestClient) Shutdown() {
 	}
 }
 func (c *failoverTestClient) IsShutdown() bool { return c.stopped.Load() }
+
+func (c *failoverTestClient) Abort() {
+	c.abortOnce.Do(func() {
+		if !c.IsShutdown() {
+			c.Shutdown()
+		}
+	})
+}
 
 func (c *failoverTestClient) awaitShutdown(t *testing.T) {
 	t.Helper()

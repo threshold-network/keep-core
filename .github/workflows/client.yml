@@ -119,6 +119,24 @@ jobs:
         run: |
           cd third_party/btcsuite/btcec && go test ./...
 
+  electrum-lifecycle:
+    needs: client-detect-changes
+    if: |
+      github.event_name != 'pull_request'
+        || needs.client-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+      # Root ./... does not include tests inside the vendored Go module.
+      - name: Test Electrum lifecycle and native transports with the race detector
+        run: >-
+          go test -race -timeout 3m -count=1
+          ./pkg/bitcoin/electrum ./config
+          github.com/checksum0/go-electrum/electrum
+
   client-build-test-publish:
     needs: client-detect-changes
     if: |
