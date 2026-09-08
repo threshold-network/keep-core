@@ -28,6 +28,9 @@ const (
 type Config struct {
 	// URL to the Electrum server in format: `scheme://hostname:port`.
 	URL string
+	// FallbackURLs contains the remaining embedded servers when URL was
+	// auto-selected. An explicitly configured URL has no automatic fallbacks.
+	FallbackURLs []string `mapstructure:"-"`
 	// Timeout for a single attempt of Electrum connection establishment.
 	ConnectTimeout time.Duration
 	// Timeout for Electrum connection establishment retries.

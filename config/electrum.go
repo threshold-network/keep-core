@@ -30,7 +30,7 @@ func readElectrumUrls(network bitcoin.Network) (
 
 // resolveElectrum checks if Electrum is already configured. If the Electrum URL
 // is empty it reads the Electrum configs from the embedded list for the given
-// network and picks up one randomly.
+// network, picks one randomly, and retains the others for automatic failover.
 func (c *Config) resolveElectrum(rng *rand.Rand) error {
 	network := c.Bitcoin.Network
 
@@ -70,15 +70,28 @@ func (c *Config) resolveElectrum(rng *rand.Rand) error {
 		return fmt.Errorf("failed to read default Electrum URLs: [%v]", err)
 	}
 
+	return c.selectElectrumServer(urls, rng)
+}
+
+func (c *Config) selectElectrumServer(urls []string, rng *rand.Rand) error {
+	if len(urls) == 0 {
+		return fmt.Errorf("default Electrum URL list is empty")
+	}
+
 	// #nosec G404 (insecure random number source (rand))
 	// Picking up an Electrum server does not require secure randomness.
 	selectedURL := urls[rng.Intn(len(urls))]
 
 	logger.Infof("auto-selecting Electrum server: [%v]", selectedURL)
 
-	// Set only the URL in the original config. Other fields may be already set,
-	// and we don't want to override them.
+	// Retain the other connection settings while configuring the server pool.
 	c.Bitcoin.Electrum.URL = selectedURL
+	c.Bitcoin.Electrum.FallbackURLs = nil
+	for _, url := range urls {
+		if url != selectedURL {
+			c.Bitcoin.Electrum.FallbackURLs = append(c.Bitcoin.Electrum.FallbackURLs, url)
+		}
+	}
 
 	return nil
 }

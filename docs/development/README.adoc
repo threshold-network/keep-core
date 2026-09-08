@@ -254,3 +254,20 @@ Development
 ```
 make
 ```
+
+== Electrum server defaults
+
+If `bitcoin.electrum.url` is omitted, the client randomly selects an entry from
+`config/_electrum_urls/<network>` and keeps the other entries as failover
+candidates. Connection failures, failed server-version requests, disconnected
+clients, and unsuccessful RPC requests cause it to try another candidate within
+the configured retry budget. Keepalive requests use the same recovery path.
+Missing fee estimates try the other confirmation targets on the current server;
+caller cancellation does not mark the server unhealthy.
+
+An explicit `bitcoin.electrum.url` stays pinned to that server. Fallback URLs are
+internal configuration populated from the embedded list. A network with only one
+embedded entry can reconnect to that entry but cannot switch to another server;
+adding an independent, vetted server to that network's list enables failover.
+Each network currently has one embedded entry. This change does not add public
+servers to those curated lists.

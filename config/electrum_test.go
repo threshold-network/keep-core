@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/go-test/deep"
 
@@ -96,4 +97,38 @@ func (s *fakeRandSource) Int63() int64 {
 }
 func (s *fakeRandSource) Seed(expectedValue int64) {
 	s.expectedValue = expectedValue
+}
+
+func TestSelectElectrumServerRetainsAlternatives(t *testing.T) {
+	cfg := &Config{}
+	cfg.Bitcoin.Electrum.RequestTimeout = time.Second
+	err := cfg.selectElectrumServer([]string{"first", "second", "third"}, rand.New(&fakeRandSource{1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Bitcoin.Electrum.URL != "second" ||
+		!reflect.DeepEqual(cfg.Bitcoin.Electrum.FallbackURLs, []string{"first", "third"}) {
+		t.Fatalf("unexpected server pool: %+v", cfg.Bitcoin.Electrum)
+	}
+	if cfg.Bitcoin.Electrum.RequestTimeout != time.Second {
+		t.Fatal("connection settings were overwritten")
+	}
+}
+
+func TestResolveElectrumExplicitURL(t *testing.T) {
+	cfg := &Config{}
+	cfg.Bitcoin.Network = bitcoin.Mainnet
+	cfg.Bitcoin.Electrum.URL = "ssl://private.example:50002"
+	if err := cfg.resolveElectrum(rand.New(&fakeRandSource{})); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Bitcoin.Electrum.URL != "ssl://private.example:50002" || len(cfg.Bitcoin.Electrum.FallbackURLs) != 0 {
+		t.Fatalf("explicit URL acquired automatic fallbacks: %+v", cfg.Bitcoin.Electrum)
+	}
+}
+
+func TestSelectElectrumServerEmptyList(t *testing.T) {
+	if err := new(Config).selectElectrumServer(nil, rand.New(&fakeRandSource{})); err == nil {
+		t.Fatal("expected error for empty server pool")
+	}
 }

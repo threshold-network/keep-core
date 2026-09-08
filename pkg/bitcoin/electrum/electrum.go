@@ -29,13 +29,30 @@ var (
 // Connection is a handle for interactions with Electrum server.
 type Connection struct {
 	parentCtx   context.Context
-	client      *electrum.Client
+	client      electrumClient
 	clientMutex *sync.Mutex
 	config      Config
+	serverURLs  []string
+	serverIndex int
+	newClient   func(context.Context, string) (electrumClient, error)
 }
 
 // Connect initializes handle with provided Config.
 func Connect(parentCtx context.Context, config Config) (bitcoin.Chain, error) {
+	connection, err := connect(parentCtx, config, func(ctx context.Context, url string) (electrumClient, error) {
+		return electrum.NewClient(ctx, url, nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return connection, nil
+}
+
+func connect(
+	parentCtx context.Context,
+	config Config,
+	newClient func(context.Context, string) (electrumClient, error),
+) (*Connection, error) {
 	if config.ConnectTimeout == 0 {
 		config.ConnectTimeout = DefaultConnectTimeout
 	}
@@ -56,20 +73,22 @@ func Connect(parentCtx context.Context, config Config) (bitcoin.Chain, error) {
 		parentCtx:   parentCtx,
 		config:      config,
 		clientMutex: &sync.Mutex{},
+		newClient:   newClient,
+		serverURLs:  []string{config.URL},
 	}
 
-	if err := c.electrumConnect(); err != nil {
+	for _, url := range config.FallbackURLs {
+		if url != "" && !slices.Contains(c.serverURLs, url) {
+			c.serverURLs = append(c.serverURLs, url)
+		}
+	}
+
+	if err := c.electrumConnect(parentCtx); err != nil {
 		return nil, fmt.Errorf("failed to initialize electrum client: [%w]", err)
-	}
-
-	if err := c.verifyServer(); err != nil {
-		return nil, fmt.Errorf("failed to verify electrum server: [%w]", err)
 	}
 
 	// Keep the connection alive and check the connection health.
 	go c.keepAlive()
-
-	// TODO: Add reconnects on lost connection.
 
 	return c, nil
 }
@@ -85,7 +104,7 @@ func (c *Connection) GetTransaction(
 	rawTransaction, err := requestWithRetry(
 		c.parentCtx,
 		c,
-		func(ctx context.Context, client *electrum.Client) (string, error) {
+		func(ctx context.Context, client electrumClient) (string, error) {
 			// We cannot use `GetTransaction` to get the the transaction details
 			// as Esplora/Electrs doesn't support verbose transactions.
 			// See: https://github.com/Blockstream/electrs/pull/36
@@ -151,7 +170,7 @@ func (c *Connection) GetTransactionConfirmations(
 	rawTransaction, err := requestWithRetry(
 		reqCtx,
 		c,
-		func(ctx context.Context, client *electrum.Client) (string, error) {
+		func(ctx context.Context, client electrumClient) (string, error) {
 			// We cannot use `GetTransaction` to get the transaction details
 			// as Esplora/Electrs doesn't support verbose transactions.
 			// See: https://github.com/Blockstream/electrs/pull/36
@@ -223,7 +242,7 @@ txOutLoop:
 			c,
 			func(
 				ctx context.Context,
-				client *electrum.Client,
+				client electrumClient,
 			) ([]*electrum.GetMempoolResult, error) {
 				return client.GetHistory(ctx, reversedScriptHashString)
 			},
@@ -310,7 +329,7 @@ func (c *Connection) BroadcastTransaction(
 	response, err := requestWithRetry(
 		c.parentCtx,
 		c,
-		func(ctx context.Context, client *electrum.Client) (string, error) {
+		func(ctx context.Context, client electrumClient) (string, error) {
 			return client.BroadcastTransaction(ctx, rawTx)
 		},
 		"BroadcastTransaction",
@@ -330,7 +349,7 @@ func (c *Connection) GetLatestBlockHeight() (uint, error) {
 	blockHeight, err := requestWithRetry(
 		c.parentCtx,
 		c,
-		func(ctx context.Context, client *electrum.Client) (int32, error) {
+		func(ctx context.Context, client electrumClient) (int32, error) {
 			tip, err := client.SubscribeHeadersSingle(ctx)
 			if err != nil {
 				return 0, fmt.Errorf("failed to get the blocks tip height: [%w]", err)
@@ -367,7 +386,7 @@ func (c *Connection) GetBlockHeader(
 		c,
 		func(
 			ctx context.Context,
-			client *electrum.Client,
+			client electrumClient,
 		) (*electrum.GetBlockHeaderResult, error) {
 			return client.GetBlockHeader(ctx, height, 0)
 		},
@@ -404,7 +423,7 @@ func (c *Connection) GetTransactionMerkleProof(
 		c,
 		func(
 			ctx context.Context,
-			client *electrum.Client,
+			client electrumClient,
 		) (*electrum.GetMerkleProofResult, error) {
 			return client.GetMerkleProof(
 				ctx,
@@ -544,7 +563,7 @@ func (c *Connection) getConfirmedScriptHistory(
 		c,
 		func(
 			ctx context.Context,
-			client *electrum.Client,
+			client electrumClient,
 		) ([]*electrum.GetMempoolResult, error) {
 			return client.GetHistory(ctx, reversedScriptHashString)
 		},
@@ -613,7 +632,7 @@ func (c *Connection) GetCoinbaseTxHash(blockHeight uint) (bitcoin.Hash, error) {
 		c,
 		func(
 			ctx context.Context,
-			client *electrum.Client,
+			client electrumClient,
 		) (string, error) {
 			return client.GetHashFromPosition(ctx, height, 0)
 		},
@@ -720,7 +739,7 @@ func (c *Connection) getScriptMempool(
 		c,
 		func(
 			ctx context.Context,
-			client *electrum.Client,
+			client electrumClient,
 		) ([]*electrum.GetMempoolResult, error) {
 			return client.GetMempool(ctx, reversedScriptHashString)
 		},
@@ -919,7 +938,7 @@ func (c *Connection) getScriptUtxos(
 		c,
 		func(
 			ctx context.Context,
-			client *electrum.Client,
+			client electrumClient,
 		) ([]*electrum.ListUnspentResult, error) {
 			return client.ListUnspent(ctx, reversedScriptHashString)
 		},
@@ -1038,7 +1057,9 @@ func isElectrumFeeOracleFailure(err error) bool {
 // retry loop). Persistent RPC errors for one confirmation target should not
 // exhaust RequestRetryTimeout; EstimateSatPerVByteFee tries looser targets next.
 func (c *Connection) getFeeBtcPerKbOnce(blocks uint32) (float32, error) {
-	if err := c.reconnectIfShutdown(); err != nil {
+	c.clientMutex.Lock()
+	defer c.clientMutex.Unlock()
+	if err := c.reconnectIfShutdown(c.parentCtx); err != nil {
 		return 0, err
 	}
 	requestCtx, requestCancel := context.WithTimeout(
@@ -1046,10 +1067,11 @@ func (c *Connection) getFeeBtcPerKbOnce(blocks uint32) (float32, error) {
 		c.config.RequestTimeout,
 	)
 	defer requestCancel()
-	c.clientMutex.Lock()
 	fee, err := c.client.GetFee(requestCtx, blocks)
-	c.clientMutex.Unlock()
 	if err != nil {
+		if !isElectrumFeeOracleFailure(err) {
+			c.failover(c.parentCtx)
+		}
 		return 0, fmt.Errorf("request failed: [%w]", err)
 	}
 	return fee, nil
@@ -1178,68 +1200,72 @@ func convertBtcKbToSatVByte(btcPerKbFee float32) int64 {
 	return int64(math.Round(satPerVByte))
 }
 
-func (c *Connection) electrumConnect() error {
-	var client *electrum.Client
-	var err error
-
-	logger.Debug("establishing connection to electrum server...")
-	client, err = connectWithRetry(
-		c,
-		func(ctx context.Context) (*electrum.Client, error) {
-			return electrum.NewClient(ctx, c.config.URL, nil)
-		},
-	)
-
-	if err == nil {
-		c.client = client
+// electrumConnect tries every configured server in turn within the connection
+// retry budget. The caller holds clientMutex after initialization.
+func (c *Connection) electrumConnect(ctx context.Context) error {
+	client, err := connectWithRetry(ctx, c, func(ctx context.Context) (electrumClient, error) {
+		url := c.serverURLs[c.serverIndex]
+		client, err := c.newClient(ctx, url)
+		if err == nil {
+			err = verifyServer(ctx, client, url)
+			if err != nil {
+				client.Shutdown()
+			}
+		}
+		if err != nil {
+			c.nextServer()
+			return nil, err
+		}
+		return client, nil
+	})
+	if err != nil {
+		return err
 	}
-
-	return err
+	c.client = client
+	return nil
 }
 
-func (c *Connection) verifyServer() error {
-	type Server struct {
-		version  string
-		protocol string
-	}
-
-	server, err := requestWithRetry(
-		c.parentCtx,
-		c,
-		func(ctx context.Context, client *electrum.Client) (*Server, error) {
-			serverVersion, protocolVersion, err := client.ServerVersion(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return &Server{serverVersion, protocolVersion}, nil
-		},
-		"ServerVersion",
-	)
+func verifyServer(ctx context.Context, client electrumClient, url string) error {
+	version, protocol, err := client.ServerVersion(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get server version: [%w]", err)
 	}
-
 	logger.Infof(
 		"connected to electrum server [version: [%s], protocol: [%s]]",
-		server.version,
-		server.protocol,
+		version,
+		protocol,
 	)
-
-	// Log a warning if connected to a server running an unsupported protocol version.
-	if !slices.Contains(supportedProtocolVersions, server.protocol) {
+	if !slices.Contains(supportedProtocolVersions, protocol) {
 		logger.Warnf(
 			"electrum server [%s] runs an unsupported protocol version: [%s]; expected one of: [%s]",
-			c.config.URL,
-			server.protocol,
+			url,
+			protocol,
 			strings.Join(supportedProtocolVersions, ","),
 		)
 	}
-
 	return nil
+}
+
+// nextServer and failover are called with clientMutex held.
+func (c *Connection) nextServer() {
+	c.serverIndex = (c.serverIndex + 1) % len(c.serverURLs)
+}
+
+func (c *Connection) failover(ctx context.Context) {
+	// Cancellation belongs to the caller, not to the server's health. A single
+	// configured URL remains pinned and retains the existing retry behavior.
+	if ctx.Err() != nil || c.parentCtx.Err() != nil || len(c.serverURLs) < 2 {
+		return
+	}
+	c.client.Shutdown()
+	c.client = nil
+	c.nextServer()
+	logger.Warn("electrum request failed; trying the next configured server")
 }
 
 func (c *Connection) keepAlive() {
 	ticker := time.NewTicker(c.config.KeepAliveInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -1247,7 +1273,7 @@ func (c *Connection) keepAlive() {
 			_, err := requestWithRetry(
 				c.parentCtx,
 				c,
-				func(ctx context.Context, client *electrum.Client) (interface{}, error) {
+				func(ctx context.Context, client electrumClient) (interface{}, error) {
 					return nil, client.Ping(ctx)
 				},
 				"Ping",
@@ -1260,23 +1286,28 @@ func (c *Connection) keepAlive() {
 				)
 			} else {
 				// Adjust ticker starting at the time of the latest successful ping.
-				ticker = time.NewTicker(c.config.KeepAliveInterval)
+				ticker.Reset(c.config.KeepAliveInterval)
 			}
 		case <-c.parentCtx.Done():
-			ticker.Stop()
-			c.client.Shutdown()
+			c.clientMutex.Lock()
+			if c.client != nil {
+				c.client.Shutdown()
+				c.client = nil
+			}
+			c.clientMutex.Unlock()
 			return
 		}
 	}
 }
 
 func connectWithRetry(
+	ctx context.Context,
 	c *Connection,
-	newClientFn func(ctx context.Context) (*electrum.Client, error),
-) (*electrum.Client, error) {
-	var result *electrum.Client
+	newClientFn func(ctx context.Context) (electrumClient, error),
+) (electrumClient, error) {
+	var result electrumClient
 	err := wrappers.DoWithDefaultRetry(
-		c.parentCtx,
+		ctx,
 		c.config.ConnectRetryTimeout,
 		func(ctx context.Context) error {
 			connectCtx, connectCancel := context.WithTimeout(
@@ -1300,7 +1331,7 @@ func connectWithRetry(
 func requestWithRetry[K any](
 	parentCtx context.Context,
 	c *Connection,
-	requestFn func(ctx context.Context, client *electrum.Client) (K, error),
+	requestFn func(ctx context.Context, client electrumClient) (K, error),
 	requestName string,
 ) (K, error) {
 	startTime := time.Now()
@@ -1312,18 +1343,20 @@ func requestWithRetry[K any](
 		parentCtx,
 		c.config.RequestRetryTimeout,
 		func(ctx context.Context) error {
-			if err := c.reconnectIfShutdown(); err != nil {
+			c.clientMutex.Lock()
+			defer c.clientMutex.Unlock()
+
+			if err := c.reconnectIfShutdown(ctx); err != nil {
 				return err
 			}
 
 			requestCtx, requestCancel := context.WithTimeout(ctx, c.config.RequestTimeout)
 			defer requestCancel()
 
-			c.clientMutex.Lock()
 			r, err := requestFn(requestCtx, c.client)
-			c.clientMutex.Unlock()
 
 			if err != nil {
+				c.failover(ctx)
 				return fmt.Errorf("request failed: [%w]", err)
 			}
 
@@ -1347,14 +1380,22 @@ func requestWithRetry[K any](
 	return result, err
 }
 
-func (c *Connection) reconnectIfShutdown() error {
-	c.clientMutex.Lock()
-	defer c.clientMutex.Unlock()
-
-	isClientShutdown := c.client.IsShutdown()
-	if isClientShutdown {
+// reconnectIfShutdown is called with clientMutex held. Reconnection is bounded
+// by the caller's context as well as the connection retry timeout.
+func (c *Connection) reconnectIfShutdown(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := c.parentCtx.Err(); err != nil {
+		return err
+	}
+	if c.client != nil && c.client.IsShutdown() {
+		c.client = nil
+		c.nextServer()
+	}
+	if c.client == nil {
 		logger.Warn("connection to electrum server is down; reconnecting...")
-		err := c.electrumConnect()
+		err := c.electrumConnect(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to reconnect to electrum server: [%w]", err)
 		}
