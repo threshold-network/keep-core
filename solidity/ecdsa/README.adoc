@@ -422,7 +422,7 @@ presented below.
 
 Please make sure you have the following prerequisites installed on your machine:
 
-- https://nodejs.org[Node.js] >=24.11.1
+- https://nodejs.org[Node.js] >=24.0.0
 - https://yarnpkg.com[Yarn] >=1.22
 
 === Build contracts
