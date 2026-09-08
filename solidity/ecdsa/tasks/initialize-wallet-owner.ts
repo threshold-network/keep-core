@@ -18,9 +18,9 @@ async function initializeWalletOwner(
   const { getNamedAccounts, ethers, deployments, helpers } = hre
   const { read, execute } = deployments
   const { deployer, governance } = await getNamedAccounts()
-  const ZERO = ethers.constants.AddressZero
+  const ZERO = ethers.ZeroAddress
 
-  if (!ethers.utils.isAddress(walletOwnerAddress)) {
+  if (!ethers.isAddress(walletOwnerAddress)) {
     throw Error(`invalid address: ${walletOwnerAddress}`)
   }
 

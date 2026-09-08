@@ -17,7 +17,7 @@ describe("AltBn128", () => {
   const fixture = async () => {
     const TestAltBn128 = await ethers.getContractFactory("TestAltBn128")
     testAltBn128 = await TestAltBn128.deploy()
-    await testAltBn128.deployed()
+    await testAltBn128.waitForDeployment()
 
     return testAltBn128
   }

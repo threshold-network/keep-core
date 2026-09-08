@@ -1,21 +1,22 @@
 import { deployments, ethers, upgrades, helpers } from "hardhat"
 import chai, { expect } from "chai"
 import chaiAsPromised from "chai-as-promised"
-import { keccak256 } from "ethers/lib/utils"
+import { keccak256 } from "ethers"
 
+import requireResult from "./helpers/chain"
 import { params, walletRegistryFixture } from "./fixtures"
 import { noMisbehaved, signAndSubmitCorrectDkgResult } from "./utils/dkg"
 import ecdsaData from "./data/ecdsa"
 import { createNewWallet } from "./utils/wallets"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { WalletRegistry, WalletRegistryV2 } from "../typechain"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
+import type { Allowlist, WalletRegistry, WalletRegistryV2 } from "../typechain"
 import type { FactoryOptions } from "hardhat/types"
-import type { Contract } from "ethers"
+import type { BaseContract, Contract } from "ethers"
 import type { UpgradeProxyOptions } from "@openzeppelin/hardhat-upgrades/src/utils/options"
 
 const { mineBlocksTo } = helpers.time
-const { AddressZero } = ethers.constants
+const { ZeroAddress: AddressZero } = ethers
 
 chai.use(chaiAsPromised)
 
@@ -37,7 +38,9 @@ describe("WalletRegistry - Upgrade", async () => {
         await expect(
           upgradeProxy("WalletRegistry", "WalletRegistry", {
             factoryOpts: {
-              libraries: { EcdsaInactivity: EcdsaInactivity.address },
+              libraries: {
+                EcdsaInactivity: await EcdsaInactivity.getAddress(),
+              },
               signer: proxyAdminOwner,
             },
             proxyOpts: {
@@ -57,7 +60,7 @@ describe("WalletRegistry - Upgrade", async () => {
     })
 
     describe("T-005: Atomic upgrade without governance modifier (ISSUE #2)", () => {
-      let allowlist: Contract
+      let allowlist: Allowlist
 
       beforeEach(async () => {
         await deployments.fixture()
@@ -65,7 +68,7 @@ describe("WalletRegistry - Upgrade", async () => {
         // Deploy a minimal Allowlist contract for testing
         const AllowlistFactory = await ethers.getContractFactory("Allowlist")
         allowlist = await AllowlistFactory.deploy()
-        await allowlist.deployed()
+        await allowlist.waitForDeployment()
       })
 
       it("should allow initializeV2 via upgradeToAndCall without governance restriction", async () => {
@@ -81,14 +84,16 @@ describe("WalletRegistry - Upgrade", async () => {
           "WalletRegistry",
           {
             factoryOpts: {
-              libraries: { EcdsaInactivity: EcdsaInactivity.address },
+              libraries: {
+                EcdsaInactivity: await EcdsaInactivity.getAddress(),
+              },
               signer: proxyAdminOwner, // Proxy admin owner, NOT governance
             },
             proxyOpts: {
               constructorArgs: [AddressZero, AddressZero],
               call: {
                 fn: "initializeV2",
-                args: [allowlist.address], // Valid allowlist address
+                args: [await allowlist.getAddress()], // Valid allowlist address
               },
               unsafeAllow: ["external-library-linking"],
             },
@@ -96,22 +101,26 @@ describe("WalletRegistry - Upgrade", async () => {
         )
 
         // Verify upgrade succeeded
-        expect(newWalletRegistry.address).to.equal(walletRegistry.address)
-        expect(await newWalletRegistry.allowlist()).to.equal(allowlist.address)
+        expect(await newWalletRegistry.getAddress()).to.equal(
+          await walletRegistry.getAddress(),
+        )
+        expect(await newWalletRegistry.getFunction("allowlist")()).to.equal(
+          await allowlist.getAddress(),
+        )
       })
 
       it("should prevent re-initialization with reinitializer(2) modifier", async () => {
         // First upgrade with initializeV2
         await upgradeProxy("WalletRegistry", "WalletRegistry", {
           factoryOpts: {
-            libraries: { EcdsaInactivity: EcdsaInactivity.address },
+            libraries: { EcdsaInactivity: await EcdsaInactivity.getAddress() },
             signer: proxyAdminOwner,
           },
           proxyOpts: {
             constructorArgs: [AddressZero, AddressZero],
             call: {
               fn: "initializeV2",
-              args: [allowlist.address],
+              args: [await allowlist.getAddress()],
             },
             unsafeAllow: ["external-library-linking"],
           },
@@ -123,11 +132,11 @@ describe("WalletRegistry - Upgrade", async () => {
         // Deploy another allowlist for re-initialization attempt
         const AllowlistFactory = await ethers.getContractFactory("Allowlist")
         const newAllowlist = await AllowlistFactory.deploy()
-        await newAllowlist.deployed()
+        await newAllowlist.waitForDeployment()
 
         // Attempt to call initializeV2 again should fail
         await expect(
-          walletRegistry.initializeV2(newAllowlist.address),
+          walletRegistry.initializeV2(await newAllowlist.getAddress()),
         ).to.be.revertedWith("Initializable: contract is already initialized")
       })
 
@@ -138,7 +147,9 @@ describe("WalletRegistry - Upgrade", async () => {
         await expect(
           upgradeProxy("WalletRegistry", "WalletRegistry", {
             factoryOpts: {
-              libraries: { EcdsaInactivity: EcdsaInactivity.address },
+              libraries: {
+                EcdsaInactivity: await EcdsaInactivity.getAddress(),
+              },
               signer: proxyAdminOwner,
             },
             proxyOpts: {
@@ -167,7 +178,9 @@ describe("WalletRegistry - Upgrade", async () => {
           await expect(
             upgradeProxy("WalletRegistry", "WalletRegistryV2MisplacedNewSlot", {
               factoryOpts: {
-                libraries: { EcdsaInactivity: EcdsaInactivity.address },
+                libraries: {
+                  EcdsaInactivity: await EcdsaInactivity.getAddress(),
+                },
                 signer: proxyAdminOwner,
               },
               proxyOpts: {
@@ -186,7 +199,9 @@ describe("WalletRegistry - Upgrade", async () => {
           await expect(
             upgradeProxy("WalletRegistry", "WalletRegistryV2MissingSlot", {
               factoryOpts: {
-                libraries: { EcdsaInactivity: EcdsaInactivity.address },
+                libraries: {
+                  EcdsaInactivity: await EcdsaInactivity.getAddress(),
+                },
                 signer: proxyAdminOwner,
               },
               proxyOpts: {
@@ -229,7 +244,7 @@ describe("WalletRegistry - Upgrade", async () => {
         )) as WalletRegistry & WalletRegistryV2
 
         expect(await walletRegistry.governance()).equal(
-          walletRegistryGovernance.address,
+          await walletRegistryGovernance.getAddress(),
         )
 
         newWalletRegistry = (await upgradeProxy(
@@ -238,10 +253,15 @@ describe("WalletRegistry - Upgrade", async () => {
           {
             factoryOpts: {
               signer: proxyAdminOwner,
-              libraries: { EcdsaInactivity: EcdsaInactivity.address },
+              libraries: {
+                EcdsaInactivity: await EcdsaInactivity.getAddress(),
+              },
             },
             proxyOpts: {
-              constructorArgs: [newSortitionPoolAddress, tokenStaking.address],
+              constructorArgs: [
+                newSortitionPoolAddress,
+                await tokenStaking.getAddress(),
+              ],
               call: {
                 fn: "initializeV2",
                 args: [newRandomBeaconAddress, newVarValue],
@@ -253,12 +273,14 @@ describe("WalletRegistry - Upgrade", async () => {
       })
 
       it("new instance should have the same address as the old one", async () => {
-        expect(newWalletRegistry.address).equal(walletRegistry.address)
+        expect(await newWalletRegistry.getAddress()).equal(
+          await walletRegistry.getAddress(),
+        )
       })
 
       it("should not update governance", async () => {
         expect(await walletRegistry.governance()).equal(
-          walletRegistryGovernance.address,
+          await walletRegistryGovernance.getAddress(),
         )
       })
 
@@ -280,7 +302,7 @@ describe("WalletRegistry - Upgrade", async () => {
 
       it("should not update already set variable", async () => {
         expect(await walletRegistry.reimbursementPool()).to.be.equal(
-          reimbursementPool.address,
+          await reimbursementPool.getAddress(),
         )
       })
 
@@ -354,13 +376,13 @@ describe("WalletRegistry - Upgrade", async () => {
             .connect(walletOwner.wallet)
             .requestNewWallet()
 
-          const relayEntry = ethers.utils.randomBytes(32)
-          const dkgSeed = ethers.BigNumber.from(keccak256(relayEntry))
+          const relayEntry = ethers.randomBytes(32)
+          const dkgSeed = BigInt(keccak256(relayEntry))
 
           // eslint-disable-next-line no-underscore-dangle
           await walletRegistryV1
             .connect(randomBeacon.wallet)
-            .__beaconCallback(relayEntry, 0)
+            .__beaconCallback(ethers.toBigInt(relayEntry), 0)
 
           // Submit DKG result on Wallet Registry V1
           const {
@@ -371,7 +393,7 @@ describe("WalletRegistry - Upgrade", async () => {
             walletRegistryV1,
             expectedNewWalletData.publicKey,
             dkgSeed,
-            (await requestNewWalletTx.wait()).blockNumber,
+            requireResult(await requestNewWalletTx.wait()).blockNumber,
             noMisbehaved,
           )
 
@@ -384,10 +406,15 @@ describe("WalletRegistry - Upgrade", async () => {
             {
               factoryOpts: {
                 signer: proxyAdminOwner,
-                libraries: { EcdsaInactivity: EcdsaInactivity.address },
+                libraries: {
+                  EcdsaInactivity: await EcdsaInactivity.getAddress(),
+                },
               },
               proxyOpts: {
-                constructorArgs: [sortitionPool.address, staking.address],
+                constructorArgs: [
+                  await sortitionPool.getAddress(),
+                  await staking.getAddress(),
+                ],
                 call: {
                   fn: "initializeV2",
                   args: [AddressZero, "new variable set for new contract"],
@@ -399,7 +426,7 @@ describe("WalletRegistry - Upgrade", async () => {
 
           // Approve DKG result on Wallet Registry V2
           await mineBlocksTo(
-            (await submitDkgResultTx.wait()).blockNumber +
+            requireResult(await submitDkgResultTx.wait()).blockNumber +
               params.dkgResultChallengePeriodLength,
           )
 
@@ -435,7 +462,7 @@ describe("WalletRegistry - Upgrade", async () => {
         upgradeProxy("WalletRegistry", "WalletRegistryV2", {
           factoryOpts: {
             signer: (await helpers.signers.getNamedSigners()).deployer,
-            libraries: { EcdsaInactivity: EcdsaInactivity.address },
+            libraries: { EcdsaInactivity: await EcdsaInactivity.getAddress() },
           },
           proxyOpts: {
             constructorArgs: [AddressZero, AddressZero],
@@ -460,7 +487,7 @@ async function upgradeProxy(
   currentContractName: string,
   newContractName: string,
   opts?: UpgradesUpgradeOptions,
-): Promise<Contract> {
+): Promise<BaseContract> {
   const currentContract = await deployments.get(currentContractName)
 
   const newContract = await ethers.getContractFactory(

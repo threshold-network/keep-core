@@ -1,0 +1,89 @@
+diff --git a/src/utils/etherscan-api.ts b/src/utils/etherscan-api.ts
+--- a/src/utils/etherscan-api.ts
++++ b/src/utils/etherscan-api.ts
+@@ -2,36 +2,38 @@
+ import { HardhatRuntimeEnvironment } from 'hardhat/types';
+ 
+ import { request } from 'undici';
+ 
+ import debug from './debug';
+ import { Etherscan } from '@nomicfoundation/hardhat-verify/etherscan';
+ 
+ /**
+  * Call the configured Etherscan API with the given parameters.
+  *
+  * @param etherscan Etherscan instance
+  * @param params The API parameters to call with
+  * @returns The Etherscan API response
+  */
+ export async function callEtherscanApi(etherscan: Etherscan, params: any): Promise<EtherscanResponseBody> {
+-  const parameters = new URLSearchParams({ ...params, apikey: etherscan.apiKey });
++  const parameters = { ...params, apikey: etherscan.apiKey };
++  if (etherscan.chainId !== undefined) {
++    parameters.chainid = etherscan.chainId;
++  }
+ 
+   const response = await request(etherscan.apiUrl, {
+     method: 'POST',
+-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+-    body: parameters.toString(),
++    query: parameters,
+   });
+ 
+   if (!(response.statusCode >= 200 && response.statusCode <= 299)) {
+     const responseBodyText = await response.body.text();
+     throw new UpgradesError(
+       `Etherscan API call failed with status ${response.statusCode}, response: ${responseBodyText}`,
+     );
+   }
+ 
+   const responseBodyJson = await response.body.json();
+   debug('Etherscan response', JSON.stringify(responseBodyJson));
+ 
+   return responseBodyJson;
+ }
+ 
+diff --git a/dist/utils/etherscan-api.js b/dist/utils/etherscan-api.js
+--- a/dist/utils/etherscan-api.js
++++ b/dist/utils/etherscan-api.js
+@@ -4,35 +4,37 @@
+ };
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.verifyAndGetStatus = exports.RESPONSE_OK = exports.getEtherscanInstance = exports.callEtherscanApi = void 0;
+ const upgrades_core_1 = require("@openzeppelin/upgrades-core");
+ const undici_1 = require("undici");
+ const debug_1 = __importDefault(require("./debug"));
+ const etherscan_1 = require("@nomicfoundation/hardhat-verify/etherscan");
+ /**
+  * Call the configured Etherscan API with the given parameters.
+  *
+  * @param etherscan Etherscan instance
+  * @param params The API parameters to call with
+  * @returns The Etherscan API response
+  */
+ async function callEtherscanApi(etherscan, params) {
+-    const parameters = new URLSearchParams({ ...params, apikey: etherscan.apiKey });
++    const parameters = { ...params, apikey: etherscan.apiKey };
++    if (etherscan.chainId !== undefined) {
++        parameters.chainid = etherscan.chainId;
++    }
+     const response = await (0, undici_1.request)(etherscan.apiUrl, {
+         method: 'POST',
+-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+-        body: parameters.toString(),
++        query: parameters,
+     });
+     if (!(response.statusCode >= 200 && response.statusCode <= 299)) {
+         const responseBodyText = await response.body.text();
+         throw new upgrades_core_1.UpgradesError(`Etherscan API call failed with status ${response.statusCode}, response: ${responseBodyText}`);
+     }
+     const responseBodyJson = await response.body.json();
+     (0, debug_1.default)('Etherscan response', JSON.stringify(responseBodyJson));
+     return responseBodyJson;
+ }
+ exports.callEtherscanApi = callEtherscanApi;
+ /**
+  * Gets an Etherscan instance based on Hardhat config.
+  * Throws an error if Etherscan API key is not present in config.
+  */
+ async function getEtherscanInstance(hre) {

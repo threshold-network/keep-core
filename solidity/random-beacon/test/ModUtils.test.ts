@@ -9,7 +9,7 @@ describe("ModUtils", () => {
   const fixture = async () => {
     const TestModUtils = await ethers.getContractFactory("TestModUtils")
     testModUtils = await TestModUtils.deploy()
-    await testModUtils.deployed()
+    await testModUtils.waitForDeployment()
 
     return testModUtils
   }

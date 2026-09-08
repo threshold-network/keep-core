@@ -1,6 +1,7 @@
 import { ethers } from "hardhat"
 import { expect } from "chai"
 
+import requireResult from "./chain"
 import { createMock, expectCalledWith } from "./mock"
 
 import type { Mock } from "./mock"
@@ -15,7 +16,7 @@ describe("MockContract", () => {
 
     const factory = await ethers.getContractFactory("MockTargetConsumer")
     consumer = (await factory.deploy(target.address)) as MockTargetConsumer
-    await consumer.deployed()
+    await consumer.waitForDeployment()
   })
 
   describe("view functions reached by STATICCALL", () => {
@@ -92,9 +93,9 @@ describe("MockContract", () => {
     it("reverts every call to the function", async () => {
       await target.doThing.reverts("nope")
 
-      await expect(
-        consumer.doThing(ethers.constants.AddressZero, 1),
-      ).to.be.revertedWith("nope")
+      await expect(consumer.doThing(ethers.ZeroAddress, 1)).to.be.revertedWith(
+        "nope",
+      )
     })
 
     it("reverts only the matching arguments", async () => {
@@ -150,7 +151,7 @@ describe("MockContract", () => {
     it("counts each function separately", async () => {
       await target.doThing.returns(true)
 
-      await consumer.doThing(ethers.constants.AddressZero, 1)
+      await consumer.doThing(ethers.ZeroAddress, 1)
       await consumer.noReturn(1)
 
       expect(await target.doThing.callCount()).to.equal(1)
@@ -161,13 +162,13 @@ describe("MockContract", () => {
   describe("reset", () => {
     it("clears recorded calls and configured responses for one function", async () => {
       await target.doThing.returns(true)
-      await consumer.doThing(ethers.constants.AddressZero, 1)
+      await consumer.doThing(ethers.ZeroAddress, 1)
 
       await target.doThing.reset()
 
       expect(await target.doThing.callCount()).to.equal(0)
       // The configured `true` is gone, so the call answers with empty data.
-      await consumer.doThing(ethers.constants.AddressZero, 1)
+      await consumer.doThing(ethers.ZeroAddress, 1)
       expect(await consumer.lastResult()).to.equal(false)
     })
 
@@ -215,10 +216,10 @@ describe("MockContract", () => {
       // `msg.sender == someContract`.
       const factory = await ethers.getContractFactory("MockTargetConsumer")
       const other = await factory.deploy(target.address)
-      await other.deployed()
+      await other.waitForDeployment()
 
       const tx = await other.connect(target.wallet).noReturn(1)
-      const receipt = await tx.wait()
+      const receipt = requireResult(await tx.wait())
 
       expect(receipt.from).to.equal(target.address)
     })
@@ -226,9 +227,7 @@ describe("MockContract", () => {
 
   describe("address option", () => {
     it("deploys at a requested address", async () => {
-      const address = ethers.utils.getAddress(
-        `0x${"ab".repeat(20)}`.toLowerCase(),
-      )
+      const address = ethers.getAddress(`0x${"ab".repeat(20)}`.toLowerCase())
 
       const pinned = await createMock<IMockTarget>("IMockTarget", { address })
 
@@ -237,7 +236,7 @@ describe("MockContract", () => {
 
       const factory = await ethers.getContractFactory("MockTargetConsumer")
       const pinnedConsumer = await factory.deploy(address)
-      await pinnedConsumer.deployed()
+      await pinnedConsumer.waitForDeployment()
 
       expect(await pinnedConsumer.readValueThroughStaticCall(1)).to.equal(7)
     })
@@ -250,7 +249,7 @@ describe("MockContract", () => {
       // real ecdsaWalletRegistry and relay. `hardhat_setCode` replaces the code
       // and leaves the storage, so a mock keeping its state at slots 0, 1, 2...
       // would read that leftover as its own.
-      const address = ethers.utils.getAddress(`0x${"cd".repeat(20)}`)
+      const address = ethers.getAddress(`0x${"cd".repeat(20)}`)
       const garbage =
         "0xdeadbeef00000000000000000000000000000000000000000000000000000001"
 
@@ -258,7 +257,7 @@ describe("MockContract", () => {
         Array.from({ length: 8 }, (_, slot) =>
           ethers.provider.send("hardhat_setStorageAt", [
             address,
-            ethers.utils.hexValue(slot),
+            ethers.toQuantity(slot),
             garbage,
           ]),
         ),
@@ -272,7 +271,7 @@ describe("MockContract", () => {
 
       const factory = await ethers.getContractFactory("MockTargetConsumer")
       const pinnedConsumer = await factory.deploy(address)
-      await pinnedConsumer.deployed()
+      await pinnedConsumer.waitForDeployment()
 
       expect(await pinnedConsumer.readValueThroughStaticCall(1)).to.equal(7)
     })
