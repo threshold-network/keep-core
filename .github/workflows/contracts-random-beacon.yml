@@ -48,10 +48,14 @@ jobs:
             path-filter:
               - './solidity/random-beacon/**'
               - './.github/workflows/contracts-random-beacon.yml'
+              - './.github/actions/install-yarn-deps/**'
+              - './.github/actions/docker-build-push/**'
 
   contracts-lint:
     needs: contracts-detect-changes
-    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
+    if: |
+      needs.contracts-detect-changes.outputs.path-filter == 'true'
+        || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,10 +64,10 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
       - uses: ./.github/actions/install-yarn-deps
         with:
           working-directory: ./solidity/random-beacon
@@ -74,7 +78,9 @@ jobs:
 
   contracts-slither:
     needs: contracts-detect-changes
-    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
+    if: |
+      needs.contracts-detect-changes.outputs.path-filter == 'true'
+        || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -83,10 +89,10 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
       - uses: actions/setup-python@v4
         with:
           python-version: 3.10.8
@@ -109,7 +115,9 @@ jobs:
 
   contracts-build-and-test:
     needs: contracts-detect-changes
-    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
+    if: |
+      needs.contracts-detect-changes.outputs.path-filter == 'true'
+        || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -119,10 +127,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:
@@ -137,7 +145,9 @@ jobs:
 
   contracts-deployment-dry-run:
     needs: contracts-detect-changes
-    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
+    if: |
+      needs.contracts-detect-changes.outputs.path-filter == 'true'
+        || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -147,10 +157,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:
@@ -203,10 +213,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:
@@ -245,10 +255,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
           registry-url: "https://registry.npmjs.org"
 
       - uses: ./.github/actions/install-yarn-deps
@@ -343,10 +353,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
           registry-url: "https://registry.npmjs.org"
 
       - uses: ./.github/actions/install-yarn-deps

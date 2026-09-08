@@ -99,7 +99,16 @@ func (pm *PerformanceMetrics) Stop() {
 // registerAllMetrics registers all performance metrics with 0 values
 // so they appear in the /metrics endpoint even before operations occur.
 func (pm *PerformanceMetrics) registerAllMetrics() {
-	// ----- counter metrics -----
+	pm.registerCounterMetrics()
+	pm.registerWalletActionMetrics()
+	pm.registerHistogramMetrics()
+	pm.registerGaugeMetrics()
+}
+
+// registerCounterMetrics registers all counter metrics with 0 initial values.
+// Map entries are populated before observers are registered so that observer
+// callbacks never read the map while it is being written concurrently.
+func (pm *PerformanceMetrics) registerCounterMetrics() {
 	counters := []string{
 		// ----- DKG counters -----
 		MetricDKGJoinedTotal,
@@ -117,14 +126,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricUnmonitoredWalletTransactionsTotal,
 
 		// ----- SPV proof-skip counters -----
-		MetricRedemptionProofSubmissionsTotal,
-		MetricRedemptionProofSubmissionsSuccessTotal,
-		MetricRedemptionProofSubmissionsFailedTotal,
-		MetricDepositSweepProofSubmissionsTotal,
-		MetricDepositSweepProofSubmissionsSuccessTotal,
-		MetricDepositSweepProofSubmissionsFailedTotal,
+
 		MetricSpvProofSkippedOutsideRelayRangeTotal,
 		MetricSpvProofSkippedExceededMaxHeadersTotal,
+		MetricSpvProofTaskFailuresTotal,
+		MetricRedemptionProofTaskFailuresTotal,
 
 		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
@@ -134,6 +140,18 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricRedemptionExecutionsTotal,
 		MetricRedemptionExecutionsSuccessTotal,
 		MetricRedemptionExecutionsFailedTotal,
+		MetricRedemptionProposalGenerationTotal,
+		MetricRedemptionProposalGenerationFailedTotal,
+		MetricRedemptionProposalGenerationSuccessTotal,
+		MetricRedemptionProposalBroadcastTotal,
+		MetricRedemptionProposalBroadcastFailedTotal,
+		MetricRedemptionProofSubmissionsTotal,
+		MetricRedemptionProofSubmissionsSuccessTotal,
+		MetricRedemptionProofSubmissionsFailedTotal,
+		MetricDepositSweepProofSubmissionsTotal,
+		MetricDepositSweepProofSubmissionsSuccessTotal,
+		MetricDepositSweepProofSubmissionsFailedTotal,
+
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
@@ -184,7 +202,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// ----- wallet action metrics -----
+}
+
+// registerWalletActionMetrics registers per-action-type wallet counters and
+// duration histograms with 0 initial values.
+func (pm *PerformanceMetrics) registerWalletActionMetrics() {
 	// For each action type, register: total, success_total, failed_total, duration_seconds
 	for _, actionType := range GetAllWalletActionTypes() {
 		actionCounters := []string{
@@ -245,7 +267,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		)
 	}
 
-	// ----- histogram metrics -----
+}
+
+// registerHistogramMetrics registers standalone duration/histogram metrics with
+// 0 initial values.
+func (pm *PerformanceMetrics) registerHistogramMetrics() {
 	// These use the actual metric names as used in the codebase.
 	durationMetrics := []string{
 		MetricDKGDurationSeconds,
@@ -302,8 +328,16 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		pm.registry.ObserveApplicationSource("performance", sources)
 	}
 
-	// ----- gauge metrics -----
+}
+
+// registerGaugeMetrics registers all gauge metrics with 0 initial values.
+func (pm *PerformanceMetrics) registerGaugeMetrics() {
 	gauges := []string{
+		MetricSpvMaintainerActive,
+		MetricSpvMaintainerLastActivityTimestamp,
+		MetricSpvMaintainerLastSuccessTimestamp,
+		MetricSpvMaintainerLastFailureTimestamp,
+		MetricSpvMaintainerMaxBackoffSeconds,
 		MetricWalletDispatcherActiveActions,
 		MetricIncomingMessageQueueSize,
 		MetricMessageHandlerQueueSize,
@@ -545,6 +579,13 @@ const (
 	MetricRedemptionExecutionsFailedTotal  = "redemption_executions_failed_total"
 	MetricRedemptionActionDurationSeconds  = "redemption_action_duration_seconds"
 
+	// Redemption proposal counters distinguish task generation from P2P broadcast.
+	// Recorded only when the node is acting as coordination leader for the wallet/window.
+	MetricRedemptionProposalGenerationTotal        = "redemption_proposal_generation_total"
+	MetricRedemptionProposalGenerationFailedTotal  = "redemption_proposal_generation_failed_total"
+	MetricRedemptionProposalGenerationSuccessTotal = "redemption_proposal_generation_success_total"
+	MetricRedemptionProposalBroadcastTotal         = "redemption_proposal_broadcast_total"
+	MetricRedemptionProposalBroadcastFailedTotal   = "redemption_proposal_broadcast_failed_total"
 	// Redemption Proof Submission Metrics (SPV maintainer)
 	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"
 	MetricRedemptionProofSubmissionsSuccessTotal = "redemption_proof_submissions_success_total"
@@ -554,6 +595,18 @@ const (
 	MetricDepositSweepProofSubmissionsTotal        = "deposit_sweep_proof_submissions_total"
 	MetricDepositSweepProofSubmissionsSuccessTotal = "deposit_sweep_proof_submissions_success_total"
 	MetricDepositSweepProofSubmissionsFailedTotal  = "deposit_sweep_proof_submissions_failed_total"
+
+	// SPV Maintainer Health Metrics (proof-task failures and control-loop
+	// lifecycle gauges)
+	// MetricSpvProofTaskFailuresTotal and MetricRedemptionProofTaskFailuresTotal
+	// cover discovery and proof-info errors, not just submission failures.
+	MetricSpvProofTaskFailuresTotal          = "spv_proof_task_failures_total"
+	MetricRedemptionProofTaskFailuresTotal   = "redemption_proof_task_failures_total"
+	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"
+	MetricSpvMaintainerActive                = "spv_maintainer_active"
+	MetricSpvMaintainerLastActivityTimestamp = "spv_maintainer_last_activity_timestamp_seconds"
+	MetricSpvMaintainerLastSuccessTimestamp  = "spv_maintainer_last_success_timestamp_seconds"
+	MetricSpvMaintainerMaxBackoffSeconds     = "spv_maintainer_max_backoff_seconds"
 
 	// SPV Proof Skip Metrics (SPV maintainer)
 	// MetricSpvProofSkippedOutsideRelayRangeTotal counts the number of

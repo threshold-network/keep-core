@@ -11,11 +11,15 @@ import (
 // SubmitMovedFundsSweepProof prepares moved funds sweep proof for the given
 // transaction and submits it to the on-chain contract. If the number of
 // required confirmations is `0`, an error is returned.
+// The metricsRecorder parameter is accepted to satisfy transactionProofSubmitter
+// but is currently unused: moved funds sweep proof submissions are not yet
+// instrumented with metrics.
 func SubmitMovedFundsSweepProof(
 	transactionHash bitcoin.Hash,
 	requiredConfirmations uint,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
+	_ MetricsRecorder,
 ) error {
 	return submitMovedFundsSweepProof(
 		transactionHash,
@@ -137,19 +141,10 @@ func getUnprovenMovedFundsSweepTransactions(
 	[]*bitcoin.Transaction,
 	error,
 ) {
-	blockCounter, err := spvChain.BlockCounter()
+	startBlock, err := unprovenSearchStartBlock(historyDepth, spvChain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block counter: [%v]", err)
+		return nil, err
 	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	// Calculate the starting block of the range in which the events will be
-	// searched for.
-	startBlock := currentBlock - historyDepth
 
 	events, err :=
 		spvChain.PastMovingFundsCommitmentSubmittedEvents(
@@ -211,45 +206,31 @@ func getUnprovenMovedFundsSweepTransactions(
 		// When wallet makes a moved funds sweep transaction, it transfers
 		// funds to itself. Therefore we can search all the transactions that
 		// pay to the wallet's public key hash.
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		//
+		// A wallet can have only one unproven moved funds sweep transaction at
+		// a time, so we stop at the first match.
+		unproven, err := collectUnprovenWalletTransactions(
 			walletPublicKeyHash,
 			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenMovedFundsSweepTransaction(
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenMovedFundsSweepTransaction(
 					transaction,
 					walletPublicKeyHash,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven moved "+
-						"funds sweep transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenMovedFundsSweepTransactions = append(
-					unprovenMovedFundsSweepTransactions,
-					transaction,
-				)
-
-				// A wallet can have only one unproven moved funds sweep
-				// transaction at a time. If we found such transaction, we don't
-				// have to look at this wallet's transactions anymore.
-				break
-			}
+			},
+			true,
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenMovedFundsSweepTransactions = append(
+			unprovenMovedFundsSweepTransactions,
+			unproven...,
+		)
 	}
 
 	return unprovenMovedFundsSweepTransactions, nil

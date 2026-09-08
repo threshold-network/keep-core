@@ -1286,7 +1286,7 @@ func connectWithRetry(
 	return result, err
 }
 
-func requestWithRetry[K interface{}](
+func requestWithRetry[K any](
 	parentCtx context.Context,
 	c *Connection,
 	requestFn func(ctx context.Context, client *electrum.Client) (K, error),

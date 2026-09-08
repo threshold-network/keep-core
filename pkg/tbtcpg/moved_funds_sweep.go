@@ -393,32 +393,10 @@ func EstimateMovedFundsSweepFee(
 		AddPublicKeyHashInputs(inputCount, true).
 		AddPublicKeyHashOutputs(1, true)
 
-	transactionSize, err := sizeEstimator.VirtualSize()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"cannot estimate transaction virtual size: [%v]",
-			err,
-		)
-	}
-
-	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
-
-	totalFee, err := feeEstimator.EstimateFee(transactionSize)
-	if err != nil {
-		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
-	}
-
-	if uint64(totalFee) > sweepTxMaxTotalFee {
-		return 0, ErrSweepTxFeeTooHigh
-	}
-
-	// Enforce the safe minimum fee rate and buffer so a non-RBF moved funds
-	// sweep transaction is never broadcast below the floor where it could get
-	// stuck and jam the wallet.
-	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, sweepTxMaxTotalFee)
-	if err != nil {
-		return 0, err
-	}
-
-	return totalFee, nil
+	return estimateCappedFee(
+		btcChain,
+		sizeEstimator,
+		sweepTxMaxTotalFee,
+		ErrSweepTxFeeTooHigh,
+	)
 }

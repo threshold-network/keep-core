@@ -528,7 +528,6 @@ func TestSpvProofSkipCountersRegistered(t *testing.T) {
 		}
 
 		assertCounterExportedInRegistry(t, registry, counterName)
-
 		if value := pm.GetCounterValue(counterName); value != 0 {
 			t.Errorf("counter %s should start at 0, got %v", counterName, value)
 		}

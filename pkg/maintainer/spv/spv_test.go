@@ -2,6 +2,7 @@ package spv
 
 import (
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"reflect"
 	"strings"
@@ -446,14 +447,23 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 	)
 }
 
-// recordingMetricsRecorder captures IncrementCounter calls for assertions.
-// proveTransactions invokes it synchronously, so no locking is needed.
+// recordingMetricsRecorder captures IncrementCounter and SetGauge calls for
+// assertions. proveTransactions and the maintainer control loop invoke it
+// synchronously, so no locking is needed.
 type recordingMetricsRecorder struct {
 	counters map[string]float64
+	gauges   map[string]float64
 }
 
 func (r *recordingMetricsRecorder) IncrementCounter(name string, value float64) {
 	r.counters[name] += value
+}
+
+func (r *recordingMetricsRecorder) SetGauge(name string, value float64) {
+	if r.gauges == nil {
+		r.gauges = make(map[string]float64)
+	}
+	r.gauges[name] = value
 }
 
 // TestProveTransactions covers the caller-side handling of each proofSkipReason
@@ -488,6 +498,7 @@ func TestProveTransactions(t *testing.T) {
 		transactionConfirmations uint
 		expectSubmitted          bool
 		expectedCounter          string
+		submissionError          bool
 	}{
 		// Decisive header (difficulty 8) matches neither epoch -> skipped.
 		"outside relay range is skipped and metered": {
@@ -504,6 +515,13 @@ func TestProveTransactions(t *testing.T) {
 			transactionConfirmations: 150,
 			expectSubmitted:          false,
 			expectedCounter:          "spv_proof_skipped_exceeded_max_headers_total",
+		},
+		"submission failure is counted": {
+			headerDifficultyAt:       func(uint) *big.Int { return big.NewInt(32) },
+			headersTo:                proofStart + 19,
+			transactionConfirmations: 20,
+			expectSubmitted:          true,
+			submissionError:          true,
 		},
 		// All headers at the current epoch difficulty -> proof is submitted.
 		"assemblable proof is submitted": {
@@ -543,14 +561,13 @@ func TestProveTransactions(t *testing.T) {
 			recorder := &recordingMetricsRecorder{
 				counters: make(map[string]float64),
 			}
-			SetMetricsRecorder(recorder)
-			defer SetMetricsRecorder(nil)
 
 			sm := &spvMaintainer{
-				config:       Config{MaxProofHeaders: DefaultMaxProofHeaders},
-				spvChain:     localChain,
-				btcDiffChain: localChain,
-				btcChain:     btcChain,
+				metricsRecorder: recorder,
+				config:          Config{MaxProofHeaders: DefaultMaxProofHeaders},
+				spvChain:        localChain,
+				btcDiffChain:    localChain,
+				btcChain:        btcChain,
 			}
 
 			var submitted []bitcoin.Hash
@@ -567,13 +584,30 @@ func TestProveTransactions(t *testing.T) {
 				_ uint,
 				_ bitcoin.Chain,
 				_ Chain,
+				metrics MetricsRecorder,
 			) error {
+				if metrics != recorder {
+					t.Fatal("proof submitter did not receive the maintainer recorder")
+				}
 				submitted = append(submitted, hash)
+				if test.submissionError {
+					return fmt.Errorf("submission failed")
+				}
 				return nil
 			}
 
-			if err := sm.proveTransactions(getter, submitter); err != nil {
-				t.Fatal(err)
+			err := sm.runProofTask(tbtc.ActionRedemption, getter, submitter)
+			if (err != nil) != test.submissionError {
+				t.Fatalf("unexpected task error: %v", err)
+			}
+			wantFailures := float64(0)
+			if test.submissionError {
+				wantFailures = 1
+			}
+			for _, name := range []string{"spv_proof_task_failures_total", "redemption_proof_task_failures_total"} {
+				if got := recorder.counters[name]; got != wantFailures {
+					t.Errorf("%s: want %v, got %v", name, wantFailures, got)
+				}
 			}
 
 			if test.expectSubmitted {
@@ -823,6 +857,263 @@ func TestIsInputCurrentWalletsMainUTXO(t *testing.T) {
 				test.expectedIsCurrentMainUtxo,
 				isCurrentMainUtxo,
 			)
+		})
+	}
+}
+
+// TestUnprovenSearchStartBlock exercises the clamp guard and error paths of
+// unprovenSearchStartBlock directly. The action-level integration tests only
+// ever exercise it with a historyDepth well below the current block, so the
+// error branches and the clamp boundary are otherwise untested.
+func TestUnprovenSearchStartBlock(t *testing.T) {
+	blockCounterErr := fmt.Errorf("block counter unavailable")
+	currentBlockErr := fmt.Errorf("current block unavailable")
+
+	tests := map[string]struct {
+		historyDepth    uint64
+		currentBlock    uint64
+		blockCounterErr error
+		currentBlockErr error
+		expectedStart   uint64
+		expectedErr     string
+	}{
+		"history depth below current block": {
+			historyDepth:  100,
+			currentBlock:  1000,
+			expectedStart: 900,
+		},
+		"history depth equal to current block": {
+			// The clamp guard is strictly historyDepth > currentBlock, so
+			// equal values must fall through to the plain subtraction, not
+			// the clamp branch. Both yield 0 here, pinning the off-by-one.
+			historyDepth:  1000,
+			currentBlock:  1000,
+			expectedStart: 0,
+		},
+		"history depth one above current block": {
+			// The first value that DOES trigger the clamp guard; paired with
+			// the equal case above, this pins the exact boundary.
+			historyDepth:  1001,
+			currentBlock:  1000,
+			expectedStart: 0,
+		},
+		"history depth far exceeds current block": {
+			historyDepth:  1_000_000,
+			currentBlock:  5,
+			expectedStart: 0,
+		},
+		"zero current block and zero history depth": {
+			historyDepth:  0,
+			currentBlock:  0,
+			expectedStart: 0,
+		},
+		"block counter unavailable": {
+			historyDepth:    100,
+			blockCounterErr: blockCounterErr,
+			expectedErr:     "failed to get block counter",
+		},
+		"current block unavailable": {
+			historyDepth:    100,
+			currentBlock:    1000,
+			currentBlockErr: currentBlockErr,
+			expectedErr:     "failed to get current block",
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			var spvChain Chain
+
+			if test.blockCounterErr != nil {
+				spvChain = &errorBlockCounterChain{
+					localChain: newLocalChain(),
+					err:        test.blockCounterErr,
+				}
+			} else {
+				localChain := newLocalChain()
+				blockCounter := newMockBlockCounter()
+				blockCounter.SetCurrentBlock(test.currentBlock)
+				if test.currentBlockErr != nil {
+					blockCounter.SetCurrentBlockErr(test.currentBlockErr)
+				}
+				localChain.setBlockCounter(blockCounter)
+				spvChain = localChain
+			}
+
+			start, err := unprovenSearchStartBlock(test.historyDepth, spvChain)
+
+			if test.expectedErr != "" {
+				if err == nil {
+					t.Fatalf(
+						"expected error containing [%s], got nil",
+						test.expectedErr,
+					)
+				}
+				if !strings.Contains(err.Error(), test.expectedErr) {
+					t.Errorf(
+						"unexpected error\nexpected to contain: [%s]\nactual:              [%v]",
+						test.expectedErr,
+						err,
+					)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+
+			testutils.AssertUintsEqual(
+				t,
+				"search start block",
+				test.expectedStart,
+				start,
+			)
+		})
+	}
+}
+
+// stubTransactionChain overrides GetTransactionsForPublicKeyHash on the local
+// Bitcoin chain so that collectUnprovenWalletTransactions can be exercised with
+// a controlled set of transactions and error, independently of how the local
+// chain filters by public key hash.
+type stubTransactionChain struct {
+	*localBitcoinChain
+	transactions []*bitcoin.Transaction
+	err          error
+}
+
+func (s *stubTransactionChain) GetTransactionsForPublicKeyHash(
+	_ [20]byte,
+	_ int,
+) ([]*bitcoin.Transaction, error) {
+	return s.transactions, s.err
+}
+
+func TestCollectUnprovenWalletTransactions(t *testing.T) {
+	// Distinct transactions identified by pointer. Empty Transaction values
+	// compare equal under reflect.DeepEqual, so assertions below rely on
+	// pointer identity, not value equality.
+	tx1 := &bitcoin.Transaction{}
+	tx2 := &bitcoin.Transaction{}
+	tx3 := &bitcoin.Transaction{}
+
+	// matches returns a predicate reporting a transaction as unproven when it
+	// is one of the given transactions (compared by pointer).
+	matches := func(unproven ...*bitcoin.Transaction) func(*bitcoin.Transaction) (bool, error) {
+		return func(transaction *bitcoin.Transaction) (bool, error) {
+			for _, u := range unproven {
+				if transaction == u {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+	}
+
+	predicateErr := fmt.Errorf("predicate failure")
+	chainErr := fmt.Errorf("chain failure")
+
+	tests := map[string]struct {
+		transactions     []*bitcoin.Transaction
+		isUnproven       func(*bitcoin.Transaction) (bool, error)
+		stopAtFirstMatch bool
+		chainErr         error
+		expectedResult   []*bitcoin.Transaction
+		expectedErr      string
+	}{
+		"returns all matches when not stopping at first match": {
+			transactions:     []*bitcoin.Transaction{tx1, tx2, tx3},
+			isUnproven:       matches(tx1, tx3),
+			stopAtFirstMatch: false,
+			expectedResult:   []*bitcoin.Transaction{tx1, tx3},
+		},
+		"returns only the first match when stopping at first match": {
+			transactions:     []*bitcoin.Transaction{tx1, tx2, tx3},
+			isUnproven:       matches(tx2, tx3),
+			stopAtFirstMatch: true,
+			expectedResult:   []*bitcoin.Transaction{tx2},
+		},
+		"returns nothing when no transaction matches": {
+			transactions:     []*bitcoin.Transaction{tx1, tx2, tx3},
+			isUnproven:       matches(),
+			stopAtFirstMatch: false,
+			expectedResult:   nil,
+		},
+		"propagates the chain error": {
+			transactions: []*bitcoin.Transaction{tx1},
+			isUnproven:   matches(tx1),
+			chainErr:     chainErr,
+			expectedErr:  "failed to get transactions for wallet",
+		},
+		"propagates the predicate error": {
+			transactions: []*bitcoin.Transaction{tx1},
+			isUnproven: func(*bitcoin.Transaction) (bool, error) {
+				return false, predicateErr
+			},
+			expectedErr: "failed to check if transaction is unproven",
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			btcChain := &stubTransactionChain{
+				localBitcoinChain: newLocalBitcoinChain(),
+				transactions:      test.transactions,
+				err:               test.chainErr,
+			}
+
+			result, err := collectUnprovenWalletTransactions(
+				[20]byte{},
+				len(test.transactions),
+				btcChain,
+				test.isUnproven,
+				test.stopAtFirstMatch,
+			)
+
+			if test.expectedErr != "" {
+				if result != nil {
+					t.Errorf(
+						"expected nil result on error, got [%v]",
+						result,
+					)
+				}
+				if err == nil {
+					t.Fatalf(
+						"expected error containing [%s], got nil",
+						test.expectedErr,
+					)
+				}
+				if !strings.Contains(err.Error(), test.expectedErr) {
+					t.Errorf(
+						"unexpected error\nexpected to contain: [%s]\nactual:              [%v]",
+						test.expectedErr,
+						err,
+					)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+
+			testutils.AssertIntsEqual(
+				t,
+				"number of unproven transactions",
+				len(test.expectedResult),
+				len(result),
+			)
+
+			for i, expected := range test.expectedResult {
+				if result[i] != expected {
+					t.Errorf(
+						"unexpected transaction at index [%d]; "+
+							"pointer identity mismatch",
+						i,
+					)
+				}
+			}
 		})
 	}
 }

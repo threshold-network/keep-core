@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -192,6 +193,49 @@ func applyWalletTxFeeFloor(
 	totalFee := rate * txVsize
 	if uint64(totalFee) > maxTotalFee {
 		totalFee = int64(maxTotalFee)
+	}
+
+	return totalFee, nil
+}
+
+// estimateCappedFee estimates the transaction fee for a transaction of the
+// virtual size produced by the given size estimator, returning an error if
+// the size or fee estimation itself fails. It returns feeTooHighErr if the
+// estimated fee exceeds maxTotalFee. Otherwise, it applies the non-RBF
+// wallet transaction fee buffer and minimum fee-rate floor via
+// applyWalletTxFeeFloor, without exceeding maxTotalFee, and can return
+// ErrMaxFeeTooLow or a validation error from that call.
+func estimateCappedFee(
+	btcChain bitcoin.Chain,
+	sizeEstimator *bitcoin.TransactionSizeEstimator,
+	maxTotalFee uint64,
+	feeTooHighErr error,
+) (int64, error) {
+	transactionSize, err := sizeEstimator.VirtualSize()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot estimate transaction virtual size: [%v]",
+			err,
+		)
+	}
+
+	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
+
+	totalFee, err := feeEstimator.EstimateFee(transactionSize)
+	if err != nil {
+		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
+	}
+
+	if uint64(totalFee) > maxTotalFee {
+		return 0, feeTooHighErr
+	}
+
+	// Enforce the safe minimum fee rate and buffer so a non-RBF wallet
+	// transaction is never broadcast below the floor where it could get
+	// stuck and jam the wallet.
+	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, maxTotalFee)
+	if err != nil {
+		return 0, err
 	}
 
 	return totalFee, nil

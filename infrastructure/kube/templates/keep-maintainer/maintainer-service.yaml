@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: keep-maintainer-metrics
+spec:
+  type: ClusterIP
+  selector:
+    app: keep-maintainer
+  ports:
+    - name: metrics
+      port: 9601
+      targetPort: metrics
