@@ -1,4 +1,5 @@
-import { ethers, waffle, helpers } from "hardhat"
+import { ethers, helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import {
@@ -77,7 +78,7 @@ describe("System -- e2e", () => {
   let governance: SignerWithAddress
 
   before(async () => {
-    const contracts = await waffle.loadFixture(fixture)
+    const contracts = await loadFixture(fixture)
 
     ;({ governance } = await helpers.signers.getNamedSigners())
     ;[requester] = await helpers.signers.getUnnamedSigners()

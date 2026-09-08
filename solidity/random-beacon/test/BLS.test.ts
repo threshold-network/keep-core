@@ -1,4 +1,4 @@
-import { waffle } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import blsData from "./data/bls"
@@ -10,7 +10,7 @@ describe("BLS", () => {
   let bls: BLS
 
   beforeEach("load test fixture", async () => {
-    const contracts = await waffle.loadFixture(blsDeployment)
+    const contracts = await loadFixture(blsDeployment)
 
     bls = contracts.bls as BLS
   })

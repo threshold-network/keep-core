@@ -1,4 +1,5 @@
-import { waffle, helpers } from "hardhat"
+import { helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import { constants, randomBeaconDeployment } from "./fixtures"
@@ -70,7 +71,7 @@ describe("RandomBeacon - Rewards", () => {
       sortitionPool,
       t,
       operators,
-    } = await waffle.loadFixture(fixture))
+    } = await loadFixture(fixture))
     ;[thirdParty] = await helpers.signers.getUnnamedSigners()
     ;({ deployer, governance } = await helpers.signers.getNamedSigners())
   })
