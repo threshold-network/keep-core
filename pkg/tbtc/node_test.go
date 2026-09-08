@@ -50,6 +50,11 @@ func TestNode_GetSigningExecutor(t *testing.T) {
 	// Populate the mock keystore with the mock signer's data. This is
 	// required to make the node controlling the signer's wallet.
 	keyStorePersistence := createMockKeyStorePersistence(t, signer)
+	nodeConfig := Config{
+		PreParamsPoolSize:          1,
+		PreParamsGenerationTimeout: time.Hour,
+		TransactionMonitor:         TransactionMonitorConfig{StuckThreshold: 45 * time.Minute},
+	}
 
 	node, err := newNode(
 		groupParameters,
@@ -60,10 +65,13 @@ func TestNode_GetSigningExecutor(t *testing.T) {
 		&mockPersistenceHandle{},
 		newTestScheduler(t),
 		&mockCoordinationProposalGenerator{},
-		Config{PreParamsPoolSize: 1, PreParamsGenerationTimeout: time.Hour},
+		nodeConfig,
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if node.transactionMonitor.config.StuckThreshold != nodeConfig.TransactionMonitor.StuckThreshold {
+		t.Fatal("node did not pass its transaction monitor configuration to the monitor")
 	}
 
 	walletPublicKey := signer.wallet.publicKey

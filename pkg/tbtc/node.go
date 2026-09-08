@@ -130,6 +130,11 @@ func newNode(
 	proposalGenerator CoordinationProposalGenerator,
 	config Config,
 ) (*node, error) {
+	transactionMonitor, err := newTransactionMonitor(btcChain, config.TransactionMonitor)
+	if err != nil {
+		return nil, err
+	}
+
 	walletRegistry, err := newWalletRegistry(
 		keyStorePersistance,
 		chain.CalculateWalletID,
@@ -154,7 +159,7 @@ func newNode(
 		inactivityClaimExecutors: make(map[string]*inactivityClaimExecutor),
 		coordinationExecutors:    make(map[string]*coordinationExecutor),
 		proposalGenerator:        proposalGenerator,
-		transactionMonitor:       newTransactionMonitor(btcChain),
+		transactionMonitor:       transactionMonitor,
 	}
 
 	// Archive any wallets that might have been closed or terminated while the
