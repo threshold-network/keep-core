@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-import type { BigNumber, BigNumberish } from "ethers"
+import type { BigNumberish } from "ethers"
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 
 // eslint-disable-next-line import/prefer-default-export
@@ -12,41 +12,41 @@ export async function authorize(
   authorization?: BigNumberish,
 ): Promise<void> {
   const { ethers, helpers } = hre
-  const ownerAddress = ethers.utils.getAddress(owner)
-  const providerAddress = ethers.utils.getAddress(provider)
+  const ownerAddress = ethers.getAddress(owner)
+  const providerAddress = ethers.getAddress(provider)
 
   const application = await helpers.contracts.getContract(deploymentName)
 
   console.log(
-    `Authorizing provider's ${providerAddress} stake in ${deploymentName} application (${application.address})`,
+    `Authorizing provider's ${providerAddress} stake in ${deploymentName} application (${await application.getAddress()})`,
   )
 
   // Authorizer can equal to the owner if not set otherwise. This simplification
   // is used for development purposes.
   const authorizerAddress = authorizer
-    ? ethers.utils.getAddress(authorizer)
+    ? ethers.getAddress(authorizer)
     : ownerAddress
 
   const { to1e18, from1e18 } = helpers.number
   const staking = await helpers.contracts.getContract("TokenStaking")
 
-  const authorizationBN: BigNumber = authorization
+  const authorizationBN: bigint = authorization
     ? to1e18(authorization)
     : await application.minimumAuthorization()
 
-  const currentAuthorization = await staking.authorizedStake(
+  const currentAuthorization: bigint = await staking.authorizedStake(
     providerAddress,
-    application.address,
+    await application.getAddress(),
   )
 
-  if (currentAuthorization.gte(authorizationBN)) {
+  if (currentAuthorization >= authorizationBN) {
     console.log(
       `Authorized stake is already ${from1e18(currentAuthorization)} T`,
     )
     return
   }
 
-  const increaseAmount: BigNumber = authorizationBN.sub(currentAuthorization)
+  const increaseAmount: bigint = authorizationBN - currentAuthorization
 
   console.log(
     `Increasing authorization by ${from1e18(increaseAmount)} T to ${from1e18(
@@ -57,10 +57,10 @@ export async function authorize(
   await (
     await staking
       .connect(await ethers.getSigner(authorizerAddress))
-      .increaseAuthorization(
-        providerAddress,
-        application.address,
-        increaseAmount,
-      )
+      .getFunction("increaseAuthorization")(
+      providerAddress,
+      await application.getAddress(),
+      increaseAmount,
+    )
   ).wait()
 }

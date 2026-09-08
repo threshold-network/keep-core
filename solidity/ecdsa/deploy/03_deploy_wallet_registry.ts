@@ -57,7 +57,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   await helpers.ownable.transferOwnership(
     "EcdsaSortitionPool",
-    walletRegistry.address,
+    await walletRegistry.getAddress(),
     deployer,
   )
 
@@ -79,10 +79,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   }
 
   if (hre.network.tags.tenderly) {
-    await verifyOnTenderlyOrContinue(hre, () =>
+    await verifyOnTenderlyOrContinue(hre, async () =>
       hre.tenderly.verify({
         name: "WalletRegistry",
-        address: walletRegistry.address,
+        address: await walletRegistry.getAddress(),
       }),
     )
   }

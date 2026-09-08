@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-import type { BigNumberish, BigNumber } from "ethers"
+import type { BigNumberish } from "ethers"
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 
 // eslint-disable-next-line import/prefer-default-export
@@ -10,7 +10,7 @@ export async function mint(
 ): Promise<void> {
   const { ethers, helpers } = hre
   const { to1e18, from1e18 } = helpers.number
-  const ownerAddress = ethers.utils.getAddress(owner)
+  const ownerAddress = ethers.getAddress(owner)
   const stakeAmount = to1e18(amount)
 
   const t = await helpers.contracts.getContract("T")
@@ -18,43 +18,43 @@ export async function mint(
 
   const tokenContractOwner = await t.owner()
 
-  const currentBalance: BigNumber = await t.balanceOf(ownerAddress)
+  const currentBalance: bigint = await t.balanceOf(ownerAddress)
 
   console.log(
     `Account ${ownerAddress} balance is ${from1e18(currentBalance)} T`,
   )
 
-  if (currentBalance.lt(stakeAmount)) {
-    const mintAmount = stakeAmount.sub(currentBalance)
+  if (currentBalance < stakeAmount) {
+    const mintAmount = stakeAmount - currentBalance
 
     console.log(`Minting ${from1e18(mintAmount)} T for ${ownerAddress}...`)
 
     await (
       await t
         .connect(await ethers.getSigner(tokenContractOwner))
-        .mint(ownerAddress, mintAmount)
+        .getFunction("mint")(ownerAddress, mintAmount)
     ).wait()
   }
 
-  const currentAllowance: BigNumber = await t.allowance(
+  const currentAllowance: bigint = await t.allowance(
     ownerAddress,
-    staking.address,
+    await staking.getAddress(),
   )
 
   console.log(
-    `Account ${ownerAddress} allowance for ${staking.address} is ${from1e18(
+    `Account ${ownerAddress} allowance for ${await staking.getAddress()} is ${from1e18(
       currentAllowance,
     )} T`,
   )
 
-  if (currentAllowance.lt(stakeAmount)) {
+  if (currentAllowance < stakeAmount) {
     console.log(
-      `Approving ${from1e18(stakeAmount)} T for ${staking.address}...`,
+      `Approving ${from1e18(stakeAmount)} T for ${await staking.getAddress()}...`,
     )
     await (
       await t
         .connect(await ethers.getSigner(ownerAddress))
-        .approve(staking.address, stakeAmount)
+        .getFunction("approve")(await staking.getAddress(), stakeAmount)
     ).wait()
   }
 }

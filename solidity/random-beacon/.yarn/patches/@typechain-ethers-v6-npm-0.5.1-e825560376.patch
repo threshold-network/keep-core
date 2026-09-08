@@ -1,0 +1,13 @@
+diff --git a/dist/codegen/reserved-keywords.js b/dist/codegen/reserved-keywords.js
+index f5a47b105a31e5ae3a6e40da476a37f748d962d9..f05f5ec9582c56a264fe6a61f7a098e2008047a3 100644
+--- a/dist/codegen/reserved-keywords.js
++++ b/dist/codegen/reserved-keywords.js
+@@ -1,7 +1,7 @@
+ "use strict";
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.reservedKeywordsLabels = exports.reservedKeywords = void 0;
+-exports.reservedKeywords = new Set(['signer', 'provider', 'deployTransaction', 'deployed', 'fallback', 'connect']);
++exports.reservedKeywords = new Set(['signer', 'provider', 'deployTransaction', 'deployed', 'fallback', 'connect', 'target']);
+ exports.reservedKeywordsLabels = new Set([
+     'class',
+     'function',

@@ -9,9 +9,9 @@ import { createNewWallet } from "./utils/wallets"
 import { signOperatorInactivityClaim } from "./utils/inactivity"
 import { assertGasUsed } from "./helpers/gas"
 
-import type { BigNumber, ContractTransaction } from "ethers"
+import type { ContractTransactionResponse } from "ethers"
 import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type {
   SortitionPool,
   WalletRegistry,
@@ -85,9 +85,9 @@ describe("WalletRegistry - Inactivity", () => {
                     ) => number[],
                     expectedGasUsed: number,
                   ) => {
-                    let tx: ContractTransaction
-                    let initialNonce: BigNumber
-                    let initClaimSenderBalance: BigNumber
+                    let tx: ContractTransactionResponse
+                    let initialNonce: bigint
+                    let initClaimSenderBalance: bigint
                     let claimSender: SignerWithAddress
 
                     before(async () => {
@@ -137,13 +137,12 @@ describe("WalletRegistry - Inactivity", () => {
                     it("should refund ETH", async () => {
                       const postNotifyThirdPartyBalance =
                         await provider.getBalance(claimSender.address)
-                      const diff = postNotifyThirdPartyBalance.sub(
-                        initClaimSenderBalance,
-                      )
+                      const diff =
+                        postNotifyThirdPartyBalance - initClaimSenderBalance
 
                       expect(diff).to.be.gt(0)
                       expect(diff).to.be.lt(
-                        ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
+                        ethers.parseUnits("2000000", "gwei"), // 0,002 ETH
                       )
                     })
 
@@ -151,17 +150,14 @@ describe("WalletRegistry - Inactivity", () => {
                       await assertGasUsed(
                         tx,
                         expectedGasUsed,
-                        ethers.BigNumber.from(expectedGasUsed)
-                          .mul(5) // 5% delta
-                          .div(100)
-                          .toNumber(),
+                        Number((BigInt(expectedGasUsed) * 5n) / 100n),
                       )
                     })
 
                     it("should increment inactivity claim nonce for the group", async () => {
                       expect(
                         await walletRegistry.inactivityClaimNonce(walletID),
-                      ).to.be.equal(initialNonce.add(1))
+                      ).to.be.equal(initialNonce + 1n)
                     })
 
                     it("should emit InactivityClaimed event", async () => {
@@ -169,7 +165,7 @@ describe("WalletRegistry - Inactivity", () => {
                         .to.emit(walletRegistry, "InactivityClaimed")
                         .withArgs(
                           walletID,
-                          initialNonce.toNumber(),
+                          Number(initialNonce),
                           claimSender.address,
                         )
                     })
@@ -945,7 +941,7 @@ describe("WalletRegistry - Inactivity", () => {
 
       context("when wallet ID is unknown", async () => {
         it("should revert", async () => {
-          const unknownWalletID: string = ethers.utils.keccak256(walletID)
+          const unknownWalletID: string = ethers.keccak256(walletID)
 
           const { signatures, signingMembersIndices } =
             await signOperatorInactivityClaim(

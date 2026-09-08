@@ -1,19 +1,20 @@
 import { expect } from "chai"
-import { ethers } from "hardhat"
 
-import type { ContractTransaction } from "ethers"
+import requireResult from "./chain"
 
-const { BigNumber } = ethers
+import type { ContractTransactionResponse } from "ethers"
 
 // TODO: Move to @keep-network/hardhat-helpers
 // eslint-disable-next-line import/prefer-default-export
 export async function assertGasUsed(
-  tx: ContractTransaction,
+  tx: ContractTransactionResponse,
   expectedGasUsed: number,
   delta = 1000,
 ): Promise<void> {
-  expect((await tx.wait()).gasUsed, "invalid gas used").to.be.closeTo(
-    BigNumber.from(expectedGasUsed),
+  const receipt = requireResult(await tx.wait())
+  if (!receipt) throw new Error("Transaction has no receipt")
+  expect(receipt.gasUsed, "invalid gas used").to.be.closeTo(
+    BigInt(expectedGasUsed),
     delta,
   )
 }

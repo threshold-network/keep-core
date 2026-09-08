@@ -1,14 +1,13 @@
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
-import type { utils } from "ethers"
+import type { Interface } from "ethers"
 
 // ApplicationStatus enum: NOT_APPROVED=0, APPROVED=1, PAUSED=2, DISABLED=3
-const APPLICATION_STATUS_APPROVED = 1
+const APPLICATION_STATUS_APPROVED = 1n
 
-function ifaceHasFunction(iface: utils.Interface, name: string): boolean {
+function ifaceHasFunction(iface: Interface, name: string): boolean {
   try {
-    iface.getFunction(name)
-    return true
+    return iface.getFunction(name) !== null
   } catch {
     return false
   }
@@ -22,7 +21,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const RandomBeacon = await deployments.get("RandomBeacon")
   const TokenStaking = await get("TokenStaking")
 
-  const iface = new ethers.utils.Interface(TokenStaking.abi)
+  const iface = new ethers.Interface(TokenStaking.abi)
   if (!ifaceHasFunction(iface, "approveApplication")) {
     hre.deployments.log(
       "TokenStaking does not have approveApplication (Threshold TokenStaking); skipping",

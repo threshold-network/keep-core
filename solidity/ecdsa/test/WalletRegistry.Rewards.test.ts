@@ -6,7 +6,7 @@ import ecdsaData from "./data/ecdsa"
 import { createNewWallet } from "./utils/wallets"
 import { signOperatorInactivityClaim } from "./utils/inactivity"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { Mock } from "./helpers/mock"
 import type { Operator, OperatorID } from "./utils/operators"
 import type {
@@ -30,7 +30,7 @@ async function rewardsBeneficiaryAddress(
   stakingProvider: string,
 ): Promise<string> {
   const allowlistAddr = await walletRegistry.allowlist()
-  if (allowlistAddr !== ethers.constants.AddressZero) {
+  if (allowlistAddr !== ethers.ZeroAddress) {
     const al = (await ethers.getContractAt(
       "Allowlist",
       allowlistAddr,
@@ -116,7 +116,7 @@ describe("WalletRegistry - Rewards", () => {
         await tToken.connect(deployer).mint(deployer.address, rewardAmount)
         await tToken
           .connect(deployer)
-          .approveAndCall(sortitionPool.address, rewardAmount, [])
+          .approveAndCall(await sortitionPool.getAddress(), rewardAmount, "0x")
       })
 
       after(async () => {
@@ -133,7 +133,7 @@ describe("WalletRegistry - Rewards", () => {
         const balanceBefore = await tToken.balanceOf(beneficiary)
         const tx = await walletRegistry.withdrawRewards(stakingProvider)
         const balanceAfter = await tToken.balanceOf(beneficiary)
-        const received = balanceAfter.sub(balanceBefore)
+        const received = balanceAfter - balanceBefore
 
         await expect(tx)
           .to.emit(walletRegistry, "RewardsWithdrawn")
@@ -172,7 +172,7 @@ describe("WalletRegistry - Rewards", () => {
         await tToken.connect(deployer).mint(deployer.address, rewardAmount)
         await tToken
           .connect(deployer)
-          .approveAndCall(sortitionPool.address, rewardAmount, [])
+          .approveAndCall(await sortitionPool.getAddress(), rewardAmount, "0x")
       })
 
       after(async () => {
@@ -187,7 +187,7 @@ describe("WalletRegistry - Rewards", () => {
         await walletRegistry.withdrawRewards(stakingProvider)
         const balanceAfter = await tToken.balanceOf(beneficiary)
 
-        expect(availableAmount).to.equal(balanceAfter.sub(balanceBefore))
+        expect(availableAmount).to.equal(balanceAfter - balanceBefore)
 
         availableAmount = await walletRegistry.availableRewards(stakingProvider)
         expect(availableAmount).to.equal(0)
@@ -243,7 +243,7 @@ describe("WalletRegistry - Rewards", () => {
         await tToken.connect(deployer).mint(deployer.address, rewardAmount)
         await tToken
           .connect(deployer)
-          .approveAndCall(sortitionPool.address, rewardAmount, [])
+          .approveAndCall(await sortitionPool.getAddress(), rewardAmount, "0x")
       })
 
       it("should withdraw ineligible rewards", async () => {

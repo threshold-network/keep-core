@@ -17,6 +17,6 @@ export async function addBetaOperator(
   await (
     await sortitionPool
       .connect(await ethers.getSigner(chaosnetOwner))
-      .addBetaOperators([operator])
+      .getFunction("addBetaOperators")([operator])
   ).wait()
 }

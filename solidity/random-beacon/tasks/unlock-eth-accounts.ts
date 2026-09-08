@@ -9,7 +9,7 @@ task("unlock-accounts", "Unlock ethereum accounts").setAction(
     if (hre.network.name === "development") {
       const password = process.env.KEEP_ETHEREUM_PASSWORD || "password"
 
-      const provider = new ethers.providers.JsonRpcProvider(
+      const provider = new ethers.JsonRpcProvider(
         (hre.network.config as HttpNetworkConfig).url,
       )
       const accounts = await provider.listAccounts()
@@ -18,7 +18,7 @@ task("unlock-accounts", "Unlock ethereum accounts").setAction(
       console.log("---------------------------------")
 
       for (let i = 0; i < accounts.length; i++) {
-        const account = accounts[i]
+        const account = await accounts[i].getAddress()
 
         try {
           console.log(`\nUnlocking account: ${account}`)

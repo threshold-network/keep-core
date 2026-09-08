@@ -47,13 +47,13 @@ task(
         const currentBalance = await ethers.provider.getBalance(address)
 
         console.log(
-          `current balance of ${address} is ${ethers.utils.formatEther(
+          `current balance of ${address} is ${ethers.formatEther(
             currentBalance,
           )} ether`,
         )
 
-        if (currentBalance.lt(expectedBalance)) {
-          const topUpAmount = expectedBalance.sub(currentBalance)
+        if (currentBalance < expectedBalance) {
+          const topUpAmount = expectedBalance - currentBalance
 
           await hre.run(TASK_SEND_ETH, {
             from: args.from,

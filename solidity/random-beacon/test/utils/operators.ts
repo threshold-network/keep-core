@@ -3,8 +3,8 @@ import { ethers, helpers } from "hardhat"
 import { params } from "../fixtures"
 import { testConfig } from "../../hardhat.config"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { BigNumber, BigNumberish, Contract } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
+import type { BigNumberish, Contract } from "ethers"
 import type {
   RandomBeacon,
   RandomBeaconStub,
@@ -14,7 +14,7 @@ import type {
 } from "../../typechain"
 
 /** Minimal ABI for TokenStaking methods omitted from the generated Typechain ABI. */
-const legacyTokenStakingIface = new ethers.utils.Interface([
+const legacyTokenStakingIface = new ethers.Interface([
   "function stake(address,address,address,uint96)",
   "function increaseAuthorization(address,address,uint96)",
   "function approveApplication(address)",
@@ -23,10 +23,10 @@ const legacyTokenStakingIface = new ethers.utils.Interface([
 ])
 
 export function legacyTokenStakingAt(
-  staking: Pick<TokenStaking, "address">,
+  staking: Pick<TokenStaking, "getAddress">,
   signer: SignerWithAddress,
 ): Contract {
-  return new ethers.Contract(staking.address, legacyTokenStakingIface, signer)
+  return new ethers.Contract(staking, legacyTokenStakingIface, signer)
 }
 
 export type OperatorID = number
@@ -37,7 +37,7 @@ export async function registerOperators(
   t: T,
   numberOfOperators = testConfig.operatorsCount,
   unnamedSignersOffset = testConfig.nonStakingAccountsCount,
-  stakeAmount: BigNumber = params.minimumAuthorization,
+  stakeAmount: bigint = params.minimumAuthorization,
 ): Promise<Operator[]> {
   const operators: Operator[] = []
 
@@ -87,7 +87,7 @@ export async function registerOperators(
 
     await randomBeacon.connect(operator).joinSortitionPool()
 
-    const id = await sortitionPool.getOperatorID(operator.address)
+    const id = Number(await sortitionPool.getOperatorID(operator.address))
 
     operators.push({ id, signer: operator })
   }
@@ -108,7 +108,7 @@ export async function stake(
   const { deployer } = await helpers.signers.getNamedSigners()
 
   await t.connect(deployer).mint(owner.address, stakeAmount)
-  await t.connect(owner).approve(staking.address, stakeAmount)
+  await t.connect(owner).approve(await staking.getAddress(), stakeAmount)
 
   await legacyTokenStakingAt(staking, owner).stake(
     stakingProvider.address,
@@ -119,7 +119,7 @@ export async function stake(
 
   await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
     stakingProvider.address,
-    randomBeacon.address,
+    await randomBeacon.getAddress(),
     stakeAmount,
   )
 }

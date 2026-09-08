@@ -1,6 +1,6 @@
 import { helpers, ethers } from "hardhat"
 import { expect } from "chai"
-import { formatBytes32String } from "ethers/lib/utils"
+import { encodeBytes32String } from "ethers"
 
 import { walletRegistryFixture } from "./fixtures"
 import { createNewWallet } from "./utils/wallets"
@@ -8,8 +8,8 @@ import ecdsaData from "./data/ecdsa"
 import { hashUint32Array } from "./utils/groups"
 
 import type { Operator } from "./utils/operators"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { ContractTransaction } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
+import type { ContractTransactionResponse } from "ethers"
 import type { DkgResult } from "./utils/dkg"
 import type {
   IRandomBeacon,
@@ -92,10 +92,10 @@ describe("WalletRegistry - Wallets", async () => {
             ).to.be.equal(hashUint32Array(dkgResult.members))
 
             expect(wallet.publicKeyX, "unexpected public key X").to.be.equal(
-              ethers.utils.hexDataSlice(test.publicKey, 0, 32),
+              ethers.dataSlice(test.publicKey, 0, 32),
             )
             expect(wallet.publicKeyY, "unexpected public key Y").to.be.equal(
-              ethers.utils.hexDataSlice(test.publicKey, 32),
+              ethers.dataSlice(test.publicKey, 32),
             )
           })
 
@@ -111,12 +111,12 @@ describe("WalletRegistry - Wallets", async () => {
         const testData = [
           {
             context: "with too short public key",
-            publicKey: ethers.utils.randomBytes(63),
+            publicKey: ethers.randomBytes(63),
             expectedError: "Invalid length of the public key",
           },
           {
             context: "with too long public key",
-            publicKey: ethers.utils.randomBytes(65),
+            publicKey: ethers.randomBytes(65),
             expectedError: "Invalid length of the public key",
           },
         ]
@@ -215,7 +215,7 @@ describe("WalletRegistry - Wallets", async () => {
       it("should return false", async () => {
         await expect(
           await walletRegistry.isWalletRegistered(
-            formatBytes32String("NON EXISTING"),
+            encodeBytes32String("NON EXISTING"),
           ),
         ).to.be.false
       })
@@ -249,7 +249,7 @@ describe("WalletRegistry - Wallets", async () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.getWalletPublicKey(
-            formatBytes32String("NON EXISTING"),
+            encodeBytes32String("NON EXISTING"),
           ),
         ).to.be.revertedWith("Wallet with the given ID has not been registered")
       })
@@ -283,7 +283,7 @@ describe("WalletRegistry - Wallets", async () => {
           ).to.be.equal(walletPublicKey)
 
           await expect(
-            ethers.utils.arrayify(actualPublicKey),
+            ethers.getBytes(actualPublicKey),
             "returned public key is not 64-byte long",
           ).to.have.lengthOf(64)
         })
@@ -318,7 +318,7 @@ describe("WalletRegistry - Wallets", async () => {
     context("when caller is the wallet owner", () => {
       context("when wallet with the given ID is unknown", () => {
         it("should revert", async () => {
-          const unknownWalletID: string = ethers.utils.keccak256(walletID)
+          const unknownWalletID: string = ethers.keccak256(walletID)
           await expect(
             walletRegistry
               .connect(walletOwner.wallet)
@@ -330,7 +330,7 @@ describe("WalletRegistry - Wallets", async () => {
       })
 
       context("when wallet with the given ID is registered", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before("close the wallet", async () => {
           await createSnapshot()
@@ -518,7 +518,7 @@ describe("WalletRegistry - Wallets", async () => {
           // To test this scenario, we need an address that is not a
           // sortition pool operator for sure. The address of the wallet
           // registry itself seems to be a good candidate.
-          const operator = walletRegistry.address
+          const operator = await walletRegistry.getAddress()
 
           await expect(
             walletRegistry.isWalletMember(

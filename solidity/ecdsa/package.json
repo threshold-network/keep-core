@@ -37,16 +37,17 @@
     "prepublishOnly": "hardhat prepare-artifacts --network $npm_config_network"
   },
   "devDependencies": {
-    "@keep-network/hardhat-helpers": "^0.6.0-pre.15",
+    "@keep-network/hardhat-helpers": "patch:@keep-network/hardhat-helpers@npm%3A0.7.2#~/.yarn/patches/@keep-network-hardhat-helpers-npm-0.7.2-086cf3da54.patch",
     "@keep-network/hardhat-local-networks-config": "github:threshold-network/hardhat-local-networks-config#6dff5bc8648127ca5d8696c321076bddb6d4142a",
-    "@nomicfoundation/hardhat-chai-matchers": "^1.0.6",
+    "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",
+    "@nomicfoundation/hardhat-ethers": "^3.1.3",
+    "@nomicfoundation/hardhat-network-helpers": "^1.1.2",
     "@nomicfoundation/hardhat-verify": "^2.1.3",
-    "@nomiclabs/hardhat-ethers": "^2.0.6",
-    "@openzeppelin/hardhat-upgrades": "^1.20.4",
+    "@openzeppelin/hardhat-upgrades": "patch:@openzeppelin/hardhat-upgrades@npm%3A2.5.1#~/.yarn/patches/@openzeppelin-hardhat-upgrades-npm-2.5.1-etherscan-v2.patch",
     "@stylistic/eslint-plugin": "^5.10.0",
-    "@tenderly/hardhat-tenderly": "1.0.12",
-    "@typechain/ethers-v5": "^11.1.2",
-    "@typechain/hardhat": "^7.0.0",
+    "@tenderly/hardhat-tenderly": "2.1.1",
+    "@typechain/ethers-v6": "patch:@typechain/ethers-v6@npm%3A0.5.1#~/.yarn/patches/@typechain-ethers-v6-npm-0.5.1-e825560376.patch",
+    "@typechain/hardhat": "^9.1.0",
     "@types/chai": "^4.3.20",
     "@types/chai-as-promised": "^7.1.5",
     "@types/mocha": "^10.0.10",
@@ -58,7 +59,7 @@
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import-x": "^4.17.1",
     "eslint-plugin-no-only-tests": "^3.4.0",
-    "ethers": "^5.8.0",
+    "ethers": "^6.17.0",
     "fs-extra": "^11.2.0",
     "globals": "^17.12.0",
     "hardhat": "2.29.0",
@@ -77,7 +78,7 @@
     "typescript-eslint": "^8.70.0"
   },
   "dependencies": {
-    "@keep-network/random-beacon": "development",
+    "@keep-network/random-beacon": "2.1.0-dev.18",
     "@keep-network/sortition-pools": "^2.0.0-pre.16",
     "@openzeppelin/contracts": "^4.9.6",
     "@openzeppelin/contracts-upgradeable": "^4.9.6",
@@ -88,7 +89,8 @@
   },
   "resolutions": {
     "ethereumjs-abi": "npm:0.6.8",
-    "get-func-name": "^2.0.2"
+    "get-func-name": "^2.0.2",
+    "@threshold-network/solidity-contracts@npm:1.3.0-dev.14": "patch:@threshold-network/solidity-contracts@npm%3A1.3.0-dev.14#./.yarn/patches/@threshold-network-solidity-contracts-npm-1.3.0-dev.14-ethers-v6.patch"
   },
   "packageManager": "yarn@4.12.0+sha512.f45ab632439a67f8bc759bf32ead036a1f413287b9042726b7cc4818b7b49e14e9423ba49b18f9e06ea4941c1ad062385b1d8760a8d5091a1a31e5f6219afca8"
 }

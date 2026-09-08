@@ -7,7 +7,7 @@ import { registerOperators } from "./utils/operators"
 import { createGroup } from "./utils/groups"
 import { signOperatorInactivityClaim } from "./utils/inactivity"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { Operator } from "./utils/operators"
 import type {
   RandomBeacon,
@@ -101,7 +101,7 @@ describe("RandomBeacon - Rewards", () => {
         await t.connect(deployer).mint(deployer.address, rewardAmount)
         await t
           .connect(deployer)
-          .approveAndCall(sortitionPool.address, rewardAmount, [])
+          .approveAndCall(await sortitionPool.getAddress(), rewardAmount, "0x")
       })
 
       after(async () => {
@@ -118,7 +118,7 @@ describe("RandomBeacon - Rewards", () => {
         const balanceBefore = await t.balanceOf(beneficiary)
         const tx = await randomBeacon.withdrawRewards(stakingProvider)
         const balanceAfter = await t.balanceOf(beneficiary)
-        const received = balanceAfter.sub(balanceBefore)
+        const received = balanceAfter - balanceBefore
 
         await expect(tx)
           .to.emit(randomBeacon, "RewardsWithdrawn")
@@ -152,7 +152,7 @@ describe("RandomBeacon - Rewards", () => {
         await t.connect(deployer).mint(deployer.address, rewardAmount)
         await t
           .connect(deployer)
-          .approveAndCall(sortitionPool.address, rewardAmount, [])
+          .approveAndCall(await sortitionPool.getAddress(), rewardAmount, "0x")
       })
 
       after(async () => {
@@ -167,7 +167,7 @@ describe("RandomBeacon - Rewards", () => {
         await randomBeacon.withdrawRewards(stakingProvider)
         const balanceAfter = await t.balanceOf(beneficiary)
 
-        expect(availableAmount).to.equal(balanceAfter.sub(balanceBefore))
+        expect(availableAmount).to.equal(balanceAfter - balanceBefore)
 
         availableAmount = await randomBeacon.availableRewards(stakingProvider)
         expect(availableAmount).to.equal(0)
@@ -221,7 +221,7 @@ describe("RandomBeacon - Rewards", () => {
         await t.connect(deployer).mint(deployer.address, rewardAmount)
         await t
           .connect(deployer)
-          .approveAndCall(sortitionPool.address, rewardAmount, [])
+          .approveAndCall(await sortitionPool.getAddress(), rewardAmount, "0x")
       })
 
       after(async () => {
