@@ -44,7 +44,8 @@ API uses in the pinned Threshold deployment export. See the
 
 ECDSA pins the existing Beacon dependency to `2.1.0-dev.18`. Until coordinated
 publication supplies an ethers v6 Beacon package, ECDSA's source checkout uses
-its sibling or refreshed bundled deployment scripts. The explicit
+its sibling or refreshed bundled deployment scripts and tasks. Packed ECDSA
+exports carry the executable bundle too. The explicit
 `RANDOM_BEACON_EXPORT_PATH` override allows actual tarball checks without those
 fallbacks. The pin is a reproducibility measure, not a claim that the old npm
 scripts gained ethers v6 compatibility.

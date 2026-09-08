@@ -4,9 +4,17 @@ const { createRequire } = require("node:module");
 
 const requirePackage = createRequire(path.join(process.cwd(), "package.json"));
 requirePackage("ts-node/register/transpile-only");
-const { extendProvider } = requirePackage("hardhat/config");
+const { extendProvider, task } = requirePackage("hardhat/config");
 const { ProviderWrapper } = requirePackage("hardhat/plugins");
-const config = require(path.join(process.cwd(), "hardhat.config.ts")).default;
+// Loading the packed configuration also registers only its own task exports.
+// Registering source and packed tasks together would redefine required params.
+const ecdsaExport = process.env.ECDSA_EXPORT_PATH;
+const packageConfig = require(
+  ecdsaExport
+    ? path.resolve(ecdsaExport, "hardhat.config.js")
+    : path.join(process.cwd(), "hardhat.config.ts"),
+);
+const config = packageConfig.default;
 
 class FixedClockProvider extends ProviderWrapper {
   async request(args) {
@@ -39,10 +47,21 @@ extendProvider(async (provider, resolvedConfig, network) => {
 });
 
 // Test the executable ECDSA export from an actual packed producer.
-const ecdsaExport = process.env.ECDSA_EXPORT_PATH;
 if (ecdsaExport) {
+  // The full-suite account guard imports test fixtures omitted from npm.
+  // These task tests need only the named slots and one set of staking roles.
+  task("check-accounts-count").setAction(async (_args, hre) => {
+    const { nonStakingAccountsCount, stakingRolesCount } =
+      packageConfig.testConfig;
+    const required = nonStakingAccountsCount + stakingRolesCount;
+    if ((await hre.ethers.getSigners()).length < required) {
+      throw new Error(
+        `Packed task checks require at least ${required} accounts`,
+      );
+    }
+  });
   const root = path.resolve(ecdsaExport);
-  for (const subdir of ["deploy", "artifacts"]) {
+  for (const subdir of ["deploy", "artifacts", "tasks"]) {
     if (!fs.statSync(path.join(root, subdir)).isDirectory()) {
       throw new Error(`ECDSA ${subdir} export is missing: ${root}`);
     }

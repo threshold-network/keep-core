@@ -32,7 +32,7 @@ adopt the same compatible runtime and upstream fixes before release.
 
 ## Test and build evidence
 
-- Both full suites pass: 962 Beacon tests and 673 ECDSA tests, with
+- Both full suites pass: 962 Beacon tests and 679 ECDSA tests, with
   ECDSA's existing 44 pending tests unchanged.
 - Four additional Beacon confirmation tests pass using the local ethers provider:
   one confirmation, a mined second confirmation, timeout, and missing transaction.
@@ -48,6 +48,20 @@ ethers v6 provider does not implement `waitForTransaction`. Published Beacon
 scripts include its compiled `export/utils/wait-for-confirmations.js` dependency.
 ECDSA's bundled Beacon scripts are regenerated from the same TypeScript sources,
 including the missing-approval-function and already-approved guards.
+
+ECDSA's Beacon task imports use the same export resolver as deployments. Source
+checkouts prefer a sibling Beacon build and otherwise load the committed v6
+task bundle. Packed ECDSA includes that bundle, so its compiled task entrypoints
+also work with the pinned v5 Beacon dependency; an adjacent installed package is
+not mistaken for a sibling source build. `RANDOM_BEACON_EXPORT_PATH` selects the
+task exports too and never falls back if they are missing.
+
+Six ECDSA task regressions cover staking with distinct beneficiary/authorizer
+accounts, direct registration, complete initialization with minimum
+authorization and beta membership, idempotent reruns, stake/authorization
+increases, and the development account-unlock provider API. The unlock check uses
+an in-memory provider with no RPC connection. Before the task import fix, all
+five initialization/registration checks failed at the pinned v5 API calls.
 
 ## Production-contract deployment comparison
 
@@ -126,8 +140,13 @@ consumer's plugins; it does not validate dependency installation from scratch.
 It executes both producers' compiled deployment scripts through explicit packed
 paths and requires byte-identical state, exports, artifacts and deployment
 records versus the ethers v6 source capture, without the v5 gas exceptions.
-`RANDOM_BEACON_EXPORT_PATH` fails on missing export directories rather than using
-sibling or bundled sources. `ECDSA_EXPORT_PATH` is confined to the capture config.
+It also compares all bundled JavaScript with Beacon's compiled source and runs
+the six ECDSA task checks through the packed ECDSA entrypoints: first with the
+explicit packed v6 Beacon exports, then with the pinned v5 dependency installed
+beside ECDSA to exercise its shipped task bundle.
+`RANDOM_BEACON_EXPORT_PATH` fails on missing export directories (including
+`tasks/`) rather than using sibling or bundled sources. `ECDSA_EXPORT_PATH` is
+confined to the capture config.
 
 For the committed fallback check, temporarily move Beacon's ignored `export/`
 directory aside in **both** trees, capture ECDSA, and restore the directories.

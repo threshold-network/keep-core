@@ -11,7 +11,10 @@
     "!**/test/",
     "deploy/",
     "export/",
+    "external/random-beacon-export/",
     "tasks/",
+    "types/random-beacon.d.ts",
+    "utils/",
     "export.json"
   ],
   "scripts": {

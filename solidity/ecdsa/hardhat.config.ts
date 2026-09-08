@@ -23,49 +23,13 @@ import "./tasks"
 import { task } from "hardhat/config"
 import { TASK_TEST } from "hardhat/builtin-tasks/task-names"
 
+import resolveRandomBeaconExport from "./utils/random-beacon-export"
+
 import type { HardhatUserConfig } from "hardhat/config"
 
 const TASK_CHECK_ACCOUNTS_COUNT = "check-accounts-count"
 
 const hardhatVerifyEnabled = process.env.DISABLE_HARDHAT_VERIFY !== "true"
-
-/**
- * Random-beacon `export/` is gitignored in the random-beacon package, so CI never
- * has ../random-beacon/export. Prefer committed `external/random-beacon-export/deploy`
- * (mirrors npm export scripts with a fixed 05_approve_*) before falling back to node_modules.
- */
-function resolveRandomBeaconExport(subdir: "deploy" | "artifacts"): string {
-  // Package compatibility checks must be able to bypass local and bundled exports.
-  const exportRoot = process.env.RANDOM_BEACON_EXPORT_PATH
-  if (exportRoot) {
-    const configured = path.resolve(exportRoot, subdir)
-    if (!fs.existsSync(configured)) {
-      throw new Error(
-        `Random Beacon ${subdir} export is missing: ${configured}`,
-      )
-    }
-    return configured
-  }
-
-  const local = path.join(__dirname, "../random-beacon/export", subdir)
-  if (fs.existsSync(local)) {
-    return local
-  }
-  if (subdir === "deploy") {
-    const bundledDeploy = path.join(
-      __dirname,
-      "external/random-beacon-export/deploy",
-    )
-    if (fs.existsSync(bundledDeploy)) {
-      return bundledDeploy
-    }
-  }
-  return path.join(
-    __dirname,
-    "node_modules/@keep-network/random-beacon/export",
-    subdir,
-  )
-}
 
 setupTenderly({ automaticVerifications: false })
 
