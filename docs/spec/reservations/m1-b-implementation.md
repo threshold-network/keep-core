@@ -34,7 +34,8 @@ use.
 
 ## 2. Minimal router surface
 
-The stacked router has 24 entry points. B removes 5 and adds 1, for **20**.
+The stacked router has 24 entry points. B removes 5 and adds 2, for **21**
+(9 state-changing, 12 views).
 
 ### 2.1 Retained — state-changing
 
@@ -78,6 +79,16 @@ is read by the vault-swap gate.
 `BridgeState.Storage` today has `liveWalletsCount` (`:253`),
 `reservationTotalAmount` (`:378`) and per-wallet counts, but **no global
 position count**, so both the storage field and its view are new.
+
+`notifyReservationAcceptanceTimedOut` — a state-changing entry point, added
+during review to close a real gap: once `notifyReservationActionTimeout` was
+narrowed to cover the Reanchor arm only (§2.1), a pending acceptance whose
+designated wallet never signs had no permissionless release path — only the
+redundant `notifyReservationActionTimeout` name existed before. This
+router-level forwarder releases the reserved capacity and marks the action
+`TimedOut`, so the position stays available for a later acceptance request.
+Legitimate scope addition, not a spec deviation
+(`m1-tbtc-v2-readiness/01-gap-analysis.md`).
 
 ### 2.5 Whether the router is needed at all
 
