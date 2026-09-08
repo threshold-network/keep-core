@@ -71,14 +71,14 @@ second multi-agent-review pass (`agent-docs/reviews/codex-signer-store-identity-
   chain stays provable across the compaction boundary. Crash recovery
   (`recover_state_witness_compaction`) follows the same create-then-verify-then-rename
   pattern as `rotate_state_witness_segment_inner`. It is invoked at store-open
-  specifically when `anchor_configuration.is_none() && mode == Ordinary`
-  (unanchored signer opening in the ordinary acquire mode) — not
-  unconditionally across every acquire mode. Before the parallel P0-1 fix in
-  this same file, the underlying failure mode was broader than that guard
-  implies: an unresolved compaction crash artifact caused
-  `recover_state_witness_rotation` to hard-error universally across ALL
-  acquire modes for an unanchored store, not scoped to any particular
-  inspection/transition mode.
+  specifically when `anchor_metadata.is_none()` (any unanchored signer),
+  unconditionally across every acquire mode — there is no additional gate on
+  which mode is being acquired. Before the parallel P0-1 fix in this same
+  file, an unresolved compaction crash artifact instead caused
+  `recover_state_witness_rotation` (which used to run first) to hard-error
+  universally across ALL acquire modes for an unanchored store; the fix
+  reordered the two recovery calls so compaction recovery for an unanchored
+  store always runs first, regardless of mode.
   **Retention of `.state-witness.previous` was considered and rejected in
   code**; there is no rollback procedure available after compaction
   completes.
