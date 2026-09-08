@@ -11,11 +11,8 @@ import {
 } from "./fixtures"
 import { legacyTokenStakingAt } from "./utils/operators"
 
-import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { Mock } from "./helpers/mock"
-import type { ContractTransaction } from "ethers"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
+  IWalletOwner,
   WalletRegistry,
   SortitionPool,
   TokenStaking,
@@ -24,6 +21,9 @@ import type {
   WalletRegistryGovernance,
   IStaking,
 } from "../typechain"
+import type { Mock } from "./helpers/mock"
+import type { ContractTransaction } from "ethers"
+import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 
 const { mineBlocks } = helpers.time
 const { to1e18 } = helpers.number

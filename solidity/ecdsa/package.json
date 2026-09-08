@@ -45,8 +45,8 @@
     "@openzeppelin/hardhat-upgrades": "^1.20.4",
     "@tenderly/hardhat-tenderly": ">=1.0.13 <1.2.0",
     "@thesis-co/eslint-config": "https://codeload.github.com/thesis/eslint-config/tar.gz/778365bbebb6b056bf973d25c57b8b466d21cbcf",
-    "@typechain/ethers-v5": "^8.0.5",
-    "@typechain/hardhat": "^4.0.0",
+    "@typechain/ethers-v5": "^11.1.2",
+    "@typechain/hardhat": "^7.0.0",
     "@types/chai": "^4.3.0",
     "@types/chai-as-promised": "^7.1.5",
     "@types/mocha": "^9.1.0",
@@ -68,7 +68,7 @@
     "solhint-config-keep": "https://codeload.github.com/keep-network/solhint-config-keep/tar.gz/5e1751e58c0f1c507305ffc8c7f6c58047657ada",
     "solidity-docgen": "^0.6.0-beta.35",
     "ts-node": "^10.4.0",
-    "typechain": "^6.1.0",
+    "typechain": "^8.3.2",
     "typescript": "^6.0.3"
   },
   "dependencies": {

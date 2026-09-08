@@ -3,15 +3,15 @@ import { expect } from "chai"
 
 import { walletRegistryFixture } from "./fixtures"
 
-import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
+  IWalletOwner,
   WalletRegistry,
   WalletRegistryStub,
   IRandomBeacon,
   WalletRegistryGovernance,
 } from "../typechain"
+import type { Mock } from "./helpers/mock"
+import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 

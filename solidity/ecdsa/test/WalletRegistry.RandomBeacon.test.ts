@@ -6,16 +6,16 @@ import { expectCalledWith } from "./helpers/mock"
 import { dkgState, walletRegistryFixture } from "./fixtures"
 import { upgradeRandomBeacon } from "./utils/governance"
 
-import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
+  IWalletOwner,
   IRandomBeacon,
   RandomBeaconStub,
   RandomBeaconStub__factory,
   WalletRegistry,
   WalletRegistryStub,
 } from "../typechain"
+import type { Mock } from "./helpers/mock"
+import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { ContractTransaction } from "ethers"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot

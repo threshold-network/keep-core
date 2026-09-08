@@ -13,15 +13,15 @@ import {
 } from "./utils/dkg"
 import ecdsaData from "./data/ecdsa"
 
-import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { Mock } from "./helpers/mock"
-import type { DkgResult } from "./utils/dkg"
-import type { Operator } from "./utils/operators"
 import type {
+  IWalletOwner,
   SortitionPool,
   EcdsaDkgValidator,
   WalletRegistry,
 } from "../typechain"
+import type { Mock } from "./helpers/mock"
+import type { DkgResult } from "./utils/dkg"
+import type { Operator } from "./utils/operators"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 

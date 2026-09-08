@@ -5,8 +5,11 @@ import chaiAsPromised from "chai-as-promised"
 
 import type { Contract } from "ethers"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { WalletRegistry, WalletRegistryGovernance } from "../typechain"
-import type { TransparentUpgradeableProxy } from "../typechain/TransparentUpgradeableProxy"
+import type {
+  WalletRegistry,
+  WalletRegistryGovernance,
+  TransparentUpgradeableProxy,
+} from "../typechain"
 
 chai.use(chaiAsPromised)
 

@@ -20,9 +20,8 @@ import { legacyTokenStakingAt } from "./utils/operators"
 
 import type { Operator } from "./utils/operators"
 import type { BigNumber, ContractTransaction, Signer } from "ethers"
-import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
+  IWalletOwner,
   SortitionPool,
   WalletRegistry,
   WalletRegistryStub,
@@ -30,6 +29,7 @@ import type {
   IRandomBeacon,
   DkgChallenger,
 } from "../typechain"
+import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { DkgResult, DkgResultSubmittedEventArgs } from "./utils/dkg"
 import type { Mock } from "./helpers/mock"
 
