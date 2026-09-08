@@ -39,6 +39,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@bytecodealliance/preview2-shim@npm:^0.19.0":
+  version: 0.19.0
+  resolution: "@bytecodealliance/preview2-shim@npm:0.19.0"
+  checksum: 10c0/c15b6aff80dfcb8cd2c2fb532f7b5a35bef0031d1df1f08064d8ef591668621ce379e5a285a3f48d2de5101fbc5a8e6badc935eaaa97eeb9ccb73d60c280c74d
+  languageName: node
+  linkType: hard
+
 "@cacheable/memory@npm:^2.2.0":
   version: 2.2.0
   resolution: "@cacheable/memory@npm:2.2.0"
@@ -1620,8 +1627,8 @@ __metadata:
     hardhat-dependency-compiler: "npm:^1.1.2"
     hardhat-deploy: "npm:^1.0.4"
     hardhat-gas-reporter: "npm:^2.3.0"
-    prettier: "npm:^2.4.1"
-    prettier-plugin-solidity: "npm:^1.0.0-beta.18"
+    prettier: "npm:^3.9.6"
+    prettier-plugin-solidity: "npm:^2.4.1"
     solhint: "npm:^3.3.6"
     solhint-config-keep: "https://codeload.github.com/keep-network/solhint-config-keep/tar.gz/5e1751e58c0f1c507305ffc8c7f6c58047657ada"
     solidity-docgen: "npm:^0.6.0-beta.35"
@@ -1831,6 +1838,15 @@ __metadata:
   peerDependencies:
     hardhat: ^2.26.0
   checksum: 10c0/daf420f4fdbbcbfe117077c5950d39ba5126bc57abc360ba2de55756bce4a455fe53f61ad0edcd04c9e2440cc3f8197631c586cfe5ad781efa5da2f79d7ccd19
+  languageName: node
+  linkType: hard
+
+"@nomicfoundation/slang@npm:1.3.8":
+  version: 1.3.8
+  resolution: "@nomicfoundation/slang@npm:1.3.8"
+  dependencies:
+    "@bytecodealliance/preview2-shim": "npm:^0.19.0"
+  checksum: 10c0/ec97aff9bc16bffcecddaca99e1c264e3b54138f148c72b41e033c17a269e62c6862ed05efee42a1f4f6bdda5726f0c804cdea56279630c26f529d35266c255d
   languageName: node
   linkType: hard
 
@@ -2284,7 +2300,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@solidity-parser/parser@npm:^0.20.1":
+"@solidity-parser/parser@npm:^0.20.1, @solidity-parser/parser@npm:^0.20.2":
   version: 0.20.2
   resolution: "@solidity-parser/parser@npm:0.20.2"
   checksum: 10c0/23b0b7ed343a4fa55cb8621cf4fc81b0bdd791a4ee7e96ced7778db07de66d4e418db2c2dc1525b1f82fc0310ac829c78382327292b37e35cb30a19961fcb429
@@ -11446,19 +11462,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prettier-plugin-solidity@npm:^1.0.0-beta.18":
-  version: 1.0.0-beta.18
-  resolution: "prettier-plugin-solidity@npm:1.0.0-beta.18"
+"prettier-plugin-solidity@npm:^2.4.1":
+  version: 2.4.1
+  resolution: "prettier-plugin-solidity@npm:2.4.1"
   dependencies:
-    "@solidity-parser/parser": "npm:^0.13.2"
-    emoji-regex: "npm:^9.2.2"
-    escape-string-regexp: "npm:^4.0.0"
-    semver: "npm:^7.3.5"
-    solidity-comments-extractor: "npm:^0.0.7"
-    string-width: "npm:^4.2.2"
+    "@nomicfoundation/slang": "npm:1.3.8"
+    "@solidity-parser/parser": "npm:^0.20.2"
+    semver: "npm:^7.8.5"
   peerDependencies:
-    prettier: ^2.3.0
-  checksum: 10c0/f991084e3e9614e3eefea5cd7473390fa0205ccf9a72bb4d954e9a8570ae8adc5d3717034ddb3fdc4d8ffd999f35807df4f2dee1f642132a5bec69cc02f6c766
+    prettier: ">=3.0.0"
+  checksum: 10c0/20ea46e5e9e406d5eb6df50335b5c08be098afc6cc392d32b8bb0e140c2a41d02c8e83a8da79ce5a1223e361d7a497e86e95bfe6caf1eb8546c4f6ff3d085a76
   languageName: node
   linkType: hard
 
@@ -11471,7 +11484,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prettier@npm:^2.1.2, prettier@npm:^2.4.1":
+"prettier@npm:^2.1.2":
   version: 2.4.1
   resolution: "prettier@npm:2.4.1"
   bin:
@@ -11486,6 +11499,15 @@ __metadata:
   bin:
     prettier: bin-prettier.js
   checksum: 10c0/463ea8f9a0946cd5b828d8cf27bd8b567345cf02f56562d5ecde198b91f47a76b7ac9eae0facd247ace70e927143af6135e8cf411986b8cb8478784a4d6d724a
+  languageName: node
+  linkType: hard
+
+"prettier@npm:^3.9.6":
+  version: 3.9.6
+  resolution: "prettier@npm:3.9.6"
+  bin:
+    prettier: bin/prettier.cjs
+  checksum: 10c0/9f7ddae234035868f3daab3dc34e6de7e54622185afb017378029f0c09a9c023248ccf6f34def0b17a0538e18c47aa1b3188bab72965d1bf735919baa0747e99
   languageName: node
   linkType: hard
 
@@ -12332,7 +12354,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"semver@npm:^7.7.1, semver@npm:^7.7.2, semver@npm:^7.7.3":
+"semver@npm:^7.7.1, semver@npm:^7.7.2, semver@npm:^7.7.3, semver@npm:^7.8.5":
   version: 7.8.5
   resolution: "semver@npm:7.8.5"
   bin:
@@ -12747,13 +12769,6 @@ __metadata:
   version: 0.4.46
   resolution: "solidity-ast@npm:0.4.46"
   checksum: 10c0/3c0cf84f98b9af7faa5458a3d5d6fae2f6582db7005dbf4fb614ec6eab3cf3600eb62f025cb3f491f11b11ca2858c458fc88cf7abc1c2e964366c5a647efdc17
-  languageName: node
-  linkType: hard
-
-"solidity-comments-extractor@npm:^0.0.7":
-  version: 0.0.7
-  resolution: "solidity-comments-extractor@npm:0.0.7"
-  checksum: 10c0/57fb166ff71812404288ae1a386bb9bbb6330662aedc3b45d89f6f0ce51ee0e36c9f4b9d4fd363c2b37fbf607e42df088e734c532fb93e2f345601b429813d9e
   languageName: node
   linkType: hard
 
