@@ -21,6 +21,39 @@ const (
 	RandomBeaconContractName = "RandomBeacon"
 )
 
+// beaconAdmissionReader narrows the chain reads that decide whether a peer is
+// admitted to the network via the beacon branch: mapping an operator to a
+// staking provider, and checking whether that provider currently has, or ever
+// had, a stake delegation. The indirection exists so the admission predicate
+// can be exercised without a chain behind it - see tbtcAdmissionReader in
+// tbtc.go for the same pattern on the tBTC branch.
+type beaconAdmissionReader interface {
+	OperatorToStakingProvider(operatorAddress common.Address) (common.Address, error)
+	HasStakeDelegation(stakingProvider common.Address) (bool, error)
+}
+
+// beaconAdmissionReaderChain is the production beaconAdmissionReader, backed
+// by the live RandomBeacon and TokenStaking contracts.
+type beaconAdmissionReaderChain struct {
+	randomBeacon *contract.RandomBeacon
+	baseChain    *baseChain
+}
+
+func (r *beaconAdmissionReaderChain) OperatorToStakingProvider(
+	operatorAddress common.Address,
+) (common.Address, error) {
+	return r.randomBeacon.OperatorToStakingProvider(operatorAddress)
+}
+
+func (r *beaconAdmissionReaderChain) HasStakeDelegation(
+	stakingProvider common.Address,
+) (bool, error) {
+	_, _, _, hasStakeDelegation, err := r.baseChain.RolesOf(
+		chain.Address(stakingProvider.Hex()),
+	)
+	return hasStakeDelegation, err
+}
+
 var errNotImplemented = fmt.Errorf("not implemented")
 
 // BeaconChain represents a beacon-specific chain handle.
@@ -29,6 +62,7 @@ type BeaconChain struct {
 
 	randomBeacon  *contract.RandomBeacon
 	sortitionPool *contract.BeaconSortitionPool
+	admission     beaconAdmissionReader
 }
 
 // newBeaconChain construct a new instance of the beacon-specific Ethereum
@@ -94,6 +128,10 @@ func newBeaconChain(
 		baseChain:     baseChain,
 		randomBeacon:  randomBeacon,
 		sortitionPool: sortitionPool,
+		admission: &beaconAdmissionReaderChain{
+			randomBeacon: randomBeacon,
+			baseChain:    baseChain,
+		},
 	}, nil
 }
 
@@ -344,17 +382,17 @@ func (bc *BeaconChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool
 	operatorAddress, err := operatorPublicKeyToChainAddress(operatorPublicKey)
 	if err != nil {
 		return false, fmt.Errorf(
-			"cannot convert from operator key to chain address: [%v]",
+			"cannot convert from operator key to chain address: [%w]",
 			err,
 		)
 	}
 
-	stakingProvider, err := bc.randomBeacon.OperatorToStakingProvider(
+	stakingProvider, err := bc.admission.OperatorToStakingProvider(
 		operatorAddress,
 	)
 	if err != nil {
 		return false, fmt.Errorf(
-			"failed to map operator [%v] to a staking provider: [%v]",
+			"failed to map operator [%v] to a staking provider: [%w]",
 			operatorAddress,
 			err,
 		)
@@ -376,12 +414,12 @@ func (bc *BeaconChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool
 	// predicate here would therefore recognize nobody. The watchtower re-runs
 	// this check against every connected peer every ten minutes and disconnects
 	// on failure, so the whole fleet would come apart within a single round.
-	_, _, _, hasStakeDelegation, err := bc.baseChain.RolesOf(
-		chain.Address(stakingProvider.Hex()),
+	hasStakeDelegation, err := bc.admission.HasStakeDelegation(
+		stakingProvider,
 	)
 	if err != nil {
 		return false, fmt.Errorf(
-			"failed to check stake delegation for staking provider [%v]: [%v]",
+			"failed to check stake delegation for staking provider [%v]: [%w]",
 			stakingProvider,
 			err,
 		)
