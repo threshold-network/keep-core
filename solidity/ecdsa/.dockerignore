@@ -2,6 +2,12 @@
 .*
 !.yarnrc.yml
 
+# Include local dependency patches, but exclude Yarn caches and install state.
+!.yarn
+.yarn/**
+!.yarn/patches
+!.yarn/patches/**
+
 # Documentation
 docs/
 

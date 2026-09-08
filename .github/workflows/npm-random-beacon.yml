@@ -8,9 +8,13 @@ on:
       - "solidity/random-beacon/contracts/**"
       - "solidity/random-beacon/deploy/**"
       - "solidity/random-beacon/tasks/**"
+      - "solidity/random-beacon/utils/**"
       - "solidity/random-beacon/hardhat.config.ts"
       - "solidity/random-beacon/package.json"
       - "solidity/random-beacon/yarn.lock"
+      - "solidity/random-beacon/.nvmrc"
+      - "solidity/random-beacon/.yarnrc.yml"
+      - "solidity/random-beacon/.yarn/patches/**"
       - ".github/workflows/npm-random-beacon.yml"
   workflow_dispatch:
 
@@ -35,18 +39,9 @@ jobs:
         with:
           working-directory: ./solidity/random-beacon
 
-      - name: Resolve latest contracts
-        # `@threshold-network/solidity-contracts` is pinned to 1.3.0-dev.11
-        # (the version used by the last successful publish, 2.1.0-dev.18)
-        # because the `development` dist-tag was bumped to 1.3.0-dev.16,
-        # which refactored `TokenStaking` and removed `approveApplication`
-        # (called by `deploy/05_approve_random_beacon_in_token_staking.ts`).
-        # Unpin once the deploy scripts and Go ABI bindings are migrated
-        # to the new TokenStaking API.
-        run: |
-          yarn up --exact \
-            @keep-network/sortition-pools \
-            @threshold-network/solidity-contracts@1.3.0-dev.11
+      - name: Install locked dependencies
+        # Preserve the tested Threshold version and its local ethers v6 patch.
+        run: yarn install --immutable
 
       # Deploy contracts to a local network to generate deployment artifacts that
       # are required by dashboard and client compilation.
