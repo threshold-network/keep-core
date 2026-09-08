@@ -14,7 +14,7 @@
     "export.json"
   ],
   "scripts": {
-    "install:deps": "corepack enable && corepack prepare yarn@4.8.1 --activate && yarn install",
+    "install:deps": "corepack enable && corepack prepare yarn@4.12.0 --activate && yarn install",
     "clean": "hardhat clean && rm -rf cache/ export/ external/npm typechain/ export.json",
     "build": "hardhat compile",
     "test": "hardhat typechain && hardhat check-accounts-count && USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_BEACON=true hardhat test",
@@ -78,5 +78,5 @@
   "resolutions": {
     "ethereumjs-abi": "npm:0.6.8"
   },
-  "packageManager": "yarn@4.8.1+sha512.bc946f2a022d7a1a38adfc15b36a66a3807a67629789496c3714dd1703d2e6c6b1c69ff9ec3b43141ac7a1dd853b7685638eb0074300386a59c18df351ef8ff6"
+  "packageManager": "yarn@4.12.0+sha512.f45ab632439a67f8bc759bf32ead036a1f413287b9042726b7cc4818b7b49e14e9423ba49b18f9e06ea4941c1ad062385b1d8760a8d5091a1a31e5f6219afca8"
 }
