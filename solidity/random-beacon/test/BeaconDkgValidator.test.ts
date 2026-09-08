@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-expressions, no-await-in-loop */
+/* eslint-disable @typescript-eslint/no-unused-expressions */
 
 import { BigNumber } from "ethers"
 import {

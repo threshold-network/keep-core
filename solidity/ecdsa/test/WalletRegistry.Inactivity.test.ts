@@ -56,7 +56,6 @@ describe("WalletRegistry - Inactivity", () => {
   const noHeartbeatFailure = false
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ walletRegistry, sortitionPool, randomBeacon, walletOwner, thirdParty } =
       await walletRegistryFixture({ useAllowlist: true }))
     ;({ members, walletID } = await createNewWallet(

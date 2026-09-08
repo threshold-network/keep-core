@@ -59,7 +59,6 @@ describe("WalletRegistryGovernance", async () => {
   const initialSortitionPoolRewardsBanDuration = 1209600 // 14 days
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ walletRegistry, walletRegistryGovernance, governance, thirdParty } =
       await fixture())
   })

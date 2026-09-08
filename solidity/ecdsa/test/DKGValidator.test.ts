@@ -53,7 +53,6 @@ describe("EcdsaDkgValidator", () => {
   let validator: EcdsaDkgValidator
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ walletRegistry, sortitionPool, walletOwner } =
       await walletRegistryFixture({ useAllowlist: true }))
 

@@ -58,7 +58,6 @@ describe("WalletRegistry - Wallets", async () => {
   let thirdParty: SignerWithAddress
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ walletRegistry, randomBeacon, walletOwner, thirdParty } =
       await walletRegistryFixture({ useAllowlist: true }))
   })

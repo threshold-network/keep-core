@@ -38,7 +38,6 @@ describe("WalletRegistry - Wallet Owner", async () => {
   let walletOwner: Mock<IWalletOwner>
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ walletRegistry, walletOwner } = await walletRegistryFixture({
       useAllowlist: true,
     }))

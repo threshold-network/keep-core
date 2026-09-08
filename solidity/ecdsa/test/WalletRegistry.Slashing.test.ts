@@ -68,7 +68,6 @@ describe("WalletRegistry - Slashing", () => {
   const rewardMultiplier = 30
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({
       walletRegistry,
       randomBeacon,

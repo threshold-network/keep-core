@@ -4,7 +4,6 @@ import { constants } from "../fixtures"
 
 import type { BigNumberish } from "ethers"
 
-/* eslint-disable import/prefer-default-export */
 export function firstEligibleIndex(
   seed: BigNumberish,
   groupSize?: number
