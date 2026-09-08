@@ -49,7 +49,10 @@ describe("WalletRegistry - Upgrade", async () => {
               unsafeAllow: ["external-library-linking"],
             },
           }),
-        ).to.be.rejectedWith(Error, "AllowlistAddressZero")
+        ).to.be.revertedWithCustomError(
+          await helpers.contracts.getContract("WalletRegistry"),
+          "AllowlistAddressZero",
+        )
       })
     })
 
@@ -147,7 +150,10 @@ describe("WalletRegistry - Upgrade", async () => {
               unsafeAllow: ["external-library-linking"],
             },
           }),
-        ).to.be.rejectedWith(Error, "AllowlistAddressZero")
+        ).to.be.revertedWithCustomError(
+          await helpers.contracts.getContract("WalletRegistry"),
+          "AllowlistAddressZero",
+        )
       })
     })
   })
@@ -295,10 +301,9 @@ describe("WalletRegistry - Upgrade", async () => {
       })
 
       it("should revert for removed function", async () => {
-        await expect(walletRegistry.notifySeedTimeout()).to.be.rejectedWith(
-          Error,
-          "Transaction reverted: function selector was not recognized and there's no fallback function",
-        )
+        await expect(
+          walletRegistry.notifySeedTimeout(),
+        ).to.be.revertedWithoutReason()
       })
 
       it("should execute updated function logic", async () => {
