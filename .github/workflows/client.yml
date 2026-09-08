@@ -503,6 +503,7 @@ jobs:
       # They remain required for Bitcoin client/config/dependency changes and
       # for every push, scheduled run, and manual run.
       - name: Run public Electrum integration tests
+        if: ${{ !cancelled() }}
         continue-on-error: ${{ github.event_name == 'pull_request' && needs.electrum-integration-detect-changes.outputs.path-filter == 'false' }}
         run: |
           docker run \
