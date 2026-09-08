@@ -10,6 +10,7 @@
     "!contracts/hardhat-dependency-compiler",
     "!**/test/",
     "deploy/",
+    "deploy-utils/",
     "export/",
     "tasks/",
     "export.json"
@@ -32,7 +33,7 @@
     "test": "USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_ECDSA=true hardhat test",
     "deploy": "hardhat deploy --export export.json",
     "deploy:test": "USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_ECDSA=true hardhat deploy",
-    "prepack": "tsc -p tsconfig.export.json && hardhat export-artifacts --including-no-public-functions export/artifacts",
+    "prepack": "tsc -p tsconfig.export.json && mkdir -p export/deploy-data && cp deploy-data/*.json export/deploy-data/ && hardhat export-artifacts --including-no-public-functions export/artifacts",
     "prepublishOnly": "hardhat prepare-artifacts --network $npm_config_network"
   },
   "devDependencies": {

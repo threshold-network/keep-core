@@ -5,6 +5,21 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const { getNamedAccounts, deployments, helpers } = hre
   const { deployer } = await getNamedAccounts()
 
+  const existingBeacon = await deployments.getOrNull("RandomBeacon")
+  const poolOwner = await deployments.read("BeaconSortitionPool", "owner")
+  if (
+    existingBeacon &&
+    helpers.address.equal(poolOwner, existingBeacon.address)
+  ) {
+    deployments.log(`using existing RandomBeacon at ${existingBeacon.address}`)
+    return
+  }
+  if (!helpers.address.equal(poolOwner, deployer)) {
+    throw new Error(
+      `BeaconSortitionPool is owned by ${poolOwner}; cannot deploy a new RandomBeacon from ${deployer}`
+    )
+  }
+
   const T = await deployments.get("T")
   const TokenStaking = await deployments.get("TokenStaking")
   const ReimbursementPool = await deployments.get("ReimbursementPool")
@@ -14,7 +29,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const deployOptions: DeployOptions = {
     from: deployer,
     log: true,
-    waitConfirmations: 1,
+    waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
   }
 
   const BLS = await deployments.deploy("BLS", deployOptions)
@@ -59,11 +74,6 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   )
 
   if (hre.network.tags.etherscan) {
-    await hre.ethers.provider.waitForTransaction(
-      RandomBeacon.transactionHash,
-      2,
-      300000
-    )
     await helpers.etherscan.verify(BLS)
     await helpers.etherscan.verify(BeaconAuthorization)
     await helpers.etherscan.verify(BeaconDkg)

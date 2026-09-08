@@ -1,5 +1,5 @@
-import verifyOnEtherscanOrContinue from "./etherscanVerification"
-import verifyOnTenderlyOrContinue from "./tenderlyVerification"
+import verifyOnEtherscanOrContinue from "../deploy-utils/etherscanVerification"
+import verifyOnTenderlyOrContinue from "../deploy-utils/tenderlyVerification"
 
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
@@ -29,7 +29,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     waitConfirmations: 1,
   })
 
-  const [walletRegistry, proxyDeployment] = await helpers.upgrades.deployProxy(
+  const [, proxyDeployment] = await helpers.upgrades.deployProxy(
     "WalletRegistry",
     {
       contractName:
@@ -57,7 +57,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   await helpers.ownable.transferOwnership(
     "EcdsaSortitionPool",
-    walletRegistry.address,
+    proxyDeployment.address,
     deployer
   )
 
@@ -82,7 +82,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     await verifyOnTenderlyOrContinue(hre, () =>
       hre.tenderly.verify({
         name: "WalletRegistry",
-        address: walletRegistry.address,
+        address: proxyDeployment.address,
       })
     )
   }

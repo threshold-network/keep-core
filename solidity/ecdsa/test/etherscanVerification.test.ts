@@ -1,7 +1,7 @@
 import chai, { expect } from "chai"
 import chaiAsPromised from "chai-as-promised"
 
-import verifyOnEtherscanOrContinue from "../deploy/etherscanVerification"
+import verifyOnEtherscanOrContinue from "../deploy-utils/etherscanVerification"
 
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 
