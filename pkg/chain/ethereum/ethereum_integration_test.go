@@ -120,6 +120,23 @@ func shouldSkipEthereumIntegrationError(err error) bool {
 		strings.Contains(errorMessage, "\"message\":\"Too Many Requests\"")
 }
 
+// callOrSkip invokes fn and, on a transient integration error, skips the
+// test instead of failing it; every RPC call in this file should go through
+// this helper, not just the first one per test.
+func callOrSkip[T any](t *testing.T, fn func() (T, error)) T {
+	t.Helper()
+
+	result, err := fn()
+	if err != nil {
+		if shouldSkipEthereumIntegrationError(err) {
+			t.Skip(err)
+		}
+		t.Fatal(err)
+	}
+
+	return result
+}
+
 // The block the admission assertions below read at. Pinning it makes them
 // describe one fixed chain state instead of whatever mainnet happens to hold
 // when they run, so they need an archive endpoint rather than a pruned one.
@@ -133,19 +150,19 @@ const (
 	mainnetTokenStakingAddress   = "0x01B67b1194C75264d06F808A921228a95C765dd7"
 )
 
+// allowlistOperatorEntry mirrors one entry of the ECDSA allowlist deploy
+// data's operator lists.
+type allowlistOperatorEntry struct {
+	Identification  string `json:"identification"`
+	StakingProvider string `json:"stakingProvider"`
+	Operator        string `json:"operator"`
+}
+
 // allowlistWeights mirrors the fields this file reads out of the ECDSA
 // allowlist deploy data.
 type allowlistWeights struct {
-	Operators []struct {
-		Identification  string `json:"identification"`
-		StakingProvider string `json:"stakingProvider"`
-		Operator        string `json:"operator"`
-	} `json:"operators"`
-	DeprecatedOperatorsNotAdded []struct {
-		Identification  string `json:"identification"`
-		StakingProvider string `json:"stakingProvider"`
-		Operator        string `json:"operator"`
-	} `json:"deprecatedOperatorsNotAdded"`
+	Operators                   []allowlistOperatorEntry `json:"operators"`
+	DeprecatedOperatorsNotAdded []allowlistOperatorEntry `json:"deprecatedOperatorsNotAdded"`
 }
 
 func readAllowlistWeights(t *testing.T) *allowlistWeights {
@@ -223,12 +240,12 @@ func newAdmissionCallers(t *testing.T) *admissionCallers {
 	}
 }
 
-// TestTbtcChain_IsRecognized_DeprecatedOperatorsKeepBeaconAdmission reads the
+// TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission reads the
 // operators the ECDSA allowlist deliberately left out. The tBTC predicate
 // rejects every one of them, and every one of them stays admitted through the
 // beacon branch, which is why the beacon must keep its own predicate: the
 // change de-admits nobody in production.
-func TestTbtcChain_IsRecognized_DeprecatedOperatorsKeepBeaconAdmission(t *testing.T) {
+func TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission(t *testing.T) {
 	callers := newAdmissionCallers(t)
 	weights := readAllowlistWeights(t)
 
@@ -241,16 +258,12 @@ func TestTbtcChain_IsRecognized_DeprecatedOperatorsKeepBeaconAdmission(t *testin
 			stakingProvider := common.HexToAddress(deprecated.StakingProvider)
 			operatorAddress := common.HexToAddress(deprecated.Operator)
 
-			eligibleStake, err := callers.walletRegistry.EligibleStake(
-				callers.callOpts,
-				stakingProvider,
-			)
-			if err != nil {
-				if shouldSkipEthereumIntegrationError(err) {
-					t.Skip(err)
-				}
-				t.Fatal(err)
-			}
+			eligibleStake := callOrSkip(t, func() (*big.Int, error) {
+				return callers.walletRegistry.EligibleStake(
+					callers.callOpts,
+					stakingProvider,
+				)
+			})
 
 			if eligibleStake.Sign() != 0 {
 				t.Errorf(
@@ -260,25 +273,27 @@ func TestTbtcChain_IsRecognized_DeprecatedOperatorsKeepBeaconAdmission(t *testin
 				)
 			}
 
-			beaconStakingProvider, err := callers.randomBeacon.OperatorToStakingProvider(
-				callers.callOpts,
-				operatorAddress,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
+			beaconStakingProvider := callOrSkip(t, func() (common.Address, error) {
+				return callers.randomBeacon.OperatorToStakingProvider(
+					callers.callOpts,
+					operatorAddress,
+				)
+			})
 
 			if (beaconStakingProvider == common.Address{}) {
 				t.Error("expected the operator to be known to the beacon")
 			}
 
-			roles, err := callers.tokenStaking.RolesOf(
-				callers.callOpts,
-				beaconStakingProvider,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
+			roles := callOrSkip(t, func() (struct {
+				Owner       common.Address
+				Beneficiary common.Address
+				Authorizer  common.Address
+			}, error) {
+				return callers.tokenStaking.RolesOf(
+					callers.callOpts,
+					beaconStakingProvider,
+				)
+			})
 
 			if (roles.Owner == common.Address{}) {
 				t.Error("expected the beacon branch to keep admitting")
@@ -311,16 +326,12 @@ func TestBeaconChain_EligibleStakeIsZeroForEveryKnownProvider(t *testing.T) {
 
 	for _, stakingProvider := range stakingProviders {
 		t.Run(stakingProvider, func(t *testing.T) {
-			eligibleStake, err := callers.randomBeacon.EligibleStake(
-				callers.callOpts,
-				common.HexToAddress(stakingProvider),
-			)
-			if err != nil {
-				if shouldSkipEthereumIntegrationError(err) {
-					t.Skip(err)
-				}
-				t.Fatal(err)
-			}
+			eligibleStake := callOrSkip(t, func() (*big.Int, error) {
+				return callers.randomBeacon.EligibleStake(
+					callers.callOpts,
+					common.HexToAddress(stakingProvider),
+				)
+			})
 
 			testutils.AssertBigIntsEqual(
 				t,
@@ -332,42 +343,63 @@ func TestBeaconChain_EligibleStakeIsZeroForEveryKnownProvider(t *testing.T) {
 	}
 }
 
-// TestTbtcChain_IsRecognized_PendingDecreaseAtTheFloor guards the mechanic that
+// TestMainnetChainState_PendingDecreaseAtTheFloor guards the mechanic that
 // makes the predicate surprising: a requested weight decrease is applied to
 // eligible stake the moment it is requested, and an authorization cannot be
 // lowered past the minimum without going to zero outright. Providers sitting on
 // that floor must stay recognized.
-func TestTbtcChain_IsRecognized_PendingDecreaseAtTheFloor(t *testing.T) {
+func TestMainnetChainState_PendingDecreaseAtTheFloor(t *testing.T) {
 	callers := newAdmissionCallers(t)
 	weights := readAllowlistWeights(t)
 
-	minimumAuthorization, err := callers.walletRegistry.MinimumAuthorization(
-		callers.callOpts,
-	)
-	if err != nil {
-		if shouldSkipEthereumIntegrationError(err) {
-			t.Skip(err)
-		}
-		t.Fatal(err)
-	}
+	minimumAuthorization := callOrSkip(t, func() (*big.Int, error) {
+		return callers.walletRegistry.MinimumAuthorization(callers.callOpts)
+	})
 
 	providersAtTheFloor := 0
+	providersAtTheFloorWithPendingDecrease := 0
 
 	for _, operator := range weights.Operators {
-		eligibleStake, err := callers.walletRegistry.EligibleStake(
-			callers.callOpts,
-			common.HexToAddress(operator.StakingProvider),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
+		stakingProvider := common.HexToAddress(operator.StakingProvider)
+
+		eligibleStake := callOrSkip(t, func() (*big.Int, error) {
+			return callers.walletRegistry.EligibleStake(
+				callers.callOpts,
+				stakingProvider,
+			)
+		})
 
 		if eligibleStake.Cmp(minimumAuthorization) != 0 {
 			continue
 		}
 
 		providersAtTheFloor++
+
+		// Read is unconditional so the file actually exercises the pending-
+		// decrease mechanic this test is named for, but the count below is
+		// informational only: whether any floor-sitting provider currently
+		// has an active pending decrease is transient live-chain state (it
+		// changes as decreases get approved), unlike the floor's existence
+		// itself, so it must not gate a hard assertion.
+		pendingDecrease := callOrSkip(t, func() (*big.Int, error) {
+			return callers.walletRegistry.PendingAuthorizationDecrease(
+				callers.callOpts,
+				stakingProvider,
+			)
+		})
+
+		if pendingDecrease.Sign() > 0 {
+			providersAtTheFloorWithPendingDecrease++
+		}
 	}
+
+	t.Logf(
+		"%d of %d providers sitting on the floor have an active pending "+
+			"decrease at block %d",
+		providersAtTheFloorWithPendingDecrease,
+		providersAtTheFloor,
+		admissionPinnedBlock,
+	)
 
 	// The filter above leaves eligible stake equal to the minimum authorization,
 	// so asserting it is positive per provider would be a tautology. The
@@ -392,29 +424,25 @@ func TestTbtcChain_IsRecognized_PendingDecreaseAtTheFloor(t *testing.T) {
 	}
 }
 
-// TestTbtcChain_IsRecognized_ProviderAuthorizedAfterLegacyStakingFroze is the
+// TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze is the
 // case the change exists for. Legacy token staking can no longer record a
 // delegation for anyone, so a provider authorized after it froze reads a zero
 // owner forever while holding full eligible stake: the delegation predicate
 // rejects it permanently and the eligible stake predicate admits it. It has no
 // beacon backstop either, which is the cost the change carries.
-func TestTbtcChain_IsRecognized_ProviderAuthorizedAfterLegacyStakingFroze(t *testing.T) {
+func TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze(t *testing.T) {
 	callers := newAdmissionCallers(t)
 
 	stakingProvider := common.HexToAddress(
 		"0x3d921565ec837c6bfaf441579e07571646e0048a",
 	)
 
-	eligibleStake, err := callers.walletRegistry.EligibleStake(
-		callers.callOpts,
-		stakingProvider,
-	)
-	if err != nil {
-		if shouldSkipEthereumIntegrationError(err) {
-			t.Skip(err)
-		}
-		t.Fatal(err)
-	}
+	eligibleStake := callOrSkip(t, func() (*big.Int, error) {
+		return callers.walletRegistry.EligibleStake(
+			callers.callOpts,
+			stakingProvider,
+		)
+	})
 
 	if eligibleStake.Sign() <= 0 {
 		t.Fatalf(
@@ -423,10 +451,13 @@ func TestTbtcChain_IsRecognized_ProviderAuthorizedAfterLegacyStakingFroze(t *tes
 		)
 	}
 
-	roles, err := callers.tokenStaking.RolesOf(callers.callOpts, stakingProvider)
-	if err != nil {
-		t.Fatal(err)
-	}
+	roles := callOrSkip(t, func() (struct {
+		Owner       common.Address
+		Beneficiary common.Address
+		Authorizer  common.Address
+	}, error) {
+		return callers.tokenStaking.RolesOf(callers.callOpts, stakingProvider)
+	})
 
 	if (roles.Owner != common.Address{}) {
 		t.Errorf(
@@ -435,21 +466,46 @@ func TestTbtcChain_IsRecognized_ProviderAuthorizedAfterLegacyStakingFroze(t *tes
 		)
 	}
 
-	beaconStakingProvider, err := callers.randomBeacon.OperatorToStakingProvider(
-		callers.callOpts,
-		common.HexToAddress("0xc1E20a88C2130472B25B3C382773bA85944230d2"),
-	)
-	if err != nil {
-		t.Fatal(err)
+	// Before using the hardcoded operator address for the beacon-side check,
+	// prove it actually belongs to the staking provider under test on the
+	// tBTC side: the wallet registry and the beacon are queried with two
+	// independently hardcoded addresses, and nothing else ties them together.
+	walletRegistryStakingProvider := callOrSkip(t, func() (common.Address, error) {
+		return callers.walletRegistry.OperatorToStakingProvider(
+			callers.callOpts,
+			common.HexToAddress("0xc1E20a88C2130472B25B3C382773bA85944230d2"),
+		)
+	})
+	if walletRegistryStakingProvider != stakingProvider {
+		t.Fatalf(
+			"operator does not map to the staking provider under test: "+
+				"got [%v], want [%v]",
+			walletRegistryStakingProvider,
+			stakingProvider,
+		)
 	}
 
-	beaconRoles, err := callers.tokenStaking.RolesOf(
-		callers.callOpts,
-		beaconStakingProvider,
-	)
-	if err != nil {
-		t.Fatal(err)
+	beaconStakingProvider := callOrSkip(t, func() (common.Address, error) {
+		return callers.randomBeacon.OperatorToStakingProvider(
+			callers.callOpts,
+			common.HexToAddress("0xc1E20a88C2130472B25B3C382773bA85944230d2"),
+		)
+	})
+
+	if (beaconStakingProvider == common.Address{}) {
+		t.Fatal("expected the operator to be known to the beacon")
 	}
+
+	beaconRoles := callOrSkip(t, func() (struct {
+		Owner       common.Address
+		Beneficiary common.Address
+		Authorizer  common.Address
+	}, error) {
+		return callers.tokenStaking.RolesOf(
+			callers.callOpts,
+			beaconStakingProvider,
+		)
+	})
 
 	if (beaconRoles.Owner != common.Address{}) {
 		t.Error("expected the provider to have no beacon backstop")
