@@ -39,7 +39,7 @@ func (a Addresses) String() string {
 	}
 
 	var sb strings.Builder
-	var i = 0
+	var i int
 
 	sb.WriteString("[")
 	for i = 0; i < len(a)-1; i++ {

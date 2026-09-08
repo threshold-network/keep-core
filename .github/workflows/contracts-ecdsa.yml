@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - dev
   # We intend to use `workflow dispatch` in two different situations/paths
   # 1. If a workflow will be manually dispatched from branch named
   #    `dapp-development`, workflow will deploy the contracts on the selected
@@ -35,14 +36,27 @@ jobs:
   contracts-detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      path-filter: ${{ steps.set-output.outputs.path-filter }}
+      path-filter: ${{ steps.filter.outputs.path-filter }}
     steps:
-      - name: Set path-filter output
-        id: set-output
-        run: echo "path-filter=true" >> $GITHUB_OUTPUT
+      - uses: actions/checkout@v3
+        if: github.event_name == 'pull_request'
+
+      - uses: dorny/paths-filter@v2
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            path-filter:
+              - './solidity/ecdsa/**'
+              - './.github/workflows/contracts-ecdsa.yml'
+              - './.github/actions/install-yarn-deps/**'
+              - './.github/actions/docker-build-push/**'
 
   contracts-lint:
     needs: contracts-detect-changes
+    if: |
+      needs.contracts-detect-changes.outputs.path-filter == 'true'
+        || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -52,10 +66,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:
@@ -69,6 +83,9 @@ jobs:
 
   contracts-slither:
     needs: contracts-detect-changes
+    if: |
+      needs.contracts-detect-changes.outputs.path-filter == 'true'
+        || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -78,10 +95,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
 
       - uses: actions/setup-python@v4
         with:
@@ -111,6 +128,9 @@ jobs:
 
   contracts-build-and-test:
     needs: contracts-detect-changes
+    if: |
+      needs.contracts-detect-changes.outputs.path-filter == 'true'
+        || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -120,10 +140,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:
@@ -138,6 +158,9 @@ jobs:
 
   contracts-deployment-dry-run:
     needs: contracts-detect-changes
+    if: |
+      needs.contracts-detect-changes.outputs.path-filter == 'true'
+        || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -147,10 +170,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
 
       - uses: ./.github/actions/install-yarn-deps
         with:
@@ -166,6 +189,69 @@ jobs:
           push: false
           context: ./solidity/ecdsa
 
+  # Verifies that hardhat-deploy's `export`/`export.json` output - the
+  # artifact shape consumed downstream by @keep-network/tbtc-v2 - stays
+  # byte-identical to the committed baseline. This is the automated gate
+  # for the core safety constraint of issue #4216 (the hardhat-deploy v1
+  # upgrade): without it, drift in the deploy/export artifact shape would
+  # only ever be caught by a one-off manual comparison, not by CI. A
+  # mismatch means the deploy/export artifact shape changed; if that is
+  # intentional, regenerate the baseline locally and commit
+  # solidity/ecdsa/export-baseline.sha256 alongside the change.
+  #
+  # Note: the manifest covers the full export/ tree, including artifacts
+  # of external dependencies deployed onto the local test network
+  # (@keep-network/random-beacon, @keep-network/sortition-pools,
+  # @openzeppelin/*, @thesis/*, @threshold-network/*). This is safe from
+  # upstream-publish flakiness: install-yarn-deps runs `yarn install
+  # --immutable` against the committed yarn.lock, which pins each of
+  # these to a concrete resolved version (e.g. `@keep-network/
+  # random-beacon@npm:development` resolves to a fixed `2.1.0-dev.18` in
+  # yarn.lock, not whatever the "development" dist-tag currently points
+  # to upstream) - external artifacts only change when yarn.lock itself
+  # changes. So a diff under export/artifacts/@* means a dependency
+  # version bump landed in this PR/branch; regenerate the baseline as
+  # part of that same change, the same way as any other intentional
+  # export-shape change described above.
+  contracts-export-byte-identity:
+    needs: contracts-detect-changes
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./solidity/ecdsa
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
+
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/ecdsa
+
+      - name: Deploy contracts and generate export artifacts
+        run: |
+          yarn deploy:test --network hardhat --export export.json
+          yarn prepack
+
+      - name: Verify export byte-identity against baseline
+        run: |
+          set -e
+          sha256sum export.json > /tmp/manifest.txt
+          find export -type f | sort | xargs sha256sum >> /tmp/manifest.txt
+          if ! diff -q export-baseline.sha256 /tmp/manifest.txt > /dev/null; then
+            echo "::error::export.json / export/ artifacts differ from the committed baseline (solidity/ecdsa/export-baseline.sha256)."
+            echo "::error::If this change is intentional, regenerate the baseline locally (yarn deploy:test --network hardhat --export export.json && yarn prepack, then hash export.json and export/) and commit solidity/ecdsa/export-baseline.sha256 alongside it."
+            diff export-baseline.sha256 /tmp/manifest.txt || true
+            exit 1
+          fi
+          echo "export byte-identity OK"
+
   contracts-deployment-testnet:
     needs: [contracts-build-and-test]
     if: |
@@ -180,10 +266,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
           registry-url: "https://registry.npmjs.org"
 
       - uses: ./.github/actions/install-yarn-deps
@@ -280,10 +366,10 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
-          # Using fixed version, because 18.16 was sometimes causing issues with
-          # artifacts generation during `hardhat compile` - see
-          # https://github.com/NomicFoundation/hardhat/issues/3877
-          node-version: "22.23.1"
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
           registry-url: "https://registry.npmjs.org"
 
       - uses: ./.github/actions/install-yarn-deps

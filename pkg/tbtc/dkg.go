@@ -506,7 +506,7 @@ func (de *dkgExecutor) registerSigner(
 			de.groupParameters,
 		)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve final signing group members")
+		return nil, fmt.Errorf("failed to resolve final signing group members: [%w]", err)
 	}
 
 	// Just like the final and original group may differ, the

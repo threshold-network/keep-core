@@ -310,6 +310,56 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		tbtc.DefaultKeyGenerationConcurrency,
 		"tECDSA key generation concurrency.",
 	)
+
+	cmd.Flags().IntVar(
+		&cfg.Tbtc.WalletTxSatPerVByteFloor,
+		"tbtc.walletTxSatPerVByteFloor",
+		tbtc.DefaultWalletTxSatPerVByteFloor,
+		"Minimum fee rate (sat/vByte) applied to wallet Bitcoin transactions "+
+			"(deposit sweeps, redemptions, moving funds, moved funds sweeps). "+
+			"Applies to both the leader-side floor in tbtcpg and the "+
+			"follower-side soft check; 0 means use the default.",
+	)
+
+	cmd.Flags().IntVar(
+		&cfg.Tbtc.WalletTxFeeBufferPercent,
+		"tbtc.walletTxFeeBufferPercent",
+		tbtc.DefaultWalletTxFeeBufferPercent,
+		"Safety-buffer percentage applied over the per-vByte fee rate "+
+			"(bufferedRate = ceil(rawRate * (100+Percent) / 100)); "+
+			"0 means use the default.",
+	)
+
+	cmd.Flags().DurationVar(
+		&cfg.Tbtc.TransactionMonitor.StuckThreshold,
+		"tbtc.transactionMonitor.stuckThreshold",
+		tbtc.DefaultTransactionMonitorStuckThreshold,
+		"Unconfirmed transaction age before a stuck-transaction alert; 0 uses the default.",
+	)
+	cmd.Flags().DurationVar(
+		&cfg.Tbtc.TransactionMonitor.CheckInterval,
+		"tbtc.transactionMonitor.checkInterval",
+		tbtc.DefaultTransactionMonitorCheckInterval,
+		"Polling interval for wallet transaction confirmations; 0 uses the default.",
+	)
+	cmd.Flags().IntVar(
+		&cfg.Tbtc.TransactionMonitor.MaxTracked,
+		"tbtc.transactionMonitor.maxTracked",
+		tbtc.DefaultTransactionMonitorMaxTracked,
+		"Maximum number of wallet transactions tracked in memory; must not exceed 100000; 0 uses the default.",
+	)
+	cmd.Flags().DurationVar(
+		&cfg.Tbtc.TransactionMonitor.MaxTrackingAge,
+		"tbtc.transactionMonitor.maxTrackingAge",
+		tbtc.DefaultTransactionMonitorMaxTrackingAge,
+		"Maximum age of a tracked transaction; must be at least stuckThreshold; 0 uses the default.",
+	)
+	cmd.Flags().DurationVar(
+		&cfg.Tbtc.TransactionMonitor.CheckBudget,
+		"tbtc.transactionMonitor.checkBudget",
+		tbtc.DefaultTransactionMonitorCheckBudget,
+		"Time budget for one transaction confirmation-check pass; 0 uses the default.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.
@@ -372,6 +422,15 @@ func initMaintainerFlags(command *cobra.Command, cfg *config.Config) {
 		spv.DefaultIdleBackOffTime,
 		"The wait time which should be applied when there are no more "+
 			"transaction proofs to submit.",
+	)
+	command.Flags().UintVar(
+		&cfg.Maintainer.Spv.MaxProofHeaders,
+		"spv.maxProofHeaders",
+		spv.DefaultMaxProofHeaders,
+		"The maximum number of block headers allowed when assembling an SPV "+
+			"proof. Bounds the forward walk over headers and so the number of "+
+			"consecutive leading minimum-difficulty (DIFF1) headers a proof "+
+			"can absorb before it becomes unprovable.",
 	)
 }
 

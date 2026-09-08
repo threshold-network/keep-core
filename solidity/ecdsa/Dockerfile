@@ -1,4 +1,4 @@
-FROM node:22.23.1-alpine
+FROM node:24.11.1-alpine
 
 RUN apk add --update --no-cache \
     git \
@@ -16,6 +16,7 @@ WORKDIR $WORK_DIR
 RUN git config --global url."https://".insteadOf git://
 
 COPY package*.json yarn.lock .yarnrc.yml ./
+ENV COREPACK_DEFAULT_TO_LATEST=0
 RUN corepack enable && corepack prepare yarn@4.8.1 --activate && yarn install --immutable
 
 COPY . ./

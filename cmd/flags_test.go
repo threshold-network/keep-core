@@ -22,6 +22,7 @@ import (
 	ethereumEcdsa "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen"
 	ethereumTbtc "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen"
 	ethereumThreshold "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen"
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 var cmdFlagsTests = map[string]struct {
@@ -224,6 +225,55 @@ var cmdFlagsTests = map[string]struct {
 		flagValue:             "101",
 		expectedValueFromFlag: 101,
 		defaultValue:          runtime.GOMAXPROCS(0),
+	},
+	"tbtc.walletTxSatPerVByteFloor": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.WalletTxSatPerVByteFloor },
+		flagName:              "--tbtc.walletTxSatPerVByteFloor",
+		flagValue:             "7",
+		expectedValueFromFlag: 7,
+		defaultValue:          tbtc.DefaultWalletTxSatPerVByteFloor,
+	},
+	"tbtc.walletTxFeeBufferPercent": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.WalletTxFeeBufferPercent },
+		flagName:              "--tbtc.walletTxFeeBufferPercent",
+		flagValue:             "30",
+		expectedValueFromFlag: 30,
+		defaultValue:          tbtc.DefaultWalletTxFeeBufferPercent,
+	},
+	"tbtc.transactionMonitor.stuckThreshold": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.TransactionMonitor.StuckThreshold },
+		flagName:              "--tbtc.transactionMonitor.stuckThreshold",
+		flagValue:             "1h",
+		expectedValueFromFlag: time.Hour,
+		defaultValue:          tbtc.DefaultTransactionMonitorStuckThreshold,
+	},
+	"tbtc.transactionMonitor.checkInterval": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.TransactionMonitor.CheckInterval },
+		flagName:              "--tbtc.transactionMonitor.checkInterval",
+		flagValue:             "1m",
+		expectedValueFromFlag: time.Minute,
+		defaultValue:          tbtc.DefaultTransactionMonitorCheckInterval,
+	},
+	"tbtc.transactionMonitor.maxTracked": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.TransactionMonitor.MaxTracked },
+		flagName:              "--tbtc.transactionMonitor.maxTracked",
+		flagValue:             "25",
+		expectedValueFromFlag: 25,
+		defaultValue:          tbtc.DefaultTransactionMonitorMaxTracked,
+	},
+	"tbtc.transactionMonitor.maxTrackingAge": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.TransactionMonitor.MaxTrackingAge },
+		flagName:              "--tbtc.transactionMonitor.maxTrackingAge",
+		flagValue:             "12h",
+		expectedValueFromFlag: 12 * time.Hour,
+		defaultValue:          tbtc.DefaultTransactionMonitorMaxTrackingAge,
+	},
+	"tbtc.transactionMonitor.checkBudget": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.TransactionMonitor.CheckBudget },
+		flagName:              "--tbtc.transactionMonitor.checkBudget",
+		flagValue:             "30s",
+		expectedValueFromFlag: 30 * time.Second,
+		defaultValue:          tbtc.DefaultTransactionMonitorCheckBudget,
 	},
 	"maintainer.bitcoinDifficulty": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Maintainer.BitcoinDifficulty.Enabled },
@@ -432,6 +482,7 @@ func TestFlags_Mixed(t *testing.T) {
 		"--bitcoin.electrum.url", "ssl://url.to.electrum:18332",
 		"--network.port", "7469",
 		"--bitcoinDifficulty",
+		"--tbtc.transactionMonitor.stuckThreshold", "30m",
 	}
 	testCommand.SetArgs(args)
 
@@ -464,6 +515,16 @@ func TestFlags_Mixed(t *testing.T) {
 		"clientInfo.port": {
 			readValueFunc: func(c *config.Config) interface{} { return c.ClientInfo.Port },
 			expectedValue: 3097,
+		},
+		"tbtc.transactionMonitor": {
+			readValueFunc: func(c *config.Config) interface{} { return c.Tbtc.TransactionMonitor },
+			expectedValue: tbtc.TransactionMonitorConfig{
+				StuckThreshold: 30 * time.Minute,
+				CheckInterval:  45 * time.Second,
+				MaxTracked:     50,
+				MaxTrackingAge: 12 * time.Hour,
+				CheckBudget:    tbtc.DefaultTransactionMonitorCheckBudget,
+			},
 		},
 		"storage.dir": {
 			readValueFunc: func(c *config.Config) interface{} { return c.Storage.Dir },
