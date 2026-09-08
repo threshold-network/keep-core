@@ -20,6 +20,11 @@ on:
 
 jobs:
   npm-compile-publish-contracts:
+    # The ethers v6 deployment exports break existing ethers v5 consumers.
+    # Block both push and workflow_dispatch publication, including latest.
+    # Re-enable only after the consumer migration and release pins are ready;
+    # see solidity/docs/ethers-v6-compatibility.md#limits-and-release-gates.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     defaults:
       run:
