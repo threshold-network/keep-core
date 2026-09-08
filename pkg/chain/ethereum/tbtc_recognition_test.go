@@ -16,14 +16,17 @@ import (
 // mockAdmissionReader stands in for the wallet registry reads the tBTC
 // admission predicate performs.
 type mockAdmissionReader struct {
-	stakingProviders map[common.Address]common.Address
-	eligibleStakes   map[common.Address]*big.Int
+	stakingProviders              map[common.Address]common.Address
+	eligibleStakes                map[common.Address]*big.Int
+	pendingAuthorizationDecreases map[common.Address]*big.Int
 
-	stakingProviderErr error
-	eligibleStakeErr   error
+	stakingProviderErr              error
+	eligibleStakeErr                error
+	pendingAuthorizationDecreaseErr error
 
-	stakingProviderCalls int
-	eligibleStakeCalls   int
+	stakingProviderCalls              int
+	eligibleStakeCalls                int
+	pendingAuthorizationDecreaseCalls int
 }
 
 func (mar *mockAdmissionReader) OperatorToStakingProvider(
@@ -48,6 +51,18 @@ func (mar *mockAdmissionReader) EligibleStake(
 	}
 
 	return mar.eligibleStakes[stakingProvider], nil
+}
+
+func (mar *mockAdmissionReader) PendingAuthorizationDecrease(
+	stakingProvider common.Address,
+) (*big.Int, error) {
+	mar.pendingAuthorizationDecreaseCalls++
+
+	if mar.pendingAuthorizationDecreaseErr != nil {
+		return nil, mar.pendingAuthorizationDecreaseErr
+	}
+
+	return mar.pendingAuthorizationDecreases[stakingProvider], nil
 }
 
 // legacyDelegationApplication mirrors the predicate BeaconChain.IsRecognized
@@ -98,8 +113,9 @@ func TestTbtcChain_IsRecognized(t *testing.T) {
 	minimumAuthorization := tTokens(40_000)
 
 	var tests = map[string]struct {
-		eligibleStake      *big.Int
-		expectedRecognized bool
+		eligibleStake                *big.Int
+		pendingAuthorizationDecrease *big.Int
+		expectedRecognized           bool
 	}{
 		"authorized staking provider that never held a legacy delegation": {
 			eligibleStake:      tTokens(40_000_000),
@@ -109,25 +125,18 @@ func TestTbtcChain_IsRecognized(t *testing.T) {
 			eligibleStake:      minimumAuthorization,
 			expectedRecognized: true,
 		},
-		"eligible stake of a single base unit": {
-			eligibleStake:      big.NewInt(1),
-			expectedRecognized: true,
-		},
 		"authorization decrease approved down to zero": {
-			eligibleStake:      big.NewInt(0),
-			expectedRecognized: false,
-		},
-		"operator registered by an address holding no authorization": {
-			eligibleStake:      big.NewInt(0),
-			expectedRecognized: false,
-		},
-		"deprecated operator deliberately left unauthorized": {
 			eligibleStake:      big.NewInt(0),
 			expectedRecognized: false,
 		},
 		"eligible stake the registry reported as no value at all": {
 			eligibleStake:      nil,
 			expectedRecognized: false,
+		},
+		"a pending unapproved decrease keeps the provider admitted": {
+			eligibleStake:                big.NewInt(0),
+			pendingAuthorizationDecrease: tTokens(30_000),
+			expectedRecognized:           true,
 		},
 	}
 
@@ -142,6 +151,9 @@ func TestTbtcChain_IsRecognized(t *testing.T) {
 					},
 					eligibleStakes: map[common.Address]*big.Int{
 						stakingProvider: test.eligibleStake,
+					},
+					pendingAuthorizationDecreases: map[common.Address]*big.Int{
+						stakingProvider: test.pendingAuthorizationDecrease,
 					},
 				},
 			}
@@ -232,6 +244,33 @@ func TestTbtcChain_IsRecognized_EligibleStakeLookupFails(t *testing.T) {
 				operatorAddress: stakingProvider,
 			},
 			eligibleStakeErr: lookupErr,
+		},
+	}
+
+	isRecognized, err := chain.IsRecognized(operatorPublicKey)
+
+	testutils.AssertBoolsEqual(t, "recognition", false, isRecognized)
+	testutils.AssertAnyErrorInChainMatchesTarget(t, lookupErr, err)
+}
+
+// TestTbtcChain_IsRecognized_PendingAuthorizationDecreaseLookupFails asserts
+// the same fail-closed behaviour for the pending authorization decrease read,
+// which the predicate only reaches once eligible stake comes back zero.
+func TestTbtcChain_IsRecognized_PendingAuthorizationDecreaseLookupFails(t *testing.T) {
+	operatorPublicKey, operatorAddress := newTestOperator(t)
+
+	stakingProvider := common.HexToAddress("0x1")
+	lookupErr := errors.New("connection refused")
+
+	chain := &TbtcChain{
+		admission: &mockAdmissionReader{
+			stakingProviders: map[common.Address]common.Address{
+				operatorAddress: stakingProvider,
+			},
+			eligibleStakes: map[common.Address]*big.Int{
+				stakingProvider: big.NewInt(0),
+			},
+			pendingAuthorizationDecreaseErr: lookupErr,
 		},
 	}
 

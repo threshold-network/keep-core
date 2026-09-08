@@ -54,13 +54,14 @@ const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
 )
 
-// tbtcAdmissionReader narrows the WalletRegistry down to the two reads that
+// tbtcAdmissionReader narrows the WalletRegistry down to the three reads that
 // decide whether a peer is admitted to the network. *ecdsacontract.WalletRegistry
 // satisfies it as it stands; the indirection exists so the admission predicate
 // can be exercised without a chain behind it.
 type tbtcAdmissionReader interface {
 	OperatorToStakingProvider(operator common.Address) (common.Address, error)
 	EligibleStake(stakingProvider common.Address) (*big.Int, error)
+	PendingAuthorizationDecrease(stakingProvider common.Address) (*big.Int, error)
 }
 
 // TbtcChain represents a TBTC-specific chain handle.
@@ -338,17 +339,20 @@ func (tc *TbtcChain) Staking() (chain.Address, error) {
 // The leading FALSE is the static allow list, which production builds empty.
 // This method contributes the third disjunct only; BeaconChain.IsRecognized
 // contributes the second and deliberately keeps the rolesOf predicate.
-//
 // Mapping an operator to a staking provider is not by itself a boundary, since
 // registering an operator is permissionless on both registries. The boundary is
-// the eligible stake, which expands to authorized weight minus any pending
-// decrease, floored at the minimum authorization: it can be raised only by the
+// the eligible stake, which is zero when the authorized stake minus any pending
+// decrease falls below the minimum authorization: it can be raised only by the
 // owner of the authorization source the wallet registry reads.
+//
+// A pending (unapproved) decrease is also sufficient for admission via the
+// newly added PendingAuthorizationDecrease check, precisely because that zeroing
+// happens at request time rather than at approval time.
 func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, error) {
 	operatorAddress, err := operatorPublicKeyToChainAddress(operatorPublicKey)
 	if err != nil {
 		return false, fmt.Errorf(
-			"cannot convert from operator key to chain address: [%v]",
+			"cannot convert from operator key to chain address: [%w]",
 			err,
 		)
 	}
@@ -382,7 +386,27 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 
 	// The binding cannot return a nil amount without also returning an error,
 	// but admission must not be able to panic on one.
-	return eligibleStake != nil && eligibleStake.Sign() > 0, nil
+	if eligibleStake != nil && eligibleStake.Sign() > 0 {
+		return true, nil
+	}
+
+	// A requested-but-not-yet-approved authorization decrease zeroes eligible
+	// stake immediately, well before the wallet drops the operator as a
+	// signing member, so admitting on a pending decrease too keeps the peer
+	// reachable while the decrease request is merely outstanding.
+	pendingDecrease, err := tc.admission.PendingAuthorizationDecrease(stakingProvider)
+	if err != nil {
+		// Fail closed for the same reason as the EligibleStake error path
+		// above.
+		return false, fmt.Errorf(
+			"failed to check pending authorization decrease for staking "+
+				"provider [%v]: [%w]",
+			stakingProvider,
+			err,
+		)
+	}
+
+	return pendingDecrease != nil && pendingDecrease.Sign() > 0, nil
 }
 
 // OperatorToStakingProvider returns the staking provider address for the
