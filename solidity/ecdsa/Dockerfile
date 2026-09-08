@@ -8,17 +8,19 @@ RUN apk add --update --no-cache \
     rm -rf /usr/share/man
 
 ENV WORK_DIR=/ecdsa
+ENV HOME=/home/node
+ENV COREPACK_DEFAULT_TO_LATEST=0
 
-RUN mkdir -p $WORK_DIR
+RUN corepack enable && mkdir -p $WORK_DIR && chown node:node $WORK_DIR
 WORKDIR $WORK_DIR
+USER node
 
 # Use `https://` instead of unauthenticated `git://` protocol.
 RUN git config --global url."https://".insteadOf git://
 
-COPY package*.json yarn.lock .yarnrc.yml ./
-ENV COREPACK_DEFAULT_TO_LATEST=0
-RUN corepack enable && corepack prepare yarn@4.12.0 --activate && yarn install --immutable
+COPY --chown=node:node package*.json yarn.lock .yarnrc.yml ./
+RUN corepack prepare yarn@4.12.0 --activate && yarn install --immutable
 
-COPY . ./
+COPY --chown=node:node . ./
 
 ENTRYPOINT ["npx", "hardhat"]
