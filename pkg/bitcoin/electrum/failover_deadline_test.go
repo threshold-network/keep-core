@@ -125,6 +125,7 @@ func TestVerificationCleanupHonorsDeadline(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			config := failoverTestConfig()
 			config.ConnectTimeout = time.Second
+			config.RequestTimeout = time.Second
 			config.ConnectRetryTimeout = 50 * time.Millisecond
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -161,6 +162,7 @@ func TestReconnectVerificationCleanupDoesNotBlockRequests(t *testing.T) {
 	config.FallbackURLs = []string{"second", "third"}
 	config.RequestRetryTimeout = 50 * time.Millisecond
 	config.ConnectTimeout = time.Second
+	config.RequestTimeout = time.Second
 	first := new(failoverTestClient)
 	second := &failoverTestClient{version: func(ctx context.Context) error {
 		<-ctx.Done()

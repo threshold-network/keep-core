@@ -83,7 +83,7 @@ func connect(
 		}
 	}
 
-	if err := c.electrumConnect(parentCtx); err != nil {
+	if err := c.electrumConnect(parentCtx, parentCtx); err != nil {
 		return nil, fmt.Errorf("failed to initialize electrum client: [%w]", err)
 	}
 
@@ -1059,7 +1059,7 @@ func isElectrumFeeOracleFailure(err error) bool {
 func (c *Connection) getFeeBtcPerKbOnce(blocks uint32) (float32, error) {
 	c.clientMutex.Lock()
 	defer c.clientMutex.Unlock()
-	if err := c.reconnectIfShutdown(c.parentCtx); err != nil {
+	if err := c.reconnectIfShutdown(c.parentCtx, c.parentCtx); err != nil {
 		return 0, err
 	}
 	requestCtx, requestCancel := context.WithTimeout(
@@ -1201,28 +1201,44 @@ func convertBtcKbToSatVByte(btcPerKbFee float32) int64 {
 }
 
 // electrumConnect tries every configured server in turn within the connection
-// retry budget. The caller holds clientMutex after initialization.
-func (c *Connection) electrumConnect(ctx context.Context) error {
-	client, err := connectWithRetry(ctx, c, func(ctx context.Context) (electrumClient, error) {
-		url := c.serverURLs[c.serverIndex]
-		client, err := c.newClient(ctx, url)
-		if err == nil {
-			err = verifyServer(ctx, client, url)
-			if err != nil {
-				shutdownClientAsync(client)
+// retry budget. budgetCtx also carries any enclosing request retry deadline;
+// callerCtx distinguishes caller cancellation from internal timeout expiry.
+// The caller holds clientMutex after initialization.
+func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error {
+	return wrappers.DoWithDefaultRetry(
+		budgetCtx,
+		c.config.ConnectRetryTimeout,
+		func(ctx context.Context) error {
+			url := c.serverURLs[c.serverIndex]
+			connectCtx, connectCancel := context.WithTimeout(ctx, c.config.ConnectTimeout)
+			client, err := c.newClient(connectCtx, url)
+			connectCancel()
+
+			if err == nil {
+				// Verification is an RPC with its own timeout, independent of
+				// dialing but still bounded by the caller and retry deadlines.
+				requestCtx, requestCancel := context.WithTimeout(ctx, c.config.RequestTimeout)
+				err = requestCtx.Err()
+				if err == nil {
+					err = verifyServer(requestCtx, client, url)
+				}
+				requestCancel()
+				if err != nil {
+					shutdownClientAsync(client)
+				}
 			}
-		}
-		if err != nil {
-			c.nextServer()
-			return nil, err
-		}
-		return client, nil
-	})
-	if err != nil {
-		return err
-	}
-	c.client = client
-	return nil
+			if err != nil {
+				// Preserve the candidate when its attempt was interrupted by
+				// the caller. Internal timeouts still indicate server failure.
+				if callerCtx.Err() == nil && c.parentCtx.Err() == nil {
+					c.nextServer()
+				}
+				return err
+			}
+			c.client = client
+			return nil
+		},
+	)
 }
 
 func verifyServer(ctx context.Context, client electrumClient, url string) error {
@@ -1303,34 +1319,6 @@ func (c *Connection) keepAlive() {
 	}
 }
 
-func connectWithRetry(
-	ctx context.Context,
-	c *Connection,
-	newClientFn func(ctx context.Context) (electrumClient, error),
-) (electrumClient, error) {
-	var result electrumClient
-	err := wrappers.DoWithDefaultRetry(
-		ctx,
-		c.config.ConnectRetryTimeout,
-		func(ctx context.Context) error {
-			connectCtx, connectCancel := context.WithTimeout(
-				ctx,
-				c.config.ConnectTimeout,
-			)
-			defer connectCancel()
-
-			client, err := newClientFn(connectCtx)
-			if err == nil {
-				result = client
-			}
-
-			return err
-		},
-	)
-
-	return result, err
-}
-
 func requestWithRetry[K any](
 	parentCtx context.Context,
 	c *Connection,
@@ -1349,7 +1337,7 @@ func requestWithRetry[K any](
 			c.clientMutex.Lock()
 			defer c.clientMutex.Unlock()
 
-			if err := c.reconnectIfShutdown(ctx); err != nil {
+			if err := c.reconnectIfShutdown(parentCtx, ctx); err != nil {
 				return err
 			}
 
@@ -1384,9 +1372,9 @@ func requestWithRetry[K any](
 }
 
 // reconnectIfShutdown is called with clientMutex held. Reconnection is bounded
-// by the caller's context as well as the connection retry timeout.
-func (c *Connection) reconnectIfShutdown(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
+// by the enclosing request budget as well as the connection retry timeout.
+func (c *Connection) reconnectIfShutdown(callerCtx, budgetCtx context.Context) error {
+	if err := budgetCtx.Err(); err != nil {
 		return err
 	}
 	if err := c.parentCtx.Err(); err != nil {
@@ -1398,7 +1386,7 @@ func (c *Connection) reconnectIfShutdown(ctx context.Context) error {
 	}
 	if c.client == nil {
 		logger.Warn("connection to electrum server is down; reconnecting...")
-		err := c.electrumConnect(ctx)
+		err := c.electrumConnect(callerCtx, budgetCtx)
 		if err != nil {
 			return fmt.Errorf("failed to reconnect to electrum server: [%w]", err)
 		}
