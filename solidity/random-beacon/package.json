@@ -33,7 +33,7 @@
     "lint:config:fix": "prettier --write '**/*.@(json|yaml)'",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepack": "tsc -p tsconfig.export.json && hardhat export-artifacts --including-no-public-functions export/artifacts",
-    "prepublishOnly": "hardhat prepare-artifacts --network $npm_config_network"
+    "prepublishOnly": "hardhat export-deployment-artifacts --network \"${npm_config_network:-hardhat}\""
   },
   "dependencies": {
     "@keep-network/sortition-pools": "^2.0.0-pre.16",
