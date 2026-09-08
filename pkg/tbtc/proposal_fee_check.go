@@ -59,37 +59,14 @@ func warnIfProposedWalletTxFeeBelowBufferedFloor(
 	proposedFee *big.Int,
 	actionLabel string,
 ) {
-	// Silently skip on degenerate inputs; the caller has already surfaced
-	// the underlying estimation error (size estimator failure, nil fee
-	// that panicked in on-chain validation, etc.). This helper never
-	// escalates failures; it only adds a warning when the inputs are
-	// usable.
-	if satPerVByteFloor <= 0 || txVsize <= 0 {
+	bufferedRate, minBufferedFee := bufferedWalletTxFeeFloor(satPerVByteFloor, txVsize)
+	if minBufferedFee == nil {
+		// Degenerate inputs; the caller has already surfaced the underlying
+		// estimation error (size estimator failure, nil fee that panicked in
+		// on-chain validation, etc.). This helper never escalates failures;
+		// it only adds a warning when the inputs are usable.
 		return
 	}
-	if WalletTxFeeBufferPercent < 0 {
-		return
-	}
-
-	// Compute the buffered threshold with arbitrary-precision arithmetic
-	// so an operator-tuned policy (large satPerVByteFloor or buffer
-	// ratio) cannot overflow int64 in this helper. The leader-side
-	// tbtcpg.applyWalletTxFeeFloor applies the same buffer formula but
-	// with checked-arithmetic guards and returns an error on the same
-	// implausible inputs; here the threshold simply ends up large enough
-	// that no realistic proposed fee trips the warning.
-	satPerVByte := big.NewInt(satPerVByteFloor)
-	numerator := big.NewInt(100 + WalletTxFeeBufferPercent)
-	denominator := big.NewInt(100)
-	delta := big.NewInt(99)
-
-	// bufferedRate = ceil(satPerVByteFloor * (100+Percent) / 100).
-	bufferedRate := new(big.Int).Mul(satPerVByte, numerator)
-	bufferedRate.Add(bufferedRate, delta)
-	bufferedRate.Quo(bufferedRate, denominator)
-
-	// minBufferedFee = bufferedRate * txVsize.
-	minBufferedFee := new(big.Int).Mul(bufferedRate, big.NewInt(txVsize))
 
 	switch {
 	// This branch is defense-in-depth for test/mock chain implementations
@@ -128,4 +105,47 @@ func warnIfProposedWalletTxFeeBelowBufferedFloor(
 			txVsize,
 		)
 	}
+}
+
+// bufferedWalletTxFeeFloor computes the safe buffered minimum total fee (in
+// satoshis) for a wallet tx of the given virtual size, applying the same
+// MinWalletTxSatPerVByteFee/WalletTxFeeBufferPercent policy enforced by
+// warnIfProposedWalletTxFeeBelowBufferedFloor above. It also returns the
+// buffered per-vByte rate used to compute that fee, for inclusion in log
+// messages. Extracted so callers that only need the below-floor boolean
+// (e.g. the deposit sweep fee metric in checkSweepFeeFloor) share the exact
+// same threshold as the log warning, rather than risking the two drifting
+// apart.
+//
+// Both return values are nil on degenerate inputs (satPerVByteFloor <= 0,
+// txVsize <= 0, or a negative buffer percent).
+func bufferedWalletTxFeeFloor(
+	satPerVByteFloor int64,
+	txVsize int64,
+) (bufferedRate, minBufferedFee *big.Int) {
+	if satPerVByteFloor <= 0 || txVsize <= 0 || WalletTxFeeBufferPercent < 0 {
+		return nil, nil
+	}
+
+	// Compute the buffered threshold with arbitrary-precision arithmetic
+	// so an operator-tuned policy (large satPerVByteFloor or buffer
+	// ratio) cannot overflow int64 in this helper. The leader-side
+	// tbtcpg.applyWalletTxFeeFloor applies the same buffer formula but
+	// with checked-arithmetic guards and returns an error on the same
+	// implausible inputs; here the threshold simply ends up large enough
+	// that no realistic proposed fee trips the warning.
+	satPerVByte := big.NewInt(satPerVByteFloor)
+	numerator := big.NewInt(100 + WalletTxFeeBufferPercent)
+	denominator := big.NewInt(100)
+	delta := big.NewInt(99)
+
+	// bufferedRate = ceil(satPerVByteFloor * (100+Percent) / 100).
+	bufferedRate = new(big.Int).Mul(satPerVByte, numerator)
+	bufferedRate.Add(bufferedRate, delta)
+	bufferedRate.Quo(bufferedRate, denominator)
+
+	// minBufferedFee = bufferedRate * txVsize.
+	minBufferedFee = new(big.Int).Mul(bufferedRate, big.NewInt(txVsize))
+
+	return bufferedRate, minBufferedFee
 }
