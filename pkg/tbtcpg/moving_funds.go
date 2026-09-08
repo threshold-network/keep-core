@@ -338,13 +338,13 @@ func (mft *MovingFundsTask) findNewTargetWallets(
 		if wallet.State == tbtc.StateLive {
 			targetWallets = append(targetWallets, walletPubKeyHash)
 		}
-		if len(targetWallets) == int(targetWalletsCount) {
+		if uint64(len(targetWallets)) == targetWalletsCount {
 			// Stop the iteration if enough live wallets have been gathered.
 			break
 		}
 	}
 
-	if len(targetWallets) != int(targetWalletsCount) {
+	if uint64(len(targetWallets)) != targetWalletsCount {
 		return nil, fmt.Errorf(
 			"%w: required [%v] target wallets; gathered [%v]",
 			ErrNotEnoughTargetWallets,

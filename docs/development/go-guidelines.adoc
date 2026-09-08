@@ -67,3 +67,39 @@ There are a few common patterns for testing in the Keep codebase:
   information is deemed useful, it can be included before the initial newline.
   See `pkg/internal/testutils` for an example of an assert helper that uses this
   style.
+
+=== Integer conversions
+
+Keep numeric validation and narrowing in the same function. A checked conversion
+should return the converted value and an error, so callers cannot accidentally
+validate one value and cast another. Use `group.MemberIndexFromUint32` for member
+indices decoded from protocol messages or persisted signers. It checks the type
+range; the protocol still checks actual group membership.
+
+Use `new(big.Int).SetUint64(value)` to construct a nonnegative `big.Int` from an
+unsigned block number or transaction index. When serializing a `big.Int` into a
+fixed-width unsigned field, check `IsUint64` first. For signed Bitcoin amounts,
+reject negative inputs before converting to unsigned ABI fields and check the
+upper bound before converting unsigned responses to `int64`. Check arithmetic
+before it can overflow; a check on an already-wrapped fee cannot recover the
+original value.
+
+Some conversions intentionally preserve a bit pattern rather than a numeric
+value. Existing deterministic retry and coordination seeds use all 64 bits,
+including the sign bit, and Bitcoin version fields preserve their signed 32-bit
+wire encoding. Do not reject, mask, or clamp these values: doing so would change
+protocol behavior. Such conversions use a local `#nosec G115` comment explaining
+the representation contract. Other local exceptions identify the upstream
+library or internal test-only range guarantee. Do not exclude G115 globally or
+annotate a conversion without checking its callers and bounds.
+
+Run the G115 check with the same generated-code exclusions used by CI:
+
+[source,shell]
+----
+gosec -include=G115 \
+  -exclude-dir=pkg/chain/ethereum/beacon/gen \
+  -exclude-dir=pkg/chain/ethereum/ecdsa/gen \
+  -exclude-dir=pkg/chain/ethereum/threshold/gen \
+  -exclude-dir=pkg/chain/ethereum/tbtc/gen ./...
+----

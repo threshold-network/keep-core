@@ -30,8 +30,9 @@ func NewSignature(data *common.SignatureData) *Signature {
 	recoveryInt = (recoveryInt << 8) | int(recoveryBytes[0])
 
 	return &Signature{
-		R:          new(big.Int).SetBytes(data.GetR()),
-		S:          new(big.Int).SetBytes(data.GetS()),
+		R: new(big.Int).SetBytes(data.GetR()),
+		S: new(big.Int).SetBytes(data.GetS()),
+		// #nosec G115 -- tss-lib signing output supplies a recovery ID in {0, 1, 2, 3}.
 		RecoveryID: int8(recoveryInt),
 	}
 }

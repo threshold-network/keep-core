@@ -159,6 +159,7 @@ func computeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte {
 	binary.BigEndian.PutUint32(outputIndexBytes, mainUtxo.Outpoint.OutputIndex)
 
 	valueBytes := make([]byte, 8)
+	// #nosec G115 -- Hash the exact 64-bit Bitcoin amount encoding; valid UTXOs are nonnegative.
 	binary.BigEndian.PutUint64(valueBytes, uint64(mainUtxo.Value))
 
 	mainUtxoHash := crypto.Keccak256Hash(

@@ -556,6 +556,7 @@ func (ce *coordinationExecutor) getLeader(seed [32]byte) chain.Address {
 	// #nosec G404 (insecure random number source (rand))
 	// Shuffling operators does not require secure randomness.
 	// Use first 8 bytes of the seed to initialize the RNG.
+	// #nosec G115 -- Preserve all 64 seed bits so existing operators select the same leader/actions.
 	rng := rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(seed[:8]))))
 
 	// Shuffle the list of unique operators.
@@ -626,6 +627,7 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// #nosec G404 (insecure random number source (rand))
 	// Drawing a decision about heartbeat does not require secure randomness.
 	// Use first 8 bytes of the seed to initialize the RNG.
+	// #nosec G115 -- Preserve all 64 seed bits so existing operators select the same leader/actions.
 	rng := rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(seed[:8]))))
 	if rng.Float64() < coordinationHeartbeatProbability {
 		actions = append(actions, ActionHeartbeat)

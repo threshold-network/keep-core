@@ -124,6 +124,10 @@ func (tc *TbtcChain) SubmitRedemptionProofWithReimbursement(
 	mainUTXO bitcoin.UnspentTransactionOutput,
 	walletPublicKeyHash [20]byte,
 ) error {
+	if mainUTXO.Value < 0 {
+		return fmt.Errorf("invalid main UTXO value: [%v]", mainUTXO.Value)
+	}
+
 	bitcoinTxInfo := tbtcabi.BitcoinTxInfo3{
 		Version:      transaction.SerializeVersion(),
 		InputVector:  transaction.SerializeInputs(),
@@ -132,7 +136,7 @@ func (tc *TbtcChain) SubmitRedemptionProofWithReimbursement(
 	}
 	redemptionProof := tbtcabi.BitcoinTxProof2{
 		MerkleProof:      proof.MerkleProof,
-		TxIndexInBlock:   big.NewInt(int64(proof.TxIndexInBlock)),
+		TxIndexInBlock:   new(big.Int).SetUint64(uint64(proof.TxIndexInBlock)),
 		BitcoinHeaders:   proof.BitcoinHeaders,
 		CoinbasePreimage: proof.CoinbasePreimage,
 		CoinbaseProof:    proof.CoinbaseProof,
