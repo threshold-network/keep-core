@@ -538,7 +538,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           .connect(walletOwner.wallet)
           .requestNewWallet()
 
-        requestNewWalletStartBlock = tx.blockNumber
+        requestNewWalletStartBlock = (await tx.wait()).blockNumber
       })
 
       after(async () => {
@@ -653,7 +653,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   noMisbehaved
                 ))
 
-                resultSubmissionBlock = tx.blockNumber
+                resultSubmissionBlock = (await tx.wait()).blockNumber
               })
 
               after(async () => {
@@ -788,7 +788,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   await createSnapshot()
 
                   const tx = await walletRegistry.challengeDkgResult(dkgResult)
-                  challengeBlockNumber = tx.blockNumber
+                  challengeBlockNumber = (await tx.wait()).blockNumber
                 })
 
                 after(async () => {
@@ -1152,7 +1152,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   noMisbehaved
                 ))
 
-                resultSubmissionBlock = tx.blockNumber
+                resultSubmissionBlock = (await tx.wait()).blockNumber
               })
 
               after(async () => {
@@ -1236,7 +1236,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                     const tx = await walletRegistry.challengeDkgResult(
                       dkgResult
                     )
-                    challengeBlockNumber = tx.blockNumber
+                    challengeBlockNumber = (await tx.wait()).blockNumber
                   })
 
                   after(async () => {
@@ -1605,7 +1605,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 submitterIndex
               ))
 
-              resultSubmissionBlock = tx.blockNumber
+              resultSubmissionBlock = (await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -1784,7 +1784,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                     const { dkgResultSubmissionGas } =
                       await walletRegistry.gasParameters()
                     const feeForDkgSubmission = dkgResultSubmissionGas.mul(
-                      tx.gasPrice
+                      (await tx.wait()).effectiveGasPrice
                     )
                     // submission part was done by someone else and this is why
                     // we add submission dkg fee to the initial balance
@@ -1845,7 +1845,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 anotherSubmitterIndex
               ))
 
-              resultSubmissionBlock = tx.blockNumber
+              resultSubmissionBlock = (await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -1930,7 +1930,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 const { dkgResultSubmissionGas } =
                   await walletRegistry.gasParameters()
                 const feeForDkgSubmission = dkgResultSubmissionGas.mul(
-                  tx.gasPrice
+                  (await tx.wait()).effectiveGasPrice
                 )
                 // submission part was done by someone else and this is why
                 // we add submission dkg fee to the initial balance
@@ -2406,7 +2406,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   noMisbehaved
                 ))
 
-                resultSubmissionBlock = tx.blockNumber
+                resultSubmissionBlock = (await tx.wait()).blockNumber
               })
 
               after(async () => {
@@ -2949,7 +2949,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
               noMisbehaved
             ))
 
-            resultSubmissionBlock = tx.blockNumber
+            resultSubmissionBlock = (await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -3454,7 +3454,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           .connect(walletOwner.wallet)
           .requestNewWallet()
 
-        requestNewWalletStartBlock = tx.blockNumber
+        requestNewWalletStartBlock = (await tx.wait()).blockNumber
       })
 
       after(async () => {
@@ -3549,7 +3549,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           .connect(walletOwner.wallet)
           .requestNewWallet()
 
-        requestNewWalletStartBlock = tx.blockNumber
+        requestNewWalletStartBlock = (await tx.wait()).blockNumber
       })
 
       after(async () => {
@@ -3700,7 +3700,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           .connect(walletOwner.wallet)
           .requestNewWallet()
 
-        requestNewWalletStartBlock = tx.blockNumber
+        requestNewWalletStartBlock = (await tx.wait()).blockNumber
       })
 
       after(async () => {

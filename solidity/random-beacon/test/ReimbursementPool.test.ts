@@ -294,7 +294,9 @@ describe("ReimbursementPool", () => {
           )
           // consumed gas: 50k + 40.8k = 90.8k
           // refund: 90.8k * tx.gasPrice
-          const expectedRefund = ethers.BigNumber.from(90800).mul(tx.gasPrice)
+          const expectedRefund = ethers.BigNumber.from(90800).mul(
+            (await tx.wait()).effectiveGasPrice
+          )
           expect(refundeeBalanceDiff).to.be.equal(expectedRefund)
         })
 

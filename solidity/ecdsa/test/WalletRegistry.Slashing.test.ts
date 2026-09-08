@@ -13,6 +13,7 @@ import type {
   T,
   IRandomBeacon,
 } from "../typechain"
+import type { BigNumber } from "ethers"
 import type { Mock } from "./helpers/mock"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { Operator, OperatorID } from "./utils/operators"
@@ -128,8 +129,8 @@ describe("WalletRegistry - Slashing", () => {
       context.skip(
         "when the passed wallet members identifiers are valid (skipped: TokenStaking slashing queue API differs from legacy tests)",
         () => {
-          let notifierBalanceBefore
-          let notifierBalanceAfter
+          let notifierBalanceBefore: BigNumber
+          let notifierBalanceAfter: BigNumber
 
           before(async () => {
             await createSnapshot()

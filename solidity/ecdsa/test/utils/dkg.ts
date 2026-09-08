@@ -296,11 +296,13 @@ export async function expectDkgResultSubmittedEvent(
 ): Promise<void> {
   const eventName = "DkgResultSubmitted"
 
-  const event: DkgResultSubmittedEvent = (await tx.wait()).events.find(
-    (e) => e.event === eventName
-  ) as unknown as DkgResultSubmittedEvent
+  const event = (await tx.wait()).events?.find((e) => e.event === eventName) as
+    | DkgResultSubmittedEvent
+    | undefined
 
-  await expect(event, `Event ${eventName} not emitted`).to.be.not.null
+  if (!event) {
+    throw new Error(`Event ${eventName} not emitted`)
+  }
 
   const actualArgs = event.args
 

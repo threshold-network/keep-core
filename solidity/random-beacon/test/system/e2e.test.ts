@@ -116,7 +116,9 @@ describe("System -- e2e", () => {
       )
 
       // pass key generation state and transition to awaiting result state
-      await mineBlocksTo(genesisTx.blockNumber + constants.offchainDkgTime + 1)
+      await mineBlocksTo(
+        (await genesisTx.wait()).blockNumber + constants.offchainDkgTime + 1
+      )
 
       expect(await randomBeacon.getGroupCreationState()).to.be.equal(
         dkgState.AWAITING_RESULT
@@ -126,7 +128,9 @@ describe("System -- e2e", () => {
         randomBeacon,
         groupPubKeys[groupPubKeyCounter],
         genesisSeed,
-        genesisTx.blockNumber,
+        (
+          await genesisTx.wait()
+        ).blockNumber,
         noMisbehaved
       )
       groupMembers.push(dkgResult.members)
@@ -156,7 +160,9 @@ describe("System -- e2e", () => {
           )
 
           await mineBlocksTo(
-            txSubmitRelayEntry.blockNumber + constants.offchainDkgTime + 1
+            (await txSubmitRelayEntry.wait()).blockNumber +
+              constants.offchainDkgTime +
+              1
           )
 
           expect(await randomBeacon.getGroupCreationState()).to.be.equal(
@@ -169,7 +175,9 @@ describe("System -- e2e", () => {
             ethers.BigNumber.from(
               ethers.utils.keccak256(blsData.groupSignatures[i - 1])
             ),
-            txSubmitRelayEntry.blockNumber,
+            (
+              await txSubmitRelayEntry.wait()
+            ).blockNumber,
             noMisbehaved
           )
           groupMembers.push(dkgResult.members)
