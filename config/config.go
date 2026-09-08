@@ -227,6 +227,10 @@ func validateConfig(config *Config, categories ...Category) error {
 					"missing value for storage.dir; see storage section in configuration",
 				))
 			}
+		case Tbtc:
+			if err := config.Tbtc.TransactionMonitor.Validate(); err != nil {
+				result = multierror.Append(result, err)
+			}
 		}
 	}
 

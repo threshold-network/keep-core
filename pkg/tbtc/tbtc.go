@@ -153,6 +153,9 @@ type Config struct {
 	// DefaultWalletTxFeeBufferPercent. Maps to the
 	// tbtc.walletTxFeeBufferPercent flag / viper key.
 	WalletTxFeeBufferPercent int
+	// TransactionMonitor controls confirmation polling and stuck-transaction
+	// alerts. Omitted settings retain the default monitoring policy.
+	TransactionMonitor TransactionMonitorConfig
 }
 
 // applyWalletTxFeePolicy applies the operator-tunable wallet-tx fee-floor
