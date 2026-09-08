@@ -53,7 +53,7 @@ jobs:
   # This job will be triggered for releases which name starts with
   # `refs/tags/solidity/`. It will generate contracts documentation in
   # Markdown and sync it with a specific path of
-  # `threshold-network/threshold` repository. If changes will be detected,
+  # `threshold-network/docs` repository. If changes will be detected,
   # a PR updating the docs will be created in the destination repository. The
   # commit pushing the changes will be verified using GPG key.
   contracts-docs-publish:
@@ -66,7 +66,7 @@ jobs:
       publish: true
       addTOC: false
       verifyCommits: true
-      destinationRepo: threshold-network/threshold
+      destinationRepo: threshold-network/docs
       destinationFolder: ./docs/app-development/random-beacon/random-beacon-api
       destinationBaseBranch: main
       userEmail: 38324465+thesis-valkyrie@users.noreply.github.com
