@@ -35,6 +35,10 @@ result-shape and read-failure cases. Approval transaction failures still propaga
 Both JSON and human-readable approval ABIs are exercised. Injected library,
 beacon and Tenderly verification failures must be retried without changing
 deployment addresses or sending transactions.
+Governance verification failures are tolerated before ownership transfer; both
+verification hooks must run again after transfer, retaining matching deployment
+metadata. Missing or obsolete governance records are recovered and verified with
+constructor arguments without sending transactions.
 
 `ALLOWLIST_WEIGHTS_FILE` can select a consumer-owned weights JSON. If unset,
 script 16 uses the packaged network-specific data under `export/deploy-data`.

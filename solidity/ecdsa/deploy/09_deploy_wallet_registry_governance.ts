@@ -9,6 +9,12 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const { deployer } = await getNamedAccounts()
 
   const WalletRegistry = await deployments.get("WalletRegistry")
+  // 60 seconds for Sepolia. 1 week otherwise.
+  const GOVERNANCE_DELAY = hre.network.name === "sepolia" ? 60 : 604800
+  const args = [WalletRegistry.address, GOVERNANCE_DELAY]
+  let WalletRegistryGovernance = await deployments.getOrNull(
+    "WalletRegistryGovernance"
+  )
 
   const currentGovernance = await deployments.read(
     "WalletRegistry",
@@ -29,36 +35,41 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
         `WalletRegistryGovernance at ${currentGovernance} points to ${linkedRegistry}, expected ${WalletRegistry.address}`
       )
     }
-    const existing = await deployments.getOrNull("WalletRegistryGovernance")
     if (
-      !existing ||
-      !helpers.address.equal(existing.address, currentGovernance)
+      !WalletRegistryGovernance ||
+      !helpers.address.equal(
+        WalletRegistryGovernance.address,
+        currentGovernance
+      )
     ) {
-      await deployments.save("WalletRegistryGovernance", {
+      WalletRegistryGovernance = {
         address: currentGovernance,
         abi: artifact.abi,
-      })
+        args,
+      }
+      await deployments.save(
+        "WalletRegistryGovernance",
+        WalletRegistryGovernance
+      )
     }
     deployments.log(
       `using live WalletRegistryGovernance at ${currentGovernance}`
     )
-    return
+  } else {
+    WalletRegistryGovernance = await deployments.deploy(
+      "WalletRegistryGovernance",
+      {
+        from: deployer,
+        skipIfAlreadyDeployed: true,
+        args,
+        log: true,
+        waitConfirmations: 1,
+      }
+    )
   }
 
-  // 60 seconds for Sepolia. 1 week otherwise.
-  const GOVERNANCE_DELAY = hre.network.name === "sepolia" ? 60 : 604800
-
-  const WalletRegistryGovernance = await deployments.deploy(
-    "WalletRegistryGovernance",
-    {
-      from: deployer,
-      skipIfAlreadyDeployed: true,
-      args: [WalletRegistry.address, GOVERNANCE_DELAY],
-      log: true,
-      waitConfirmations: 1,
-    }
-  )
-
+  // Verification failures can be tolerated before ownership is transferred.
+  // Retry the hooks even when reusing the live governance deployment.
   if (
     hre.network.tags.etherscan &&
     process.env.DISABLE_HARDHAT_VERIFY !== "true"

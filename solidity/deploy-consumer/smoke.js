@@ -169,7 +169,83 @@ async function main() {
     if (tenderlyTag === undefined) delete network.tags.tenderly
     else network.tags.tenderly = tenderlyTag
   }
-  await deployments.run(undefined, options)
+  // Governance verification failures are tolerated off mainnet, so the loader
+  // can transfer governance before an operator retries the failed verification.
+  const verifyGovernance = async (action, fail = false) => {
+    const attempts = { etherscan: [], tenderly: [] }
+    const previousVerify = hre.helpers.etherscan.verify
+    const previousTenderly = hre.tenderly
+    const previousTag = network.tags.tenderly
+    hre.helpers.etherscan.verify = async (deployment) => {
+      await previousVerify(deployment)
+      const governance = await deployments.getOrNull("WalletRegistryGovernance")
+      if (governance && governance.address === deployment.address) {
+        attempts.etherscan.push(deployment)
+        if (fail) throw new Error("injected governance Etherscan failure")
+      }
+    }
+    network.tags.tenderly = true
+    hre.tenderly = {
+      verify: async (deployment) => {
+        if (deployment.name === "WalletRegistryGovernance") {
+          attempts.tenderly.push(deployment)
+          if (fail) throw new Error("injected governance Tenderly failure")
+        }
+      },
+    }
+    try {
+      await action()
+    } finally {
+      hre.helpers.etherscan.verify = previousVerify
+      hre.tenderly = previousTenderly
+      if (previousTag === undefined) delete network.tags.tenderly
+      else network.tags.tenderly = previousTag
+    }
+    return attempts
+  }
+  const assertGovernanceVerification = (attempts, deployment) => {
+    // Assert outside the hooks: the testnet helpers intentionally catch failures.
+    assert.equal(attempts.etherscan.length, 1)
+    equalAddress(attempts.etherscan[0].address, deployment.address)
+    assert.deepEqual(attempts.etherscan[0].args, deployment.args)
+    assert.deepEqual(attempts.tenderly, [
+      { name: "WalletRegistryGovernance", address: deployment.address },
+    ])
+  }
+  const initialGovernanceVerification = await verifyGovernance(
+    () => deployments.run(undefined, options),
+    true
+  )
+  const governanceRecord = await deployments.get("WalletRegistryGovernance")
+  assertGovernanceVerification(initialGovernanceVerification, governanceRecord)
+  equalAddress(
+    await read("WalletRegistry", "governance"),
+    governanceRecord.address
+  )
+  const governanceNonces = await nonces()
+  const governanceMetadata = JSON.parse(JSON.stringify(governanceRecord))
+  const deployGovernance = script(
+    "ecdsa",
+    "09_deploy_wallet_registry_governance.js"
+  )
+  assertGovernanceVerification(
+    await verifyGovernance(() =>
+      deployGovernance({ ...hre, network: { ...network, name: "sepolia" } })
+    ),
+    governanceRecord
+  )
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(await deployments.get("WalletRegistryGovernance"))
+    ),
+    governanceMetadata,
+    "governance verification retry replaced deployment metadata"
+  )
+  assert.deepEqual(
+    await nonces(),
+    governanceNonces,
+    "governance verification retry sent transactions"
+  )
 
   const beacon = await address("RandomBeacon")
   const registry = await address("WalletRegistry")
@@ -249,18 +325,36 @@ async function main() {
     beforeAddresses
   )
 
-  // Recover governance when the consumer only copied WalletRegistry.json.
-  await deployments.delete("WalletRegistryGovernance")
-  await script("ecdsa", "09_deploy_wallet_registry_governance.js")(hre)
-  equalAddress(
-    await address("WalletRegistryGovernance"),
-    beforeAddresses.WalletRegistryGovernance
-  )
-  assert.deepEqual(
-    await nonces(),
-    before,
-    "governance recovery deployed an orphan"
-  )
+  // Recover and verify governance when the consumer copied only the registry
+  // record or also copied an obsolete governance deployment.
+  for (const obsolete of [false, true]) {
+    if (obsolete) {
+      await deployments.save("WalletRegistryGovernance", {
+        ...governanceRecord,
+        address: named.deployer,
+        args: [named.deployer, 1],
+      })
+    } else {
+      await deployments.delete("WalletRegistryGovernance")
+    }
+    assertGovernanceVerification(
+      await verifyGovernance(() => deployGovernance(hre)),
+      governanceRecord
+    )
+    equalAddress(
+      await address("WalletRegistryGovernance"),
+      beforeAddresses.WalletRegistryGovernance
+    )
+    assert.deepEqual(
+      (await deployments.get("WalletRegistryGovernance")).args,
+      governanceRecord.args
+    )
+    assert.deepEqual(
+      await nonces(),
+      before,
+      "governance recovery deployed an orphan"
+    )
+  }
 
   // ABI/status variations cannot be produced by the current TokenStaking
   // artifact. Exercise them at the read/execute boundary of the real exports.
