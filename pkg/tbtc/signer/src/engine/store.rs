@@ -3142,6 +3142,47 @@ impl StateFileLock {
                     .to_string(),
             ));
         }
+        let bytes =
+            encode_state_witness_segment_header(&self.identity.fingerprint, acknowledgement)?;
+        self.publish_state_witness_segment(
+            &bytes,
+            &tip,
+            validation_anchor,
+            self.anchor_configuration.is_some(),
+            retire_previous,
+        )
+    }
+
+    /// Publishes a freshly built segment header as the new current state
+    /// witness journal, atomically retiring the old one.
+    ///
+    /// This is the single publication routine shared by
+    /// `rotate_state_witness_segment_inner` (externally-signed rotation) and
+    /// `compact_witness_journal_local` (self-signed local compaction): both
+    /// are "new segment" boundaries that must go through the exact same
+    /// pending/tip checks, `.next` creation, rename-with-fsync sequencing,
+    /// live-entry validation, field replacement, and `.previous` retirement.
+    /// A prior version of this code reimplemented that sequence separately
+    /// for each caller, which let the two recovery state machines
+    /// (`recover_state_witness_compaction` and `recover_state_witness_rotation`)
+    /// diverge; funneling both callers through one routine makes that class
+    /// of divergence structurally impossible.
+    ///
+    /// `header_bytes` and `expected_base` are supplied by the caller:
+    /// `header_bytes` is the already-encoded 472-byte segment header (built
+    /// from either a real externally-signed acknowledgement or a self-signed
+    /// local marker), and `expected_base` is the witness the freshly created
+    /// `.next` segment must parse back as its sole entry before it is
+    /// trusted enough to publish.
+    #[cfg(unix)]
+    fn publish_state_witness_segment(
+        &mut self,
+        header_bytes: &[u8],
+        expected_base: &StateWitness,
+        validation_anchor: Option<&StateAnchorMetadata>,
+        store_is_anchored: bool,
+        retire_previous: bool,
+    ) -> Result<(), EngineError> {
         ensure_entry_absent(
             self.directory.as_raw_fd(),
             &self.witness_next_name,
@@ -3152,13 +3193,11 @@ impl StateFileLock {
             &self.witness_previous_name,
             "previous signer state witness journal",
         )?;
-        let bytes =
-            encode_state_witness_segment_header(&self.identity.fingerprint, acknowledgement)?;
         let (next_file, next_identity) = if retire_previous {
             create_entry_atomically(
                 &self.directory,
                 &self.witness_next_name,
-                &bytes,
+                header_bytes,
                 "next signer state witness journal",
             )?
         } else {
@@ -3166,7 +3205,7 @@ impl StateFileLock {
             create_entry_atomically_with_guard(
                 &self.directory,
                 &self.witness_next_name,
-                &bytes,
+                header_bytes,
                 "next signer state witness journal",
                 Some(&guard),
             )?
@@ -3177,11 +3216,11 @@ impl StateFileLock {
             &self.identity.fingerprint,
             self.witness_max_records,
             validation_anchor,
-            self.anchor_configuration.is_some(),
+            store_is_anchored,
         )?;
         if parsed.segment_header.is_none()
             || parsed.pending.is_some()
-            || parsed.history.as_slice() != [tip.clone()]
+            || parsed.history.as_slice() != [expected_base.clone()]
         {
             let _ = unlinkat_entry(self.directory.as_raw_fd(), &self.witness_next_name);
             return Err(EngineError::Internal(
@@ -3195,7 +3234,7 @@ impl StateFileLock {
             )?;
         }
         let current_digest = current_state_image_digest(self.current_state_file.as_ref())?;
-        if tip.state_image_digest != current_digest {
+        if expected_base.state_image_digest != current_digest {
             let _ = unlinkat_entry(self.directory.as_raw_fd(), &self.witness_next_name);
             return Err(EngineError::Internal(
                 "new state witness segment base does not commit the current state image"
@@ -3541,24 +3580,27 @@ impl StateFileLock {
     ///
     /// The compaction commits a new genesis to the current journal as a
     /// regular PREPARE+COMMIT pair (`new_tip.generation = tip.generation +
-    /// 1`, with the same state image digest as the current tip), renames
-    /// the current `.state-witness` to `.state-witness.previous`, and
-    /// publishes a fresh `.state-witness` carrying only a new segment
-    /// header. The new segment header is self-signed (its embedded
+    /// 1`, with the same state image digest as the current tip), then
+    /// publishes a fresh segment header through the same
+    /// `publish_state_witness_segment` routine `rotate_state_witness_segment_inner`
+    /// uses: `.state-witness` is renamed to `.state-witness.previous`, the
+    /// freshly built segment is published as `.state-witness`, and
+    /// `.state-witness.previous` is retired immediately afterward, matching
+    /// the existing signed-rotation convention
+    /// (`rotate_state_witness_segment_inner` with `retire_previous = true`).
+    /// The new segment header is self-signed (its embedded
     /// `StateAnchorAcknowledgement` has a zero signature) and the parser
-    /// recognises that marker so the signed-base requirement is skipped;
-    /// the per-record chain hash and the header_commitment integrity check
-    /// still pin the layout. `.state-witness.previous` is retired
-    /// immediately after the new segment is verified and published,
-    /// matching the existing signed-rotation convention
-    /// (`rotate_state_witness_segment_inner` with `retire_previous = true`):
-    /// `revalidate_store_entries` asserts it never lingers outside an
-    /// in-progress rotation/compaction, and the anti-rollback invariant does
-    /// not depend on retaining it. `recover_state_witness_compaction`
-    /// mirrors this so a crash-recovered compaction reaches the same steady
-    /// state.
+    /// recognises that marker so the signed-base requirement is skipped; the
+    /// per-record chain hash and the header_commitment integrity check
+    /// still pin the layout. The header's `previous_event_root` field
+    /// additionally threads the retiring segment's terminal record chain
+    /// hash (see `synthetic_compaction_acknowledgement`), so the new
+    /// segment's genesis chain-hash seed carries cryptographic continuity
+    /// from the retiring segment's entire append history instead of
+    /// resetting to a value derived only from the new tip.
+    /// `recover_state_witness_compaction` mirrors the retirement so a
+    /// crash-recovered compaction reaches the same steady state.
     #[cfg(unix)]
-    #[allow(clippy::too_many_lines)]
     fn compact_witness_journal_local(&mut self) -> Result<(), EngineError> {
         if self.pending_witness.is_some() {
             return Err(EngineError::Internal(
@@ -3612,114 +3654,25 @@ impl StateFileLock {
         // 2. Build the new segment header. The synthetic acknowledgement's
         //    zero signature marks this as a self-signed compaction
         //    segment; every other field is a deterministic hash of the
-        //    new tip so it passes `validate_anchor_acknowledgement_shape`.
-        let synthetic_ack =
-            synthetic_compaction_acknowledgement(&self.identity.fingerprint, &new_tip);
+        //    new tip so it passes `validate_anchor_acknowledgement_shape`,
+        //    except `previous_event_root`, which threads the retiring
+        //    segment's just-committed terminal chain hash (captured here,
+        //    before the rename below retires that journal) so the new
+        //    segment's genesis carries real cross-boundary continuity.
+        let retiring_segment_chain_hash = self.last_chain_hash;
+        let synthetic_ack = synthetic_compaction_acknowledgement(
+            &self.identity.fingerprint,
+            &new_tip,
+            retiring_segment_chain_hash,
+        );
         let header_bytes =
             encode_state_witness_segment_header(&self.identity.fingerprint, &synthetic_ack)?;
 
-        // 3. Crash-safe create-then-rename, mirroring rotation: publish a
-        //    fresh `.state-witness.next` first, then verify, then rename
-        //    current -> previous and next -> current with directory fsyncs
-        //    between every step. Recovery handles each intermediate state
-        //    via `recover_state_witness_compaction`.
-        ensure_entry_absent(
-            self.directory.as_raw_fd(),
-            &self.witness_next_name,
-            "next signer state witness journal before local compaction",
-        )?;
-        ensure_entry_absent(
-            self.directory.as_raw_fd(),
-            &self.witness_previous_name,
-            "previous signer state witness journal before local compaction",
-        )?;
-        let (next_file, next_identity) = create_entry_atomically(
-            &self.directory,
-            &self.witness_next_name,
-            &header_bytes,
-            "compaction signer state witness journal",
-        )?;
-        let parsed = read_state_witness_journal_streaming(
-            &next_file,
-            &self.identity.store_id,
-            &self.identity.fingerprint,
-            self.witness_max_records,
-            None,
-            false,
-        )?;
-        if parsed.segment_header.is_none()
-            || parsed.pending.is_some()
-            || parsed.history.as_slice() != [new_tip.clone()]
-        {
-            let _ = unlinkat_entry(self.directory.as_raw_fd(), &self.witness_next_name);
-            return Err(EngineError::Internal(
-                "locally compacted signer state witness segment failed pre-publication \
-                 verification"
-                    .to_string(),
-            ));
-        }
-        renameat_same_directory(
-            self.directory.as_raw_fd(),
-            &self.witness_name,
-            &self.witness_previous_name,
-            "retain previous signer state witness journal during local compaction",
-        )?;
-        self.directory.sync_all().map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to sync signer state directory after retaining previous witness \
-                 segment during local compaction: {error}"
-            ))
-        })?;
-        renameat_same_directory(
-            self.directory.as_raw_fd(),
-            &self.witness_next_name,
-            &self.witness_name,
-            "publish local compaction signer state witness segment",
-        )?;
-        self.directory.sync_all().map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to sync signer state directory after publishing local compaction \
-                 witness segment: {error}"
-            ))
-        })?;
-        validate_live_entry(
-            &self.directory,
-            &self.witness_name,
-            next_identity,
-            "signer state witness journal",
-        )?;
-        // Local compaction retires the previous segment immediately, matching
-        // the existing signed-rotation convention (`rotate_state_witness_segment_inner`
-        // with `retire_previous = true`): `revalidate_store_entries` asserts
-        // `.state-witness.previous` never lingers outside an in-progress
-        // rotation/compaction, and the anti-rollback invariant does not
-        // depend on retaining it (the next checkpoint or compaction's own
-        // chain covers continuity). Retaining it indefinitely for forensic
-        // recovery was considered and rejected: it would require either
-        // weakening that invariant check or a generation-stamped archival
-        // scheme with its own new crash-recovery window, neither of which is
-        // justified by the actual anti-rollback guarantee, which is intact
-        // either way. See the compaction runbook for the operational
-        // implication.
-        unlinkat_entry(self.directory.as_raw_fd(), &self.witness_previous_name)?;
-        self.directory.sync_all().map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to sync signer state directory after retiring previous witness \
-                 segment during local compaction: {error}"
-            ))
-        })?;
-
-        self.witness_file = next_file;
-        self.witness_identity = next_identity;
-        self.witness_history = parsed.history;
-        self.pending_witness = parsed.pending;
-        self.witness_length = parsed.length;
-        self.witness_header_length = parsed.header_length;
-        self.witness_header_bytes = parsed.header_bytes;
-        self.witness_segment_header = parsed.segment_header;
-        self.last_chain_hash = parsed.tail_chain_hash;
-        self.verify_state_witness_journal_fully()?;
-        Ok(())
+        // 3. Publish the new segment through the same publish/rename/fsync/
+        //    retire mechanics `rotate_state_witness_segment_inner` uses.
+        //    Recovery handles each intermediate crash window via
+        //    `recover_state_witness_compaction`.
+        self.publish_state_witness_segment(&header_bytes, &new_tip, None, false, true)
     }
 
     #[cfg(unix)]
@@ -4970,15 +4923,33 @@ fn replace_durable_entry_with_guard(
 /// configured (so there is no signing key to draw on). The new tip
 /// commits to the compaction through the journal's per-record chain hash,
 /// and the segment header is recognised as a compaction segment because its
-/// `signature` is the all-zero 64-byte marker. Every other field is a
-/// deterministic SHA-256 of `TBTC_SIGNER_STATE_ANCHOR_METADATA_DOMAIN` plus
-/// the new tip's commitment, so the resulting bytes are unique to the new
-/// tip and pass `validate_anchor_acknowledgement_shape` (the shape check
-/// rejects only zero-valued required fields and the wrong store
-/// fingerprint).
+/// `signature` is the all-zero 64-byte marker. Every field except
+/// `previous_event_root` is a deterministic SHA-256 of
+/// `TBTC_SIGNER_STATE_ANCHOR_METADATA_DOMAIN` plus the new tip's
+/// commitment, so the resulting bytes are unique to the new tip and pass
+/// `validate_anchor_acknowledgement_shape` (the shape check rejects only
+/// zero-valued required fields and the wrong store fingerprint).
+///
+/// `previous_event_root` carries `retiring_segment_chain_hash`, the
+/// retiring segment's own terminal per-record chain hash, verbatim. A
+/// real, externally-signed rotation cannot repurpose this field: its bytes
+/// are part of the signed protocol acknowledgement and the 472-byte
+/// segment header layout is a frozen cross-language contract with the Go
+/// bridge (see `signed_segment_header_matches_frozen_472_byte_vector`), so
+/// an anchored rotation's on-disk bytes stay exactly as they were before.
+/// A self-signed compaction segment has no such external contract to
+/// preserve, so it is free to fold the retiring segment's terminal chain
+/// hash into this field. Doing so ties `header_commitment` (and therefore
+/// the new segment's genesis chain-hash seed, see
+/// `read_state_witness_journal_streaming`) to the retiring segment's
+/// entire append history rather than only its final tip, so tampering
+/// with any record chained under the retiring segment's terminal hash
+/// changes that hash and, transitively, every future record's chain hash
+/// verified against this header.
 fn synthetic_compaction_acknowledgement(
     store_fingerprint: &[u8; 32],
     new_tip: &StateWitness,
+    retiring_segment_chain_hash: [u8; 32],
 ) -> StateAnchorAcknowledgement {
     fn domain_hash(label: &[u8], new_tip: &StateWitness) -> [u8; 32] {
         let mut digest = Sha256::new();
@@ -4995,7 +4966,7 @@ fn synthetic_compaction_acknowledgement(
         status: 1,
         service_epoch: 1,
         revision: 1,
-        previous_event_root: [0u8; 32],
+        previous_event_root: retiring_segment_chain_hash,
         event_root: domain_hash(b"compaction-event-root", new_tip),
         checkpoint_store_fingerprint: *store_fingerprint,
         checkpoint_generation: new_tip.generation,
@@ -7858,6 +7829,167 @@ mod witness_transcript_tests {
         cleanup_anchor_store_fixture(&state_path);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn compacted_segment_previous_event_root_threads_the_retiring_segments_terminal_chain_hash() {
+        let _guard = lock_test_state();
+
+        // Compacting from two different write ceilings retires two journals
+        // with different append histories -- and therefore different
+        // terminal chain hashes -- even though both eventually compact
+        // through the same code path. If the new segment's genesis
+        // chain-hash seed were a fixed value (or derived only from the new
+        // tip's own fields, as it was before this fix), both runs would
+        // publish the same `previous_event_root`. Each run's expected value
+        // is computed here independently of `compact_witness_journal_local`,
+        // by replaying the exact same deterministic PREPARE+COMMIT
+        // chain-hash arithmetic it performs on the retiring segment's
+        // actual last chain hash, so this proves derivation rather than
+        // merely echoing an internal capture back at itself.
+        let run = |label: &str, ceiling: &str, fills: u32| -> [u8; 32] {
+            let mut random = [0u8; 12];
+            OsRng.fill_bytes(&mut random);
+            let state_path = std::env::temp_dir().join(format!(
+                "tbtc-signer-compaction-chain-{label}-{}-{}",
+                std::process::id(),
+                hex::encode(random)
+            ));
+            std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
+            std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, ceiling);
+
+            let mut store = StateFileLock::acquire(&state_path).expect("open unanchored store");
+            for index in 0..fills {
+                store
+                    .replace_state(format!("fill the record budget {index}").as_bytes())
+                    .expect("fill the record budget up to the configured ceiling");
+            }
+            let tip = store.state_witness_tip().expect("tip before compaction");
+            let chain_hash_before_compaction = store.last_chain_hash;
+            let fingerprint = store.identity.fingerprint;
+
+            store
+                .replace_state(b"write that forces compaction")
+                .expect("local compaction frees capacity so the write continues");
+            let published_previous_event_root = store
+                .witness_segment_header
+                .as_ref()
+                .expect("compaction publishes a fresh segment header")
+                .previous_event_root;
+            drop(store);
+            cleanup_anchor_store_fixture(&state_path);
+
+            // Independently replay compaction's own retiring-segment append:
+            // one PREPARE+COMMIT pair for `new_tip`, chained from the last
+            // chain hash the retiring segment actually had.
+            let new_generation = tip.generation + 1;
+            let new_tip = StateWitness {
+                generation: new_generation,
+                previous_commitment: tip.commitment,
+                commitment: state_commitment(
+                    &fingerprint,
+                    new_generation,
+                    &tip.commitment,
+                    &tip.state_image_digest,
+                ),
+                state_image_digest: tip.state_image_digest,
+            };
+            let prepare_record = encode_state_witness_record(
+                TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+                &new_tip,
+                &chain_hash_before_compaction,
+            );
+            let mut prepare_chain_hash = [0u8; 32];
+            prepare_chain_hash.copy_from_slice(&prepare_record[105..137]);
+            let commit_record = encode_state_witness_record(
+                TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+                &new_tip,
+                &prepare_chain_hash,
+            );
+            let mut expected_retiring_segment_chain_hash = [0u8; 32];
+            expected_retiring_segment_chain_hash.copy_from_slice(&commit_record[105..137]);
+
+            assert_eq!(
+                published_previous_event_root, expected_retiring_segment_chain_hash,
+                "{label}: compacted segment must thread the retiring segment's real terminal \
+                 chain hash, not a value derived only from the new tip"
+            );
+            published_previous_event_root
+        };
+
+        let short = run("short", "4", 1);
+        let long = run("long", "6", 2);
+        assert_ne!(
+            short, long,
+            "the compacted segment's genesis chain-hash seed must vary with the retiring \
+             segment's actual append history, not be a fixed constant"
+        );
+        assert_ne!(short, [0u8; 32]);
+        assert_ne!(long, [0u8; 32]);
+    }
+
+    /// Proves the threaded link is a real, checked property rather than a
+    /// computed-and-ignored field: forging the on-disk `previous_event_root`
+    /// bytes to a different (but still nonzero) chain-hash value and
+    /// recomputing `header_commitment` so the header stays internally
+    /// self-consistent -- exactly what an attacker who controls the file but
+    /// not the retiring segment's genuine chain would have to do -- must
+    /// still be caught, because the new segment's genesis chain-hash seed
+    /// (`header_commitment`) has already been used to chain every record
+    /// appended on top of it.
+    #[cfg(unix)]
+    #[test]
+    fn tampering_a_compacted_segments_threaded_chain_link_is_detected_on_reopen() {
+        let _guard = lock_test_state();
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let state_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-compaction-chain-tamper-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+
+        let mut store = StateFileLock::acquire(&state_path).expect("open unanchored store");
+        store
+            .replace_state(b"fill the record budget")
+            .expect("fill the record budget");
+        store
+            .replace_state(b"write that forces compaction")
+            .expect("local compaction frees capacity so the write continues");
+        // A real write on top of the freshly compacted segment: this
+        // record's on-disk chain hash is computed from the header's
+        // genuine `header_commitment`, which now threads the retiring
+        // segment's real terminal chain hash. Without a record chained on
+        // top, tampering the header alone has nothing to contradict.
+        store
+            .replace_state(b"write chained onto the compacted segment")
+            .expect("write after compaction");
+        drop(store);
+
+        let witness_path = state_witness_file_path(&state_path);
+        let mut bytes = fs::read(&witness_path).expect("read compacted witness journal");
+        assert!(bytes.len() >= TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH);
+        let forged_previous_event_root = [0xABu8; 32];
+        bytes[208..240].copy_from_slice(&forged_previous_event_root);
+        let mut digest = Sha256::new();
+        digest.update(TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_DOMAIN);
+        digest.update(&bytes[..440]);
+        let recomputed_header_commitment: [u8; 32] = digest.finalize().into();
+        bytes[440..472].copy_from_slice(&recomputed_header_commitment);
+        fs::write(&witness_path, &bytes).expect("write forged witness journal");
+
+        let error = StateFileLock::acquire(&state_path)
+            .expect_err("a forged threaded chain-hash link must be detected on reopen");
+        assert!(
+            error.to_string().contains("chain hash is invalid"),
+            "tampering the threaded previous_event_root must surface as a chain-hash \
+             mismatch, not a silent success or unrelated failure: {error}"
+        );
+
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
     fn fixture_acknowledgement() -> StateAnchorAcknowledgement {
         let store_fingerprint = [0x11; 32];
         let previous_commitment = [0x22; 32];
@@ -10542,7 +10674,11 @@ mod witness_transcript_tests {
             // header whose base IS the new tip, matching the segment
             // `compact_witness_journal_local` publishes with no trailing
             // records.
-            let synthetic_ack = synthetic_compaction_acknowledgement(&fingerprint, &new_tip);
+            let synthetic_ack = synthetic_compaction_acknowledgement(
+                &fingerprint,
+                &new_tip,
+                base_commit_chain_hash,
+            );
             let header_bytes = encode_state_witness_segment_header(&fingerprint, &synthetic_ack)
                 .expect("encode compaction segment header fixture");
             create_entry_atomically(&directory, &next, &header_bytes, "fixture next witness")
