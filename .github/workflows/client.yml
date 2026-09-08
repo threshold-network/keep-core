@@ -268,6 +268,17 @@ jobs:
           push: false
           context: .
 
+      - name: Verify Linux release compatibility
+        run: |
+          release_dir=$(mktemp -d)
+          trap 'rm -rf "$release_dir"' EXIT
+          tar -xzf out/bin/*-linux-amd64.tar.gz -C "$release_dir"
+          for image in debian:bullseye-slim ubuntu:20.04; do
+            docker run --rm --platform linux/amd64 \
+              --mount "type=bind,src=$release_dir,dst=/release,readonly" \
+              "$image" sh -ec 'getconf GNU_LIBC_VERSION; /release/keep-client --version'
+          done
+
       - name: Archive Client Binaries
         uses: actions/upload-artifact@v4
         with:
@@ -386,14 +397,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      contents: read
     steps:
+      - uses: actions/checkout@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version-file: "go.mod"
           cache: false
 
       - name: Download Docker Build Image

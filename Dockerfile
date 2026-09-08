@@ -112,9 +112,15 @@ CMD []
 #
 # Build Binaries
 #
-FROM golang:1.26.8-bookworm AS build-bins
+# Keep cgo release binaries compatible with glibc 2.31 (Debian 11/Ubuntu 20.04).
+# Copy only Go so the C compiler and libc still come from Bullseye.
+FROM buildpack-deps:bullseye AS build-bins
 
-ENV APP_DIR=/go/src/github.com/keep-network/keep-core
+COPY --from=golang:1.26.8-bookworm /usr/local/go /usr/local/go
+
+ENV PATH=/usr/local/go/bin:$PATH \
+	GOTOOLCHAIN=local \
+	APP_DIR=/go/src/github.com/keep-network/keep-core
 
 WORKDIR $APP_DIR
 
