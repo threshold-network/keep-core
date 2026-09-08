@@ -1426,10 +1426,10 @@ __metadata:
     "@threshold-network/solidity-contracts": "npm:1.3.0-dev.14"
     "@typechain/ethers-v5": "npm:^11.1.2"
     "@typechain/hardhat": "npm:^7.0.0"
-    "@types/chai": "npm:^4.3.0"
+    "@types/chai": "npm:^4.3.20"
     "@types/chai-as-promised": "npm:^7.1.5"
-    "@types/mocha": "npm:^9.1.0"
-    "@types/node": "npm:^17.0.10"
+    "@types/mocha": "npm:^10.0.10"
+    "@types/node": "npm:^24.13.3"
     chai: "npm:^4.3.4"
     chai-as-promised: "npm:^7.1.1"
     eslint: "npm:^7.32.0"
@@ -2425,10 +2425,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/chai@npm:*, @types/chai@npm:^4.3.0":
+"@types/chai@npm:*":
   version: 4.3.0
   resolution: "@types/chai@npm:4.3.0"
   checksum: 10c0/d8107f1916e552633cb98509129241bf2576084b65726e9e03c5194e69e704af5c64b52e4a23b51060eaf2914c588fdf260a6fc49bf63e51808e7d78944e238c
+  languageName: node
+  linkType: hard
+
+"@types/chai@npm:^4.3.20":
+  version: 4.3.20
+  resolution: "@types/chai@npm:4.3.20"
+  checksum: 10c0/4601189d611752e65018f1ecadac82e94eed29f348e1d5430e5681a60b01e1ecf855d9bcc74ae43b07394751f184f6970fac2b5561fc57a1f36e93a0f5ffb6e8
   languageName: node
   linkType: hard
 
@@ -2455,14 +2462,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/mocha@npm:^9.1.0":
-  version: 9.1.0
-  resolution: "@types/mocha@npm:9.1.0"
-  checksum: 10c0/67c4662437ffbac955e8de0fa3e60860913201e46ac9a86305347b79dabe47c5f0a03b3b11c19f7aa8855c13de3337dc1bbd227ca8178f14e7688eab13bbe5af
+"@types/mocha@npm:^10.0.10":
+  version: 10.0.10
+  resolution: "@types/mocha@npm:10.0.10"
+  checksum: 10c0/d2b8c48138cde6923493e42b38e839695eb42edd04629abe480a8f34c0e3f50dd82a55832c2e8d2b6e6f9e4deb492d7d733e600fbbdd5a0ceccbcfc6844ff9d5
   languageName: node
   linkType: hard
 
-"@types/node@npm:*, @types/node@npm:^17.0.10":
+"@types/node@npm:*":
   version: 17.0.10
   resolution: "@types/node@npm:17.0.10"
   checksum: 10c0/d250b5b010d84d7d5e0aaba90b50826bfce1b31e3359e2f277fbe2184fbaa7142d51c48c69973504f337f58370cd32ed4040816b36b4c7e9524cd07631bc457e
@@ -2480,6 +2487,15 @@ __metadata:
   version: 12.20.55
   resolution: "@types/node@npm:12.20.55"
   checksum: 10c0/3b190bb0410047d489c49bbaab592d2e6630de6a50f00ba3d7d513d59401d279972a8f5a598b5bb8ddc1702f8a2f4ec57a65d93852f9c329639738e7053637d1
+  languageName: node
+  linkType: hard
+
+"@types/node@npm:^24.13.3":
+  version: 24.13.3
+  resolution: "@types/node@npm:24.13.3"
+  dependencies:
+    undici-types: "npm:~7.18.0"
+  checksum: 10c0/a5bc08f49b9581dcdca90e02cd77197a3c799840807664942e5cd5161a553d4d2ae8064f7e3294410d748d7d098b5c1848be7fa50c06f29c4193ab16be4e59eb
   languageName: node
   linkType: hard
 
@@ -11411,6 +11427,13 @@ __metadata:
   version: 1.9.1
   resolution: "underscore@npm:1.9.1"
   checksum: 10c0/63415f33b1ba4d7f8a9c8bdd00d457ce7ebdfcb9b1bf9dd596d7550550a790986e5ce7f2319d5e5076dbd56c4a359ebd3c914dd98f6eb33122d41fd439fcb4fa
+  languageName: node
+  linkType: hard
+
+"undici-types@npm:~7.18.0":
+  version: 7.18.2
+  resolution: "undici-types@npm:7.18.2"
+  checksum: 10c0/85a79189113a238959d7a647368e4f7c5559c3a404ebdb8fc4488145ce9426fcd82252a844a302798dfc0e37e6fb178ff481ed03bc4caf634c5757d9ef43521d
   languageName: node
   linkType: hard
 
