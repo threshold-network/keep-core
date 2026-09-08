@@ -17,7 +17,6 @@ describe("RandomBeacon - Constructor", () => {
   let RandomBeacon: RandomBeacon__factory
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;[tToken, staking, dkgValidator, reimbursementPool] =
       await getUnnamedAccounts()
 

@@ -9,3 +9,4 @@ typechain/
 docgen-templates/
 export.json
 gasReporterOutput.json
+.hardhat/

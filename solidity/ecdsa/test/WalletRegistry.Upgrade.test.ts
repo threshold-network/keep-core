@@ -24,7 +24,6 @@ describe("WalletRegistry - Upgrade", async () => {
   let EcdsaInactivity: Contract
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ esdm: proxyAdminOwner } = await helpers.signers.getNamedSigners())
     await deployments.fixture()
     EcdsaInactivity = await helpers.contracts.getContract("EcdsaInactivity")

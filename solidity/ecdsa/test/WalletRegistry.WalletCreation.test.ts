@@ -101,7 +101,6 @@ describe("WalletRegistry - Wallet Creation", async () => {
   let operators: Operator[]
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({
       walletRegistry,
       sortitionPool,

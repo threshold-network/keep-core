@@ -22,10 +22,7 @@ describe("ReimbursementPool", () => {
 
   // prettier-ignore
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ deployer: owner } = await helpers.signers.getNamedSigners())
-
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;[thirdParty, thirdPartyContract, refundee] = await helpers.signers.getUnnamedSigners()
   })
 

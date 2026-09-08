@@ -1,5 +1,3 @@
-/* eslint-disable import/prefer-default-export */
-
 import { ethers } from "hardhat"
 
 import { constants } from "../fixtures"

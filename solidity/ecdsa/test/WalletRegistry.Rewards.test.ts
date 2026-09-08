@@ -64,7 +64,6 @@ describe("WalletRegistry - Rewards", () => {
   const rewardAmount = to1e18(100000)
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({
       tToken,
       walletRegistry,

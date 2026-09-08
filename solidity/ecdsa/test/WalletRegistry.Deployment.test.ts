@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-expressions */
 import { deployments, ethers, helpers, upgrades } from "hardhat"
 import chai, { expect } from "chai"
 import chaiAsPromised from "chai-as-promised"

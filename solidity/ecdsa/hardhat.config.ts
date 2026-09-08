@@ -291,7 +291,7 @@ task(TASK_TEST, "Runs mocha tests").setAction(async (args, hre, runSuper) => {
 })
 
 task(TASK_CHECK_ACCOUNTS_COUNT, "Checks accounts count").setAction(async () => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires,global-require
+  // eslint-disable-next-line @typescript-eslint/no-require-imports,global-require
   const { constants } = require("./test/fixtures")
 
   if (testConfig.operatorsCount < constants.groupSize) {

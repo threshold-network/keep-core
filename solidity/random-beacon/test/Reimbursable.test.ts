@@ -12,10 +12,7 @@ describe("Reimbursable", () => {
   let contractToUpdate: SignerWithAddress
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ deployer } = await helpers.signers.getNamedSigners())
-
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;[admin, thirdParty, contractToUpdate] =
       await helpers.signers.getUnnamedSigners()
 

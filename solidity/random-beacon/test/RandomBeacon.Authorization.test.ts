@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 import { ethers, helpers } from "hardhat"
-import { createMock } from "./helpers/mock"
 import { expect } from "chai"
 
+import { createMock } from "./helpers/mock"
 import { constants, params, randomBeaconDeployment } from "./fixtures"
 import { legacyTokenStakingAt } from "./utils/operators"
 

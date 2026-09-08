@@ -18,7 +18,6 @@ describe("RandomBeacon - Parameters", () => {
   let randomBeaconGovernance: RandomBeaconGovernance
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;[impersonatedGovernance, thirdParty, thirdPartyContract] =
       await ethers.getSigners()
 
