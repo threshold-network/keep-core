@@ -38,9 +38,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   // Log deployment information
   console.log(`Allowlist deployed at: ${allowlist.address}`)
-  console.log(
-    `Allowlist proxy admin: ${proxyDeployment.receipt.contractAddress}`
-  )
+  console.log(`Allowlist proxy deployed at: ${proxyDeployment.address}`)
   console.log(`Allowlist owner: ${await allowlist.owner()} (deployer)`)
   if (governance && governance !== deployer) {
     console.log(

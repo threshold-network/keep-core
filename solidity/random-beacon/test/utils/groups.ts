@@ -17,7 +17,9 @@ export async function createGroup(
   randomBeacon: RandomBeacon,
   signers: Operator[]
 ): Promise<void> {
-  const { blockNumber: startBlock } = await randomBeacon.genesis()
+  const { blockNumber: startBlock } = await (
+    await randomBeacon.genesis()
+  ).wait()
 
   await mineBlocks(constants.offchainDkgTime)
 

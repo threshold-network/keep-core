@@ -48,7 +48,7 @@ describe("WalletRegistry - Inactivity", () => {
     (_, i) => i + 1
   )
   const nonSubsequentInactiveMembersIndices = [2, 5, 7, 23, 56]
-  const emptyMembersIndices = []
+  const emptyMembersIndices: number[] = []
 
   const groupThreshold = 51
 
@@ -242,12 +242,15 @@ describe("WalletRegistry - Inactivity", () => {
                       // we cut the first 2 characters to get rid of "0x" and
                       // then return signature on arbitrary position - each
                       // signature has 65 bytes so 130 characters
-                      const getSignature = (signatures, index) =>
+                      const getSignature = (
+                        signatures: string,
+                        index: number
+                      ) =>
                         signatures
                           .slice(2)
                           .slice(130 * index, 130 * index + 130)
 
-                      const modifySignatures = (signatures) => {
+                      const modifySignatures = (signatures: string) => {
                         let newSignatures = "0x"
 
                         for (
@@ -402,7 +405,9 @@ describe("WalletRegistry - Inactivity", () => {
               })
 
               context("when one of the signatures is incorrect", () => {
-                const assertInvalidSignature = async (invalidSignature) => {
+                const assertInvalidSignature = async (
+                  invalidSignature: string
+                ) => {
                   // The 50 signers sign correct parameters. Invalid signature
                   // is expected to be provided by signer 51.
                   const { signatures, signingMembersIndices } =
@@ -836,7 +841,7 @@ describe("WalletRegistry - Inactivity", () => {
 
           context("when inactive members indices count is zero", () => {
             it("should revert", async () => {
-              const inactiveMembersIndices = []
+              const inactiveMembersIndices: number[] = []
 
               await assertInactiveMembersIndicesCorrupted(
                 inactiveMembersIndices

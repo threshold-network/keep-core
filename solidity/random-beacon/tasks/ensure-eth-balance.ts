@@ -27,35 +27,40 @@ task(
     undefined,
     types.string
   )
-  .setAction(async (args, hre) => {
-    const { ethers } = hre
+  .setAction(
+    async (
+      args: { from?: string; targetBalance: string; addresses: string[] },
+      hre
+    ) => {
+      const { ethers } = hre
 
-    // FIXME: `validate` will fail for badly checksummed addresses
-    // see: https://github.com/ethers-io/ethers.js/discussions/3261
-    const addresses: Set<string> = new Set(
-      Array.from(args.addresses).map(hre.helpers.address.validate)
-    )
-
-    const expectedBalance = parseValue(args.targetBalance, hre)
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const address of addresses) {
-      const currentBalance = await ethers.provider.getBalance(address)
-
-      console.log(
-        `current balance of ${address} is ${ethers.utils.formatEther(
-          currentBalance
-        )} ether`
+      // FIXME: `validate` will fail for badly checksummed addresses
+      // see: https://github.com/ethers-io/ethers.js/discussions/3261
+      const addresses: Set<string> = new Set(
+        Array.from(args.addresses).map(hre.helpers.address.validate)
       )
 
-      if (currentBalance.lt(expectedBalance)) {
-        const topUpAmount = expectedBalance.sub(currentBalance)
+      const expectedBalance = parseValue(args.targetBalance, hre)
 
-        await hre.run(TASK_SEND_ETH, {
-          from: args.from,
-          amount: topUpAmount.toString(),
-          to: address,
-        })
+      // eslint-disable-next-line no-restricted-syntax
+      for (const address of addresses) {
+        const currentBalance = await ethers.provider.getBalance(address)
+
+        console.log(
+          `current balance of ${address} is ${ethers.utils.formatEther(
+            currentBalance
+          )} ether`
+        )
+
+        if (currentBalance.lt(expectedBalance)) {
+          const topUpAmount = expectedBalance.sub(currentBalance)
+
+          await hre.run(TASK_SEND_ETH, {
+            from: args.from,
+            amount: topUpAmount.toString(),
+            to: address,
+          })
+        }
       }
     }
-  })
+  )

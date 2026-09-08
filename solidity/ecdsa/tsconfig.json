@@ -2,9 +2,7 @@
   "files": ["./hardhat.config.ts"],
   "include": ["./deploy", "./tasks", "./test", "./typechain", "./types"],
   "compilerOptions": {
-    // TypeScript 6 turns `strict` on by default. Pinned off so the bump stays
-    // behaviour-preserving; this package has not been through strict yet.
-    "strict": false,
+    "strict": true,
     // TypeScript 6 stopped including every `node_modules/@types` package
     // automatically, which silently drops the mocha and chai globals. These
     // are the four that contribute globals here.

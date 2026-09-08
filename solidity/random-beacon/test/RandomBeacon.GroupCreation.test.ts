@@ -152,7 +152,7 @@ describe("RandomBeacon - Group Creation", () => {
           await createSnapshot()
 
           const [genesisTx, seed] = await genesis(randomBeacon)
-          startBlock = genesisTx.blockNumber
+          startBlock = (await genesisTx.wait()).blockNumber
           genesisSeed = seed
         })
 
@@ -304,7 +304,7 @@ describe("RandomBeacon - Group Creation", () => {
         await createSnapshot()
 
         const [genesisTx, seed] = await genesis(randomBeacon)
-        startBlock = genesisTx.blockNumber
+        startBlock = (await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -479,7 +479,7 @@ describe("RandomBeacon - Group Creation", () => {
         await createSnapshot()
 
         const [genesisTx, seed] = await genesis(randomBeacon)
-        startBlock = genesisTx.blockNumber
+        startBlock = (await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -563,7 +563,7 @@ describe("RandomBeacon - Group Creation", () => {
               noMisbehaved
             ))
 
-            resultSubmissionBlock = tx.blockNumber
+            resultSubmissionBlock = (await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -689,7 +689,7 @@ describe("RandomBeacon - Group Creation", () => {
               await createSnapshot()
 
               const tx = await randomBeacon.challengeDkgResult(dkgResult)
-              challengeBlockNumber = tx.blockNumber
+              challengeBlockNumber = (await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -761,7 +761,7 @@ describe("RandomBeacon - Group Creation", () => {
 
         const [genesisTx, seed] = await genesis(randomBeacon)
 
-        startBlock = genesisTx.blockNumber
+        startBlock = (await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -1009,7 +1009,7 @@ describe("RandomBeacon - Group Creation", () => {
                 noMisbehaved
               ))
 
-              resultSubmissionBlock = tx.blockNumber
+              resultSubmissionBlock = (await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -1075,7 +1075,7 @@ describe("RandomBeacon - Group Creation", () => {
               )
 
               const tx = await randomBeacon.challengeDkgResult(dkgResult)
-              challengeBlockNumber = tx.blockNumber
+              challengeBlockNumber = (await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -1416,7 +1416,7 @@ describe("RandomBeacon - Group Creation", () => {
 
         const [genesisTx, seed] = await genesis(randomBeacon)
 
-        startBlock = genesisTx.blockNumber
+        startBlock = (await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -1477,7 +1477,7 @@ describe("RandomBeacon - Group Creation", () => {
               submitterIndex
             ))
 
-            resultSubmissionBlock = tx.blockNumber
+            resultSubmissionBlock = (await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -1693,7 +1693,7 @@ describe("RandomBeacon - Group Creation", () => {
               anotherSubmitterIndex
             ))
 
-            resultSubmissionBlock = tx.blockNumber
+            resultSubmissionBlock = (await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -2016,7 +2016,7 @@ describe("RandomBeacon - Group Creation", () => {
 
         const [genesisTx] = await genesis(randomBeacon)
 
-        startBlock = genesisTx.blockNumber
+        startBlock = (await genesisTx.wait()).blockNumber
       })
 
       after(async () => {
@@ -2161,7 +2161,7 @@ describe("RandomBeacon - Group Creation", () => {
 
         const [genesisTx, seed] = await genesis(randomBeacon)
 
-        startBlock = genesisTx.blockNumber
+        startBlock = (await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -2303,7 +2303,7 @@ describe("RandomBeacon - Group Creation", () => {
               noMisbehaved
             ))
 
-            resultSubmissionBlock = tx.blockNumber
+            resultSubmissionBlock = (await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -2682,7 +2682,7 @@ describe("RandomBeacon - Group Creation", () => {
       let dkgResult: DKG.ResultStruct
 
       const [genesisTx] = await genesis(randomBeacon)
-      const startBlock = genesisTx.blockNumber
+      const startBlock = (await genesisTx.wait()).blockNumber
 
       await mineBlocks(constants.offchainDkgTime)
 

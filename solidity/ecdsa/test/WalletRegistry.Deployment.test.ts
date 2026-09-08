@@ -34,9 +34,11 @@ describe("WalletRegistry - Deployment", async () => {
       "WalletRegistry"
     )
 
-    walletRegistryImplementationAddress = (
-      await deployments.get("WalletRegistry")
-    ).implementation
+    const { implementation } = await deployments.get("WalletRegistry")
+    if (!implementation) {
+      throw new Error("WalletRegistry deployment has no implementation address")
+    }
+    walletRegistryImplementationAddress = implementation
 
     walletRegistryGovernance =
       await helpers.contracts.getContract<WalletRegistryGovernance>(
