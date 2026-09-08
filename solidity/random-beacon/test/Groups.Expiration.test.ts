@@ -1,4 +1,5 @@
-import { ethers, waffle, helpers } from "hardhat"
+import { ethers, helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import { noMisbehaved, hashDKGMembers } from "./utils/dkg"
@@ -22,7 +23,7 @@ describe("Groups", () => {
   let groups: GroupsStub
 
   beforeEach("load test fixture", async () => {
-    groups = await waffle.loadFixture(fixture)
+    groups = await loadFixture(fixture)
   })
 
   describe("expireOldGroups", async () => {

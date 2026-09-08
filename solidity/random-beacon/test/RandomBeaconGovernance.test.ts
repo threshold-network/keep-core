@@ -1,4 +1,5 @@
-import { ethers, waffle, helpers } from "hardhat"
+import { ethers, helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import { randomBeaconDeployment, params } from "./fixtures"
@@ -40,7 +41,7 @@ describe("RandomBeaconGovernance", () => {
   before(async () => {
     [thirdParty, thirdPartyContract] = await helpers.signers.getUnnamedSigners()
     ;({ governance, randomBeaconGovernance, randomBeacon } =
-      await waffle.loadFixture(fixture))
+      await loadFixture(fixture))
   })
 
   describe("constructor", () => {

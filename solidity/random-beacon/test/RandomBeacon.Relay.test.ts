@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 
-import { ethers, waffle, helpers } from "hardhat"
+import { ethers, helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 import { BigNumber } from "ethers"
 
@@ -38,7 +39,7 @@ const { mineBlocks, mineBlocksTo } = helpers.time
 const { to1e18 } = helpers.number
 const ZERO_ADDRESS = ethers.constants.AddressZero
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
-const { provider } = waffle
+const { provider } = ethers
 
 // FIXME: As a workaround for a bug https://github.com/dethcrypto/TypeChain/issues/601
 // we declare a new type instead of using `RandomBeaconStub & RandomBeacon` intersection.
@@ -107,7 +108,7 @@ describe("RandomBeacon - Relay", () => {
       bls,
       operators: members,
       randomBeaconGovernance,
-    } = await waffle.loadFixture(fixture))
+    } = await loadFixture(fixture))
 
     membersIDs = members.map((member) => member.id)
     membersAddresses = members.map((member) => member.signer.address)

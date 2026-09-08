@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 
-import { ethers, waffle, helpers } from "hardhat"
+import { ethers, helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import blsData from "./data/bls"
@@ -28,7 +29,7 @@ import type { RandomBeacon, SortitionPool, T, TokenStaking } from "../typechain"
 
 const { mineBlocks, mineBlocksTo } = helpers.time
 const { keccak256 } = ethers.utils
-const { provider } = waffle
+const { provider } = ethers
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 // FIXME: As a workaround for a bug https://github.com/dethcrypto/TypeChain/issues/601
@@ -91,7 +92,7 @@ describe("RandomBeacon - Group Creation", () => {
       staking,
       t,
       signers,
-    } = await waffle.loadFixture(fixture))
+    } = await loadFixture(fixture))
 
     randomBeacon = randomBeaconStub
   })
