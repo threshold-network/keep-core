@@ -164,6 +164,17 @@ deployment snapshots.
 
 ## Limits and release gates
 
+The publishing jobs in
+[`npm-random-beacon.yml`](../../.github/workflows/npm-random-beacon.yml) and
+[`npm-ecdsa.yml`](../../.github/workflows/npm-ecdsa.yml) are disabled with
+`if: ${{ false }}`. This blocks both automatic pushes to `main` and manual
+dispatches on any ref, protecting the existing `development` and `latest` npm
+tags. Re-enable the jobs in a coordinated release change only after the consumer
+runtime migration, upstream fixes, release channel agreement, and ECDSA's pin to
+a compatible published Beacon version are ready and the actual packed producers
+pass the full ECDSA and tbtc-v2 consumer checks. Local packing and the offline
+publication lifecycle checks above remain available while the jobs are disabled.
+
 These checks do not deploy to mainnet/Sepolia, contact explorer verification
 services, run the full tbtc-v2 consumer, or authorize package publication. The
 manual WalletRegistry V2 script is ported to v6 (and now saves a parsed ABI array)
