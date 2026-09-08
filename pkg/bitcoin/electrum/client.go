@@ -2,6 +2,7 @@ package electrum
 
 import (
 	"context"
+	"sync"
 
 	"github.com/checksum0/go-electrum/electrum"
 )
@@ -24,9 +25,19 @@ type electrumClient interface {
 	IsShutdown() bool
 }
 
-// shutdownClientAsync closes a retired client without delaying a request or
-// holding clientMutex through a WebSocket close handshake. The client must no
-// longer be reachable by requests before cleanup starts.
-func shutdownClientAsync(client electrumClient) {
-	go client.Shutdown()
+// watchClientCancellation closes client when ctx is cancelled, independently of
+// the request mutex and keepalive loop. It also covers clients being verified.
+// The returned function unregisters the callback and retires the client without
+// waiting for a WebSocket close handshake. Both paths share a single shutdown.
+func watchClientCancellation(ctx context.Context, client electrumClient) func() {
+	shutdown := sync.OnceFunc(func() {
+		if !client.IsShutdown() {
+			client.Shutdown()
+		}
+	})
+	stop := context.AfterFunc(ctx, shutdown)
+	return func() {
+		stop()
+		go shutdown()
+	}
 }

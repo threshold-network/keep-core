@@ -30,6 +30,7 @@ var (
 type Connection struct {
 	parentCtx   context.Context
 	client      electrumClient
+	closeClient func()
 	clientMutex *sync.Mutex
 	config      Config
 	serverURLs  []string
@@ -1214,7 +1215,9 @@ func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error
 			client, err := c.newClient(connectCtx, url)
 			connectCancel()
 
+			var closeClient func()
 			if err == nil {
+				closeClient = watchClientCancellation(c.parentCtx, client)
 				// Verification is an RPC with its own timeout, independent of
 				// dialing but still bounded by the caller and retry deadlines.
 				requestCtx, requestCancel := context.WithTimeout(ctx, c.config.RequestTimeout)
@@ -1224,7 +1227,7 @@ func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error
 				}
 				requestCancel()
 				if err != nil {
-					shutdownClientAsync(client)
+					closeClient()
 				}
 			}
 			if err != nil {
@@ -1236,6 +1239,7 @@ func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error
 				return err
 			}
 			c.client = client
+			c.closeClient = closeClient
 			return nil
 		},
 	)
@@ -1262,9 +1266,15 @@ func verifyServer(ctx context.Context, client electrumClient, url string) error 
 	return nil
 }
 
-// nextServer and failover are called with clientMutex held.
+// nextServer, retireClient, and failover are called with clientMutex held.
 func (c *Connection) nextServer() {
 	c.serverIndex = (c.serverIndex + 1) % len(c.serverURLs)
+}
+
+func (c *Connection) retireClient() {
+	c.client = nil
+	c.closeClient()
+	c.closeClient = nil
 }
 
 func (c *Connection) failover(callerCtx context.Context) {
@@ -1274,10 +1284,8 @@ func (c *Connection) failover(callerCtx context.Context) {
 	if callerCtx.Err() != nil || c.parentCtx.Err() != nil || len(c.serverURLs) < 2 {
 		return
 	}
-	client := c.client
-	c.client = nil
+	c.retireClient()
 	c.nextServer()
-	shutdownClientAsync(client)
 	logger.Warn("electrum request failed; trying the next configured server")
 }
 
@@ -1307,13 +1315,9 @@ func (c *Connection) keepAlive() {
 				ticker.Reset(c.config.KeepAliveInterval)
 			}
 		case <-c.parentCtx.Done():
-			c.clientMutex.Lock()
-			client := c.client
-			c.client = nil
-			c.clientMutex.Unlock()
-			if client != nil {
-				client.Shutdown()
-			}
+			// Each client's cancellation callback closes its transport even
+			// if an RPC (including Ping above) is blocked while holding the
+			// request mutex.
 			return
 		}
 	}
@@ -1381,7 +1385,7 @@ func (c *Connection) reconnectIfShutdown(callerCtx, budgetCtx context.Context) e
 		return err
 	}
 	if c.client != nil && c.client.IsShutdown() {
-		c.client = nil
+		c.retireClient()
 		c.nextServer()
 	}
 	if c.client == nil {
