@@ -16167,6 +16167,7 @@ fn production_realistic_state_witness_max_records_setting_keeps_store_advancing(
 #[test]
 #[allow(clippy::assertions_on_constants)]
 fn production_default_state_witness_max_records_is_sane() {
+    let _guard = lock_test_state();
     clear_state_storage_policy_overrides();
     assert_eq!(
         TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS, 262_144,
