@@ -325,7 +325,7 @@ func runCoordinationRound(
 		go func(operatorIndex int, op *coordinationOperatorFixture) {
 			executor := newCoordinationExecutor(
 				op.chain,
-				ethereum.Unknown,
+				ethereum.Developer,
 				coordinatedWallet,
 				coordinatedWallet.membersByOperator(op.address),
 				op.address,
@@ -543,7 +543,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 // operator's checklist search below falls through to NoopProposal.
 func TestCoordinationExecutor_Coordinate_ReservationProposals(t *testing.T) {
 	// coordinationBlock is an arbitrary block number; every executor
-	// below is constructed with ethereum.Unknown (activation block 0,
+	// below is constructed with ethereum.Developer (activation block 0,
 	// see runCoordinationRound), so the reservation actions checklist
 	// gate is satisfied at any height here and this value proves
 	// nothing about the gate itself (see
@@ -1118,6 +1118,16 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 			windowIndex:                4,
 			expectedReservationActions: []WalletActionType{ActionReservationAnchor, ActionReservationReanchor},
 		},
+		// ethereum.Unknown is the zero value used for an unset or
+		// unrecognized network and must fail closed exactly like
+		// mainnet, never like ethereum.Developer, even though it is
+		// also Go's zero value for coordinationExecutor.ethereumNetwork.
+		"unknown network never activates (fails closed)": {
+			network:                    ethereum.Unknown,
+			coordinationBlock:          26500000,
+			windowIndex:                4,
+			expectedReservationActions: nil,
+		},
 	}
 
 	for testName, test := range tests {
@@ -1165,6 +1175,25 @@ func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
 			"ReservationsActivationBlock(ethereum.Mainnet) = %d, want %d",
 			got,
 			uint64(math.MaxUint64),
+		)
+	}
+	// ethereum.Unknown is the zero value of ethereum.Network - anything
+	// that fails to explicitly set a network (an unset config field, a
+	// struct literal that forgets the field) lands here. It must fail
+	// closed like every other unrecognized network, never like
+	// ethereum.Developer, which is the only network that activates
+	// immediately.
+	if got := ReservationsActivationBlock(ethereum.Unknown); got != math.MaxUint64 {
+		t.Errorf(
+			"ReservationsActivationBlock(ethereum.Unknown) = %d, want %d",
+			got,
+			uint64(math.MaxUint64),
+		)
+	}
+	if got := ReservationsActivationBlock(ethereum.Developer); got != 0 {
+		t.Errorf(
+			"ReservationsActivationBlock(ethereum.Developer) = %d, want 0",
+			got,
 		)
 	}
 }

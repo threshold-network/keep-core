@@ -9,6 +9,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
@@ -200,6 +201,38 @@ func (m *mockWalletClosedChain) OnWalletClosed(
 ) subscription.EventSubscription {
 	m.onWalletClosedHandler = handler
 	return subscription.NewEventSubscription(func() {})
+}
+
+// mockSigning is a minimal chain.Signing fake exposing a fixed operator
+// address. WireReservationWatchers only ever calls Address() on it (to
+// derive reservationOperatorStaggerOffset); the remaining methods exist
+// only to satisfy the interface and are never exercised by these tests.
+type mockSigning struct {
+	address chain.Address
+}
+
+func (m mockSigning) Address() chain.Address { return m.address }
+func (m mockSigning) PublicKey() []byte      { return nil }
+func (m mockSigning) Sign(message []byte) ([]byte, error) {
+	return nil, nil
+}
+func (m mockSigning) Verify(message []byte, signature []byte) (bool, error) {
+	return false, nil
+}
+func (m mockSigning) VerifyWithPublicKey(
+	message []byte,
+	signature []byte,
+	publicKey []byte,
+) (bool, error) {
+	return false, nil
+}
+func (m mockSigning) PublicKeyToAddress(publicKey *operator.PublicKey) (chain.Address, error) {
+	return "", nil
+}
+func (m mockSigning) PublicKeyBytesToAddress(publicKey []byte) chain.Address { return "" }
+
+func (m *mockWalletClosedChain) Signing() chain.Signing {
+	return mockSigning{address: chain.Address("0x0000000000000000000000000000000000000001")}
 }
 
 func TestWireReservationWatchers(t *testing.T) {
@@ -399,6 +432,110 @@ func TestWireReservationWatchers_SelfCheckSkippedWhenActivityFound(t *testing.T)
 	}
 }
 
+// TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess
+// verifies that WireReservationWatchers actually drives the stale-deposit
+// and action-timeout watchers to submit real Bridge notifications when
+// on-chain data is already overdue at wiring time via each watcher's
+// synchronous initial poll (staleDepositWatcher.pollTick and
+// actionTimeoutWatcher.pollPendingActions, both run before the
+// background Run loops start) - not merely that the wiring call itself
+// returns nil. The stranding watcher's equivalent startup-scan behavior
+// is already covered by
+// TestWireReservationWatchers_StartupCatchUpScan_TransientErrorsDoNotAbort.
+func TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	walletClosedChain := &mockWalletClosedChain{}
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	// Seed an overdue Reanchor action generation: the action-timeout
+	// watcher's synchronous initial pollPendingActions pass must
+	// discover and notify it. TimeoutAt is far in the past relative to
+	// the real wall-clock time.Now() WireReservationWatchers uses, so
+	// the FIRST-attempt stagger offset (bounded by
+	// actionTimeoutRenotifyInterval, 600s) can never mask it.
+	actionWallet := walletPKHAt(0x60)
+	actionKey := reservationKey(0xAA01)
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            actionKey,
+		RequestNonce:              1,
+		SourceWalletPublicKeyHash: actionWallet,
+		BlockNumber:               500,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		actionKey,
+		actionWallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	// Seed an overdue reserved deposit: the stale-deposit watcher's
+	// synchronous initial pollTick pass must discover and notify it.
+	depositWallet := walletPKHAt(0x61)
+	vault := chain.Address("0xVault")
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault:         vault,
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+	fundingTxHash := bitcoin.Hash{0x02}
+	fundingOutputIndex := uint32(0)
+	// currentBlock (1000) does not exceed staleDepositRevealScanLookBackBlocks,
+	// so pollTick's own startBlock computation stays 0 - mirror that
+	// here rather than subtracting the lookback bound directly (which
+	// would underflow uint64 for a currentBlock this small).
+	startBlock := uint64(0)
+	endBlock := uint64(1000)
+	if err := spvChain.addPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{StartBlock: startBlock + 1, EndBlock: &endBlock},
+		&tbtc.DepositRevealedEvent{
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+			Vault:              &vault,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	depositKey := spvChain.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+	spvChain.setReservedDeposit(depositKey, depositWallet, true)
+	spvChain.setWallet(depositWallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
+	spvChain.setReservation(depositKey, &tbtc.Reservation{RequestNonce: 1})
+	spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStatePending,
+		TimeoutAt: 100,
+	})
+
+	if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
+		t.Fatalf(
+			"expected WireReservationWatchers's synchronous initial poll "+
+				"to drive a real NotifyReservationActionTimeout call, got %d",
+			len(calls),
+		)
+	}
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 1 {
+		t.Fatalf(
+			"expected WireReservationWatchers's synchronous initial poll "+
+				"to drive a real NotifyStaleReservedDeposit call, got %d",
+			len(calls),
+		)
+	}
+}
+
 // TestRetryReservationStrandingStartupScan covers
 // retryReservationStrandingStartupScan's three outcomes: a wallet that
 // becomes fetchable during the retry delay is checked and, if
@@ -495,7 +632,7 @@ func TestRunStaleDepositPollTick_LiveWalletIsParked(t *testing.T) {
 		ReservationActionTimeout: reservationActionTimeout,
 	})
 
-	startBlock := currentBlock - reservationStaleDepositLookBackBlocks
+	startBlock := currentBlock - staleDepositRevealScanLookBackBlocks
 	endBlock := currentBlock
 	fundingTxHash := bitcoin.Hash{0x01}
 	fundingOutputIndex := uint32(0)
@@ -522,22 +659,21 @@ func TestRunStaleDepositPollTick_LiveWalletIsParked(t *testing.T) {
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain)
-	state := newStaleDepositPollState()
 
-	trackedCount := runStaleDepositPollTick(spvChain, watcher, state, 1000)
+	trackedCount := watcher.pollTick(1000)
 	if trackedCount != 1 {
 		t.Fatalf("expected 1 tracked deposit after the first tick, got %d", trackedCount)
 	}
-	if len(state.pending) != 0 {
-		t.Fatalf("expected the live-wallet deposit to be parked, not left pending: %v", state.pending)
+	if len(watcher.pending) != 0 {
+		t.Fatalf("expected the live-wallet deposit to be parked, not left pending: %v", watcher.pending)
 	}
-	if len(state.parked) != 1 {
-		t.Fatalf("expected 1 parked deposit, got %d: %v", len(state.parked), state.parked)
+	if len(watcher.parked) != 1 {
+		t.Fatalf("expected 1 parked deposit, got %d: %v", len(watcher.parked), watcher.parked)
 	}
 }
 
-// TestRunStaleDepositParkedReconcile covers runStaleDepositParkedReconcile's
-// two outcomes on a parked deposit: reactivation into the pending set once
+// TestRunStaleDepositParkedReconcile covers parkedReconcile's two
+// outcomes on a parked deposit: reactivation into the pending set once
 // its wallet is no longer Live, and eviction once it resolves Drop.
 func TestRunStaleDepositParkedReconcile(t *testing.T) {
 	t.Run("reactivates into pending once the wallet leaves live", func(t *testing.T) {
@@ -557,17 +693,16 @@ func TestRunStaleDepositParkedReconcile(t *testing.T) {
 		})
 
 		watcher := NewReservationStaleDepositWatcher(spvChain)
-		state := newStaleDepositPollState()
 		key := depositKey.String()
-		state.parked[key] = depositKey
+		watcher.parked[key] = depositKey
 
-		runStaleDepositParkedReconcile(spvChain, watcher, state, 1000)
+		watcher.parkedReconcile(1000)
 
-		if len(state.parked) != 0 {
-			t.Fatalf("expected the deposit to leave the parked set, got %v", state.parked)
+		if len(watcher.parked) != 0 {
+			t.Fatalf("expected the deposit to leave the parked set, got %v", watcher.parked)
 		}
-		if _, ok := state.pending[key]; !ok {
-			t.Fatalf("expected the deposit to be reactivated into the pending set, got %v", state.pending)
+		if _, ok := watcher.pending[key]; !ok {
+			t.Fatalf("expected the deposit to be reactivated into the pending set, got %v", watcher.pending)
 		}
 	})
 
@@ -581,17 +716,16 @@ func TestRunStaleDepositParkedReconcile(t *testing.T) {
 		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateLive})
 
 		watcher := NewReservationStaleDepositWatcher(spvChain)
-		state := newStaleDepositPollState()
 		key := depositKey.String()
-		state.parked[key] = depositKey
+		watcher.parked[key] = depositKey
 
-		runStaleDepositParkedReconcile(spvChain, watcher, state, 1000)
+		watcher.parkedReconcile(1000)
 
-		if len(state.parked) != 0 {
-			t.Fatalf("expected the resolved deposit to be evicted from the parked set, got %v", state.parked)
+		if len(watcher.parked) != 0 {
+			t.Fatalf("expected the resolved deposit to be evicted from the parked set, got %v", watcher.parked)
 		}
-		if len(state.pending) != 0 {
-			t.Fatalf("expected the resolved deposit not to reappear in pending, got %v", state.pending)
+		if len(watcher.pending) != 0 {
+			t.Fatalf("expected the resolved deposit not to reappear in pending, got %v", watcher.pending)
 		}
 	})
 }

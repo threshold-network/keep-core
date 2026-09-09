@@ -13,11 +13,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// reservationProofLookBackBlocks bounds the pending-action-request event
-// scan performed on the very first pass, before an incremental cursor
-// exists. Mirrors ReservationAcceptanceLookBackBlocks /
-// ReservationReanchorLookBackBlocks in pkg/tbtcpg: 30 days at 12s/block.
-const reservationProofLookBackBlocks = uint64(216000)
+// reservationProofLookBackBlocks is a thin alias for
+// reservationDefaultLookBackBlocks (see reservation_wiring.go), the
+// single canonical 30-day/12s-per-block lookback bound shared by every
+// reservation watcher's startup/first-pass catch-up scan. It keeps
+// this exact name because reservation_proof_loop_test.go references
+// it directly.
+const reservationProofLookBackBlocks = reservationDefaultLookBackBlocks
 
 // reservationProofScanState persists the incremental event-scan cursor and
 // the set of still-pending action-request events across successive passes

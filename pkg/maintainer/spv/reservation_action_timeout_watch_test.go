@@ -557,7 +557,11 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_RetainsEntryAcrossLo
 	wallet1 := walletPKH()
 
 	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute)
-	currentNow := uint32(500)
+	// now is comfortably beyond TimeoutAt (100) plus the maximum
+	// possible reservationOperatorStaggerOffset (bounded by
+	// actionTimeoutRenotifyInterval, 600s) so the FIRST-attempt stagger
+	// gate never masks the recovery notification this test asserts.
+	currentNow := uint32(900)
 	ratw.nowFn = func() uint32 { return currentNow }
 
 	key1 := reservationKey(0x4001)
@@ -635,7 +639,7 @@ func TestReservationActionTimeoutWatcher_NextScanRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	expectedStart := uint64(300_000) - reservationActionTimeoutLookBackBlocks
+	expectedStart := uint64(300_000) - reservationProofLookBackBlocks
 	if startBlock != expectedStart {
 		t.Errorf("expected start block %d, got %d", expectedStart, startBlock)
 	}
@@ -683,7 +687,11 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 		spvChain,
 		pollInterval,
 	)
-	ratw.nowFn = func() uint32 { return 500 }
+	// now is comfortably beyond every seeded TimeoutAt plus the maximum
+	// possible reservationOperatorStaggerOffset (bounded by
+	// actionTimeoutRenotifyInterval, 600s) so the FIRST-attempt stagger
+	// gate never masks the notifications this test asserts.
+	ratw.nowFn = func() uint32 { return 900 }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -705,7 +713,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 			{
 				ActionType: tbtc.ReservationActionTypeReanchor,
 				State:      tbtc.ReservationActionStatePending,
-				TimeoutAt:  100, // Timed out (now=500 > 100)
+				TimeoutAt:  100, // Timed out (now=900 > 100)
 			},
 		},
 		1,
@@ -758,7 +766,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 			{
 				ActionType: tbtc.ReservationActionTypeReanchor,
 				State:      tbtc.ReservationActionStatePending,
-				TimeoutAt:  200, // Timed out (now=500 > 200)
+				TimeoutAt:  200, // Timed out (now=900 > 200)
 			},
 		},
 		2,
@@ -805,7 +813,10 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 		spvChain,
 		pollInterval,
 	)
-	ratw.nowFn = func() uint32 { return 500 }
+	// now is comfortably beyond TimeoutAt (100) plus the maximum
+	// possible reservationOperatorStaggerOffset (see the identical
+	// comment in RunLoop_IncrementalTracking above).
+	ratw.nowFn = func() uint32 { return 900 }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -826,7 +837,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 			{
 				ActionType: tbtc.ReservationActionTypeReanchor,
 				State:      tbtc.ReservationActionStatePending,
-				TimeoutAt:  100, // Timed out (now=500 > 100)
+				TimeoutAt:  100, // Timed out (now=900 > 100)
 			},
 		},
 		1,
@@ -908,7 +919,11 @@ func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t 
 		pollInterval,
 	)
 
-	var currentNow uint32 = 500
+	// initialNow is comfortably beyond TimeoutAt (100) plus the maximum
+	// possible reservationOperatorStaggerOffset (bounded by
+	// actionTimeoutRenotifyInterval, 600s) so the FIRST-attempt stagger
+	// gate never masks the first-window notification asserted below.
+	var currentNow uint32 = 900
 	var nowMutex sync.Mutex
 	ratw.nowFn = func() uint32 {
 		nowMutex.Lock()
@@ -959,7 +974,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t 
 	// the dropped/reverted-notification scenario this mechanism exists
 	// to recover from.
 	nowMutex.Lock()
-	currentNow = 500 + uint32(actionTimeoutRenotifyInterval.Seconds()) + 1
+	currentNow = 900 + uint32(actionTimeoutRenotifyInterval.Seconds()) + 1
 	nowMutex.Unlock()
 
 	// Second window: the backoff has elapsed, so a retry notification
@@ -1001,7 +1016,10 @@ func TestReservationActionTimeoutWatcher_RunLoop_BoundedFirstScan(t *testing.T) 
 		spvChain,
 		pollInterval,
 	)
-	ratw.nowFn = func() uint32 { return 500 }
+	// now is comfortably beyond every seeded TimeoutAt plus the maximum
+	// possible reservationOperatorStaggerOffset (see the identical
+	// comment in RunLoop_IncrementalTracking above).
+	ratw.nowFn = func() uint32 { return 900 }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1249,7 +1267,11 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_BoundsRPCVolumePerTi
 	wrapped := &actionCallCountingChain{Chain: spvChain}
 
 	ratw := NewReservationActionTimeoutWatcher(wrapped, 0)
-	ratw.nowFn = func() uint32 { return 500 }
+	// now is comfortably beyond every seeded TimeoutAt plus the maximum
+	// possible reservationOperatorStaggerOffset for every one of the
+	// tracked keys (see the identical comment in
+	// RunLoop_IncrementalTracking above).
+	ratw.nowFn = func() uint32 { return 900 }
 
 	wallet := walletPKH()
 	total := reservationActionTimeoutMaxChecksPerTick + 10

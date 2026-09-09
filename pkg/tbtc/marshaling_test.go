@@ -516,6 +516,50 @@ func TestReservationAnchorProposal_Marshal_NilPanic(t *testing.T) {
 	}
 }
 
+// TestReservationAnchorProposal_Marshal_RejectsInvalidFields proves Marshal
+// itself validates RequestNonce, DepositFundingTxHash, and a negative
+// AnchorTxFee directly - previously only Unmarshal caught these, meaning a
+// producer bug marshaled successfully and was only rejected by every other
+// follower downstream, turning a local bug into an unattributable
+// network-wide rejection.
+func TestReservationAnchorProposal_Marshal_RejectsInvalidFields(t *testing.T) {
+	validHash := [32]byte{1}
+
+	tests := map[string]struct {
+		proposal *ReservationAnchorProposal
+	}{
+		"zero request nonce": {
+			proposal: &ReservationAnchorProposal{
+				DepositFundingTxHash: validHash,
+				RequestNonce:         0,
+				AnchorTxFee:          big.NewInt(1000),
+			},
+		},
+		"zero deposit funding tx hash": {
+			proposal: &ReservationAnchorProposal{
+				DepositFundingTxHash: [32]byte{},
+				RequestNonce:         1,
+				AnchorTxFee:          big.NewInt(1000),
+			},
+		},
+		"negative anchor tx fee": {
+			proposal: &ReservationAnchorProposal{
+				DepositFundingTxHash: validHash,
+				RequestNonce:         1,
+				AnchorTxFee:          big.NewInt(-1),
+			},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := test.proposal.Marshal(); err == nil {
+				t.Fatal("expected Marshal to reject the invalid proposal directly")
+			}
+		})
+	}
+}
+
 func TestReservationAnchorProposal_Unmarshal_ZeroHash(t *testing.T) {
 	proposal := &ReservationAnchorProposal{
 		DepositFundingTxHash: [32]byte{},

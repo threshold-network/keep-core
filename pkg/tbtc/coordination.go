@@ -94,19 +94,21 @@ const (
 var reservationsActivationBlocks = map[ethereum.Network]uint64{}
 
 // ReservationsActivationBlock returns the reservations activation block
-// height for the given network. Only ethereum.Developer and
-// ethereum.Unknown (local/dev chains) return 0, meaning reservation
-// actions are active immediately. Every other network without an
-// explicit entry in reservationsActivationBlocks returns
-// math.MaxUint64, so an unrecognized public network never activates the
-// feature instead of silently inheriting an immediate-activation
-// default. This is the single source of truth for whether the
-// reservations feature is live on a given network at a given block:
-// the reserved-deposit gate in deposit_sweep.go (both the tbtc and
-// tbtcpg packages) must derive its decision from this comparison, not
-// from whether an unrelated chain RPC call happens to succeed.
+// height for the given network. Only ethereum.Developer (the local/dev
+// sandbox network) returns 0, meaning reservation actions are active
+// immediately. Every other network - including ethereum.Mainnet,
+// ethereum.Sepolia, and ethereum.Unknown, the zero value used for an
+// unset or unrecognized network - falls through to math.MaxUint64 when
+// it has no explicit entry in reservationsActivationBlocks, so a public
+// or unrecognized network never activates the feature instead of
+// silently inheriting an immediate-activation default. This is the
+// single source of truth for whether the reservations feature is live
+// on a given network at a given block: the reserved-deposit gate in
+// deposit_sweep.go (both the tbtc and tbtcpg packages) must derive its
+// decision from this comparison, not from whether an unrelated chain
+// RPC call happens to succeed.
 func ReservationsActivationBlock(network ethereum.Network) uint64 {
-	if network == ethereum.Developer || network == ethereum.Unknown {
+	if network == ethereum.Developer {
 		return 0
 	}
 

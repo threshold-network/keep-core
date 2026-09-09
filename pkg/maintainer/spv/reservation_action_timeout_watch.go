@@ -7,14 +7,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
-
-// reservationActionTimeoutLookBackBlocks bounds the pending-action-request event
-// scan performed on the very first pass, before an incremental cursor
-// exists. Mirrors reservationProofLookBackBlocks in reservation_proof_loop.go:
-// 30 days at 12s/block.
-const reservationActionTimeoutLookBackBlocks = uint64(216000)
 
 // actionTimeoutRenotifyInterval bounds how often a still-Pending action
 // generation is re-offered to NotifyReservationActionTimeout once one
@@ -106,6 +102,15 @@ type ReservationActionTimeoutWatcher struct {
 	// SetStrandingWatcher is called), recheckStrandingAfterActionTimeout is
 	// a no-op, exactly matching pre-fix behavior.
 	strandingWatcher *reservationStrandingWatcher
+
+	// operatorAddress identifies this process for
+	// reservationOperatorStaggerOffset (see reservation_wiring.go), used
+	// to stagger the FIRST notify attempt for a given action generation
+	// so multiple operators' simultaneous first attempts do not collide
+	// on-chain (see pollPendingActions). Left unset (the zero address)
+	// until SetOperatorAddress is called; production wiring
+	// (WireReservationWatchers) calls it once after construction.
+	operatorAddress common.Address
 }
 
 // SetStrandingWatcher wires an optional reservationStrandingWatcher into the
@@ -118,6 +123,20 @@ func (ratw *ReservationActionTimeoutWatcher) SetStrandingWatcher(
 	strandingWatcher *reservationStrandingWatcher,
 ) {
 	ratw.strandingWatcher = strandingWatcher
+}
+
+// SetOperatorAddress wires the operator's own chain address into the
+// watcher so pollPendingActions can derive a deterministic per-operator
+// stagger offset for a pending action's FIRST notify attempt (see
+// reservationOperatorStaggerOffset). It is a post-construction setter,
+// mirroring SetStrandingWatcher, so existing
+// NewReservationActionTimeoutWatcher call sites keep compiling
+// unchanged; production wiring (WireReservationWatchers) calls it once
+// after construction.
+func (ratw *ReservationActionTimeoutWatcher) SetOperatorAddress(
+	operatorAddress common.Address,
+) {
+	ratw.operatorAddress = operatorAddress
 }
 
 type pendingAction struct {
@@ -137,9 +156,14 @@ type pendingAction struct {
 	notifiedAt uint32
 }
 
-// actionEventKey identifies one reservation action generation.
+// actionEventKey identifies one reservation action generation. It
+// delegates to reservationEventKey (see reservation_proof_loop.go), the
+// canonical (reservationKey, requestNonce) key formatter shared by
+// every pending-event map in this package; this watcher previously used
+// its own "%s#%d" format, now consolidated onto reservationEventKey's
+// pre-existing "%s:%d" format.
 func actionEventKey(reservationKey *big.Int, requestNonce uint64) string {
-	return fmt.Sprintf("%s#%d", reservationKey.String(), requestNonce)
+	return reservationEventKey(reservationKey, requestNonce)
 }
 
 // NewReservationActionTimeoutWatcher constructs a watcher bound to the
@@ -168,34 +192,16 @@ func defaultActionTimeoutNowFn() uint32 {
 	return uint32(time.Now().Unix())
 }
 
-// nextScanRange calculates the start and current block numbers for the next
-// event scan. On the first scan (lastScannedBlock == 0), the scan window is
-// bounded by reservationActionTimeoutLookBackBlocks. On subsequent scans, it
-// resumes from lastScannedBlock + 1.
+// nextScanRange calculates the start and current block numbers for the
+// next event scan. It delegates to the shared reservationProofNextScanRange
+// helper (see reservation_proof_loop.go): this watcher's own incremental
+// scan shape (bounded catch-up window on the first pass, resume-from-cursor
+// thereafter) is identical to the proof loop's, so both now share one
+// implementation instead of two independently-maintained copies.
 func (ratw *ReservationActionTimeoutWatcher) nextScanRange(
 	lastScannedBlock uint64,
 ) (startBlock uint64, currentBlock uint64, err error) {
-	blockCounter, err := ratw.spvChain.BlockCounter()
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get block counter: [%v]", err)
-	}
-
-	currentBlock, err = blockCounter.CurrentBlock()
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	if lastScannedBlock == 0 {
-		if currentBlock > reservationActionTimeoutLookBackBlocks {
-			startBlock = currentBlock - reservationActionTimeoutLookBackBlocks
-		} else {
-			startBlock = 0
-		}
-	} else {
-		startBlock = lastScannedBlock + 1
-	}
-
-	return startBlock, currentBlock, nil
+	return reservationProofNextScanRange(ratw.spvChain, lastScannedBlock)
 }
 
 // Run starts the background poll loop. It returns when ctx is done or when
@@ -341,7 +347,24 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			continue
 		}
 
-		if now > action.TimeoutAt {
+		deadline := action.TimeoutAt
+		if item.notifiedAt == 0 {
+			// FIRST notify attempt for this action generation: stagger
+			// it by a deterministic per-operator offset (see
+			// reservationOperatorStaggerOffset) so that every
+			// reservation-enabled operator's first permissionless
+			// notify attempt does not collide in the same poll tick.
+			// Retries (notifiedAt != 0) are unaffected by this and
+			// keep using the renotify-interval backoff checked above
+			// unchanged.
+			deadline += reservationOperatorStaggerOffset(
+				ratw.operatorAddress,
+				key,
+				actionTimeoutRenotifyInterval,
+			)
+		}
+
+		if now > deadline {
 			notified, err := ratw.checkReservationActionTimeout(
 				item.reservationKey,
 				now,
