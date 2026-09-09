@@ -167,6 +167,14 @@ jobs:
       - name: Compile tbtc-v2 Solidity contracts
         working-directory: tbtc-v2-upstream/solidity
         run: |
+          # Some transitive dependencies (e.g. umpirsky/country-list, pulled
+          # in via @celo/contractkit) are pinned to git:// GitHub URLs. The
+          # unencrypted git:// protocol (port 9418) is unreliable/blocked on
+          # GitHub Actions runners' network egress and reliably times out,
+          # failing yarn install outright. Rewrite git:// to https:// for
+          # any github.com dependency resolution so yarn falls back to the
+          # protocol every other step in this job already uses successfully.
+          git config --global url."https://github.com/".insteadOf "git://github.com/"
           yarn install --frozen-lockfile
           yarn build
 
