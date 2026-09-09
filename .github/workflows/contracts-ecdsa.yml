@@ -187,7 +187,14 @@ jobs:
         with:
           imageName: keep-ecdsa-hardhat
           push: false
+          load: true
           context: ./solidity/ecdsa
+
+      - name: Verify non-root runtime user
+        run: |
+          docker run --rm --entrypoint sh "$IMAGE_NAME" -c 'test "$(id -u)" = 1000 && test "$(id -g)" = 1000'
+          docker run --rm --entrypoint sh "$IMAGE_NAME" -c 'test -w "$WORK_DIR"'
+          docker run --rm "$IMAGE_NAME" --help >/dev/null
 
   # Verifies that hardhat-deploy's `export`/`export.json` output - the
   # artifact shape consumed downstream by @keep-network/tbtc-v2 - stays
