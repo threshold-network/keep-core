@@ -468,8 +468,13 @@ pub(crate) fn ensure_state_file_lock() -> Result<(), EngineError> {
         if existing_lock.state_path == state_path {
             // `state()` is the front door for every stateful signer operation.
             // Revalidate the held no-follow store on every call so a lock,
-            // store-ID, directory, witness, or state replacement after startup
+            // store-ID, directory, or state-file replacement after startup
             // cannot be hidden behind the initialized in-memory state.
+            // identity() deliberately does NOT re-verify witness journal
+            // record content here (that would cost a full reparse on every
+            // operation, including writes) -- the load path that follows
+            // (read_state_for_load) performs that full re-verification
+            // before returning state content.
             existing_lock.identity()?;
             return Ok(());
         }

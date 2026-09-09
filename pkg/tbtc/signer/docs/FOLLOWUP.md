@@ -50,7 +50,8 @@ second multi-agent-review pass (`agent-docs/reviews/codex-signer-store-identity-
   (`StateFileLock::compact_witness_journal_local`,
   `recover_state_witness_compaction`, `synthetic_compaction_acknowledgement`).
 - **Original issue:** the rotation-threshold ceiling
-  (`reserve_witness_record_capacity`) hard-failed every write once
+  (`ensure_witness_record_capacity`, since renamed to
+  `reserve_witness_record_capacity`) hard-failed every write once
   `witness_max_records` was reached, and the only rotation path
   (`rotate_state_witness_segment*`) was gated on an externally-signed
   `StateAnchorAcknowledgement`. For an **unanchored** signer (no anchor

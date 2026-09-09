@@ -1357,7 +1357,12 @@ impl StateFileLock {
     /// Identity is a startup preflight and state freshness is a separate
     /// contract. Keeping this path structural lets the subsequent loader apply
     /// the configured corruption policy to malformed state while still
-    /// validating every held descriptor and the witness journal.
+    /// validating every held descriptor (lock, directory, store-id, witness
+    /// file identity/permissions). This does NOT re-verify witness journal
+    /// record content -- DurableStoreIdentity never encodes journal content,
+    /// so a full reparse here would be redundant cost with no data-integrity
+    /// benefit. The subsequent load call (read_state_for_load) performs the
+    /// full witness-journal re-verification before returning state content.
     #[cfg(unix)]
     pub(crate) fn identity_for_load(&mut self) -> Result<DurableStoreIdentity, EngineError> {
         self.reconcile_pending_witness()?;
