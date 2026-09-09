@@ -136,14 +136,17 @@ jobs:
     # on every event, every branch, mirroring btcec-vendor-byte-identity's
     # rationale for not gating by path.
     #
-    # tbtc-v2 ref: pinned to `main` below as the best available default -
-    # confirm this is the correct source-of-truth ref for the reservation
-    # contracts' ABI (e.g. once threshold-network/tbtc-v2#1112 merges,
-    # `main` should already carry it; if a different long-lived branch is
-    # the actual integration target, update `TBTC_V2_REF` accordingly).
+    # tbtc-v2 ref: threshold-network/tbtc-v2#1112 (which adds
+    # ReservationRouter.sol) merged into tbtc-v2's own `reservations-upgrade`
+    # integration branch, not `main` - mirrors this repo's own
+    # `reservations-epic` staging pattern. `main` does not carry the
+    # reservation contracts yet (verified: no ReservationRouter.sol there
+    # as of this job's authoring), so pointing here at `main` would make
+    # every run of this job fail unconditionally. Once the reservations
+    # work lands on tbtc-v2's `main`, switch `TBTC_V2_REF` back to `main`.
     runs-on: ubuntu-latest
     env:
-      TBTC_V2_REF: main
+      TBTC_V2_REF: reservations-upgrade
     steps:
       - uses: actions/checkout@v4
 
@@ -189,9 +192,13 @@ jobs:
       - name: Verify vendored ReservationRouter fallback matches the real compiled ABI
         run: |
           set -e
+          ARTIFACT="tbtc-v2-upstream/solidity/build/contracts/bridge/ReservationRouter.sol/ReservationRouter.json"
+          if [ ! -f "$ARTIFACT" ]; then
+            echo "::error::$ARTIFACT was not produced by the tbtc-v2 build - TBTC_V2_REF=${TBTC_V2_REF} likely no longer carries ReservationRouter.sol (or its build path moved). Update TBTC_V2_REF above to the branch/tag that does."
+            exit 1
+          fi
           mkdir -p "tmp/contracts/development/@keep-network/tbtc-v2/artifacts"
-          cp tbtc-v2-upstream/solidity/build/contracts/bridge/ReservationRouter.sol/ReservationRouter.json \
-            "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/ReservationRouter.json"
+          cp "$ARTIFACT" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/ReservationRouter.json"
           make -C pkg/chain/ethereum/tbtc/gen verify-vendored-fallback
 
   client-build-test-publish:
