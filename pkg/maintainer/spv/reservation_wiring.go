@@ -190,7 +190,7 @@ func WireReservationWatchers(
 	)
 
 	strandingWatcher := newReservationStrandingWatcher(spvChain)
-	strandingWatcher.SetOperatorAddress(operatorAddress)
+
 	// Startup catch-up scan: a wallet closed/terminated while this
 	// maintainer was down would otherwise never notify, since the live
 	// OnWalletClosed subscription only sees events from this point forward.
@@ -351,7 +351,7 @@ func WireReservationWatchers(
 				reservationWiringLogger.Errorf(
 					"reservation stale-deposit watcher crashed and is "+
 						"no longer running (recovered panic: [%v]); "+
-						"reservation stranding notifications are silently "+
+						"stale reserved deposit notifications are silently "+
 						"unmonitored until process restart",
 					r,
 				)
@@ -368,7 +368,7 @@ func WireReservationWatchers(
 			// this shared helper.
 			reservationWiringLogger.Errorf(
 				"reservation stale-deposit watcher is not running: [%v]; "+
-					"reservation stranding notifications are silently "+
+					"stale reserved deposit notifications are silently "+
 					"unmonitored until process restart",
 				err,
 			)

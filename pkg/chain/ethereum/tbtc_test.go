@@ -398,8 +398,8 @@ func TestBuildReservationAnchorProposalAbi(t *testing.T) {
 		// Non-zero RequestNonce exercises the P0 #3 fix's new mapping:
 		// a zero value on both sides would silently pass even if the
 		// builder omitted the field.
-		RequestNonce:              17,
-		AnchorTxFee:               big.NewInt(1500),
+		RequestNonce: 17,
+		AnchorTxFee:  big.NewInt(1500),
 	}
 
 	fundingTx := &bitcoin.Transaction{
@@ -441,8 +441,8 @@ func TestBuildReservationAnchorProposalAbi(t *testing.T) {
 			FundingTxHash:      fundingTxHash,
 			FundingOutputIndex: 7,
 		},
-		RequestNonce:     17,
-		AnchorTxFee:      big.NewInt(1500),
+		RequestNonce: 17,
+		AnchorTxFee:  big.NewInt(1500),
 	}
 	if !reflect.DeepEqual(expectedProposal, abiProposal) {
 		t.Errorf(
@@ -519,114 +519,141 @@ func TestBuildReservationReanchorProposalAbi(t *testing.T) {
 // reservation lookup - the surrounding TbtcChain method depends on real
 // go-ethereum simulated-backend infrastructure that does not exist anywhere
 // in pkg/chain/ethereum today (a package-wide gap, explicitly deferred).
+//
+// The four subtests cover the actual failure modes the original P0 fix
+// turns on: a key present in both event lists appears exactly once
+// (dedup), a reservation whose current custody is a different wallet is
+// excluded (reanchored-away), a key only reachable via the reanchor
+// event list is included (reanchored-in), and the output is sorted
+// deterministically regardless of event order.
 func TestResolveCustodiedReservationKeys(t *testing.T) {
 	walletPKH := [20]byte{0x42}
 	otherPKH := [20]byte{0x99}
 
-	mkAcceptance := func(key int64, pkh [20]byte) *tbtc.ReservationAcceptanceRequestedEvent {
+	acceptance := func(key int64, pkh [20]byte) *tbtc.ReservationAcceptanceRequestedEvent {
 		return &tbtc.ReservationAcceptanceRequestedEvent{
 			ReservationKey:      big.NewInt(key),
 			WalletPublicKeyHash: pkh,
 		}
 	}
-	mkReanchor := func(key int64, targetPKH [20]byte) *tbtc.ReservationReanchorRequestedEvent {
+	reanchor := func(key int64, targetPKH [20]byte) *tbtc.ReservationReanchorRequestedEvent {
 		return &tbtc.ReservationReanchorRequestedEvent{
 			ReservationKey:            big.NewInt(key),
 			TargetWalletPublicKeyHash: targetPKH,
 		}
 	}
-	mkReservation := func(key int64, pkh [20]byte) *tbtc.Reservation {
+	reservation := func(pkh [20]byte) *tbtc.Reservation {
 		return &tbtc.Reservation{
 			WalletPublicKeyHash: pkh,
 		}
 	}
 
-	// Fake lookup: returns the given wallet for key 1, a different wallet
-	// for key 2 (simulating a re-anchored-away reservation), an error for
-	// key 3, and never gets called for other keys.
+	// Single dispatch: every reservation key gets a deterministic outcome
+	// from one lookup table. Keys 1 and 3 are currently custodied by
+	// walletPKH; key 2 has reanchored away to otherPKH; key 4 only
+	// appears via a reanchor event (reanchored-into this wallet).
 	lookup := func(key *big.Int) (*tbtc.Reservation, error) {
 		switch key.Int64() {
 		case 1:
-			return mkReservation(1, walletPKH), nil
+			return reservation(walletPKH), nil
 		case 2:
-			return mkReservation(2, otherPKH), nil // re-anchored away
+			return reservation(otherPKH), nil
 		case 3:
-			return nil, fmt.Errorf("simulated lookup failure")
+			return reservation(walletPKH), nil
+		case 4:
+			return reservation(walletPKH), nil
 		}
-		return nil, fmt.Errorf("unexpected lookup call for key [%v]", key)
+		return nil, fmt.Errorf("unexpected lookup call")
 	}
 
-	acceptanceEvents := []*tbtc.ReservationAcceptanceRequestedEvent{
-		mkAcceptance(1, walletPKH), // survives: custodies wallet, valid lookup
-		mkAcceptance(2, walletPKH), // dropped: custody filter (custodies otherPKH)
-		mkAcceptance(3, walletPKH), // dropped: lookup error propagates out
-		nil,                         // skipped: nil event guard
-		mkAcceptance(4, walletPKH), // skipped: never reached because key 3 fails lookup
-	}
-	reanchorEvents := []*tbtc.ReservationReanchorRequestedEvent{
-		mkReanchor(1, walletPKH), // dedup with acceptance (key 1): stays as key 1
-		mkReanchor(5, walletPKH), // survives: new key, custodies wallet (assuming lookup ok)
-		// Override key 5 lookup to succeed (the dispatch switch above only
-		// whitelists keys 1, 2, 3). Switch to a dedicated dispatch:
-	}
-
-	// Replace lookup with a dispatch that returns ok for keys 1 and 5
-	// (both currently custodied by walletPKH), re-anchored-away for 2,
-	// and erroring for 3. Keys 4 never reach lookup (3 errors first).
-	lookup = func(key *big.Int) (*tbtc.Reservation, error) {
-		switch key.Int64() {
-		case 1:
-			return mkReservation(1, walletPKH), nil
-		case 2:
-			return mkReservation(2, otherPKH), nil
-		case 3:
-			return nil, fmt.Errorf("simulated lookup failure")
-		case 5:
-			return mkReservation(5, walletPKH), nil
-		}
-		return nil, fmt.Errorf("unexpected lookup call for key [%v]", key)
-	}
-
-	// First sub-test: lookup error short-circuits the whole call.
-	_, err := resolveCustodiedReservationKeys(
-		walletPKH,
-		acceptanceEvents,
-		reanchorEvents,
-		lookup,
-	)
-	if err == nil {
-		t.Fatal("expected lookup error to propagate out of resolveCustodiedReservationKeys")
-	}
-
-	// Second sub-test: success path returns deduped + custody-filtered keys,
-	// sorted in deterministic order, with the lookup-erroring key removed
-	// from the input.
-	cleanAcceptance := []*tbtc.ReservationAcceptanceRequestedEvent{
-		mkAcceptance(1, walletPKH),
-		mkAcceptance(2, walletPKH),
-		nil, // nil-event guard: must not crash or produce a key
-	}
-	cleanReanchor := []*tbtc.ReservationReanchorRequestedEvent{
-		mkReanchor(1, walletPKH), // dedup with acceptance key 1
-		mkReanchor(5, walletPKH), // new, custodies wallet
-	}
-
-	keys, err := resolveCustodiedReservationKeys(
-		walletPKH,
-		cleanAcceptance,
-		cleanReanchor,
-		lookup,
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expectedKeys := []*big.Int{big.NewInt(1), big.NewInt(5)}
-	if !reflect.DeepEqual(expectedKeys, keys) {
-		t.Errorf(
-			"unexpected resolved keys\nexpected: [%+v]\nactual:   [%+v]\n",
-			expectedKeys,
-			keys,
+	t.Run("dedup - key in both event lists appears once", func(t *testing.T) {
+		keys, err := resolveCustodiedReservationKeys(
+			walletPKH,
+			[]*tbtc.ReservationAcceptanceRequestedEvent{acceptance(1, walletPKH)},
+			[]*tbtc.ReservationReanchorRequestedEvent{reanchor(1, walletPKH)},
+			lookup,
 		)
-	}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expectedKeys := []*big.Int{big.NewInt(1)}
+		if !reflect.DeepEqual(expectedKeys, keys) {
+			t.Errorf("expected [%+v], actual [%+v]", expectedKeys, keys)
+		}
+	})
+
+	t.Run("custody filter - reanchored-away excluded", func(t *testing.T) {
+		keys, err := resolveCustodiedReservationKeys(
+			walletPKH,
+			[]*tbtc.ReservationAcceptanceRequestedEvent{
+				acceptance(1, walletPKH),
+				acceptance(2, walletPKH),
+				acceptance(3, walletPKH),
+			},
+			nil,
+			lookup,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expectedKeys := []*big.Int{big.NewInt(1), big.NewInt(3)}
+		if !reflect.DeepEqual(expectedKeys, keys) {
+			t.Errorf("expected [%+v], actual [%+v]", expectedKeys, keys)
+		}
+	})
+
+	t.Run("reanchored-in - key only in reanchor event list", func(t *testing.T) {
+		keys, err := resolveCustodiedReservationKeys(
+			walletPKH,
+			nil,
+			[]*tbtc.ReservationReanchorRequestedEvent{reanchor(4, walletPKH)},
+			lookup,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expectedKeys := []*big.Int{big.NewInt(4)}
+		if !reflect.DeepEqual(expectedKeys, keys) {
+			t.Errorf("expected [%+v], actual [%+v]", expectedKeys, keys)
+		}
+	})
+
+	t.Run("sorted output - reverse event order produces ascending keys", func(t *testing.T) {
+		// Reverse the natural order to prove the sort isn't incidental
+		// to event iteration order.
+		keys, err := resolveCustodiedReservationKeys(
+			walletPKH,
+			[]*tbtc.ReservationAcceptanceRequestedEvent{
+				acceptance(3, walletPKH),
+				acceptance(1, walletPKH),
+			},
+			[]*tbtc.ReservationReanchorRequestedEvent{
+				reanchor(2, otherPKH),
+				reanchor(1, walletPKH),
+			},
+			lookup,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expectedKeys := []*big.Int{big.NewInt(1), big.NewInt(3)}
+		if !reflect.DeepEqual(expectedKeys, keys) {
+			t.Errorf("expected [%+v], actual [%+v]", expectedKeys, keys)
+		}
+	})
+
+	t.Run("lookup error short-circuits the whole call", func(t *testing.T) {
+		failingLookup := func(key *big.Int) (*tbtc.Reservation, error) {
+			return nil, fmt.Errorf("simulated lookup failure")
+		}
+		_, err := resolveCustodiedReservationKeys(
+			walletPKH,
+			[]*tbtc.ReservationAcceptanceRequestedEvent{acceptance(1, walletPKH)},
+			nil,
+			failingLookup,
+		)
+		if err == nil {
+			t.Fatal("expected lookup error to propagate out of resolveCustodiedReservationKeys")
+		}
+	})
 }

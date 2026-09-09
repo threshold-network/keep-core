@@ -16,11 +16,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/keep-network/keep-common/pkg/cache"
+	"math"
 	"math/big"
 	"sort"
 	"time"
-
-	"github.com/keep-network/keep-common/pkg/cache"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -1233,8 +1233,20 @@ func (tc *TbtcChain) WalletReservations(
 		return nil, nil
 	}
 
+	// Bound the two event queries to the wallet's own registration block
+	// (earliest if it registered multiple times - recovery, re-activation):
+	// a wallet cannot have reservation events before it existed. Falls
+	// back to a full-history scan only when the registration lookup
+	// itself fails, so a transient RPC error degrades to the previous
+	// behavior rather than skipping real reservations.
+	startBlock, err := tc.earliestWalletRegistrationBlock(walletPublicKeyHash)
+	if err != nil {
+		startBlock = 0
+	}
+
 	acceptanceEvents, err := tc.PastReservationAcceptanceRequestedEvents(
 		&tbtc.ReservationAcceptanceRequestedEventFilter{
+			StartBlock:          startBlock,
 			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
 		},
 	)
@@ -1248,6 +1260,7 @@ func (tc *TbtcChain) WalletReservations(
 
 	reanchorEvents, err := tc.PastReservationReanchorRequestedEvents(
 		&tbtc.ReservationReanchorRequestedEventFilter{
+			StartBlock:                startBlock,
 			TargetWalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
 		},
 	)
@@ -1265,6 +1278,41 @@ func (tc *TbtcChain) WalletReservations(
 		reanchorEvents,
 		tc.GetReservation,
 	)
+}
+
+// earliestWalletRegistrationBlock returns the earliest block at which the
+// given wallet was registered. Returns 0 if no registration event is
+// found (caller falls back to full-history scan). A wallet can register
+// multiple times across its lifetime, so the earliest registration is
+// the safe lower bound for any reservation event for that wallet.
+func (tc *TbtcChain) earliestWalletRegistrationBlock(
+	walletPublicKeyHash [20]byte,
+) (uint64, error) {
+	registrationEvents, err := tc.PastNewWalletRegisteredEvents(
+		&tbtc.NewWalletRegisteredEventFilter{
+			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot get past NewWalletRegistered events for [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+	if len(registrationEvents) == 0 {
+		return 0, nil
+	}
+	var earliest uint64 = math.MaxUint64
+	for _, event := range registrationEvents {
+		if event != nil && event.BlockNumber > 0 && event.BlockNumber < earliest {
+			earliest = event.BlockNumber
+		}
+	}
+	if earliest == math.MaxUint64 {
+		return 0, nil
+	}
+	return earliest, nil
 }
 
 // resolveCustodiedReservationKeys is the pure-logic core of
@@ -1299,8 +1347,21 @@ func resolveCustodiedReservationKeys(
 		candidateKeys[event.ReservationKey.String()] = event.ReservationKey
 	}
 
+	// Sort the candidate keys BEFORE the per-key lookup loop so the
+	// order in which GetReservation is called is deterministic. This
+	// matters for the partial-failure case: if the loop returns on
+	// the first lookup error, that error must reproduce against the
+	// same input rather than depending on Go map iteration order.
 	keys := make([]*big.Int, 0, len(candidateKeys))
 	for _, key := range candidateKeys {
+		keys = append(keys, key)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		return keys[i].Cmp(keys[j]) < 0
+	})
+
+	filteredKeys := make([]*big.Int, 0, len(keys))
+	for _, key := range keys {
 		reservation, err := reservationLookup(key)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -1317,14 +1378,10 @@ func resolveCustodiedReservationKeys(
 			continue
 		}
 
-		keys = append(keys, key)
+		filteredKeys = append(filteredKeys, key)
 	}
 
-	sort.SliceStable(keys, func(i, j int) bool {
-		return keys[i].Cmp(keys[j]) < 0
-	})
-
-	return keys, nil
+	return filteredKeys, nil
 }
 
 // ReservationByAnchorUtxo returns the reservation key whose anchor outpoint
