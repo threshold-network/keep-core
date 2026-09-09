@@ -643,4 +643,3 @@ func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
 		t.Errorf("expected error to mention the reserved deposit, got: [%v]", err)
 	}
 }
-

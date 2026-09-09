@@ -1271,4 +1271,3 @@ func TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck(t *testing.T) {
 		)
 	}
 }
-
