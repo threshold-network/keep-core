@@ -15518,6 +15518,237 @@ fn read_state_for_load_catches_middle_of_journal_corruption_on_already_open_stor
     clear_state_storage_policy_overrides();
 }
 
+#[cfg(unix)]
+#[test]
+fn state_witness_tip_snapshot_catches_middle_of_journal_corruption_on_already_open_store() {
+    // state_witness_tip_snapshot() fully re-verifies the witness journal
+    // before returning tip/base/anchor data, exactly like state_witness_tip().
+    const ITERATIONS: usize = 20;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("state_witness_tip_snapshot_middle_corruption");
+    reset_witness_verification_counters();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    for index in 0..4 {
+        store
+            .replace_state(format!("tip snapshot seed {index}").as_bytes())
+            .expect("seed persists through the durable store");
+    }
+
+    let witness_path = state_witness_file_path(&state_path);
+    let good_bytes = std::fs::read(&witness_path).expect("read journal");
+    let first_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
+
+    for _ in 0..ITERATIONS {
+        let (full_before, _) = witness_verification_counters();
+        let mut corrupted = good_bytes.clone();
+        corrupted[first_record_offset] ^= 0xFF;
+        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupted journal");
+
+        let error = store
+            .state_witness_tip_snapshot()
+            .expect_err("middle-of-journal corruption on the open store must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("commitment")
+                || message.contains("record")
+                || message.contains("corrupt"),
+            "middle-of-journal corruption must surface as a record/commitment error: {message}",
+        );
+
+        let (full_after, _) = witness_verification_counters();
+        assert!(
+            full_after > full_before,
+            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
+        );
+
+        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure restored journal");
+    }
+
+    store
+        .state_witness_tip_snapshot()
+        .expect("the restored journal must verify cleanly once the corruption is undone");
+
+    drop(store);
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[cfg(unix)]
+#[test]
+fn state_anchor_trust_head_snapshot_catches_middle_of_journal_corruption_on_already_open_store() {
+    // state_anchor_trust_head_snapshot() fully re-verifies the witness
+    // journal before returning trust-transition outcome data. Establishing a
+    // real trust head first (via a bootstrap transition, matching
+    // `bootstrap_trust_transition_succeeds_on_first_call_and_ordinary_reopen`
+    // in store.rs) is required -- this function errors on a store with no
+    // trust head at all, so a plain unanchored store cannot exercise it.
+    const ITERATIONS: usize = 20;
+
+    let _guard = lock_test_state();
+    let state_path =
+        configure_test_state_path("state_anchor_trust_head_snapshot_middle_corruption");
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "10");
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut initial = StateFileLock::acquire(&state_path).expect("open unanchored store");
+    let tip = initial.state_witness_tip().expect("unanchored genesis tip");
+    let store_fingerprint = initial.identity().expect("initial identity").fingerprint;
+    drop(initial);
+
+    let now = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_millis(),
+    )
+    .expect("clock fits u64");
+    let transition = bootstrap_state_anchor_trust_transition_for_tests(
+        store_fingerprint,
+        &tip,
+        now,
+        now + 30_000,
+        now,
+        now + 30_000,
+        true,
+    )
+    .expect("build verified bootstrap transition");
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut transition_store =
+        StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+            .expect("acquire transition store");
+    transition_store
+        .transition_state_witness_anchor(&transition)
+        .expect("bootstrap trust transition succeeds");
+    drop(transition_store);
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    reset_witness_verification_counters();
+    let mut store = StateFileLock::acquire(&state_path).expect("ordinary reopen with trust head");
+    store
+        .state_anchor_trust_head_snapshot()
+        .expect("trust head readable before any corruption");
+
+    let witness_path = state_witness_file_path(&state_path);
+    let good_bytes = std::fs::read(&witness_path).expect("read journal");
+    let first_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
+
+    for _ in 0..ITERATIONS {
+        let (full_before, _) = witness_verification_counters();
+        let mut corrupted = good_bytes.clone();
+        corrupted[first_record_offset] ^= 0xFF;
+        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupted journal");
+
+        let error = store
+            .state_anchor_trust_head_snapshot()
+            .expect_err("middle-of-journal corruption on the open store must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("commitment")
+                || message.contains("record")
+                || message.contains("corrupt"),
+            "middle-of-journal corruption must surface as a record/commitment error: {message}",
+        );
+
+        let (full_after, _) = witness_verification_counters();
+        assert!(
+            full_after > full_before,
+            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
+        );
+
+        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure restored journal");
+    }
+
+    store
+        .state_anchor_trust_head_snapshot()
+        .expect("the restored journal must verify cleanly once the corruption is undone");
+
+    drop(store);
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[cfg(unix)]
+#[test]
+fn state_anchor_bootstrap_facts_snapshot_catches_journal_corruption_on_already_open_store() {
+    // state_anchor_bootstrap_facts_snapshot() only succeeds on a pristine
+    // (exactly-genesis-length) journal, so there is no "middle" record --
+    // corrupt the non-tail PREPARE record (record 1 of the mandatory
+    // PREPARE+COMMIT genesis pair; record 2/COMMIT is the tail) instead.
+    const ITERATIONS: usize = 20;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("state_anchor_bootstrap_facts_snapshot_corruption");
+    reset_witness_verification_counters();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire_for_bootstrap_facts(&state_path)
+        .expect("open pristine bootstrap-facts store");
+
+    let witness_path = state_witness_file_path(&state_path);
+    let good_bytes = std::fs::read(&witness_path).expect("read journal");
+    let prepare_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
+
+    for _ in 0..ITERATIONS {
+        let (full_before, _) = witness_verification_counters();
+        let mut corrupted = good_bytes.clone();
+        corrupted[prepare_record_offset] ^= 0xFF;
+        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupted journal");
+
+        let error = store
+            .state_anchor_bootstrap_facts_snapshot()
+            .expect_err("PREPARE-record corruption on the open store must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("commitment")
+                || message.contains("record")
+                || message.contains("corrupt"),
+            "journal corruption must surface as a record/commitment error: {message}",
+        );
+
+        let (full_after, _) = witness_verification_counters();
+        assert!(
+            full_after > full_before,
+            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
+        );
+
+        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure restored journal");
+    }
+
+    store
+        .state_anchor_bootstrap_facts_snapshot()
+        .expect("the restored pristine journal must verify cleanly once the corruption is undone");
+
+    drop(store);
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
 #[test]
 #[cfg(unix)]
 fn state_file_entries_reject_symlink_at_each_path() {
