@@ -174,8 +174,16 @@ jobs:
           # failing yarn install outright. Rewrite git:// to https:// for
           # any github.com dependency resolution so yarn falls back to the
           # protocol every other step in this job already uses successfully.
+          #
+          # Not --frozen-lockfile: the https rewrite above changes how yarn
+          # resolves that git dependency vs. the exact hash pinned in
+          # tbtc-v2's own yarn.lock, which --frozen-lockfile then rejects
+          # as drift even though no real dependency version changed. This
+          # checkout is a scratch clone of the upstream repo used only to
+          # compile and diff the real ABI below - never committed back -
+          # so an unpinned, job-local lockfile resolution is safe here.
           git config --global url."https://github.com/".insteadOf "git://github.com/"
-          yarn install --frozen-lockfile
+          yarn install
           yarn build
 
       - name: Verify vendored ReservationRouter fallback matches the real compiled ABI
