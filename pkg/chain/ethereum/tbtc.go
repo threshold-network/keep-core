@@ -1209,9 +1209,30 @@ func (tc *TbtcChain) WalletReservationsCount(
 // wallet) event logs, deduplicated, and filtered down to reservations
 // this wallet CURRENTLY custodies via GetReservation - a reservation may
 // have since re-anchored away to a different wallet.
+//
+// WalletReservationsCount is checked first as a cheap short-circuit: the
+// vast majority of wallets never custody a reservation, and skipping the
+// full-history event scan for them avoids an unbounded eth_getLogs query
+// (genesis to tip) on every wallet-close notification for the common
+// case. Wallets that do have reservations still pay the full-range scan
+// - governance-capped reservation volume keeps this rare and bounded in
+// absolute terms, and correctness (never missing a real reservation)
+// takes priority over narrowing the block range here.
 func (tc *TbtcChain) WalletReservations(
 	walletPublicKeyHash [20]byte,
 ) ([]*big.Int, error) {
+	count, err := tc.reservationRouter.WalletReservationsCount(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get wallet reservations count for [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+
 	acceptanceEvents, err := tc.PastReservationAcceptanceRequestedEvents(
 		&tbtc.ReservationAcceptanceRequestedEventFilter{
 			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
@@ -1238,6 +1259,32 @@ func (tc *TbtcChain) WalletReservations(
 		)
 	}
 
+	return resolveCustodiedReservationKeys(
+		walletPublicKeyHash,
+		acceptanceEvents,
+		reanchorEvents,
+		tc.GetReservation,
+	)
+}
+
+// resolveCustodiedReservationKeys is the pure-logic core of
+// TbtcChain.WalletReservations: deduplicate the union of acceptance
+// and reanchor-REQUESTED events for the wallet down to one entry per
+// reservation key, confirm each candidate still custodies the wallet
+// via the lookup callback, and return the surviving keys sorted in
+// deterministic order. Extracted as a standalone function so it can be
+// unit-tested with fake event slices and a fake reservation lookup -
+// mirroring the existing pattern in this file (e.g.
+// buildReservationAnchorProposalAbi) - since the surrounding
+// TbtcChain methods depend on real go-ethereum simulated-backend
+// infrastructure that does not exist anywhere in pkg/chain/ethereum
+// today (a package-wide gap, explicitly deferred).
+func resolveCustodiedReservationKeys(
+	walletPublicKeyHash [20]byte,
+	acceptanceEvents []*tbtc.ReservationAcceptanceRequestedEvent,
+	reanchorEvents []*tbtc.ReservationReanchorRequestedEvent,
+	reservationLookup func(key *big.Int) (*tbtc.Reservation, error),
+) ([]*big.Int, error) {
 	candidateKeys := make(map[string]*big.Int)
 	for _, event := range acceptanceEvents {
 		if event == nil || event.ReservationKey == nil {
@@ -1254,7 +1301,7 @@ func (tc *TbtcChain) WalletReservations(
 
 	keys := make([]*big.Int, 0, len(candidateKeys))
 	for _, key := range candidateKeys {
-		reservation, err := tc.GetReservation(key)
+		reservation, err := reservationLookup(key)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"cannot get reservation [%v]: [%v]",
@@ -1272,6 +1319,10 @@ func (tc *TbtcChain) WalletReservations(
 
 		keys = append(keys, key)
 	}
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		return keys[i].Cmp(keys[j]) < 0
+	})
 
 	return keys, nil
 }

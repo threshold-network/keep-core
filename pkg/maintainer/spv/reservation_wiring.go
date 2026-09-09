@@ -190,7 +190,7 @@ func WireReservationWatchers(
 	)
 
 	strandingWatcher := newReservationStrandingWatcher(spvChain)
-
+	strandingWatcher.SetOperatorAddress(operatorAddress)
 	// Startup catch-up scan: a wallet closed/terminated while this
 	// maintainer was down would otherwise never notify, since the live
 	// OnWalletClosed subscription only sees events from this point forward.
@@ -346,16 +346,30 @@ func WireReservationWatchers(
 
 	staleDepositInitialCount := staleDepositWatcher.pollTick(uint32(time.Now().Unix()))
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reservationWiringLogger.Errorf(
+					"reservation stale-deposit watcher crashed and is "+
+						"no longer running (recovered panic: [%v]); "+
+						"reservation stranding notifications are silently "+
+						"unmonitored until process restart",
+					r,
+				)
+			}
+		}()
 		if err := staleDepositWatcher.Run(ctx, DefaultReservationStaleDepositPollInterval); err != nil {
-			// Run only returns a non-nil error here on the interval
-			// misconfiguration check at loop start (never after the loop is
-			// running - per-tick errors are logged and the loop continues),
-			// so reaching this branch means the watcher is not running at
-			// all: reservations are silently unmonitored for stale
-			// deposits. Fatal, matching this function's established
-			// severity for the equivalent-consequence wiring failures above.
-			reservationWiringLogger.Fatalf(
-				"reservation stale-deposit watcher is not running: [%v]",
+			// Run only returns non-nil on the interval misconfiguration
+			// guard at loop start (per-tick errors are logged and the loop
+			// continues), so reaching this branch means the watcher is
+			// not running at all. Log at distinct severity rather than
+			// Fatalf-ing: WireReservationWatchers is called from two
+			// callers (cmd/start.go's client process AND spv.go's maintainer
+			// process), and the caller decides process-level fatality, not
+			// this shared helper.
+			reservationWiringLogger.Errorf(
+				"reservation stale-deposit watcher is not running: [%v]; "+
+					"reservation stranding notifications are silently "+
+					"unmonitored until process restart",
 				err,
 			)
 		}
@@ -368,12 +382,24 @@ func WireReservationWatchers(
 		)
 	}
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reservationWiringLogger.Errorf(
+					"reservation action-timeout watcher crashed and is "+
+						"no longer running (recovered panic: [%v]); "+
+						"reservation action timeouts are silently "+
+						"unmonitored until process restart",
+					r,
+				)
+			}
+		}()
 		if err := actionTimeoutWatcher.Run(ctx); err != nil {
-			// See the identical rationale on the stale-deposit watcher's
-			// launch above: this branch means the watcher is not running,
-			// silently leaving reservation action timeouts unmonitored.
-			reservationWiringLogger.Fatalf(
-				"reservation action-timeout watcher is not running: [%v]",
+			// See the identical rationale on the stale-deposit watcher
+			// launch above.
+			reservationWiringLogger.Errorf(
+				"reservation action-timeout watcher is not running: [%v]; "+
+					"reservation action timeouts are silently unmonitored "+
+					"until process restart",
 				err,
 			)
 		}

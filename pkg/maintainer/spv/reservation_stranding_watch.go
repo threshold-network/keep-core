@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -37,6 +38,23 @@ type reservationStrandingWatcher struct {
 	// retry attempts. Defaults to reservationStrandingRetryDelay; tests
 	// override it directly to avoid slowing down the suite.
 	retryDelay time.Duration
+	// operatorAddress is the operator's own chain address. Currently
+	// retained only for observability and forward-compatibility: the
+	// stranding notify path is intentionally NOT staggered (a blocking
+	// delay here would silently suppress a one-shot event, which is
+	// strictly worse than a transient gas race; the OnWalletClosed
+	// event never replays). Action-timeout and stale-deposit watchers
+	// consume the same operator address for their first-notify stagger.
+	operatorAddress common.Address
+}
+
+// SetOperatorAddress wires the operator's own chain address into the
+// watcher. Post-construction setter (not a constructor parameter) so
+// existing callers keep working unchanged.
+func (rsw *reservationStrandingWatcher) SetOperatorAddress(
+	operatorAddress common.Address,
+) {
+	rsw.operatorAddress = operatorAddress
 }
 
 // newReservationStrandingWatcher constructs a stranding watcher bound to the

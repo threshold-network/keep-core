@@ -492,8 +492,8 @@ func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
 	if rap.AnchorTxFee == nil {
 		return nil, fmt.Errorf("anchor transaction fee is required")
 	}
-	if rap.AnchorTxFee.Sign() < 0 || len(rap.AnchorTxFee.Bytes()) > 8 {
-		return nil, fmt.Errorf("invalid anchor transaction fee")
+	if rap.AnchorTxFee.Sign() <= 0 || len(rap.AnchorTxFee.Bytes()) > 8 {
+		return nil, fmt.Errorf("anchor transaction fee must be positive")
 	}
 	if rap.RequestNonce == 0 {
 		return nil, fmt.Errorf("request nonce is required")
@@ -550,7 +550,7 @@ func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
 
 // Marshal converts the ReservationReanchorProposal to a byte array.
 func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
-	if rrp.ReservationKey == nil {
+	if rrp.ReservationKey == nil || rrp.ReservationKey.Sign() <= 0 {
 		return nil, fmt.Errorf("reservation key is required")
 	}
 	if len(rrp.ReservationKey.Bytes()) > 32 {
@@ -559,8 +559,8 @@ func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
 	if rrp.ReanchorTxFee == nil {
 		return nil, fmt.Errorf("re-anchor transaction fee is required")
 	}
-	if rrp.ReanchorTxFee.Sign() < 0 || len(rrp.ReanchorTxFee.Bytes()) > 8 {
-		return nil, fmt.Errorf("invalid re-anchor transaction fee")
+	if rrp.ReanchorTxFee.Sign() <= 0 || len(rrp.ReanchorTxFee.Bytes()) > 8 {
+		return nil, fmt.Errorf("re-anchor transaction fee must be positive")
 	}
 	if rrp.RequestNonce == 0 {
 		return nil, fmt.Errorf("request nonce is required")
