@@ -94,6 +94,19 @@ describe("WalletRegistry - Wallet Creation", async () => {
     await walletOwner.setRecording(false)
   })
 
+  // Helper to assert that the submitter's Allowlist weight remains unchanged
+  async function expectAllowlistWeightUnchanged(operatorAddress: string) {
+    const stakingProvider = await walletRegistry.operatorToStakingProvider(
+      operatorAddress
+    )
+    expect(
+      await allowlist.authorizedStake(stakingProvider, walletRegistry.address)
+    ).to.equal(params.minimumAuthorization)
+    expect(await walletRegistry.eligibleStake(stakingProvider)).to.equal(
+      params.minimumAuthorization
+    )
+  }
+
   describe("requestNewWallet", async () => {
     context("when called by the deployer", async () => {
       it("should revert", async () => {
@@ -2429,19 +2442,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   })
 
                   it("should preserve the submitter's Allowlist weight", async () => {
-                    const stakingProvider =
-                      await walletRegistry.operatorToStakingProvider(
-                        submitter.address
-                      )
-                    expect(
-                      await allowlist.authorizedStake(
-                        stakingProvider,
-                        walletRegistry.address
-                      )
-                    ).to.equal(params.minimumAuthorization)
-                    expect(
-                      await walletRegistry.eligibleStake(stakingProvider)
-                    ).to.equal(params.minimumAuthorization)
+                    await expectAllowlistWeightUnchanged(submitter.address)
                   })
 
                   it("should use close to 1 720 000 gas", async () => {
@@ -2507,19 +2508,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   })
 
                   it("should preserve the submitter's Allowlist weight", async () => {
-                    const stakingProvider =
-                      await walletRegistry.operatorToStakingProvider(
-                        submitter.address
-                      )
-                    expect(
-                      await allowlist.authorizedStake(
-                        stakingProvider,
-                        walletRegistry.address
-                      )
-                    ).to.equal(params.minimumAuthorization)
-                    expect(
-                      await walletRegistry.eligibleStake(stakingProvider)
-                    ).to.equal(params.minimumAuthorization)
+                    await expectAllowlistWeightUnchanged(submitter.address)
                   })
                 })
               })
@@ -2621,19 +2610,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 })
 
                 it("should preserve the submitter's Allowlist weight", async () => {
-                  const stakingProvider =
-                    await walletRegistry.operatorToStakingProvider(
-                      submitter.address
-                    )
-                  expect(
-                    await allowlist.authorizedStake(
-                      stakingProvider,
-                      walletRegistry.address
-                    )
-                  ).to.equal(params.minimumAuthorization)
-                  expect(
-                    await walletRegistry.eligibleStake(stakingProvider)
-                  ).to.equal(params.minimumAuthorization)
+                  await expectAllowlistWeightUnchanged(submitter.address)
                 })
 
                 it("should use close to 420 000 gas", async () => {
@@ -2959,20 +2936,14 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   .withArgs(dkgResultHash, to1e18(400), submitter.address)
               })
 
+              it("should emit a zero notifier reward", async () => {
+                await expect(challengeTx)
+                  .to.emit(staking, "NotifierRewarded")
+                  .withArgs(thirdParty.address, 0)
+              })
+
               it("should preserve the submitter's Allowlist weight", async () => {
-                const stakingProvider =
-                  await walletRegistry.operatorToStakingProvider(
-                    submitter.address
-                  )
-                expect(
-                  await allowlist.authorizedStake(
-                    stakingProvider,
-                    walletRegistry.address
-                  )
-                ).to.equal(params.minimumAuthorization)
-                expect(
-                  await walletRegistry.eligibleStake(stakingProvider)
-                ).to.equal(params.minimumAuthorization)
+                await expectAllowlistWeightUnchanged(submitter.address)
               })
             })
 
@@ -3043,20 +3014,14 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   .withArgs(dkgResultHash, to1e18(400), submitter.address)
               })
 
+              it("should emit a zero notifier reward", async () => {
+                await expect(challengeTx)
+                  .to.emit(staking, "NotifierRewarded")
+                  .withArgs(thirdParty.address, 0)
+              })
+
               it("should preserve the submitter's Allowlist weight", async () => {
-                const stakingProvider =
-                  await walletRegistry.operatorToStakingProvider(
-                    submitter.address
-                  )
-                expect(
-                  await allowlist.authorizedStake(
-                    stakingProvider,
-                    walletRegistry.address
-                  )
-                ).to.equal(params.minimumAuthorization)
-                expect(
-                  await walletRegistry.eligibleStake(stakingProvider)
-                ).to.equal(params.minimumAuthorization)
+                await expectAllowlistWeightUnchanged(submitter.address)
               })
             })
           })
@@ -3148,20 +3113,14 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 .withArgs(dkgResultHash, to1e18(400), submitter.address)
             })
 
+            it("should emit a zero notifier reward", async () => {
+              await expect(challengeTx)
+                .to.emit(staking, "NotifierRewarded")
+                .withArgs(thirdParty.address, 0)
+            })
+
             it("should preserve the submitter's Allowlist weight", async () => {
-              const stakingProvider =
-                await walletRegistry.operatorToStakingProvider(
-                  submitter.address
-                )
-              expect(
-                await allowlist.authorizedStake(
-                  stakingProvider,
-                  walletRegistry.address
-                )
-              ).to.equal(params.minimumAuthorization)
-              expect(
-                await walletRegistry.eligibleStake(stakingProvider)
-              ).to.equal(params.minimumAuthorization)
+              await expectAllowlistWeightUnchanged(submitter.address)
             })
           }
         )

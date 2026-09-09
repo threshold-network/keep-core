@@ -124,8 +124,8 @@ describe("WalletRegistry - Slashing", () => {
           await restoreSnapshot()
         })
 
-        it("should not seize tokens from Allowlist-only providers", async () => {
-          await expect(tx).not.to.emit(staking, "TokensSeized")
+        it("should not queue any staking provider for slashing (Allowlist-only providers carry no TokenStaking authorization)", async () => {
+          expect(await staking.getSlashingQueueLength()).to.equal(0)
         })
 
         it("should leave every member's Allowlist weight unchanged", async () => {
