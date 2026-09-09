@@ -175,6 +175,13 @@ jobs:
           imageName: keep-random-beacon-hardhat
           context: ./solidity/random-beacon
           push: false
+          load: true
+
+      - name: Verify non-root runtime user
+        run: |
+          docker run --rm --entrypoint sh "$IMAGE_NAME" -c 'test "$(id -u)" = 1000 && test "$(id -g)" = 1000'
+          docker run --rm --entrypoint sh "$IMAGE_NAME" -c 'test -w "$WORK_DIR"'
+          docker run --rm "$IMAGE_NAME" --help >/dev/null
 
   # Enforces the core safety constraint stated in issue #4216 for the
   # hardhat-deploy v1 upgrade: `export/` and `export.json` (the deploy

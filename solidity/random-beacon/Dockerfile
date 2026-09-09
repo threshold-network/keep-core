@@ -11,6 +11,11 @@ ENV WORK_DIR=/random-beacon
 ENV HOME=/home/node
 ENV COREPACK_DEFAULT_TO_LATEST=0
 
+# `corepack enable` must run as root: it writes shims into root-owned
+# /usr/local/bin. `corepack prepare` (below, after `USER node`) must run as
+# node: it writes Corepack's per-user cache under $HOME. `chown` targets only
+# $WORK_DIR here because `yarn install` creates node_modules inside it;
+# dependency/source ownership is set later via `COPY --chown`.
 RUN corepack enable && mkdir -p $WORK_DIR && chown node:node $WORK_DIR
 WORKDIR $WORK_DIR
 USER node
