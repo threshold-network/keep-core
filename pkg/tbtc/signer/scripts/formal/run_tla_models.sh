@@ -13,15 +13,19 @@ TLA_TOOLS_VERSION="${TLA_TOOLS_VERSION:-v1.8.0}"
 TLA_TOOLS_JAR="${TLA_TOOLS_JAR:-/tmp/tla2tools-${TLA_TOOLS_VERSION}.jar}"
 TLA_TOOLS_URL="${TLA_TOOLS_URL:-https://github.com/tlaplus/tlaplus/releases/download/${TLA_TOOLS_VERSION}/tla2tools.jar}"
 # Pin the SHA-256 of the upstream tla2tools.jar (github.com/tlaplus/tlaplus
-# release v1.8.0, "The Clarke release"). Verified 2026-09-08: downloaded the
-# asset directly from TLA_TOOLS_URL below and computed both SHA-1 and SHA-256
-# independently; the SHA-1 (ae9472e46b73383fff3055b9c7b080a6eb24adff) matches
-# the official checksum published in the v1.8.0 GitHub release notes, and the
-# corresponding SHA-256 is pinned here. Re-verify the same way (download from
-# the official release URL, confirm the SHA-1 matches the release notes, then
-# take the SHA-256 of that exact download) before re-pinning on any future
-# rebuild of the release asset.
-TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-b658b4e504fdf0b721caf7066320f6b6fe5805f4dd2f717d0e47baba4097205e}"
+# release v1.8.0, "The Clarke release"). Verified 2026-09-09: the upstream
+# asset for this same v1.8.0 tag was replaced by the tlaplus project between
+# 2026-09-08 and 2026-09-09 (GitHub reports the release asset's updatedAt as
+# 2026-09-09T01:52Z), invalidating the previous pin without any version bump.
+# Downloaded the asset directly from TLA_TOOLS_URL below and computed both
+# SHA-1 and SHA-256 independently; the SHA-1
+# (ef20a63caea9dcbcf2f02ddd5db6415decab8f9b) matches the checksum currently
+# published in the v1.8.0 GitHub release notes, and the corresponding SHA-256
+# is pinned here. Re-verify the same way (download from the official release
+# URL, confirm the SHA-1 matches the release notes, then take the SHA-256 of
+# that exact download) before re-pinning on any future rebuild of the release
+# asset -- and note that "same tag" does not guarantee "same bytes" upstream.
+TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-a1fc0bfe391d99fdd86f579a63ff68c0950010e9dde551f1192b867d5c8f4efd}"
 
 if ! command -v java >/dev/null 2>&1; then
   echo "java is required to run TLC model checks" >&2

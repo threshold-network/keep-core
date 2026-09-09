@@ -6610,8 +6610,9 @@ fn parse_state_witness_journal(
         ));
     }
     let records = &bytes[TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH..];
-    let complete_records = records.chunks_exact(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
-    if records.is_empty() || !complete_records.remainder().is_empty() {
+    let (complete_records, remainder) =
+        records.as_chunks::<TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH>();
+    if records.is_empty() || !remainder.is_empty() {
         return Err(truncated_state_witness_journal_error(
             "signer state witness journal contains a missing or partial record".to_string(),
         ));
@@ -6622,7 +6623,7 @@ fn parse_state_witness_journal(
     let mut chain_hash = [0u8; 32];
     for record in complete_records {
         apply_state_witness_record(
-            record,
+            record.as_slice(),
             store_fingerprint,
             &mut history,
             &mut pending,
