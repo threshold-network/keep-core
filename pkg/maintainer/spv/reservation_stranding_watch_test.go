@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -194,6 +195,7 @@ func TestReservationStrandingWatcher_UnknownReservationIsSkipped(t *testing.T) {
 	})
 
 	watcher := newReservationStrandingWatcher(spvChain)
+	watcher.retryDelay = time.Millisecond
 	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -283,6 +285,7 @@ func TestReservationStrandingWatcher_WalletReservationsChainError(t *testing.T) 
 	spvChain.walletReservationsErr = fmt.Errorf("rpc unavailable")
 
 	watcher := newReservationStrandingWatcher(spvChain)
+	watcher.retryDelay = time.Millisecond
 	if err := watcher.checkReservationStrandingForWallet(walletPKH()); err == nil {
 		t.Fatal("expected error when WalletReservations fails, got nil")
 	}
@@ -291,6 +294,207 @@ func TestReservationStrandingWatcher_WalletReservationsChainError(t *testing.T) 
 		t.Fatalf(
 			"expected no notifications on chain error, got %d",
 			len(calls),
+		)
+	}
+}
+
+// transientErrChain wraps a Chain and fails the first N calls to a wrapped
+// method before delegating to the embedded Chain, so the stranding
+// watcher's retry behavior (finding P1-1: bounded retry on a transient
+// WalletReservations/GetReservation chain-read failure) can be exercised
+// without extending the shared localChain fake in chain_test.go.
+type transientErrChain struct {
+	Chain
+	walletReservationsFailuresLeft int
+	getReservationFailuresLeft     int
+	walletReservationsCalls        int
+	getReservationCalls            int
+}
+
+func (c *transientErrChain) WalletReservations(
+	walletPublicKeyHash [20]byte,
+) ([]*big.Int, error) {
+	c.walletReservationsCalls++
+	if c.walletReservationsFailuresLeft > 0 {
+		c.walletReservationsFailuresLeft--
+		return nil, fmt.Errorf("transient rpc failure")
+	}
+	return c.Chain.WalletReservations(walletPublicKeyHash)
+}
+
+func (c *transientErrChain) GetReservation(
+	reservationKey *big.Int,
+) (*tbtc.Reservation, error) {
+	c.getReservationCalls++
+	if c.getReservationFailuresLeft > 0 {
+		c.getReservationFailuresLeft--
+		return nil, fmt.Errorf("transient rpc failure")
+	}
+	return c.Chain.GetReservation(reservationKey)
+}
+
+// TestReservationStrandingWatcher_WalletReservationsTransientErrorRetries
+// verifies finding P1-1: a WalletReservations failure that clears within
+// reservationStrandingRetryAttempts attempts must not be treated as
+// permanent - the caller-visible OnWalletClosed trigger is one-shot and
+// never replayed, so giving up after a single transient RPC hiccup would
+// silently and permanently drop the wallet's reservations from stranding
+// coverage.
+func TestReservationStrandingWatcher_WalletReservationsTransientErrorRetries(t *testing.T) {
+	spvChain := newLocalChain()
+	wallet := walletPKH()
+	key := reservationKey(0xAA60)
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+
+	wrapped := &transientErrChain{
+		Chain:                          spvChain,
+		walletReservationsFailuresLeft: 2,
+	}
+
+	watcher := newReservationStrandingWatcher(wrapped)
+	watcher.retryDelay = time.Millisecond
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+		t.Fatalf("expected the retry to eventually succeed, got error: %v", err)
+	}
+
+	if wrapped.walletReservationsCalls != 3 {
+		t.Fatalf(
+			"expected 3 WalletReservations attempts (2 failures + 1 success), got %d",
+			wrapped.walletReservationsCalls,
+		)
+	}
+
+	if notified := spvChain.getSubmittedReservationStrandedKeys(); len(notified) != 1 {
+		t.Fatalf(
+			"expected the reservation to still be notified after the retry succeeded, got %d",
+			len(notified),
+		)
+	}
+}
+
+// TestReservationStrandingWatcher_WalletReservationsExhaustsRetriesAndFails
+// verifies the bound on finding P1-1's retry: after
+// reservationStrandingRetryAttempts consecutive failures the watcher gives
+// up and returns an error, rather than retrying forever.
+func TestReservationStrandingWatcher_WalletReservationsExhaustsRetriesAndFails(t *testing.T) {
+	spvChain := newLocalChain()
+	wallet := walletPKH()
+
+	wrapped := &transientErrChain{
+		Chain:                          spvChain,
+		walletReservationsFailuresLeft: reservationStrandingRetryAttempts,
+	}
+
+	watcher := newReservationStrandingWatcher(wrapped)
+	watcher.retryDelay = time.Millisecond
+	if err := watcher.checkReservationStrandingForWallet(wallet); err == nil {
+		t.Fatal("expected an error after exhausting all retry attempts")
+	}
+
+	if wrapped.walletReservationsCalls != reservationStrandingRetryAttempts {
+		t.Fatalf(
+			"expected exactly %d attempts, got %d",
+			reservationStrandingRetryAttempts,
+			wrapped.walletReservationsCalls,
+		)
+	}
+}
+
+// TestReservationStrandingWatcher_GetReservationTransientErrorRetries is the
+// GetReservation analog of
+// TestReservationStrandingWatcher_WalletReservationsTransientErrorRetries:
+// a transient per-reservation read failure must also be retried rather
+// than immediately skipping the reservation.
+func TestReservationStrandingWatcher_GetReservationTransientErrorRetries(t *testing.T) {
+	spvChain := newLocalChain()
+	wallet := walletPKH()
+	key := reservationKey(0xAA61)
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+
+	wrapped := &transientErrChain{
+		Chain:                      spvChain,
+		getReservationFailuresLeft: 2,
+	}
+
+	watcher := newReservationStrandingWatcher(wrapped)
+	watcher.retryDelay = time.Millisecond
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if wrapped.getReservationCalls != 3 {
+		t.Fatalf(
+			"expected 3 GetReservation attempts (2 failures + 1 success), got %d",
+			wrapped.getReservationCalls,
+		)
+	}
+
+	if notified := spvChain.getSubmittedReservationStrandedKeys(); len(notified) != 1 {
+		t.Fatalf(
+			"expected the reservation to still be notified after the retry succeeded, got %d",
+			len(notified),
+		)
+	}
+}
+
+func TestReservationStrandingWatcher_CapturesTerminationCause(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	key := reservationKey(0xAA10)
+
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+	spvChain.setWalletTerminationCause(wallet, tbtc.WalletTerminationCauseFraudChallengeDefeat)
+
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if calls := spvChain.getWalletTerminationCauseCallCount(); calls != 1 {
+		t.Fatalf("expected exactly one WalletTerminationCause call, got %d", calls)
+	}
+
+	if notified := spvChain.getSubmittedReservationStrandedKeys(); len(notified) != 1 {
+		t.Fatalf("expected one notification, got %d", len(notified))
+	}
+}
+
+// TestReservationStrandingWatcher_CauseLookupErrorDoesNotBlockNotification
+// proves the cause lookup is best-effort observability, not a correctness
+// gate: a failure to determine the termination cause must not prevent the
+// reservation from being notified stranded.
+func TestReservationStrandingWatcher_CauseLookupErrorDoesNotBlockNotification(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	key := reservationKey(0xAA11)
+
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+	spvChain.walletTerminationCauseErr = fmt.Errorf("rpc unavailable")
+
+	watcher := newReservationStrandingWatcher(spvChain)
+	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+		t.Fatalf("cause lookup failure must not fail the whole check: %v", err)
+	}
+
+	if notified := spvChain.getSubmittedReservationStrandedKeys(); len(notified) != 1 {
+		t.Fatalf(
+			"expected the reservation to still be notified despite the cause "+
+				"lookup failure, got %d",
+			len(notified),
 		)
 	}
 }

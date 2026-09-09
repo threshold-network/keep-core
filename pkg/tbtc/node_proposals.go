@@ -146,6 +146,7 @@ func (n *node) handleDepositSweepProposal(
 		walletActionLogger,
 		n.chain,
 		n.btcChain,
+		n.ethereumNetwork,
 		wallet,
 		signingExecutor,
 		proposal,

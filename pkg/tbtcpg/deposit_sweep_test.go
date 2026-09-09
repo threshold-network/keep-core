@@ -1,7 +1,6 @@
 package tbtcpg_test
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -96,6 +95,7 @@ func TestDepositSweepTask_FindDepositsToSweep_BoundedLookback(t *testing.T) {
 		&testutils.MockLogger{},
 		walletPublicKeyHash,
 		5,
+		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +175,7 @@ func TestDepositSweepTask_FindDepositsToSweep_UnderflowGuard(t *testing.T) {
 		&testutils.MockLogger{},
 		walletPublicKeyHash,
 		5,
+		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -261,6 +262,7 @@ func TestDepositSweepTask_FindDepositsToSweep(t *testing.T) {
 				&testutils.MockLogger{},
 				scenario.WalletPublicKeyHash,
 				scenario.MaxNumberOfDeposits,
+				false,
 			)
 
 			if err != nil {
@@ -348,6 +350,7 @@ func TestDepositSweepTask_ProposeDepositsSweep(t *testing.T) {
 				scenario.WalletPublicKeyHash,
 				scenario.DepositsReferences(),
 				scenario.SweepTxFee,
+				false,
 			)
 
 			if !reflect.DeepEqual(scenario.ExpectedErr, err) {
@@ -470,6 +473,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			10,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -534,6 +538,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			10,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -602,6 +607,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			10,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -655,6 +661,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			10,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -713,6 +720,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			10,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -752,6 +760,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			10,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -812,6 +821,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			10,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -902,6 +912,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			20,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -962,6 +973,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			10,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1038,6 +1050,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			20,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1088,6 +1101,7 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			&testutils.MockLogger{},
 			walletPublicKeyHash,
 			10,
+			false,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1168,6 +1182,7 @@ func TestFindDepositsToSweep_ExcludesReservedDeposits(t *testing.T) {
 		&testutils.MockLogger{},
 		walletPublicKeyHash,
 		10,
+		true,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1241,6 +1256,7 @@ func TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck(t *testing.T) {
 		&testutils.MockLogger{},
 		walletPublicKeyHash,
 		10,
+		true,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1256,151 +1272,3 @@ func TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck(t *testing.T) {
 	}
 }
 
-// TestFindDepositsToSweep_ReservationParametersUnavailableSweepsAll verifies
-// that findDeposits degrades to sweeping all candidate deposits normally,
-// rather than aborting, when ReservationParameters() fails -- the expected
-// state before the Bridge upgrade that introduces reservations exposes this
-// call.
-func TestFindDepositsToSweep_ReservationParametersUnavailableSweepsAll(t *testing.T) {
-	currentBlock := uint64(300000)
-	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
-	walletPublicKeyHash := hexToByte20(
-		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
-	)
-
-	tbtcChain := tbtcpg.NewLocalChain()
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	blockCounter := tbtcpg.NewMockBlockCounter()
-	blockCounter.SetCurrentBlock(currentBlock)
-	tbtcChain.SetBlockCounter(blockCounter)
-	tbtcChain.SetDepositMinAge(3600)
-	// Deliberately not calling SetReservationParameters: LocalChain's
-	// ReservationParameters() returns an error until it's configured,
-	// mirroring the pre-upgrade Bridge.
-
-	reservationVault := testReservationVaultAddress
-
-	// A deposit revealed against what would be the reservation vault,
-	// and marked reserved. It must still sweep normally because the
-	// reservation parameters lookup itself failed.
-	depositHash := setupVaultGroupingDeposit(
-		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		0, 290000, &reservationVault,
-	)
-	tbtcChain.SetReservedDeposit(
-		tbtcChain.BuildDepositKey(depositHash, 0), true,
-	)
-
-	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
-	deposits, err := task.FindDepositsToSweep(
-		&testutils.MockLogger{},
-		walletPublicKeyHash,
-		10,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(deposits) != 1 || deposits[0].FundingTxHash != depositHash {
-		t.Fatalf(
-			"expected all deposits to sweep normally when reservation "+
-				"parameters are unavailable, got %v",
-			deposits,
-		)
-	}
-}
-
-// reservationParametersFlakyChain wraps a tbtcpg.Chain, failing the first
-// failuresBeforeSuccess calls to ReservationParameters() and delegating to
-// the wrapped chain on every call after that (including the eventual
-// successful one and any subsequent ones). Everything else delegates
-// straight through.
-type reservationParametersFlakyChain struct {
-	tbtcpg.Chain
-	failuresBeforeSuccess int
-	calls                 int
-}
-
-func (c *reservationParametersFlakyChain) ReservationParameters() (
-	*tbtc.ReservationParameters,
-	error,
-) {
-	c.calls++
-	if c.calls <= c.failuresBeforeSuccess {
-		return nil, fmt.Errorf(
-			"simulated transient failure (call %d)",
-			c.calls,
-		)
-	}
-	return c.Chain.ReservationParameters()
-}
-
-// TestFindDepositsToSweep_ReservationParametersRetriesTransientFailure
-// verifies findDeposits retries a failing ReservationParameters() call a
-// bounded number of times before concluding reservations are inactive,
-// so a transient RPC hiccup (as opposed to the method being permanently
-// absent pre-upgrade) does not cause a genuinely reserved deposit to be
-// swept as a default one.
-func TestFindDepositsToSweep_ReservationParametersRetriesTransientFailure(t *testing.T) {
-	currentBlock := uint64(300000)
-	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
-	walletPublicKeyHash := hexToByte20(
-		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
-	)
-
-	tbtcChain := tbtcpg.NewLocalChain()
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	blockCounter := tbtcpg.NewMockBlockCounter()
-	blockCounter.SetCurrentBlock(currentBlock)
-	tbtcChain.SetBlockCounter(blockCounter)
-	tbtcChain.SetDepositMinAge(3600)
-	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationVault: testReservationVaultAddress,
-	})
-
-	reservationVault := testReservationVaultAddress
-	depositHash := setupVaultGroupingDeposit(
-		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		0, 290000, &reservationVault,
-	)
-	tbtcChain.SetReservedDeposit(
-		tbtcChain.BuildDepositKey(depositHash, 0), true,
-	)
-
-	// Fails on the first 2 attempts, succeeds on the 3rd - within the
-	// retry budget, so the reserved deposit must still be excluded.
-	flakyChain := &reservationParametersFlakyChain{
-		Chain:                 tbtcChain,
-		failuresBeforeSuccess: 2,
-	}
-
-	task := tbtcpg.NewDepositSweepTask(flakyChain, btcChain)
-	deposits, err := task.FindDepositsToSweep(
-		&testutils.MockLogger{},
-		walletPublicKeyHash,
-		10,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(deposits) != 0 {
-		t.Fatalf(
-			"expected the reserved deposit to be excluded after "+
-				"ReservationParameters recovers within its retry "+
-				"budget, got %v",
-			deposits,
-		)
-	}
-	if flakyChain.calls != 3 {
-		t.Fatalf(
-			"expected exactly 3 ReservationParameters attempts "+
-				"(2 failures + 1 success), got %d",
-			flakyChain.calls,
-		)
-	}
-}

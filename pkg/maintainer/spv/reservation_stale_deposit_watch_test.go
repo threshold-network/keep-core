@@ -817,3 +817,146 @@ func TestReservationStaleDepositWatcher_WalletFetchRefreshesAcrossTicks(t *testi
 		)
 	}
 }
+
+// reservationParamsCallCountingChain wraps a Chain and counts
+// ReservationParameters invocations, delegating every other method to the
+// embedded Chain. It is used to assert that deriveTimeoutFromReveal
+// deduplicates the governance-parameter fetch within a single poll tick
+// (calls sharing the same `now`) instead of issuing one fetch per
+// deposit.
+type reservationParamsCallCountingChain struct {
+	Chain
+	reservationParamsCallCount int
+}
+
+func (w *reservationParamsCallCountingChain) ReservationParameters() (
+	*tbtc.ReservationParameters,
+	error,
+) {
+	w.reservationParamsCallCount++
+	return w.Chain.ReservationParameters()
+}
+
+// TestReservationStaleDepositWatcher_DedupesReservationParametersFetchWithinTick
+// verifies that N deposits with no reservation action recorded yet
+// (RequestNonce == 0, so each routes through deriveTimeoutFromReveal's
+// reveal-timestamp fallback), checked with the identical `now` value as
+// the poller does for every deposit within one poll tick, result in
+// exactly one ReservationParameters call rather than one per deposit.
+func TestReservationStaleDepositWatcher_DedupesReservationParametersFetchWithinTick(t *testing.T) {
+	inner := newLocalChain()
+	spvChain := &reservationParamsCallCountingChain{Chain: inner}
+
+	wallet := walletPKH()
+	inner.setWallet(wallet, &tbtc.WalletChainData{
+		State: tbtc.StateUnknown,
+	})
+	inner.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	fundingTxHash, err := bitcoin.NewHashFromString(
+		"585b6699f42291d1a9d0776b75f04c295ea203f83504349db11e94fdae7d1b2c",
+		bitcoin.InternalByteOrder,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const depositCount = 3
+	const currentBlock = uint64(0)
+	keys := make([]*big.Int, depositCount)
+	for i := range depositCount {
+		fundingOutputIndex := uint32(i)
+		key := inner.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+		keys[i] = key
+
+		inner.setReservedDeposit(key, wallet, true)
+		inner.setReservation(key, &tbtc.Reservation{RequestNonce: 0})
+
+		seedPastDepositRevealedEvent(t, inner, wallet, fundingTxHash, fundingOutputIndex, currentBlock)
+		inner.setDepositRequest(fundingTxHash, fundingOutputIndex, &tbtc.DepositChainRequest{
+			RevealedAt: time.Unix(1_000, 0),
+		})
+	}
+
+	watcher := NewReservationStaleDepositWatcher(spvChain)
+
+	// Derived deadline = 1_000 + 3600 = 4_600. now = 2_000 < 4_600, so
+	// every deposit resolves to Keep without triggering forgetDeposit,
+	// isolating the assertion to the parameter fetch count.
+	const now = uint32(2_000)
+	for _, key := range keys {
+		res, err := watcher.CheckStaleReservedDeposit(key, now)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res != StaleDepositResolutionKeep {
+			t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
+		}
+	}
+
+	if spvChain.reservationParamsCallCount != 1 {
+		t.Fatalf(
+			"expected exactly one ReservationParameters call for %d "+
+				"deposits sharing a poll tick, got %d",
+			depositCount,
+			spvChain.reservationParamsCallCount,
+		)
+	}
+}
+
+// TestReservationStaleDepositWatcher_ReservationParametersFetchRefreshesAcrossTicks
+// verifies that the governance-parameter cache is scoped to a single poll
+// tick, not permanent: a new `now` value (signaling the next tick) must
+// trigger a fresh ReservationParameters call rather than reusing a
+// previous tick's cached value indefinitely.
+func TestReservationStaleDepositWatcher_ReservationParametersFetchRefreshesAcrossTicks(t *testing.T) {
+	inner := newLocalChain()
+	spvChain := &reservationParamsCallCountingChain{Chain: inner}
+
+	wallet := walletPKH()
+	inner.setWallet(wallet, &tbtc.WalletChainData{
+		State: tbtc.StateUnknown,
+	})
+	inner.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	fundingTxHash, err := bitcoin.NewHashFromString(
+		"7cff663e3e08847a5579913f6a66bc6c01f5f48c6ae1783be77418ed188021e6",
+		bitcoin.InternalByteOrder,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fundingOutputIndex := uint32(0)
+
+	key := inner.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+	inner.setReservedDeposit(key, wallet, true)
+	inner.setReservation(key, &tbtc.Reservation{RequestNonce: 0})
+
+	seedPastDepositRevealedEvent(t, inner, wallet, fundingTxHash, fundingOutputIndex, 0)
+	inner.setDepositRequest(fundingTxHash, fundingOutputIndex, &tbtc.DepositChainRequest{
+		RevealedAt: time.Unix(1_000, 0),
+	})
+
+	watcher := NewReservationStaleDepositWatcher(spvChain)
+
+	// Derived deadline = 1_000 + 3600 = 4_600; both ticks ask before the
+	// deadline so the deposit stays Keep and the memo is never
+	// invalidated by a resolved-deposit forgetDeposit call.
+	if _, err := watcher.CheckStaleReservedDeposit(key, 2_000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := watcher.CheckStaleReservedDeposit(key, 2_001); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if spvChain.reservationParamsCallCount != 2 {
+		t.Fatalf(
+			"expected one ReservationParameters call per distinct poll tick, got %d",
+			spvChain.reservationParamsCallCount,
+		)
+	}
+}

@@ -436,7 +436,12 @@ func (tc *TbtcChain) ReservationParameters() (
 // test coverage. It requires go-ethereum simulated-backend infrastructure
 // that does not exist anywhere in pkg/chain/ethereum today. PR #4280
 // explicitly deferred this pending that infra (see 01-gap-analysis.md's
-// Minor row); the infra itself is not yet built and has no owning PR.
+// Minor row); the infra itself is not yet built and has no owning PR. This
+// is a package-wide gap, not specific to reservations: the analogous
+// ValidateDepositSweepProposal has never had a direct test either for the
+// same reason. A follow-up should build the minimal simulated-backend
+// infrastructure once, covering every proposal validator in this package,
+// rather than deferring it again per future PR.
 // ValidateReservationAnchorProposal asks the WalletProposalValidator
 // whether the given anchor proposal is valid for the given wallet and
 // reserved deposit. The validator is a separate contract reached at its
@@ -477,12 +482,10 @@ func (tc *TbtcChain) ValidateReservationAnchorProposal(
 // for WalletProposalValidator.ValidateReservationAnchorProposal from their
 // application-level representations. Extracted as a pure function from
 // ValidateReservationAnchorProposal so the field mapping can be unit
-// tested directly, mirroring the reverse-direction converters below
-// (convertReservationFromAbiType et al.).
-//
-// TODO(test-coverage): like ValidateReservationAnchorProposal above, this
-// has no direct unit test coverage - same missing go-ethereum
-// simulated-backend infrastructure, same deferral (see the TODO above).
+// tested directly (TestBuildReservationAnchorProposalAbi), mirroring the
+// reverse-direction converters below (convertReservationFromAbiType et
+// al.). Unlike the wrapper above, this builder makes no chain call and
+// so needs no simulated-backend infrastructure to test.
 func buildReservationAnchorProposalAbi(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationAnchorProposal,
@@ -1017,6 +1020,61 @@ func (tc *TbtcChain) NotifyReservationStranded(
 	)
 
 	return err
+}
+
+// WalletTerminationCause returns the on-chain reason the given wallet was
+// most recently terminated. The Bridge's WalletTerminated event itself
+// carries no cause field; the cause is instead inferred from which of the
+// three pre-termination timeout events was emitted for the wallet -
+// MovingFundsTimedOut, MovedFundsSweepTimedOut, or
+// FraudChallengeDefeatTimedOut, each of which unconditionally leads to
+// termination and never more than one of which fires for a given wallet.
+// The search is unbounded (from block 0): each of the three events fires
+// at most once per wallet in the wallet's entire history, so this call is
+// cheap and only ever made once per wallet close, immediately before a
+// stranding notification - not on any hot or polled path.
+func (tc *TbtcChain) WalletTerminationCause(
+	walletPublicKeyHash [20]byte,
+) (tbtc.WalletTerminationCause, error) {
+	filter := [][20]byte{walletPublicKeyHash}
+
+	movingFundsEvents, err := tc.bridge.PastMovingFundsTimedOutEvents(0, nil, filter)
+	if err != nil {
+		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
+			"cannot get past MovingFundsTimedOut events for wallet [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+	if len(movingFundsEvents) > 0 {
+		return tbtc.WalletTerminationCauseMovingFundsTimeout, nil
+	}
+
+	movedFundsSweepEvents, err := tc.bridge.PastMovedFundsSweepTimedOutEvents(0, nil, filter)
+	if err != nil {
+		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
+			"cannot get past MovedFundsSweepTimedOut events for wallet [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+	if len(movedFundsSweepEvents) > 0 {
+		return tbtc.WalletTerminationCauseMovedFundsSweepTimeout, nil
+	}
+
+	fraudChallengeEvents, err := tc.bridge.PastFraudChallengeDefeatTimedOutEvents(0, nil, filter)
+	if err != nil {
+		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
+			"cannot get past FraudChallengeDefeatTimedOut events for wallet [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+	if len(fraudChallengeEvents) > 0 {
+		return tbtc.WalletTerminationCauseFraudChallengeDefeat, nil
+	}
+
+	return tbtc.WalletTerminationCauseUnknown, nil
 }
 
 // NotifyReservationAcceptanceTimedOut notifies the Bridge that the

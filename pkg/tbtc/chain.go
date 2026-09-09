@@ -642,6 +642,14 @@ type ReservationChain interface {
 	// reservations whose wallet is no longer live.
 	NotifyReservationStranded(reservationKey *big.Int) error
 
+	// WalletTerminationCause returns the on-chain reason the given wallet
+	// was most recently terminated, inferred from the most recent of the
+	// three pre-termination timeout events (MovingFundsTimedOut,
+	// MovedFundsSweepTimedOut, FraudChallengeDefeatTimedOut) found for it.
+	// Returns WalletTerminationCauseUnknown (with a nil error) if none of
+	// the three events can be found for the wallet.
+	WalletTerminationCause(walletPublicKeyHash [20]byte) (WalletTerminationCause, error)
+
 	// GetReservation returns the on-chain reservation record. An absent key is represented by ReservationStateUnknown; errors report chain-call or conversion failures.
 	GetReservation(reservationKey *big.Int) (*Reservation, error)
 

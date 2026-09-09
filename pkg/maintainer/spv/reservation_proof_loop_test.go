@@ -2,12 +2,67 @@ package spv
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
+
+// reservationProofBitcoinChain wraps localBitcoinChain (defined in
+// bitcoin_chain_test.go, shared spv-package test infrastructure) with a
+// working GetTxHashesForPublicKeyHash, so tests that exercise
+// walletTransactionsForProof's wallet-history cache through the full
+// proveReservationAcceptanceActions/proveReservationReanchorActions
+// pipeline don't hit localBitcoinChain's own GetTxHashesForPublicKeyHash,
+// which is an unimplemented panic stub unused by any other test in the
+// package.
+type reservationProofBitcoinChain struct {
+	*localBitcoinChain
+
+	// getTransactionsForPublicKeyHashCalls counts calls that reach the
+	// embedded localBitcoinChain's full-body fetch, letting tests assert
+	// walletTransactionsForProof's cache actually skips it when nothing
+	// changed for a wallet since the previous pass.
+	getTransactionsForPublicKeyHashCalls int
+}
+
+func newReservationProofBitcoinChain() *reservationProofBitcoinChain {
+	return &reservationProofBitcoinChain{localBitcoinChain: newLocalBitcoinChain()}
+}
+
+// GetTransactionsForPublicKeyHash counts each call reaching the embedded
+// chain's full-body fetch; see getTransactionsForPublicKeyHashCalls.
+func (c *reservationProofBitcoinChain) GetTransactionsForPublicKeyHash(
+	publicKeyHash [20]byte,
+	limit int,
+) ([]*bitcoin.Transaction, error) {
+	c.getTransactionsForPublicKeyHashCalls++
+	return c.localBitcoinChain.GetTransactionsForPublicKeyHash(publicKeyHash, limit)
+}
+
+// GetTxHashesForPublicKeyHash derives hashes from the same confirmed
+// transaction set GetTransactionsForPublicKeyHash serves, so the two stay
+// consistent for change detection in walletTransactionsForProof. It calls
+// the embedded chain directly, bypassing the counted override above, since
+// production code uses this lightweight hash fetch specifically to decide
+// whether the full-body fetch is needed at all.
+func (c *reservationProofBitcoinChain) GetTxHashesForPublicKeyHash(
+	publicKeyHash [20]byte,
+) ([]bitcoin.Hash, error) {
+	transactions, err := c.localBitcoinChain.GetTransactionsForPublicKeyHash(publicKeyHash, math.MaxInt)
+	if err != nil {
+		return nil, err
+	}
+
+	hashes := make([]bitcoin.Hash, len(transactions))
+	for i, transaction := range transactions {
+		hashes[i] = transaction.Hash()
+	}
+
+	return hashes, nil
+}
 
 // TestReservationProofNextScanRange covers the incremental scan-range
 // arithmetic: the very first pass (lastScannedBlock == 0) is bounded to
@@ -460,6 +515,14 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 	})
 }
 
+// alwaysMatchReservationTransaction is an isMatch predicate that accepts
+// every candidate, used by tests that exercise proveReservationTransaction's
+// confirmation/skip-reason handling directly and don't care about shape
+// matching.
+func alwaysMatchReservationTransaction(*bitcoin.Transaction) bool {
+	return true
+}
+
 // TestProveReservationTransaction covers the submit-vs-skip decision: a
 // transaction with enough confirmations and a proof within relay range must
 // invoke submit exactly once; a transaction with too few confirmations must
@@ -500,7 +563,8 @@ func TestProveReservationTransaction(t *testing.T) {
 
 		submitted := false
 		err := proveReservationTransaction(
-			transaction,
+			[]*bitcoin.Transaction{transaction},
+			alwaysMatchReservationTransaction,
 			btcChain,
 			spvChain,
 			spvChain,
@@ -539,7 +603,8 @@ func TestProveReservationTransaction(t *testing.T) {
 
 		submitted := false
 		err := proveReservationTransaction(
-			transaction,
+			[]*bitcoin.Transaction{transaction},
+			alwaysMatchReservationTransaction,
 			btcChain,
 			spvChain,
 			spvChain,
@@ -563,7 +628,8 @@ func TestProveReservationTransaction(t *testing.T) {
 		spvChain, btcChain := newFixture(20)
 
 		err := proveReservationTransaction(
-			transaction,
+			[]*bitcoin.Transaction{transaction},
+			alwaysMatchReservationTransaction,
 			btcChain,
 			spvChain,
 			spvChain,
@@ -642,7 +708,8 @@ func TestProveReservationTransaction_RecordsMetrics(t *testing.T) {
 
 			submitted := false
 			if err := proveReservationTransaction(
-				transaction,
+				[]*bitcoin.Transaction{transaction},
+				alwaysMatchReservationTransaction,
 				btcChain,
 				spvChain,
 				spvChain,
@@ -684,10 +751,10 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 	diff := func(d int64) *big.Int { return big.NewInt(d) }
 
 	spvChain := newLocalChain()
-	btcChain := newLocalBitcoinChain()
+	btcChain := newReservationProofBitcoinChain()
 
 	if err := populateBlockHeaders(
-		btcChain,
+		btcChain.localBitcoinChain,
 		proofStart,
 		proofStart+19,
 		func(uint) *big.Int { return diff(32) },
@@ -847,10 +914,10 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 		diff := func(d int64) *big.Int { return big.NewInt(d) }
 
 		spvChain := newLocalChain()
-		btcChain := newLocalBitcoinChain()
+		btcChain := newReservationProofBitcoinChain()
 
 		if err := populateBlockHeaders(
-			btcChain,
+			btcChain.localBitcoinChain,
 			proofStart,
 			proofStart+19,
 			func(uint) *big.Int { return diff(32) },
@@ -966,10 +1033,10 @@ func TestProveReservationReanchorActions(t *testing.T) {
 	diff := func(d int64) *big.Int { return big.NewInt(d) }
 
 	spvChain := newLocalChain()
-	btcChain := newLocalBitcoinChain()
+	btcChain := newReservationProofBitcoinChain()
 
 	if err := populateBlockHeaders(
-		btcChain,
+		btcChain.localBitcoinChain,
 		proofStart,
 		proofStart+19,
 		func(uint) *big.Int { return diff(32) },
@@ -1109,10 +1176,10 @@ func TestProveReservationReanchorActions(t *testing.T) {
 		diff := func(d int64) *big.Int { return big.NewInt(d) }
 
 		spvChain := newLocalChain()
-		btcChain := newLocalBitcoinChain()
+		btcChain := newReservationProofBitcoinChain()
 
 		if err := populateBlockHeaders(
-			btcChain,
+			btcChain.localBitcoinChain,
 			proofStart,
 			proofStart+19,
 			func(uint) *big.Int { return diff(32) },
@@ -1324,5 +1391,158 @@ func TestProveReservationReanchorActions_LeavesPendingOnChainError(t *testing.T)
 
 	if scanState.reanchorLastScannedBlock != 1000 {
 		t.Fatalf("expected cursor to advance to current block 1000, got %d", scanState.reanchorLastScannedBlock)
+	}
+}
+
+// TestProveReservationTransaction_SelectsConfirmedRBFCandidate is a
+// regression test for the RBF (replace-by-fee) candidate-selection bug: a
+// still-pending, never-confirming replaced transaction encountered first in
+// candidates must not block an already-confirmed later replacement from
+// being proved. proveReservationTransaction must walk every candidate and
+// prove the first one that is both a shape match and has enough
+// confirmations, not assume the first (or only) one considered is correct.
+func TestProveReservationTransaction_SelectsConfirmedRBFCandidate(t *testing.T) {
+	const proofStart = 790270
+	diff := func(d int64) *big.Int { return big.NewInt(d) }
+
+	spvChain := newLocalChain()
+	btcChain := newLocalBitcoinChain()
+
+	if err := populateBlockHeaders(
+		btcChain,
+		proofStart,
+		proofStart+19,
+		func(uint) *big.Int { return diff(32) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+	spvChain.setCurrentEpoch(392)
+	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
+
+	// unconfirmedReplaced is the RBF-replaced transaction; it never
+	// accumulates enough confirmations and is seen first in candidate
+	// order, mirroring a wallet fetch/map-iteration order that does not
+	// match on-chain confirmation order.
+	unconfirmedReplaced := &bitcoin.Transaction{Locktime: 1}
+	if err := btcChain.addTransactionConfirmations(unconfirmedReplaced.Hash(), 2); err != nil {
+		t.Fatal(err)
+	}
+
+	// confirmedReplacement is the RBF replacement that actually confirmed.
+	confirmedReplacement := &bitcoin.Transaction{Locktime: 2}
+	if err := btcChain.addTransactionConfirmations(confirmedReplacement.Hash(), 20); err != nil {
+		t.Fatal(err)
+	}
+
+	var submittedHash bitcoin.Hash
+	submissions := 0
+	err := proveReservationTransaction(
+		[]*bitcoin.Transaction{unconfirmedReplaced, confirmedReplacement},
+		alwaysMatchReservationTransaction,
+		btcChain,
+		spvChain,
+		spvChain,
+		DefaultMaxProofHeaders,
+		newProofInfoCache(),
+		nil,
+		func(hash bitcoin.Hash, requiredConfirmations uint) error {
+			submissions++
+			submittedHash = hash
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if submissions != 1 {
+		t.Fatalf("expected exactly one proof submission, got %d", submissions)
+	}
+	if submittedHash != confirmedReplacement.Hash() {
+		t.Errorf(
+			"expected the confirmed replacement [%s] to be proved, got [%s]",
+			confirmedReplacement.Hash().Hex(bitcoin.ReversedByteOrder),
+			submittedHash.Hex(bitcoin.ReversedByteOrder),
+		)
+	}
+}
+
+// TestWalletTransactionsForProof verifies the wallet transaction cache
+// underlying Finding 2's fix: a pass whose lightweight
+// GetTxHashesForPublicKeyHash check shows no change for a wallet since the
+// previous pass reuses the previous pass's fetched transaction bodies
+// instead of calling GetTransactionsForPublicKeyHash again, and a pass that
+// observes a new confirmed transaction for the wallet does refetch.
+func TestWalletTransactionsForProof(t *testing.T) {
+	btcChain := newReservationProofBitcoinChain()
+	state := newReservationProofScanState()
+
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstTx := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{{Value: 1000, PublicKeyScript: walletScript}},
+	}
+	if err := btcChain.BroadcastTransaction(firstTx); err != nil {
+		t.Fatal(err)
+	}
+
+	transactions, err := walletTransactionsForProof(state, btcChain, walletPublicKeyHash, 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(transactions) != 1 {
+		t.Fatalf("expected 1 transaction, got %d", len(transactions))
+	}
+	if btcChain.getTransactionsForPublicKeyHashCalls != 1 {
+		t.Fatalf(
+			"expected 1 full-history fetch after the first pass, got %d",
+			btcChain.getTransactionsForPublicKeyHashCalls,
+		)
+	}
+
+	// Second pass: nothing changed for the wallet. The full-history fetch
+	// must be skipped and the previous pass's bodies reused.
+	transactions, err = walletTransactionsForProof(state, btcChain, walletPublicKeyHash, 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(transactions) != 1 {
+		t.Fatalf("expected 1 transaction, got %d", len(transactions))
+	}
+	if btcChain.getTransactionsForPublicKeyHashCalls != 1 {
+		t.Fatalf(
+			"expected the full-history fetch to be skipped when nothing "+
+				"changed, but call count is now %d",
+			btcChain.getTransactionsForPublicKeyHashCalls,
+		)
+	}
+
+	// Third pass: a new confirmed transaction appears for the wallet. The
+	// full-history fetch must run again and observe it.
+	secondTx := &bitcoin.Transaction{
+		Locktime: 1,
+		Outputs:  []*bitcoin.TransactionOutput{{Value: 2000, PublicKeyScript: walletScript}},
+	}
+	if err := btcChain.BroadcastTransaction(secondTx); err != nil {
+		t.Fatal(err)
+	}
+
+	transactions, err = walletTransactionsForProof(state, btcChain, walletPublicKeyHash, 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(transactions) != 2 {
+		t.Fatalf("expected 2 transactions after the wallet's history changed, got %d", len(transactions))
+	}
+	if btcChain.getTransactionsForPublicKeyHashCalls != 2 {
+		t.Fatalf(
+			"expected the full-history fetch to run again after a change, "+
+				"got call count %d",
+			btcChain.getTransactionsForPublicKeyHashCalls,
+		)
 	}
 }

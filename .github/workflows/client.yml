@@ -119,6 +119,65 @@ jobs:
         run: |
           cd third_party/btcsuite/btcec && go test ./...
 
+  reservation-router-vendored-fallback-verify:
+    # Companion gate to btcec-vendor-byte-identity above: the tbtc module's
+    # ReservationRouter ABI generation falls back to a vendored, committed
+    # copy of the ABI (pkg/chain/ethereum/tbtc/gen/ReservationRouter.fallback-artifact.json,
+    # plus the Bridge/WalletProposalValidator reservation-methods patch
+    # fragments) whenever @keep-network/tbtc-v2 hasn't yet published the
+    # real reservation contracts under the `development` npm tag (see
+    # threshold-network/keep-core#4281). That vendored copy can silently
+    # drift from the real, currently-deployed contract ABI with no build
+    # failure - exactly what happened once already (see the P0 findings
+    # this job exists to prevent from recurring). This job compiles the
+    # real tbtc-v2 Solidity contracts directly and diffs their ABI against
+    # the vendored fallback, failing loudly on any divergence. Cheap
+    # (checkout + yarn install + hardhat compile + one jq diff) and runs
+    # on every event, every branch, mirroring btcec-vendor-byte-identity's
+    # rationale for not gating by path.
+    #
+    # tbtc-v2 ref: pinned to `main` below as the best available default -
+    # confirm this is the correct source-of-truth ref for the reservation
+    # contracts' ABI (e.g. once threshold-network/tbtc-v2#1112 merges,
+    # `main` should already carry it; if a different long-lived branch is
+    # the actual integration target, update `TBTC_V2_REF` accordingly).
+    runs-on: ubuntu-latest
+    env:
+      TBTC_V2_REF: main
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Checkout tbtc-v2 (${{ env.TBTC_V2_REF }})
+        uses: actions/checkout@v4
+        with:
+          repository: threshold-network/tbtc-v2
+          ref: ${{ env.TBTC_V2_REF }}
+          path: tbtc-v2-upstream
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Compile tbtc-v2 Solidity contracts
+        working-directory: tbtc-v2-upstream/solidity
+        run: |
+          yarn install --frozen-lockfile
+          yarn build
+
+      - name: Verify vendored ReservationRouter fallback matches the real compiled ABI
+        run: |
+          set -e
+          mkdir -p "tmp/contracts/development/@keep-network/tbtc-v2/artifacts"
+          cp tbtc-v2-upstream/solidity/build/contracts/bridge/ReservationRouter.sol/ReservationRouter.json \
+            "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/ReservationRouter.json"
+          make -C pkg/chain/ethereum/tbtc/gen verify-vendored-fallback
+
   client-build-test-publish:
     needs: client-detect-changes
     if: |
@@ -142,20 +201,6 @@ jobs:
         with:
           environment: ${{ github.event.inputs.environment }}
 
-      # TODO(https://github.com/threshold-network/tbtc-v2/pull/1112): remove once
-      # @keep-network/tbtc-v2 publishes the reservation-router surface (Bridge,
-      # WalletProposalValidator, RedemptionWatchtower, ReservationRouter, and the
-      # rest of the tbtc module's required_contracts) under the `development` npm
-      # tag. Until then, `make get_artifacts` can't fetch these from npm; the gen
-      # Makefile's vendored fallback artifacts (see
-      # pkg/chain/ethereum/tbtc/gen/Makefile's ReservationRouter.fallback-artifact.json
-      # rule and the Bridge/WalletProposalValidator reservation-methods-fallback.json
-      # patch rules) supply the missing methods for `environment=development` builds
-      # instead. This directory only exists so the Dockerfile's COPY step (guarded by
-      # `-n "$(ls -A ...)"`, a no-op when empty) always has a source to copy from; see
-      # ./ci-shims/tbtc-artifacts and the matching Dockerfile step.
-      - name: Prepare tbtc-v2 artifact shim directory
-        run: mkdir -p ci-shims/tbtc-artifacts
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 

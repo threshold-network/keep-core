@@ -1621,6 +1621,12 @@ func (lc *localChain) NotifyReservationStranded(
 	panic("unsupported")
 }
 
+func (lc *localChain) WalletTerminationCause(
+	walletPublicKeyHash [20]byte,
+) (WalletTerminationCause, error) {
+	panic("unsupported")
+}
+
 func (lc *localChain) ReservationCaps() (
 	uint64,
 	uint64,

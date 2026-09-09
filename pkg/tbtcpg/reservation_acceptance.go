@@ -86,6 +86,52 @@ func (rat *ReservationAcceptanceTask) setMetricsRecorder(recorder interface {
 // work bounded even if a wallet's reveal volume spikes.
 const maxReservationAcceptanceCandidatesPerRun = 50
 
+// reservationAcceptanceFundingTxLookupWorkers bounds the number of reserved
+// deposits whose funding-transaction lookups (GetTransaction and
+// GetTransactionConfirmations) run concurrently against the Bitcoin chain
+// adapter in fetchReservationAcceptanceFundingTxs. Fetching serially for up
+// to maxReservationAcceptanceCandidatesPerRun candidates, each bound only
+// by the chain adapter's own multi-minute retry budget, could turn one
+// unhealthy Bitcoin backend into hours of serial retries before a run
+// gives up; running a small bounded number of lookups concurrently instead
+// caps the number of sequential retry windows to roughly
+// maxReservationAcceptanceCandidatesPerRun /
+// reservationAcceptanceFundingTxLookupWorkers.
+const reservationAcceptanceFundingTxLookupWorkers = 8
+
+// reservationAcceptanceFundingTxLookupTimeout bounds a single candidate's
+// GetTransactionConfirmations call in fetchReservationAcceptanceFundingTxs.
+// It is set well below a Bitcoin chain adapter's own default per-request
+// retry budget (for the Electrum adapter, bitcoin/electrum.
+// DefaultRequestRetryTimeout is two minutes) so an unhealthy backend fails
+// a candidate's lookup fast instead of silently consuming the adapter's
+// full retry budget on every one of the bounded worker pool's concurrent
+// slots. GetTransaction itself takes no context (see bitcoin.Chain) and
+// remains bound only by the adapter's own retry policy.
+const reservationAcceptanceFundingTxLookupTimeout = 30 * time.Second
+
+// reservationAcceptanceFundingTxCandidate is a phase-one-eligible reserved
+// deposit awaiting the concurrent funding-transaction lookup performed by
+// fetchReservationAcceptanceFundingTxs.
+type reservationAcceptanceFundingTxCandidate struct {
+	event          *tbtc.DepositRevealedEvent
+	depositKey     *big.Int
+	depositRequest *tbtc.DepositChainRequest
+}
+
+// reservationAcceptanceFundingTxLookup is the outcome of one candidate's
+// funding-transaction lookup. fundingTxErr and confirmationsErr are tracked
+// separately, instead of a single combined error, so the caller can
+// reproduce the exact log message a strictly serial GetTransaction ->
+// GetTransactionConfirmations call chain would have emitted for whichever
+// of the two calls failed.
+type reservationAcceptanceFundingTxLookup struct {
+	fundingTx        *bitcoin.Transaction
+	fundingTxErr     error
+	confirmations    uint
+	confirmationsErr error
+}
+
 // reservationAcceptanceScanState is the per-wallet incremental deposit-
 // reveal scan cursor and its in-memory candidate cache, mirroring the
 // cursor/cache split used by pkg/maintainer/spv/reservation_proof_loop.go's
@@ -428,6 +474,8 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	anchorFeeComputed := false
 	now := time.Now()
 
+	var pendingCandidates []*reservationAcceptanceFundingTxCandidate
+
 	candidatesExamined := 0
 	for _, event := range depositRevealedEvents {
 		if !depositTargetsReservationVault(event.Vault, reservationVault) {
@@ -517,33 +565,57 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			continue
 		}
 
-		fundingTx, err := rat.btcChain.GetTransaction(event.FundingTxHash)
-		if err != nil {
+		pendingCandidates = append(
+			pendingCandidates,
+			&reservationAcceptanceFundingTxCandidate{
+				event:          event,
+				depositKey:     depositKey,
+				depositRequest: depositRequest,
+			},
+		)
+	}
+
+	// The two Electrum calls below (GetTransaction and
+	// GetTransactionConfirmations) are looked up concurrently for every
+	// phase-one-eligible candidate collected above, rather than one
+	// candidate at a time, so an unhealthy Bitcoin backend cannot turn this
+	// bounded candidate set into a fully serial multi-hour retry chain --
+	// see fetchReservationAcceptanceFundingTxs. fundingTxLookups is
+	// index-aligned with pendingCandidates so the loop below still applies
+	// each candidate's result in the original oldest-first order and
+	// returns the first fully eligible one deterministically, exactly as
+	// the previous strictly serial implementation did.
+	fundingTxLookups := rat.fetchReservationAcceptanceFundingTxs(pendingCandidates)
+
+	for i, pendingCandidate := range pendingCandidates {
+		event := pendingCandidate.event
+		depositKey := pendingCandidate.depositKey
+		depositRequest := pendingCandidate.depositRequest
+		lookup := fundingTxLookups[i]
+
+		if lookup.fundingTxErr != nil {
 			taskLogger.Errorf(
 				"failed to get funding tx for reserved deposit [%v]: [%v]",
 				depositKey,
-				err,
+				lookup.fundingTxErr,
 			)
 			continue
 		}
+		fundingTx := lookup.fundingTx
 
-		confirmations, err := rat.btcChain.GetTransactionConfirmations(
-			context.Background(),
-			event.FundingTxHash,
-		)
-		if err != nil {
+		if lookup.confirmationsErr != nil {
 			taskLogger.Errorf(
 				"failed to get funding tx confirmations for [%v]: [%v]",
 				depositKey,
-				err,
+				lookup.confirmationsErr,
 			)
 			continue
 		}
-		if confirmations < tbtc.DepositSweepRequiredFundingTxConfirmations {
+		if lookup.confirmations < tbtc.DepositSweepRequiredFundingTxConfirmations {
 			taskLogger.Debugf(
 				"reserved deposit [%v] funding tx confirmations [%d/%d] below required",
 				depositKey,
-				confirmations,
+				lookup.confirmations,
 				tbtc.DepositSweepRequiredFundingTxConfirmations,
 			)
 			continue
@@ -677,6 +749,77 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	}
 
 	return nil, nil
+}
+
+// fetchReservationAcceptanceFundingTxs looks up the funding transaction and
+// its confirmation count for every candidate in candidates using a small
+// bounded pool of reservationAcceptanceFundingTxLookupWorkers goroutines
+// draining a shared channel of candidate indexes, instead of performing the
+// two Electrum calls (GetTransaction, GetTransactionConfirmations) for one
+// candidate at a time. Serially, an unhealthy Bitcoin backend can turn up
+// to maxReservationAcceptanceCandidatesPerRun candidates into on the order
+// of twice that many sequential multi-minute retry windows before
+// findReservationAcceptanceCandidate gives up; running the lookups
+// concurrently bounds that to roughly ceil(len(candidates) /
+// reservationAcceptanceFundingTxLookupWorkers) sequential retry windows
+// instead. The returned slice is index-aligned with candidates so the
+// caller can still apply each candidate's result in its original
+// (oldest-first) order and pick the first fully eligible one
+// deterministically, even though the underlying network calls raced.
+func (rat *ReservationAcceptanceTask) fetchReservationAcceptanceFundingTxs(
+	candidates []*reservationAcceptanceFundingTxCandidate,
+) []reservationAcceptanceFundingTxLookup {
+	lookups := make([]reservationAcceptanceFundingTxLookup, len(candidates))
+	if len(candidates) == 0 {
+		return lookups
+	}
+
+	indexes := make(chan int, len(candidates))
+	for i := range candidates {
+		indexes <- i
+	}
+	close(indexes)
+
+	workers := reservationAcceptanceFundingTxLookupWorkers
+	if workers > len(candidates) {
+		workers = len(candidates)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
+			defer wg.Done()
+			for i := range indexes {
+				fundingTxHash := candidates[i].event.FundingTxHash
+
+				fundingTx, err := rat.btcChain.GetTransaction(fundingTxHash)
+				if err != nil {
+					lookups[i].fundingTxErr = err
+					continue
+				}
+				lookups[i].fundingTx = fundingTx
+
+				fetchCtx, cancelFetchCtx := context.WithTimeout(
+					context.Background(),
+					reservationAcceptanceFundingTxLookupTimeout,
+				)
+				confirmations, err := rat.btcChain.GetTransactionConfirmations(
+					fetchCtx,
+					fundingTxHash,
+				)
+				cancelFetchCtx()
+				if err != nil {
+					lookups[i].confirmationsErr = err
+					continue
+				}
+				lookups[i].confirmations = confirmations
+			}
+		}()
+	}
+	wg.Wait()
+
+	return lookups
 }
 
 // hasPendingAction reports whether the on-chain reservation action

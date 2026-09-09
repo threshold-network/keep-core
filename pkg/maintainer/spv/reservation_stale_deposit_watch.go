@@ -18,13 +18,29 @@ const staleDepositRevealScanLookBackBlocks = uint64(216000)
 type StaleDepositResolution uint8
 
 const (
-	// StaleDepositResolutionUnknown is the zero value representing an unknown or errored resolution.
+	// StaleDepositResolutionUnknown is the zero value, returned alongside
+	// a non-nil error whenever the check could not be completed (a chain
+	// call failed or the deposit key was invalid). No watcher state was
+	// updated on this call; the caller must retain the deposit in its
+	// tracking set and retry on the next tick.
 	StaleDepositResolutionUnknown StaleDepositResolution = iota
-	// StaleDepositResolutionKeep indicates the deposit is still pending-stale and should be retained in the tracking set.
+	// StaleDepositResolutionKeep indicates the deposit is still
+	// pending-stale (the wallet has not gone live and the action timeout
+	// has not yet elapsed) and must be retained in the caller's tracking
+	// set for the next tick; no watcher state changes as a result.
 	StaleDepositResolutionKeep
-	// StaleDepositResolutionDrop indicates the deposit is no longer a candidate for staleness (e.g. not reserved, settled action) and can be dropped from tracking.
+	// StaleDepositResolutionDrop indicates the deposit is no longer a
+	// staleness candidate (not reserved, no wallet assigned, or its
+	// reservation action already advanced past pending) and must be
+	// removed from the caller's tracking set. The caller should also call
+	// forgetDeposit to release any per-deposit cache entries the watcher
+	// holds for this key.
 	StaleDepositResolutionDrop
-	// StaleDepositResolutionNotified indicates the deposit was confirmed stale and the notification was submitted.
+	// StaleDepositResolutionNotified indicates the deposit was confirmed
+	// stale and NotifyStaleReservedDeposit was submitted, on this call or
+	// a prior one (see the `notified` field). The caller must remove the
+	// deposit from its tracking set and call forgetDeposit so the watcher
+	// does not retain state for a deposit it will never check again.
 	StaleDepositResolutionNotified
 )
 
@@ -45,10 +61,11 @@ type ReservationStaleDepositWatcher struct {
 	memoizedTimeout map[string]staleDepositTimeoutMemo
 
 	// walletTickCache memoizes GetWallet results within a single poll
-	// tick, keyed by wallet public key hash. The poller computes `now`
-	// once per tick and passes that identical value to every deposit
-	// check in the tick (see startStaleDepositPoll in
-	// reservation_wiring.go), so a `now` that differs from
+	// tick, keyed by wallet public key hash. `now` is an opaque
+	// tick-generation token: the caller computes it once per poll
+	// iteration and passes that identical value to every deposit checked
+	// in that iteration (CheckStaleReservedDeposit forwards its own `now`
+	// parameter here unchanged). A `now` that differs from
 	// walletTickCacheNow signals a new tick and invalidates the cache; a
 	// repeated `now` signals the same tick and reuses it. This lets
 	// deposits assigned to the same wallet share one GetWallet call per
@@ -56,6 +73,18 @@ type ReservationStaleDepositWatcher struct {
 	walletTickCacheValid bool
 	walletTickCacheNow   uint32
 	walletTickCache      map[[20]byte]walletFetchResult
+
+	// reservationParamsTickCache applies the identical
+	// tick-generation-token contract described above to the
+	// ReservationParameters fetch: a `now` that differs from
+	// reservationParamsTickCacheNow signals a new tick and triggers a
+	// fresh fetch; a repeated `now` reuses it. deriveTimeoutFromReveal
+	// relies on this so every deposit checked within one tick shares a
+	// single governance-parameter fetch instead of paying for one per
+	// deposit.
+	reservationParamsTickCacheValid bool
+	reservationParamsTickCacheNow   uint32
+	reservationParamsTickCache      reservationParamsFetchResult
 }
 
 // walletFetchResult caches the outcome of a single GetWallet call,
@@ -63,6 +92,14 @@ type ReservationStaleDepositWatcher struct {
 // every deposit sharing that wallet within the same poll tick.
 type walletFetchResult struct {
 	wallet *tbtc.WalletChainData
+	err    error
+}
+
+// reservationParamsFetchResult caches the outcome of a single
+// ReservationParameters call, including an error, so a failed fetch is
+// not retried for every deposit sharing the same poll tick.
+type reservationParamsFetchResult struct {
+	params *tbtc.ReservationParameters
 	err    error
 }
 
@@ -214,6 +251,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 		derivedTimeout, err := rsdw.deriveTimeoutFromReveal(
 			depositKey,
 			walletPublicKeyHash,
+			now,
 		)
 		if err != nil {
 			return StaleDepositResolutionUnknown, err
@@ -239,6 +277,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 			derivedTimeout, err := rsdw.deriveTimeoutFromReveal(
 				depositKey,
 				walletPublicKeyHash,
+				now,
 			)
 			if err != nil {
 				return StaleDepositResolutionUnknown, err
@@ -293,11 +332,13 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 // getWalletForTick fetches the given wallet's on-chain state, memoizing
 // the result for the duration of one poll tick so every deposit assigned
 // to the same wallet reuses a single GetWallet call instead of issuing
-// one per deposit. `now` identifies the tick: the poller computes it once
-// and passes the identical value to every deposit checked in that tick
-// (see startStaleDepositPoll in reservation_wiring.go), so a `now` value
-// that differs from the cached one signals a new tick and the cache is
-// dropped and rebuilt from scratch.
+// one per deposit. `now` is an opaque tick-generation token, not a
+// literal timestamp used in comparisons: the caller computes it once per
+// poll iteration and passes that identical value to every deposit
+// checked in that iteration (CheckStaleReservedDeposit forwards its own
+// `now` parameter here unchanged). A `now` value that differs from the
+// cached one signals a new tick and the cache is dropped and rebuilt
+// from scratch; a repeated `now` signals the same tick and reuses it.
 func (rsdw *ReservationStaleDepositWatcher) getWalletForTick(
 	walletPublicKeyHash [20]byte,
 	now uint32,
@@ -320,6 +361,29 @@ func (rsdw *ReservationStaleDepositWatcher) getWalletForTick(
 	return wallet, err
 }
 
+// getReservationParametersForTick fetches the live ReservationParameters,
+// applying the identical tick-generation-token contract as
+// getWalletForTick above: a `now` that differs from the cached tick
+// token signals a new tick and triggers a fresh fetch, while a repeated
+// `now` reuses the cached result. deriveTimeoutFromReveal relies on this
+// so its per-deposit staleness comparison against the memoized deadline
+// (see staleDepositTimeoutMemo) pays for the governance-parameter fetch
+// at most once per tick rather than once per deposit.
+func (rsdw *ReservationStaleDepositWatcher) getReservationParametersForTick(
+	now uint32,
+) (*tbtc.ReservationParameters, error) {
+	if !rsdw.reservationParamsTickCacheValid || now != rsdw.reservationParamsTickCacheNow {
+		rsdw.reservationParamsTickCacheValid = true
+		rsdw.reservationParamsTickCacheNow = now
+		params, err := rsdw.spvChain.ReservationParameters()
+		rsdw.reservationParamsTickCache = reservationParamsFetchResult{
+			params: params,
+			err:    err,
+		}
+	}
+	return rsdw.reservationParamsTickCache.params, rsdw.reservationParamsTickCache.err
+}
+
 // forgetDeposit clears any cached notification state and memoized
 // staleness deadline held for the given deposit key. The poller invokes
 // this once a deposit resolves to Drop or Notified, so a resolved
@@ -331,11 +395,25 @@ func (rsdw *ReservationStaleDepositWatcher) forgetDeposit(depositKey *big.Int) {
 	delete(rsdw.memoizedTimeout, key)
 }
 
+// deriveTimeoutFromReveal computes the staleness deadline for a reserved
+// deposit that has no reservation action recorded yet, from the
+// deposit's own DepositRevealed timestamp plus the live
+// ReservationActionTimeout governance parameter. It checks its own memo
+// cache (memoizedTimeout) first: an existing memo whose
+// reservationActionTimeout still matches the live governance value
+// short-circuits the block scan and event/deposit-request lookups
+// entirely. `now` only identifies the poll tick so the
+// governance-parameter fetch itself is amortized across every deposit
+// checked in that tick (see getReservationParametersForTick); it plays
+// no role in the derivation or the staleness comparison.
 func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 	depositKey *big.Int,
 	walletPublicKeyHash [20]byte,
+	now uint32,
 ) (uint32, error) {
-	params, paramsErr := rsdw.spvChain.ReservationParameters()
+	memo, hasMemo := rsdw.memoizedTimeout[depositKey.String()]
+
+	params, paramsErr := rsdw.getReservationParametersForTick(now)
 	if paramsErr != nil {
 		return 0, fmt.Errorf(
 			"failed to load reservation parameters for staleness "+
@@ -344,8 +422,7 @@ func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 		)
 	}
 
-	if memo, ok := rsdw.memoizedTimeout[depositKey.String()]; ok &&
-		memo.reservationActionTimeout == params.ReservationActionTimeout {
+	if hasMemo && memo.reservationActionTimeout == params.ReservationActionTimeout {
 		return memo.timeoutAt, nil
 	}
 

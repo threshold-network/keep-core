@@ -102,6 +102,11 @@ type localChain struct {
 	submittedAcceptanceTimeouts []*big.Int
 	reservationParameters       *tbtc.ReservationParameters
 	reservationAnchorUtxoIndex  map[[36]byte]*big.Int
+	// walletTerminationCauses is keyed by wallet public key hash; a missing
+	// entry defaults to tbtc.WalletTerminationCauseUnknown, matching the
+	// production zero-value default when no pre-termination event is found.
+	walletTerminationCauses     map[[20]byte]tbtc.WalletTerminationCause
+	walletTerminationCauseCalls int
 
 	// Error-injection fields for the reservation watcher chain-error
 	// passthrough tests: nil (the default) means the corresponding method
@@ -115,6 +120,7 @@ type localChain struct {
 	notifyStaleReservedDepositErr          error
 	pastNewWalletRegisteredEventsErr       error
 	notifyReservationStrandedErrByKey      map[string]error
+	walletTerminationCauseErr              error
 
 	// Wallet registration and pending-action-request event state for the
 	// watcher dispatch and reservation proof loop tests.
@@ -1008,6 +1014,49 @@ func (lc *localChain) getSubmittedReservationStrandedKeys() []*big.Int {
 	out := make([]*big.Int, len(lc.submittedStrandedKeys))
 	copy(out, lc.submittedStrandedKeys)
 	return out
+}
+
+// WalletTerminationCause returns the cause installed via
+// setWalletTerminationCause, or tbtc.WalletTerminationCauseUnknown if none
+// was installed for this wallet - matching production's zero-result
+// default when no pre-termination event is found.
+func (lc *localChain) WalletTerminationCause(
+	walletPublicKeyHash [20]byte,
+) (tbtc.WalletTerminationCause, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.walletTerminationCauseCalls++
+
+	if lc.walletTerminationCauseErr != nil {
+		return tbtc.WalletTerminationCauseUnknown, lc.walletTerminationCauseErr
+	}
+
+	return lc.walletTerminationCauses[walletPublicKeyHash], nil
+}
+
+// getWalletTerminationCauseCallCount returns how many times
+// WalletTerminationCause has been invoked.
+func (lc *localChain) getWalletTerminationCauseCallCount() int {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.walletTerminationCauseCalls
+}
+
+// setWalletTerminationCause installs the cause WalletTerminationCause
+// returns for the given wallet.
+func (lc *localChain) setWalletTerminationCause(
+	walletPublicKeyHash [20]byte,
+	cause tbtc.WalletTerminationCause,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.walletTerminationCauses == nil {
+		lc.walletTerminationCauses = make(map[[20]byte]tbtc.WalletTerminationCause)
+	}
+	lc.walletTerminationCauses[walletPublicKeyHash] = cause
 }
 
 // GetReservation returns the reservation previously installed via

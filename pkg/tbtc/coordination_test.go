@@ -1151,7 +1151,7 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 
 func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
 	// Mainnet must have no entry in reservationsActivationBlocks so that
-	// reservationsActivationBlock returns math.MaxUint64 (never activates)
+	// ReservationsActivationBlock returns math.MaxUint64 (never activates)
 	// until a real rollout height is chosen. A placeholder value here would
 	// be a silently-live landmine: a real height and an invented one are
 	// indistinguishable at runtime.
@@ -1160,9 +1160,9 @@ func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
 			"until a real rollout height is chosen; remove the placeholder and " +
 			"let it fall through to math.MaxUint64")
 	}
-	if got := reservationsActivationBlock(ethereum.Mainnet); got != math.MaxUint64 {
+	if got := ReservationsActivationBlock(ethereum.Mainnet); got != math.MaxUint64 {
 		t.Errorf(
-			"reservationsActivationBlock(ethereum.Mainnet) = %d, want %d",
+			"ReservationsActivationBlock(ethereum.Mainnet) = %d, want %d",
 			got,
 			uint64(math.MaxUint64),
 		)

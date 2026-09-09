@@ -93,15 +93,19 @@ const (
 // reservations activation block. See the doc comment above.
 var reservationsActivationBlocks = map[ethereum.Network]uint64{}
 
-// reservationsActivationBlock returns the reservations activation block
+// ReservationsActivationBlock returns the reservations activation block
 // height for the given network. Only ethereum.Developer and
 // ethereum.Unknown (local/dev chains) return 0, meaning reservation
 // actions are active immediately. Every other network without an
 // explicit entry in reservationsActivationBlocks returns
 // math.MaxUint64, so an unrecognized public network never activates the
 // feature instead of silently inheriting an immediate-activation
-// default.
-func reservationsActivationBlock(network ethereum.Network) uint64 {
+// default. This is the single source of truth for whether the
+// reservations feature is live on a given network at a given block:
+// the reserved-deposit gate in deposit_sweep.go (both the tbtc and
+// tbtcpg packages) must derive its decision from this comparison, not
+// from whether an unrelated chain RPC call happens to succeed.
+func ReservationsActivationBlock(network ethereum.Network) uint64 {
 	if network == ethereum.Developer || network == ethereum.Unknown {
 		return 0
 	}
@@ -257,6 +261,14 @@ type CoordinationProposalRequest struct {
 	WalletOperators     []chain.Address
 	ExecutingOperator   chain.Address
 	ActionsChecklist    []WalletActionType
+	// ReservationsActive reports whether the reservations feature is
+	// live for the network and coordination block this request was
+	// built for, i.e. ReservationsActivationBlock(network) <=
+	// coordinationBlock. Proposal generators (e.g. tbtcpg's
+	// DepositSweepTask) must use this instead of probing a
+	// reservation-related chain call and treating its failure as
+	// "not active" - see ReservationsActivationBlock's doc comment.
+	ReservationsActive bool
 }
 
 // CoordinationProposalGenerator is a component responsible for generating
@@ -682,7 +694,7 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// on-chain ReservationActionTimeout backstop firing before the wallet
 	// subsystem gets a chance to act. There is no per-operator enable
 	// flag here; the activation block is derived per-network (see
-	// reservationsActivationBlock), which keeps leader and follower
+	// ReservationsActivationBlock), which keeps leader and follower
 	// checklists in agreement without relying on local config (a
 	// follower whose local config diverged from the leader's would
 	// otherwise fault an honest leader's reservation proposal as
@@ -696,7 +708,7 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// traffic can still delay reservation acceptance/re-anchor even
 	// though the checklist entry itself is unconditional. This is an
 	// accepted tradeoff bounded by ReservationActionTimeout, not a bug.
-	if coordinationBlock >= reservationsActivationBlock(ce.ethereumNetwork) {
+	if coordinationBlock >= ReservationsActivationBlock(ce.ethereumNetwork) {
 		actions = append(actions, ActionReservationAnchor)
 		actions = append(actions, ActionReservationReanchor)
 	}
@@ -728,6 +740,7 @@ func (ce *coordinationExecutor) executeLeaderRoutine(
 			WalletOperators:     ce.coordinatedWallet.signingGroupOperators,
 			ExecutingOperator:   ce.operatorAddress,
 			ActionsChecklist:    actionsChecklist,
+			ReservationsActive:  coordinationBlock >= ReservationsActivationBlock(ce.ethereumNetwork),
 		},
 		2,             // 2 attempts at most
 		1*time.Minute, // 1 minute between attempts

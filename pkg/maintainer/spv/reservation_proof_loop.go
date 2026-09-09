@@ -32,13 +32,90 @@ type reservationProofScanState struct {
 
 	reanchorLastScannedBlock uint64
 	pendingReanchorEvents    map[string]*tbtc.ReservationReanchorRequestedEvent
+
+	// walletTransactionCache caches each wallet's confirmed Bitcoin
+	// transaction hash set and bodies from the pass that fetched them, so
+	// walletTransactionsForProof can skip the full GetTransactionsForPublicKeyHash
+	// fetch on a later pass whose lightweight GetTxHashesForPublicKeyHash
+	// check shows nothing changed for that wallet. Shared by
+	// proveReservationAcceptanceActions and proveReservationReanchorActions,
+	// since either can observe the same wallet's public key hash.
+	walletTransactionCache map[[20]byte]*walletTransactionCacheEntry
+}
+
+// walletTransactionCacheEntry holds one wallet's confirmed transaction hash
+// set together with the corresponding transaction bodies fetched alongside
+// it; see reservationProofScanState.walletTransactionCache.
+type walletTransactionCacheEntry struct {
+	txHashes     []bitcoin.Hash
+	transactions []*bitcoin.Transaction
 }
 
 func newReservationProofScanState() *reservationProofScanState {
 	return &reservationProofScanState{
 		pendingAcceptanceEvents: make(map[string]*tbtc.ReservationAcceptanceRequestedEvent),
 		pendingReanchorEvents:   make(map[string]*tbtc.ReservationReanchorRequestedEvent),
+		walletTransactionCache:  make(map[[20]byte]*walletTransactionCacheEntry),
 	}
+}
+
+// walletTransactionsForProof returns walletPublicKeyHash's confirmed
+// Bitcoin transaction history needed to match pending reservation actions
+// against. It first fetches only the wallet's confirmed transaction hashes
+// (GetTxHashesForPublicKeyHash) - far cheaper than the full transaction
+// bodies GetTransactionsForPublicKeyHash returns - and reuses the previous
+// pass's fetched transaction bodies from state.walletTransactionCache when
+// the hash set is unchanged since then, instead of unconditionally
+// refetching every wallet's full history on every ~config.IdleBackoffTime
+// pass regardless of whether anything happened on-chain for that wallet.
+func walletTransactionsForProof(
+	state *reservationProofScanState,
+	btcChain bitcoin.Chain,
+	walletPublicKeyHash [20]byte,
+	limit int,
+) ([]*bitcoin.Transaction, error) {
+	txHashes, err := btcChain.GetTxHashesForPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get transaction hashes for wallet: [%v]",
+			err,
+		)
+	}
+
+	if cached, ok := state.walletTransactionCache[walletPublicKeyHash]; ok &&
+		reservationTransactionHashesEqual(cached.txHashes, txHashes) {
+		return cached.transactions, nil
+	}
+
+	transactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		walletPublicKeyHash,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	state.walletTransactionCache[walletPublicKeyHash] = &walletTransactionCacheEntry{
+		txHashes:     txHashes,
+		transactions: transactions,
+	}
+
+	return transactions, nil
+}
+
+// reservationTransactionHashesEqual reports whether a and b contain the
+// same transaction hashes in the same order, as returned by
+// GetTxHashesForPublicKeyHash across two passes.
+func reservationTransactionHashesEqual(a, b []bitcoin.Hash) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // reservationEventKey identifies one reservation action generation, unique
@@ -256,7 +333,9 @@ func proveReservationAcceptanceActions(
 	}
 
 	for walletPublicKeyHash, events := range walletEvents {
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		walletTransactions, err := walletTransactionsForProof(
+			state,
+			btcChain,
 			walletPublicKeyHash,
 			config.TransactionLimit,
 		)
@@ -265,8 +344,11 @@ func proveReservationAcceptanceActions(
 			continue
 		}
 
-		// Index wallet transactions by deposit key for O(1) matching.
-		candidateTransactions := make(map[string]*bitcoin.Transaction)
+		// Index wallet transactions by deposit key for O(1) matching. A
+		// wallet that broadcasts an RBF replacement chain for the same
+		// deposit key produces multiple candidates per key, so every
+		// candidate is kept rather than only the last one seen.
+		candidateTransactions := make(map[string][]*bitcoin.Transaction)
 		for _, transaction := range walletTransactions {
 			if len(transaction.Inputs) == 1 && len(transaction.Outputs) == 1 && transaction.Inputs[0].Outpoint != nil {
 				input := transaction.Inputs[0]
@@ -274,22 +356,22 @@ func proveReservationAcceptanceActions(
 					input.Outpoint.TransactionHash,
 					input.Outpoint.OutputIndex,
 				)
-				candidateTransactions[depositKey.String()] = transaction
+				key := depositKey.String()
+				candidateTransactions[key] = append(candidateTransactions[key], transaction)
 			}
 		}
 
 		for _, event := range events {
-			transaction, ok := candidateTransactions[event.ReservationKey.String()]
+			candidates, ok := candidateTransactions[event.ReservationKey.String()]
 			if !ok {
 				continue
 			}
 
-			if !isMatchingReservationAcceptanceTransaction(spvChain, event, transaction) {
-				continue
-			}
-
 			if err := proveReservationTransaction(
-				transaction,
+				candidates,
+				func(transaction *bitcoin.Transaction) bool {
+					return isMatchingReservationAcceptanceTransaction(spvChain, event, transaction)
+				},
 				btcChain,
 				spvChain,
 				btcDiffChain,
@@ -309,9 +391,8 @@ func proveReservationAcceptanceActions(
 				},
 			); err != nil {
 				logger.Errorf(
-					"failed to prove reservation acceptance transaction [%s] "+
+					"failed to prove reservation acceptance transaction "+
 						"for reservation [%v]: [%v]",
-					transaction.Hash().Hex(bitcoin.ReversedByteOrder),
 					event.ReservationKey,
 					err,
 				)
@@ -440,7 +521,9 @@ func proveReservationReanchorActions(
 	}
 
 	for walletPublicKeyHash, events := range walletEvents {
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		walletTransactions, err := walletTransactionsForProof(
+			state,
+			btcChain,
 			walletPublicKeyHash,
 			config.TransactionLimit,
 		)
@@ -449,11 +532,15 @@ func proveReservationReanchorActions(
 			continue
 		}
 
-		// Index wallet transactions by spent outpoint for O(1) matching.
-		candidateTransactions := make(map[bitcoin.TransactionOutpoint]*bitcoin.Transaction)
+		// Index wallet transactions by spent outpoint for O(1) matching. A
+		// wallet that broadcasts an RBF replacement chain for the same
+		// anchor UTXO produces multiple candidates per outpoint, so every
+		// candidate is kept rather than only the last one seen.
+		candidateTransactions := make(map[bitcoin.TransactionOutpoint][]*bitcoin.Transaction)
 		for _, transaction := range walletTransactions {
 			if len(transaction.Inputs) == 1 && len(transaction.Outputs) == 1 && transaction.Inputs[0].Outpoint != nil {
-				candidateTransactions[*transaction.Inputs[0].Outpoint] = transaction
+				outpoint := *transaction.Inputs[0].Outpoint
+				candidateTransactions[outpoint] = append(candidateTransactions[outpoint], transaction)
 			}
 		}
 
@@ -478,17 +565,16 @@ func proveReservationReanchorActions(
 				continue
 			}
 
-			transaction, ok := candidateTransactions[*reservation.AnchorUtxo.Outpoint]
+			candidates, ok := candidateTransactions[*reservation.AnchorUtxo.Outpoint]
 			if !ok {
 				continue
 			}
 
-			if !isMatchingReservationReanchorTransaction(event, reservation.AnchorUtxo, transaction) {
-				continue
-			}
-
 			if err := proveReservationTransaction(
-				transaction,
+				candidates,
+				func(transaction *bitcoin.Transaction) bool {
+					return isMatchingReservationReanchorTransaction(event, reservation.AnchorUtxo, transaction)
+				},
 				btcChain,
 				spvChain,
 				btcDiffChain,
@@ -508,9 +594,8 @@ func proveReservationReanchorActions(
 				},
 			); err != nil {
 				logger.Errorf(
-					"failed to prove reservation re-anchor transaction [%s] "+
+					"failed to prove reservation re-anchor transaction "+
 						"for reservation [%v]: [%v]",
-					transaction.Hash().Hex(bitcoin.ReversedByteOrder),
 					event.ReservationKey,
 					err,
 				)
@@ -555,12 +640,28 @@ func isMatchingReservationReanchorTransaction(
 }
 
 // proveReservationTransaction assembles and submits the SPV proof for a
-// single reservation acceptance or re-anchor transaction, once it has
-// accumulated enough confirmations and its proof falls within the relay's
-// difficulty range. cache carries the pass-invariant chain reads shared
-// with every other transaction proved in the same pass; see proofInfoCache.
+// reservation acceptance or re-anchor transaction, once it has accumulated
+// enough confirmations and its proof falls within the relay's difficulty
+// range.
+//
+// candidates holds every wallet transaction spending the acceptance/
+// re-anchor action's expected outpoint that was observed on this pass; a
+// wallet that broadcasts an RBF (replace-by-fee) replacement chain for the
+// same spend can have more than one, and the order candidates were
+// collected in is not guaranteed to match confirmation order. candidates
+// are walked in order and the first one that both matches the expected
+// transaction shape (isMatch) and has already accumulated enough
+// confirmations is proved, so a still-pending earlier-seen replacement
+// never silently blocks a later, already-confirmed one. If no candidate
+// has enough confirmations yet, the first matching candidate's skip/
+// confirmation state is logged, mirroring the previous single-candidate
+// behavior.
+//
+// cache carries the pass-invariant chain reads shared with every other
+// transaction proved in the same pass; see proofInfoCache.
 func proveReservationTransaction(
-	transaction *bitcoin.Transaction,
+	candidates []*bitcoin.Transaction,
+	isMatch func(transaction *bitcoin.Transaction) bool,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
@@ -569,21 +670,55 @@ func proveReservationTransaction(
 	metricsRecorder MetricsRecorder,
 	submit func(transactionHash bitcoin.Hash, requiredConfirmations uint) error,
 ) error {
-	transactionHashStr := transaction.Hash().Hex(bitcoin.ReversedByteOrder)
+	var pending *bitcoin.Transaction
+	var pendingConfirmations, pendingRequired uint
+	var pendingSkipReason proofSkipReason
 
-	accumulatedConfirmations, requiredConfirmations, skipReason, err := getProofInfo(
-		transaction.Hash(),
-		btcChain,
-		spvChain,
-		btcDiffChain,
-		maxProofHeaders,
-		cache,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to get proof info: [%v]", err)
+	for _, transaction := range candidates {
+		if !isMatch(transaction) {
+			continue
+		}
+
+		accumulatedConfirmations, requiredConfirmations, skipReason, err := getProofInfo(
+			transaction.Hash(),
+			btcChain,
+			spvChain,
+			btcDiffChain,
+			maxProofHeaders,
+			cache,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to get proof info: [%v]", err)
+		}
+
+		if skipReason == proofSkipNone && accumulatedConfirmations >= requiredConfirmations {
+			if err := submit(transaction.Hash(), requiredConfirmations); err != nil {
+				return err
+			}
+
+			logger.Infof(
+				"successfully submitted proof for transaction [%s]",
+				transaction.Hash().Hex(bitcoin.ReversedByteOrder),
+			)
+
+			return nil
+		}
+
+		if pending == nil {
+			pending = transaction
+			pendingConfirmations = accumulatedConfirmations
+			pendingRequired = requiredConfirmations
+			pendingSkipReason = skipReason
+		}
 	}
 
-	switch skipReason {
+	if pending == nil {
+		return nil
+	}
+
+	transactionHashStr := pending.Hash().Hex(bitcoin.ReversedByteOrder)
+
+	switch pendingSkipReason {
 	case proofSkipOutsideRelayRange:
 		logger.Warnf(
 			"skipped proving transaction [%s]; the range of the "+
@@ -614,35 +749,19 @@ func proveReservationTransaction(
 		}
 		return nil
 	case proofSkipNone:
-		// The proof is within range and assemblable; proceed to the
-		// confirmation check and submission below.
-	default:
-		return fmt.Errorf(
-			"unexpected proof skip reason [%d] for transaction [%s]",
-			skipReason,
-			transactionHashStr,
-		)
-	}
-
-	if accumulatedConfirmations < requiredConfirmations {
 		logger.Infof(
 			"skipped proving transaction [%s]; transaction has [%v/%v] "+
 				"confirmations",
 			transactionHashStr,
-			accumulatedConfirmations,
-			requiredConfirmations,
+			pendingConfirmations,
+			pendingRequired,
 		)
 		return nil
+	default:
+		return fmt.Errorf(
+			"unexpected proof skip reason [%d] for transaction [%s]",
+			pendingSkipReason,
+			transactionHashStr,
+		)
 	}
-
-	if err := submit(transaction.Hash(), requiredConfirmations); err != nil {
-		return err
-	}
-
-	logger.Infof(
-		"successfully submitted proof for transaction [%s]",
-		transactionHashStr,
-	)
-
-	return nil
 }

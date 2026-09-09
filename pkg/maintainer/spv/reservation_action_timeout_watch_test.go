@@ -1078,3 +1078,307 @@ func TestReservationActionTimeoutWatcher_RunLoop_BoundedFirstScan(t *testing.T) 
 		t.Errorf("oldKey should not have been discovered by bounded initial scan")
 	}
 }
+
+// TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_NotifiesWhenWalletClosed
+// verifies finding P1-2: ReservationRouter.sol's notifyReservationActionTimeout
+// restores a Reanchor-type reservation to Active under its current wallet,
+// so once that wallet is Closed/Terminated the anchor is stranded on
+// Bitcoin but would otherwise read Active on-chain indefinitely - the
+// stranding watcher's only trigger, the wallet's one-shot OnWalletClosed
+// event, already fired before this timeout notification landed. With a
+// strandingWatcher wired in via SetStrandingWatcher, a successful Reanchor
+// timeout notification must immediately re-examine the reservation and
+// notify it stranded.
+func TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_NotifiesWhenWalletClosed(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	key := reservationKey(0xE001)
+
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		WalletPublicKeyHash: wallet,
+		RequestNonce:        1,
+		// ReservationRouter.sol's notifyReservationActionTimeout restores
+		// the reservation to Active as part of the same call; the local
+		// chain fake is a plain snapshot store rather than a state
+		// machine, so the post-timeout Active state is seeded directly.
+		State: tbtc.ReservationStateActive,
+	})
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeReanchor,
+		State:      tbtc.ReservationActionStatePending,
+		TimeoutAt:  100,
+	})
+
+	ratw := NewReservationActionTimeoutWatcher(spvChain, 0)
+	ratw.SetStrandingWatcher(newReservationStrandingWatcher(spvChain))
+
+	if err := ratw.CheckReservationActionTimeouts(key, 5_000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
+		t.Fatalf("expected one action timeout notification, got %d", len(calls))
+	}
+
+	stranded := spvChain.getSubmittedReservationStrandedKeys()
+	if len(stranded) != 1 {
+		t.Fatalf(
+			"expected the reservation to be immediately re-examined and "+
+				"notified stranded, got %d stranding notifications",
+			len(stranded),
+		)
+	}
+	if diff := deep.Equal(key, stranded[0]); diff != nil {
+		t.Errorf("unexpected stranded key: %v", diff)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_SkipsWhenWalletLive
+// verifies the immediate re-check only strands the reservation when its
+// wallet is actually Closed/Terminated; a still-Live wallet (the common
+// case - most Reanchor timeouts have nothing to do with a dead wallet)
+// must not trigger a stranding notification.
+func TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_SkipsWhenWalletLive(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	key := reservationKey(0xE002)
+
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateLive})
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		WalletPublicKeyHash: wallet,
+		RequestNonce:        1,
+		State:               tbtc.ReservationStateActive,
+	})
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeReanchor,
+		State:      tbtc.ReservationActionStatePending,
+		TimeoutAt:  100,
+	})
+
+	ratw := NewReservationActionTimeoutWatcher(spvChain, 0)
+	ratw.SetStrandingWatcher(newReservationStrandingWatcher(spvChain))
+
+	if err := ratw.CheckReservationActionTimeouts(key, 5_000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
+		t.Fatalf("expected one action timeout notification, got %d", len(calls))
+	}
+
+	if stranded := spvChain.getSubmittedReservationStrandedKeys(); len(stranded) != 0 {
+		t.Fatalf(
+			"expected no stranding notification for a still-Live wallet, got %d",
+			len(stranded),
+		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_NilWatcherIsNoOp
+// verifies recheckStrandingAfterActionTimeout is a safe no-op when no
+// strandingWatcher has been wired in via SetStrandingWatcher (the default
+// for every ReservationActionTimeoutWatcher until reservation_wiring.go
+// calls it), matching every other existing test in this file that never
+// wires one in.
+func TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_NilWatcherIsNoOp(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKH()
+	key := reservationKey(0xE003)
+
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		WalletPublicKeyHash: wallet,
+		RequestNonce:        1,
+		State:               tbtc.ReservationStateActive,
+	})
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeReanchor,
+		State:      tbtc.ReservationActionStatePending,
+		TimeoutAt:  100,
+	})
+
+	ratw := NewReservationActionTimeoutWatcher(spvChain, 0)
+
+	if err := ratw.CheckReservationActionTimeouts(key, 5_000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if stranded := spvChain.getSubmittedReservationStrandedKeys(); len(stranded) != 0 {
+		t.Fatalf(
+			"expected no stranding notification without a wired strandingWatcher, got %d",
+			len(stranded),
+		)
+	}
+}
+
+// actionCallCountingChain wraps a Chain and counts GetReservationAction
+// calls, to verify finding P1-4's per-tick RPC volume cap without
+// extending the shared localChain fake in chain_test.go.
+type actionCallCountingChain struct {
+	Chain
+	getReservationActionCalls int
+}
+
+func (c *actionCallCountingChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationAction, error) {
+	c.getReservationActionCalls++
+	return c.Chain.GetReservationAction(reservationKey, requestNonce)
+}
+
+// TestReservationActionTimeoutWatcher_PollPendingActions_BoundsRPCVolumePerTick
+// verifies finding P1-4: pollPendingActions issues at most
+// reservationActionTimeoutMaxChecksPerTick GetReservationAction calls on a
+// single tick, regardless of how many actions are tracked, via the
+// per-tick batch cap and rotating cursor implemented in
+// nextActionCheckBatch.
+func TestReservationActionTimeoutWatcher_PollPendingActions_BoundsRPCVolumePerTick(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	wrapped := &actionCallCountingChain{Chain: spvChain}
+
+	ratw := NewReservationActionTimeoutWatcher(wrapped, 0)
+	ratw.nowFn = func() uint32 { return 500 }
+
+	wallet := walletPKH()
+	total := reservationActionTimeoutMaxChecksPerTick + 10
+	for i := range total {
+		key := reservationKey(uint64(0xD000 + i))
+		seededReservation(
+			t,
+			spvChain,
+			key,
+			wallet,
+			[]*tbtc.ReservationAction{
+				{
+					ActionType: tbtc.ReservationActionTypeReanchor,
+					State:      tbtc.ReservationActionStatePending,
+					TimeoutAt:  100,
+				},
+			},
+			1,
+		)
+		eventKey := actionEventKey(key, 1)
+		ratw.pendingActions[eventKey] = &pendingAction{
+			reservationKey: key,
+			requestNonce:   1,
+		}
+	}
+
+	if err := ratw.pollPendingActions(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if wrapped.getReservationActionCalls != reservationActionTimeoutMaxChecksPerTick {
+		t.Fatalf(
+			"expected exactly %d GetReservationAction calls on a single "+
+				"tick with %d tracked actions, got %d",
+			reservationActionTimeoutMaxChecksPerTick,
+			total,
+			wrapped.getReservationActionCalls,
+		)
+	}
+
+	// Every checked action in this batch is Reanchor+Pending+overdue, so
+	// the bounded batch also produced exactly one timeout notification
+	// per checked action this tick.
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != reservationActionTimeoutMaxChecksPerTick {
+		t.Fatalf(
+			"expected %d timeout notifications on the first tick, got %d",
+			reservationActionTimeoutMaxChecksPerTick,
+			len(calls),
+		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_NextActionCheckBatch_CapsAndRotates
+// verifies nextActionCheckBatch caps each tick's batch at
+// reservationActionTimeoutMaxChecksPerTick and, via its rotating cursor,
+// covers every tracked action within ceil(tracked/cap) ticks.
+func TestReservationActionTimeoutWatcher_NextActionCheckBatch_CapsAndRotates(t *testing.T) {
+	ratw := NewReservationActionTimeoutWatcher(newLocalChain(), 0)
+
+	total := reservationActionTimeoutMaxChecksPerTick + 10
+	for i := range total {
+		key := reservationKey(uint64(0xF000 + i))
+		eventKey := actionEventKey(key, 1)
+		ratw.pendingActions[eventKey] = &pendingAction{
+			reservationKey: key,
+			requestNonce:   1,
+		}
+	}
+
+	batch1 := ratw.nextActionCheckBatch()
+	if len(batch1) != reservationActionTimeoutMaxChecksPerTick {
+		t.Fatalf(
+			"expected first-tick batch capped at %d, got %d",
+			reservationActionTimeoutMaxChecksPerTick,
+			len(batch1),
+		)
+	}
+
+	batch2 := ratw.nextActionCheckBatch()
+	if len(batch2) != reservationActionTimeoutMaxChecksPerTick {
+		t.Fatalf(
+			"expected second-tick batch also capped at %d, got %d",
+			reservationActionTimeoutMaxChecksPerTick,
+			len(batch2),
+		)
+	}
+
+	seen := make(map[string]bool, total)
+	for _, key := range batch1 {
+		seen[key] = true
+	}
+	for _, key := range batch2 {
+		seen[key] = true
+	}
+	if len(seen) != total {
+		t.Fatalf(
+			"expected all %d tracked actions covered within 2 ticks, got %d distinct",
+			total,
+			len(seen),
+		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_NextActionCheckBatch_NoCapNeeded
+// verifies that when the tracked count is at or below the per-tick cap,
+// a single batch covers everything and the cursor resets to the
+// beginning - preserving the pre-fix single-pass behavior for the common
+// case where the cap never actually binds.
+func TestReservationActionTimeoutWatcher_NextActionCheckBatch_NoCapNeeded(t *testing.T) {
+	ratw := NewReservationActionTimeoutWatcher(newLocalChain(), 0)
+
+	for i := range 5 {
+		key := reservationKey(uint64(0xF100 + i))
+		eventKey := actionEventKey(key, 1)
+		ratw.pendingActions[eventKey] = &pendingAction{
+			reservationKey: key,
+			requestNonce:   1,
+		}
+	}
+
+	batch := ratw.nextActionCheckBatch()
+	if len(batch) != 5 {
+		t.Fatalf("expected all 5 tracked actions in a single batch, got %d", len(batch))
+	}
+	if ratw.actionCheckCursor != "" {
+		t.Fatalf(
+			"expected cursor to reset once every tracked action is "+
+				"covered in one tick, got %q",
+			ratw.actionCheckCursor,
+		)
+	}
+}

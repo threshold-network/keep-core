@@ -111,6 +111,47 @@ func (t ReservationActionType) String() string {
 	}
 }
 
+// WalletTerminationCause represents the reason a wallet was terminated
+// (or closed), inferred from which pre-termination on-chain event was
+// last emitted for it, so a reservation stranding notification can carry
+// operational context instead of a bare notify-with-no-reason call.
+type WalletTerminationCause uint8
+
+const (
+	// WalletTerminationCauseUnknown means no distinguishing pre-termination
+	// event (MovingFundsTimedOut, MovedFundsSweepTimedOut,
+	// FraudChallengeDefeatTimedOut) could be found for the wallet within the
+	// lookback window searched, or the wallet closed via the cooperative
+	// WalletClosed path rather than being terminated.
+	WalletTerminationCauseUnknown WalletTerminationCause = iota
+	// WalletTerminationCauseMovingFundsTimeout means the wallet was
+	// terminated after failing to submit its moving funds commitment
+	// within the allotted window.
+	WalletTerminationCauseMovingFundsTimeout
+	// WalletTerminationCauseMovedFundsSweepTimeout means the wallet was
+	// terminated after failing to sweep funds moved to it within the
+	// allotted window.
+	WalletTerminationCauseMovedFundsSweepTimeout
+	// WalletTerminationCauseFraudChallengeDefeat means the wallet was
+	// terminated after losing a fraud challenge.
+	WalletTerminationCauseFraudChallengeDefeat
+)
+
+func (c WalletTerminationCause) String() string {
+	switch c {
+	case WalletTerminationCauseUnknown:
+		return "Unknown"
+	case WalletTerminationCauseMovingFundsTimeout:
+		return "MovingFundsTimeout"
+	case WalletTerminationCauseMovedFundsSweepTimeout:
+		return "MovedFundsSweepTimeout"
+	case WalletTerminationCauseFraudChallengeDefeat:
+		return "FraudChallengeDefeat"
+	default:
+		return fmt.Sprintf("WalletTerminationCause(%d)", uint8(c))
+	}
+}
+
 // ReservationActionState represents the settlement state of a reservation
 // action generation.
 type ReservationActionState uint8

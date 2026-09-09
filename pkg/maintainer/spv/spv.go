@@ -94,6 +94,35 @@ func Initialize(
 		// funds sweep, none of which need that pair) cannot carry. See
 		// reservation_proof_loop.go.
 		go maintainReservationProofs(ctx, config, spvChain, btcDiffChain, btcChain, metricsRecorder)
+
+		// Reservation watcher wiring (stranding / stale-deposit /
+		// action-timeout - see reservation_wiring.go) is a mandatory,
+		// permissionless, network-wide duty, not a leader-election duty,
+		// but it lives in this package and this is the process
+		// guaranteed to run whenever the reservation feature is enabled
+		// end-to-end. cmd/start.go's client process also wires the same
+		// watchers against its own tbtcChain handle (see its call site
+		// for why it is kept in addition to this one rather than instead
+		// of it). walletClosedChain requires a type assertion because
+		// spv.Chain does not declare OnWalletClosed; every production
+		// Chain implementation (ethereum's tbtc.Chain) satisfies it.
+		// This process has no visibility into the client's own
+		// Tbtc.Reservations.LeaderDutiesEnabled flag, so it passes true
+		// to skip WireReservationWatchers's paired-flag misconfiguration
+		// self-check, relying on the informational log above instead.
+		// The operator explicitly opted into reservation duties via this
+		// flag, so a failure to wire the watchers is treated as fatal,
+		// matching cmd/start.go's severity for the same failure.
+		walletClosedChain, ok := spvChain.(WalletClosedChain)
+		if !ok {
+			logger.Fatalf(
+				"cannot wire reservation watchers: chain implementation " +
+					"does not support wallet closed event subscription",
+			)
+		}
+		if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true); err != nil {
+			logger.Fatalf("failed to wire reservation watchers: [%v]", err)
+		}
 	}
 
 	go spvMaintainer.startControlLoop(ctx)
