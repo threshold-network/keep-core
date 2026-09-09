@@ -467,17 +467,6 @@ mod tests {
                 previous_value,
             }
         }
-
-        #[allow(dead_code)]
-        fn unset(key: &'static str) -> Self {
-            let previous_value = std::env::var(key).ok();
-            std::env::remove_var(key);
-
-            Self {
-                key,
-                previous_value,
-            }
-        }
     }
 
     impl Drop for EnvVarGuard {

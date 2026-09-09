@@ -877,8 +877,6 @@ mod tests {
 
     #[derive(serde::Deserialize)]
     struct CoordinatorShuffleCorpusFile {
-        #[allow(dead_code)]
-        description: String,
         cases: Vec<CoordinatorShuffleCase>,
     }
 
