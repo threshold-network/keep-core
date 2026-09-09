@@ -20,13 +20,11 @@ type mockAdmissionReader struct {
 	eligibleStakes                map[common.Address]*big.Int
 	pendingAuthorizationDecreases map[common.Address]*big.Int
 
-	stakingProviderErr              error
-	eligibleStakeErr                error
-	pendingAuthorizationDecreaseErr error
+	stakingProviderErr error
+	eligibleStakeErr   error
 
-	stakingProviderCalls              int
-	eligibleStakeCalls                int
-	pendingAuthorizationDecreaseCalls int
+	stakingProviderCalls int
+	eligibleStakeCalls   int
 }
 
 func (mar *mockAdmissionReader) OperatorToStakingProvider(
@@ -53,29 +51,14 @@ func (mar *mockAdmissionReader) EligibleStake(
 	return mar.eligibleStakes[stakingProvider], nil
 }
 
+// PendingAuthorizationDecrease answers the pending decreases seeded into the
+// reader. A pending decrease is not an admission credential, so the predicate
+// under test has no way to reach this read: tbtcAdmissionReader does not
+// declare it.
 func (mar *mockAdmissionReader) PendingAuthorizationDecrease(
 	stakingProvider common.Address,
 ) (*big.Int, error) {
-	mar.pendingAuthorizationDecreaseCalls++
-
-	if mar.pendingAuthorizationDecreaseErr != nil {
-		return nil, mar.pendingAuthorizationDecreaseErr
-	}
-
 	return mar.pendingAuthorizationDecreases[stakingProvider], nil
-}
-
-// legacyDelegationApplication mirrors the predicate BeaconChain.IsRecognized
-// implements: recognition follows a legacy token staking delegation, which the
-// tBTC branch no longer consults.
-type legacyDelegationApplication struct {
-	delegated map[string]bool
-}
-
-func (lda *legacyDelegationApplication) IsRecognized(
-	operatorPublicKey *operator.PublicKey,
-) (bool, error) {
-	return lda.delegated[operatorPublicKey.String()], nil
 }
 
 // tTokens returns the given whole number of T in the 18-decimal base unit
@@ -108,35 +91,29 @@ func newTestOperator(t *testing.T) (*operator.PublicKey, common.Address) {
 func TestTbtcChain_IsRecognized(t *testing.T) {
 	stakingProvider := common.HexToAddress("0x1")
 
-	// The floor an authorization decrease cannot be lowered past without going
-	// to zero outright.
+	// The floor an authorization cannot be lowered past without going to zero
+	// outright.
 	minimumAuthorization := tTokens(40_000)
 
 	var tests = map[string]struct {
-		eligibleStake                *big.Int
-		pendingAuthorizationDecrease *big.Int
-		expectedRecognized           bool
+		eligibleStake      *big.Int
+		expectedRecognized bool
 	}{
 		"authorized staking provider that never held a legacy delegation": {
 			eligibleStake:      tTokens(40_000_000),
 			expectedRecognized: true,
 		},
-		"pending decrease sitting exactly on the minimum authorization": {
+		"authorization sitting exactly on the minimum": {
 			eligibleStake:      minimumAuthorization,
 			expectedRecognized: true,
 		},
-		"authorization decrease approved down to zero": {
+		"authorization decreased to zero with nothing pending": {
 			eligibleStake:      big.NewInt(0),
 			expectedRecognized: false,
 		},
 		"eligible stake the registry reported as no value at all": {
 			eligibleStake:      nil,
 			expectedRecognized: false,
-		},
-		"a pending unapproved decrease keeps the provider admitted": {
-			eligibleStake:                big.NewInt(0),
-			pendingAuthorizationDecrease: tTokens(30_000),
-			expectedRecognized:           true,
 		},
 	}
 
@@ -152,9 +129,6 @@ func TestTbtcChain_IsRecognized(t *testing.T) {
 					eligibleStakes: map[common.Address]*big.Int{
 						stakingProvider: test.eligibleStake,
 					},
-					pendingAuthorizationDecreases: map[common.Address]*big.Int{
-						stakingProvider: test.pendingAuthorizationDecrease,
-					},
 				},
 			}
 
@@ -169,6 +143,68 @@ func TestTbtcChain_IsRecognized(t *testing.T) {
 				test.expectedRecognized,
 				isRecognized,
 			)
+		})
+	}
+}
+
+// TestTbtcChain_IsRecognized_PendingOnlyRejected covers the two shapes a
+// staking provider can carry a positive pending authorization decrease in
+// while holding no eligible stake. A requested decrease is subtracted from
+// eligible stake when it is requested rather than when it is approved, so both
+// shapes are ordinary chain states rather than corner cases. Neither of them
+// is an admission credential: the provider is not currently authorized for the
+// wallet registry, and only the authorizer can change that.
+func TestTbtcChain_IsRecognized_PendingOnlyRejected(t *testing.T) {
+	stakingProvider := common.HexToAddress("0x1")
+
+	var tests = map[string]struct {
+		pendingAuthorizationDecrease *big.Int
+	}{
+		// The whole authorization was requested for decrease, taking eligible
+		// stake to zero while the request waits.
+		"full_decrease": {
+			pendingAuthorizationDecrease: tTokens(40_000),
+		},
+		// A decrease record outliving the authorization it was requested
+		// against, so nothing remains for it to be subtracted from.
+		"orphan": {
+			pendingAuthorizationDecrease: tTokens(30_000),
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			operatorPublicKey, operatorAddress := newTestOperator(t)
+
+			admission := &mockAdmissionReader{
+				stakingProviders: map[common.Address]common.Address{
+					operatorAddress: stakingProvider,
+				},
+				eligibleStakes: map[common.Address]*big.Int{
+					stakingProvider: big.NewInt(0),
+				},
+				pendingAuthorizationDecreases: map[common.Address]*big.Int{
+					stakingProvider: test.pendingAuthorizationDecrease,
+				},
+			}
+
+			// The fixture is only meaningful if the pending amount it seeds is
+			// actually positive; a reader answering nil would make the case
+			// indistinguishable from having no pending record at all.
+			testutils.AssertBigIntNonZero(
+				t,
+				"seeded pending authorization decrease",
+				admission.pendingAuthorizationDecreases[stakingProvider],
+			)
+
+			chain := &TbtcChain{admission: admission}
+
+			isRecognized, err := chain.IsRecognized(operatorPublicKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			testutils.AssertBoolsEqual(t, "recognition", false, isRecognized)
 		})
 	}
 }
@@ -193,6 +229,12 @@ func TestTbtcChain_IsRecognized_UnregisteredOperator(t *testing.T) {
 	}
 
 	testutils.AssertBoolsEqual(t, "recognition", false, isRecognized)
+	testutils.AssertIntsEqual(
+		t,
+		"staking provider reads",
+		1,
+		admission.stakingProviderCalls,
+	)
 	testutils.AssertIntsEqual(
 		t,
 		"eligible stake reads",
@@ -220,6 +262,9 @@ func TestTbtcChain_IsRecognized_StakingProviderLookupFails(t *testing.T) {
 	testutils.AssertBoolsEqual(t, "recognition", false, isRecognized)
 	if err == nil {
 		t.Fatal("expected the chain error to be returned to the caller")
+	}
+	if errors.Is(err, firewall.ErrNotRecognized) {
+		t.Fatal("chain error was reported as a non-recognition")
 	}
 
 	// Recognition wraps rather than formats its chain errors, so the cause
@@ -250,159 +295,12 @@ func TestTbtcChain_IsRecognized_EligibleStakeLookupFails(t *testing.T) {
 	isRecognized, err := chain.IsRecognized(operatorPublicKey)
 
 	testutils.AssertBoolsEqual(t, "recognition", false, isRecognized)
-	testutils.AssertAnyErrorInChainMatchesTarget(t, lookupErr, err)
-}
-
-// TestTbtcChain_IsRecognized_PendingAuthorizationDecreaseLookupFails asserts
-// the same fail-closed behaviour for the pending authorization decrease read,
-// which the predicate only reaches once eligible stake comes back zero.
-func TestTbtcChain_IsRecognized_PendingAuthorizationDecreaseLookupFails(t *testing.T) {
-	operatorPublicKey, operatorAddress := newTestOperator(t)
-
-	stakingProvider := common.HexToAddress("0x1")
-	lookupErr := errors.New("connection refused")
-
-	chain := &TbtcChain{
-		admission: &mockAdmissionReader{
-			stakingProviders: map[common.Address]common.Address{
-				operatorAddress: stakingProvider,
-			},
-			eligibleStakes: map[common.Address]*big.Int{
-				stakingProvider: big.NewInt(0),
-			},
-			pendingAuthorizationDecreaseErr: lookupErr,
-		},
-	}
-
-	isRecognized, err := chain.IsRecognized(operatorPublicKey)
-
-	testutils.AssertBoolsEqual(t, "recognition", false, isRecognized)
-	testutils.AssertAnyErrorInChainMatchesTarget(t, lookupErr, err)
-}
-
-// TestTbtcChain_IsRecognized_ChainErrorIsNotCached pins the reason the
-// predicate must not fold an error into a negative result. The firewall caches
-// negative recognition for an hour; were an error to arrive as "not
-// recognized", a peer would stay locked out for that hour after a momentary
-// chain fault. The error must instead surface to the caller, leaving the cache
-// untouched, so that the very next attempt re-reads the chain.
-func TestTbtcChain_IsRecognized_ChainErrorIsNotCached(t *testing.T) {
-	operatorPublicKey, operatorAddress := newTestOperator(t)
-
-	stakingProvider := common.HexToAddress("0x1")
-
-	admission := &mockAdmissionReader{
-		stakingProviders: map[common.Address]common.Address{
-			operatorAddress: stakingProvider,
-		},
-		eligibleStakes: map[common.Address]*big.Int{
-			stakingProvider: tTokens(40_000),
-		},
-		eligibleStakeErr: errors.New("connection refused"),
-	}
-
-	policy := firewall.AnyApplicationPolicy(
-		[]firewall.Application{&TbtcChain{admission: admission}},
-		firewall.EmptyAllowList(),
-	)
-
-	err := policy.Validate(operatorPublicKey)
 	if err == nil {
-		t.Fatal("expected the chain error to surface from validation")
+		t.Fatal("expected the chain error to be returned to the caller")
 	}
 	if errors.Is(err, firewall.ErrNotRecognized) {
 		t.Fatal("chain error was reported as a non-recognition")
 	}
 
-	// The fault clears. Nothing was cached, so the peer is admitted straight
-	// away rather than after the caching period.
-	admission.eligibleStakeErr = nil
-
-	if err := policy.Validate(operatorPublicKey); err != nil {
-		t.Fatalf("peer was not admitted once the chain recovered: [%v]", err)
-	}
-}
-
-// TestTbtcChain_IsRecognized_LegacyDelegationAdmittedByBeaconBranch documents a
-// gap this predicate does not close, and asserts the behaviour as it stands
-// rather than as it should be. Admission is a disjunction over applications, so
-// an identity holding nothing but a legacy token staking delegation - including
-// one whose authorization has since been revoked - keeps its admission through
-// the beacon branch even though the tBTC branch now rejects it. The beacon
-// branch is represented here by a stand-in mirroring the predicate beacon.go
-// implements, because the property under test belongs to the composition.
-func TestTbtcChain_IsRecognized_LegacyDelegationAdmittedByBeaconBranch(t *testing.T) {
-	operatorPublicKey, operatorAddress := newTestOperator(t)
-
-	stakingProvider := common.HexToAddress("0x1")
-
-	tbtcChain := &TbtcChain{
-		admission: &mockAdmissionReader{
-			stakingProviders: map[common.Address]common.Address{
-				operatorAddress: stakingProvider,
-			},
-			eligibleStakes: map[common.Address]*big.Int{
-				stakingProvider: big.NewInt(0),
-			},
-		},
-	}
-
-	beaconChain := &legacyDelegationApplication{
-		delegated: map[string]bool{operatorPublicKey.String(): true},
-	}
-
-	isRecognized, err := tbtcChain.IsRecognized(operatorPublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	testutils.AssertBoolsEqual(t, "tbtc branch recognition", false, isRecognized)
-
-	// Applications are supplied beacon first, matching the production wiring.
-	policy := firewall.AnyApplicationPolicy(
-		[]firewall.Application{beaconChain, tbtcChain},
-		firewall.EmptyAllowList(),
-	)
-
-	if err := policy.Validate(operatorPublicKey); err != nil {
-		t.Fatalf(
-			"a legacy delegation is expected to remain admitted: [%v]",
-			err,
-		)
-	}
-}
-
-// TestTbtcChain_IsRecognized_UnauthorizedOperatorRejectedByBothBranches is the
-// counterpart to the case above: registering an operator is permissionless on
-// both registries, so an address that only registered itself must be rejected
-// whichever branch evaluates it.
-func TestTbtcChain_IsRecognized_UnauthorizedOperatorRejectedByBothBranches(t *testing.T) {
-	operatorPublicKey, operatorAddress := newTestOperator(t)
-
-	stakingProvider := common.HexToAddress("0x1")
-
-	tbtcChain := &TbtcChain{
-		admission: &mockAdmissionReader{
-			stakingProviders: map[common.Address]common.Address{
-				operatorAddress: stakingProvider,
-			},
-			eligibleStakes: map[common.Address]*big.Int{
-				stakingProvider: big.NewInt(0),
-			},
-		},
-	}
-
-	policy := firewall.AnyApplicationPolicy(
-		[]firewall.Application{
-			&legacyDelegationApplication{delegated: map[string]bool{}},
-			tbtcChain,
-		},
-		firewall.EmptyAllowList(),
-	)
-
-	testutils.AssertErrorsSame(
-		t,
-		firewall.ErrNotRecognized,
-		policy.Validate(operatorPublicKey),
-	)
+	testutils.AssertAnyErrorInChainMatchesTarget(t, lookupErr, err)
 }

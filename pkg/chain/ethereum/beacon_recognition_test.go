@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/firewall"
 )
 
 // mockBeaconAdmissionReader stands in for the chain reads the beacon
@@ -145,6 +146,9 @@ func TestBeaconChain_IsRecognized_StakingProviderLookupFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the chain error to be returned to the caller")
 	}
+	if errors.Is(err, firewall.ErrNotRecognized) {
+		t.Fatal("chain error was reported as a non-recognition")
+	}
 
 	testutils.AssertAnyErrorInChainMatchesTarget(t, lookupErr, err)
 }
@@ -171,6 +175,9 @@ func TestBeaconChain_IsRecognized_HasStakeDelegationLookupFails(t *testing.T) {
 	testutils.AssertBoolsEqual(t, "recognition", false, isRecognized)
 	if err == nil {
 		t.Fatal("expected the chain error to be returned to the caller")
+	}
+	if errors.Is(err, firewall.ErrNotRecognized) {
+		t.Fatal("chain error was reported as a non-recognition")
 	}
 
 	testutils.AssertAnyErrorInChainMatchesTarget(t, lookupErr, err)

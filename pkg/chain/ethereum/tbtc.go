@@ -54,14 +54,13 @@ const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
 )
 
-// tbtcAdmissionReader narrows the WalletRegistry down to the three reads that
+// tbtcAdmissionReader narrows the WalletRegistry down to the two reads that
 // decide whether a peer is admitted to the network. *ecdsacontract.WalletRegistry
 // satisfies it as it stands; the indirection exists so the admission predicate
 // can be exercised without a chain behind it.
 type tbtcAdmissionReader interface {
 	OperatorToStakingProvider(operator common.Address) (common.Address, error)
 	EligibleStake(stakingProvider common.Address) (*big.Int, error)
-	PendingAuthorizationDecrease(stakingProvider common.Address) (*big.Int, error)
 }
 
 // TbtcChain represents a TBTC-specific chain handle.
@@ -325,8 +324,7 @@ func (tc *TbtcChain) Staking() (chain.Address, error) {
 // IsRecognized checks whether the given operator is recognized by the TbtcChain
 // as eligible to join the network. An operator is recognized when the staking
 // provider it is registered under currently holds eligible stake for the wallet
-// registry, that is, when that provider is authorized and no pending
-// authorization decrease has taken it below the minimum authorization.
+// registry.
 //
 // Admission for the client as a whole is a disjunction over every registered
 // application, evaluated by firewall.AnyApplicationPolicy. Written out in full,
@@ -339,15 +337,21 @@ func (tc *TbtcChain) Staking() (chain.Address, error) {
 // The leading FALSE is the static allow list, which production builds empty.
 // This method contributes the third disjunct only; BeaconChain.IsRecognized
 // contributes the second and deliberately keeps the rolesOf predicate.
+//
 // Mapping an operator to a staking provider is not by itself a boundary, since
 // registering an operator is permissionless on both registries. The boundary is
-// the eligible stake, which is zero when the authorized stake minus any pending
-// decrease falls below the minimum authorization: it can be raised only by the
-// owner of the authorization source the wallet registry reads.
+// the eligible stake: the wallet registry reports zero for a provider whose
+// authorization has fallen below the minimum authorization, and a requested
+// decrease is subtracted the moment it is requested rather than when it is
+// approved. Raising it again takes the authorizer of the authorization source
+// the registry reads.
 //
-// A pending (unapproved) decrease is also sufficient for admission via the
-// newly added PendingAuthorizationDecrease check, precisely because that zeroing
-// happens at request time rather than at approval time.
+// Eligible stake therefore answers what the provider is currently authorized
+// for, not what it currently owes. A provider that is dropping its
+// authorization stays a member of every wallet it was elected to until that
+// wallet is closed, and approving the decrease does not end that membership
+// either. This predicate governs admission to the network only; wallet
+// membership and its obligations are a separate lifecycle it does not observe.
 func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, error) {
 	operatorAddress, err := operatorPublicKeyToChainAddress(operatorPublicKey)
 	if err != nil {
@@ -386,27 +390,7 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 
 	// The binding cannot return a nil amount without also returning an error,
 	// but admission must not be able to panic on one.
-	if eligibleStake != nil && eligibleStake.Sign() > 0 {
-		return true, nil
-	}
-
-	// A requested-but-not-yet-approved authorization decrease zeroes eligible
-	// stake immediately, well before the wallet drops the operator as a
-	// signing member, so admitting on a pending decrease too keeps the peer
-	// reachable while the decrease request is merely outstanding.
-	pendingDecrease, err := tc.admission.PendingAuthorizationDecrease(stakingProvider)
-	if err != nil {
-		// Fail closed for the same reason as the EligibleStake error path
-		// above.
-		return false, fmt.Errorf(
-			"failed to check pending authorization decrease for staking "+
-				"provider [%v]: [%w]",
-			stakingProvider,
-			err,
-		)
-	}
-
-	return pendingDecrease != nil && pendingDecrease.Sign() > 0, nil
+	return eligibleStake != nil && eligibleStake.Sign() > 0, nil
 }
 
 // OperatorToStakingProvider returns the staking provider address for the

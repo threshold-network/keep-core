@@ -408,12 +408,18 @@ func (bc *BeaconChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool
 	// This deliberately differs from TbtcChain.IsRecognized, which reads
 	// eligible stake instead, and the asymmetry must not be harmonised away.
 	// TokenStaking.authorizedStake short-circuits to zero for every application
-	// but one hard-coded constant, and the random beacon is not that
-	// application, so RandomBeacon.eligibleStake is zero for every staking
+	// but one hard-coded constant - the TACo application - and the random beacon
+	// is not it, so RandomBeacon.eligibleStake reads zero for every staking
 	// provider that has ever registered a beacon operator. An eligible-stake
-	// predicate here would therefore recognize nobody. The watchtower re-runs
-	// this check against every connected peer every ten minutes and disconnects
-	// on failure, so the whole fleet would come apart within a single round.
+	// predicate here would therefore recognize nobody through this branch.
+	//
+	// Peers whose provider holds tBTC eligible stake would keep their admission
+	// through the tBTC branch; the ones that would lose it are those this
+	// branch alone carries. How quickly that would surface as disconnections is
+	// not a fixed interval: the watchtower re-checks connected peers
+	// periodically, but what follows also depends on what each node's own RPC
+	// endpoint reports, on the checks running asynchronously per peer, and on
+	// how connection closure and its queues behave.
 	hasStakeDelegation, err := bc.admission.HasStakeDelegation(
 		stakingProvider,
 	)
