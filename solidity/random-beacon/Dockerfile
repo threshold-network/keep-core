@@ -17,7 +17,7 @@ RUN git config --global url."https://".insteadOf git://
 
 COPY package*.json yarn.lock .yarnrc.yml ./
 ENV COREPACK_DEFAULT_TO_LATEST=0
-RUN corepack enable && corepack prepare yarn@4.8.1 --activate && yarn install --immutable
+RUN corepack enable && corepack prepare yarn@4.12.0 --activate && yarn install --immutable
 
 COPY . ./
 
