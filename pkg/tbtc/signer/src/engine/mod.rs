@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
+#[allow(unused_imports)]
 use crate::api::{
     AttemptContext, BlameProofVerificationResult, BuildTaprootTxRequest, CanaryRolloutStatusResult,
     DeriveInteractiveAttemptContextRequest, DeriveInteractiveAttemptContextResult,
@@ -116,7 +117,10 @@ pub(crate) use anchor_trust::*;
 pub(crate) use audit::*;
 pub(crate) use codec::*;
 pub(crate) use config::*;
-pub(crate) use dkg::*;
+#[allow(unused_imports)]
+pub(crate) use dkg::persist_distributed_dkg_key_package;
+#[allow(unused_imports)]
+pub(crate) use dkg::retire_distributed_dkg_key_packages;
 pub(crate) use frost_ops::*;
 pub(crate) use init_config::*;
 pub(crate) use interactive::*;

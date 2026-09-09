@@ -13,10 +13,19 @@ TLA_TOOLS_VERSION="${TLA_TOOLS_VERSION:-v1.8.0}"
 TLA_TOOLS_JAR="${TLA_TOOLS_JAR:-/tmp/tla2tools-${TLA_TOOLS_VERSION}.jar}"
 TLA_TOOLS_URL="${TLA_TOOLS_URL:-https://github.com/tlaplus/tlaplus/releases/download/${TLA_TOOLS_VERSION}/tla2tools.jar}"
 # Pin the SHA-256 of the upstream tla2tools.jar (github.com/tlaplus/tlaplus
-# release v1.8.0). Re-pin this when the upstream release asset is rebuilt and the
-# download-verification gate below reports a mismatch, after confirming the new
-# jar comes from the official release URL.
-TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-cc4803dce2a8ffaf0f5920a9dc39df4b5ee34ab4cb53fb58ac557277a7e516b3}"
+# release v1.8.0, "The Clarke release"). Verified 2026-09-09: the upstream
+# asset for this same v1.8.0 tag was replaced by the tlaplus project between
+# 2026-09-08 and 2026-09-09 (GitHub reports the release asset's updatedAt as
+# 2026-09-09T01:52Z), invalidating the previous pin without any version bump.
+# Downloaded the asset directly from TLA_TOOLS_URL below and computed both
+# SHA-1 and SHA-256 independently; the SHA-1
+# (ef20a63caea9dcbcf2f02ddd5db6415decab8f9b) matches the checksum currently
+# published in the v1.8.0 GitHub release notes, and the corresponding SHA-256
+# is pinned here. Re-verify the same way (download from the official release
+# URL, confirm the SHA-1 matches the release notes, then take the SHA-256 of
+# that exact download) before re-pinning on any future rebuild of the release
+# asset -- and note that "same tag" does not guarantee "same bytes" upstream.
+TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-a1fc0bfe391d99fdd86f579a63ff68c0950010e9dde551f1192b867d5c8f4efd}"
 
 if ! command -v java >/dev/null 2>&1; then
   echo "java is required to run TLC model checks" >&2

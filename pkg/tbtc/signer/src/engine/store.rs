@@ -57,18 +57,23 @@ const TBTC_SIGNER_DURABLE_STORE_LOCK_FINGERPRINT_DOMAIN: &[u8] =
 const TBTC_SIGNER_STATE_IMAGE_DIGEST_DOMAIN: &[u8] = b"tbtc-signer-durable-state-image-digest-v1\0";
 const TBTC_SIGNER_STATE_WITNESS_GENESIS_DOMAIN: &[u8] = b"tbtc-signer-state-witness-genesis-v2\0";
 const TBTC_SIGNER_STATE_COMMITMENT_DOMAIN: &[u8] = b"tbtc-signer-state-witness-commitment-v2\0";
-const TBTC_SIGNER_STATE_WITNESS_MAGIC: &[u8; 16] = b"TBTCWITNESSv2\0\0\0";
+pub(crate) const TBTC_SIGNER_STATE_WITNESS_MAGIC: &[u8; 16] = b"TBTCWITNESSv3\0\0\0";
 const TBTC_SIGNER_STATE_WITNESS_SEGMENT_MAGIC: &[u8; 16] = b"TBTCWITNESSSEG1\0";
 /// The retired v1 journal magic. It is never written and never repaired; it is
 /// recognized only so a v1 store fails closed with an actionable migration
 /// error instead of a generic "invalid commitment".
 const TBTC_SIGNER_STATE_WITNESS_MAGIC_V1: &[u8; 16] = b"TBTCWITNESSv1\0\0\0";
+/// The retired v2 journal magic (pre-record-hash-chain). Never written and
+/// never repaired; recognized only so a v2 store fails closed with an
+/// actionable migration error instead of a generic parse failure caused by
+/// the 105- vs 137-byte record length mismatch.
+const TBTC_SIGNER_STATE_WITNESS_MAGIC_V2: &[u8; 16] = b"TBTCWITNESSv2\0\0\0";
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH: usize = 48;
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH: usize = 472;
 /// The journal is a fixed-width header followed by fixed-width records; the
 /// tests build on-disk fixtures from this geometry, so it is part of the
 /// crate-visible store contract.
-pub(crate) const TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH: usize = 105;
+pub(crate) const TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH: usize = 137;
 /// Reconciliation can commit an interrupted write at the rotation threshold
 /// before a mutating interactive retry persists two expiry-sweep repairs and
 /// its requested mutation. Those three snapshots need six records to finish
@@ -87,13 +92,15 @@ pub(crate) const TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION:
 /// the terminal band therefore keeps a supported exit open without widening
 /// the bound on ordinary state writes by a single record.
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_QUARANTINE_RECORD_RESERVATION: usize = 2;
-const TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE: u8 = 1;
-const TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT: u8 = 2;
+pub(crate) const TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE: u8 = 1;
+pub(crate) const TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT: u8 = 2;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_ABORT: u8 = 3;
 const TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_VERSION: u32 = 1;
 const TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_DOMAIN: &[u8] =
     b"tbtc-signer-state-witness-segment-header/v1\0";
 
+const TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN: &[u8] =
+    b"tbtc-signer-state-witness-record-chain/v1\0";
 const TBTC_SIGNER_STATE_ANCHOR_MAGIC: &[u8; 16] = b"TBTCSTATEANCH1\0\0";
 const TBTC_SIGNER_STATE_ANCHOR_VERSION: u32 = 1;
 // Fixed-width canonical encoding of every field in
@@ -300,6 +307,7 @@ pub(crate) struct StateWitness {
     pub(crate) state_image_digest: [u8; 32],
 }
 
+#[derive(Debug)]
 pub(crate) struct LoadedStateImage {
     pub(crate) bytes: Option<Vec<u8>>,
     pub(crate) digest: [u8; 32],
@@ -316,6 +324,15 @@ enum WitnessAppendPurpose {
     CorruptionQuarantine,
 }
 
+/// Frozen cross-language contract.
+///
+/// The 472-byte hand-rolled segment-header wire format duplicates ten fields
+/// already on `StateAnchorAcknowledgement`. The duplication is preserved
+/// intentionally: the layout is pinned byte-for-byte by
+/// `signed_segment_header_matches_frozen_472_byte_vector` as a
+/// frozen cross-language contract with the Go bridge. Re-encode/parse must
+/// not be refactored away from this layout while that frozen vector exists,
+/// so `TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH` remains 472.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct StateWitnessSegmentHeader {
     store_fingerprint: [u8; 32],
@@ -341,7 +358,7 @@ struct ParsedStateWitnessJournal {
     header_length: usize,
     header_bytes: Vec<u8>,
     segment_header: Option<StateWitnessSegmentHeader>,
-    tail_record: [u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
+    tail_chain_hash: [u8; 32],
 }
 
 #[cfg(unix)]
@@ -461,39 +478,10 @@ struct FileChangeStamp {
     changed_nanoseconds: u64,
 }
 
-/// The verified prefix of the append-only witness journal.
-///
-/// The journal is append-only, so verification is incremental: the bytes below
-/// `verified_length` have already been parsed and matched against the in-memory
-/// history, and only newly appended bytes need to be read back. The anchor -
-/// last verified commitment and generation - plus the exact trailing record
-/// bytes and the file change stamp are what a later access re-checks in O(1)
-/// before trusting the prefix.
-///
-/// This cache lives only in the `StateFileLock` instance, so it is never a
-/// trust anchor across process restarts: a fresh open always re-parses and
-/// re-hashes the entire journal.
-#[cfg(unix)]
-#[derive(Clone, Debug)]
-struct WitnessJournalPrefix {
-    identity: OpenedObjectIdentity,
-    stamp: FileChangeStamp,
-    verified_length: usize,
-    history_length: usize,
-    tip_generation: u64,
-    tip_commitment: [u8; 32],
-    tail_record: [u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
-}
-
 /// Counts full journal re-parses. The incremental path must keep this flat as
 /// the journal grows; the test suite asserts exactly that.
 #[cfg(all(test, unix))]
 pub(crate) static WITNESS_FULL_VERIFICATIONS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-
-/// Counts verifications served from the verified prefix.
-#[cfg(all(test, unix))]
-pub(crate) static WITNESS_INCREMENTAL_VERIFICATIONS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// Counts journal bytes read for verification. This is the direct measure of
@@ -507,17 +495,15 @@ pub(crate) static WITNESS_VERIFIED_BYTES_READ: std::sync::atomic::AtomicU64 =
 pub(crate) fn reset_witness_verification_counters() {
     use std::sync::atomic::Ordering;
     WITNESS_FULL_VERIFICATIONS.store(0, Ordering::SeqCst);
-    WITNESS_INCREMENTAL_VERIFICATIONS.store(0, Ordering::SeqCst);
     WITNESS_VERIFIED_BYTES_READ.store(0, Ordering::SeqCst);
 }
 
-/// `(full re-parses, incremental verifications, journal bytes read)`.
+/// `(full re-parses, journal bytes read)`.
 #[cfg(all(test, unix))]
-pub(crate) fn witness_verification_counters() -> (u64, u64, u64) {
+pub(crate) fn witness_verification_counters() -> (u64, u64) {
     use std::sync::atomic::Ordering;
     (
         WITNESS_FULL_VERIFICATIONS.load(Ordering::SeqCst),
-        WITNESS_INCREMENTAL_VERIFICATIONS.load(Ordering::SeqCst),
         WITNESS_VERIFIED_BYTES_READ.load(Ordering::SeqCst),
     )
 }
@@ -527,6 +513,7 @@ pub(crate) fn witness_verification_counters() -> (u64, u64, u64) {
 /// The public path fields are retained for diagnostics and existing tests. All
 /// security-sensitive operations use `directory` plus `openat`/`renameat` and
 /// compare live directory entries with the held descriptors before proceeding.
+#[derive(Debug)]
 pub(crate) struct StateFileLock {
     pub(crate) _file: fs::File,
     pub(crate) state_path: PathBuf,
@@ -568,21 +555,10 @@ pub(crate) struct StateFileLock {
     witness_header_length: usize,
     witness_header_bytes: Vec<u8>,
     witness_segment_header: Option<StateWitnessSegmentHeader>,
-    /// The verified prefix of the journal. `None` means "nothing is cached",
-    /// which forces the next verification to parse the whole journal. It is
-    /// deliberately `None` on every fresh open.
-    #[cfg(unix)]
-    witness_prefix: Option<WitnessJournalPrefix>,
-    /// Bytes of the most recently appended record, used to verify the append
-    /// read-back and to anchor the cached prefix.
-    #[cfg(unix)]
-    last_appended_record: [u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
-    /// Exact file stamp captured immediately after the appended record was
-    /// fsynced. The append read-back must observe this stamp before adopting a
-    /// new verified-prefix baseline.
-    #[cfg(unix)]
-    last_appended_stamp: Option<FileChangeStamp>,
     current_state_file: Option<fs::File>,
+    /// Chain hash of the most recently appended record, used to compute the chain hash for the next append.
+    #[cfg(unix)]
+    last_chain_hash: [u8; 32],
     current_state_identity: Option<OpenedObjectIdentity>,
     identity: DurableStoreIdentity,
     lock_held: bool,
@@ -774,14 +750,12 @@ impl StateFileLock {
             validate_secure_regular_file(&lock_file, "signer state lock file")?;
             lock_file.set_len(0).map_err(|error| {
                 EngineError::Internal(format!(
-                    "failed to truncate signer state lock file [{}]: {error}",
-                    lock_path.display()
+                    "signer truncate signer state lock file failed: {lock_path:?}: {error}"
                 ))
             })?;
             lock_file.seek(SeekFrom::Start(0)).map_err(|error| {
                 EngineError::Internal(format!(
-                    "failed to seek signer state lock file [{}]: {error}",
-                    lock_path.display()
+                    "signer seek signer state lock file failed: {lock_path:?}: {error}"
                 ))
             })?;
             writeln!(
@@ -792,14 +766,12 @@ impl StateFileLock {
             )
             .map_err(|error| {
                 EngineError::Internal(format!(
-                    "failed to write signer state lock file [{}]: {error}",
-                    lock_path.display()
+                    "signer write signer state lock file failed: {lock_path:?}: {error}"
                 ))
             })?;
             lock_file.sync_all().map_err(|error| {
                 EngineError::Internal(format!(
-                    "failed to sync signer state lock file [{}]: {error}",
-                    lock_path.display()
+                    "signer sync signer state lock file failed: {lock_path:?}: {error}"
                 ))
             })?;
         }
@@ -834,8 +806,7 @@ impl StateFileLock {
         if !recovery_intent_present {
             directory.sync_all().map_err(|error| {
                 EngineError::Internal(format!(
-                    "failed to sync signer state directory [{}]: {error}",
-                    canonical_parent.display()
+                    "signer sync signer state directory failed: {canonical_parent:?}: {error}"
                 ))
             })?;
         }
@@ -1143,6 +1114,28 @@ impl StateFileLock {
                 &certified_floors,
             )?;
 
+        // Unanchored signers have no signed rotation path, so any
+        // in-progress local compaction that crashed mid-publish must be
+        // completed before rotation recovery runs: rotation recovery's own
+        // clean-return path requires neither `.next` nor `.previous` to
+        // exist on disk, and every compaction crash window leaves one of
+        // them present, so an unresolved compaction artifact would
+        // otherwise make rotation recovery fail closed on an artifact it
+        // does not own, before compaction recovery ever gets a chance to
+        // run.
+        if anchor_metadata.is_none() {
+            recover_state_witness_compaction(
+                &directory,
+                StateWitnessRotationNames {
+                    current: &witness_name,
+                    next: &witness_next_name,
+                    previous: &witness_previous_name,
+                },
+                &identity,
+                witness_max_records,
+            )?;
+        }
+
         let promote_pending_anchor = recover_state_witness_rotation(
             &directory,
             StateWitnessRotationNames {
@@ -1153,6 +1146,7 @@ impl StateFileLock {
             &identity,
             current_state_file.as_ref(),
             anchor_metadata.as_ref(),
+            anchor_configuration.is_some(),
             witness_max_records,
             true,
             None,
@@ -1200,6 +1194,7 @@ impl StateFileLock {
             current_state_file.as_ref(),
             witness_max_records,
             anchor_metadata.as_ref(),
+            anchor_configuration.is_some(),
         )?;
         if let Some(head) = trust_journal
             .as_ref()
@@ -1281,10 +1276,8 @@ impl StateFileLock {
             witness_header_length: opened_witness.parsed.header_length,
             witness_header_bytes: opened_witness.parsed.header_bytes,
             witness_segment_header: opened_witness.parsed.segment_header,
-            witness_prefix: None,
-            last_appended_record: [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
-            last_appended_stamp: None,
             current_state_file,
+            last_chain_hash: opened_witness.parsed.tail_chain_hash,
             current_state_identity,
             identity,
             lock_held: true,
@@ -1327,11 +1320,10 @@ impl StateFileLock {
     }
 
     #[cfg(not(unix))]
-    pub(crate) fn acquire(state_path: &Path) -> Result<Self, EngineError> {
-        Err(EngineError::Internal(format!(
-            "descriptor-bound durable signer storage is unavailable on this platform for [{}]",
-            state_path.display()
-        )))
+    pub(crate) fn acquire(_state_path: &Path) -> Result<Self, EngineError> {
+        Err(EngineError::Internal(
+            "requires Unix; not supported on this platform".to_string(),
+        ))
     }
 
     #[cfg(not(unix))]
@@ -1365,7 +1357,12 @@ impl StateFileLock {
     /// Identity is a startup preflight and state freshness is a separate
     /// contract. Keeping this path structural lets the subsequent loader apply
     /// the configured corruption policy to malformed state while still
-    /// validating every held descriptor and the witness journal.
+    /// validating every held descriptor (lock, directory, store-id, witness
+    /// file identity/permissions). This does NOT re-verify witness journal
+    /// record content -- DurableStoreIdentity never encodes journal content,
+    /// so a full reparse here would be redundant cost with no data-integrity
+    /// benefit. The subsequent load call (read_state_for_load) performs the
+    /// full witness-journal re-verification before returning state content.
     #[cfg(unix)]
     pub(crate) fn identity_for_load(&mut self) -> Result<DurableStoreIdentity, EngineError> {
         self.reconcile_pending_witness()?;
@@ -1373,14 +1370,12 @@ impl StateFileLock {
         self.revalidate_store_entries()?;
         Ok(self.identity.clone())
     }
-
     #[cfg(not(unix))]
     pub(crate) fn identity_for_load(&mut self) -> Result<DurableStoreIdentity, EngineError> {
         Err(EngineError::Internal(
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
     }
-
     #[cfg(all(test, unix))]
     pub(crate) fn read_state(&mut self) -> Result<Option<Vec<u8>>, EngineError> {
         self.reconcile_pending_witness()?;
@@ -1398,6 +1393,7 @@ impl StateFileLock {
     /// which always fails closed.
     #[cfg(unix)]
     pub(crate) fn read_state_for_load(&mut self) -> Result<LoadedStateImage, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.settle_pending_state_witness_rotation()?;
         self.revalidate_store_entries()?;
@@ -1495,14 +1491,10 @@ impl StateFileLock {
             }
         };
 
-        let next_witness = match self.next_state_witness(state_image_digest(Some(bytes))) {
-            Ok(witness) => witness,
-            Err(error) => {
-                let _ = unlinkat_entry(self.directory.as_raw_fd(), &temp_name);
-                return Err(StoreReplaceError::before_replacement(error));
-            }
-        };
-        if let Err(error) = self.prepare_witness(next_witness, WitnessAppendPurpose::StateWrite) {
+        let new_state_image_digest = state_image_digest(Some(bytes));
+        if let Err(error) =
+            self.prepare_witness(new_state_image_digest, WitnessAppendPurpose::StateWrite)
+        {
             let _ = unlinkat_entry(self.directory.as_raw_fd(), &temp_name);
             return Err(StoreReplaceError::before_replacement(error));
         }
@@ -1537,7 +1529,7 @@ impl StateFileLock {
                 ))
             })?;
             self.commit_pending_witness()?;
-            self.revalidate()?;
+            self.validate_state_image_with_digest(new_state_image_digest)?;
             Ok(())
         })();
 
@@ -1600,8 +1592,10 @@ impl StateFileLock {
         })?;
         validate_entry_name(backup_name, "state backup")?;
         ensure_entry_absent(self.directory.as_raw_fd(), backup_name, "state backup")?;
-        let next_witness = self.next_state_witness(state_image_digest(None))?;
-        self.prepare_witness(next_witness, WitnessAppendPurpose::CorruptionQuarantine)?;
+        self.prepare_witness(
+            state_image_digest(None),
+            WitnessAppendPurpose::CorruptionQuarantine,
+        )?;
         if let Err(rename_error) = renameat_same_directory(
             self.directory.as_raw_fd(),
             &self.state_name,
@@ -1875,7 +1869,25 @@ impl StateFileLock {
             "signer state witness journal",
         )?;
         validate_secure_regular_file(&self.witness_file, "signer state witness journal")?;
-        self.verify_state_witness_journal()?;
+        // A full content re-parse of the witness journal is intentionally
+        // NOT performed here. This function is the shared descriptor
+        // liveness check reached by every stateful operation - every write
+        // through `replace_state`, the `identity()` front door called on
+        // every `state()` access, startup, and rotation settlement - so
+        // re-verifying the entire journal on every call here made every
+        // one of those operations cost O(current journal length), which is
+        // unacceptable at the configured record ceiling. The one entrypoint
+        // that must catch tampering anywhere in the journal before
+        // returning a result - `state_witness_tip()`, the primary public
+        // read entrypoint - performs its own unconditional
+        // `verify_state_witness_journal_fully` before this function ever
+        // runs (and before its own `reconcile_pending_witness` can act on
+        // an unverified journal). The accepted narrower tradeoff: a
+        // same-length corruption of an earlier record injected between two
+        // of this store's own writes, with no `state_witness_tip()` call in
+        // between, is caught at the next `state_witness_tip()` call or at
+        // the next fresh `StateFileLock::acquire` - both of which always
+        // fully re-parse - rather than immediately.
         if self
             .trust_journal
             .as_ref()
@@ -1889,82 +1901,6 @@ impl StateFileLock {
             ));
         }
         Ok(())
-    }
-
-    /// Verifies the journal against the in-memory history.
-    ///
-    /// The journal is append-only and is written only by this process while the
-    /// exclusive lock is held, so re-reading and re-hashing every record ever
-    /// written on every access is pure waste that grows without bound in
-    /// lifetime persist count. Instead the verified prefix is cached and the
-    /// O(1) anchor - file identity, change stamp, header, trailing record, and
-    /// the last verified generation/commitment - is re-checked. ANY mismatch,
-    /// including a file whose identity moved underneath, falls through to a
-    /// full re-parse, which is what produces the precise failure. Bytes
-    /// appended since the last verification are read back and checked at append
-    /// time, so no byte is ever trusted without having been read from disk.
-    ///
-    /// The cache is per-`StateFileLock`, so a tampered prefix is still caught
-    /// in full on any fresh open.
-    #[cfg(unix)]
-    fn verify_state_witness_journal(&mut self) -> Result<(), EngineError> {
-        let stamp = witness_change_stamp(&self.witness_file)?;
-        if let Some(prefix) = self.witness_prefix.as_ref() {
-            let tip = self
-                .witness_history
-                .last()
-                .map(|tip| (tip.generation, tip.commitment));
-            if prefix.identity == self.witness_identity
-                && prefix.stamp == stamp
-                && prefix.verified_length == self.witness_length
-                && prefix.history_length == self.witness_history.len()
-                && tip == Some((prefix.tip_generation, prefix.tip_commitment))
-                && self.witness_anchor_matches(prefix)?
-            {
-                #[cfg(test)]
-                WITNESS_INCREMENTAL_VERIFICATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                return Ok(());
-            }
-        }
-        self.verify_state_witness_journal_fully()
-    }
-
-    /// Re-reads the two fixed anchors of the cached prefix: the header, which
-    /// binds this store's ID, and the trailing record. Returns `false` - never
-    /// an error - when either differs, so the caller falls back to the full
-    /// parse that reports the real problem.
-    #[cfg(unix)]
-    fn witness_anchor_matches(&self, prefix: &WitnessJournalPrefix) -> Result<bool, EngineError> {
-        const LABEL: &str = "signer state witness journal";
-        if prefix.verified_length
-            < self.witness_header_length + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH
-        {
-            return Ok(false);
-        }
-        // Take stamps around the anchor reads. A writer that changes the file
-        // between the caller's initial stat and these reads must not be
-        // admitted merely because it restores the same length.
-        let before = witness_change_stamp(&self.witness_file)?;
-        if before != prefix.stamp {
-            return Ok(false);
-        }
-        let header = read_file_range_at(&self.witness_file, 0, self.witness_header_length, LABEL)?;
-        if header != self.witness_header_bytes {
-            return Ok(false);
-        }
-        let tail = read_file_range_at(
-            &self.witness_file,
-            prefix.verified_length - TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
-            TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
-            LABEL,
-        )?;
-        let after = witness_change_stamp(&self.witness_file)?;
-        #[cfg(test)]
-        WITNESS_VERIFIED_BYTES_READ.fetch_add(
-            (header.len() + tail.len()) as u64,
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        Ok(before == after && after == prefix.stamp && tail == prefix.tail_record)
     }
 
     #[cfg(unix)]
@@ -1988,6 +1924,7 @@ impl StateFileLock {
             &self.identity.fingerprint,
             self.witness_max_records,
             validation_anchor,
+            self.anchor_configuration.is_some(),
         )?;
         if parsed.length != self.witness_length
             || parsed.header_length != self.witness_header_length
@@ -2004,129 +1941,57 @@ impl StateFileLock {
             ));
         }
 
-        // Only cache a prefix whose bytes provably did not move while they were
-        // being read.
+        // Ensure the streamed bytes were not modified while they were being
+        // read: a mismatch here means a concurrent same-uid write raced the
+        // read, and the freshly parsed state must not be trusted.
         let after = witness_change_stamp(&self.witness_file)?;
         if before != after {
-            self.witness_prefix = None;
             return Err(EngineError::Internal(
                 "signer state witness journal changed during full verification".to_string(),
             ));
         }
-        self.witness_prefix = self.build_witness_prefix(after, &parsed.tail_record);
-        Ok(())
-    }
-
-    /// Builds the cached prefix from the current in-memory model. Returns
-    /// `None` when there is nothing to anchor to, which simply disables the
-    /// incremental path.
-    #[cfg(unix)]
-    fn build_witness_prefix(
-        &self,
-        stamp: FileChangeStamp,
-        tail_record: &[u8],
-    ) -> Option<WitnessJournalPrefix> {
-        let tip = self.witness_history.last()?;
-        if tail_record.len() != TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH
-            || self.witness_length
-                < self.witness_header_length + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH
-        {
-            return None;
-        }
-        let mut tail = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
-        tail.copy_from_slice(tail_record);
-        Some(WitnessJournalPrefix {
-            identity: self.witness_identity,
-            stamp,
-            verified_length: self.witness_length,
-            history_length: self.witness_history.len(),
-            tip_generation: tip.generation,
-            tip_commitment: tip.commitment,
-            tail_record: tail,
-        })
-    }
-
-    /// Reads back the record that was just appended and extends the verified
-    /// prefix over it. This is the "verify only the bytes appended since"
-    /// half of the incremental scheme: every journal byte is still read from
-    /// disk and checked exactly once.
-    #[cfg(unix)]
-    fn extend_witness_prefix(&mut self) -> Result<(), EngineError> {
-        const LABEL: &str = "signer state witness journal";
-        let appended_stamp = self.last_appended_stamp.take();
-        let Some(previous) = self.witness_prefix.clone() else {
-            // Nothing verified yet; the next access parses the whole journal.
-            return Ok(());
-        };
-        let Some(appended_stamp) = appended_stamp else {
-            self.witness_prefix = None;
-            return Err(EngineError::Internal(
-                "signer state witness append has no post-sync change stamp".to_string(),
-            ));
-        };
-        let appended_offset = previous.verified_length;
-        if appended_offset.checked_add(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH)
-            != Some(self.witness_length)
-        {
-            self.witness_prefix = None;
-            return Err(EngineError::Internal(
-                "signer state witness journal length did not advance by exactly one record"
-                    .to_string(),
-            ));
-        }
-        let before = witness_change_stamp(&self.witness_file)?;
-        if before != appended_stamp || before.size != self.witness_length as u64 {
-            self.witness_prefix = None;
-            return Err(EngineError::Internal(
-                "signer state witness journal changed after the append was synced".to_string(),
-            ));
-        }
-        let header = read_file_range_at(&self.witness_file, 0, self.witness_header_length, LABEL)?;
-        let old_tail = read_file_range_at(
-            &self.witness_file,
-            previous.verified_length - TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
-            TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
-            LABEL,
-        )?;
-        let appended = read_file_range_at(
-            &self.witness_file,
-            appended_offset,
-            TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
-            LABEL,
-        )?;
-        #[cfg(test)]
-        WITNESS_VERIFIED_BYTES_READ.fetch_add(
-            (header.len() + old_tail.len() + appended.len()) as u64,
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        let header_matches = header == self.witness_header_bytes;
-        if !header_matches
-            || old_tail != previous.tail_record
-            || appended != self.last_appended_record
-        {
-            self.witness_prefix = None;
-            return Err(EngineError::Internal(
-                "signer state witness journal prefix or append read-back changed during append"
-                    .to_string(),
-            ));
-        }
-        let after = witness_change_stamp(&self.witness_file)?;
-        if before != after {
-            self.witness_prefix = None;
-            return Err(EngineError::Internal(
-                "signer state witness journal changed during append read-back".to_string(),
-            ));
-        }
-        self.witness_prefix = self.build_witness_prefix(after, &self.last_appended_record);
         Ok(())
     }
 
     #[cfg(unix)]
     pub(crate) fn validate_state_image(&mut self) -> Result<(), EngineError> {
+        let expected = self
+            .witness_history
+            .last()
+            .map(|tip| tip.state_image_digest)
+            .unwrap_or([0u8; 32]);
+        self.verify_state_image_against(expected)
+    }
+    /// Validates the live state file against a precomputed digest supplied
+    /// by the caller (e.g. the digest of the freshly written state bytes).
+    #[cfg(unix)]
+    pub(crate) fn validate_state_image_with_digest(
+        &mut self,
+        expected_state_image_digest: [u8; 32],
+    ) -> Result<(), EngineError> {
+        self.verify_state_image_against(expected_state_image_digest)
+    }
+
+    #[cfg(unix)]
+    fn verify_state_image_against(
+        &mut self,
+        expected_state_image_digest: [u8; 32],
+    ) -> Result<(), EngineError> {
         self.settle_pending_state_witness_rotation()?;
         self.revalidate_store_entries()?;
-        let current_digest = current_state_image_digest(self.current_state_file.as_ref())?;
-        self.validate_state_image_digest(current_digest)
+        let current_digest = match self.current_state_file.as_ref() {
+            Some(file) => {
+                let bytes = read_file_at(file, "signer state file")?;
+                state_image_digest(Some(&bytes))
+            }
+            None => state_image_digest(None),
+        };
+        if current_digest != expected_state_image_digest {
+            return Err(EngineError::Internal(
+                "signer state image does not match the committed witness tip".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Validates the digest captured from the exact stable-read bytes supplied
@@ -2187,13 +2052,32 @@ impl StateFileLock {
     }
 
     #[cfg(not(unix))]
+    pub(crate) fn validate_state_image_with_digest(
+        &mut self,
+        _expected_state_image_digest: [u8; 32],
+    ) -> Result<(), EngineError> {
+        Err(EngineError::Internal(
+            "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
+        ))
+    }
+
+    #[cfg(not(unix))]
     fn revalidate(&mut self) -> Result<(), EngineError> {
         Err(EngineError::Internal(
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
     }
 
+    /// The primary public read entrypoint. Every call fully re-parses and
+    /// re-verifies the witness journal against the in-memory history before
+    /// `reconcile_pending_witness` can act, so tampering anywhere in the
+    /// journal is caught before returning a result regardless of whether
+    /// reconciliation goes on to append a COMMIT/ABORT record. This is the
+    /// one entrypoint that keeps the full guarantee the store's own writes
+    /// no longer pay for on every append; see `revalidate_store_entries`.
+    #[cfg(unix)]
     pub(crate) fn state_witness_tip(&mut self) -> Result<StateWitness, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         self.witness_history.last().cloned().ok_or_else(|| {
@@ -2201,10 +2085,18 @@ impl StateFileLock {
         })
     }
 
+    #[cfg(not(unix))]
+    pub(crate) fn state_witness_tip(&mut self) -> Result<StateWitness, EngineError> {
+        Err(EngineError::Internal(
+            "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
+        ))
+    }
+
     #[cfg(unix)]
     pub(crate) fn state_witness_tip_snapshot(
         &mut self,
     ) -> Result<StateWitnessTipSnapshot, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         self.normalize_published_pending_anchor()?;
@@ -2230,11 +2122,11 @@ impl StateFileLock {
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
     }
-
     #[cfg(unix)]
     pub(crate) fn state_anchor_trust_head_snapshot(
         &mut self,
     ) -> Result<StateAnchorTrustTransitionStoreOutcome, EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         self.normalize_published_pending_anchor()?;
@@ -2253,6 +2145,7 @@ impl StateFileLock {
     pub(crate) fn state_anchor_bootstrap_facts_snapshot(
         &mut self,
     ) -> Result<([u8; 32], StateWitness), EngineError> {
+        self.verify_state_witness_journal_fully()?;
         self.revalidate()?;
         self.validate_bootstrap_facts_pristine()?;
         let tip = self.witness_history.last().cloned().ok_or_else(|| {
@@ -3211,6 +3104,7 @@ impl StateFileLock {
             &self.identity,
             self.current_state_file.as_ref(),
             self.anchor_metadata.as_ref(),
+            self.anchor_configuration.is_some(),
             self.witness_max_records,
             true,
             None,
@@ -3227,6 +3121,7 @@ impl StateFileLock {
             self.current_state_file.as_ref(),
             self.witness_max_records,
             self.anchor_metadata.as_ref(),
+            self.anchor_configuration.is_some(),
         )?;
         self.witness_file = opened.file;
         self.witness_identity = opened.identity;
@@ -3236,9 +3131,7 @@ impl StateFileLock {
         self.witness_header_length = opened.parsed.header_length;
         self.witness_header_bytes = opened.parsed.header_bytes;
         self.witness_segment_header = opened.parsed.segment_header;
-        self.witness_prefix = None;
-        self.last_appended_record = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
-        self.last_appended_stamp = None;
+        self.last_chain_hash = opened.parsed.tail_chain_hash;
         self.verify_state_witness_journal_fully()?;
         self.normalize_published_pending_anchor()?;
         if revalidate_steady_store {
@@ -3290,6 +3183,47 @@ impl StateFileLock {
                     .to_string(),
             ));
         }
+        let bytes =
+            encode_state_witness_segment_header(&self.identity.fingerprint, acknowledgement)?;
+        self.publish_state_witness_segment(
+            &bytes,
+            &tip,
+            validation_anchor,
+            self.anchor_configuration.is_some(),
+            retire_previous,
+        )
+    }
+
+    /// Publishes a freshly built segment header as the new current state
+    /// witness journal, atomically retiring the old one.
+    ///
+    /// This is the single publication routine shared by
+    /// `rotate_state_witness_segment_inner` (externally-signed rotation) and
+    /// `compact_witness_journal_local` (self-signed local compaction): both
+    /// are "new segment" boundaries that must go through the exact same
+    /// pending/tip checks, `.next` creation, rename-with-fsync sequencing,
+    /// live-entry validation, field replacement, and `.previous` retirement.
+    /// A prior version of this code reimplemented that sequence separately
+    /// for each caller, which let the two recovery state machines
+    /// (`recover_state_witness_compaction` and `recover_state_witness_rotation`)
+    /// diverge; funneling both callers through one routine makes that class
+    /// of divergence structurally impossible.
+    ///
+    /// `header_bytes` and `expected_base` are supplied by the caller:
+    /// `header_bytes` is the already-encoded 472-byte segment header (built
+    /// from either a real externally-signed acknowledgement or a self-signed
+    /// local marker), and `expected_base` is the witness the freshly created
+    /// `.next` segment must parse back as its sole entry before it is
+    /// trusted enough to publish.
+    #[cfg(unix)]
+    fn publish_state_witness_segment(
+        &mut self,
+        header_bytes: &[u8],
+        expected_base: &StateWitness,
+        validation_anchor: Option<&StateAnchorMetadata>,
+        store_is_anchored: bool,
+        retire_previous: bool,
+    ) -> Result<(), EngineError> {
         ensure_entry_absent(
             self.directory.as_raw_fd(),
             &self.witness_next_name,
@@ -3300,13 +3234,11 @@ impl StateFileLock {
             &self.witness_previous_name,
             "previous signer state witness journal",
         )?;
-        let bytes =
-            encode_state_witness_segment_header(&self.identity.fingerprint, acknowledgement)?;
         let (next_file, next_identity) = if retire_previous {
             create_entry_atomically(
                 &self.directory,
                 &self.witness_next_name,
-                &bytes,
+                header_bytes,
                 "next signer state witness journal",
             )?
         } else {
@@ -3314,7 +3246,7 @@ impl StateFileLock {
             create_entry_atomically_with_guard(
                 &self.directory,
                 &self.witness_next_name,
-                &bytes,
+                header_bytes,
                 "next signer state witness journal",
                 Some(&guard),
             )?
@@ -3325,10 +3257,11 @@ impl StateFileLock {
             &self.identity.fingerprint,
             self.witness_max_records,
             validation_anchor,
+            store_is_anchored,
         )?;
         if parsed.segment_header.is_none()
             || parsed.pending.is_some()
-            || parsed.history.as_slice() != [tip.clone()]
+            || parsed.history.as_slice() != [expected_base.clone()]
         {
             let _ = unlinkat_entry(self.directory.as_raw_fd(), &self.witness_next_name);
             return Err(EngineError::Internal(
@@ -3342,7 +3275,7 @@ impl StateFileLock {
             )?;
         }
         let current_digest = current_state_image_digest(self.current_state_file.as_ref())?;
-        if tip.state_image_digest != current_digest {
+        if expected_base.state_image_digest != current_digest {
             let _ = unlinkat_entry(self.directory.as_raw_fd(), &self.witness_next_name);
             return Err(EngineError::Internal(
                 "new state witness segment base does not commit the current state image"
@@ -3407,9 +3340,7 @@ impl StateFileLock {
         self.witness_header_length = parsed.header_length;
         self.witness_header_bytes = parsed.header_bytes;
         self.witness_segment_header = parsed.segment_header;
-        self.witness_prefix = None;
-        self.last_appended_record = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
-        self.last_appended_stamp = None;
+        self.last_chain_hash = parsed.tail_chain_hash;
 
         // The new name and complete signed header are durable and verified.
         // Only now may the previous segment be retired.
@@ -3509,18 +3440,12 @@ impl StateFileLock {
     #[cfg(unix)]
     fn prepare_witness(
         &mut self,
-        witness: StateWitness,
+        state_image_digest: [u8; 32],
         purpose: WitnessAppendPurpose,
     ) -> Result<(), EngineError> {
         if self.pending_witness.is_some() {
             return Err(EngineError::Internal(
                 "cannot prepare a state witness while another update is pending".to_string(),
-            ));
-        }
-        let expected = self.next_state_witness(witness.state_image_digest)?;
-        if witness != expected || witness.generation == 0 {
-            return Err(EngineError::Internal(
-                "prepared state witness does not extend the active witness tip".to_string(),
             ));
         }
         if let Some(threshold) = self.witness_rotation_threshold {
@@ -3556,10 +3481,17 @@ impl StateFileLock {
                 ));
             }
         }
-        self.ensure_witness_record_capacity(2)?;
+        // Ensure capacity for the upcoming PREPARE+COMMIT pair before
+        // computing the witness to append. For an unanchored store, this
+        // may run local compaction, which advances the committed tip: a
+        // witness computed against the pre-compaction tip would no longer
+        // extend the post-compaction one, so the witness MUST be derived
+        // from the tip as it stands after this call, not before it.
+        self.reserve_witness_record_capacity(2)?;
+        let witness = self.next_state_witness(state_image_digest)?;
         self.append_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &witness)?;
         self.pending_witness = Some(witness);
-        self.extend_witness_prefix()
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -3570,7 +3502,7 @@ impl StateFileLock {
         self.append_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT, &pending)?;
         self.witness_history.push(pending);
         self.pending_witness = None;
-        self.extend_witness_prefix()
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -3580,7 +3512,7 @@ impl StateFileLock {
         })?;
         self.append_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_ABORT, &pending)?;
         self.pending_witness = None;
-        self.extend_witness_prefix()
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -3625,19 +3557,45 @@ impl StateFileLock {
         record_type: u8,
         witness: &StateWitness,
     ) -> Result<(), EngineError> {
-        // A cooperating append must never turn an unverified or externally
-        // changed prefix into a new trusted cache entry. Validate the exact
-        // pre-append journal first; this also checks the fixed anchors and
-        // forces a streaming full parse on any stamp mismatch.
-        self.verify_state_witness_journal()?;
-        self.ensure_witness_record_capacity(1)?;
+        self.reserve_witness_record_capacity(1)?;
+        self.append_witness_record_unchecked(record_type, witness)
+    }
+
+    /// Appends a record without the capacity check `append_witness_record`
+    /// otherwise performs. Local compaction's own terminal PREPARE+COMMIT
+    /// pair (`compact_witness_journal_local`) intentionally writes past the
+    /// configured ceiling to the journal it is about to retire — routing
+    /// that through the checked wrapper would re-enter
+    /// `reserve_witness_record_capacity`, which re-triggers compaction and
+    /// recurses without bound. Every other caller must go through
+    /// `append_witness_record`.
+    ///
+    /// This does NOT re-parse or re-verify the rest of the journal: doing so
+    /// on every append is what made writes cost O(current journal length).
+    /// Instead it checks exactly the two things an O(1) "extend the trusted
+    /// view by one record" operation needs: the pre-append size still
+    /// matches the in-memory length (an external truncation/growth would
+    /// otherwise be silently overwritten or appended past), and the bytes
+    /// that land on disk after the fsynced append are read back and compared
+    /// byte-for-byte against what was written (a concurrent same-uid writer
+    /// racing this exact append at this exact offset would otherwise go
+    /// unnoticed). Catching corruption of an EARLIER, already-committed
+    /// record is intentionally out of scope here - that is
+    /// `state_witness_tip()`'s and a fresh `StateFileLock::acquire`'s job,
+    /// both of which always fully re-parse.
+    #[cfg(unix)]
+    fn append_witness_record_unchecked(
+        &mut self,
+        record_type: u8,
+        witness: &StateWitness,
+    ) -> Result<(), EngineError> {
         let stat = descriptor_stat(&self.witness_file, "signer state witness journal")?;
         if stat.st_size < 0 || stat.st_size as usize != self.witness_length {
             return Err(EngineError::Internal(
                 "signer state witness journal length changed before append".to_string(),
             ));
         }
-        let record = encode_state_witness_record(record_type, witness);
+        let record = encode_state_witness_record(record_type, witness, &self.last_chain_hash);
         append_file_at(
             &self.witness_file,
             self.witness_length,
@@ -3649,10 +3607,23 @@ impl StateFileLock {
                 "failed to sync signer state witness journal: {error}"
             ))
         })?;
-        let appended_stamp = witness_change_stamp(&self.witness_file)?;
+        let appended = read_file_range_at(
+            &self.witness_file,
+            self.witness_length,
+            record.len(),
+            "signer state witness journal",
+        )?;
+        #[cfg(test)]
+        WITNESS_VERIFIED_BYTES_READ
+            .fetch_add(appended.len() as u64, std::sync::atomic::Ordering::SeqCst);
+        if appended != record {
+            return Err(EngineError::Internal(
+                "signer state witness journal append did not read back as written".to_string(),
+            ));
+        }
         self.witness_length += record.len();
-        self.last_appended_record.copy_from_slice(&record);
-        self.last_appended_stamp = Some(appended_stamp);
+        self.last_chain_hash
+            .copy_from_slice(&record[record.len() - 32..]);
         Ok(())
     }
 
@@ -3669,8 +3640,108 @@ impl StateFileLock {
             })
     }
 
+    /// Performs local compaction when the journal record ceiling is reached
+    /// and there is no externally-signed rotation path available.
+    ///
+    /// The compaction commits a new genesis to the current journal as a
+    /// regular PREPARE+COMMIT pair (`new_tip.generation = tip.generation +
+    /// 1`, with the same state image digest as the current tip), then
+    /// publishes a fresh segment header through the same
+    /// `publish_state_witness_segment` routine `rotate_state_witness_segment_inner`
+    /// uses: `.state-witness` is renamed to `.state-witness.previous`, the
+    /// freshly built segment is published as `.state-witness`, and
+    /// `.state-witness.previous` is retired immediately afterward, matching
+    /// the existing signed-rotation convention
+    /// (`rotate_state_witness_segment_inner` with `retire_previous = true`).
+    /// The new segment header is self-signed (its embedded
+    /// `StateAnchorAcknowledgement` has a zero signature) and the parser
+    /// recognises that marker so the signed-base requirement is skipped; the
+    /// per-record chain hash and the header_commitment integrity check
+    /// still pin the layout. The header's `previous_event_root` field
+    /// additionally threads the retiring segment's terminal record chain
+    /// hash (see `synthetic_compaction_acknowledgement`), so the new
+    /// segment's genesis chain-hash seed carries cryptographic continuity
+    /// from the retiring segment's entire append history instead of
+    /// resetting to a value derived only from the new tip.
+    /// `recover_state_witness_compaction` mirrors the retirement so a
+    /// crash-recovered compaction reaches the same steady state.
     #[cfg(unix)]
-    fn ensure_witness_record_capacity(&self, additional: usize) -> Result<(), EngineError> {
+    fn compact_witness_journal_local(&mut self) -> Result<(), EngineError> {
+        if self.pending_witness.is_some() {
+            return Err(EngineError::Internal(
+                "cannot compact signer state witness journal while a state update is pending"
+                    .to_string(),
+            ));
+        }
+        let tip = self.witness_history.last().cloned().ok_or_else(|| {
+            EngineError::Internal(
+                "signer state witness journal has no committed tip for local compaction"
+                    .to_string(),
+            )
+        })?;
+        let new_generation = tip.generation.checked_add(1).ok_or_else(|| {
+            EngineError::Internal(
+                "signer state witness generation exhausted u64 during local compaction".to_string(),
+            )
+        })?;
+        if tip.state_image_digest == state_image_digest(None) {
+            return Err(EngineError::Internal(
+                "cannot locally compact from a sentinel state image digest".to_string(),
+            ));
+        }
+        let new_tip = StateWitness {
+            generation: new_generation,
+            previous_commitment: tip.commitment,
+            commitment: state_commitment(
+                &self.identity.fingerprint,
+                new_generation,
+                &tip.commitment,
+                &tip.state_image_digest,
+            ),
+            state_image_digest: tip.state_image_digest,
+        };
+
+        // 1. Commit the new tip to the current journal as a regular
+        //    PREPARE+COMMIT pair, appended without the capacity check:
+        //    this journal is already at (or over) the ceiling and is
+        //    about to be retired by the rename below, so intentionally
+        //    writing its terminal two records past the limit is correct
+        //    here — routing through the checked `append_witness_record`
+        //    would re-enter `reserve_witness_record_capacity`, which would
+        //    call back into this function and recurse without bound.
+        //    Each append is its own fsynced fixed-width record, so a
+        //    crash between them is recovered by `reconcile_pending_witness`
+        //    on the next open.
+        self.append_witness_record_unchecked(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &new_tip)?;
+        self.append_witness_record_unchecked(TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT, &new_tip)?;
+        self.witness_history.push(new_tip.clone());
+
+        // 2. Build the new segment header. The synthetic acknowledgement's
+        //    zero signature marks this as a self-signed compaction
+        //    segment; every other field is a deterministic hash of the
+        //    new tip so it passes `validate_anchor_acknowledgement_shape`,
+        //    except `previous_event_root`, which threads the retiring
+        //    segment's just-committed terminal chain hash (captured here,
+        //    before the rename below retires that journal) so the new
+        //    segment's genesis carries real cross-boundary continuity.
+        let retiring_segment_chain_hash = self.last_chain_hash;
+        let synthetic_ack = synthetic_compaction_acknowledgement(
+            &self.identity.fingerprint,
+            &new_tip,
+            retiring_segment_chain_hash,
+        );
+        let header_bytes =
+            encode_state_witness_segment_header(&self.identity.fingerprint, &synthetic_ack)?;
+
+        // 3. Publish the new segment through the same publish/rename/fsync/
+        //    retire mechanics `rotate_state_witness_segment_inner` uses.
+        //    Recovery handles each intermediate crash window via
+        //    `recover_state_witness_compaction`.
+        self.publish_state_witness_segment(&header_bytes, &new_tip, None, false, true)
+    }
+
+    #[cfg(unix)]
+    fn reserve_witness_record_capacity(&mut self, additional: usize) -> Result<(), EngineError> {
         let required = self
             .witness_record_count()?
             .checked_add(additional)
@@ -3679,18 +3750,42 @@ impl StateFileLock {
                     "signer state witness journal record count overflowed".to_string(),
                 )
             })?;
-        if required > self.witness_max_records {
+        if required <= self.witness_max_records {
+            return Ok(());
+        }
+        // Local compaction only applies to unanchored signers, whose
+        // `witness_rotation_threshold` is permanently `None`: there is no
+        // externally-signed rotation path available, so without
+        // compaction every future write would hit the ceiling and refuse.
+        if self.witness_rotation_threshold.is_none() {
+            self.compact_witness_journal_local()?;
+            let post_required = self
+                .witness_record_count()?
+                .checked_add(additional)
+                .ok_or_else(|| {
+                    EngineError::Internal(
+                        "signer state witness journal record count overflowed after local \
+                         compaction"
+                            .to_string(),
+                    )
+                })?;
+            if post_required <= self.witness_max_records {
+                return Ok(());
+            }
             return Err(EngineError::Internal(format!(
-                "signer state witness journal record ceiling [{}] reached; refusing unsigned \
-                 local compaction or re-genesis. Install a future manifest-pinned, \
-                 authority-signed checkpoint through the checkpoint ABI before resuming writes",
-                self.witness_max_records
+                "signer state witness journal record ceiling [{}] still reached after local \
+                 compaction: required [{}], additional [{}]",
+                self.witness_max_records, post_required, additional
             )));
         }
-        Ok(())
+        Err(EngineError::Internal(format!(
+            "signer state witness journal record ceiling [{}] reached; a fresh manifest-pinned, \
+             authority-signed acknowledgement of the current tip is required before \
+             additional state writes",
+            self.witness_max_records
+        )))
     }
 }
-
 fn resolve_witness_history_index(
     history: &[StateWitness],
     generation: u64,
@@ -3902,7 +3997,7 @@ pub(crate) fn durable_store_fingerprint_v1(
     )
 }
 
-fn state_image_digest(state_bytes: Option<&[u8]>) -> [u8; 32] {
+pub(crate) fn state_image_digest(state_bytes: Option<&[u8]>) -> [u8; 32] {
     match state_bytes {
         Some(bytes) => hash_fields(TBTC_SIGNER_STATE_IMAGE_DIGEST_DOMAIN, &[&[1], bytes]),
         None => hash_fields(TBTC_SIGNER_STATE_IMAGE_DIGEST_DOMAIN, &[&[0], &[]]),
@@ -3927,7 +4022,7 @@ pub(crate) fn state_commitment(
     digest.finalize().into()
 }
 
-fn state_witness_genesis(store_fingerprint: &[u8; 32]) -> [u8; 32] {
+pub(crate) fn state_witness_genesis(store_fingerprint: &[u8; 32]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(TBTC_SIGNER_STATE_WITNESS_GENESIS_DOMAIN);
     digest.update(store_fingerprint);
@@ -3989,8 +4084,62 @@ pub(crate) fn encode_v1_state_witness_genesis_journal(
     bytes.extend_from_slice(&encode_state_witness_record(
         TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
         &genesis,
+        &[0u8; 32],
     ));
     bytes.extend_from_slice(&encode_state_witness_record(
+        TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+        &genesis,
+        &[0u8; 32],
+    ));
+    bytes
+}
+
+/// Fixture for the retired v2 journal layout (pre-record-hash-chain, 105-byte
+/// records, v2 state-commitment transcript). The magic is the only
+/// meaningful prefix; every byte after the 48-byte header is a 105-byte
+/// record shaped exactly like v3 minus the trailing 32-byte chain hash.
+#[cfg(test)]
+fn encode_v2_state_witness_genesis_journal(
+    store_id: &[u8; 32],
+    store_fingerprint: &[u8; 32],
+    state_image_digest: &[u8; 32],
+) -> Vec<u8> {
+    fn encode_v2_record(record_type: u8, witness: &StateWitness) -> [u8; 105] {
+        let mut record = [0u8; 105];
+        let mut offset = 0usize;
+        record[offset] = record_type;
+        offset += 1;
+        record[offset..offset + 8].copy_from_slice(&witness.generation.to_be_bytes());
+        offset += 8;
+        record[offset..offset + 32].copy_from_slice(&witness.previous_commitment);
+        offset += 32;
+        record[offset..offset + 32].copy_from_slice(&witness.state_image_digest);
+        offset += 32;
+        record[offset..offset + 32].copy_from_slice(&witness.commitment);
+        offset += 32;
+        debug_assert_eq!(offset, 105);
+        record
+    }
+    let previous_commitment = state_witness_genesis(store_fingerprint);
+    let genesis = StateWitness {
+        generation: 1,
+        previous_commitment,
+        commitment: state_commitment(
+            store_fingerprint,
+            1,
+            &previous_commitment,
+            state_image_digest,
+        ),
+        state_image_digest: *state_image_digest,
+    };
+    let mut bytes = Vec::with_capacity(TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 2 * 105);
+    bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC_V2);
+    bytes.extend_from_slice(store_id);
+    bytes.extend_from_slice(&encode_v2_record(
+        TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+        &genesis,
+    ));
+    bytes.extend_from_slice(&encode_v2_record(
         TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
         &genesis,
     ));
@@ -4012,6 +4161,11 @@ fn validate_entry_name(name: &OsStr, label: &str) -> Result<(), EngineError> {
     if name.is_empty() || name.as_bytes().contains(&b'/') || name.as_bytes().contains(&0) {
         return Err(EngineError::Internal(format!(
             "invalid signer {label} file name"
+        )));
+    }
+    if name == OsStr::new(".") || name == OsStr::new("..") {
+        return Err(EngineError::Validation(format!(
+            "signer {label} entry name [{name:?}] is not allowed (path traversal)"
         )));
     }
     Ok(())
@@ -4204,6 +4358,7 @@ fn open_or_create_store_id(
         validate_owned_unlinked_regular(&file, LABEL)?;
         set_owner_only_permissions(&file, LABEL)?;
         validate_secure_regular_file(&file, LABEL)?;
+        advisory_exclusive_lock(&file, LABEL);
         let store_id = read_store_id(&file)?;
         let identity = descriptor_identity(&file, LABEL)?;
         return Ok((file, store_id, identity));
@@ -4217,6 +4372,7 @@ fn open_or_create_store_id(
         }
     }
     let (file, identity) = create_entry_atomically(directory, name, &store_id, LABEL)?;
+    advisory_exclusive_lock(&file, LABEL);
     Ok((file, store_id, identity))
 }
 
@@ -4824,6 +4980,77 @@ fn replace_durable_entry_with_guard(
     }
 }
 
+/// Builds the synthetic, self-signed acknowledgement carried by a local
+/// compaction segment header.
+///
+/// A real acknowledgement is signed by the configured external authority; a
+/// compaction is performed by the signer itself when no authority is
+/// configured (so there is no signing key to draw on). The new tip
+/// commits to the compaction through the journal's per-record chain hash,
+/// and the segment header is recognised as a compaction segment because its
+/// `signature` is the all-zero 64-byte marker. Every field except
+/// `previous_event_root` is a deterministic SHA-256 of
+/// `TBTC_SIGNER_STATE_ANCHOR_METADATA_DOMAIN` plus the new tip's
+/// commitment, so the resulting bytes are unique to the new tip and pass
+/// `validate_anchor_acknowledgement_shape` (the shape check rejects only
+/// zero-valued required fields and the wrong store fingerprint).
+///
+/// `previous_event_root` carries `retiring_segment_chain_hash`, the
+/// retiring segment's own terminal per-record chain hash, verbatim. A
+/// real, externally-signed rotation cannot repurpose this field: its bytes
+/// are part of the signed protocol acknowledgement and the 472-byte
+/// segment header layout is a frozen cross-language contract with the Go
+/// bridge (see `signed_segment_header_matches_frozen_472_byte_vector`), so
+/// an anchored rotation's on-disk bytes stay exactly as they were before.
+/// A self-signed compaction segment has no such external contract to
+/// preserve, so it is free to fold the retiring segment's terminal chain
+/// hash into this field. Doing so ties `header_commitment` (and therefore
+/// the new segment's genesis chain-hash seed, see
+/// `read_state_witness_journal_streaming`) to the retiring segment's
+/// entire append history rather than only its final tip, so tampering
+/// with any record chained under the retiring segment's terminal hash
+/// changes that hash and, transitively, every future record's chain hash
+/// verified against this header.
+fn synthetic_compaction_acknowledgement(
+    store_fingerprint: &[u8; 32],
+    new_tip: &StateWitness,
+    retiring_segment_chain_hash: [u8; 32],
+) -> StateAnchorAcknowledgement {
+    fn domain_hash(label: &[u8], new_tip: &StateWitness) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(TBTC_SIGNER_STATE_ANCHOR_METADATA_DOMAIN);
+        digest.update(label);
+        digest.update(new_tip.commitment);
+        digest.finalize().into()
+    }
+    let binding_hash = domain_hash(b"compaction-binding-hash", new_tip);
+    StateAnchorAcknowledgement {
+        binding_hash,
+        request_digest: domain_hash(b"compaction-request-digest", new_tip),
+        nonce: domain_hash(b"compaction-nonce", new_tip),
+        status: 1,
+        service_epoch: 1,
+        revision: 1,
+        previous_event_root: retiring_segment_chain_hash,
+        event_root: domain_hash(b"compaction-event-root", new_tip),
+        checkpoint_store_fingerprint: *store_fingerprint,
+        checkpoint_generation: new_tip.generation,
+        checkpoint_previous_commitment: new_tip.previous_commitment,
+        checkpoint_state_image_digest: new_tip.state_image_digest,
+        checkpoint_state_commitment: new_tip.commitment,
+        operation_id: domain_hash(b"compaction-operation-id", new_tip),
+        transition_digest: domain_hash(b"compaction-transition-digest", new_tip),
+        committed_at_unix_ms: 0,
+        expires_at_unix_ms: 0,
+        signing_digest: [0u8; 32],
+        // All-zero signature is the in-band compaction marker; the parser
+        // recognises it and skips the signed-base check.
+        signature: [0u8; 64],
+        configured_spki_hash: [0u8; 32],
+        acknowledgement_digest: [0u8; 32],
+    }
+}
+
 fn encode_state_witness_segment_header(
     store_fingerprint: &[u8; 32],
     acknowledgement: &StateAnchorAcknowledgement,
@@ -4862,6 +5089,7 @@ fn parse_state_witness_segment_header(
     bytes: &[u8],
     expected_store_fingerprint: &[u8; 32],
     anchor: Option<&StateAnchorMetadata>,
+    store_is_anchored: bool,
 ) -> Result<StateWitnessSegmentHeader, EngineError> {
     if bytes.len() != TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH {
         return Err(EngineError::Internal(format!(
@@ -4950,43 +5178,65 @@ fn parse_state_witness_segment_header(
             "state witness segment header commitment or base is invalid".to_string(),
         ));
     }
-    let metadata = anchor.ok_or_else(|| {
-        EngineError::Internal(
-            "rotated state witness segment has no retained signed base acknowledgement; \
-             offline recovery certification is required"
-                .to_string(),
-        )
-    })?;
-    let header_matches_acknowledgement = |acknowledgement: &StateAnchorAcknowledgement| {
-        acknowledgement.checkpoint_store_fingerprint == store_fingerprint
-            && acknowledgement.checkpoint_generation == base.generation
-            && acknowledgement.checkpoint_previous_commitment == base.previous_commitment
-            && acknowledgement.checkpoint_state_image_digest == base.state_image_digest
-            && acknowledgement.checkpoint_state_commitment == base.commitment
-            && acknowledgement.binding_hash == binding_hash
-            && acknowledgement.service_epoch == service_epoch
-            && acknowledgement.revision == revision
-            && acknowledgement.previous_event_root == previous_event_root
-            && acknowledgement.event_root == event_root
-            && acknowledgement.operation_id == operation_id
-            && acknowledgement.transition_digest == transition_digest
-            && acknowledgement.committed_at_unix_ms == committed_at_unix_ms
-            && acknowledgement.acknowledgement_digest == acknowledgement_digest
-            && acknowledgement.signature == signature
-    };
-    if ![
-        metadata.witness_base.as_ref(),
-        metadata.pending_witness_base.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(header_matches_acknowledgement)
-    {
+    // A future refactor accidentally passing `anchor: None` for an anchored
+    // store must not admit a forged self-signed compaction marker: this
+    // check is independent of `anchor` and rejects the zero signature the
+    // instant the caller declares the store anchored, before consulting any
+    // other metadata.
+    if store_is_anchored && signature == [0u8; 64] {
         return Err(EngineError::Internal(
-            "state witness segment header disagrees with every retained signed base \
-             acknowledgement"
+            "anchored state witness segment header carries the self-signed local compaction \
+             marker; refusing to trust an unsigned segment"
                 .to_string(),
         ));
+    }
+    // A zero signature is the in-band marker for a self-signed local
+    // compaction segment (see `compact_witness_journal_local`): the segment
+    // is authorized by the journal's own chain, not by an external anchor
+    // signature, so the signed-base check is skipped. The header_commitment
+    // integrity check above still pins the layout, and the per-record
+    // chain hash continues to commit every record to the previous one, so
+    // a fake compaction segment cannot displace a real one.
+    let is_self_signed_compaction = signature == [0u8; 64];
+    if !is_self_signed_compaction {
+        let metadata = anchor.ok_or_else(|| {
+            EngineError::Internal(
+                "rotated state witness segment has no retained signed base acknowledgement; \
+                 offline recovery certification is required"
+                    .to_string(),
+            )
+        })?;
+        let header_matches_acknowledgement = |acknowledgement: &StateAnchorAcknowledgement| {
+            acknowledgement.checkpoint_store_fingerprint == store_fingerprint
+                && acknowledgement.checkpoint_generation == base.generation
+                && acknowledgement.checkpoint_previous_commitment == base.previous_commitment
+                && acknowledgement.checkpoint_state_image_digest == base.state_image_digest
+                && acknowledgement.checkpoint_state_commitment == base.commitment
+                && acknowledgement.binding_hash == binding_hash
+                && acknowledgement.service_epoch == service_epoch
+                && acknowledgement.revision == revision
+                && acknowledgement.previous_event_root == previous_event_root
+                && acknowledgement.event_root == event_root
+                && acknowledgement.operation_id == operation_id
+                && acknowledgement.transition_digest == transition_digest
+                && acknowledgement.committed_at_unix_ms == committed_at_unix_ms
+                && acknowledgement.acknowledgement_digest == acknowledgement_digest
+                && acknowledgement.signature == signature
+        };
+        if ![
+            metadata.witness_base.as_ref(),
+            metadata.pending_witness_base.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(header_matches_acknowledgement)
+        {
+            return Err(EngineError::Internal(
+                "state witness segment header disagrees with every retained signed base \
+                 acknowledgement"
+                    .to_string(),
+            ));
+        }
     }
     Ok(StateWitnessSegmentHeader {
         store_fingerprint,
@@ -5151,6 +5401,7 @@ fn recover_state_anchor_trust_transition(
         store_identity,
         current_state_file,
         Some(&rotation_anchor),
+        true,
         maximum_records,
         false,
         Some(recovery_guard),
@@ -5462,6 +5713,160 @@ fn revalidate_state_anchor_trust_transition_intent_entry(
     Ok(())
 }
 
+/// Recovers an in-progress local compaction from a crash.
+///
+/// Mirrors `recover_state_witness_rotation` for the compaction half of the
+/// witness lifecycle. The compaction publishes a new `.state-witness.next`
+/// first, then renames the current journal to `.state-witness.previous`,
+/// then renames `.next` to the current name, with a directory fsync
+/// between each rename. A crash anywhere along that sequence can leave two
+/// different reachable post-crash states: (a) `.next` still on disk as a
+/// pending candidate to validate and publish (the crash windows before or
+/// between the two renames), or (b) `.next` already retired into place with
+/// only a stale `.previous` left to clean up (the crash window after both
+/// renames but before the final retirement). If neither `.next` nor a
+/// stale `.previous` is present, the journal is already in a steady state
+/// and `Ok(false)` is returned.
+#[cfg(unix)]
+#[allow(clippy::too_many_lines)]
+fn recover_state_witness_compaction(
+    directory: &fs::File,
+    names: StateWitnessRotationNames<'_>,
+    store_identity: &DurableStoreIdentity,
+    maximum_records: usize,
+) -> Result<bool, EngineError> {
+    let StateWitnessRotationNames {
+        current: current_name,
+        next: next_name,
+        previous: previous_name,
+    } = names;
+    let next_exists = live_entry_stat(
+        directory.as_raw_fd(),
+        next_name,
+        "next state witness journal during compaction recovery",
+    )?
+    .is_some();
+    if !next_exists {
+        // `.next` is only created by an in-progress compaction; once it's
+        // gone, either no compaction ever ran, or a prior compaction
+        // completed its rename dance but crashed before the final
+        // retire-previous step (see the live path in
+        // `compact_witness_journal_local`). Local compaction is the only
+        // source of `.previous` for an unanchored store (the only topology
+        // that calls this function), so finish that retirement here rather
+        // than leaving a stray `.previous` for `revalidate_store_entries`
+        // to reject.
+        if live_entry_stat(
+            directory.as_raw_fd(),
+            previous_name,
+            "previous state witness journal during compaction recovery",
+        )?
+        .is_some()
+        {
+            unlinkat_entry(directory.as_raw_fd(), previous_name)?;
+            directory.sync_all().map_err(|error| {
+                EngineError::Internal(format!(
+                    "failed to sync signer state directory after retiring previous witness \
+                     segment during compaction recovery: {error}"
+                ))
+            })?;
+        }
+        return Ok(false);
+    }
+    // The .next file must already be a fully valid compaction segment.
+    // `parse_state_witness_segment_header` accepts the zero signature as
+    // the self-signed compaction marker and skips the signed-base check.
+    let parsed = validate_rotation_candidate(
+        directory,
+        next_name,
+        store_identity,
+        None,
+        false,
+        maximum_records,
+    )?;
+    if parsed
+        .segment_header
+        .as_ref()
+        .is_none_or(|header| header.signature != [0u8; 64])
+    {
+        return Err(EngineError::Internal(
+            "compaction recovery candidate is not a self-signed compaction segment".to_string(),
+        ));
+    }
+    // `.next` alone does not say which side of the two-rename dance the
+    // crash landed on: `current` is only absent once the first rename
+    // (current -> previous) has already happened, so that boundary must be
+    // checked before assuming the first rename still needs to run, mirroring
+    // `recover_state_witness_rotation`'s own current_exists/previous_exists
+    // branching.
+    let current_exists = live_entry_stat(
+        directory.as_raw_fd(),
+        current_name,
+        "current state witness journal during compaction recovery",
+    )?
+    .is_some();
+    let previous_exists = live_entry_stat(
+        directory.as_raw_fd(),
+        previous_name,
+        "previous state witness journal during compaction recovery",
+    )?
+    .is_some();
+    match (current_exists, previous_exists) {
+        (true, false) => {
+            // Crash before the first rename: `current` still holds the
+            // pre-compaction journal and must be retained before `.next`
+            // takes its place.
+            renameat_same_directory(
+                directory.as_raw_fd(),
+                current_name,
+                previous_name,
+                "retain previous signer state witness journal during compaction recovery",
+            )?;
+            directory.sync_all().map_err(|error| {
+                EngineError::Internal(format!(
+                    "failed to sync signer state directory after retaining previous witness \
+                     segment during compaction recovery: {error}"
+                ))
+            })?;
+        }
+        (false, true) => {
+            // Crash between the two renames: `current` was already retired
+            // to `.previous`; only the publish rename below remains.
+        }
+        _ => {
+            return Err(EngineError::Internal(
+                "ambiguous signer state witness compaction entries; refusing to discard either \
+                 segment"
+                    .to_string(),
+            ));
+        }
+    }
+    renameat_same_directory(
+        directory.as_raw_fd(),
+        next_name,
+        current_name,
+        "publish recovered compaction signer state witness segment",
+    )?;
+    directory.sync_all().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to sync signer state directory after publishing recovered compaction \
+             witness segment: {error}"
+        ))
+    })?;
+    // Matches the live path in `compact_witness_journal_local`: retire the
+    // previous segment immediately so a completed recovery leaves the store
+    // in the same steady state `revalidate_store_entries` expects.
+    unlinkat_entry(directory.as_raw_fd(), previous_name)?;
+    directory.sync_all().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to sync signer state directory after retiring previous witness segment \
+             during compaction recovery: {error}"
+        ))
+    })?;
+    let _ = parsed;
+    Ok(true)
+}
+
 #[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 fn recover_state_witness_rotation(
@@ -5470,6 +5875,7 @@ fn recover_state_witness_rotation(
     store_identity: &DurableStoreIdentity,
     current_state_file: Option<&fs::File>,
     anchor: Option<&StateAnchorMetadata>,
+    store_is_anchored: bool,
     maximum_records: usize,
     retire_previous: bool,
     recovery_guard: Option<&StateAnchorTrustRecoveryGuard<'_>>,
@@ -5521,6 +5927,7 @@ fn recover_state_witness_rotation(
             &store_identity.fingerprint,
             maximum_records,
             anchor,
+            store_is_anchored,
         )?;
         validate_anchor_history(anchor, &parsed.history)?;
         if parsed.pending.is_some() {
@@ -5578,6 +5985,7 @@ fn recover_state_witness_rotation(
             next_name,
             store_identity,
             anchor,
+            store_is_anchored,
             maximum_records,
         )?;
         if let Some(guard) = recovery_guard {
@@ -5613,6 +6021,7 @@ fn recover_state_witness_rotation(
             current_name,
             store_identity,
             anchor,
+            store_is_anchored,
             maximum_records,
         )?;
         if let Some(guard) = recovery_guard {
@@ -5625,6 +6034,7 @@ fn recover_state_witness_rotation(
             next_name,
             store_identity,
             anchor,
+            store_is_anchored,
             maximum_records,
         )?;
         if let Some(guard) = recovery_guard {
@@ -5646,6 +6056,7 @@ fn recover_state_witness_rotation(
             current_name,
             store_identity,
             anchor,
+            store_is_anchored,
             maximum_records,
         )?;
         if let Some(guard) = recovery_guard {
@@ -5657,6 +6068,7 @@ fn recover_state_witness_rotation(
             current_name,
             store_identity,
             anchor,
+            store_is_anchored,
             maximum_records,
         )?;
     } else {
@@ -5671,6 +6083,7 @@ fn recover_state_witness_rotation(
         current_name,
         store_identity,
         anchor,
+        store_is_anchored,
         maximum_records,
     )?;
     if !acknowledgement_matches_witness(pending, parsed.history.first()) {
@@ -5749,6 +6162,7 @@ fn validate_rotation_candidate(
     name: &OsStr,
     store_identity: &DurableStoreIdentity,
     anchor: Option<&StateAnchorMetadata>,
+    store_is_anchored: bool,
     maximum_records: usize,
 ) -> Result<ParsedStateWitnessJournal, EngineError> {
     let file = openat_optional(
@@ -5767,6 +6181,7 @@ fn validate_rotation_candidate(
         &store_identity.fingerprint,
         maximum_records,
         anchor,
+        store_is_anchored,
     )?;
     if parsed.segment_header.is_none() || parsed.pending.is_some() {
         return Err(EngineError::Internal(
@@ -5784,13 +6199,14 @@ fn open_or_create_state_witness(
     current_state_file: Option<&fs::File>,
     maximum_records: usize,
     anchor: Option<&StateAnchorMetadata>,
+    store_is_anchored: bool,
 ) -> Result<OpenedStateWitnessJournal, EngineError> {
     const LABEL: &str = "signer state witness journal";
 
     if let Some(file) = openat_optional(directory.as_raw_fd(), name, libc::O_RDWR, LABEL)? {
-        validate_owned_unlinked_regular(&file, LABEL)?;
         set_owner_only_permissions(&file, LABEL)?;
         validate_secure_regular_file(&file, LABEL)?;
+        advisory_exclusive_lock(&file, LABEL);
 
         // The journal is a fixed header followed by fixed-width records, each
         // appended and fsynced individually, and the genesis header+PREPARE+
@@ -5807,6 +6223,7 @@ fn open_or_create_state_witness(
             &store_identity.store_id,
             &store_identity.fingerprint,
             anchor,
+            store_is_anchored,
         )?;
         let parsed = read_state_witness_journal_streaming(
             &file,
@@ -5814,6 +6231,7 @@ fn open_or_create_state_witness(
             &store_identity.fingerprint,
             maximum_records,
             anchor,
+            store_is_anchored,
         )?;
         validate_anchor_history(anchor, &parsed.history)?;
         debug_assert_eq!(length, parsed.length);
@@ -5852,20 +6270,27 @@ fn open_or_create_state_witness(
         commitment: state_commitment(&store_identity.fingerprint, 1, &genesis_root, &digest),
         state_image_digest: digest,
     };
+    let genesis_chain_hash = [0u8; 32];
+    let prepare_record = encode_state_witness_record(
+        TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+        &genesis,
+        &genesis_chain_hash,
+    );
+    let mut commit_chain_hash = [0u8; 32];
+    commit_chain_hash.copy_from_slice(&prepare_record[prepare_record.len() - 32..]);
     let mut bytes = Vec::with_capacity(
         TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 2 * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
     );
     bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
     bytes.extend_from_slice(&store_identity.store_id);
-    bytes.extend_from_slice(&encode_state_witness_record(
-        TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
-        &genesis,
-    ));
+    bytes.extend_from_slice(&prepare_record);
     bytes.extend_from_slice(&encode_state_witness_record(
         TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
         &genesis,
+        &commit_chain_hash,
     ));
     let (file, identity) = create_entry_atomically(directory, name, &bytes, LABEL)?;
+    advisory_exclusive_lock(&file, LABEL);
     Ok(OpenedStateWitnessJournal {
         file,
         identity,
@@ -5876,9 +6301,11 @@ fn open_or_create_state_witness(
             header_length: TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH,
             header_bytes: bytes[..TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH].to_vec(),
             segment_header: None,
-            tail_record: bytes[bytes.len() - TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH..]
-                .try_into()
-                .expect("genesis journal has one trailing fixed-width record"),
+            tail_chain_hash: {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&bytes[bytes.len() - 32..]);
+                hash
+            },
         },
     })
 }
@@ -5898,6 +6325,7 @@ fn truncate_incomplete_witness_record(
     expected_store_id: &[u8; 32],
     expected_store_fingerprint: &[u8; 32],
     anchor: Option<&StateAnchorMetadata>,
+    store_is_anchored: bool,
 ) -> Result<usize, EngineError> {
     const LABEL: &str = "signer state witness journal";
     let stat = descriptor_stat(file, LABEL)?;
@@ -5928,6 +6356,7 @@ fn truncate_incomplete_witness_record(
             &prefix[..TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH],
             expected_store_fingerprint,
             anchor,
+            store_is_anchored,
         )
         .is_ok()
     {
@@ -5965,14 +6394,35 @@ fn current_state_image_digest(state_file: Option<&fs::File>) -> Result<[u8; 32],
     }
 }
 
-fn encode_state_witness_record(record_type: u8, witness: &StateWitness) -> Vec<u8> {
-    let mut record = Vec::with_capacity(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
-    record.push(record_type);
-    record.extend_from_slice(&witness.generation.to_be_bytes());
-    record.extend_from_slice(&witness.previous_commitment);
-    record.extend_from_slice(&witness.state_image_digest);
-    record.extend_from_slice(&witness.commitment);
-    debug_assert_eq!(record.len(), TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
+pub(crate) fn encode_state_witness_record(
+    record_type: u8,
+    witness: &StateWitness,
+    previous_chain_hash: &[u8; 32],
+) -> [u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH] {
+    // Fixed-offset writes into a stack array: every field has a known
+    // position, the chain hash commits to bytes [..offset] before the hash
+    // slot is filled, and the total length is enforced by the return type.
+    let mut record = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
+    let mut offset = 0usize;
+    record[offset] = record_type;
+    offset += 1;
+    record[offset..offset + 8].copy_from_slice(&witness.generation.to_be_bytes());
+    offset += 8;
+    record[offset..offset + 32].copy_from_slice(&witness.previous_commitment);
+    offset += 32;
+    record[offset..offset + 32].copy_from_slice(&witness.state_image_digest);
+    offset += 32;
+    record[offset..offset + 32].copy_from_slice(&witness.commitment);
+    offset += 32;
+    debug_assert_eq!(offset, TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 32);
+
+    let mut digest = Sha256::new();
+    digest.update(TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN);
+    digest.update(previous_chain_hash);
+    digest.update(&record[..offset]);
+    let chain_hash = digest.finalize();
+    record[offset..offset + 32].copy_from_slice(&chain_hash);
+
     record
 }
 
@@ -5990,6 +6440,7 @@ fn read_state_witness_journal_streaming(
     store_fingerprint: &[u8; 32],
     maximum_records: usize,
     anchor: Option<&StateAnchorMetadata>,
+    store_is_anchored: bool,
 ) -> Result<ParsedStateWitnessJournal, EngineError> {
     const LABEL: &str = "signer state witness journal";
     let stat = descriptor_stat(file, LABEL)?;
@@ -6013,8 +6464,11 @@ fn read_state_witness_journal_streaming(
     let prefix = read_file_range_at(file, 0, prefix_length, LABEL)?;
     #[cfg(test)]
     WITNESS_VERIFIED_BYTES_READ.fetch_add(prefix.len() as u64, std::sync::atomic::Ordering::SeqCst);
-    if is_retired_v1_state_witness_journal(&prefix) {
+    if is_retired_legacy_state_witness_journal(&prefix, TBTC_SIGNER_STATE_WITNESS_MAGIC_V1) {
         return Err(retired_v1_state_witness_journal_error());
+    }
+    if is_retired_legacy_state_witness_journal(&prefix, TBTC_SIGNER_STATE_WITNESS_MAGIC_V2) {
+        return Err(retired_v2_state_witness_journal_error());
     }
     if length < TBTC_SIGNER_STATE_WITNESS_MAGIC.len() {
         return Err(truncated_state_witness_journal_error(format!(
@@ -6050,20 +6504,24 @@ fn read_state_witness_journal_streaming(
     );
     header_bytes.extend_from_slice(&header_tail);
 
-    let (segment_header, mut history, requires_record) = if header_length
-        == TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH
-    {
-        if &header_bytes[TBTC_SIGNER_STATE_WITNESS_MAGIC.len()..] != expected_store_id {
-            return Err(EngineError::Internal(
-                "signer state witness journal store ID is invalid".to_string(),
-            ));
-        }
-        (None, Vec::new(), true)
-    } else {
-        let header = parse_state_witness_segment_header(&header_bytes, store_fingerprint, anchor)?;
-        let base = header.base.clone();
-        (Some(header), vec![base], false)
-    };
+    let (segment_header, mut history, requires_record) =
+        if header_length == TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH {
+            if &header_bytes[TBTC_SIGNER_STATE_WITNESS_MAGIC.len()..] != expected_store_id {
+                return Err(EngineError::Internal(
+                    "signer state witness journal store ID is invalid".to_string(),
+                ));
+            }
+            (None, Vec::new(), true)
+        } else {
+            let header = parse_state_witness_segment_header(
+                &header_bytes,
+                store_fingerprint,
+                anchor,
+                store_is_anchored,
+            )?;
+            let base = header.base.clone();
+            (Some(header), vec![base], false)
+        };
 
     let record_bytes = length - header_length;
     if (requires_record && record_bytes == 0)
@@ -6083,7 +6541,10 @@ fn read_state_witness_journal_streaming(
 
     history.reserve(record_count.div_ceil(2));
     let mut pending = None::<StateWitness>;
-    let mut tail = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
+    let mut chain_hash: [u8; 32] = match &segment_header {
+        Some(header) => header.header_commitment,
+        None => [0u8; 32],
+    };
     for index in 0..record_count {
         let offset = header_length + index * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH;
         let record =
@@ -6091,10 +6552,13 @@ fn read_state_witness_journal_streaming(
         #[cfg(test)]
         WITNESS_VERIFIED_BYTES_READ
             .fetch_add(record.len() as u64, std::sync::atomic::Ordering::SeqCst);
-        apply_state_witness_record(&record, store_fingerprint, &mut history, &mut pending)?;
-        if index + 1 == record_count {
-            tail.copy_from_slice(&record);
-        }
+        apply_state_witness_record(
+            &record,
+            store_fingerprint,
+            &mut history,
+            &mut pending,
+            &mut chain_hash,
+        )?;
     }
     if history.is_empty() {
         return Err(truncated_state_witness_journal_error(
@@ -6114,7 +6578,7 @@ fn read_state_witness_journal_streaming(
         header_length,
         header_bytes,
         segment_header,
-        tail_record: tail,
+        tail_chain_hash: chain_hash,
     })
 }
 
@@ -6124,8 +6588,11 @@ fn parse_state_witness_journal(
     expected_store_id: &[u8; 32],
     store_fingerprint: &[u8; 32],
 ) -> Result<(Vec<StateWitness>, Option<StateWitness>), EngineError> {
-    if is_retired_v1_state_witness_journal(bytes) {
+    if is_retired_legacy_state_witness_journal(bytes, TBTC_SIGNER_STATE_WITNESS_MAGIC_V1) {
         return Err(retired_v1_state_witness_journal_error());
+    }
+    if is_retired_legacy_state_witness_journal(bytes, TBTC_SIGNER_STATE_WITNESS_MAGIC_V2) {
+        return Err(retired_v2_state_witness_journal_error());
     }
     if bytes.len() < TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH {
         return Err(truncated_state_witness_journal_error(format!(
@@ -6143,8 +6610,9 @@ fn parse_state_witness_journal(
         ));
     }
     let records = &bytes[TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH..];
-    let complete_records = records.chunks_exact(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
-    if records.is_empty() || !complete_records.remainder().is_empty() {
+    let (complete_records, remainder) =
+        records.as_chunks::<TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH>();
+    if records.is_empty() || !remainder.is_empty() {
         return Err(truncated_state_witness_journal_error(
             "signer state witness journal contains a missing or partial record".to_string(),
         ));
@@ -6152,8 +6620,15 @@ fn parse_state_witness_journal(
 
     let mut history = Vec::<StateWitness>::new();
     let mut pending = None::<StateWitness>;
+    let mut chain_hash = [0u8; 32];
     for record in complete_records {
-        apply_state_witness_record(record, store_fingerprint, &mut history, &mut pending)?;
+        apply_state_witness_record(
+            record.as_slice(),
+            store_fingerprint,
+            &mut history,
+            &mut pending,
+            &mut chain_hash,
+        )?;
     }
     if history.is_empty() {
         return Err(truncated_state_witness_journal_error(
@@ -6168,6 +6643,7 @@ fn apply_state_witness_record(
     store_fingerprint: &[u8; 32],
     history: &mut Vec<StateWitness>,
     pending: &mut Option<StateWitness>,
+    chain_hash: &mut [u8; 32],
 ) -> Result<(), EngineError> {
     if record.len() != TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH {
         return Err(truncated_state_witness_journal_error(
@@ -6186,6 +6662,18 @@ fn apply_state_witness_record(
     state_image_digest.copy_from_slice(&record[41..73]);
     let mut commitment = [0u8; 32];
     commitment.copy_from_slice(&record[73..105]);
+    let mut recorded_chain_hash = [0u8; 32];
+    recorded_chain_hash.copy_from_slice(&record[105..137]);
+    let mut chain_digest = Sha256::new();
+    chain_digest.update(TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN);
+    chain_digest.update(chain_hash.as_slice());
+    chain_digest.update(&record[..105]);
+    let expected_chain_hash: [u8; 32] = chain_digest.finalize().into();
+    if recorded_chain_hash != expected_chain_hash {
+        return Err(EngineError::Internal(
+            "signer state witness journal record chain hash is invalid".to_string(),
+        ));
+    }
     let witness = StateWitness {
         generation,
         previous_commitment,
@@ -6258,30 +6746,75 @@ fn apply_state_witness_record(
             )))
         }
     }
+    *chain_hash = recorded_chain_hash;
     Ok(())
 }
 
-/// True when the journal carries the retired v1 magic. The store ID is not
-/// consulted: a v1 journal must be recognized even when the caller cannot
-/// recompute the v1 fingerprint any more, which is precisely the situation the
-/// v2 transcript exists to fix.
-fn is_retired_v1_state_witness_journal(bytes: &[u8]) -> bool {
-    bytes.len() >= TBTC_SIGNER_STATE_WITNESS_MAGIC_V1.len()
-        && &bytes[..TBTC_SIGNER_STATE_WITNESS_MAGIC_V1.len()] == TBTC_SIGNER_STATE_WITNESS_MAGIC_V1
+/// True when the journal's leading bytes match the supplied retired magic.
+/// The store ID is not consulted: a retired journal must be recognized even
+/// when the caller cannot recompute the retired fingerprint any more, which
+/// is precisely the situation the new transcript exists to fix. The check
+/// fires before record parsing so an unrecognized layout fails closed with
+/// an actionable migration message instead of a generic "missing or partial
+/// record" parse error.
+fn is_retired_legacy_state_witness_journal(bytes: &[u8], magic: &[u8; 16]) -> bool {
+    bytes.len() >= magic.len() && &bytes[..magic.len()] == magic.as_slice()
 }
 
-fn retired_v1_state_witness_journal_error() -> EngineError {
+/// Builds the rejection error for a journal that carries a retired layout
+/// magic. `retired_version` is the full layout label the operator sees
+/// (e.g. "v2 record layout" or "v1 state-commitment transcript"), `magic` is
+/// the retired layout's wire magic, `new_version` is the layout this build
+/// commits under (e.g. "v3" or "v2"), and `layout_change` is the prose
+/// explanation of what changed in the new layout. The recovery procedure is
+/// spelled out in full and the operator is repeatedly warned against
+/// deleting the journal, because deletion would silently re-genesis the
+/// anti-rollback chain at generation 1.
+fn retired_legacy_state_witness_journal_error(
+    retired_version: &str,
+    magic: &[u8; 16],
+    new_version: &str,
+    layout_change: &str,
+) -> EngineError {
+    let version_short = retired_version
+        .split_whitespace()
+        .next()
+        .unwrap_or(retired_version);
     EngineError::Internal(format!(
-        "signer state witness journal uses the retired v1 state-commitment transcript \
-         (magic [{}]); this build commits under v2, whose store fingerprint binds only the \
-         stable {TBTC_SIGNER_DURABLE_STORE_ID_SUFFIX} bytes. The journal was left byte-for-byte \
-         intact. Run the documented v1->v2 witness re-anchor before starting this build; do NOT \
-         delete the journal, which would silently re-genesis the anti-rollback chain at \
-         generation 1",
-        String::from_utf8_lossy(TBTC_SIGNER_STATE_WITNESS_MAGIC_V1).trim_end_matches('\0')
+        "signer state witness journal uses the retired {retired_version} (magic [{}]); this \
+         build commits under {new_version}, {layout_change}. The journal was left byte-for-byte \
+         intact - it was not modified, read, or parsed. Recovery procedure: (1) stop the signer \
+         process; (2) rename the existing .state-witness journal aside to a non-conflicting name \
+         such as .state-witness.{version_short}-retired-<timestamp>; do NOT delete it; \
+         (3) restart the signer with the new ABI; the new build will regenerate the journal at \
+         generation 1, accepting the {version_short}->{new_version} break as a one-time \
+         migration event; (4) verify the migration by checking the new state-witness genesis \
+         fingerprint matches the {new_version} fingerprint derived from the existing .store-id. \
+         Do NOT delete the journal under any circumstance, which would silently re-genesis the \
+         anti-rollback chain at generation 1.",
+        String::from_utf8_lossy(magic).trim_end_matches('\0')
     ))
 }
 
+fn retired_v1_state_witness_journal_error() -> EngineError {
+    retired_legacy_state_witness_journal_error(
+        "v1 state-commitment transcript",
+        TBTC_SIGNER_STATE_WITNESS_MAGIC_V1,
+        "v2",
+        "whose store fingerprint binds only the stable \
+         .store-id bytes",
+    )
+}
+
+fn retired_v2_state_witness_journal_error() -> EngineError {
+    retired_legacy_state_witness_journal_error(
+        "v2 record layout",
+        TBTC_SIGNER_STATE_WITNESS_MAGIC_V2,
+        "v3",
+        "which adds a 32-byte per-record hash chain and grows every record \
+         from 105 to 137 bytes",
+    )
+}
 /// A short journal is never a torn create: the header, PREPARE, and COMMIT of a
 /// genesis journal are written to a temp file, fsynced, and renamed into place
 /// as one unit, and every later record is appended and fsynced as one
@@ -6383,6 +6916,34 @@ fn acquire_exclusive_lock(file: &fs::File, lock_path: &Path) -> Result<(), Engin
         "failed to lock signer state file [{}]: {error}",
         lock_path.display()
     )))
+}
+
+/// Acquires a non-blocking advisory `flock` on a durable store file. The signer
+/// state lock is the primary mutex; this is a defense-in-depth guard against a
+/// second process that bypasses the lock file (e.g. by holding its own copy
+/// of the witness journal or store-id file). A contention failure does NOT
+/// fail the store acquire: the held store lock and the descriptor-stamp
+/// revalidation are the authoritative guards, so lock contention
+/// (`EAGAIN`/`EWOULDBLOCK`) is silently ignored; only an unexpected errno
+/// value surfaces a diagnostic warning to the operator.
+#[cfg(unix)]
+fn advisory_exclusive_lock(file: &fs::File, label: &str) {
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        // Lock contention is silently ignored (see doc comment above); an
+        // unexpected errno is worth surfacing, but only in development,
+        // matching the profile gate persistence.rs uses for its own
+        // diagnostic-only warning.
+        if !error.raw_os_error().is_some_and(is_lock_contention_errno)
+            && development_profile_active()
+        {
+            eprintln!(
+                "warning: failed to advisory-flock {label}: {error} \
+                 (signer state lock is the primary guard; this is diagnostic only)"
+            );
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -6671,11 +7232,7 @@ fn unique_temp_name(state_name: &OsStr) -> Result<OsString, EngineError> {
     let mut random = [0u8; 16];
     OsRng.fill_bytes(&mut random);
     let mut name = state_name.to_os_string();
-    name.push(format!(
-        ".tmp-{}-{}",
-        std::process::id(),
-        hex::encode(random)
-    ));
+    name.push(format!(".tmp-{}", hex::encode(random)));
     validate_entry_name(&name, "state temp")?;
     Ok(name)
 }
@@ -6805,7 +7362,6 @@ mod witness_transcript_tests {
             "ea5eb04a4776357e59875f683390a2ff4b7dd511ad394e588dfab147f94fa867"
         );
     }
-
     /// End-to-end v2 chain vector: the `.store-id` bytes derive the store
     /// fingerprint, the fingerprint derives the genesis root, and the genesis
     /// record commits over it. The Go bridge must reproduce all three.
@@ -6829,6 +7385,13 @@ mod witness_transcript_tests {
                 &[0x33; 32]
             )),
             "5387626d5314b17b324f9a7df1ab16fcbf10917a137527bf33c71847e1b77da0"
+        );
+        // Frozen v2 fingerprint for the all-`0x24` `.store-id` fixture used by
+        // the v1 rejection test and the truncated-journal repair tests. The Go
+        // bridge must reproduce this byte-for-byte.
+        assert_eq!(
+            hex::encode(durable_store_fingerprint(&[0x24; 32])),
+            "52fcbfc4b2c6a93645106a32c62113192cac30b934b905e1ad357792c4ce8628"
         );
     }
 
@@ -6866,9 +7429,13 @@ mod witness_transcript_tests {
     fn retired_v1_journals_are_recognized_by_magic_alone() {
         let journal =
             encode_v1_state_witness_genesis_journal(&[0x24; 32], &[0x11; 32], &[0x33; 32]);
-        assert!(is_retired_v1_state_witness_journal(&journal));
-        assert!(!is_retired_v1_state_witness_journal(
-            TBTC_SIGNER_STATE_WITNESS_MAGIC
+        assert!(is_retired_legacy_state_witness_journal(
+            &journal,
+            TBTC_SIGNER_STATE_WITNESS_MAGIC_V1,
+        ));
+        assert!(!is_retired_legacy_state_witness_journal(
+            TBTC_SIGNER_STATE_WITNESS_MAGIC,
+            TBTC_SIGNER_STATE_WITNESS_MAGIC_V1,
         ));
 
         let error = parse_state_witness_journal(&journal, &[0x24; 32], &[0x11; 32])
@@ -6881,9 +7448,612 @@ mod witness_transcript_tests {
             "unexpected v1 rejection message: {message}"
         );
         assert!(
-            message.contains("re-anchor"),
-            "the v1 rejection must be actionable: {message}"
+            message.contains("do NOT delete"),
+            "the v1 rejection must preserve the do-not-delete warning: {message}"
         );
+
+        // (a) The v1 journal bytes on disk MUST be left exactly as-is after
+        // the rejection: parsing must not mutate, truncate, or rewrite the
+        // caller-supplied buffer.
+        let original_bytes = journal.clone();
+        let _ = parse_state_witness_journal(&journal, &[0x24; 32], &[0x11; 32]);
+        assert_eq!(
+            journal, original_bytes,
+            "v1 rejection must not mutate the journal bytes",
+        );
+
+        // (b) A v1 journal truncated to header-only length still fails closed
+        // with the same actionable error: this guards against an over-eager
+        // "looks like a short torn write" repair path that would otherwise
+        // silently dispose of the retired v1 journal.
+        let truncated_v1 = &original_bytes[..TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH];
+        let truncated_error = parse_state_witness_journal(truncated_v1, &[0x24; 32], &[0x11; 32])
+            .expect_err("a truncated v1 journal must still fail closed");
+        let EngineError::Internal(truncated_message) = truncated_error else {
+            panic!("unexpected error variant for truncated v1");
+        };
+        assert!(
+            truncated_message.contains("retired v1 state-commitment transcript"),
+            "truncated v1 must keep the v1-rejection message intact: {truncated_message}",
+        );
+        assert!(
+            truncated_message.contains("do NOT delete"),
+            "truncated v1 must still warn against deletion: {truncated_message}",
+        );
+    }
+
+    /// Frozen cross-language v3 vector for the per-record chain hash. The
+    /// Go bridge must reproduce these bytes exactly. Inputs reuse the same
+    /// `0x11` store-id / `0x33` state-image-digest fixture used by the
+    /// `state_witness_chain_matches_frozen_go_v2_vector` test so a single
+    /// fixture derives every transcript value without ambiguity. The
+    /// `sha256(domain || previous_chain_hash || record[..105])` recurrence
+    /// is the v3 chain invariant enforced at
+    /// `apply_state_witness_record`; these hex values lock it in.
+    #[test]
+    fn record_chain_hash_matches_frozen_go_v3_vector() {
+        let fingerprint = durable_store_fingerprint(&[0x11; 32]);
+        let genesis_root = state_witness_genesis(&fingerprint);
+        let state_image_digest = [0x33u8; 32];
+        let commitment = state_commitment(&fingerprint, 1, &genesis_root, &state_image_digest);
+        // PREPARE record at generation 1 against the zero chain seed:
+        // `record[..105]` = type(1) || generation_be(8) || previous_commitment(32)
+        //                 || state_image_digest(32) || commitment(32).
+        let prepare_record = [TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE]
+            .into_iter()
+            .chain(1u64.to_be_bytes())
+            .chain(genesis_root)
+            .chain(state_image_digest)
+            .chain(commitment)
+            .collect::<Vec<u8>>();
+        assert_eq!(
+            prepare_record.len(),
+            TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 32
+        );
+        let prepare_chain_hash: [u8; 32] = {
+            let mut digest = Sha256::new();
+            digest.update(TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN);
+            digest.update([0u8; 32]);
+            digest.update(&prepare_record);
+            digest.finalize().into()
+        };
+        assert_eq!(
+            hex::encode(prepare_chain_hash),
+            "0c293011cd3227ff1ef6d6a27f7c2eba3f81e86e5f17b313cb34e7cb22a9e75a",
+            "PREPARE chain_hash at generation 1 against the zero chain seed"
+        );
+
+        // COMMIT record for the same witness, chaining from the PREPARE
+        // chain_hash. A second record at the same generation commits the
+        // same state image; the only thing that changes is the previous
+        // chain hash slot, so the COMMIT hash is a deterministic function
+        // of the PREPARE hash above.
+        let commit_record = [TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT]
+            .into_iter()
+            .chain(1u64.to_be_bytes())
+            .chain(genesis_root)
+            .chain(state_image_digest)
+            .chain(commitment)
+            .collect::<Vec<u8>>();
+        assert_eq!(
+            commit_record.len(),
+            TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 32
+        );
+        let commit_chain_hash: [u8; 32] = {
+            let mut digest = Sha256::new();
+            digest.update(TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN);
+            digest.update(prepare_chain_hash);
+            digest.update(&commit_record);
+            digest.finalize().into()
+        };
+        assert_eq!(
+            hex::encode(commit_chain_hash),
+            "0ca1395dcc71d8f93107d0b31b3dbcc92c930c8750bb5b94bc0a0281a4d414cb",
+            "COMMIT chain_hash at generation 1 chained from PREPARE.hash"
+        );
+
+        // Cross-check: encoding a record through the production helper and
+        // hashing the trailing 32 bytes must agree with the vectors above.
+        let prepare_via_helper = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &StateWitness {
+                generation: 1,
+                previous_commitment: genesis_root,
+                state_image_digest,
+                commitment,
+            },
+            &[0u8; 32],
+        );
+        let mut trailing = [0u8; 32];
+        trailing
+            .copy_from_slice(&prepare_via_helper[TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 32..]);
+        assert_eq!(
+            trailing, prepare_chain_hash,
+            "encode_state_witness_record must commit the frozen PREPARE chain hash"
+        );
+    }
+
+    // F-02 (a): mid-journal chain_hash tamper is detected on reopen with the
+    // documented failure message. Mirrors the signature-tamper pattern at
+    // store.rs:8686 by mutating one byte of a structured payload and
+    // confirming the verifier fails closed.
+    #[test]
+    fn mid_journal_chain_hash_tamper_is_detected_on_reopen() {
+        let store_id = [0x24u8; 32];
+        let fingerprint = durable_store_fingerprint(&store_id);
+        let genesis_root = state_witness_genesis(&fingerprint);
+        let first_digest = [0x33u8; 32];
+        let second_digest = [0x55u8; 32];
+        let first_commit = state_commitment(&fingerprint, 1, &genesis_root, &first_digest);
+        let second_commit = state_commitment(&fingerprint, 2, &first_commit, &second_digest);
+        let first_witness = StateWitness {
+            generation: 1,
+            previous_commitment: genesis_root,
+            state_image_digest: first_digest,
+            commitment: first_commit,
+        };
+        let second_witness = StateWitness {
+            generation: 2,
+            previous_commitment: first_commit,
+            state_image_digest: second_digest,
+            commitment: second_commit,
+        };
+
+        // Build a 3-record journal by hand (header + 3 x 137-byte record)
+        // so we can reach in and flip one byte of the middle record's
+        // trailing chain hash. We use a single PREPARE/COMMIT pair for the
+        // first witness and a PREPARE-only for the second so the journal
+        // is otherwise well-formed.
+        let mut bytes = Vec::with_capacity(
+            TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 3 * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+        );
+        bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
+        bytes.extend_from_slice(&store_id);
+        let prepare_one = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &first_witness,
+            &[0u8; 32],
+        );
+        let mut commit_one_prev = [0u8; 32];
+        commit_one_prev
+            .copy_from_slice(&prepare_one[TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 32..]);
+        let commit_one = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+            &first_witness,
+            &commit_one_prev,
+        );
+        let mut prepare_two_prev = [0u8; 32];
+        prepare_two_prev
+            .copy_from_slice(&commit_one[TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 32..]);
+        let prepare_two = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &second_witness,
+            &prepare_two_prev,
+        );
+        bytes.extend_from_slice(&prepare_one);
+        bytes.extend_from_slice(&commit_one);
+        bytes.extend_from_slice(&prepare_two);
+
+        // Corrupt the trailing 32-byte chain hash of the middle record.
+        let middle_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH
+            + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH
+            + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH
+            - 32;
+        let mut tampered = bytes.clone();
+        tampered[middle_offset] ^= 0x01;
+
+        let error = parse_state_witness_journal(&tampered, &store_id, &fingerprint)
+            .expect_err("a journal with a corrupted chain hash must fail closed");
+        let EngineError::Internal(message) = error else {
+            panic!("unexpected error variant for chain hash tamper");
+        };
+        assert!(
+            message.contains("signer state witness journal record chain hash is invalid"),
+            "unexpected tamper rejection message: {message}"
+        );
+
+        // The original, uncorrupted journal still parses successfully so
+        // the failure is exclusively the tamper, not the fixture.
+        let (history, _) =
+            parse_state_witness_journal(&bytes, &store_id, &fingerprint).expect("parse baseline");
+        assert_eq!(history, vec![first_witness.clone()]);
+        assert_eq!(history.last(), Some(&first_witness));
+    }
+
+    // F-02 (b): a record whose chain hash was recomputed under a different
+    // domain separator must be rejected. The chain_hash construction is
+    // `sha256(domain || prev_chain_hash || record[..105])`; swapping the
+    // domain breaks the chain even when every other byte is correct.
+    #[test]
+    fn wrong_domain_separator_recomputation_is_rejected() {
+        let store_id = [0x24u8; 32];
+        let fingerprint = durable_store_fingerprint(&store_id);
+        let genesis_root = state_witness_genesis(&fingerprint);
+        let state_digest = [0x33u8; 32];
+        let commitment = state_commitment(&fingerprint, 1, &genesis_root, &state_digest);
+        let witness = StateWitness {
+            generation: 1,
+            previous_commitment: genesis_root,
+            state_image_digest: state_digest,
+            commitment,
+        };
+        let mut record = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
+        let mut offset = 0usize;
+        record[offset] = TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT;
+        offset += 1;
+        record[offset..offset + 8].copy_from_slice(&witness.generation.to_be_bytes());
+        offset += 8;
+        record[offset..offset + 32].copy_from_slice(&witness.previous_commitment);
+        offset += 32;
+        record[offset..offset + 32].copy_from_slice(&witness.state_image_digest);
+        offset += 32;
+        record[offset..offset + 32].copy_from_slice(&witness.commitment);
+        offset += 32;
+        debug_assert_eq!(offset, TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 32);
+
+        // Recompute the chain hash under an attacker-chosen domain that
+        // is NOT `TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN`. The
+        // resulting bytes will not match the verifier's
+        // `TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN` recurrence.
+        let wrong_domain: &[u8] = b"attacker-chosen-record-chain-domain ";
+        let attacker_chain_hash: [u8; 32] = {
+            let mut digest = Sha256::new();
+            digest.update(wrong_domain);
+            digest.update([0u8; 32]);
+            digest.update(&record[..TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 32]);
+            digest.finalize().into()
+        };
+        record[offset..offset + 32].copy_from_slice(&attacker_chain_hash);
+
+        let mut journal = Vec::with_capacity(
+            TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 2 * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+        );
+        journal.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
+        journal.extend_from_slice(&store_id);
+        // The PREPARE record uses the real chain domain so the verifier
+        // gets past the first record and reaches the corrupted COMMIT.
+        let prepare = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &witness,
+            &[0u8; 32],
+        );
+        journal.extend_from_slice(&prepare);
+        journal.extend_from_slice(&record);
+
+        let error = parse_state_witness_journal(&journal, &store_id, &fingerprint)
+            .expect_err("a record chained under a foreign domain must fail closed");
+        let EngineError::Internal(message) = error else {
+            panic!("unexpected error variant for wrong-domain chain hash");
+        };
+        assert!(
+            message.contains("signer state witness journal record chain hash is invalid"),
+            "wrong-domain rejection must surface the documented message: {message}"
+        );
+    }
+
+    // F-02 (c): mirror the retired v1 rejection test for the retired v2
+    // record layout. v2 used 105-byte records with no chain hash; the v3
+    // record layout is 32 bytes wider, so a v2 journal fails closed with
+    // an actionable migration message rather than a generic "missing or
+    // partial record" parse error. The test asserts the magic literal, the
+    // "retired v2 record layout" wording, and the do-not-delete warning,
+    // and pins byte-for-byte immutability of the input file.
+    #[test]
+    fn retired_v2_journals_are_recognized_by_magic_alone() {
+        let journal =
+            encode_v2_state_witness_genesis_journal(&[0x24; 32], &[0x11; 32], &[0x33; 32]);
+        assert!(is_retired_legacy_state_witness_journal(
+            &journal,
+            TBTC_SIGNER_STATE_WITNESS_MAGIC_V2,
+        ));
+        assert!(!is_retired_legacy_state_witness_journal(
+            TBTC_SIGNER_STATE_WITNESS_MAGIC,
+            TBTC_SIGNER_STATE_WITNESS_MAGIC_V2,
+        ));
+
+        let error = parse_state_witness_journal(&journal, &[0x24; 32], &[0x11; 32])
+            .expect_err("a v2 journal must fail closed");
+        let EngineError::Internal(message) = error else {
+            panic!("unexpected error variant");
+        };
+        assert!(
+            message.contains("retired v2 record layout"),
+            "unexpected v2 rejection message: {message}"
+        );
+        assert!(
+            message.contains("TBTCWITNESSv2"),
+            "v2 rejection must surface the v2 magic literal: {message}"
+        );
+        assert!(
+            message.contains("do NOT delete"),
+            "the v2 rejection must preserve the do-not-delete warning: {message}"
+        );
+
+        // (a) The v2 journal bytes on disk MUST be left exactly as-is after
+        // the rejection: parsing must not mutate, truncate, or rewrite the
+        // caller-supplied buffer.
+        let original_bytes = journal.clone();
+        let _ = parse_state_witness_journal(&journal, &[0x24; 32], &[0x11; 32]);
+        assert_eq!(
+            journal, original_bytes,
+            "v2 rejection must not mutate the journal bytes"
+        );
+
+        // (b) A v2 journal truncated to header-only length still fails
+        // closed with the same actionable error: this guards against an
+        // over-eager "looks like a short torn write" repair path that
+        // would otherwise silently dispose of the retired v2 journal.
+        let truncated_v2 = &original_bytes[..TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH];
+        let truncated_error = parse_state_witness_journal(truncated_v2, &[0x24; 32], &[0x11; 32])
+            .expect_err("a truncated v2 journal must still fail closed");
+        let EngineError::Internal(truncated_message) = truncated_error else {
+            panic!("unexpected error variant for truncated v2");
+        };
+        assert!(
+            truncated_message.contains("retired v2 record layout"),
+            "truncated v2 must keep the v2-rejection message intact: {truncated_message}"
+        );
+        assert!(
+            truncated_message.contains("do NOT delete"),
+            "truncated v2 must still warn against deletion: {truncated_message}"
+        );
+    }
+
+    // F-02 (d): chain continuity is intentionally segment-scoped. After a
+    // pre-compaction rotation, the first record of the new segment chains
+    // from `previous_segment_header_commitment` (the segment header's own
+    // `header_commitment` field), not from the old segment's last record.
+    // The cross-segment continuity is delegated to the externally-signed
+    // checkpoint, per the design chosen in F-02 (d) / F-NC-01.
+    #[cfg(unix)]
+    #[test]
+    fn rotated_segment_chain_hash_is_segment_scoped_to_header_commitment() {
+        let _guard = lock_test_state();
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let state_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-rotation-chain-seed-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let signing_key = SigningKey::from_bytes(&[0x07; 32]);
+        let configured_spki_hash =
+            configure_anchor_store_fixture(&state_path, &signing_key, [0x44; 32]);
+        let mut store = StateFileLock::acquire(&state_path).expect("open anchored store");
+        let tip = store.state_witness_tip().expect("genesis tip");
+        let acknowledgement = signed_acknowledgement_for_tip(
+            &signing_key,
+            configured_spki_hash,
+            store.identity.fingerprint,
+            &tip,
+        );
+        assert!(
+            store
+                .acknowledge_state_witness_checkpoint(
+                    acknowledgement.clone(),
+                    2,
+                    false,
+                    acknowledgement.expires_at_unix_ms,
+                )
+                .expect("initial rotation")
+                .rotated
+        );
+
+        // Capture the post-rotation segment header_commitment. The new
+        // segment's records chain from this value, segment-scoped, per the
+        // design.
+        let header_commitment = store
+            .witness_segment_header
+            .as_ref()
+            .expect("post-rotation segment header is set")
+            .header_commitment;
+        assert_ne!(
+            header_commitment, [0u8; 32],
+            "segment header_commitment must be non-zero after rotation"
+        );
+
+        // Append one new PREPARE+COMMIT pair to the rotated segment and
+        // verify the sequential chain from the segment's own genesis:
+        // record[0] (PREPARE) seeds from `header_commitment`, and record[1]
+        // (COMMIT) chains from record[0]'s own chain hash — not from
+        // `header_commitment` directly a second time.
+        store
+            .replace_state(b"post-rotation snapshot")
+            .expect("post-rotation state write");
+        let journal_bytes =
+            fs::read(state_witness_file_path(&state_path)).expect("read rotated journal");
+        let header_length = store.witness_header_length;
+        let record_length = TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH;
+        let record0 = &journal_bytes[header_length..header_length + record_length];
+        let record1 =
+            &journal_bytes[header_length + record_length..header_length + 2 * record_length];
+        let record0_body = &record0[..record_length - 32];
+        let mut record0_expected = Sha256::new();
+        record0_expected.update(TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN);
+        record0_expected.update(header_commitment);
+        record0_expected.update(record0_body);
+        let record0_expected_chain_hash: [u8; 32] = record0_expected.finalize().into();
+        assert_eq!(
+            &record0[record_length - 32..],
+            record0_expected_chain_hash.as_slice(),
+            "the rotated segment's first record must chain from header_commitment"
+        );
+        let record1_body = &record1[..record_length - 32];
+        let mut record1_expected = Sha256::new();
+        record1_expected.update(TBTC_SIGNER_STATE_WITNESS_RECORD_CHAIN_DOMAIN);
+        record1_expected.update(record0_expected_chain_hash);
+        record1_expected.update(record1_body);
+        let record1_expected_chain_hash: [u8; 32] = record1_expected.finalize().into();
+        assert_eq!(
+            &record1[record_length - 32..],
+            record1_expected_chain_hash.as_slice(),
+            "the rotated segment's second record must chain from the first record's chain hash, \
+             not from header_commitment directly"
+        );
+
+        drop(store);
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compacted_segment_previous_event_root_threads_the_retiring_segments_terminal_chain_hash() {
+        let _guard = lock_test_state();
+
+        // Compacting from two different write ceilings retires two journals
+        // with different append histories -- and therefore different
+        // terminal chain hashes -- even though both eventually compact
+        // through the same code path. If the new segment's genesis
+        // chain-hash seed were a fixed value (or derived only from the new
+        // tip's own fields, as it was before this fix), both runs would
+        // publish the same `previous_event_root`. Each run's expected value
+        // is computed here independently of `compact_witness_journal_local`,
+        // by replaying the exact same deterministic PREPARE+COMMIT
+        // chain-hash arithmetic it performs on the retiring segment's
+        // actual last chain hash, so this proves derivation rather than
+        // merely echoing an internal capture back at itself.
+        let run = |label: &str, ceiling: &str, fills: u32| -> [u8; 32] {
+            let mut random = [0u8; 12];
+            OsRng.fill_bytes(&mut random);
+            let state_path = std::env::temp_dir().join(format!(
+                "tbtc-signer-compaction-chain-{label}-{}-{}",
+                std::process::id(),
+                hex::encode(random)
+            ));
+            std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
+            std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, ceiling);
+
+            let mut store = StateFileLock::acquire(&state_path).expect("open unanchored store");
+            for index in 0..fills {
+                store
+                    .replace_state(format!("fill the record budget {index}").as_bytes())
+                    .expect("fill the record budget up to the configured ceiling");
+            }
+            let tip = store.state_witness_tip().expect("tip before compaction");
+            let chain_hash_before_compaction = store.last_chain_hash;
+            let fingerprint = store.identity.fingerprint;
+
+            store
+                .replace_state(b"write that forces compaction")
+                .expect("local compaction frees capacity so the write continues");
+            let published_previous_event_root = store
+                .witness_segment_header
+                .as_ref()
+                .expect("compaction publishes a fresh segment header")
+                .previous_event_root;
+            drop(store);
+            cleanup_anchor_store_fixture(&state_path);
+
+            // Independently replay compaction's own retiring-segment append:
+            // one PREPARE+COMMIT pair for `new_tip`, chained from the last
+            // chain hash the retiring segment actually had.
+            let new_generation = tip.generation + 1;
+            let new_tip = StateWitness {
+                generation: new_generation,
+                previous_commitment: tip.commitment,
+                commitment: state_commitment(
+                    &fingerprint,
+                    new_generation,
+                    &tip.commitment,
+                    &tip.state_image_digest,
+                ),
+                state_image_digest: tip.state_image_digest,
+            };
+            let prepare_record = encode_state_witness_record(
+                TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+                &new_tip,
+                &chain_hash_before_compaction,
+            );
+            let mut prepare_chain_hash = [0u8; 32];
+            prepare_chain_hash.copy_from_slice(&prepare_record[105..137]);
+            let commit_record = encode_state_witness_record(
+                TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+                &new_tip,
+                &prepare_chain_hash,
+            );
+            let mut expected_retiring_segment_chain_hash = [0u8; 32];
+            expected_retiring_segment_chain_hash.copy_from_slice(&commit_record[105..137]);
+
+            assert_eq!(
+                published_previous_event_root, expected_retiring_segment_chain_hash,
+                "{label}: compacted segment must thread the retiring segment's real terminal \
+                 chain hash, not a value derived only from the new tip"
+            );
+            published_previous_event_root
+        };
+
+        let short = run("short", "4", 1);
+        let long = run("long", "6", 2);
+        assert_ne!(
+            short, long,
+            "the compacted segment's genesis chain-hash seed must vary with the retiring \
+             segment's actual append history, not be a fixed constant"
+        );
+        assert_ne!(short, [0u8; 32]);
+        assert_ne!(long, [0u8; 32]);
+    }
+
+    /// Proves the threaded link is a real, checked property rather than a
+    /// computed-and-ignored field: forging the on-disk `previous_event_root`
+    /// bytes to a different (but still nonzero) chain-hash value and
+    /// recomputing `header_commitment` so the header stays internally
+    /// self-consistent -- exactly what an attacker who controls the file but
+    /// not the retiring segment's genuine chain would have to do -- must
+    /// still be caught, because the new segment's genesis chain-hash seed
+    /// (`header_commitment`) has already been used to chain every record
+    /// appended on top of it.
+    #[cfg(unix)]
+    #[test]
+    fn tampering_a_compacted_segments_threaded_chain_link_is_detected_on_reopen() {
+        let _guard = lock_test_state();
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let state_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-compaction-chain-tamper-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+
+        let mut store = StateFileLock::acquire(&state_path).expect("open unanchored store");
+        store
+            .replace_state(b"fill the record budget")
+            .expect("fill the record budget");
+        store
+            .replace_state(b"write that forces compaction")
+            .expect("local compaction frees capacity so the write continues");
+        // A real write on top of the freshly compacted segment: this
+        // record's on-disk chain hash is computed from the header's
+        // genuine `header_commitment`, which now threads the retiring
+        // segment's real terminal chain hash. Without a record chained on
+        // top, tampering the header alone has nothing to contradict.
+        store
+            .replace_state(b"write chained onto the compacted segment")
+            .expect("write after compaction");
+        drop(store);
+
+        let witness_path = state_witness_file_path(&state_path);
+        let mut bytes = fs::read(&witness_path).expect("read compacted witness journal");
+        assert!(bytes.len() >= TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH);
+        let forged_previous_event_root = [0xABu8; 32];
+        bytes[208..240].copy_from_slice(&forged_previous_event_root);
+        let mut digest = Sha256::new();
+        digest.update(TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_DOMAIN);
+        digest.update(&bytes[..440]);
+        let recomputed_header_commitment: [u8; 32] = digest.finalize().into();
+        bytes[440..472].copy_from_slice(&recomputed_header_commitment);
+        fs::write(&witness_path, &bytes).expect("write forged witness journal");
+
+        let error = StateFileLock::acquire(&state_path)
+            .expect_err("a forged threaded chain-hash link must be detected on reopen");
+        assert!(
+            error.to_string().contains("chain hash is invalid"),
+            "tampering the threaded previous_event_root must surface as a chain-hash \
+             mismatch, not a silent success or unrelated failure: {error}"
+        );
+
+        cleanup_anchor_store_fixture(&state_path);
     }
 
     fn fixture_acknowledgement() -> StateAnchorAcknowledgement {
@@ -7386,8 +8556,9 @@ mod witness_transcript_tests {
             witness_base: Some(acknowledgement),
             pending_witness_base: None,
         };
-        let parsed = parse_state_witness_segment_header(&header, &[0x11; 32], Some(&metadata))
-            .expect("parse frozen segment header");
+        let parsed =
+            parse_state_witness_segment_header(&header, &[0x11; 32], Some(&metadata), true)
+                .expect("parse frozen segment header");
         assert_eq!(parsed.base.generation, 42);
     }
 
@@ -7412,13 +8583,19 @@ mod witness_transcript_tests {
         let mut genesis_journal = Vec::new();
         genesis_journal.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
         genesis_journal.extend_from_slice(&store_id);
-        genesis_journal.extend_from_slice(&encode_state_witness_record(
+        let genesis_prepare_record = encode_state_witness_record(
             TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
             &genesis,
-        ));
+            &[0u8; 32],
+        );
+        let mut genesis_commit_chain_hash = [0u8; 32];
+        genesis_commit_chain_hash
+            .copy_from_slice(&genesis_prepare_record[genesis_prepare_record.len() - 32..]);
+        genesis_journal.extend_from_slice(&genesis_prepare_record);
         genesis_journal.extend_from_slice(&encode_state_witness_record(
             TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
             &genesis,
+            &genesis_commit_chain_hash,
         ));
 
         let acknowledgement = fixture_acknowledgement();
@@ -7444,8 +8621,11 @@ mod witness_transcript_tests {
                 &next_digest,
             ),
         };
-        let segment_record =
-            encode_state_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &segment_next);
+        let segment_record = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &segment_next,
+            &[0u8; 32],
+        );
 
         let mut random = [0u8; 12];
         OsRng.fill_bytes(&mut random);
@@ -7470,17 +8650,29 @@ mod witness_transcript_tests {
             let mut torn = genesis_journal.clone();
             torn.extend_from_slice(&segment_record[..partial_length]);
             install(&torn);
-            let repaired =
-                truncate_incomplete_witness_record(&file, &store_id, &store_fingerprint, None)
-                    .expect("repair torn genesis-journal append");
+            let repaired = truncate_incomplete_witness_record(
+                &file,
+                &store_id,
+                &store_fingerprint,
+                None,
+                false,
+            )
+            .expect("repair torn genesis-journal append");
             assert_eq!(repaired, genesis_journal.len());
             assert_eq!(
                 usize::try_from(file.metadata().expect("stat repaired journal").len())
                     .expect("journal length fits usize"),
                 genesis_journal.len()
             );
-            read_state_witness_journal_streaming(&file, &store_id, &store_fingerprint, 8, None)
-                .expect("repaired genesis journal verifies");
+            read_state_witness_journal_streaming(
+                &file,
+                &store_id,
+                &store_fingerprint,
+                8,
+                None,
+                false,
+            )
+            .expect("repaired genesis journal verifies");
         }
 
         for partial_length in [1, TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH - 1] {
@@ -7492,6 +8684,7 @@ mod witness_transcript_tests {
                 &store_id,
                 &acknowledgement.checkpoint_store_fingerprint,
                 Some(&anchor),
+                true,
             )
             .expect("repair torn signed-segment append");
             assert_eq!(repaired, TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH);
@@ -7501,6 +8694,7 @@ mod witness_transcript_tests {
                 &acknowledgement.checkpoint_store_fingerprint,
                 8,
                 Some(&anchor),
+                true,
             )
             .expect("repaired signed segment verifies");
         }
@@ -7514,9 +8708,14 @@ mod witness_transcript_tests {
             let mut short = genesis_journal.clone();
             short.truncate(short_length);
             install(&short);
-            let retained =
-                truncate_incomplete_witness_record(&file, &store_id, &store_fingerprint, None)
-                    .expect("short journal is inspected without repair");
+            let retained = truncate_incomplete_witness_record(
+                &file,
+                &store_id,
+                &store_fingerprint,
+                None,
+                false,
+            )
+            .expect("short journal is inspected without repair");
             assert_eq!(retained, short_length);
             assert_eq!(
                 usize::try_from(file.metadata().expect("stat short journal").len())
@@ -7529,6 +8728,7 @@ mod witness_transcript_tests {
                 &store_fingerprint,
                 8,
                 None,
+                false,
             ) {
                 Ok(_) => panic!("short or uncommitted genesis journal must fail closed"),
                 Err(error) => error,
@@ -7545,7 +8745,7 @@ mod witness_transcript_tests {
             encode_v1_state_witness_genesis_journal(&store_id, &[0x11; 32], &state_digest);
         install(&retired);
         let retained =
-            truncate_incomplete_witness_record(&file, &store_id, &store_fingerprint, None)
+            truncate_incomplete_witness_record(&file, &store_id, &store_fingerprint, None, false)
                 .expect("retired journal is left untouched");
         assert_eq!(retained, retired.len());
         let error = match read_state_witness_journal_streaming(
@@ -7554,6 +8754,7 @@ mod witness_transcript_tests {
             &store_fingerprint,
             8,
             None,
+            false,
         ) {
             Ok(_) => panic!("retired v1 journal must fail closed in production reader"),
             Err(error) => error,
@@ -7563,6 +8764,117 @@ mod witness_transcript_tests {
             .contains("retired v1 state-commitment transcript"));
         drop(file);
         fs::remove_file(fixture_path).expect("remove witness repair fixture");
+    }
+
+    /// Mid-record torn-repair: a signed segment header (472 bytes) followed by
+    /// a partial first record (mid-record, not at the trailing torn remainder)
+    /// must be repaired by truncating the file to EXACTLY 472 bytes, leaving
+    /// the 472-byte header untouched. This guards against the repair path
+    /// silently dropping the header for a write that was interrupted in the
+    /// middle of a record's body.
+    #[test]
+    #[cfg(unix)]
+    fn mid_record_torn_repair_truncates_only_the_partial_record() {
+        let store_id = [0x24; 32];
+        let _store_fingerprint = durable_store_fingerprint(&store_id);
+        let acknowledgement = fixture_acknowledgement();
+        let segment_header = encode_state_witness_segment_header(
+            &acknowledgement.checkpoint_store_fingerprint,
+            &acknowledgement,
+        )
+        .expect("encode signed segment header");
+        assert_eq!(
+            segment_header.len(),
+            TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH
+        );
+        assert_eq!(segment_header.len(), 472);
+
+        let anchor = StateAnchorMetadata {
+            latest: acknowledgement.clone(),
+            witness_base: Some(acknowledgement.clone()),
+            pending_witness_base: None,
+        };
+        let next_digest = [0x34; 32];
+        let segment_next = StateWitness {
+            generation: acknowledgement.checkpoint_generation + 1,
+            previous_commitment: acknowledgement.checkpoint_state_commitment,
+            state_image_digest: next_digest,
+            commitment: state_commitment(
+                &acknowledgement.checkpoint_store_fingerprint,
+                acknowledgement.checkpoint_generation + 1,
+                &acknowledgement.checkpoint_state_commitment,
+                &next_digest,
+            ),
+        };
+        let segment_record = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &segment_next,
+            &[0u8; 32],
+        );
+        let mid_record_offset = 50;
+        assert!(mid_record_offset < TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
+
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let fixture_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-witness-mid-record-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&fixture_path)
+            .expect("create mid-record fixture");
+
+        let install = |bytes: &[u8]| {
+            write_file_at(&file, bytes, "mid-record fixture").expect("write mid-record fixture");
+            file.sync_all().expect("sync mid-record fixture");
+        };
+
+        let mut torn = segment_header.clone();
+        torn.extend_from_slice(&segment_record[..mid_record_offset]);
+        let pre_repair_header = segment_header.clone();
+        install(&torn);
+
+        let repaired = truncate_incomplete_witness_record(
+            &file,
+            &store_id,
+            &acknowledgement.checkpoint_store_fingerprint,
+            Some(&anchor),
+            true,
+        )
+        .expect("mid-record torn append must be repaired");
+        assert_eq!(
+            repaired, TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH,
+            "mid-record torn repair must truncate to exactly the header boundary",
+        );
+        let post_repair_len = usize::try_from(file.metadata().expect("post-repair metadata").len())
+            .expect("post-repair length fits usize");
+        assert_eq!(
+            post_repair_len, TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH,
+            "the on-disk journal length must equal the header boundary after repair",
+        );
+        let post_repair_bytes = fs::read(&fixture_path).expect("read repaired journal");
+        assert_eq!(
+            &post_repair_bytes[..],
+            &pre_repair_header[..],
+            "the 472-byte header must be byte-identical after the mid-record repair",
+        );
+
+        read_state_witness_journal_streaming(
+            &file,
+            &store_id,
+            &acknowledgement.checkpoint_store_fingerprint,
+            8,
+            Some(&anchor),
+            true,
+        )
+        .expect("repaired mid-record journal must verify");
+
+        drop(file);
+        fs::remove_file(fixture_path).expect("remove mid-record fixture");
     }
 
     #[test]
@@ -7924,6 +9236,15 @@ mod witness_transcript_tests {
     #[test]
     #[cfg(unix)]
     fn provisioning_config_ffi_is_startup_only_and_capability_minimal() {
+        // Spawns a subprocess that overrides its own env via `Command::env`.
+        // Must hold the test-isolation lock like every other test that
+        // touches TBTC_SIGNER_* state: without it, this test's subprocess
+        // spawn can run concurrently with a locked test's own
+        // env::set_var/env::var calls on the parent process's environment
+        // table. A separate unguarded test
+        // (production_default_state_witness_max_records_is_sane) was found
+        // and fixed the same way; both were closing the same class of gap.
+        let _guard = lock_test_state();
         let mut random = [0u8; 12];
         OsRng.fill_bytes(&mut random);
         let state_path = std::env::temp_dir().join(format!(
@@ -7983,16 +9304,6 @@ mod witness_transcript_tests {
             crate::frost_tbtc_free_buffer(result.buffer.ptr, result.buffer.len);
             (result.status_code, bytes)
         };
-        let call_without_json = |function: extern "C" fn() -> crate::ffi::TbtcSignerResult| {
-            let result = function();
-            let bytes = if result.buffer.ptr.is_null() || result.buffer.len == 0 {
-                Vec::new()
-            } else {
-                unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len).to_vec() }
-            };
-            crate::frost_tbtc_free_buffer(result.buffer.ptr, result.buffer.len);
-            (result.status_code, bytes)
-        };
 
         let mut provisioning = InitSignerConfigRequest {
             purpose: Some("state_anchor_bootstrap_provisioning".to_string()),
@@ -8024,28 +9335,9 @@ mod witness_transcript_tests {
         );
         assert_eq!(init_status, 0);
 
-        let (first_status, first_payload) =
-            call_without_json(crate::frost_tbtc_state_anchor_bootstrap_facts);
-        let (second_status, second_payload) =
-            call_without_json(crate::frost_tbtc_state_anchor_bootstrap_facts);
-        assert_eq!(first_status, 0);
-        assert_eq!(second_status, 0);
-        assert_eq!(first_payload, second_payload);
-        let facts: StateAnchorBootstrapFactsResult =
-            serde_json::from_slice(&first_payload).expect("bootstrap facts result");
-        assert_eq!(facts.schema, STATE_ANCHOR_BOOTSTRAP_FACTS_SCHEMA);
-        assert_eq!(
-            facts.store_fingerprint,
-            facts.current_checkpoint.store_fingerprint
-        );
-        assert_eq!(facts.current_checkpoint.generation, "1");
-
-        let (ordinary_status, ordinary_payload) =
-            call_without_json(crate::frost_tbtc_durable_store_identity);
-        assert_eq!(ordinary_status, 1);
-        let ordinary_error: crate::api::ErrorResponse =
-            serde_json::from_slice(&ordinary_payload).expect("ordinary operation error");
-        assert!(ordinary_error.message.contains("normal_signer"));
+        let ordinary_error = crate::engine::durable_store_identity()
+            .expect_err("ordinary operation must be rejected under bootstrap provisioning config");
+        assert!(ordinary_error.to_string().contains("normal_signer"));
 
         let dkg_request = DkgPart1Request {
             participant_identifier: "01".to_string(),
@@ -8097,8 +9389,7 @@ mod witness_transcript_tests {
                     .expect("restore pre-bootstrap witness component");
             }
             let error = StateFileLock::acquire(&state_path)
-                .err()
-                .expect("mixed pre/post-bootstrap rollback state must fail closed");
+                .expect_err("mixed pre/post-bootstrap rollback state must fail closed");
             if remove_anchor {
                 assert!(
                     error
@@ -8590,11 +9881,11 @@ mod witness_transcript_tests {
         assert!(first.rotated);
         assert_eq!(store.witness_record_count().expect("empty segment"), 0);
 
-        let aborted = store
-            .next_state_witness(state_image_digest(Some(b"aborted state")))
-            .expect("next witness");
         store
-            .prepare_witness(aborted, WitnessAppendPurpose::StateWrite)
+            .prepare_witness(
+                state_image_digest(Some(b"aborted state")),
+                WitnessAppendPurpose::StateWrite,
+            )
             .expect("prepare witness");
         store.abort_pending_witness().expect("abort witness");
         assert_eq!(store.state_witness_tip().expect("unchanged tip"), tip);
@@ -8603,7 +9894,7 @@ mod witness_transcript_tests {
         // Reproduce a crash after the exact replay's pending-anchor fsync but
         // before `.next` creation. The current signed segment has the same base
         // and tip as the replay, but is not a completed publication because it
-        // still contains PREPARE+ABORT. A tip read must finish compaction rather
+        // still contains PREPARE+ABORT. A tip read must finish rotation rather
         // than falsely promoting the pending metadata and leaving writes
         // blocked forever.
         let witness_base = store
@@ -8619,16 +9910,16 @@ mod witness_transcript_tests {
             .expect("persist replay rotation intent");
         let snapshot = store
             .state_witness_tip_snapshot()
-            .expect("tip settles pending compaction");
+            .expect("tip settles pending rotation");
         assert_eq!(snapshot.tip, tip);
         assert_eq!(snapshot.base, tip);
         let settled_anchor = snapshot.anchor.expect("settled anchor");
         assert_eq!(settled_anchor.witness_base, Some(acknowledgement));
         assert!(settled_anchor.pending_witness_base.is_none());
-        assert_eq!(store.witness_record_count().expect("compacted segment"), 0);
+        assert_eq!(store.witness_record_count().expect("rotated segment"), 0);
         store
-            .replace_state(b"write after compaction")
-            .expect("writes resume after compaction");
+            .replace_state(b"write after rotation")
+            .expect("writes resume after rotation");
         drop(store);
 
         let witness_path = state_witness_file_path(&state_path);
@@ -8683,11 +9974,11 @@ mod witness_transcript_tests {
                 .rotated
         );
 
-        let aborted = store
-            .next_state_witness(state_image_digest(Some(b"aborted state")))
-            .expect("next witness");
         store
-            .prepare_witness(aborted, WitnessAppendPurpose::StateWrite)
+            .prepare_witness(
+                state_image_digest(Some(b"aborted state")),
+                WitnessAppendPurpose::StateWrite,
+            )
             .expect("prepare witness");
         store.abort_pending_witness().expect("abort witness");
         assert_eq!(store.state_witness_tip().expect("unchanged tip"), tip);
@@ -8700,12 +9991,12 @@ mod witness_transcript_tests {
                 false,
                 acknowledgement.expires_at_unix_ms,
             )
-            .expect("exact replay compacts unchanged tip");
+            .expect("exact replay rotates unchanged tip");
         assert!(replay.idempotent);
         assert!(replay.rotated);
-        assert_eq!(store.witness_record_count().expect("compacted count"), 0);
+        assert_eq!(store.witness_record_count().expect("rotated count"), 0);
         store
-            .replace_state(b"write after exact-replay compaction")
+            .replace_state(b"write after exact-replay rotation")
             .expect("writes resume");
         drop(store);
         cleanup_anchor_store_fixture(&state_path);
@@ -9264,13 +10555,19 @@ mod witness_transcript_tests {
         let mut legacy = Vec::new();
         legacy.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
         legacy.extend_from_slice(&store_id);
-        legacy.extend_from_slice(&encode_state_witness_record(
+        let legacy_prepare_record = encode_state_witness_record(
             TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
             &base,
-        ));
+            &[0u8; 32],
+        );
+        let mut legacy_commit_chain_hash = [0u8; 32];
+        legacy_commit_chain_hash
+            .copy_from_slice(&legacy_prepare_record[legacy_prepare_record.len() - 32..]);
+        legacy.extend_from_slice(&legacy_prepare_record);
         legacy.extend_from_slice(&encode_state_witness_record(
             TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
             &base,
+            &legacy_commit_chain_hash,
         ));
         create_entry_atomically(&directory, &current, &legacy, "fixture current witness")
             .expect("publish legacy current");
@@ -9334,6 +10631,7 @@ mod witness_transcript_tests {
                     &identity,
                     None,
                     Some(&metadata),
+                    true,
                     16,
                     true,
                     None,
@@ -9345,9 +10643,15 @@ mod witness_transcript_tests {
                 .expect("next retired");
             ensure_entry_absent(directory.as_raw_fd(), &previous, "fixture previous")
                 .expect("previous retired");
-            let parsed =
-                validate_rotation_candidate(&directory, &current, &identity, Some(&metadata), 16)
-                    .expect("final current segment");
+            let parsed = validate_rotation_candidate(
+                &directory,
+                &current,
+                &identity,
+                Some(&metadata),
+                true,
+                16,
+            )
+            .expect("final current segment");
             assert!(acknowledgement_matches_witness(
                 metadata
                     .pending_witness_base
@@ -9358,5 +10662,242 @@ mod witness_transcript_tests {
             drop(directory);
             fs::remove_dir_all(path).expect("remove rotation fixture");
         }
+    }
+
+    #[cfg(unix)]
+    fn compaction_recovery_fixture(
+        case: u8,
+    ) -> (
+        PathBuf,
+        fs::File,
+        OsString,
+        OsString,
+        OsString,
+        DurableStoreIdentity,
+        StateWitness,
+    ) {
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let path = std::env::temp_dir().join(format!(
+            "tbtc-signer-witness-compaction-test-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        fs::create_dir(&path).expect("create compaction fixture directory");
+        let canonical = fs::canonicalize(&path).expect("canonical fixture directory");
+        let directory =
+            open_absolute_directory_nofollow(&canonical).expect("open fixture directory");
+        let store_id = [0x27; 32];
+        let fingerprint = durable_store_fingerprint(&store_id);
+        let identity = DurableStoreIdentity {
+            store_id,
+            canonical_path_fingerprint: [0u8; 32],
+            filesystem_fingerprint: [0u8; 32],
+            lock_fingerprint: [0u8; 32],
+            fingerprint,
+        };
+        let digest = state_image_digest(None);
+        let genesis_root = state_witness_genesis(&fingerprint);
+        let base = StateWitness {
+            generation: 1,
+            previous_commitment: genesis_root,
+            state_image_digest: digest,
+            commitment: state_commitment(&fingerprint, 1, &genesis_root, &digest),
+        };
+        let new_tip = StateWitness {
+            generation: 2,
+            previous_commitment: base.commitment,
+            state_image_digest: digest,
+            commitment: state_commitment(&fingerprint, 2, &base.commitment, &digest),
+        };
+        let current = OsString::from("state.state-witness");
+        let next = OsString::from("state.state-witness.next");
+        let previous_name = OsString::from("state.state-witness.previous");
+
+        // The pre-compaction journal: an ordinary genesis-format journal,
+        // matching what `compact_witness_journal_local` compacts from. Its
+        // exact record content does not matter to
+        // `recover_state_witness_compaction`, which only checks the three
+        // entries' existence.
+        let mut current_bytes = Vec::new();
+        current_bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
+        current_bytes.extend_from_slice(&store_id);
+        let base_prepare_record = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &base,
+            &[0u8; 32],
+        );
+        let mut base_commit_chain_hash = [0u8; 32];
+        base_commit_chain_hash
+            .copy_from_slice(&base_prepare_record[base_prepare_record.len() - 32..]);
+        current_bytes.extend_from_slice(&base_prepare_record);
+        current_bytes.extend_from_slice(&encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+            &base,
+            &base_commit_chain_hash,
+        ));
+        create_entry_atomically(
+            &directory,
+            &current,
+            &current_bytes,
+            "fixture current witness",
+        )
+        .expect("publish fixture current");
+
+        if case >= 1 {
+            // The compacted `.next` segment: a self-signed (zero-signature)
+            // header whose base IS the new tip, matching the segment
+            // `compact_witness_journal_local` publishes with no trailing
+            // records.
+            let synthetic_ack = synthetic_compaction_acknowledgement(
+                &fingerprint,
+                &new_tip,
+                base_commit_chain_hash,
+            );
+            let header_bytes = encode_state_witness_segment_header(&fingerprint, &synthetic_ack)
+                .expect("encode compaction segment header fixture");
+            create_entry_atomically(&directory, &next, &header_bytes, "fixture next witness")
+                .expect("publish fixture next");
+        }
+        if case >= 2 {
+            renameat_same_directory(
+                directory.as_raw_fd(),
+                &current,
+                &previous_name,
+                "fixture current to previous",
+            )
+            .expect("retain fixture previous");
+        }
+        if case >= 3 {
+            renameat_same_directory(
+                directory.as_raw_fd(),
+                &next,
+                &current,
+                "fixture next to current",
+            )
+            .expect("publish fixture current");
+        }
+        directory.sync_all().expect("sync fixture state");
+        (
+            path,
+            directory,
+            current,
+            next,
+            previous_name,
+            identity,
+            new_tip,
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compaction_recovery_completes_every_durable_rename_boundary() {
+        // Covers `recover_state_witness_compaction`'s three reachable crash
+        // windows: 1: `.next` durable, before the first rename; 2: current
+        // renamed to `.previous` (between the two renames); 3: `.next`
+        // renamed to current, `.previous` still stale (after both renames,
+        // before retirement). Each state also represents the corresponding
+        // pre/post directory-fsync crash image. Case 1 and 2 must complete
+        // the full rename dance and report `Ok(true)`; case 3 has no `.next`
+        // to publish and only retires the stale `.previous`, reporting
+        // `Ok(false)`.
+        for case in 1..=3 {
+            let (path, directory, current, next, previous, identity, new_tip) =
+                compaction_recovery_fixture(case);
+            let expected_result = case != 3;
+            assert_eq!(
+                recover_state_witness_compaction(
+                    &directory,
+                    StateWitnessRotationNames {
+                        current: &current,
+                        next: &next,
+                        previous: &previous,
+                    },
+                    &identity,
+                    16,
+                )
+                .expect("recover local compaction"),
+                expected_result,
+                "case {case} must report the documented completion result"
+            );
+            ensure_entry_absent(directory.as_raw_fd(), &next, "fixture next")
+                .expect("next retired");
+            ensure_entry_absent(directory.as_raw_fd(), &previous, "fixture previous")
+                .expect("previous retired");
+            let parsed =
+                validate_rotation_candidate(&directory, &current, &identity, None, false, 16)
+                    .expect("final current segment");
+            assert_eq!(
+                parsed.history.first(),
+                Some(&new_tip),
+                "case {case} must publish the compacted new tip as the current segment"
+            );
+            drop(directory);
+            fs::remove_dir_all(path).expect("remove compaction fixture");
+        }
+    }
+
+    /// Smoke test for the lock stack used by `open_durable_store`:
+    /// `acquire_exclusive_lock` is the primary, fail-closed mutex;
+    /// `advisory_exclusive_lock` is the secondary defense-in-depth probe
+    /// that must NOT panic or fail the store acquire when contention is
+    /// detected (per its doc comment: "A contention failure does NOT fail
+    /// the store acquire ... an `EWOULDBLOCK` here only surfaces a
+    /// diagnostic warning [for non-contention failures]"). This test pins
+    /// both contracts.
+    #[cfg(unix)]
+    #[test]
+    fn advisory_and_primary_lock_fail_closed_under_contention() {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let lock_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-lock-fixture-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let primary = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&lock_path)
+            .expect("open primary lock file");
+        let advisory = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .expect("open advisory lock file");
+
+        // Acquire the primary mutex on a clean file.
+        acquire_exclusive_lock(&primary, &lock_path).expect("primary lock on an unheld file");
+
+        // The advisory probe on a separate descriptor for the same file sees
+        // `EWOULDBLOCK` from `flock`, but the wrapper returns void and does
+        // not panic: it is the primary lock that is authoritative.
+        advisory_exclusive_lock(&advisory, "test advisory lock under contention");
+
+        // The primary mutex is fail-closed: re-acquiring it on the
+        // contended descriptor surfaces the documented "already held" error
+        // instead of silently succeeding.
+        let primary_error = acquire_exclusive_lock(&advisory, &lock_path)
+            .expect_err("primary lock on a contended file must fail closed");
+        let EngineError::Internal(message) = primary_error else {
+            panic!("unexpected error variant for contended primary lock");
+        };
+        assert!(
+            message.contains("signer state lock already held by another process"),
+            "primary lock contention must surface the documented failure: {message}"
+        );
+
+        // After the primary holder is released, both probes succeed.
+        drop(primary);
+        acquire_exclusive_lock(&advisory, &lock_path).expect("primary lock after release");
+        advisory_exclusive_lock(&advisory, "test advisory lock after release");
+
+        drop(advisory);
+        let _ = fs::remove_file(&lock_path);
     }
 }

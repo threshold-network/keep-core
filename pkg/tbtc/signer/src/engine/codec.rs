@@ -1,4 +1,5 @@
-// Hex/struct codecs and Go<->frost identifier conversions.
+//! Internal helpers; some are only reachable via the FFI surface removed by PR #4198.
+//!
 
 use super::*;
 

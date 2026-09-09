@@ -3,6 +3,11 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+// The FFI request/response types in this module are currently unused because
+// the corresponding FFI exports were removed in this PR. They will be
+// re-enabled in the follow-up PR. Silencing `dead_code` keeps the follow-up
+// diff purely additive (no reintroductions of types already declared here).
+
 /// A hex-encoded secret whose owned Rust allocation is wiped on drop and whose
 /// `Debug` representation never exposes its contents. Serde remains transparent
 /// so the C-ABI JSON contract continues to carry an ordinary string.
@@ -687,26 +692,6 @@ pub struct FrostTbtcAbiVersionResult {
     pub abi_major: u32,
     pub abi_minor: u32,
 }
-
-/// Runtime identity of the exact durable session store the signer opened and
-/// locked. The affirmative safety claims are mandatory on the Go side; this
-/// response is emitted only after descriptor/path revalidation succeeds.
-/// This stable identity does not attest state freshness or key inventory.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct DurableStoreIdentityResult {
-    pub schema: String,
-    pub backend: String,
-    pub store_id: String,
-    pub canonical_path_fingerprint: String,
-    pub filesystem_fingerprint: String,
-    pub lock_fingerprint: String,
-    pub fingerprint: String,
-    pub durable: bool,
-    pub exclusive_lock_held: bool,
-    pub symlink_free: bool,
-    pub replacement_protected: bool,
-}
-
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RetainedKeyPackageInventoryPackage {

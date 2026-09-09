@@ -1,4 +1,5 @@
 //! Retained FROST key-package readiness and dynamic state-witness readback.
+//!
 
 use super::*;
 
@@ -37,7 +38,9 @@ struct ValidatedInventoryEntry {
     public_key_package_commitment: [u8; 32],
     key_packages: Vec<ValidatedInventoryPackage>,
 }
-
+// `frost_tbtc_retained_key_package_inventory` FFI export was removed in
+// PR #4198 followup; tests in engine/tests.rs still exercise the inventory path.
+#[allow(dead_code)]
 pub(crate) fn retained_key_package_inventory(
 ) -> Result<RetainedKeyPackageInventoryResult, EngineError> {
     // Keep the engine guard through store-tip capture. Every state mutation
@@ -109,6 +112,7 @@ pub(crate) fn retained_key_package_inventory(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn state_witness_proof(
     request: StateWitnessProofRequest,
 ) -> Result<StateWitnessProofResult, EngineError> {
@@ -353,6 +357,7 @@ pub(crate) fn parse_key_group(key_group: &str) -> Result<([u8; 32], [u8; 33]), E
     Ok((x_only.serialize(), compressed))
 }
 
+#[allow(dead_code)]
 fn parse_bytes32(value: &str, label: &str) -> Result<[u8; 32], EngineError> {
     if value.len() != 66 || !value.starts_with("0x") || value != value.to_ascii_lowercase() {
         return Err(EngineError::Validation(format!(

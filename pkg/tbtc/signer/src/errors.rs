@@ -22,6 +22,7 @@ pub enum EngineError {
     #[error("provenance gate rejected: {reason_code}: {detail}")]
     ProvenanceGateRejected { reason_code: String, detail: String },
     #[error("admission policy rejected for session {session_id}: {reason_code}: {detail}")]
+    #[allow(dead_code)]
     AdmissionPolicyRejected {
         session_id: String,
         reason_code: String,
@@ -112,6 +113,7 @@ pub enum EngineError {
     #[error(
         "state witness history pruned: requested generation [{requested_generation}] precedes retained base [{witness_base_generation}]"
     )]
+    #[allow(dead_code)]
     HistoryPruned {
         requested_generation: u64,
         witness_base_generation: u64,

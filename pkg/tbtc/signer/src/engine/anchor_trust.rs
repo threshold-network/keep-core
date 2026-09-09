@@ -16,13 +16,18 @@ use ed25519_dalek::{Signature, VerifyingKey};
 #[cfg(test)]
 use ed25519_dalek::{Signer, SigningKey};
 
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_TRUST_CERTIFICATE_SCHEMA: &str =
     "tbtc-frost-native-signer-state-anchor-trust-certificate/v1";
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_TRUST_TRANSITION_SCHEMA: &str =
     "tbtc-signer-state-anchor-trust-transition/v1";
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_TRUST_TRANSITION_RESULT_SCHEMA: &str =
     "tbtc-signer-state-anchor-trust-transition-result/v1";
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_TRUST_HEAD_SCHEMA: &str = "tbtc-signer-state-anchor-trust-head/v1";
+#[allow(dead_code)]
 pub(crate) const STATE_ANCHOR_BOOTSTRAP_FACTS_SCHEMA: &str =
     "tbtc-signer-state-anchor-bootstrap-facts/v1";
 
@@ -48,6 +53,13 @@ const TRUST_JOURNAL_RECORD_FIXED_LENGTH: usize = 116;
 pub(crate) const STATE_ANCHOR_TRUST_MAX_RECORD_LENGTH: usize = 128 * 1024;
 pub(crate) const STATE_ANCHOR_TRUST_MAX_CERTIFICATE_JSON_LENGTH: usize = 120 * 1024;
 pub(crate) const STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH: usize = 256 * 1024 * 1024;
+/// Records-based fail-closed ceiling for the trust journal, paired with
+/// [`STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH`]. The parser enforces this as an
+/// exact count of records walked one at a time in the parse loop, after
+/// header validation has already succeeded, so a legitimate journal whose
+/// records are larger than the minimum fixed size is never penalized for
+/// byte length alone.
+pub(crate) const STATE_ANCHOR_TRUST_MAX_RECORDS: usize = 1_024;
 const TRUST_INTENT_MAGIC: &[u8; 16] = b"TBTCTRUSTINTNT1\0";
 const TRUST_INTENT_VERSION: u32 = 1;
 const TRUST_INTENT_HEADER_LENGTH: usize = 56;
@@ -94,6 +106,7 @@ pub(crate) struct StateAnchorTrustCheckpointModel {
 }
 
 impl StateAnchorTrustCheckpointModel {
+    #[allow(dead_code)]
     pub(crate) fn from_witness(store_fingerprint: [u8; 32], witness: &StateWitness) -> Self {
         Self {
             store_fingerprint,
@@ -104,6 +117,7 @@ impl StateAnchorTrustCheckpointModel {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn to_wire(&self) -> StateAnchorTrustCheckpoint {
         StateAnchorTrustCheckpoint {
             store_fingerprint: bytes32_hex(self.store_fingerprint),
@@ -143,6 +157,7 @@ impl StateAnchorTrustReferenceModel {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn to_wire(&self) -> StateAnchorTrustReference {
         StateAnchorTrustReference {
             service_epoch: self.service_epoch.to_string(),
@@ -381,7 +396,15 @@ pub(crate) fn parse_state_anchor_trust_journal(
     let mut committed: Vec<VerifiedStateAnchorTrustCertificate> = Vec::new();
     let mut pending: Vec<VerifiedStateAnchorTrustCertificate> = Vec::new();
     let mut next_commit_index = 0usize;
+    let mut record_count = 0usize;
     while offset < bytes.len() {
+        record_count += 1;
+        if record_count > STATE_ANCHOR_TRUST_MAX_RECORDS {
+            return Err(EngineError::Internal(format!(
+                "state-anchor trust journal exceeds the configured fail-closed records ceiling \
+                 [{STATE_ANCHOR_TRUST_MAX_RECORDS}]"
+            )));
+        }
         if bytes.len() - offset < 4 {
             return Err(EngineError::Internal(
                 "state-anchor trust journal has a truncated record length".to_string(),
@@ -635,6 +658,7 @@ fn state_anchor_trust_record_commitment(
     )
 }
 
+#[allow(dead_code)]
 pub(crate) fn encode_state_anchor_trust_transition_intent(
     store_fingerprint: &[u8; 32],
     request: &TransitionStateWitnessAnchorRequest,
@@ -1626,6 +1650,7 @@ fn hash_direct(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
     digest.finalize().into()
 }
 
+#[allow(dead_code)]
 pub(crate) fn state_anchor_trust_head_result(
     sequence: u64,
     digest: [u8; 32],
@@ -1647,6 +1672,7 @@ pub(crate) fn state_anchor_trust_head_result(
     }
 }
 
+#[allow(dead_code)]
 fn transition_state_witness_anchor_result(
     outcome: StateAnchorTrustTransitionStoreOutcome,
 ) -> TransitionStateWitnessAnchorResult {
@@ -1684,6 +1710,7 @@ fn transition_state_witness_anchor_result(
 /// the durable store, then executes the crash-safe transition under the
 /// startup gate. Trust replacement is intentionally unavailable once normal
 /// engine/store initialization has begun.
+#[allow(dead_code)]
 pub(crate) fn transition_state_witness_anchor(
     request: TransitionStateWitnessAnchorRequest,
 ) -> Result<TransitionStateWitnessAnchorResult, EngineError> {
@@ -1697,6 +1724,7 @@ pub(crate) fn transition_state_witness_anchor(
 /// Returns the committed offline-certified trust head. A preflight call uses
 /// an ephemeral, descriptor-bound inspection acquisition so observing the
 /// head does not prevent the startup-only transition symbol from running.
+#[allow(dead_code)]
 pub(crate) fn state_anchor_trust_head() -> Result<StateAnchorTrustHeadResult, EngineError> {
     let outcome = with_startup_state_anchor_trust_head_inspection(|store| {
         store.state_anchor_trust_head_snapshot()
@@ -1708,6 +1736,7 @@ pub(crate) fn state_anchor_trust_head() -> Result<StateAnchorTrustHeadResult, En
     ))
 }
 
+#[allow(dead_code)]
 pub(crate) fn state_anchor_bootstrap_facts() -> Result<StateAnchorBootstrapFactsResult, EngineError>
 {
     let (store_fingerprint, checkpoint) = with_startup_state_anchor_bootstrap_facts(|store| {
@@ -2550,6 +2579,31 @@ mod tests {
         assert_eq!(journal.committed.len(), 2);
         assert!(journal.pending.is_empty());
         assert_eq!(journal.committed[1].wire, certificates[1].wire);
+    }
+
+    #[test]
+    fn trust_journal_header_validation_precedes_records_ceiling_check() {
+        // A garbage journal whose byte length would have implied more than
+        // [`STATE_ANCHOR_TRUST_MAX_RECORDS`] minimum-size records under the
+        // old byte-length proxy must still fail on header validation first:
+        // the records ceiling is enforced by the parse loop after header
+        // validation succeeds, not as a byte-length pre-check.
+        let store_fingerprint = [0x42u8; 32];
+        let padded_records = STATE_ANCHOR_TRUST_MAX_RECORDS + 1;
+        let padded_length = STATE_ANCHOR_TRUST_JOURNAL_HEADER_LENGTH
+            + padded_records * TRUST_JOURNAL_RECORD_FIXED_LENGTH;
+        let bytes = vec![0u8; padded_length];
+        assert!(
+            bytes.len() < STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH,
+            "test journal must remain under the byte cap to prove header validation runs first"
+        );
+        let error = parse_state_anchor_trust_journal(&bytes, &store_fingerprint)
+            .expect_err("an all-zero blob must fail header validation, not a records ceiling");
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("header"),
+            "rejection must reference header validation, not the records ceiling; got [{rendered}]"
+        );
     }
 
     #[test]

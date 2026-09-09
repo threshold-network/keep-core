@@ -1,4 +1,5 @@
-// Distributed-DKG key-package persistence.
+//! Distributed-DKG key-package persistence.
+//!
 
 use super::*;
 
@@ -12,6 +13,10 @@ use super::*;
 /// operator calls it once per local seat and the key packages accumulate under
 /// one session (same key group). There is NO production gate: this is the real
 /// distributed path, not the transitional dealer one.
+// `frost_tbtc_persist_distributed_dkg_key_package` FFI export was removed in
+// PR #4198 followup; tests in engine/tests.rs still exercise the persist/retire
+// pair.
+#[allow(dead_code)]
 pub fn persist_distributed_dkg_key_package(
     mut request: PersistDistributedDkgKeyPackageRequest,
 ) -> Result<DkgResult, EngineError> {
@@ -317,6 +322,7 @@ pub fn persist_distributed_dkg_key_package(
 /// secret package and the corresponding public package. Absence is a successful
 /// no-op, which makes recovery safe after a crash that committed the native
 /// removal before the caller archived its local wallet registry entry.
+#[allow(dead_code)]
 pub fn retire_distributed_dkg_key_packages(
     request: RetireDistributedDkgKeyPackagesRequest,
 ) -> Result<RetireDistributedDkgKeyPackagesResult, EngineError> {

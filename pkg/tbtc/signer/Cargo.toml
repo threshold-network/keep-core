@@ -37,3 +37,4 @@ base64ct = { version = "1.8", features = ["alloc"] }
 criterion = "0.5"
 pretty_assertions = "1.4"
 proptest = "1.6"
+tempfile = "3"

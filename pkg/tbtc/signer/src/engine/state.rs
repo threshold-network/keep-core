@@ -1,4 +1,5 @@
-// In-memory engine/session state, the state-file lock, and registry capacity guards.
+//! In-memory engine/session state, the state-file lock, and registry capacity guards.
+//!
 
 use super::*;
 
@@ -57,6 +58,7 @@ impl Drop for ZeroizingChaCha20Rng {
 // and without them the rest of this struct is useless after a
 // restart, so none of it is mirrored into PersistedSessionState.
 // The durable artifact is SessionState.consumed_interactive_attempt_markers.
+#[derive(Debug)]
 pub(crate) struct InteractiveSigningState {
     pub(crate) open_request_fingerprint: String,
     pub(crate) attempt_context: AttemptContext,
@@ -85,6 +87,7 @@ pub(crate) struct InteractiveSigningState {
 // expiry, replacement) by the interactive module; the Drop impl is
 // the backstop for paths that drop the struct without going through
 // one of those.
+#[derive(Debug)]
 pub(crate) struct InteractiveRound1State {
     pub(crate) nonces: frost::round1::SigningNonces,
     pub(crate) commitments_hex: String,
@@ -96,7 +99,8 @@ impl Drop for InteractiveRound1State {
     }
 }
 
-#[derive(Default)]
+#[allow(dead_code)]
+#[derive(Debug, Default)]
 pub(crate) struct SessionState {
     pub(crate) dkg_request_fingerprint: Option<String>,
     pub(crate) dkg_key_packages: Option<BTreeMap<u16, frost::keys::KeyPackage>>,
@@ -464,8 +468,13 @@ pub(crate) fn ensure_state_file_lock() -> Result<(), EngineError> {
         if existing_lock.state_path == state_path {
             // `state()` is the front door for every stateful signer operation.
             // Revalidate the held no-follow store on every call so a lock,
-            // store-ID, directory, witness, or state replacement after startup
+            // store-ID, directory, or state-file replacement after startup
             // cannot be hidden behind the initialized in-memory state.
+            // identity() deliberately does NOT re-verify witness journal
+            // record content here (that would cost a full reparse on every
+            // operation, including writes) -- the load path that follows
+            // (read_state_for_load) performs that full re-verification
+            // before returning state content.
             existing_lock.identity()?;
             return Ok(());
         }
@@ -579,6 +588,9 @@ pub(crate) fn with_state_file_lock_before_startup_rewrite<T>(
     Ok(outcome)
 }
 
+// `frost_tbtc_durable_store_identity` FFI export was removed in PR #4198 followup;
+// tests in engine/tests.rs + engine/store.rs still exercise the preflight path.
+#[allow(dead_code)]
 pub(crate) fn durable_store_identity() -> Result<DurableStoreIdentity, EngineError> {
     // Store identity is deliberately available before state classification.
     // Use the load-safe structural path so a malformed image can still reach

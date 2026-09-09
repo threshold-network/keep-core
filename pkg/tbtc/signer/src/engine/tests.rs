@@ -6,14 +6,17 @@ use super::*;
 use proptest::prelude::*;
 use serde::Deserialize;
 #[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 #[cfg(unix)]
 use std::{
     process::Command,
     thread,
     time::{Duration, Instant},
 };
+use tempfile::TempDir;
 
 // Test-only reimplementations of the removed stateless FROST primitives.
 //
@@ -576,11 +579,31 @@ fn dkg_part3_normalizes_odd_y_group_key_and_secret_shares() {
         .expect("aggregate verifies under normalized x-only key");
 }
 
+// Registry of `TempDir` handles retained for the lifetime of the test process.
+// `tempfile::tempdir()` removes the directory on drop, so each call must hand
+// its handle off here to keep the on-disk test fixture alive until the next
+// invocation (or process exit) replaces it. Tests share `std::env::temp_dir()`
+// when they hardcode `/tmp/...` paths, and the `unique_temp_name` helper that
+// once included `pid` in its suffix no longer does, so per-suffix shared paths
+// can collide on the state lock across test runs. Routing every test through
+// a freshly-minted tempdir removes that collision surface entirely.
+static TEST_STATE_PATH_TEMPDIRS: LazyLock<Mutex<Vec<(String, TempDir)>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+fn retain_test_state_tempdir(suffix: &str, tempdir: TempDir) -> PathBuf {
+    let path = tempdir
+        .path()
+        .join(format!("frost_tbtc_engine_state_{suffix}.json"));
+    let mut registry = TEST_STATE_PATH_TEMPDIRS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    registry.push((suffix.to_string(), tempdir));
+    path
+}
+
 fn configure_test_state_path(suffix: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "frost_tbtc_engine_state_{suffix}_{}.json",
-        std::process::id()
-    ));
+    let tempdir = tempfile::tempdir().expect("create per-test tempdir for state path");
+    let path = retain_test_state_tempdir(suffix, tempdir);
     clear_state_storage_policy_overrides();
     cleanup_test_state_artifacts(&path);
     std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &path);
@@ -789,7 +812,7 @@ fn expect_validation_error_contains(err: EngineError, expected_substring: &str) 
     );
 }
 
-#[cfg(unix)]
+#[allow(dead_code)]
 fn write_witness_journal_fixture(witness_path: &Path, bytes: &[u8]) {
     std::fs::write(witness_path, bytes).expect("write witness journal fixture");
     std::fs::set_permissions(witness_path, std::fs::Permissions::from_mode(0o600))
@@ -1360,6 +1383,68 @@ fn retire_distributed_dkg_key_packages_pre_replace_failure_restores_owner() {
         .expect("engine lock")
         .sessions
         .contains_key(&session_id));
+}
+#[test]
+fn retire_distributed_dkg_key_packages_post_replace_failure_leaves_unconfirmed_durability() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("distributed_dkg_retirement_post_replace");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(15);
+    let session_id = "session-distributed-retirement-post-replace-failure".to_string();
+    let persisted =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("local seat").clone(),
+            public_key_package: native_public,
+        })
+        .expect("persist distributed DKG seat");
+
+    // AfterRenameBeforeDirectorySync: the rename completed before the fault
+    // fired, so the retired session is gone from the persisted image too. The
+    // fault must not resurrect it on restart.
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let error =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: persisted.key_group.clone(),
+        })
+        .expect_err("post-replacement retirement failure must report unconfirmed durability");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(
+        !state()
+            .expect("state")
+            .lock()
+            .expect("engine lock")
+            .sessions
+            .contains_key(&session_id),
+        "the rename completed before the fault fired, so the session must not be restored"
+    );
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    assert!(
+        !state()
+            .expect("state")
+            .lock()
+            .expect("engine lock")
+            .sessions
+            .contains_key(&session_id),
+        "the persisted image already replaced the retired session; restart must not resurrect it"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 #[test]
@@ -7009,8 +7094,8 @@ fn init_signer_config_rolls_back_install_when_policy_validation_fails() {
 
     // Firewall enforcement on with an INVALID policy (a UTC start hour without a
     // matching end hour) -> the loader rejects and the install must roll back.
-    // Absent firewall knobs no longer trip this: the loader now falls back to
-    // conservative built-in defaults, so only an explicitly-invalid value fails.
+    // Absent firewall knobs fall back to conservative built-in defaults; only
+    // an explicitly-invalid value fails.
     let error = init_signer_config(InitSignerConfigRequest {
         profile: Some("development".to_string()),
         enforce_signing_policy_firewall: Some(true),
@@ -14787,8 +14872,8 @@ fn durable_store_fingerprint_vectors_pin_v2_and_retired_v1_transcripts() {
     );
 }
 
-#[test]
 #[cfg(unix)]
+#[test]
 fn pending_commit_refuses_to_absorb_same_length_prefix_corruption() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("witness_pending_prefix_corruption");
@@ -14809,20 +14894,33 @@ fn pending_commit_refuses_to_absorb_same_length_prefix_corruption() {
     assert!(interrupted.replaced());
     clear_persist_fault_injection_for_tests();
 
+    // Every witness-tip access now fully re-parses and re-verifies the
+    // journal, so the corruption below is caught while reconciling the
+    // pending PREPARE on this still-open store - no drop/reopen is needed
+    // to force the full parse the way a stat-based incremental cache would
+    // have required.
     let witness_path = state_witness_file_path(&state_path);
     let prepared_journal = std::fs::read(&witness_path).expect("prepared journal");
     let prepared_length = prepared_journal.len();
     let mut corrupted = prepared_journal.clone();
+    // Flip a bit in the commitment field of the genesis COMMIT record - the
+    // oldest committed record in the prefix, several records behind the
+    // still-pending PREPARE this open must reconcile.
     let old_commitment_offset =
         TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH + 80;
     corrupted[old_commitment_offset] ^= 0x80;
     write_witness_journal_fixture(&witness_path, &corrupted);
 
+    // The corrupted byte lies inside the per-record hash-chain domain (the
+    // first 105 bytes of every 137-byte record), so the record chain-hash
+    // check (added by the per-record hash-chain hardening) now catches
+    // the corruption before the per-record commitment recomputation even
+    // runs.
     expect_internal_error_contains(
         store
             .state_witness_tip()
             .expect_err("COMMIT must verify the complete pre-append prefix"),
-        "invalid commitment",
+        "chain hash is invalid",
     );
     assert_eq!(
         std::fs::metadata(&witness_path)
@@ -14854,9 +14952,9 @@ fn pending_commit_refuses_to_absorb_same_length_prefix_corruption() {
 
 #[test]
 #[cfg(unix)]
-fn state_witness_record_ceiling_fails_closed_before_prepare_and_on_restart() {
+fn state_witness_record_ceiling_triggers_local_compaction_for_unanchored_store() {
     let _guard = lock_test_state();
-    let state_path = configure_test_state_path("witness_record_ceiling");
+    let state_path = configure_test_state_path("witness_record_ceiling_compaction");
     std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
 
     let mut store = StateFileLock::acquire(&state_path).expect("open capped durable store");
@@ -14866,15 +14964,75 @@ fn state_witness_record_ceiling_fails_closed_before_prepare_and_on_restart() {
     let full_tip = store.state_witness_tip().expect("tip at record ceiling");
     assert_eq!(full_tip.generation, 2);
 
-    let rejected = store
-        .replace_state(b"must not be installed")
-        .expect_err("a new PREPARE must reserve its terminal record");
-    assert!(!rejected.replaced());
-    expect_internal_error_contains(rejected.into_engine_error(), "record ceiling [4] reached");
+    // An unanchored store (no anchor service configured, so
+    // `witness_rotation_threshold` is permanently `None`) has no
+    // externally-signed rotation path to fall back on. Hitting the record
+    // ceiling now triggers automatic local compaction instead of a
+    // permanent write-lockout: the write below must succeed, not fail.
+    store
+        .replace_state(b"write after local compaction")
+        .expect("local compaction frees capacity so the write continues");
     assert_eq!(
-        store.read_state().expect("state after ceiling rejection"),
-        Some(b"only permitted replacement".to_vec())
+        store.read_state().expect("state after compaction"),
+        Some(b"write after local compaction".to_vec())
     );
+    let compacted_tip = store
+        .state_witness_tip()
+        .expect("tip after local compaction");
+    // The compaction commits its own synthetic generation bump before the
+    // caller's write proceeds, so the tip advances by two generations
+    // (compaction's own commit, then the actual write), not one.
+    assert_eq!(compacted_tip.generation, full_tip.generation + 2);
+
+    // Local compaction retires the previous segment immediately, matching
+    // the existing signed-rotation convention: `revalidate_store_entries`
+    // asserts `.state-witness.previous` never lingers outside an
+    // in-progress rotation/compaction.
+    let mut previous_path = state_witness_file_path(&state_path).into_os_string();
+    previous_path.push(".previous");
+    assert!(
+        !Path::new(&previous_path).exists(),
+        "local compaction must retire .state-witness.previous immediately, matching rotation"
+    );
+
+    drop(store);
+
+    let mut reopened = StateFileLock::acquire(&state_path).expect("reopen after compaction");
+    assert_eq!(
+        reopened.read_state().expect("state after reopen"),
+        Some(b"write after local compaction".to_vec())
+    );
+    assert_eq!(
+        reopened
+            .state_witness_tip()
+            .expect("reopened tip after compaction"),
+        compacted_tip
+    );
+    drop(reopened);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn state_witness_journal_exceeding_reduced_ceiling_fails_closed_at_startup() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_record_ceiling_startup");
+    // A generous ceiling that neither replace_state call below comes close
+    // to reaching, so this test exercises only the startup record-count
+    // check, independent of the local-compaction path covered separately
+    // above.
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "20");
+
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    store
+        .replace_state(b"first replacement")
+        .expect("first replacement under the generous ceiling");
+    store
+        .replace_state(b"second replacement")
+        .expect("second replacement under the generous ceiling");
+    let full_tip = store.state_witness_tip().expect("tip before reopen");
     drop(store);
 
     std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "2");
@@ -14886,7 +15044,7 @@ fn state_witness_record_ceiling_fails_closed_before_prepare_and_on_restart() {
         "exceeding the configured fail-closed ceiling [2]",
     );
 
-    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "20");
     let mut reopened = StateFileLock::acquire(&state_path).expect("reopen with adequate ceiling");
     assert_eq!(
         reopened.state_witness_tip().expect("reopened tip"),
@@ -14899,48 +15057,6 @@ fn state_witness_record_ceiling_fails_closed_before_prepare_and_on_restart() {
         state_witness_max_records().expect_err("genesis requires two records"),
         "must be between 2 and 1000000",
     );
-
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-#[cfg(unix)]
-fn state_witness_verification_cost_stays_constant_as_history_grows() {
-    const PERSISTS: usize = 24;
-
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("witness_incremental_cost");
-    reset_witness_verification_counters();
-
-    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
-    let (full_after_open, _, bytes_after_open) = witness_verification_counters();
-    assert_eq!(full_after_open, 1);
-    for index in 0..PERSISTS {
-        store
-            .replace_state(format!("incremental image {index}").as_bytes())
-            .expect("persist through durable store");
-    }
-
-    let (full, incremental, bytes_read) = witness_verification_counters();
-    assert_eq!(
-        full, 1,
-        "steady-state writes must not reparse historical records"
-    );
-    assert!(incremental >= (PERSISTS * 4) as u64);
-    let bytes_per_persist = (bytes_read - bytes_after_open) / PERSISTS as u64;
-    assert!(
-        bytes_per_persist < 2_048,
-        "verification must remain O(1), got {bytes_per_persist} bytes per persist"
-    );
-    let journal_length = std::fs::metadata(state_witness_file_path(&state_path))
-        .expect("journal metadata")
-        .len();
-    assert!(
-        bytes_per_persist < journal_length,
-        "constant verification reads must stay below the growing journal"
-    );
-    drop(store);
 
     cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
@@ -15028,6 +15144,1268 @@ fn retained_inventory_is_public_sorted_and_bound_to_the_witness_tip() {
     );
 
     reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+// ---------------------------------------------------------------------------
+// Multi-agent-review coverage gaps. These tests are appended at the end of
+// the file so they break neither the existing test ordering nor the
+// phase-pinned `cargo test -- --exact` paths; the phase-only suite scripts
+// reference prior tests by name and the new ones are additive.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg(unix)]
+fn orphan_temp_entry_is_recovered_on_next_acquire() {
+    // A crash mid-write can leave behind a `*.tmp-<random>` entry from the
+    // `unique_temp_name` path. The next `acquire` MUST clean it up so the
+    // lock_file_name + durably-created store_id / state-witness entries can
+    // be installed without colliding with the stranded temp entry.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("orphan_temp_recovery");
+    reset_for_tests();
+
+    let parent = state_path
+        .parent()
+        .expect("state path parent exists")
+        .to_path_buf();
+    let mut orphan = state_path
+        .file_name()
+        .expect("state file name")
+        .to_os_string();
+    orphan.push(format!(".tmp-{:016x}", std::process::id()));
+    let orphan_path = parent.join(&orphan);
+    std::fs::write(&orphan_path, b"stranded partial temp entry").expect("write orphan temp entry");
+    assert!(
+        orphan_path.exists(),
+        "orphan temp entry must exist before acquire"
+    );
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path)
+        .expect("acquire must succeed despite orphan temp entry");
+    let baseline = store.state_witness_tip().expect("baseline witness tip");
+    store
+        .replace_state(b"orphan-recovery-state")
+        .expect("replace_state advances the witness");
+    let advanced = store.state_witness_tip().expect("advanced witness tip");
+    assert_eq!(
+        advanced.generation,
+        baseline.generation + 1,
+        "an orphan-recovered acquire must produce a fresh, advancing witness",
+    );
+    drop(store);
+
+    cleanup_test_state_artifacts(&state_path);
+    let _ = std::fs::remove_file(&orphan_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn short_store_id_at_final_name_is_not_silently_treated_as_valid() {
+    // A truncated `.store-id` (e.g. the result of fsync not surviving a power
+    // loss) at its final name MUST be rejected with the "restore from backup"
+    // error rather than being silently treated as a valid 32-byte store id
+    // (which would orphan the state-witness journal by deriving a
+    // fingerprint from junk bytes).
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("short_store_id_final_name");
+    reset_for_tests();
+
+    let store_id_path = durable_store_id_file_path(&state_path);
+    for length in [0_usize, 1, 16, 31] {
+        std::fs::write(&store_id_path, vec![0x55_u8; length]).expect("write short .store-id");
+        let error = match StateFileLock::acquire(&state_path) {
+            Ok(_) => {
+                panic!("truncated .store-id at final name (length = {length}) must fail closed",)
+            }
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("store-id")
+                || message.contains("store_id")
+                || message.contains("restore"),
+            "truncated .store-id rejection must be actionable: {message}",
+        );
+    }
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+#[allow(clippy::unnecessary_to_owned)]
+fn cross_mount_backup_restore_round_trip_preserves_identity_and_tip() {
+    // A backup-restore procedure that copies the durable store entries to a
+    // new directory (new mount, new inodes) MUST still validate end-to-end:
+    // `acquire` on the new directory must succeed, the identity must match
+    // the source, and the witness tip must keep advancing.
+    let _guard = lock_test_state();
+    let source_path = configure_test_state_path("cross_mount_source");
+    reset_for_tests();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut source = StateFileLock::acquire(&source_path).expect("open source store");
+    source
+        .replace_state(b"backup-restore baseline")
+        .expect("seed baseline state");
+    let source_tip = source.state_witness_tip().expect("source tip");
+    let source_identity = source.identity().expect("source identity");
+    drop(source);
+
+    let destination_tempdir = tempfile::tempdir().expect("create cross-mount destination tempdir");
+    let destination = destination_tempdir.path().to_path_buf();
+
+    for source_path_candidate in [
+        state_lock_file_path(&source_path),
+        durable_store_id_file_path(&source_path),
+        state_witness_file_path(&source_path),
+    ] {
+        let file_name = source_path_candidate
+            .file_name()
+            .expect("source entry file name")
+            .to_os_string();
+        let destination_path = destination.join(&file_name);
+        std::fs::copy(&source_path_candidate, &destination_path)
+            .expect("copy durable entry to destination");
+        let source_meta = std::fs::metadata(&source_path_candidate).expect("source entry metadata");
+        let destination_meta =
+            std::fs::metadata(&destination_path).expect("destination entry metadata");
+        assert_ne!(
+            source_meta.ino(),
+            destination_meta.ino(),
+            "destination entry must have a fresh inode (different filesystem)",
+        );
+    }
+
+    let destination_marker = destination.join(
+        source_path
+            .file_name()
+            .expect("source file name")
+            .to_os_string(),
+    );
+    std::fs::copy(&source_path, &destination_marker).expect("copy state image");
+
+    let mut restored = StateFileLock::acquire(&destination_marker)
+        .expect("acquire must succeed after cross-mount restore");
+    let restored_identity = restored.identity().expect("restored identity");
+    assert_eq!(
+        restored_identity.store_id, source_identity.store_id,
+        "store_id must survive a cross-mount restore",
+    );
+    assert_eq!(
+        restored_identity.fingerprint, source_identity.fingerprint,
+        "store fingerprint must survive a cross-mount restore",
+    );
+    let restored_tip = restored.state_witness_tip().expect("restored tip");
+    assert_eq!(
+        restored_tip, source_tip,
+        "witness tip must survive a cross-mount restore",
+    );
+    restored
+        .replace_state(b"backup-restore advanced")
+        .expect("restored store must accept new state");
+    let advanced_tip = restored.state_witness_tip().expect("advanced tip");
+    assert_eq!(
+        advanced_tip.generation,
+        restored_tip.generation + 1,
+        "witness tip must advance after cross-mount restore",
+    );
+    drop(restored);
+
+    drop(destination_tempdir);
+    cleanup_test_state_artifacts(&source_path);
+}
+#[test]
+#[cfg(unix)]
+fn same_uid_middle_of_journal_modification_fails_closed() {
+    // A same-uid (same process) modification of bytes in the middle of a
+    // record (NOT the trailing torn-remainder region) MUST fail closed on
+    // the next acquire. The header + last-anchor check would otherwise
+    // happily skip past the corruption and silently accept a forged
+    // commitment.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("middle_of_journal_corruption");
+    reset_for_tests();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path).expect("open store");
+    store
+        .replace_state(b"baseline before middle-of-journal corruption")
+        .expect("write baseline");
+    let witness_path = state_witness_file_path(&state_path);
+    drop(store);
+
+    let mut journal_bytes = std::fs::read(&witness_path).expect("read journal");
+    let header_length = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH;
+    let record_length = TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH;
+    assert!(
+        journal_bytes.len() >= header_length + record_length + 10,
+        "the journal must have at least one complete record plus headroom; got {}",
+        journal_bytes.len(),
+    );
+    // Compute the offset of the FIRST record's body (after the header). Modify
+    // a byte NOT in the trailing torn-remainder region (the trailing
+    // remainder is allowed to be repaired by `truncate_incomplete_witness_record`).
+    let first_record_offset = header_length + 5;
+    journal_bytes[first_record_offset] ^= 0xFF;
+    std::fs::write(&witness_path, &journal_bytes).expect("write corrupted journal");
+    std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+        .expect("secure corrupted journal");
+
+    let error = match StateFileLock::acquire(&state_path) {
+        Ok(_) => panic!("same-uid middle-of-journal byte flip must fail closed"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("commitment") || message.contains("record") || message.contains("corrupt"),
+        "middle-of-journal corruption must surface as a record/commitment error: {message}",
+    );
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_invalidation_falls_through_to_full_reparse_on_middle_of_journal_corruption() {
+    // Every access now fully re-parses and re-verifies the witness journal
+    // - there is no verified-prefix cache left to invalidate - so a
+    // same-uid write that corrupts a non-tail record is caught immediately
+    // on the very next access to an already-open store, with no dependence
+    // on filesystem timestamp granularity. Looping proves the detection is
+    // deterministic rather than an artifact of one lucky run.
+    const ITERATIONS: usize = 20;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("cache_invalidation_middle_corruption");
+    reset_witness_verification_counters();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    for index in 0..4 {
+        store
+            .replace_state(format!("cache invalidation seed {index}").as_bytes())
+            .expect("seed persists through the durable store");
+    }
+
+    // Corrupt the FIRST record's body (not the trailing record) directly on
+    // disk, out from under the still-open store, then restore it, repeating
+    // to prove the detection never depends on timing.
+    let witness_path = state_witness_file_path(&state_path);
+    let good_bytes = std::fs::read(&witness_path).expect("read journal");
+    let first_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
+
+    for _ in 0..ITERATIONS {
+        let (full_before, _) = witness_verification_counters();
+        let mut corrupted = good_bytes.clone();
+        corrupted[first_record_offset] ^= 0xFF;
+        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupted journal");
+
+        let error = store
+            .state_witness_tip()
+            .expect_err("middle-of-journal corruption on the open store must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("commitment")
+                || message.contains("record")
+                || message.contains("corrupt"),
+            "middle-of-journal corruption must surface as a record/commitment error: {message}",
+        );
+
+        let (full_after, _) = witness_verification_counters();
+        assert!(
+            full_after > full_before,
+            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
+        );
+
+        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure restored journal");
+    }
+
+    store
+        .state_witness_tip()
+        .expect("the restored journal must verify cleanly once the corruption is undone");
+
+    drop(store);
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[cfg(unix)]
+#[test]
+fn read_state_for_load_catches_middle_of_journal_corruption_on_already_open_store() {
+    // read_state_for_load() now fully re-verifies the witness journal before
+    // returning the loaded state image. A same-uid write that corrupts a
+    // non-tail record is caught immediately on the very next read_state_for_load()
+    // call on an already-open store, with no dependence on filesystem timestamp
+    // granularity.
+    const ITERATIONS: usize = 20;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("read_state_for_load_middle_corruption");
+    reset_witness_verification_counters();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    for index in 0..4 {
+        store
+            .replace_state(format!("read_state_for_load seed {index}").as_bytes())
+            .expect("seed persists through the durable store");
+    }
+
+    // Corrupt the FIRST record's body (not the trailing record) directly on
+    // disk, out from under the still-open store, then restore it, repeating
+    // to prove the detection never depends on timing.
+    let witness_path = state_witness_file_path(&state_path);
+    let good_bytes = std::fs::read(&witness_path).expect("read journal");
+    let first_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
+
+    for _ in 0..ITERATIONS {
+        let (full_before, _) = witness_verification_counters();
+        let mut corrupted = good_bytes.clone();
+        corrupted[first_record_offset] ^= 0xFF;
+        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupted journal");
+
+        let error = store
+            .read_state_for_load()
+            .expect_err("middle-of-journal corruption on the open store must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("commitment")
+                || message.contains("record")
+                || message.contains("corrupt"),
+            "middle-of-journal corruption must surface as a record/commitment error: {message}",
+        );
+
+        let (full_after, _) = witness_verification_counters();
+        assert!(
+            full_after > full_before,
+            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
+        );
+
+        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure restored journal");
+    }
+
+    store
+        .read_state_for_load()
+        .expect("the restored journal must verify cleanly once the corruption is undone");
+
+    drop(store);
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[cfg(unix)]
+#[test]
+fn state_witness_tip_snapshot_catches_middle_of_journal_corruption_on_already_open_store() {
+    // state_witness_tip_snapshot() fully re-verifies the witness journal
+    // before returning tip/base/anchor data, exactly like state_witness_tip().
+    const ITERATIONS: usize = 20;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("state_witness_tip_snapshot_middle_corruption");
+    reset_witness_verification_counters();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    for index in 0..4 {
+        store
+            .replace_state(format!("tip snapshot seed {index}").as_bytes())
+            .expect("seed persists through the durable store");
+    }
+
+    let witness_path = state_witness_file_path(&state_path);
+    let good_bytes = std::fs::read(&witness_path).expect("read journal");
+    let first_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
+
+    for _ in 0..ITERATIONS {
+        let (full_before, _) = witness_verification_counters();
+        let mut corrupted = good_bytes.clone();
+        corrupted[first_record_offset] ^= 0xFF;
+        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupted journal");
+
+        let error = store
+            .state_witness_tip_snapshot()
+            .expect_err("middle-of-journal corruption on the open store must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("commitment")
+                || message.contains("record")
+                || message.contains("corrupt"),
+            "middle-of-journal corruption must surface as a record/commitment error: {message}",
+        );
+
+        let (full_after, _) = witness_verification_counters();
+        assert!(
+            full_after > full_before,
+            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
+        );
+
+        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure restored journal");
+    }
+
+    store
+        .state_witness_tip_snapshot()
+        .expect("the restored journal must verify cleanly once the corruption is undone");
+
+    drop(store);
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[cfg(unix)]
+#[test]
+fn state_anchor_trust_head_snapshot_catches_middle_of_journal_corruption_on_already_open_store() {
+    // state_anchor_trust_head_snapshot() fully re-verifies the witness
+    // journal before returning trust-transition outcome data. Establishing a
+    // real trust head first (via a bootstrap transition, matching
+    // `bootstrap_trust_transition_succeeds_on_first_call_and_ordinary_reopen`
+    // in store.rs) is required -- this function errors on a store with no
+    // trust head at all, so a plain unanchored store cannot exercise it.
+    const ITERATIONS: usize = 20;
+
+    let _guard = lock_test_state();
+    let state_path =
+        configure_test_state_path("state_anchor_trust_head_snapshot_middle_corruption");
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "10");
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut initial = StateFileLock::acquire(&state_path).expect("open unanchored store");
+    let tip = initial.state_witness_tip().expect("unanchored genesis tip");
+    let store_fingerprint = initial.identity().expect("initial identity").fingerprint;
+    drop(initial);
+
+    let now = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_millis(),
+    )
+    .expect("clock fits u64");
+    let transition = bootstrap_state_anchor_trust_transition_for_tests(
+        store_fingerprint,
+        &tip,
+        now,
+        now + 30_000,
+        now,
+        now + 30_000,
+        true,
+    )
+    .expect("build verified bootstrap transition");
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut transition_store =
+        StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+            .expect("acquire transition store");
+    transition_store
+        .transition_state_witness_anchor(&transition)
+        .expect("bootstrap trust transition succeeds");
+    drop(transition_store);
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    reset_witness_verification_counters();
+    let mut store = StateFileLock::acquire(&state_path).expect("ordinary reopen with trust head");
+    store
+        .state_anchor_trust_head_snapshot()
+        .expect("trust head readable before any corruption");
+
+    let witness_path = state_witness_file_path(&state_path);
+    let good_bytes = std::fs::read(&witness_path).expect("read journal");
+    let first_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
+
+    for _ in 0..ITERATIONS {
+        let (full_before, _) = witness_verification_counters();
+        let mut corrupted = good_bytes.clone();
+        corrupted[first_record_offset] ^= 0xFF;
+        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupted journal");
+
+        let error = store
+            .state_anchor_trust_head_snapshot()
+            .expect_err("middle-of-journal corruption on the open store must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("commitment")
+                || message.contains("record")
+                || message.contains("corrupt"),
+            "middle-of-journal corruption must surface as a record/commitment error: {message}",
+        );
+
+        let (full_after, _) = witness_verification_counters();
+        assert!(
+            full_after > full_before,
+            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
+        );
+
+        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure restored journal");
+    }
+
+    store
+        .state_anchor_trust_head_snapshot()
+        .expect("the restored journal must verify cleanly once the corruption is undone");
+
+    drop(store);
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[cfg(unix)]
+#[test]
+fn state_anchor_bootstrap_facts_snapshot_catches_journal_corruption_on_already_open_store() {
+    // state_anchor_bootstrap_facts_snapshot() only succeeds on a pristine
+    // (exactly-genesis-length) journal, so there is no "middle" record --
+    // corrupt the non-tail PREPARE record (record 1 of the mandatory
+    // PREPARE+COMMIT genesis pair; record 2/COMMIT is the tail) instead.
+    const ITERATIONS: usize = 20;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("state_anchor_bootstrap_facts_snapshot_corruption");
+    reset_witness_verification_counters();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire_for_bootstrap_facts(&state_path)
+        .expect("open pristine bootstrap-facts store");
+
+    let witness_path = state_witness_file_path(&state_path);
+    let good_bytes = std::fs::read(&witness_path).expect("read journal");
+    let prepare_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
+
+    for _ in 0..ITERATIONS {
+        let (full_before, _) = witness_verification_counters();
+        let mut corrupted = good_bytes.clone();
+        corrupted[prepare_record_offset] ^= 0xFF;
+        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupted journal");
+
+        let error = store
+            .state_anchor_bootstrap_facts_snapshot()
+            .expect_err("PREPARE-record corruption on the open store must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("commitment")
+                || message.contains("record")
+                || message.contains("corrupt"),
+            "journal corruption must surface as a record/commitment error: {message}",
+        );
+
+        let (full_after, _) = witness_verification_counters();
+        assert!(
+            full_after > full_before,
+            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
+        );
+
+        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
+        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure restored journal");
+    }
+
+    store
+        .state_anchor_bootstrap_facts_snapshot()
+        .expect("the restored pristine journal must verify cleanly once the corruption is undone");
+
+    drop(store);
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn state_file_entries_reject_symlink_at_each_path() {
+    // O_NOFOLLOW MUST be enforced at every durable entry path: a symlink at
+    // `.lock`, `.store-id`, `.state-witness`, `.state-anchor`,
+    // `.state-anchor-trust`, or `.state-anchor-trust.intent` MUST be rejected
+    // by `StateFileLock::acquire` rather than silently following into a
+    // hostile target the same-uid attacker swapped in.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("o_nofollow_symlink_reject");
+    reset_for_tests();
+
+    let parent = state_path
+        .parent()
+        .expect("state path parent exists")
+        .to_path_buf();
+    let state_basename = state_path
+        .file_name()
+        .expect("state file name")
+        .to_os_string();
+
+    let target_tempdir = tempfile::tempdir().expect("create symlink target tempdir");
+    let target = target_tempdir.path().join("hostile_target.json");
+    std::fs::write(&target, b"hostile same-uid target").expect("write hostile target");
+
+    let symlink_path_for = |suffix: &str| {
+        let mut name = state_basename.clone();
+        name.push(suffix);
+        parent.join(&name)
+    };
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let locked_baseline = StateFileLock::acquire(&state_path).expect("baseline acquire");
+    drop(locked_baseline);
+
+    let suffixes = [
+        TBTC_SIGNER_DURABLE_STORE_ID_SUFFIX,
+        TBTC_SIGNER_STATE_WITNESS_SUFFIX,
+        TBTC_SIGNER_STATE_ANCHOR_SUFFIX,
+        TBTC_SIGNER_STATE_ANCHOR_TRUST_SUFFIX,
+        TBTC_SIGNER_STATE_ANCHOR_TRUST_INTENT_SUFFIX,
+    ];
+    for suffix in suffixes {
+        let link = symlink_path_for(suffix);
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&target, &link).expect("create hostile symlink");
+        let acquired = StateFileLock::acquire(&state_path);
+        let _ = std::fs::remove_file(&link);
+        let _ = acquired.expect_err(&format!(
+            "StateFileLock::acquire must reject hostile symlink at {suffix}",
+        ));
+    }
+    drop(target_tempdir);
+    cleanup_test_state_artifacts(&state_path);
+}
+#[test]
+fn dkg_share_epoch_rollback_is_rejected_on_persist_and_in_memory() {
+    // The durable store path MUST reject a `dkg_share_epoch = 1` rolling
+    // back to the pre-refresh epoch (epoch 0 is the only supported value).
+    // A non-zero epoch means the wallet claims a multi-round FROST refresh
+    // happened off the books; silently accepting it would break the
+    // anti-rollback chain and could enable a key-continuity bypass.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("dkg_share_epoch_rollback");
+    reset_for_tests();
+
+    // Path A: in-memory rollback attempt. Build a live session with
+    // `dkg_share_epoch = 1` and confirm the inventory surface rejects it.
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(31);
+    persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+        session_id: "dkg-epoch-rollback-wallet".to_string(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages.get(&1).expect("local seat 1").clone(),
+        public_key_package: native_public.clone(),
+    })
+    .expect("persist baseline distributed-DKG seat");
+    {
+        let engine = state().expect("engine state");
+        let mut guard = engine.lock().expect("engine lock");
+        let session = guard
+            .sessions
+            .get_mut("dkg-epoch-rollback-wallet")
+            .expect("baseline wallet session");
+        session.dkg_share_epoch = 1;
+    }
+    expect_internal_error_contains(
+        retained_key_package_inventory().expect_err("nonzero epoch must fail closed"),
+        "unsupported key-package share epoch",
+    );
+
+    // Path B: persistence-loader rollback. A `PersistedSessionState` with
+    // `dkg_share_epoch = 1` must fail closed when the loader rebuilds the
+    // in-memory session. This is the path a restart uses to recover state:
+    // silently accepting a non-zero epoch would reintroduce the key-continuity
+    // bypass the inventory endpoint already rejects.
+    let mut persisted = persisted_session_state_fixture();
+    persisted.dkg_share_epoch = 1;
+    let error = SessionState::try_from(persisted)
+        .expect_err("persisted dkg_share_epoch = 1 must fail closed");
+    let message = error.to_string();
+    assert!(
+        message.contains("share epoch") || message.contains("dkg_share_epoch"),
+        "persistence-loader rollback must surface the epoch rejection: {message}",
+    );
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn retained_inventory_distinct_key_groups_are_sorted_by_wallet_id() {
+    // Two distinct key groups with seats persisted in arbitrary order must
+    // appear in the inventory sorted by `wallet_id` (the public stable
+    // projection). The order must be deterministic and stable across
+    // acquisitions of the same retained inventory.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("inventory_two_wallets_sorted");
+    reset_for_tests();
+
+    let (native_public_a, native_key_packages_a) = sample_distributed_dkg_native_material(71);
+    persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+        session_id: "inventory-wallet-a".to_string(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages_a.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public_a.clone(),
+    })
+    .expect("persist wallet A");
+    let (native_public_b, native_key_packages_b) = sample_distributed_dkg_native_material(73);
+    persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+        session_id: "inventory-wallet-b".to_string(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages_b.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public_b.clone(),
+    })
+    .expect("persist wallet B");
+
+    let inventory = retained_key_package_inventory().expect("retained inventory");
+    assert!(
+        inventory.entries.len() >= 2,
+        "inventory must list both key groups, got {} entries",
+        inventory.entries.len(),
+    );
+    let wallet_ids: Vec<&str> = inventory
+        .entries
+        .iter()
+        .map(|entry| entry.wallet_id.as_str())
+        .collect();
+    let mut sorted_wallet_ids = wallet_ids.clone();
+    sorted_wallet_ids.sort();
+    assert_eq!(
+        wallet_ids, sorted_wallet_ids,
+        "inventory entries must be sorted by wallet_id",
+    );
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn retire_distributed_dkg_key_packages_removes_wallet_from_inventory() {
+    // Retiring a wallet's key packages must remove the wallet from the
+    // public inventory: a wallet that no longer participates in signing
+    // MUST NOT keep leaking its identity through the inventory endpoint.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("inventory_retirement_removes_wallet");
+    reset_for_tests();
+
+    let (native_public_a, native_key_packages_a) = sample_distributed_dkg_native_material(81);
+    let session_id_a = "inventory-retirement-wallet-a";
+    persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+        session_id: session_id_a.to_string(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages_a.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public_a.clone(),
+    })
+    .expect("persist wallet A");
+    let (native_public_b, native_key_packages_b) = sample_distributed_dkg_native_material(83);
+    let session_id_b = "inventory-retirement-wallet-b";
+    persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+        session_id: session_id_b.to_string(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages_b.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public_b.clone(),
+    })
+    .expect("persist wallet B");
+
+    let pre_inventory = retained_key_package_inventory().expect("pre-retirement inventory");
+    assert!(
+        pre_inventory.entries.len() >= 2,
+        "inventory must list both wallets before retirement",
+    );
+    // Capture both `key_group`s (the inventory's stable identifier) so we
+    // can retire wallet A and assert wallet B survives.
+    let first_key_group = pre_inventory.entries[0].key_group.clone();
+    let second_key_group = pre_inventory.entries[1].key_group.clone();
+    let retired = retire_distributed_dkg_key_packages(RetireDistributedDkgKeyPackagesRequest {
+        key_group: first_key_group.clone(),
+    })
+    .expect("retire wallet A");
+    assert_eq!(retired.key_group, first_key_group);
+    assert!(retired.retired);
+    assert!(
+        retired.retired_key_package_count >= 1,
+        "wallet A retirement must report removing at least one key package",
+    );
+
+    let post_inventory = retained_key_package_inventory().expect("post-retirement inventory");
+    assert!(
+        !post_inventory
+            .entries
+            .iter()
+            .any(|entry| entry.key_group == first_key_group),
+        "wallet A must be removed from the inventory after retirement",
+    );
+    assert!(
+        post_inventory
+            .entries
+            .iter()
+            .any(|entry| entry.key_group == second_key_group),
+        "wallet B must remain in the inventory after retirement of A",
+    );
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn witness_segment_rotation_advances_state_generation_only() {
+    // A witness segment rotation that does NOT touch the inventory (no
+    // key-package retirement, no new wallet) advances the
+    // `state_generation` while keeping the `inventory_commitment`
+    // byte-for-byte stable. This is the underlying invariant that lets the
+    // public inventory endpoint cache results across rotations.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("inventory_rotation_advances_generation");
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(91);
+    let session_id = "inventory-rotation-wallet";
+    persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+        session_id: session_id.to_string(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public.clone(),
+    })
+    .expect("persist inventory wallet");
+    let before_rotation = retained_key_package_inventory().expect("inventory before rotation");
+    let before_commitment = before_rotation.inventory_commitment;
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    store
+        .replace_state(b"rotation-only state update")
+        .expect("rotate witness without touching inventory");
+    drop(store);
+
+    let after_rotation = retained_key_package_inventory().expect("inventory after rotation");
+    assert!(
+        after_rotation.state_generation > before_rotation.state_generation,
+        "witness rotation must advance state_generation: {} -> {}",
+        before_rotation.state_generation,
+        after_rotation.state_generation,
+    );
+    assert_eq!(
+        after_rotation.inventory_commitment, before_commitment,
+        "inventory_commitment must be stable across an inventory-free rotation",
+    );
+    assert_eq!(
+        after_rotation.entries, before_rotation.entries,
+        "inventory entries must be unchanged across an inventory-free rotation",
+    );
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[cfg(unix)]
+#[test]
+fn production_realistic_state_witness_max_records_setting_keeps_store_advancing() {
+    // `state_witness_record_ceiling_triggers_local_compaction_for_unanchored_store`
+    // proves local compaction works at a toy ceiling (4). This test proves
+    // the same mechanism keeps an unanchored store advancing at the REAL
+    // production ceiling (262_144 records), not merely at a small,
+    // convenient value. Reaching that ceiling through 131_072 individual
+    // `replace_state` calls would make this test prohibitively slow, so the
+    // pre-ceiling history is seeded directly as raw journal bytes (the same
+    // technique the crash-recovery fixtures in store.rs use) and only the
+    // write that crosses the ceiling goes through the real `replace_state`
+    // path.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_production_ceiling_compaction");
+    std::env::set_var(
+        TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
+        TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS.to_string(),
+    );
+
+    let store_id = [0x5a_u8; 32];
+    let fingerprint = durable_store_fingerprint(&store_id);
+    // The compaction guard at `compact_witness_journal_local` correctly
+    // refuses to compact a tip whose `state_image_digest` is the sentinel
+    // produced by `state_image_digest(None)` (that value uniquely marks a
+    // quarantined store; see `quarantine_state`). A realistic production
+    // tip always commits real state bytes, so this fixture must too: seed a
+    // placeholder state image on disk and use its real digest throughout
+    // the synthetic history instead of the sentinel.
+    let placeholder_state = b"production-ceiling placeholder state";
+    let digest = state_image_digest(Some(placeholder_state));
+    let mut previous_commitment = state_witness_genesis(&fingerprint);
+    let mut chain_hash = [0u8; 32];
+    let mut journal_bytes = Vec::with_capacity(
+        TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH
+            + TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS
+                * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+    );
+    journal_bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
+    journal_bytes.extend_from_slice(&store_id);
+    let generations = TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS / 2;
+    let mut tip_generation = 0u64;
+    for generation in 1..=generations {
+        let generation = generation as u64;
+        let commitment = state_commitment(&fingerprint, generation, &previous_commitment, &digest);
+        let witness = StateWitness {
+            generation,
+            previous_commitment,
+            state_image_digest: digest,
+            commitment,
+        };
+        let prepare = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+            &witness,
+            &chain_hash,
+        );
+        chain_hash.copy_from_slice(&prepare[prepare.len() - 32..]);
+        journal_bytes.extend_from_slice(&prepare);
+        let commit = encode_state_witness_record(
+            TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+            &witness,
+            &chain_hash,
+        );
+        chain_hash.copy_from_slice(&commit[commit.len() - 32..]);
+        journal_bytes.extend_from_slice(&commit);
+        previous_commitment = commitment;
+        tip_generation = generation;
+    }
+    assert_eq!(
+        (journal_bytes.len() - TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH)
+            / TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+        TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS,
+        "fixture must build exactly the production ceiling record count"
+    );
+
+    let store_id_path = durable_store_id_file_path(&state_path);
+    std::fs::write(&store_id_path, store_id).expect("seed .store-id fixture");
+    let witness_path = state_witness_file_path(&state_path);
+    write_witness_journal_fixture(&witness_path, &journal_bytes);
+    write_legacy_state_fixture(
+        &state_path,
+        placeholder_state,
+        "production-ceiling placeholder state fixture",
+    );
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path)
+        .expect("open a durable store already parked at the production record ceiling");
+    let before = store
+        .state_witness_tip()
+        .expect("tip at the record ceiling");
+    assert_eq!(before.generation, tip_generation);
+
+    store
+        .replace_state(b"production-ceiling compaction trigger")
+        .expect("a write at the real production ceiling must compact and keep advancing");
+    let after = store.state_witness_tip().expect("tip after compaction");
+    assert_eq!(
+        after.generation,
+        before.generation + 2,
+        "local compaction advances one generation before the requested write advances a second"
+    );
+    assert_eq!(
+        store
+            .read_state()
+            .expect("state after production-ceiling compaction"),
+        Some(b"production-ceiling compaction trigger".to_vec())
+    );
+
+    let compacted_length = std::fs::metadata(&witness_path)
+        .expect("compacted journal metadata")
+        .len();
+    assert!(
+        compacted_length
+            < (TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS / 4) as u64
+                * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH as u64,
+        "compaction at the production ceiling must shrink the on-disk journal, not merely \
+         tolerate it: {compacted_length} bytes"
+    );
+}
+
+#[test]
+#[allow(clippy::assertions_on_constants)]
+fn production_default_state_witness_max_records_is_sane() {
+    let _guard = lock_test_state();
+    clear_state_storage_policy_overrides();
+    assert_eq!(
+        TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS, 262_144,
+        "production default state-witness ceiling must be 262_144",
+    );
+    let parsed_default = state_witness_max_records().expect("default max_records parses");
+    assert_eq!(
+        parsed_default, 262_144,
+        "state_witness_max_records() without env returns the spec default",
+    );
+    assert!(
+        TBTC_SIGNER_MIN_STATE_WITNESS_MAX_RECORDS <= TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS
+    );
+    assert!(
+        TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS
+            <= TBTC_SIGNER_HARD_MAX_STATE_WITNESS_MAX_RECORDS
+    );
+    let _ = parsed_default;
+}
+
+#[test]
+fn ffi_symbols_for_base_branch_capabilities_are_still_exported() {
+    // After Subagent A removed the new FFI symbols durably committed by the
+    // PR, the BASE-branch FFI capabilities must still be exported through the
+    // C ABI. We assert symbol presence by taking a stable address through
+    // `core::ptr::addr_of!` for each entry point.
+    //
+    // `frost_tbtc_abi_version` is the canonical alive-symbol probe: it
+    // returns success with no inputs and reports the current major/minor.
+    let abi_version_addr = crate::frost_tbtc_abi_version as *const () as usize;
+    let version_addr = crate::frost_tbtc_version as *const () as usize;
+    assert_ne!(
+        abi_version_addr, 0,
+        "frost_tbtc_abi_version must be exported"
+    );
+    assert_ne!(version_addr, 0, "frost_tbtc_version must be exported");
+
+    // The full set of base-branch symbols MUST still be exported. Each
+    // address must be non-zero (the link-time address is non-null after
+    // linking succeeds); nan-equal addresses between distinct symbols prove
+    // the linker did not collapse them into a single thunk.
+    let base_symbols: &[(*const u8, &str)] = &[
+        (
+            crate::frost_tbtc_abi_version as *const () as *const u8,
+            "frost_tbtc_abi_version",
+        ),
+        (
+            crate::frost_tbtc_version as *const () as *const u8,
+            "frost_tbtc_version",
+        ),
+        (
+            crate::frost_tbtc_init_signer_config as *const () as *const u8,
+            "frost_tbtc_init_signer_config",
+        ),
+        (
+            crate::frost_tbtc_roast_liveness_policy as *const () as *const u8,
+            "frost_tbtc_roast_liveness_policy",
+        ),
+        (
+            crate::frost_tbtc_hardening_metrics as *const () as *const u8,
+            "frost_tbtc_hardening_metrics",
+        ),
+        (
+            crate::frost_tbtc_quarantine_status as *const () as *const u8,
+            "frost_tbtc_quarantine_status",
+        ),
+        (
+            crate::frost_tbtc_refresh_cadence_status as *const () as *const u8,
+            "frost_tbtc_refresh_cadence_status",
+        ),
+        (
+            crate::frost_tbtc_refresh_shares as *const () as *const u8,
+            "frost_tbtc_refresh_shares",
+        ),
+        (
+            crate::frost_tbtc_trigger_emergency_rekey as *const () as *const u8,
+            "frost_tbtc_trigger_emergency_rekey",
+        ),
+        (
+            crate::frost_tbtc_run_differential_fuzzing as *const () as *const u8,
+            "frost_tbtc_run_differential_fuzzing",
+        ),
+        (
+            crate::frost_tbtc_canary_rollout_status as *const () as *const u8,
+            "frost_tbtc_canary_rollout_status",
+        ),
+        (
+            crate::frost_tbtc_promote_canary as *const () as *const u8,
+            "frost_tbtc_promote_canary",
+        ),
+        (
+            crate::frost_tbtc_rollback_canary as *const () as *const u8,
+            "frost_tbtc_rollback_canary",
+        ),
+        (
+            crate::frost_tbtc_dkg_part1 as *const () as *const u8,
+            "frost_tbtc_dkg_part1",
+        ),
+        (
+            crate::frost_tbtc_dkg_part2 as *const () as *const u8,
+            "frost_tbtc_dkg_part2",
+        ),
+        (
+            crate::frost_tbtc_dkg_part3 as *const () as *const u8,
+            "frost_tbtc_dkg_part3",
+        ),
+        (
+            crate::frost_tbtc_new_signing_package as *const () as *const u8,
+            "frost_tbtc_new_signing_package",
+        ),
+        (
+            crate::frost_tbtc_verify_signature_share as *const () as *const u8,
+            "frost_tbtc_verify_signature_share",
+        ),
+        (
+            crate::frost_tbtc_interactive_session_open as *const () as *const u8,
+            "frost_tbtc_interactive_session_open",
+        ),
+        (
+            crate::frost_tbtc_interactive_round1 as *const () as *const u8,
+            "frost_tbtc_interactive_round1",
+        ),
+        (
+            crate::frost_tbtc_interactive_round2 as *const () as *const u8,
+            "frost_tbtc_interactive_round2",
+        ),
+        (
+            crate::frost_tbtc_interactive_session_abort as *const () as *const u8,
+            "frost_tbtc_interactive_session_abort",
+        ),
+        (
+            crate::frost_tbtc_interactive_aggregate as *const () as *const u8,
+            "frost_tbtc_interactive_aggregate",
+        ),
+        (
+            crate::frost_tbtc_derive_interactive_attempt_context as *const () as *const u8,
+            "frost_tbtc_derive_interactive_attempt_context",
+        ),
+        (
+            crate::frost_tbtc_build_taproot_tx as *const () as *const u8,
+            "frost_tbtc_build_taproot_tx",
+        ),
+        (
+            crate::frost_tbtc_roast_transcript_audit as *const () as *const u8,
+            "frost_tbtc_roast_transcript_audit",
+        ),
+        (
+            crate::frost_tbtc_verify_blame_proof as *const () as *const u8,
+            "frost_tbtc_verify_blame_proof",
+        ),
+        (
+            crate::frost_tbtc_free_buffer as *const () as *const u8,
+            "frost_tbtc_free_buffer",
+        ),
+    ];
+    for (addr, name) in base_symbols {
+        assert_ne!(
+            *addr as usize, 0,
+            "base-branch FFI symbol {name} must remain exported",
+        );
+    }
+    for left in 0..base_symbols.len() {
+        for right in (left + 1)..base_symbols.len() {
+            assert_ne!(
+                base_symbols[left].0, base_symbols[right].0,
+                "FFI symbols {:?} and {:?} must have distinct addresses",
+                base_symbols[left].1, base_symbols[right].1,
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn persisted_durable_entries_all_carry_owner_only_permissions() {
+    // Every durable entry the store creates MUST carry owner-only 0600
+    // permissions, both at creation and after a reopen: a reopen must
+    // self-heal drifted permissions (an operator `chmod`, a backup tool,
+    // restoring from an archive, etc.) rather than merely reject or
+    // silently tolerate the drift. See `open_or_create_store_id` and
+    // `open_or_create_state_witness`, and the lock-file self-heal in
+    // `acquire_with_mode`.
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("persisted_entries_owner_only_permissions");
+    reset_for_tests();
+
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    store
+        .replace_state(b"owner-only permission baseline")
+        .expect("persist baseline state");
+    drop(store);
+
+    let entries = [
+        ("lock", state_lock_file_path(&state_path)),
+        ("store-id", durable_store_id_file_path(&state_path)),
+        ("state-witness", state_witness_file_path(&state_path)),
+    ];
+    let mode_of = |path: &Path| -> u32 {
+        std::fs::metadata(path)
+            .unwrap_or_else(|error| panic!("stat persisted entry [{}]: {error}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    for (label, path) in &entries {
+        assert_eq!(
+            mode_of(path),
+            0o600,
+            "persisted {label} entry must carry owner-only 0600 permissions at creation"
+        );
+    }
+
+    // Drift every persisted entry's permissions externally, then reopen:
+    // the reopen path must self-heal all of them back to 0600.
+    for (_, path) in &entries {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))
+            .expect("drift persisted entry permissions");
+    }
+    if let Ok(mut slot) = state_file_lock_slot().lock() {
+        *slot = None;
+    }
+    let mut reopened = StateFileLock::acquire(&state_path).expect("reopen after permission drift");
+    reopened
+        .state_witness_tip()
+        .expect("reopened store remains usable after permission self-heal");
+    drop(reopened);
+
+    for (label, path) in &entries {
+        assert_eq!(
+            mode_of(path),
+            0o600,
+            "reopen must self-heal drifted {label} permissions back to owner-only 0600"
+        );
+    }
+
     cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
 }

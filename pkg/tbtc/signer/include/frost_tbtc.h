@@ -20,96 +20,6 @@ typedef struct {
 
 TbtcSignerResult frost_tbtc_version(void);
 TbtcSignerResult frost_tbtc_abi_version(void);
-/*
- * Returns the exact descriptor-bound durable session-store identity using the
- * tbtc-signer-durable-session-store-identity/v2 JSON schema. The call opens and
- * exclusively locks the store before reading any signer state and fails closed
- * if a live path, lock, store-ID, or state entry no longer matches its held
- * no-follow descriptor. This stable v2 identity does not attest pre-start
- * state freshness or the installed key-package inventory.
- */
-TbtcSignerResult frost_tbtc_durable_store_identity(void);
-/*
- * Returns the validated public-only retained FROST key-package inventory and
- * the exact dynamic state-witness tip using
- * tbtc-signer-retained-key-package-inventory/v1.
- */
-TbtcSignerResult frost_tbtc_retained_key_package_inventory(void);
-/*
- * Returns up to maximumEntries contiguous witness transitions from a known
- * ancestor to an exact historical target. Callers must persist accepted tips
- * independently of this signer store to detect a coordinated local rollback.
- */
-TbtcSignerResult frost_tbtc_state_witness_proof(const uint8_t* request_ptr, size_t request_len);
-/*
- * Returns tbtc-signer-state-witness-tip/v1 JSON. Decimal counters are strings.
- * The mandatory anchor fields are anchorBindingHash, anchorServiceEpoch,
- * anchorRevision, anchorEventRoot, and anchorAcknowledgementDigest; all five
- * are zero before an acknowledgement is durably accepted.
- */
-TbtcSignerResult frost_tbtc_state_witness_tip(void);
-/*
- * Accepts strict tbtc-signer-state-witness-checkpoint-ack/v1 camelCase JSON,
- * verifies the pinned Ed25519 service response, expiry and monotonic CAS, and
- * returns tbtc-signer-state-witness-checkpoint-ack-result/v1. The request's
- * operation identifier is spelled exactly `operationID`.
- */
-TbtcSignerResult frost_tbtc_acknowledge_state_witness_checkpoint(
-    const uint8_t* request_ptr,
-    size_t request_len
-);
-
-/*
- * Recovers a remotely committed checkpoint from an unexpired
- * tbtc-frost-native-signer-state-anchor-read-response/v1 wrapper. The wrapper
- * must bind the exact raw nested historical acknowledgement.
- */
-TbtcSignerResult frost_tbtc_recover_state_witness_checkpoint(
-    const uint8_t* request_ptr,
-    size_t request_len
-);
-/*
- * Verifies and durably applies a strict
- * tbtc-signer-state-anchor-trust-transition/v1 request. This operation is
- * startup-only: it must complete before ordinary signer engine/store access.
- * Certificate-chain and Read bytes are retained in a durable intent until the
- * transition completes. The full verified certificate chain and each
- * certificate's raw embedded target acknowledgement remain in the durable
- * audit journal.
- * Callers MUST invoke frost_tbtc_state_anchor_trust_head first on every
- * startup. If it reports state_anchor_trust_recovery_required, use its bounded
- * selector to choose the exact configured certificate chain, obtain a newly
- * signed target Read wrapper, and resubmit this request. Local intent bytes
- * never waive external freshness.
- * Returns tbtc-signer-state-anchor-trust-transition-result/v1.
- */
-TbtcSignerResult frost_tbtc_transition_state_witness_anchor(
-    const uint8_t* request_ptr,
-    size_t request_len
-);
-/*
- * Required startup preflight returning the committed
- * tbtc-signer-state-anchor-trust-head/v1 record. Before ordinary store
- * initialization this performs an ephemeral descriptor-bound inspection, so a
- * preflight read does not consume the startup-only transition window. It
- * reports any durable in-progress transition without mutation as
- * state_anchor_trust_recovery_required. An unbootstrapped store returns
- * state_anchor_trust_head_absent.
- */
-TbtcSignerResult frost_tbtc_state_anchor_trust_head(void);
-/*
- * Provisioning-only startup preflight returning
- * tbtc-signer-state-anchor-bootstrap-facts/v1: the stable store fingerprint
- * and exact pristine genesis checkpoint needed for the first offline trust
- * certificate. Requires a production init config whose purpose is
- * state_anchor_bootstrap_provisioning and whose only other populated fields
- * are state_path and state_witness_max_records=4. Every signer, key, session,
- * policy, network, and anchor/trust field is forbidden.
- * The call is ephemeral, does not consume the normal signer startup window,
- * and rejects any store containing state, anchor/trust data, a segmented
- * witness, or witness history beyond the exact genesis image.
- */
-TbtcSignerResult frost_tbtc_state_anchor_bootstrap_facts(void);
 TbtcSignerResult frost_tbtc_init_signer_config(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_roast_liveness_policy(void);
 TbtcSignerResult frost_tbtc_hardening_metrics(void);
@@ -127,8 +37,6 @@ void frost_tbtc_free_buffer(uint8_t* ptr, size_t len);
 TbtcSignerResult frost_tbtc_dkg_part1(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_dkg_part2(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_dkg_part3(const uint8_t* request_ptr, size_t request_len);
-TbtcSignerResult frost_tbtc_persist_distributed_dkg_key_package(const uint8_t* request_ptr, size_t request_len);
-TbtcSignerResult frost_tbtc_retire_distributed_dkg_key_packages(const uint8_t* request_ptr, size_t request_len);
 
 TbtcSignerResult frost_tbtc_new_signing_package(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_build_taproot_tx(const uint8_t* request_ptr, size_t request_len);
