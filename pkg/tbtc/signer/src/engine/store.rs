@@ -9236,6 +9236,15 @@ mod witness_transcript_tests {
     #[test]
     #[cfg(unix)]
     fn provisioning_config_ffi_is_startup_only_and_capability_minimal() {
+        // Spawns a subprocess that overrides its own env via `Command::env`.
+        // Must hold the test-isolation lock like every other test that
+        // touches TBTC_SIGNER_* state: without it, this test's subprocess
+        // spawn can race a concurrently-running locked test's own
+        // env::set_var/env::var calls on the parent process's environment
+        // table (observed: a locked test's own env var read flipping from
+        // its just-set value back to the default microseconds later, with
+        // no other locked test able to have caused it).
+        let _guard = lock_test_state();
         let mut random = [0u8; 12];
         OsRng.fill_bytes(&mut random);
         let state_path = std::env::temp_dir().join(format!(
