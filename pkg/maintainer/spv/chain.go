@@ -86,28 +86,30 @@ type Chain interface {
 		mainUTXO bitcoin.UnspentTransactionOutput,
 	) error
 
-	// SubmitReservationProof submits an SPV proof for the given reservation
-	// action generation. proofType selects between Acceptance, Redemption,
-	// Reanchor, and Dissolution proofs; m1 invokes only Acceptance (1) and
-	// Reanchor (3). The call is restricted to the SPV maintainer registered
-	// against the Bridge.
-	SubmitReservationProof(
-		proofType uint8,
+	// SubmitReservationAcceptanceProof submits an SPV proof for the given
+	// reservation acceptance action generation. The call is restricted to
+	// the SPV maintainer registered against the Bridge.
+	SubmitReservationAcceptanceProof(
 		txInfo *tbtc.BitcoinTxInfo,
 		proof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error
+
+	// SubmitReservationReanchorProof submits an SPV proof for the given
+	// reservation re-anchor action generation. The call is restricted to
+	// the SPV maintainer registered against the Bridge.
+	SubmitReservationReanchorProof(
+		txInfo *tbtc.BitcoinTxInfo,
+		proof *tbtc.BitcoinTxProof,
 		reservationKey *big.Int,
 		requestNonce uint64,
 	) error
 
 	// NotifyReservationActionTimeout notifies the Bridge that the timeout
-	// for the given reservation action generation has elapsed without the
-	// SPV proof being submitted. The walletMembersIDs carry the operator
-	// IDs of the wallet that was authorized for the action.
-	NotifyReservationActionTimeout(
-		reservationKey *big.Int,
-		walletMembersIDs []uint32,
-	) error
+	// for the given Reanchor-type reservation action generation has
+	// elapsed without the SPV proof being submitted.
+	NotifyReservationActionTimeout(reservationKey *big.Int) error
 
 	// NotifyReservationAcceptanceTimedOut notifies the Bridge that the
 	// acceptance-type action timeout has elapsed for the given reservation

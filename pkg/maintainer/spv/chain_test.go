@@ -60,8 +60,7 @@ type submittedStaleReservedDeposit struct {
 // submittedReservationActionTimeout records a NotifyReservationActionTimeout
 // call for assertion in tests.
 type submittedReservationActionTimeout struct {
-	reservationKey   *big.Int
-	walletMembersIDs []uint32
+	reservationKey *big.Int
 }
 
 // reservedDepositRecord is the local-chain-side booking for a reserved
@@ -131,15 +130,21 @@ type localChain struct {
 	// Error fields for testing on-chain submit failure metrics
 	submitDepositSweepProofErr error
 	submitRedemptionProofErr   error
-	// submitReservationProofHook, when non-nil, overrides the default
-	// success stub and gives the test full control over
-	// SubmitReservationProof behavior (e.g. to assert arguments or return
-	// an error).
-	submitReservationProofHook func(
-		proofType uint8,
+	// submitReservationAcceptanceProofHook, when non-nil, overrides the
+	// default success stub and gives the test full control over
+	// SubmitReservationAcceptanceProof behavior (e.g. to assert arguments
+	// or return an error).
+	submitReservationAcceptanceProofHook func(
 		txInfo *tbtc.BitcoinTxInfo,
 		proof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error
+	// submitReservationReanchorProofHook is the SubmitReservationReanchorProof
+	// analog of submitReservationAcceptanceProofHook.
+	submitReservationReanchorProofHook func(
+		txInfo *tbtc.BitcoinTxInfo,
+		proof *tbtc.BitcoinTxProof,
 		reservationKey *big.Int,
 		requestNonce uint64,
 	) error
@@ -847,22 +852,37 @@ func (c *errorBlockCounterChain) BlockCounter() (chain.BlockCounter, error) {
 	return nil, c.err
 }
 
-// SubmitReservationProof is a stub matching the reservation additions on
-// the production Chain interface.
-func (lc *localChain) SubmitReservationProof(
-	proofType uint8,
+// SubmitReservationAcceptanceProof is a stub matching the reservation
+// additions on the production Chain interface.
+func (lc *localChain) SubmitReservationAcceptanceProof(
 	txInfo *tbtc.BitcoinTxInfo,
 	proof *tbtc.BitcoinTxProof,
-	mainUtxo *tbtc.BitcoinTxUTXO,
 	reservationKey *big.Int,
 	requestNonce uint64,
 ) error {
-	if lc.submitReservationProofHook != nil {
-		return lc.submitReservationProofHook(
-			proofType,
+	if lc.submitReservationAcceptanceProofHook != nil {
+		return lc.submitReservationAcceptanceProofHook(
 			txInfo,
 			proof,
-			mainUtxo,
+			reservationKey,
+			requestNonce,
+		)
+	}
+	panic("unsupported")
+}
+
+// SubmitReservationReanchorProof is the SubmitReservationAcceptanceProof
+// analog for re-anchor action generations.
+func (lc *localChain) SubmitReservationReanchorProof(
+	txInfo *tbtc.BitcoinTxInfo,
+	proof *tbtc.BitcoinTxProof,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	if lc.submitReservationReanchorProofHook != nil {
+		return lc.submitReservationReanchorProofHook(
+			txInfo,
+			proof,
 			reservationKey,
 			requestNonce,
 		)
@@ -875,7 +895,6 @@ func (lc *localChain) SubmitReservationProof(
 // Chain interface to drive the notification path.
 func (lc *localChain) NotifyReservationActionTimeout(
 	reservationKey *big.Int,
-	walletMembersIDs []uint32,
 ) error {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
@@ -883,8 +902,7 @@ func (lc *localChain) NotifyReservationActionTimeout(
 	lc.submittedActionTimeouts = append(
 		lc.submittedActionTimeouts,
 		&submittedReservationActionTimeout{
-			reservationKey:   reservationKey,
-			walletMembersIDs: walletMembersIDs,
+			reservationKey: reservationKey,
 		},
 	)
 

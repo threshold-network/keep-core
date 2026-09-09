@@ -40,18 +40,16 @@ const actionTimeoutRenotifyInterval = 10 * time.Minute
 //
 // The Bridge exposes two distinct timeout entry points depending on the
 // action generation's type: NotifyReservationAcceptanceTimedOut for
-// Acceptance-type actions, and NotifyReservationActionTimeout (which
-// takes a wallet member IDs slice the router ignores for Reanchor
-// timeouts) for Reanchor-type actions. checkReservationActionTimeout
-// branches on action.ActionType to call the correct entry point; an
-// unexpected action type (Redemption and Dissolution are out of m1
-// scope) is logged and skipped rather than causing an ill-formed call.
+// Acceptance-type actions, and NotifyReservationActionTimeout for
+// Reanchor-type actions. checkReservationActionTimeout branches on
+// action.ActionType to call the correct entry point; an unexpected action
+// type (Redemption and Dissolution are out of m1 scope) is logged and
+// skipped rather than causing an ill-formed call.
 //
 // Reanchor timeouts are the permissionless path for a wallet the
 // operator no longer locally tracks as open (e.g. Closed/Terminated and
 // archived out of the wallet registry cache): NotifyReservationActionTimeout
-// is called with an empty member IDs slice unconditionally, requiring no
-// cooperation from the dead wallet.
+// requires no cooperation from the dead wallet.
 type ReservationActionTimeoutWatcher struct {
 	spvChain Chain
 	// nowFn returns the current UNIX timestamp the watcher treats as "now"
@@ -447,14 +445,11 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 
 		return true, nil
 	case tbtc.ReservationActionTypeReanchor:
-		// The router ignores the member-IDs parameter for Reanchor-type
-		// timeouts, and the action-timeout watcher is the permissionless
-		// path that must not depend on cooperation from the (possibly
-		// dead) custodying wallet, so an empty slice is passed
-		// unconditionally rather than resolving wallet members.
+		// The action-timeout watcher is the permissionless path that must
+		// not depend on cooperation from the (possibly dead) custodying
+		// wallet.
 		if err := ratw.spvChain.NotifyReservationActionTimeout(
 			reservationKey,
-			[]uint32{},
 		); err != nil {
 			return false, fmt.Errorf(
 				"failed to notify action timeout for "+

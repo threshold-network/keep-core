@@ -764,11 +764,9 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 	var submittedReservationKey *big.Int
 	var submittedRequestNonce uint64
 	submissions := 0
-	spvChain.submitReservationProofHook = func(
-		proofType uint8,
+	spvChain.submitReservationAcceptanceProofHook = func(
 		txInfo *tbtc.BitcoinTxInfo,
 		proof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
 		reservationKey *big.Int,
 		requestNonce uint64,
 	) error {
@@ -924,11 +922,9 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 		)
 
 		submissions := 0
-		spvChain.submitReservationProofHook = func(
-			proofType uint8,
+		spvChain.submitReservationAcceptanceProofHook = func(
 			txInfo *tbtc.BitcoinTxInfo,
 			proof *tbtc.BitcoinTxProof,
-			mainUtxo *tbtc.BitcoinTxUTXO,
 			reservationKey *big.Int,
 			requestNonce uint64,
 		) error {
@@ -1061,11 +1057,9 @@ func TestProveReservationReanchorActions(t *testing.T) {
 	var submittedReservationKey *big.Int
 	var submittedRequestNonce uint64
 	submissions := 0
-	spvChain.submitReservationProofHook = func(
-		proofType uint8,
+	spvChain.submitReservationReanchorProofHook = func(
 		txInfo *tbtc.BitcoinTxInfo,
 		proof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
 		reservationKey *big.Int,
 		requestNonce uint64,
 	) error {
@@ -1205,11 +1199,9 @@ func TestProveReservationReanchorActions(t *testing.T) {
 		})
 
 		submissions := 0
-		spvChain.submitReservationProofHook = func(
-			proofType uint8,
+		spvChain.submitReservationReanchorProofHook = func(
 			txInfo *tbtc.BitcoinTxInfo,
 			proof *tbtc.BitcoinTxProof,
-			mainUtxo *tbtc.BitcoinTxUTXO,
 			reservationKey *big.Int,
 			requestNonce uint64,
 		) error {

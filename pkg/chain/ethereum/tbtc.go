@@ -523,6 +523,7 @@ func buildReservationAnchorProposalAbi(
 	abiProposal := tbtcabi.WalletProposalValidatorReservationAnchorProposal{
 		WalletPubKeyHash: walletPublicKeyHash,
 		DepositKey:       depositKey,
+		RequestNonce:     proposal.RequestNonce,
 		AnchorTxFee:      proposal.AnchorTxFee,
 	}
 
@@ -571,6 +572,7 @@ func buildReservationReanchorProposalAbi(
 	return tbtcabi.WalletProposalValidatorReservationReanchorProposal{
 		SourceWalletPubKeyHash: sourceWalletPublicKeyHash,
 		ReservationKey:         proposal.ReservationKey,
+		RequestNonce:           proposal.RequestNonce,
 		TargetWalletPubKeyHash: proposal.TargetWalletPublicKeyHash,
 		ReanchorTxFee:          proposal.ReanchorTxFee,
 	}
@@ -836,16 +838,14 @@ func (tc *TbtcChain) RequestReservationReanchor(
 	return err
 }
 
-// SubmitReservationProof submits an SPV proof for the given reservation
-// action generation to the Bridge. The proof path is onlySpvMaintainer on
-// the router; the call goes through Bridge.fallback's delegatecall so the
-// router code reads the Bridge's isSpvMaintainer mapping at the Bridge's
-// address.
-func (tc *TbtcChain) SubmitReservationProof(
-	proofType uint8,
+// SubmitReservationAcceptanceProof submits an SPV proof for the given
+// reservation acceptance action generation to the Bridge. The proof path
+// is onlySpvMaintainer on the router; the call goes through
+// Bridge.fallback's delegatecall so the router code reads the Bridge's
+// isSpvMaintainer mapping at the Bridge's address.
+func (tc *TbtcChain) SubmitReservationAcceptanceProof(
 	txInfo *tbtc.BitcoinTxInfo,
 	proof *tbtc.BitcoinTxProof,
-	mainUtxo *tbtc.BitcoinTxUTXO,
 	reservationKey *big.Int,
 	requestNonce uint64,
 ) error {
@@ -862,17 +862,10 @@ func (tc *TbtcChain) SubmitReservationProof(
 		CoinbasePreimage: proof.CoinbasePreimage,
 		CoinbaseProof:    proof.CoinbaseProof,
 	}
-	abiUtxo := tbtcabi.BitcoinTxUTXO4{
-		TxHash:        mainUtxo.TxHash,
-		TxOutputIndex: mainUtxo.TxOutputIndex,
-		TxOutputValue: mainUtxo.TxOutputValue,
-	}
 
-	gasEstimate, err := tc.reservationRouter.SubmitReservationProofGasEstimate(
-		proofType,
+	gasEstimate, err := tc.reservationRouter.SubmitReservationAcceptanceProofGasEstimate(
 		abiTxInfo,
 		abiProof,
-		abiUtxo,
 		reservationKey,
 		requestNonce,
 	)
@@ -887,11 +880,60 @@ func (tc *TbtcChain) SubmitReservationProof(
 	// SubmitRedemptionProofWithReimbursement (tbtc_redemption.go).
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
-	_, err = tc.reservationRouter.SubmitReservationProof(
-		proofType,
+	_, err = tc.reservationRouter.SubmitReservationAcceptanceProof(
 		abiTxInfo,
 		abiProof,
-		abiUtxo,
+		reservationKey,
+		requestNonce,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
+// SubmitReservationReanchorProof submits an SPV proof for the given
+// reservation re-anchor action generation to the Bridge. The proof path
+// is onlySpvMaintainer on the router; the call goes through
+// Bridge.fallback's delegatecall so the router code reads the Bridge's
+// isSpvMaintainer mapping at the Bridge's address.
+func (tc *TbtcChain) SubmitReservationReanchorProof(
+	txInfo *tbtc.BitcoinTxInfo,
+	proof *tbtc.BitcoinTxProof,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	abiTxInfo := tbtcabi.BitcoinTxInfo4{
+		Version:      txInfo.Version,
+		InputVector:  txInfo.InputVector,
+		OutputVector: txInfo.OutputVector,
+		Locktime:     txInfo.Locktime,
+	}
+	abiProof := tbtcabi.BitcoinTxProof3{
+		MerkleProof:      proof.MerkleProof,
+		TxIndexInBlock:   proof.TxIndexInBlock,
+		BitcoinHeaders:   proof.BitcoinHeaders,
+		CoinbasePreimage: proof.CoinbasePreimage,
+		CoinbaseProof:    proof.CoinbaseProof,
+	}
+
+	gasEstimate, err := tc.reservationRouter.SubmitReservationReanchorProofGasEstimate(
+		abiTxInfo,
+		abiProof,
+		reservationKey,
+		requestNonce,
+	)
+	if err != nil {
+		return err
+	}
+
+	// See the margin rationale on SubmitReservationAcceptanceProof above.
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.reservationRouter.SubmitReservationReanchorProof(
+		abiTxInfo,
+		abiProof,
 		reservationKey,
 		requestNonce,
 		ethutil.TransactionOptions{
@@ -903,14 +945,12 @@ func (tc *TbtcChain) SubmitReservationProof(
 }
 
 // NotifyReservationActionTimeout notifies the Bridge that the timeout for
-// the given reservation action generation has elapsed.
+// the given Reanchor-type reservation action generation has elapsed.
 func (tc *TbtcChain) NotifyReservationActionTimeout(
 	reservationKey *big.Int,
-	walletMembersIDs []uint32,
 ) error {
 	gasEstimate, err := tc.reservationRouter.NotifyReservationActionTimeoutGasEstimate(
 		reservationKey,
-		walletMembersIDs,
 	)
 	if err != nil {
 		return err
@@ -921,7 +961,6 @@ func (tc *TbtcChain) NotifyReservationActionTimeout(
 
 	_, err = tc.reservationRouter.NotifyReservationActionTimeout(
 		reservationKey,
-		walletMembersIDs,
 		ethutil.TransactionOptions{
 			GasLimit: uint64(gasEstimateWithMargin),
 		},
@@ -1103,16 +1142,77 @@ func (tc *TbtcChain) WalletReservationsCount(
 
 // WalletReservations returns the reservation keys for all reservations
 // currently custodied by the given wallet.
+//
+// The real ReservationRouter has no walletReservations(bytes20) view -
+// only walletReservationsAmount/walletReservationsCount, which return
+// aggregates, not the key set. The key set is instead derived from the
+// PastReservationAcceptanceRequestedEvents (initial custody) and
+// PastReservationReanchorRequestedEvents (custody transferred TO this
+// wallet) event logs, deduplicated, and filtered down to reservations
+// this wallet CURRENTLY custodies via GetReservation - a reservation may
+// have since re-anchored away to a different wallet.
 func (tc *TbtcChain) WalletReservations(
 	walletPublicKeyHash [20]byte,
 ) ([]*big.Int, error) {
-	keys, err := tc.reservationRouter.WalletReservations(walletPublicKeyHash)
+	acceptanceEvents, err := tc.PastReservationAcceptanceRequestedEvents(
+		&tbtc.ReservationAcceptanceRequestedEventFilter{
+			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+	)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"cannot get wallet reservations for [0x%x]: [%v]",
+			"cannot get past reservation acceptance events for [0x%x]: [%v]",
 			walletPublicKeyHash,
 			err,
 		)
+	}
+
+	reanchorEvents, err := tc.PastReservationReanchorRequestedEvents(
+		&tbtc.ReservationReanchorRequestedEventFilter{
+			TargetWalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get past reservation reanchor events for [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	candidateKeys := make(map[string]*big.Int)
+	for _, event := range acceptanceEvents {
+		if event == nil || event.ReservationKey == nil {
+			continue
+		}
+		candidateKeys[event.ReservationKey.String()] = event.ReservationKey
+	}
+	for _, event := range reanchorEvents {
+		if event == nil || event.ReservationKey == nil {
+			continue
+		}
+		candidateKeys[event.ReservationKey.String()] = event.ReservationKey
+	}
+
+	keys := make([]*big.Int, 0, len(candidateKeys))
+	for _, key := range candidateKeys {
+		reservation, err := tc.GetReservation(key)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get reservation [%v]: [%v]",
+				key,
+				err,
+			)
+		}
+
+		if reservation.WalletPublicKeyHash != walletPublicKeyHash {
+			// The reservation was once tied to this wallet (accepted here,
+			// or re-anchored here) but has since re-anchored away; it is no
+			// longer custodied by this wallet.
+			continue
+		}
+
+		keys = append(keys, key)
 	}
 
 	return keys, nil

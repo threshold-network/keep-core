@@ -71,14 +71,8 @@ func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testin
 		t.Errorf("unexpected notified key: %v", diff)
 	}
 	// Reanchor timeouts must not depend on wallet member resolution: the
-	// router ignores the member-IDs parameter for this action type, so an
-	// empty slice is passed unconditionally.
-	if len(calls[0].walletMembersIDs) != 0 {
-		t.Errorf(
-			"expected empty member IDs for a Reanchor timeout, got %v",
-			calls[0].walletMembersIDs,
-		)
-	}
+	// real router entry point (notifyReservationActionTimeout) takes only
+	// the reservation key.
 	if acceptanceCalls := spvChain.getSubmittedAcceptanceTimeouts(); len(acceptanceCalls) != 0 {
 		t.Errorf(
 			"Reanchor timeout must not call the Acceptance entry point, got %d calls",
@@ -357,9 +351,6 @@ func TestReservationActionTimeoutWatcher_ReanchorNotifiesUnconditionally(t *test
 			"expected the Reanchor timeout to notify unconditionally, got %d calls",
 			len(calls),
 		)
-	}
-	if len(calls[0].walletMembersIDs) != 0 {
-		t.Errorf("expected empty member IDs, got %v", calls[0].walletMembersIDs)
 	}
 }
 
