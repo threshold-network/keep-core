@@ -22,8 +22,15 @@ var reservationWiringLogger = log.Logger("keep-maintainer-spv-reservations")
 // by the stale-deposit watcher fallback loop. The Bridge does not expose a
 // live subscription for DepositRevealed in m1, so the wiring layer falls back
 // to PastDepositRevealedEvents on a coarse interval and dispatches each new
-// reveal to the watcher. The interval mirrors the action-timeout poll
-// cadence so a single tick covers both reservation timers.
+// reveal to the watcher.
+//
+// This value is chosen and tuned independently of
+// DefaultReservationActionTimeoutPollInterval below: the two watchers have
+// different load profiles (this one scans a user-driven, rate-limited event
+// stream; the action-timeout watcher re-reads a state-driven, potentially
+// bursty tracked-action set) and sharing one process-wide cadence is a
+// coincidence of today's values, not an invariant either watcher depends on.
+// Changing one does not require changing the other.
 const DefaultReservationStaleDepositPollInterval = 1 * time.Minute
 
 // DefaultReservationActionTimeoutPollInterval is the default, fixed poll
@@ -31,7 +38,9 @@ const DefaultReservationStaleDepositPollInterval = 1 * time.Minute
 // loop WireReservationWatchers starts and the only way the watcher is
 // driven in production. It is intentionally conservative (1 minute) to
 // limit the Bridge load from the per-tracked-action GetReservationAction
-// reads Run issues on every tick.
+// reads Run issues on every tick. Tuned independently of
+// DefaultReservationStaleDepositPollInterval above; see that constant's
+// doc comment for why the two are not coupled.
 const DefaultReservationActionTimeoutPollInterval = 1 * time.Minute
 
 // reservationDefaultLookBackBlocks bounds every reservation watcher's
@@ -338,8 +347,15 @@ func WireReservationWatchers(
 	staleDepositInitialCount := staleDepositWatcher.pollTick(uint32(time.Now().Unix()))
 	go func() {
 		if err := staleDepositWatcher.Run(ctx, DefaultReservationStaleDepositPollInterval); err != nil {
-			reservationWiringLogger.Errorf(
-				"failed to run reservation stale-deposit watcher: [%v]",
+			// Run only returns a non-nil error here on the interval
+			// misconfiguration check at loop start (never after the loop is
+			// running - per-tick errors are logged and the loop continues),
+			// so reaching this branch means the watcher is not running at
+			// all: reservations are silently unmonitored for stale
+			// deposits. Fatal, matching this function's established
+			// severity for the equivalent-consequence wiring failures above.
+			reservationWiringLogger.Fatalf(
+				"reservation stale-deposit watcher is not running: [%v]",
 				err,
 			)
 		}
@@ -353,8 +369,11 @@ func WireReservationWatchers(
 	}
 	go func() {
 		if err := actionTimeoutWatcher.Run(ctx); err != nil {
-			reservationWiringLogger.Errorf(
-				"failed to run reservation action-timeout watcher: [%v]",
+			// See the identical rationale on the stale-deposit watcher's
+			// launch above: this branch means the watcher is not running,
+			// silently leaving reservation action timeouts unmonitored.
+			reservationWiringLogger.Fatalf(
+				"reservation action-timeout watcher is not running: [%v]",
 				err,
 			)
 		}
