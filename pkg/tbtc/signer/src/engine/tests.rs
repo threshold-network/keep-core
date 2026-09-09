@@ -217,6 +217,8 @@ fn load_attempt_context_vector_suite() -> AttemptContextVectorSuite {
 
 #[derive(Deserialize)]
 struct CoordinatorSeedVectorFile {
+    #[allow(dead_code)]
+    description: String,
     vectors: Vec<CoordinatorSeedVector>,
 }
 
