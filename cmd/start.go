@@ -97,7 +97,7 @@ func start(cmd *cobra.Command) error {
 		perfMetrics = clientinfo.NewPerformanceMetrics(
 			ctx,
 			clientInfoRegistry,
-			clientConfig.Tbtc.Reservations.LeaderDutiesEnabled,
+			clientConfig.Tbtc.ReservationsEnabled,
 		)
 		// Type assert to libp2p provider to set metrics recorder
 		// The provider struct is not exported, so we use interface assertion
@@ -168,7 +168,7 @@ func start(cmd *cobra.Command) error {
 		proposalGenerator := tbtcpg.NewProposalGenerator(
 			tbtcChain,
 			btcChain,
-			clientConfig.Tbtc.Reservations.LeaderDutiesEnabled,
+			clientConfig.Tbtc.ReservationsEnabled,
 		)
 
 		err = tbtc.Initialize(
@@ -197,12 +197,12 @@ func start(cmd *cobra.Command) error {
 		// proposal generator tasks above.
 		//
 		// pkg/maintainer/spv.Initialize ALSO wires these same watchers,
-		// gated on its own Maintainer.Spv.Reservations.LeaderDutiesEnabled
+		// gated on its own Maintainer.Spv.ReservationProofsEnabled
 		// flag, since it is the process that physically hosts the watcher
 		// code and is guaranteed to run whenever the reservation feature
 		// is enabled end-to-end. This call site is kept in addition to
 		// that one - not instead of it - because it is the only process
-		// with visibility into BOTH LeaderDutiesEnabled flags at once
+		// with visibility into BOTH reservation-enabling flags at once
 		// (see the paired-flag comment below), which lets it drive
 		// WireReservationWatchers's misconfiguration self-check with a
 		// real signal; spv.Initialize cannot determine this process's
@@ -219,9 +219,9 @@ func start(cmd *cobra.Command) error {
 		// unmarshals the whole config file into the whole Config struct
 		// regardless of which categories a command declares (categories
 		// only gate required-field validation and which CLI flags get
-		// registered) - so Maintainer.Spv.Reservations.LeaderDutiesEnabled
+		// registered) - so Maintainer.Spv.ReservationProofsEnabled
 		// IS populated here whenever the start process's own config file
-		// happens to contain a [maintainer.spv.reservations] section. But
+		// happens to contain a [maintainer.spv] section. But
 		// it CANNOT be set via a start command-line flag at all
 		// (StartCmdCategories excludes Maintainer, so no such flag is
 		// registered), and a legitimate split deployment's start-process
@@ -233,12 +233,12 @@ func start(cmd *cobra.Command) error {
 		// config outright; WireReservationWatchers only escalates to a
 		// hard error when this signal is corroborated by all three
 		// watchers finding zero reservation activity on-chain.
-		tbtcReservationsEnabled := clientConfig.Tbtc.Reservations.LeaderDutiesEnabled
+		tbtcReservationsEnabled := clientConfig.Tbtc.ReservationsEnabled
 		if tbtcReservationsEnabled {
-			pairedFlagEnabled := clientConfig.Maintainer.Spv.Reservations.LeaderDutiesEnabled
+			pairedFlagEnabled := clientConfig.Maintainer.Spv.ReservationProofsEnabled
 			if !pairedFlagEnabled {
 				logger.Warnf("Client reservation proposal generation is enabled; " +
-					"ensure the paired Maintainer.Spv.Reservations.LeaderDutiesEnabled flag is also " +
+					"ensure the paired Maintainer.Spv.ReservationProofsEnabled flag is also " +
 					"enabled in the maintainer config for end-to-end operation")
 			}
 			if err := spv.WireReservationWatchers(

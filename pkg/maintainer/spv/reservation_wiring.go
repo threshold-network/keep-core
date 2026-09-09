@@ -135,12 +135,12 @@ func reservationOperatorStaggerOffset(
 // wiring function.
 //
 // `pairedFlagEnabled` reports whether the caller could reliably confirm
-// that the counterpart process's own LeaderDutiesEnabled flag is also
+// that the counterpart process's own reservation-enabling flag is also
 // enabled. Pass true when the caller has no reliable visibility into that
 // flag (e.g. spv.Initialize, which has no access to the client's
-// Tbtc.Reservations config) to skip the misconfiguration self-check below;
+// Tbtc.ReservationsEnabled flag) to skip the misconfiguration self-check below;
 // pass the caller's best-effort read otherwise (e.g. cmd/start.go, which
-// can read Maintainer.Spv.Reservations.LeaderDutiesEnabled even though the
+// can read Maintainer.Spv.ReservationProofsEnabled even though the
 // start command doesn't require that config category - see its call site
 // for why that reading, alone, is only ever a warning signal).
 //
@@ -176,7 +176,7 @@ func WireReservationWatchers(
 	operatorAddress := common.HexToAddress(walletClosedChain.Signing().Address().String())
 
 	reservationWiringLogger.Infof(
-		"wiring reservation watchers; ensure Maintainer.Spv.Reservations.LeaderDutiesEnabled " +
+		"wiring reservation watchers; ensure Maintainer.Spv.ReservationProofsEnabled " +
 			"is also enabled in the SPV maintainer config for end-to-end operation",
 	)
 
@@ -368,10 +368,10 @@ func WireReservationWatchers(
 			"reservation watchers wired but found zero reservation " +
 				"activity on-chain (no wallet registrations, no reserved " +
 				"deposits, no pending reservation actions) while the " +
-				"paired process's LeaderDutiesEnabled flag could not be " +
+				"paired process's reservation-enabling flag could not be " +
 				"confirmed enabled; verify both " +
-				"Tbtc.Reservations.LeaderDutiesEnabled and " +
-				"Maintainer.Spv.Reservations.LeaderDutiesEnabled are " +
+				"Tbtc.ReservationsEnabled and " +
+				"Maintainer.Spv.ReservationProofsEnabled are " +
 				"enabled together and that this process is connected to " +
 				"the intended network and contract addresses",
 		)

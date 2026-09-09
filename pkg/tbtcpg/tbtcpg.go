@@ -110,7 +110,7 @@ func NewProposalGenerator(
 
 	if reservationsEnabled {
 		// These tasks only run when the operator has opted into the
-		// reservation feature via config.Reservations.LeaderDutiesEnabled; the gate
+		// reservation feature via config.ReservationsEnabled; the gate
 		// is applied at task registration so the coordination loop
 		// never even considers these actions on a non-reservation
 		// deployment.

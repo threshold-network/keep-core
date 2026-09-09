@@ -79,10 +79,10 @@ func Initialize(
 		metricsRecorder: metricsRecorder,
 	}
 
-	if config.Reservations.LeaderDutiesEnabled {
+	if config.ReservationProofsEnabled {
 		logger.Infof(
 			"SPV maintainer reservation proof submission is enabled; " +
-				"ensure the paired Tbtc.Reservations.LeaderDutiesEnabled flag is also " +
+				"ensure the paired Tbtc.ReservationsEnabled flag is also " +
 				"enabled in the client config for end-to-end operation",
 		)
 		// Reservation acceptance/re-anchor proofs run on a dedicated loop,
@@ -107,7 +107,7 @@ func Initialize(
 		// spv.Chain does not declare OnWalletClosed; every production
 		// Chain implementation (ethereum's tbtc.Chain) satisfies it.
 		// This process has no visibility into the client's own
-		// Tbtc.Reservations.LeaderDutiesEnabled flag, so it passes true
+		// Tbtc.ReservationsEnabled flag, so it passes true
 		// to skip WireReservationWatchers's paired-flag misconfiguration
 		// self-check, relying on the informational log above instead.
 		// The operator explicitly opted into reservation duties via this
