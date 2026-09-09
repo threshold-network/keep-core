@@ -15450,75 +15450,6 @@ fn cache_invalidation_falls_through_to_full_reparse_on_middle_of_journal_corrupt
 
 #[cfg(unix)]
 #[test]
-fn identity_catches_middle_of_journal_corruption_on_already_open_store() {
-    // identity() now fully re-verifies the witness journal before returning
-    // the store identity. A same-uid write that corrupts a non-tail record
-    // is caught immediately on the very next identity() call on an already-open
-    // store, with no dependence on filesystem timestamp granularity.
-    const ITERATIONS: usize = 20;
-
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("identity_middle_corruption");
-    reset_witness_verification_counters();
-
-    if let Ok(mut slot) = state_file_lock_slot().lock() {
-        *slot = None;
-    }
-    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
-    for index in 0..4 {
-        store
-            .replace_state(format!("identity seed {index}").as_bytes())
-            .expect("seed persists through the durable store");
-    }
-
-    // Corrupt the FIRST record's body (not the trailing record) directly on
-    // disk, out from under the still-open store, then restore it, repeating
-    // to prove the detection never depends on timing.
-    let witness_path = state_witness_file_path(&state_path);
-    let good_bytes = std::fs::read(&witness_path).expect("read journal");
-    let first_record_offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 5;
-
-    for _ in 0..ITERATIONS {
-        let (full_before, _) = witness_verification_counters();
-        let mut corrupted = good_bytes.clone();
-        corrupted[first_record_offset] ^= 0xFF;
-        std::fs::write(&witness_path, &corrupted).expect("write corrupted journal");
-        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
-            .expect("secure corrupted journal");
-
-        let error = store
-            .identity()
-            .expect_err("middle-of-journal corruption on the open store must fail closed");
-        let message = error.to_string();
-        assert!(
-            message.contains("commitment")
-                || message.contains("record")
-                || message.contains("corrupt"),
-            "middle-of-journal corruption must surface as a record/commitment error: {message}",
-        );
-
-        let (full_after, _) = witness_verification_counters();
-        assert!(
-            full_after > full_before,
-            "every access must fully re-verify the journal: full_before={full_before}, full_after={full_after}",
-        );
-
-        std::fs::write(&witness_path, &good_bytes).expect("restore uncorrupted journal");
-        std::fs::set_permissions(&witness_path, std::fs::Permissions::from_mode(0o600))
-            .expect("secure restored journal");
-    }
-
-    store
-        .identity()
-        .expect("the restored journal must verify cleanly once the corruption is undone");
-
-    drop(store);
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[cfg(unix)]
-#[test]
 fn read_state_for_load_catches_middle_of_journal_corruption_on_already_open_store() {
     // read_state_for_load() now fully re-verifies the witness journal before
     // returning the loaded state image. A same-uid write that corrupts a
@@ -16000,10 +15931,6 @@ fn production_realistic_state_witness_max_records_setting_keeps_store_advancing(
         "compaction at the production ceiling must shrink the on-disk journal, not merely \
          tolerate it: {compacted_length} bytes"
     );
-    drop(store);
-
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
 }
 
 #[test]

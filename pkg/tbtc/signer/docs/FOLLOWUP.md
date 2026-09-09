@@ -50,7 +50,7 @@ second multi-agent-review pass (`agent-docs/reviews/codex-signer-store-identity-
   (`StateFileLock::compact_witness_journal_local`,
   `recover_state_witness_compaction`, `synthetic_compaction_acknowledgement`).
 - **Original issue:** the rotation-threshold ceiling
-  (`ensure_witness_record_capacity`) hard-failed every write once
+  (`reserve_witness_record_capacity`) hard-failed every write once
   `witness_max_records` was reached, and the only rotation path
   (`rotate_state_witness_segment*`) was gated on an externally-signed
   `StateAnchorAcknowledgement`. For an **unanchored** signer (no anchor
@@ -58,7 +58,7 @@ second multi-agent-review pass (`agent-docs/reviews/codex-signer-store-identity-
   checkpoint never arrives, so `witness_rotation_threshold` stays permanently
   `None` and the ceiling was a permanent, unrecoverable write-lockout.
 - **What shipped:** `compact_witness_journal_local` runs automatically inside
-  `ensure_witness_record_capacity` when the ceiling is reached and no anchor
+  `reserve_witness_record_capacity` when the ceiling is reached and no anchor
   is configured. It appends a self-referential compaction record committing
   to a new genesis header (`synthetic_compaction_acknowledgement` — a
   zero-signature in-band marker `parse_state_witness_segment_header`

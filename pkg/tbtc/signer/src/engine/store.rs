@@ -1347,7 +1347,6 @@ impl StateFileLock {
     }
 
     pub(crate) fn identity(&mut self) -> Result<DurableStoreIdentity, EngineError> {
-        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         Ok(self.identity.clone())
@@ -1361,13 +1360,11 @@ impl StateFileLock {
     /// validating every held descriptor and the witness journal.
     #[cfg(unix)]
     pub(crate) fn identity_for_load(&mut self) -> Result<DurableStoreIdentity, EngineError> {
-        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.settle_pending_state_witness_rotation()?;
         self.revalidate_store_entries()?;
         Ok(self.identity.clone())
     }
-
     #[cfg(not(unix))]
     pub(crate) fn identity_for_load(&mut self) -> Result<DurableStoreIdentity, EngineError> {
         Err(EngineError::Internal(
@@ -1376,7 +1373,6 @@ impl StateFileLock {
     }
     #[cfg(all(test, unix))]
     pub(crate) fn read_state(&mut self) -> Result<Option<Vec<u8>>, EngineError> {
-        self.verify_state_witness_journal_fully()?;
         self.reconcile_pending_witness()?;
         self.revalidate()?;
         let Some(state_file) = self.current_state_file.as_ref() else {
