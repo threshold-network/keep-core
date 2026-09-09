@@ -218,9 +218,9 @@ precedence over compaction; see *When this activates* above.
 
 ## References
 
-- The compaction plan and the prior-fingerprint limitation are tracked in
-  `pkg/tbtc/signer/docs/FOLLOWUP.md` under P0 #4 (Compaction implementation
-  for witness journal).
+- The compaction implementation and the prior-fingerprint limitation are
+  described above (*When this activates* and *Security model /
+  limitations*).
 - The v3 record layout, segment header layout, and the per-record
   `chain_hash` domain are documented in
   `signer-store-v2-to-v3-migration-runbook.md` and in

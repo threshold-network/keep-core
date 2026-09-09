@@ -14913,7 +14913,7 @@ fn pending_commit_refuses_to_absorb_same_length_prefix_corruption() {
 
     // The corrupted byte lies inside the per-record hash-chain domain (the
     // first 105 bytes of every 137-byte record), so the record chain-hash
-    // check added by the hash-chain hardening (FOLLOWUP.md P0#2) now catches
+    // check (added by the per-record hash-chain hardening) now catches
     // the corruption before the per-record commitment recomputation even
     // runs.
     expect_internal_error_contains(
