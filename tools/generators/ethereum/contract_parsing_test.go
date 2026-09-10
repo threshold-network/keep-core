@@ -139,7 +139,7 @@ func TestMethodStability(t *testing.T) {
 	// Run 50 times to make sure we trigger Go's map key randomization, if
 	// applicable.
 	for i := 0; i < 50; i++ {
-		constMethods, nonConstMethods := buildMethodInfo(payableMethods, allMethods, structs)
+		constMethods, nonConstMethods, _ := buildMethodInfo(payableMethods, allMethods, structs)
 
 		methodNames := []string{}
 		for _, constMethod := range constMethods {

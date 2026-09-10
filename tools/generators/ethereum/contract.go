@@ -1,8 +1,15 @@
-//go:generate go run github.com/keep-network/keep-core/tools/generators/template contract_const_methods.go.tmpl contract_const_methods_template_content.go
-//go:generate go run github.com/keep-network/keep-core/tools/generators/template contract_non_const_methods.go.tmpl contract_non_const_methods_template_content.go
-//go:generate go run github.com/keep-network/keep-core/tools/generators/template contract_events.go.tmpl contract_events_template_content.go
-//go:generate go run github.com/keep-network/keep-core/tools/generators/template contract.go.tmpl contract_template_content.go
-//go:generate go run github.com/keep-network/keep-core/tools/generators/template command.go.tmpl command_template_content.go
+// The *_template_content.go files in this package are baked from their
+// matching *.go.tmpl sources by tools/generators/template. They are
+// committed, static artifacts, not regenerated as part of routine builds -
+// intentionally NOT wired up via //go:generate, since `make generate` runs
+// `go generate ./...` repo-wide and doing so would require pkg/generate to
+// be present in every build context that runs codegen (e.g. the Docker
+// image build, which copies in only this package and the gen/ directories
+// that consume it). After editing a .tmpl file, re-bake manually by running,
+// for each changed template, from this directory:
+//
+//	go run github.com/keep-network/keep-core/tools/generators/template \
+//		<template>.go.tmpl <template>_template_content.go
 
 package main
 

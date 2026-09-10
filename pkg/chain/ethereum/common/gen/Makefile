@@ -4,7 +4,7 @@ endif
 
 root_dir := $(realpath ../../../../..)
 module_path := $(shell go list -m)
-gen_package := ${module_path}/$(shell realpath --relative-to=${root_dir} $(CURDIR))
+gen_package := ${module_path}/$(patsubst ${root_dir}/%,%,$(CURDIR))
 artifacts_dir := ${root_dir}/tmp/contracts/${environment}/${npm_package_name}/artifacts
 
 $(info Package              ${npm_package_name})

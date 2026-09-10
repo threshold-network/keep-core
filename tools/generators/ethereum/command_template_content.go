@@ -16,6 +16,9 @@ import (
 
 	chainutil "{{.ChainUtilPackage}}"
 	"github.com/keep-network/keep-core/pkg/cmd"
+{{if .UsesDecode}}
+	"github.com/keep-network/keep-core/pkg/decode"
+{{end}}
 {{if .GenPackage}}
 	"{{.GenPackage}}/abi"
 	"{{.GenPackage}}/contract"

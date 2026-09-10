@@ -155,7 +155,13 @@ type contractInfo struct {
 	// that each declare a like-named abi/contract package, and goimports
 	// cannot reliably disambiguate between them. Empty GenPackage skips the
 	// explicit import, falling back to goimports auto-resolution.
-	GenPackage      string
+	GenPackage string
+	// UsesDecode is true when any command argument in this contract needs
+	// the pkg/decode helpers to parse a CLI string into its Go type. Used to
+	// explicitly import that package for the same reason as GenPackage:
+	// goimports cannot always resolve it reliably when only a subset of the
+	// module's source tree is present (e.g. a partial Docker build context).
+	UsesDecode      bool
 	Class           string
 	AbiClass        string
 	FullVar         string
@@ -243,21 +249,22 @@ func buildContractInfo(
 	)))
 
 	structs := make(map[string]string)
-	constMethods, nonConstMethods := buildMethodInfo(payableMethods, abi.Methods, structs)
+	constMethods, nonConstMethods, usesDecode := buildMethodInfo(payableMethods, abi.Methods, structs)
 	events := buildEventInfo(shortVar, abi.Events, structs)
 
 	return contractInfo{
-		hostChainModule,
-		chainUtilPackage,
-		genPackage,
-		string(goClassName),
-		abiClassName,
-		lowercaseFirst(string(goClassName)),
-		string(shortVar),
-		string(dashedName),
-		constMethods,
-		nonConstMethods,
-		events,
+		HostChainModule:  hostChainModule,
+		ChainUtilPackage: chainUtilPackage,
+		GenPackage:       genPackage,
+		UsesDecode:       usesDecode,
+		Class:            string(goClassName),
+		AbiClass:         abiClassName,
+		FullVar:          lowercaseFirst(string(goClassName)),
+		ShortVar:         string(shortVar),
+		DashedName:       string(dashedName),
+		ConstMethods:     constMethods,
+		NonConstMethods:  nonConstMethods,
+		Events:           events,
 	}
 }
 
@@ -265,7 +272,7 @@ func buildMethodInfo(
 	payableMethods map[string]struct{},
 	methodsByName map[string]abi.Method,
 	structs map[string]string,
-) (constMethods []methodInfo, nonConstMethods []methodInfo) {
+) (constMethods []methodInfo, nonConstMethods []methodInfo, usesDecode bool) {
 	nonConstMethods = make([]methodInfo, 0, len(methodsByName))
 	constMethods = make([]methodInfo, 0, len(methodsByName))
 
@@ -329,8 +336,10 @@ func buildMethodInfo(
 					cmdParsingFn = "hexutil.Decode(%s)"
 				case "[20]byte":
 					cmdParsingFn = "decode.ParseBytes20(%s)"
+					usesDecode = true
 				case "[32]byte":
 					cmdParsingFn = "decode.ParseBytes32(%s)"
+					usesDecode = true
 				case "common.Address":
 					cmdParsingFn = "chainutil.AddressFromHex(%s)"
 				case "*big.Int":
@@ -350,6 +359,7 @@ func buildMethodInfo(
 							}
 
 							cmdParsingFn = fmt.Sprintf(template, intParts[2], intParts[2])
+							usesDecode = true
 							break goTypeSwitch
 						}
 					}
@@ -441,7 +451,7 @@ func buildMethodInfo(
 	sort.Sort(methodInfoSlice(constMethods))
 	sort.Sort(methodInfoSlice(nonConstMethods))
 
-	return constMethods, nonConstMethods
+	return constMethods, nonConstMethods, usesDecode
 }
 
 func buildEventInfo(
