@@ -2,8 +2,8 @@ package spv
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -42,6 +42,17 @@ const DefaultReservationStaleDepositPollInterval = 1 * time.Minute
 // DefaultReservationStaleDepositPollInterval above; see that constant's
 // doc comment for why the two are not coupled.
 const DefaultReservationActionTimeoutPollInterval = 1 * time.Minute
+
+// reservationActionTimeoutPollInterval is the poll interval
+// WireReservationWatchers passes to the action-timeout watcher's Run
+// loop. It defaults to DefaultReservationActionTimeoutPollInterval;
+// declared as a var, rather than referencing that constant directly at
+// the call site, solely so tests in this package can shrink it to
+// exercise the watcher's periodic re-poll - in particular the deferred
+// stranding recheck drained at the top of every pollPendingActions
+// tick (see ReservationActionTimeoutWatcher.strandingRecheckWallets) -
+// without waiting on the real one-minute interval.
+var reservationActionTimeoutPollInterval = DefaultReservationActionTimeoutPollInterval
 
 // reservationDefaultLookBackBlocks bounds every reservation watcher's
 // startup/first-pass catch-up scan window: 30 days at 12s/block. It is
@@ -117,12 +128,7 @@ func reservationOperatorStaggerOffset(
 	}
 
 	hash := crypto.Keccak256(append(operatorAddress.Bytes(), []byte(uniqueKey)...))
-	offset := new(big.Int).Mod(
-		new(big.Int).SetBytes(hash),
-		new(big.Int).SetUint64(intervalSeconds),
-	)
-
-	return uint32(offset.Uint64())
+	return uint32(binary.BigEndian.Uint64(hash[:8]) % intervalSeconds)
 }
 
 // WireReservationWatchers is the reservation watcher integration entry
@@ -158,15 +164,18 @@ func reservationOperatorStaggerOffset(
 // Self-check: once wiring completes, if pairedFlagEnabled is false AND all
 // three watchers' initial scans DEFINITIVELY SUCCEEDED AND found zero
 // reservation activity on-chain (no wallet registrations, no reserved
-// deposits, no pending reservation actions), WireReservationWatchers returns
-// a hard error instead of only logging a warning. If any scan encounters an
-// error (making its zero result unreliable), the self-check is skipped
-// entirely - only warning logs are emitted. Either signal alone is too weak
-// to act on - a false paired-flag reading can be a legitimate split
-// deployment (see cmd/start.go), and zero activity alone can be a genuinely
-// quiet, freshly activated network - but together they are a strong
-// indicator that this process is misconfigured (wrong flags, wrong network,
-// or wrong contract address) rather than simply idle.
+// deposits, no pending reservation actions), an asynchronous goroutine
+// logs the misconfiguration prominently at Errorf severity once every
+// initial scan result has arrived - it does not return an error from
+// WireReservationWatchers and does not terminate the process. If any
+// scan encounters an error (making its zero result unreliable), the
+// self-check is skipped entirely - only warning logs are emitted. Either
+// signal alone is too weak to act on - a false paired-flag reading can be
+// a legitimate split deployment (see cmd/start.go), and zero activity
+// alone can be a genuinely quiet, freshly activated network - but
+// together they are a strong indicator that this process is misconfigured
+// (wrong flags, wrong network, or wrong contract address) rather than
+// simply idle.
 func WireReservationWatchers(
 	ctx context.Context,
 	walletClosedChain WalletClosedChain,
@@ -318,14 +327,14 @@ func WireReservationWatchers(
 
 	staleDepositWatcher := NewReservationStaleDepositWatcher(spvChain, operatorAddress)
 
-	// Let checkReservationActionTimeout immediately re-examine a
-	// Reanchor-type action's reservation for stranding right after a
-	// successful NotifyReservationActionTimeout call restores it to
-	// Active under a possibly-already-dead wallet; see
-	// recheckStrandingAfterActionTimeout's doc comment.
+	// Pass the stranding watcher so a successful Reanchor timeout
+	// submission schedules the custodying wallet for a stranding
+	// recheck on the next poll tick. The notification is only
+	// submitted at that point, so the deferred read may still observe
+	// pre-mining state.
 	actionTimeoutWatcher := NewReservationActionTimeoutWatcher(
 		spvChain,
-		DefaultReservationActionTimeoutPollInterval,
+		reservationActionTimeoutPollInterval,
 		operatorAddress,
 		strandingWatcher,
 	)
@@ -374,6 +383,8 @@ func WireReservationWatchers(
 	// result is published to resultCh for the self-check goroutine
 	// below.
 	go func() {
+		result := scanResult{name: "stale-deposit"}
+		resultSent := false
 		defer func() {
 			if r := recover(); r != nil {
 				reservationWiringLogger.Errorf(
@@ -384,14 +395,19 @@ func WireReservationWatchers(
 					r,
 				)
 			}
+			if !resultSent {
+				resultCh <- result
+			}
 		}()
 
 		initialCount, initialOK := staleDepositWatcher.pollTick(uint32(time.Now().Unix()))
-		resultCh <- scanResult{
+		result = scanResult{
 			name:   "stale-deposit",
 			count:  initialCount,
 			scanOK: initialOK,
 		}
+		resultCh <- result
+		resultSent = true
 
 		if err := staleDepositWatcher.Run(ctx, DefaultReservationStaleDepositPollInterval); err != nil {
 			// Run only returns non-nil on the interval misconfiguration
@@ -415,6 +431,8 @@ func WireReservationWatchers(
 	// the same-goroutine initial-pass ordering rationale as the
 	// stale-deposit watcher's goroutine above.
 	go func() {
+		result := scanResult{name: "action-timeout"}
+		resultSent := false
 		defer func() {
 			if r := recover(); r != nil {
 				reservationWiringLogger.Errorf(
@@ -425,6 +443,9 @@ func WireReservationWatchers(
 					r,
 				)
 			}
+			if !resultSent {
+				resultCh <- result
+			}
 		}()
 
 		initialErr := actionTimeoutWatcher.pollPendingActions()
@@ -434,11 +455,13 @@ func WireReservationWatchers(
 				initialErr,
 			)
 		}
-		resultCh <- scanResult{
+		result = scanResult{
 			name:   "action-timeout",
 			count:  len(actionTimeoutWatcher.pendingActions),
 			scanOK: initialErr == nil,
 		}
+		resultCh <- result
+		resultSent = true
 
 		if err := actionTimeoutWatcher.Run(ctx); err != nil {
 			// See the identical rationale on the stale-deposit watcher
@@ -460,11 +483,13 @@ func WireReservationWatchers(
 	// tri-state results to arrive on resultCh, then evaluates the same
 	// condition the old synchronous check used, requiring every scan to
 	// have definitively succeeded before treating a zero count as a
-	// genuine activity signal. Because this can no longer return an
-	// error from WireReservationWatchers itself, a confirmed
-	// misconfiguration is reported via Fatalf instead - the same
-	// operator-visible outcome, since every caller already treats a
-	// non-nil WireReservationWatchers return as fatal.
+	// genuine activity signal. A confirmed misconfiguration is logged
+	// prominently at Errorf severity rather than treated as fatal: the
+	// caller decides process-level fatality (see the stale-deposit and
+	// action-timeout watcher launch goroutines above for the identical
+	// rationale), and a correctly-configured node on a quiet, freshly
+	// launched network can legitimately hit this same zero-activity
+	// condition, so this self-check must never exit the process.
 	go func() {
 		var regResult, sdResult, atResult scanResult
 		for range 3 {
@@ -480,7 +505,7 @@ func WireReservationWatchers(
 		}
 
 		if reservationSelfCheckMisconfigured(pairedFlagEnabled, regResult, sdResult, atResult) {
-			reservationWiringLogger.Fatalf(
+			reservationWiringLogger.Errorf(
 				"reservation watchers wired but found zero reservation " +
 					"activity on-chain (no wallet registrations, no reserved " +
 					"deposits, no pending reservation actions) while the " +
@@ -513,10 +538,8 @@ type scanResult struct {
 // self-check condition described in WireReservationWatchers's doc
 // comment, given the three watchers' initial-pass tri-state results.
 // It is factored out as a pure function - rather than inlined in the
-// goroutine that calls it - specifically so it is unit-testable
-// without ever triggering the goroutine's Fatalf call: Fatalf calls
-// os.Exit and would abort the entire test binary if exercised
-// directly.
+// goroutine that calls it - so the decision logic is unit-testable in
+// isolation, independent of the goroutine's Errorf logging side effect.
 //
 // The check requires ALL THREE scans to have definitively succeeded
 // (scanOK) before a zero count is trusted as a genuine activity

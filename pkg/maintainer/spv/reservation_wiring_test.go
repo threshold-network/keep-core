@@ -387,10 +387,10 @@ func TestWireReservationWatchers_StartupCatchUpScan_TransientErrorsDoNotAbort(t 
 // reservationSelfCheckMisconfigured, the pure function backing
 // WireReservationWatchers's misconfiguration self-check. The self-check
 // itself now runs asynchronously and reports a confirmed
-// misconfiguration via reservationWiringLogger.Fatalf from a background
-// goroutine (see reservation_wiring.go); since Fatalf calls os.Exit, it
-// cannot be safely exercised in-process here, so this test instead
-// covers the extracted pure decision function directly.
+// misconfiguration via reservationWiringLogger.Errorf from a background
+// goroutine (see reservation_wiring.go); this test instead covers the
+// extracted pure decision function directly, independent of that
+// goroutine's asynchronous timing and logging side effect.
 func TestReservationSelfCheckMisconfigured(t *testing.T) {
 	definitiveZero := scanResult{count: 0, scanOK: true}
 	definitiveActivity := scanResult{count: 1, scanOK: true}
@@ -583,6 +583,112 @@ func TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess(t 
 			"expected WireReservationWatchers's backgrounded initial poll "+
 				"to drive a real NotifyStaleReservedDeposit call, got %d",
 			len(calls),
+		)
+	}
+}
+
+// TestWireReservationWatchers_DrainsStrandingRecheckThroughRealWiring
+// verifies that WireReservationWatchers - not a directly-constructed
+// ReservationActionTimeoutWatcher, as every existing cross-watcher
+// recheck test in reservation_action_timeout_watch_test.go uses -
+// actually wires the real strandingWatcher into
+// NewReservationActionTimeoutWatcher's constructor argument, end to
+// end: a successful Reanchor-timeout notification defers its wallet to
+// a stranding recheck (see
+// ReservationActionTimeoutWatcher.strandingRecheckWallets), and that
+// recheck - drained on the action-timeout watcher's own next poll tick,
+// not the wallet's one-shot OnWalletClosed subscription, which has
+// already fired and been consumed by this point (see
+// strandingRecheckWallets's doc comment) - must notify the reservation
+// stranded. reservationActionTimeoutPollInterval is temporarily
+// shrunk so the test does not wait on the real one-minute default.
+func TestWireReservationWatchers_DrainsStrandingRecheckThroughRealWiring(t *testing.T) {
+	originalInterval := reservationActionTimeoutPollInterval
+	reservationActionTimeoutPollInterval = 50 * time.Millisecond
+	defer func() { reservationActionTimeoutPollInterval = originalInterval }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	walletClosedChain := &mockWalletClosedChain{}
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	wallet := walletPKHAt(0x70)
+	key := reservationKey(0xBB01)
+
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            key,
+		RequestNonce:              1,
+		SourceWalletPublicKeyHash: wallet,
+		BlockNumber:               500,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	// The wallet already reads Closed, and the reservation already
+	// reads Active under it (as ReservationRouter.sol's
+	// notifyReservationActionTimeout will restore it to be, once
+	// mined), mirroring the production race the deferred recheck exists
+	// to catch: the wallet's one-shot OnWalletClosed subscription has
+	// already fired and been consumed before the timeout notification
+	// below lands, so only the action-timeout watcher's own next poll
+	// tick can notice this wallet is stranded (see
+	// TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_NotifiesWhenWalletClosed
+	// in reservation_action_timeout_watch_test.go for the equivalent
+	// directly-constructed-watcher scenario this test proves through
+	// the real wiring path instead).
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		WalletPublicKeyHash: wallet,
+		RequestNonce:        1,
+		State:               tbtc.ReservationStateActive,
+	})
+
+	if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	waitForReservationWiringCondition(
+		t,
+		500*time.Millisecond,
+		func() bool {
+			return len(spvChain.getSubmittedReservationActionTimeouts()) == 1
+		},
+	)
+
+	waitForReservationWiringCondition(
+		t,
+		2*time.Second,
+		func() bool {
+			return len(spvChain.getSubmittedReservationStrandedKeys()) == 1
+		},
+	)
+
+	stranded := spvChain.getSubmittedReservationStrandedKeys()
+	if len(stranded) != 1 || stranded[0].Cmp(key) != 0 {
+		t.Fatalf(
+			"expected WireReservationWatchers's own action-timeout "+
+				"watcher to drain the deferred stranding recheck for "+
+				"reservation [%v] through its real strandingWatcher "+
+				"wiring, got %v",
+			key,
+			stranded,
 		)
 	}
 }
