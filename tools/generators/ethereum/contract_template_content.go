@@ -22,7 +22,7 @@ import (
 
 	chainutil "{{.ChainUtilPackage}}"
 	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
-	"github.com/keep-network/keep-core/pkg/keepcommon/subscription"
+	"github.com/keep-network/keep-core/pkg/subscription"
 {{if .GenPackage}}
 	"{{.GenPackage}}/abi"
 {{end}}

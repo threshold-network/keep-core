@@ -23,7 +23,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 	chainutil "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-core/pkg/keepcommon/subscription"
+	"github.com/keep-network/keep-core/pkg/subscription"
 )
 
 // Create a package-level logger for this contract. The logger exists at
