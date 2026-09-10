@@ -53,12 +53,12 @@ const DefaultReservationActionTimeoutPollInterval = 1 * time.Minute
 // reservationActionTimeoutLookBackBlocks, and
 // reservation_proof_loop.go's reservationProofLookBackBlocks) all
 // independently set to the identical literal value with near-duplicate
-// doc comments. reservationProofLookBackBlocks and
-// reservation_stale_deposit_watch.go's staleDepositRevealScanLookBackBlocks
-// remain as thin aliases to this constant: their exact names are
-// referenced directly by test files outside this change's scope, so
-// they could not simply be deleted; every other former duplicate now
-// references this constant directly.
+// doc comments. Every former duplicate, including the two thin aliases
+// that used to remain solely for test-file references
+// (reservationProofLookBackBlocks and
+// reservation_stale_deposit_watch.go's
+// staleDepositRevealScanLookBackBlocks), now references this constant
+// directly.
 const reservationDefaultLookBackBlocks = uint64(216000)
 
 // reservationStrandingStartupScanRetryDelay bounds how long the startup
@@ -132,8 +132,10 @@ func reservationOperatorStaggerOffset(
 // three watchers are mandatory, permissionless, network-wide duties, not
 // leader-election duties: every process capable of driving them - both
 // cmd/start.go's client process and this package's own spv.Initialize -
-// calls this once at startup, each gated on its own LeaderDutiesEnabled
-// flag. Running it from both when both processes happen to share one
+// calls this once at startup, each gated on its own reservation-enabling
+// flag (Tbtc.ReservationsEnabled for cmd/start.go,
+// Maintainer.Spv.ReservationProofsEnabled for spv.Initialize).
+// Running it from both when both processes happen to share one
 // deployment is redundant but harmless: a Notify* call against an
 // already-notified or already-settled reservation is a no-op on the
 // Bridge.
@@ -154,15 +156,17 @@ func reservationOperatorStaggerOffset(
 // for why that reading, alone, is only ever a warning signal).
 //
 // Self-check: once wiring completes, if pairedFlagEnabled is false AND all
-// three watchers' initial scans found zero reservation activity on-chain
-// (no wallet registrations, no reserved deposits, no pending reservation
-// actions), WireReservationWatchers returns a hard error instead of only
-// logging a warning. Either signal alone is too weak to act on - a false
-// paired-flag reading can be a legitimate split deployment (see
-// cmd/start.go), and zero activity alone can be a genuinely quiet, freshly
-// activated network - but together they are a strong indicator that this
-// process is misconfigured (wrong flags, wrong network, or wrong contract
-// address) rather than simply idle.
+// three watchers' initial scans DEFINITIVELY SUCCEEDED AND found zero
+// reservation activity on-chain (no wallet registrations, no reserved
+// deposits, no pending reservation actions), WireReservationWatchers returns
+// a hard error instead of only logging a warning. If any scan encounters an
+// error (making its zero result unreliable), the self-check is skipped
+// entirely - only warning logs are emitted. Either signal alone is too weak
+// to act on - a false paired-flag reading can be a legitimate split
+// deployment (see cmd/start.go), and zero activity alone can be a genuinely
+// quiet, freshly activated network - but together they are a strong
+// indicator that this process is misconfigured (wrong flags, wrong network,
+// or wrong contract address) rather than simply idle.
 func WireReservationWatchers(
 	ctx context.Context,
 	walletClosedChain WalletClosedChain,
@@ -312,21 +316,19 @@ func WireReservationWatchers(
 		}
 	}
 
-	staleDepositWatcher := NewReservationStaleDepositWatcher(spvChain)
-	staleDepositWatcher.SetOperatorAddress(operatorAddress)
+	staleDepositWatcher := NewReservationStaleDepositWatcher(spvChain, operatorAddress)
 
-	actionTimeoutWatcher := NewReservationActionTimeoutWatcher(
-		spvChain,
-		DefaultReservationActionTimeoutPollInterval,
-	)
-	actionTimeoutWatcher.SetOperatorAddress(operatorAddress)
-
-	// Lets checkReservationActionTimeout immediately re-examine a
+	// Let checkReservationActionTimeout immediately re-examine a
 	// Reanchor-type action's reservation for stranding right after a
 	// successful NotifyReservationActionTimeout call restores it to
 	// Active under a possibly-already-dead wallet; see
 	// recheckStrandingAfterActionTimeout's doc comment.
-	actionTimeoutWatcher.SetStrandingWatcher(strandingWatcher)
+	actionTimeoutWatcher := NewReservationActionTimeoutWatcher(
+		spvChain,
+		DefaultReservationActionTimeoutPollInterval,
+		operatorAddress,
+		strandingWatcher,
+	)
 
 	subscription := subscribeReservationWalletClosed(ctx, walletClosedChain, spvChain, strandingWatcher)
 	go func() {
@@ -344,7 +346,33 @@ func WireReservationWatchers(
 		)
 	}
 
-	staleDepositInitialCount := staleDepositWatcher.pollTick(uint32(time.Now().Unix()))
+	// scanResult carries one watcher's initial-pass tri-state signal
+	// (count found, and whether the scan that produced it definitively
+	// succeeded) to the self-check goroutine below. A scan that errored
+	// makes its zero-count result unreliable, so scanOK lets the
+	// self-check distinguish "definitely no activity" from "the scan
+	// itself failed and we don't actually know".
+	resultCh := make(chan scanResult, 3)
+
+	// Registration scan result: registrationScanOK reflects whether the
+	// PastNewWalletRegisteredEvents call above (err) succeeded. A nil
+	// err with zero events means "definitely no registrations"; a
+	// non-nil err means the zero-length registeredEvents slice is not a
+	// reliable activity signal (see the self-check goroutine below).
+	registrationScanOK := err == nil
+	resultCh <- scanResult{
+		name:   "registration",
+		count:  len(registeredEvents),
+		scanOK: registrationScanOK,
+	}
+
+	// Start the stale-deposit watcher's background poll loop. The
+	// initial pollTick runs first, inside this same goroutine, so
+	// WireReservationWatchers does not block on it and so it cannot
+	// race with Run's own ticker-driven polls (Run's first tick only
+	// fires after a full poll interval has elapsed). Its tri-state
+	// result is published to resultCh for the self-check goroutine
+	// below.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -357,6 +385,14 @@ func WireReservationWatchers(
 				)
 			}
 		}()
+
+		initialCount, initialOK := staleDepositWatcher.pollTick(uint32(time.Now().Unix()))
+		resultCh <- scanResult{
+			name:   "stale-deposit",
+			count:  initialCount,
+			scanOK: initialOK,
+		}
+
 		if err := staleDepositWatcher.Run(ctx, DefaultReservationStaleDepositPollInterval); err != nil {
 			// Run only returns non-nil on the interval misconfiguration
 			// guard at loop start (per-tick errors are logged and the loop
@@ -375,12 +411,9 @@ func WireReservationWatchers(
 		}
 	}()
 
-	if err := actionTimeoutWatcher.pollPendingActions(); err != nil {
-		reservationWiringLogger.Errorf(
-			"action-timeout watcher initial poll failed: [%v]",
-			err,
-		)
-	}
+	// Start the action-timeout watcher's background poll loop, using
+	// the same-goroutine initial-pass ordering rationale as the
+	// stale-deposit watcher's goroutine above.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -393,6 +426,20 @@ func WireReservationWatchers(
 				)
 			}
 		}()
+
+		initialErr := actionTimeoutWatcher.pollPendingActions()
+		if initialErr != nil {
+			reservationWiringLogger.Errorf(
+				"action-timeout watcher initial poll failed: [%v]",
+				initialErr,
+			)
+		}
+		resultCh <- scanResult{
+			name:   "action-timeout",
+			count:  len(actionTimeoutWatcher.pendingActions),
+			scanOK: initialErr == nil,
+		}
+
 		if err := actionTimeoutWatcher.Run(ctx); err != nil {
 			// See the identical rationale on the stale-deposit watcher
 			// launch above.
@@ -405,24 +452,84 @@ func WireReservationWatchers(
 		}
 	}()
 
-	if !pairedFlagEnabled &&
-		len(registeredEvents) == 0 &&
-		staleDepositInitialCount == 0 &&
-		len(actionTimeoutWatcher.pendingActions) == 0 {
-		return fmt.Errorf(
-			"reservation watchers wired but found zero reservation " +
-				"activity on-chain (no wallet registrations, no reserved " +
-				"deposits, no pending reservation actions) while the " +
-				"paired process's reservation-enabling flag could not be " +
-				"confirmed enabled; verify both " +
-				"Tbtc.ReservationsEnabled and " +
-				"Maintainer.Spv.ReservationProofsEnabled are " +
-				"enabled together and that this process is connected to " +
-				"the intended network and contract addresses",
-		)
-	}
+	// The misconfiguration self-check (see the doc comment above) can no
+	// longer run synchronously now that the other two watchers' initial
+	// passes have moved into their background goroutines (see above):
+	// WireReservationWatchers must return before either of those passes
+	// has necessarily completed. This goroutine waits for all three
+	// tri-state results to arrive on resultCh, then evaluates the same
+	// condition the old synchronous check used, requiring every scan to
+	// have definitively succeeded before treating a zero count as a
+	// genuine activity signal. Because this can no longer return an
+	// error from WireReservationWatchers itself, a confirmed
+	// misconfiguration is reported via Fatalf instead - the same
+	// operator-visible outcome, since every caller already treats a
+	// non-nil WireReservationWatchers return as fatal.
+	go func() {
+		var regResult, sdResult, atResult scanResult
+		for range 3 {
+			r := <-resultCh
+			switch r.name {
+			case "registration":
+				regResult = r
+			case "stale-deposit":
+				sdResult = r
+			case "action-timeout":
+				atResult = r
+			}
+		}
+
+		if reservationSelfCheckMisconfigured(pairedFlagEnabled, regResult, sdResult, atResult) {
+			reservationWiringLogger.Fatalf(
+				"reservation watchers wired but found zero reservation " +
+					"activity on-chain (no wallet registrations, no reserved " +
+					"deposits, no pending reservation actions) while the " +
+					"paired process's reservation-enabling flag could not be " +
+					"confirmed enabled; verify both " +
+					"Tbtc.ReservationsEnabled and " +
+					"Maintainer.Spv.ReservationProofsEnabled are " +
+					"enabled together and that this process is connected to " +
+					"the intended network and contract addresses",
+			)
+		}
+	}()
 
 	return nil
+}
+
+// scanResult carries one reservation watcher's initial-pass tri-state
+// signal: the activity count it found, and whether the scan that
+// produced that count definitively succeeded. A scan that errored
+// makes its zero-count result unreliable, so scanOK lets
+// reservationSelfCheckMisconfigured distinguish "definitely no
+// activity" from "the scan itself failed and we don't actually know".
+type scanResult struct {
+	name   string
+	count  int
+	scanOK bool
+}
+
+// reservationSelfCheckMisconfigured evaluates the misconfiguration
+// self-check condition described in WireReservationWatchers's doc
+// comment, given the three watchers' initial-pass tri-state results.
+// It is factored out as a pure function - rather than inlined in the
+// goroutine that calls it - specifically so it is unit-testable
+// without ever triggering the goroutine's Fatalf call: Fatalf calls
+// os.Exit and would abort the entire test binary if exercised
+// directly.
+//
+// The check requires ALL THREE scans to have definitively succeeded
+// (scanOK) before a zero count is trusted as a genuine activity
+// signal; if any scan's own success is uncertain, the function
+// reports no misconfiguration regardless of the counts, deferring to
+// each scan's own per-tick warning logs.
+func reservationSelfCheckMisconfigured(
+	pairedFlagEnabled bool,
+	registration, staleDeposit, actionTimeout scanResult,
+) bool {
+	return !pairedFlagEnabled &&
+		registration.scanOK && staleDeposit.scanOK && actionTimeout.scanOK &&
+		registration.count == 0 && staleDeposit.count == 0 && actionTimeout.count == 0
 }
 
 // retryReservationStrandingStartupScan gives the startup catch-up scan's

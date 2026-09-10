@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -37,8 +39,8 @@ func seedPastDepositRevealedEvent(
 	spvChain.setBlockCounter(blockCounter)
 
 	startBlock := uint64(0)
-	if currentBlock > staleDepositRevealScanLookBackBlocks {
-		startBlock = currentBlock - staleDepositRevealScanLookBackBlocks
+	if currentBlock > reservationDefaultLookBackBlocks {
+		startBlock = currentBlock - reservationDefaultLookBackBlocks
 	}
 	endBlock := currentBlock
 	if err := spvChain.addPastDepositRevealedEvent(
@@ -63,7 +65,7 @@ func TestReservationStaleDepositWatcher_NonReservedDepositIsSkipped(t *testing.T
 	// Deposit is NOT booked as reserved.
 	spvChain.setReservedDeposit(reservationDepositKey(0xB001), walletPKH(), false)
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(reservationDepositKey(0xB001), 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -93,7 +95,7 @@ func TestReservationStaleDepositWatcher_LiveWalletIsKeptNotDropped(t *testing.T)
 		State: tbtc.StateLive,
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 10_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -130,14 +132,18 @@ func TestReservationStaleDepositWatcher_NotifiesAfterTimeout(t *testing.T) {
 		ReservationActionTimeout: reservationActionTimeout,
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
-	// now (5_000) > action.TimeoutAt (100).
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
+	// now (5_000) > action.TimeoutAt (100). NotifyStaleReservedDeposit
+	// is submitted, but the resolution is Keep, not Notified: submission
+	// alone is not proof the transaction mined (see
+	// TestReservationStaleDepositWatcher_NotifiedConfirmedOnRecheckIsRetired
+	// for the confirmation path).
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res != StaleDepositResolutionNotified {
-		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionNotified, res)
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
 	}
 
 	calls := spvChain.getSubmittedStaleReservedDeposits()
@@ -172,7 +178,7 @@ func TestReservationStaleDepositWatcher_DoesNotNotifyBeforeTimeout(t *testing.T)
 		ReservationActionTimeout: reservationActionTimeout,
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -207,7 +213,7 @@ func TestReservationStaleDepositWatcher_SettledActionIsSkipped(t *testing.T) {
 		TimeoutAt: 100,
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -227,7 +233,7 @@ func TestReservationStaleDepositWatcher_ZeroWalletSkips(t *testing.T) {
 	key := reservationDepositKey(0xB006)
 	spvChain.setReservedDeposit(key, [20]byte{}, true)
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -241,7 +247,18 @@ func TestReservationStaleDepositWatcher_ZeroWalletSkips(t *testing.T) {
 	}
 }
 
-func TestReservationStaleDepositWatcher_AlreadyNotifiedReturnsNotified(t *testing.T) {
+// TestReservationStaleDepositWatcher_NotifiedConfirmedOnRecheckIsRetired
+// verifies Finding 6's confirm-before-terminal contract: submitting
+// NotifyStaleReservedDeposit resolves Keep, not Notified, and only a
+// LATER call that observes the reservation actually reporting
+// ReservationStateClosed on-chain retires the deposit as Notified. This
+// matters because NotifyStaleReservedDeposit's generated chain binding
+// returns as soon as the transaction is submitted, not once it mines,
+// so treating submission itself as terminal would let a
+// dropped-or-reverted transaction silently and permanently lose the
+// deposit (the poller's DepositRevealed scan is forward-only and would
+// never re-discover it).
+func TestReservationStaleDepositWatcher_NotifiedConfirmedOnRecheckIsRetired(t *testing.T) {
 	spvChain := newLocalChain()
 
 	key := reservationDepositKey(0xB007)
@@ -261,17 +278,32 @@ func TestReservationStaleDepositWatcher_AlreadyNotifiedReturnsNotified(t *testin
 		ReservationActionTimeout: reservationActionTimeout,
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
+
+	// First tick crosses the deadline: NotifyStaleReservedDeposit is
+	// submitted, but the resolution is Keep - submission alone is not
+	// proof the notification landed.
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res != StaleDepositResolutionNotified {
-		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionNotified, res)
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
+	}
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 1 {
+		t.Fatalf("expected exactly one notification submitted, got %d", len(calls))
 	}
 
-	// Second check for already notified deposit returns Notified without resubmitting.
-	res, err = watcher.CheckStaleReservedDeposit(key, 5_000)
+	// The notify transaction mines: the reservation is released back to
+	// the default sweep path, observable as ReservationStateClosed.
+	spvChain.setReservation(key, &tbtc.Reservation{
+		RequestNonce: 1,
+		State:        tbtc.ReservationStateClosed,
+	})
+
+	// A later tick observes the confirmed on-chain state and only now
+	// retires the deposit.
+	res, err = watcher.CheckStaleReservedDeposit(key, 5_060)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,15 +311,88 @@ func TestReservationStaleDepositWatcher_AlreadyNotifiedReturnsNotified(t *testin
 		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionNotified, res)
 	}
 
+	// No renotification was submitted while confirming.
 	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 1 {
-		t.Fatalf("expected exactly one notification, got %d", len(calls))
+		t.Fatalf("expected still exactly one notification submitted, got %d", len(calls))
+	}
+}
+
+// TestReservationStaleDepositWatcher_NotifiedNotConfirmedIsRetried covers
+// the other half of Finding 6's contract: if a later tick's re-check
+// does NOT observe ReservationStateClosed, the deposit must stay tracked
+// (resolution Keep, never Drop or Notified) rather than being silently
+// and permanently lost, and once actionTimeoutRenotifyInterval elapses
+// without confirmation the notification is retried.
+func TestReservationStaleDepositWatcher_NotifiedNotConfirmedIsRetried(t *testing.T) {
+	spvChain := newLocalChain()
+
+	key := reservationDepositKey(0xB017)
+	wallet := walletPKH()
+	spvChain.setReservedDeposit(key, wallet, true)
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{
+		State: tbtc.StateUnknown,
+	})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		RequestNonce: 1,
+	})
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStatePending,
+		TimeoutAt: 100,
+	})
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
+
+	// First tick: submit the notification, awaiting confirmation.
+	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
+	}
+
+	// A tick shortly after, still within the renotify grace window, must
+	// neither resubmit nor evict: the reservation is still Pending (the
+	// notify transaction has not been observed to take effect), so the
+	// deposit stays tracked rather than being lost.
+	res, err = watcher.CheckStaleReservedDeposit(key, 5_060)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
+	}
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 1 {
+		t.Fatalf("expected no renotification within the grace window, got %d calls", len(calls))
+	}
+
+	// The reservation never actually left Pending, meaning the prior
+	// notification was dropped or reverted. Once
+	// actionTimeoutRenotifyInterval elapses, the watcher must retry
+	// rather than treat the deposit as permanently resolved or lose it.
+	renotifyAfter := 5_000 + uint32(actionTimeoutRenotifyInterval.Seconds()) + 1
+	res, err = watcher.CheckStaleReservedDeposit(key, renotifyAfter)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
+	}
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 2 {
+		t.Fatalf(
+			"expected the notification to be retried once the grace window elapsed, got %d calls",
+			len(calls),
+		)
 	}
 }
 
 func TestReservationStaleDepositWatcher_NilDepositKeyError(t *testing.T) {
 	spvChain := newLocalChain()
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(nil, 5_000)
 	if err == nil {
 		t.Fatal("expected error for nil deposit key, got nil")
@@ -302,7 +407,7 @@ func TestReservationStaleDepositWatcher_IsReservedDepositChainError(t *testing.T
 
 	spvChain.isReservedDepositErr = fmt.Errorf("rpc unavailable")
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(reservationDepositKey(0xB010), 5_000)
 	if err == nil {
 		t.Fatal("expected error when IsReservedDeposit fails, got nil")
@@ -323,7 +428,7 @@ func TestReservationStaleDepositWatcher_ReservedDepositWalletChainError(t *testi
 	spvChain.setReservedDeposit(key, walletPKH(), true)
 	spvChain.reservedDepositWalletErr = fmt.Errorf("rpc unavailable")
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err == nil {
 		t.Fatal("expected error when ReservedDepositWallet fails, got nil")
@@ -343,7 +448,7 @@ func TestReservationStaleDepositWatcher_GetWalletChainError(t *testing.T) {
 	spvChain.setReservedDeposit(key, walletPKH(), true)
 	// No spvChain.setWallet call: GetWallet errors naturally.
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err == nil {
 		t.Fatal("expected error when GetWallet fails, got nil")
@@ -368,7 +473,7 @@ func TestReservationStaleDepositWatcher_GetReservationChainError(t *testing.T) {
 	})
 	// No spvChain.setReservation: GetReservation returns an error.
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err == nil {
 		t.Fatal("expected error when GetReservation fails, got nil")
@@ -418,7 +523,7 @@ func TestReservationStaleDepositWatcher_GetReservationActionChainError_DoesNotNo
 	})
 
 	// GetReservationAction is NOT seeded, so it returns an error ("no action for given reservation/nonce").
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	// now = 10_000 is well past the 4_600 reveal-derived deadline. A
 	// transient RPC error must be surfaced as an error and must not be
 	// conflated with an "action generation not yet created" Unknown state,
@@ -473,14 +578,14 @@ func TestReservationStaleDepositWatcher_AdvancingNonceEvaluatesActiveGeneration(
 		ReservationActionTimeout: reservationActionTimeout,
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	// now = 5_000 > nonce 2's TimeoutAt (200).
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res != StaleDepositResolutionNotified {
-		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionNotified, res)
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
 	}
 
 	calls := spvChain.getSubmittedStaleReservedDeposits()
@@ -511,7 +616,7 @@ func TestReservationStaleDepositWatcher_NoActionRequestedYetPropagatesWithoutMat
 		RequestNonce: 0,
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err == nil {
 		t.Fatal("expected error when no matching deposit revealed event exists, got nil")
@@ -561,15 +666,15 @@ func TestReservationStaleDepositWatcher_NoActionRequestedYetNotifiesFromRevealTi
 		ReservationActionTimeout: reservationActionTimeout, // 3600
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	// Derived deadline = RevealedAt (1_000) + ReservationActionTimeout
 	// (3600) = 4_600. now = 10_000 > 4_600, so the deposit is stale.
 	res, err := watcher.CheckStaleReservedDeposit(key, 10_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res != StaleDepositResolutionNotified {
-		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionNotified, res)
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
 	}
 
 	calls := spvChain.getSubmittedStaleReservedDeposits()
@@ -614,7 +719,7 @@ func TestReservationStaleDepositWatcher_NoActionRequestedYetDoesNotNotifyBeforeD
 		ReservationActionTimeout: reservationActionTimeout, // 3600
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	// Derived deadline = 1_000 + 3600 = 4_600. now = 2_000 < 4_600.
 	res, err := watcher.CheckStaleReservedDeposit(key, 2_000)
 	if err != nil {
@@ -652,7 +757,7 @@ func TestReservationStaleDepositWatcher_NotifierError(t *testing.T) {
 	})
 	spvChain.notifyStaleReservedDepositErr = fmt.Errorf("notifier unavailable")
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err == nil {
 		t.Fatal("expected error when the notifier fails, got nil")
@@ -683,7 +788,7 @@ func TestReservationStaleDepositWatcher_ExactTimeoutBoundaryDoesNotNotify(t *tes
 		TimeoutAt: 5_000,
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -753,7 +858,7 @@ func TestReservationStaleDepositWatcher_DedupesWalletFetchWithinTick(t *testing.
 		})
 	}
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 
 	const now = uint32(5_000)
 	for _, key := range keys {
@@ -801,7 +906,7 @@ func TestReservationStaleDepositWatcher_WalletFetchRefreshesAcrossTicks(t *testi
 		TimeoutAt: 10_000,
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 
 	if _, err := watcher.CheckStaleReservedDeposit(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -880,7 +985,7 @@ func TestReservationStaleDepositWatcher_DedupesReservationParametersFetchWithinT
 		})
 	}
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 
 	// Derived deadline = 1_000 + 3600 = 4_600. now = 2_000 < 4_600, so
 	// every deposit resolves to Keep without triggering forgetDeposit,
@@ -941,7 +1046,7 @@ func TestReservationStaleDepositWatcher_ReservationParametersFetchRefreshesAcros
 		RevealedAt: time.Unix(1_000, 0),
 	})
 
-	watcher := NewReservationStaleDepositWatcher(spvChain)
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
 
 	// Derived deadline = 1_000 + 3600 = 4_600; both ticks ask before the
 	// deadline so the deposit stays Keep and the memo is never

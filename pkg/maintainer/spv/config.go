@@ -81,13 +81,14 @@ type Config struct {
 	// insufficient.
 	MaxProofHeaders uint
 	// ReservationProofsEnabled controls SPV proof submission for
-	// reservation acceptance and re-anchor action generations.
+	// reservation acceptance and re-anchor action generations, and gates
+	// reservation watcher wiring (stranding / stale-deposit /
+	// action-timeout) in this maintainer process.
 	//
-	// OPERATOR NOTE: This flag only controls SPV proof submission in the
-	// maintainer process. Proposal generation and watcher wiring in the
-	// client process are gated by the separate Tbtc.ReservationsEnabled
-	// flag. An operator MUST enable BOTH flags ([Tbtc] in the client and
-	// [Maintainer.Spv] in the maintainer) for the reservation feature to
-	// work end-to-end.
+	// OPERATOR NOTE: The client process ALSO independently wires the same
+	// watchers and generates reservation proposals, gated by the separate
+	// Tbtc.ReservationsEnabled flag. An operator MUST enable BOTH flags
+	// ([Tbtc] in the client and [Maintainer.Spv] in the maintainer) for
+	// the reservation feature to work end-to-end.
 	ReservationProofsEnabled bool
 }

@@ -300,9 +300,9 @@ func TestReservationStrandingWatcher_WalletReservationsChainError(t *testing.T) 
 
 // transientErrChain wraps a Chain and fails the first N calls to a wrapped
 // method before delegating to the embedded Chain, so the stranding
-// watcher's retry behavior (finding P1-1: bounded retry on a transient
-// WalletReservations/GetReservation chain-read failure) can be exercised
-// without extending the shared localChain fake in chain_test.go.
+// watcher's bounded retry on a transient WalletReservations/GetReservation
+// chain-read failure can be exercised without extending the shared
+// localChain fake in chain_test.go.
 type transientErrChain struct {
 	Chain
 	walletReservationsFailuresLeft int
@@ -334,12 +334,11 @@ func (c *transientErrChain) GetReservation(
 }
 
 // TestReservationStrandingWatcher_WalletReservationsTransientErrorRetries
-// verifies finding P1-1: a WalletReservations failure that clears within
-// reservationStrandingRetryAttempts attempts must not be treated as
-// permanent - the caller-visible OnWalletClosed trigger is one-shot and
-// never replayed, so giving up after a single transient RPC hiccup would
-// silently and permanently drop the wallet's reservations from stranding
-// coverage.
+// verifies that a WalletReservations failure clearing within
+// reservationStrandingRetryAttempts attempts is not treated as permanent -
+// the caller-visible OnWalletClosed trigger is one-shot and never replayed,
+// so giving up after a single transient RPC hiccup would silently and
+// permanently drop the wallet's reservations from stranding coverage.
 func TestReservationStrandingWatcher_WalletReservationsTransientErrorRetries(t *testing.T) {
 	spvChain := newLocalChain()
 	wallet := walletPKH()
@@ -376,9 +375,9 @@ func TestReservationStrandingWatcher_WalletReservationsTransientErrorRetries(t *
 }
 
 // TestReservationStrandingWatcher_WalletReservationsExhaustsRetriesAndFails
-// verifies the bound on finding P1-1's retry: after
-// reservationStrandingRetryAttempts consecutive failures the watcher gives
-// up and returns an error, rather than retrying forever.
+// verifies the retry bound: after reservationStrandingRetryAttempts
+// consecutive failures the watcher gives up and returns an error, rather
+// than retrying forever.
 func TestReservationStrandingWatcher_WalletReservationsExhaustsRetriesAndFails(t *testing.T) {
 	spvChain := newLocalChain()
 	wallet := walletPKH()

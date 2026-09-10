@@ -66,7 +66,7 @@ func (c *reservationProofBitcoinChain) GetTxHashesForPublicKeyHash(
 
 // TestReservationProofNextScanRange covers the incremental scan-range
 // arithmetic: the very first pass (lastScannedBlock == 0) is bounded to
-// reservationProofLookBackBlocks behind the current block (or 0 if the
+// reservationDefaultLookBackBlocks behind the current block (or 0 if the
 // chain is younger than that window); every later pass starts exactly one
 // block after the previous pass's cursor, so a steady-state loop never
 // rescans the full look-back window again.
@@ -82,19 +82,19 @@ func TestReservationProofNextScanRange(t *testing.T) {
 			expectedStart:    0,
 		},
 		"first pass, current block at the look-back window boundary": {
-			currentBlock:     reservationProofLookBackBlocks,
+			currentBlock:     reservationDefaultLookBackBlocks,
 			lastScannedBlock: 0,
 			expectedStart:    0,
 		},
 		"first pass, current block beyond the look-back window": {
-			currentBlock:     reservationProofLookBackBlocks + 500,
+			currentBlock:     reservationDefaultLookBackBlocks + 500,
 			lastScannedBlock: 0,
 			expectedStart:    500,
 		},
 		"later pass starts one block after the cursor, ignoring the look-back window": {
-			currentBlock:     reservationProofLookBackBlocks * 3,
-			lastScannedBlock: reservationProofLookBackBlocks * 2,
-			expectedStart:    reservationProofLookBackBlocks*2 + 1,
+			currentBlock:     reservationDefaultLookBackBlocks * 3,
+			lastScannedBlock: reservationDefaultLookBackBlocks * 2,
+			expectedStart:    reservationDefaultLookBackBlocks*2 + 1,
 		},
 	}
 
@@ -1545,4 +1545,79 @@ func TestWalletTransactionsForProof(t *testing.T) {
 			btcChain.getTransactionsForPublicKeyHashCalls,
 		)
 	}
+}
+
+// TestEvictStaleWalletTransactionCacheEntries verifies Finding 2's fix: a
+// wallet's walletTransactionCache entry survives as long as either the
+// acceptance or the re-anchor pending-event map still tracks a pending
+// action for it, and is evicted only once neither map does - mirroring
+// runReservationProofLoop's real usage, where
+// evictStaleWalletTransactionCacheEntries runs once per pass after both
+// proveReservationAcceptanceActions and proveReservationReanchorActions
+// have finished updating those two maps for that pass, not as soon as a
+// single pending event settles mid-pass.
+func TestEvictStaleWalletTransactionCacheEntries(t *testing.T) {
+	acceptanceWallet := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	reanchorWallet := [20]byte{2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	settledWallet := [20]byte{3, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+
+	newPopulatedState := func() *reservationProofScanState {
+		state := newReservationProofScanState()
+		for _, wallet := range [][20]byte{acceptanceWallet, reanchorWallet, settledWallet} {
+			state.walletTransactionCache[wallet] = &walletTransactionCacheEntry{}
+		}
+		state.pendingAcceptanceEvents["acceptance"] = &tbtc.ReservationAcceptanceRequestedEvent{
+			WalletPublicKeyHash: acceptanceWallet,
+		}
+		state.pendingReanchorEvents["reanchor"] = &tbtc.ReservationReanchorRequestedEvent{
+			SourceWalletPublicKeyHash: reanchorWallet,
+		}
+		return state
+	}
+
+	t.Run("wallet still pending in either map keeps its cache entry", func(t *testing.T) {
+		state := newPopulatedState()
+
+		evictStaleWalletTransactionCacheEntries(state)
+
+		if _, exists := state.walletTransactionCache[acceptanceWallet]; !exists {
+			t.Error("expected acceptance wallet's cache entry to be kept")
+		}
+		if _, exists := state.walletTransactionCache[reanchorWallet]; !exists {
+			t.Error("expected re-anchor wallet's cache entry to be kept")
+		}
+	})
+
+	t.Run("wallet with no pending action in either map is evicted", func(t *testing.T) {
+		state := newPopulatedState()
+
+		evictStaleWalletTransactionCacheEntries(state)
+
+		if _, exists := state.walletTransactionCache[settledWallet]; exists {
+			t.Error("expected settled wallet's cache entry to be evicted")
+		}
+	})
+
+	t.Run("eviction is deferred to the pass boundary, not triggered by removing a single pending event", func(t *testing.T) {
+		state := newPopulatedState()
+
+		// Simulate proveReservationAcceptanceActions settling the
+		// acceptance wallet's last pending action mid-pass: it deletes
+		// the event from pendingAcceptanceEvents directly, the same way
+		// production code does, without itself calling
+		// evictStaleWalletTransactionCacheEntries.
+		delete(state.pendingAcceptanceEvents, "acceptance")
+
+		if _, exists := state.walletTransactionCache[acceptanceWallet]; !exists {
+			t.Fatal("expected acceptance wallet's cache entry to survive until the pass-boundary eviction runs")
+		}
+
+		// Only once both passes for the loop iteration have finished
+		// updating the pending-event maps does the boundary hook evict it.
+		evictStaleWalletTransactionCacheEntries(state)
+
+		if _, exists := state.walletTransactionCache[acceptanceWallet]; exists {
+			t.Error("expected acceptance wallet's cache entry to be evicted once its pass-boundary check finds no pending action left")
+		}
+	})
 }

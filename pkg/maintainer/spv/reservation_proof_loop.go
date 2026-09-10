@@ -13,20 +13,12 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// reservationProofLookBackBlocks is a thin alias for
-// reservationDefaultLookBackBlocks (see reservation_wiring.go), the
-// single canonical 30-day/12s-per-block lookback bound shared by every
-// reservation watcher's startup/first-pass catch-up scan. It keeps
-// this exact name because reservation_proof_loop_test.go references
-// it directly.
-const reservationProofLookBackBlocks = reservationDefaultLookBackBlocks
-
 // reservationProofScanState persists the incremental event-scan cursor and
 // the set of still-pending action-request events across successive passes
 // of runReservationProofLoop, so proveReservationAcceptanceActions and
 // proveReservationReanchorActions scan only the event/Bitcoin history that
 // has appeared since the previous pass instead of rescanning the full
-// reservationProofLookBackBlocks window - and refetching Bitcoin history
+// reservationDefaultLookBackBlocks window - and refetching Bitcoin history
 // for every wallet in it - every config.IdleBackoffTime.
 type reservationProofScanState struct {
 	acceptanceLastScannedBlock uint64
@@ -41,7 +33,11 @@ type reservationProofScanState struct {
 	// fetch on a later pass whose lightweight GetTxHashesForPublicKeyHash
 	// check shows nothing changed for that wallet. Shared by
 	// proveReservationAcceptanceActions and proveReservationReanchorActions,
-	// since either can observe the same wallet's public key hash.
+	// since either can observe the same wallet's public key hash. Entries
+	// are evicted once a wallet no longer appears in either pending-event
+	// map, by evictStaleWalletTransactionCacheEntries at the end of each
+	// runReservationProofLoop pass, so this cache does not grow
+	// unboundedly for the life of the process as new wallets are observed.
 	walletTransactionCache map[[20]byte]*walletTransactionCacheEntry
 }
 
@@ -58,6 +54,31 @@ func newReservationProofScanState() *reservationProofScanState {
 		pendingAcceptanceEvents: make(map[string]*tbtc.ReservationAcceptanceRequestedEvent),
 		pendingReanchorEvents:   make(map[string]*tbtc.ReservationReanchorRequestedEvent),
 		walletTransactionCache:  make(map[[20]byte]*walletTransactionCacheEntry),
+	}
+}
+
+// evictStaleWalletTransactionCacheEntries removes walletTransactionCache
+// entries for wallets that no longer have any pending acceptance or
+// re-anchor action tracked in state. It is called once per
+// runReservationProofLoop pass, after both proveReservationAcceptanceActions
+// and proveReservationReanchorActions have finished updating
+// pendingAcceptanceEvents/pendingReanchorEvents for that pass, so a wallet
+// whose last pending action just settled is evicted on the very next pass
+// rather than lingering in memory - unbounded, one entry per distinct
+// wallet ever observed - for the remaining lifetime of the process.
+func evictStaleWalletTransactionCacheEntries(state *reservationProofScanState) {
+	activeWallets := make(map[[20]byte]struct{}, len(state.walletTransactionCache))
+	for _, event := range state.pendingAcceptanceEvents {
+		activeWallets[event.WalletPublicKeyHash] = struct{}{}
+	}
+	for _, event := range state.pendingReanchorEvents {
+		activeWallets[event.SourceWalletPublicKeyHash] = struct{}{}
+	}
+
+	for walletPublicKeyHash := range state.walletTransactionCache {
+		if _, ok := activeWallets[walletPublicKeyHash]; !ok {
+			delete(state.walletTransactionCache, walletPublicKeyHash)
+		}
 	}
 }
 
@@ -128,7 +149,7 @@ func reservationEventKey(reservationKey *big.Int, requestNonce uint64) string {
 
 // reservationProofNextScanRange returns the block range to scan for new
 // pending-action-request events this pass: the bounded
-// reservationProofLookBackBlocks catch-up window on the very first pass
+// reservationDefaultLookBackBlocks catch-up window on the very first pass
 // (lastScannedBlock == 0), or just the delta since the previous pass's
 // cursor on every pass thereafter, so a steady-state loop no longer
 // re-fetches the full ~30-day window on every config.IdleBackoffTime tick.
@@ -147,8 +168,8 @@ func reservationProofNextScanRange(
 	}
 
 	if lastScannedBlock == 0 {
-		if currentBlock > reservationProofLookBackBlocks {
-			return currentBlock - reservationProofLookBackBlocks, currentBlock, nil
+		if currentBlock > reservationDefaultLookBackBlocks {
+			return currentBlock - reservationDefaultLookBackBlocks, currentBlock, nil
 		}
 		return 0, currentBlock, nil
 	}
@@ -159,8 +180,9 @@ func reservationProofNextScanRange(
 // maintainReservationProofs runs the SPV proof submission loop for
 // reservation acceptance and re-anchor action generations. It is a
 // dedicated loop, separate from spvMaintainer's generic proofTypes-driven
-// control loop (see spv.go's Initialize), because SubmitReservationProof
-// requires the (reservationKey, requestNonce) pair of the action generation
+// control loop (see spv.go's Initialize), because
+// SubmitReservationAcceptanceProof and SubmitReservationReanchorProof each
+// require the (reservationKey, requestNonce) pair of the action generation
 // being proven - context the generic
 // unprovenTransactionsGetter/transactionProofSubmitter signatures (shared
 // by deposit sweep, redemption, moving funds, and moved funds sweep) cannot
@@ -256,6 +278,12 @@ func runReservationProofLoop(
 				err,
 			)
 		}
+
+		// Evict cache entries for wallets with no remaining pending
+		// acceptance or re-anchor actions now that both proof-generation
+		// passes for this iteration have updated the pending-event sets;
+		// see evictStaleWalletTransactionCacheEntries.
+		evictStaleWalletTransactionCacheEntries(state)
 
 		select {
 		case <-time.After(config.IdleBackoffTime):

@@ -86,9 +86,10 @@ func Initialize(
 				"enabled in the client config for end-to-end operation",
 		)
 		// Reservation acceptance/re-anchor proofs run on a dedicated loop,
-		// not through the generic proofTypes map: SubmitReservationProof
-		// requires the (reservationKey, requestNonce) pair of the action
-		// generation being proven, which the generic
+		// not through the generic proofTypes map: SubmitReservationAcceptanceProof
+		// and SubmitReservationReanchorProof each require the
+		// (reservationKey, requestNonce) pair of the action generation
+		// being proven, which the generic
 		// unprovenTransactionsGetter/transactionProofSubmitter signatures
 		// (shared by deposit sweep, redemption, moving funds, and moved
 		// funds sweep, none of which need that pair) cannot carry. See

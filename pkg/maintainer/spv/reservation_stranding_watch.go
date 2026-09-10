@@ -115,6 +115,16 @@ func (rsw *reservationStrandingWatcher) checkReservationStrandingForWallet(
 		)
 	}
 
+	// A wallet with zero reservations has nothing for the loop below to
+	// notify, so skip WalletTerminationCause entirely: it costs 3
+	// genesis-to-tip eth_getLogs scans on the underlying chain and its
+	// result is only ever read inside that loop. Without this guard,
+	// every wallet-close event pays that cost even when the wallet
+	// never held a reservation.
+	if len(keys) == 0 {
+		return nil
+	}
+
 	// Best-effort: the termination cause is operational context for the
 	// notifications below, not a correctness gate. A failure here must not
 	// block stranding notifications, so it is logged and treated as
