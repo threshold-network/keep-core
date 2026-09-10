@@ -102,6 +102,7 @@ func (n *node) handleDepositSweepProposal(
 	proposal *DepositSweepProposal,
 	startBlock uint64,
 	expiryBlock uint64,
+	coordinationBlock uint64,
 ) {
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
 	if err != nil {
@@ -154,6 +155,7 @@ func (n *node) handleDepositSweepProposal(
 		expiryBlock,
 		n.waitForBlockHeight,
 		n.transactionMonitor,
+		coordinationBlock,
 	)
 
 	// Wire metrics recorder if available

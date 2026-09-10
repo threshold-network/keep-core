@@ -57,6 +57,16 @@ type ReservationAcceptanceTask struct {
 	// cursor and its cached candidate events (see
 	// reservationAcceptanceScanState).
 	scanState map[[20]byte]*reservationAcceptanceScanState
+
+	// fundingTxLookupTimeout bounds a single candidate's
+	// GetTransactionConfirmations call in
+	// fetchReservationAcceptanceFundingTxs. NewReservationAcceptanceTask
+	// defaults it to reservationAcceptanceFundingTxLookupTimeout; it is an
+	// instance field, rather than that constant being read directly,
+	// purely so a unit test can substitute a millisecond-scale value and
+	// observe a real per-candidate timeout firing without the test itself
+	// having to block for the production 30s default.
+	fundingTxLookupTimeout time.Duration
 }
 
 // NewReservationAcceptanceTask constructs a ReservationAcceptanceTask.
@@ -65,9 +75,10 @@ func NewReservationAcceptanceTask(
 	btcChain bitcoin.Chain,
 ) *ReservationAcceptanceTask {
 	return &ReservationAcceptanceTask{
-		chain:     chain,
-		btcChain:  btcChain,
-		scanState: make(map[[20]byte]*reservationAcceptanceScanState),
+		chain:                  chain,
+		btcChain:               btcChain,
+		scanState:              make(map[[20]byte]*reservationAcceptanceScanState),
+		fundingTxLookupTimeout: reservationAcceptanceFundingTxLookupTimeout,
 	}
 }
 
@@ -105,9 +116,12 @@ const reservationAcceptanceFundingTxLookupWorkers = 8
 // retry budget (for the Electrum adapter, bitcoin/electrum.
 // DefaultRequestRetryTimeout is two minutes) so an unhealthy backend fails
 // a candidate's lookup fast instead of silently consuming the adapter's
-// full retry budget on every one of the bounded worker pool's concurrent
+// full retry budget on every one of the bounded pipeline's concurrent
 // slots. GetTransaction itself takes no context (see bitcoin.Chain) and
-// remains bound only by the adapter's own retry policy.
+// remains bound only by the adapter's own retry policy. This is the
+// default assigned to ReservationAcceptanceTask.fundingTxLookupTimeout by
+// NewReservationAcceptanceTask; see that field for why it is not read
+// directly.
 const reservationAcceptanceFundingTxLookupTimeout = 30 * time.Second
 
 // reservationAcceptanceFundingTxCandidate is a phase-one-eligible reserved
@@ -576,22 +590,29 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	}
 
 	// The two Electrum calls below (GetTransaction and
-	// GetTransactionConfirmations) are looked up concurrently for every
-	// phase-one-eligible candidate collected above, rather than one
-	// candidate at a time, so an unhealthy Bitcoin backend cannot turn this
-	// bounded candidate set into a fully serial multi-hour retry chain --
-	// see fetchReservationAcceptanceFundingTxs. fundingTxLookups is
-	// index-aligned with pendingCandidates so the loop below still applies
-	// each candidate's result in the original oldest-first order and
-	// returns the first fully eligible one deterministically, exactly as
-	// the previous strictly serial implementation did.
+	// GetTransactionConfirmations) are looked up through a bounded,
+	// lazily-scheduled pipeline (see fetchReservationAcceptanceFundingTxs)
+	// instead of eagerly for every phase-one-eligible candidate collected
+	// above, so an unhealthy Bitcoin backend cannot turn this bounded
+	// candidate set into a fully serial multi-hour retry chain, AND a
+	// caller that only needs the first fully eligible candidate -- the
+	// common case, since candidates are examined oldest-first -- does not
+	// pay for fetching every other pending candidate's funding
+	// transaction. fundingTxLookups.next(i) still hands back each
+	// candidate's result in the original oldest-first order, so the loop
+	// below still returns the first fully eligible one deterministically,
+	// exactly as the previous strictly serial implementation did;
+	// deferring stop() here ensures every exit from this loop -- a
+	// candidate found, or every candidate exhausted -- tells the pipeline
+	// to abandon any lookup it has not yet dispatched.
 	fundingTxLookups := rat.fetchReservationAcceptanceFundingTxs(pendingCandidates)
+	defer fundingTxLookups.stop()
 
 	for i, pendingCandidate := range pendingCandidates {
 		event := pendingCandidate.event
 		depositKey := pendingCandidate.depositKey
 		depositRequest := pendingCandidate.depositRequest
-		lookup := fundingTxLookups[i]
+		lookup := fundingTxLookups.next(i)
 
 		if lookup.fundingTxErr != nil {
 			taskLogger.Errorf(
@@ -751,58 +772,127 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	return nil, nil
 }
 
-// fetchReservationAcceptanceFundingTxs looks up the funding transaction and
-// its confirmation count for every candidate in candidates using a small
-// bounded pool of reservationAcceptanceFundingTxLookupWorkers goroutines
-// draining a shared channel of candidate indexes, instead of performing the
-// two Electrum calls (GetTransaction, GetTransactionConfirmations) for one
-// candidate at a time. Serially, an unhealthy Bitcoin backend can turn up
-// to maxReservationAcceptanceCandidatesPerRun candidates into on the order
-// of twice that many sequential multi-minute retry windows before
-// findReservationAcceptanceCandidate gives up; running the lookups
-// concurrently bounds that to roughly ceil(len(candidates) /
-// reservationAcceptanceFundingTxLookupWorkers) sequential retry windows
-// instead. The returned slice is index-aligned with candidates so the
-// caller can still apply each candidate's result in its original
-// (oldest-first) order and pick the first fully eligible one
-// deterministically, even though the underlying network calls raced.
+// reservationAcceptanceFundingTxPipeline is a lazily-scheduled, bounded,
+// oldest-first funding-transaction lookup pipeline returned by
+// fetchReservationAcceptanceFundingTxs. A naive worker pool launches every
+// candidate's GetTransaction/GetTransactionConfirmations call
+// unconditionally, so a caller that only needs the first fully eligible
+// candidate -- the common case, since candidates are examined oldest-first
+// -- still pays for fetching every other pending candidate's funding
+// transaction. This pipeline instead hands results back one index at a
+// time via next(), and stop() tells it to abandon every lookup it has not
+// yet dispatched, so a caller that stops asking for more results after an
+// early match never causes those later fetches to happen at all.
+type reservationAcceptanceFundingTxPipeline struct {
+	// results holds one buffered (capacity 1) channel per candidate index.
+	// Buffering lets a fetch that completes after stop() has already been
+	// called still deliver its result and exit, instead of blocking
+	// forever on a receiver that will never call next() for that index.
+	results []chan reservationAcceptanceFundingTxLookup
+
+	stopCh   chan struct{}
+	stopOnce sync.Once
+}
+
+// next blocks until candidate index i's funding-transaction lookup
+// completes and returns its result. Callers MUST consume indexes in
+// increasing order (0, 1, 2, ...) -- the same oldest-first order
+// candidates was given to fetchReservationAcceptanceFundingTxs in. Because
+// each candidate's result is delivered on its own per-index channel, a
+// later candidate's fetch racing ahead and completing first can never be
+// mistaken for an earlier candidate's result.
+func (p *reservationAcceptanceFundingTxPipeline) next(
+	i int,
+) reservationAcceptanceFundingTxLookup {
+	return <-p.results[i]
+}
+
+// stop tells the pipeline to abandon every funding-transaction lookup not
+// already dispatched. It is idempotent and safe to call even after every
+// candidate has already been consumed via next(), or not at all. A lookup
+// already in flight when stop is called is not interrupted -- it still
+// runs to completion or hits its own
+// reservationAcceptanceFundingTxLookupTimeout -- so calling stop bounds
+// the number of "wasted" fetches past the caller's answer to at most
+// reservationAcceptanceFundingTxLookupWorkers - 1, no matter how many
+// candidates remain unexamined.
+func (p *reservationAcceptanceFundingTxPipeline) stop() {
+	p.stopOnce.Do(func() { close(p.stopCh) })
+}
+
+// fetchReservationAcceptanceFundingTxs starts looking up the funding
+// transaction and its confirmation count for every candidate in
+// candidates, in oldest-first order, and returns a
+// reservationAcceptanceFundingTxPipeline the caller pulls results from one
+// index at a time via next(). At most
+// reservationAcceptanceFundingTxLookupWorkers lookups ever run
+// concurrently, exactly as the previous eager implementation enforced --
+// but unlike that implementation, which launched every candidate's fetch
+// before the caller could inspect any result, fetches here are dispatched
+// lazily and stop altogether the moment the caller calls the returned
+// pipeline's stop() (see findReservationAcceptanceCandidate, which does so
+// via defer once it either finds a fully eligible candidate or exhausts
+// every candidate). For a wallet with maxReservationAcceptanceCandidatesPerRun
+// (50) pending candidates whose oldest one turns out to be eligible, this
+// bounds the number of Bitcoin RPCs issued to roughly
+// reservationAcceptanceFundingTxLookupWorkers instead of unconditionally
+// paying for all 50, while still tolerating one slow or unhealthy
+// candidate exactly as before (see
+// reservationAcceptanceFundingTxLookupTimeout).
 func (rat *ReservationAcceptanceTask) fetchReservationAcceptanceFundingTxs(
 	candidates []*reservationAcceptanceFundingTxCandidate,
-) []reservationAcceptanceFundingTxLookup {
-	lookups := make([]reservationAcceptanceFundingTxLookup, len(candidates))
+) *reservationAcceptanceFundingTxPipeline {
+	pipeline := &reservationAcceptanceFundingTxPipeline{
+		results: make([]chan reservationAcceptanceFundingTxLookup, len(candidates)),
+		stopCh:  make(chan struct{}),
+	}
+	for i := range pipeline.results {
+		pipeline.results[i] = make(chan reservationAcceptanceFundingTxLookup, 1)
+	}
 	if len(candidates) == 0 {
-		return lookups
+		return pipeline
 	}
-
-	indexes := make(chan int, len(candidates))
-	for i := range candidates {
-		indexes <- i
-	}
-	close(indexes)
 
 	workers := reservationAcceptanceFundingTxLookupWorkers
 	if workers > len(candidates) {
 		workers = len(candidates)
 	}
+	dispatchSlots := make(chan struct{}, workers)
 
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	for w := 0; w < workers; w++ {
-		go func() {
-			defer wg.Done()
-			for i := range indexes {
-				fundingTxHash := candidates[i].event.FundingTxHash
+	// The dispatcher below walks candidates in their given (oldest-first)
+	// order, acquiring a dispatchSlots slot before starting each one's
+	// fetch, so at most `workers` fetches ever run concurrently -- the
+	// same bound the previous eager implementation enforced with its
+	// shared worker goroutines. Unlike that implementation, it checks
+	// pipeline.stopCh before every dispatch, so it stops handing out new
+	// candidates the moment the caller calls stop(), instead of having
+	// already started every candidate's fetch before the caller could
+	// react.
+	go func() {
+		for i, candidate := range candidates {
+			select {
+			case dispatchSlots <- struct{}{}:
+			case <-pipeline.stopCh:
+				return
+			}
+
+			go func(i int, candidate *reservationAcceptanceFundingTxCandidate) {
+				defer func() { <-dispatchSlots }()
+
+				var lookup reservationAcceptanceFundingTxLookup
+				fundingTxHash := candidate.event.FundingTxHash
 
 				fundingTx, err := rat.btcChain.GetTransaction(fundingTxHash)
 				if err != nil {
-					lookups[i].fundingTxErr = err
-					continue
+					lookup.fundingTxErr = err
+					pipeline.results[i] <- lookup
+					return
 				}
-				lookups[i].fundingTx = fundingTx
+				lookup.fundingTx = fundingTx
 
 				fetchCtx, cancelFetchCtx := context.WithTimeout(
 					context.Background(),
-					reservationAcceptanceFundingTxLookupTimeout,
+					rat.fundingTxLookupTimeout,
 				)
 				confirmations, err := rat.btcChain.GetTransactionConfirmations(
 					fetchCtx,
@@ -810,16 +900,18 @@ func (rat *ReservationAcceptanceTask) fetchReservationAcceptanceFundingTxs(
 				)
 				cancelFetchCtx()
 				if err != nil {
-					lookups[i].confirmationsErr = err
-					continue
+					lookup.confirmationsErr = err
+					pipeline.results[i] <- lookup
+					return
 				}
-				lookups[i].confirmations = confirmations
-			}
-		}()
-	}
-	wg.Wait()
+				lookup.confirmations = confirmations
 
-	return lookups
+				pipeline.results[i] <- lookup
+			}(i, candidate)
+		}
+	}()
+
+	return pipeline
 }
 
 // hasPendingAction reports whether the on-chain reservation action

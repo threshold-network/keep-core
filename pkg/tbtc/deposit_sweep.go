@@ -113,8 +113,8 @@ type depositSweepAction struct {
 	btcChain bitcoin.Chain
 
 	// ethereumNetwork is the network this action's node is connected to.
-	// Combined with proposalProcessingStartBlock, it determines whether
-	// the reservations feature is live for this action via
+	// Combined with coordinationBlock, it determines whether the
+	// reservations feature is live for this action via
 	// ReservationsActivationBlock - see the call site in execute().
 	ethereumNetwork ethereum.Network
 
@@ -124,6 +124,21 @@ type depositSweepAction struct {
 	proposal                     *DepositSweepProposal
 	proposalProcessingStartBlock uint64
 	proposalExpiryBlock          uint64
+	// coordinationBlock is the coordination block of the coordination
+	// round that produced proposal - the same block the leader used in
+	// coordinationExecutor.executeLeaderRoutine to compute
+	// CoordinationProposalRequest.ReservationsActive. It is derived
+	// from proposalProcessingStartBlock (see newDepositSweepAction)
+	// rather than passed in directly, because proposalProcessingStartBlock
+	// - not the coordination block - is the value threaded through the
+	// node's proposal-handling call path
+	// (processCoordinationResult -> handleDepositSweepProposal). It must
+	// be used (rather than proposalProcessingStartBlock itself, a
+	// strictly later block - the end of the coordination window) so
+	// that this follower's ReservationsActivationBlock comparison in
+	// execute() agrees with the leader's, at the same block height, for
+	// the same round.
+	coordinationBlock uint64
 
 	requiredFundingTxConfirmations   uint
 	signingTimeoutSafetyMarginBlocks uint64
@@ -149,6 +164,7 @@ func newDepositSweepAction(
 	proposalExpiryBlock uint64,
 	waitForBlockFn waitForBlockFn,
 	transactionMonitor *transactionMonitor,
+	coordinationBlock uint64,
 ) *depositSweepAction {
 	transactionExecutor := newWalletTransactionExecutor(
 		btcChain,
@@ -158,6 +174,19 @@ func newDepositSweepAction(
 	)
 
 	transactionExecutor.setTransactionMonitor(transactionMonitor)
+
+	// coordinationBlock is passed in explicitly by the caller (ultimately
+	// processCoordinationResult's result.window.coordinationBlock), rather
+	// than being recovered here by reversing the fixed
+	// coordinationDurationBlocks offset from proposalProcessingStartBlock:
+	// that reversal is an unguarded uint64 subtraction that underflows to
+	// approximately 2^64 whenever proposalProcessingStartBlock is smaller
+	// than coordinationDurationBlocks, which would silently flip
+	// reservationsActive to true and reject legitimate reserved deposits.
+	// Passing the real value through avoids the arithmetic entirely and
+	// keeps this follower's activation check aligned with the leader's,
+	// which is evaluated at the coordination block itself in
+	// coordinationExecutor.executeLeaderRoutine.
 
 	return &depositSweepAction{
 		logger:                           logger,
@@ -169,6 +198,7 @@ func newDepositSweepAction(
 		proposal:                         proposal,
 		proposalProcessingStartBlock:     proposalProcessingStartBlock,
 		proposalExpiryBlock:              proposalExpiryBlock,
+		coordinationBlock:                coordinationBlock,
 		requiredFundingTxConfirmations:   DepositSweepRequiredFundingTxConfirmations,
 		signingTimeoutSafetyMarginBlocks: depositSweepSigningTimeoutSafetyMarginBlocks,
 		broadcastTimeout:                 depositSweepBroadcastTimeout,
@@ -194,7 +224,18 @@ func (dsa *depositSweepAction) execute() error {
 	// ValidateDepositSweepProposal on the real per-network activation
 	// state, not on whether the ReservationParameters chain call happens
 	// to succeed - see ReservationsActivationBlock's doc comment.
-	reservationsActive := dsa.proposalProcessingStartBlock >= ReservationsActivationBlock(dsa.ethereumNetwork)
+	//
+	// It is derived from dsa.coordinationBlock (the block at which the
+	// coordination round started and the leader made its own
+	// ReservationsActive determination via
+	// coordinationExecutor.executeLeaderRoutine), not from
+	// dsa.proposalProcessingStartBlock. proposalProcessingStartBlock is
+	// the coordination window's end block - strictly later than the
+	// coordination block - so using it here would let the leader and a
+	// follower evaluate ReservationsActivationBlock at two different
+	// block heights for the same coordination round and potentially
+	// disagree about whether reservations are active.
+	reservationsActive := dsa.coordinationBlock >= ReservationsActivationBlock(dsa.ethereumNetwork)
 
 	validatedDeposits, err := ValidateDepositSweepProposal(
 		validateProposalLogger,
