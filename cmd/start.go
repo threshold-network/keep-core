@@ -9,8 +9,8 @@ import (
 
 	"github.com/keep-network/keep-core/build"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
-	"github.com/keep-network/keep-core/pkg/keepcommon/persistence"
 	"github.com/keep-network/keep-core/pkg/operator"
+	"github.com/keep-network/keep-core/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/storage"
 
 	"github.com/spf13/cobra"

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/chain"
-	commonlocal "github.com/keep-network/keep-core/pkg/keepcommon/chain/local"
+	commonlocal "github.com/keep-network/keep-core/pkg/chain/local"
 	"github.com/keep-network/keep-core/pkg/operator"
 )
 

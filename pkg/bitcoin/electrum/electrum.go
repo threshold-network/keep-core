@@ -18,7 +18,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/internal/byteutils"
-	"github.com/keep-network/keep-core/pkg/keepcommon/wrappers"
+	"github.com/keep-network/keep-core/pkg/wrappers"
 )
 
 var (

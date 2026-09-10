@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/keep-network/keep-core/pkg/keepcommon/generate"
+	"github.com/keep-network/keep-core/pkg/generate"
 )
 
 const (

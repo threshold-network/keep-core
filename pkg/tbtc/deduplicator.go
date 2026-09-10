@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/keepcommon/cache"
+	"github.com/keep-network/keep-core/pkg/cache"
 )
 
 const (

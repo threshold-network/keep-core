@@ -18,9 +18,9 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen/contract"
 	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-core/pkg/keepcommon/rate"
 	"github.com/keep-network/keep-core/pkg/maintainer"
 	"github.com/keep-network/keep-core/pkg/operator"
+	"github.com/keep-network/keep-core/pkg/rate"
 )
 
 // Definitions of contract names.

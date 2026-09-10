@@ -14,9 +14,9 @@ import (
 	commonEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/keepcommon/cmd/flag"
-	"github.com/keep-network/keep-core/pkg/keepcommon/rate"
 	"github.com/keep-network/keep-core/pkg/maintainer/spv"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
+	"github.com/keep-network/keep-core/pkg/rate"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 

@@ -10,7 +10,7 @@ import (
 	"github.com/keep-network/keep-core/build"
 	"github.com/keep-network/keep-core/cmd"
 	"github.com/keep-network/keep-core/config"
-	"github.com/keep-network/keep-core/pkg/keepcommon/logging"
+	"github.com/keep-network/keep-core/pkg/logging"
 )
 
 //go:generate make gen_proto

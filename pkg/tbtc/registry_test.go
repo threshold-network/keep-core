@@ -11,7 +11,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 
 	"github.com/keep-network/keep-core/internal/testutils"
-	"github.com/keep-network/keep-core/pkg/keepcommon/persistence"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 func TestWalletRegistry_RegisterSigner(t *testing.T) {

@@ -19,7 +19,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/keepcommon/cache"
+	"github.com/keep-network/keep-core/pkg/cache"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"

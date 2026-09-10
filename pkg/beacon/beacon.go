@@ -14,8 +14,8 @@ import (
 	beaconchain "github.com/keep-network/keep-core/pkg/beacon/chain"
 	"github.com/keep-network/keep-core/pkg/beacon/event"
 	"github.com/keep-network/keep-core/pkg/beacon/registry"
-	"github.com/keep-network/keep-core/pkg/keepcommon/persistence"
 	"github.com/keep-network/keep-core/pkg/net"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 var logger = log.Logger("keep-beacon")

@@ -2,7 +2,7 @@ package event
 
 import (
 	"encoding/hex"
-	"github.com/keep-network/keep-core/pkg/keepcommon/cache"
+	"github.com/keep-network/keep-core/pkg/cache"
 	"math/big"
 	"testing"
 	"time"

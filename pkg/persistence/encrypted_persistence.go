@@ -3,7 +3,7 @@ package persistence
 import (
 	"crypto/sha256"
 
-	"github.com/keep-network/keep-core/pkg/keepcommon/encryption"
+	"github.com/keep-network/keep-core/pkg/encryption"
 )
 
 // KeyLength represents the byte size of the key.

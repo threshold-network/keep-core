@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/keep-network/keep-core/pkg/cache"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
-	"github.com/keep-network/keep-core/pkg/keepcommon/cache"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/operator"
 )

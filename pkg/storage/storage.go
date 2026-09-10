@@ -5,7 +5,7 @@ import (
 	"path"
 	"path/filepath"
 
-	"github.com/keep-network/keep-core/pkg/keepcommon/persistence"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 // Config stores meta-info about keeping data on disk

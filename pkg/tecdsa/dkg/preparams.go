@@ -13,7 +13,7 @@ import (
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/generator"
-	"github.com/keep-network/keep-core/pkg/keepcommon/persistence"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 // PreParams represents tECDSA DKG pre-parameters that were not yet consumed

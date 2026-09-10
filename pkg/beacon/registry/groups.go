@@ -11,7 +11,7 @@ import (
 	beaconchain "github.com/keep-network/keep-core/pkg/beacon/chain"
 	"github.com/keep-network/keep-core/pkg/beacon/dkg"
 
-	"github.com/keep-network/keep-core/pkg/keepcommon/persistence"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 // Groups represents a collection of Keep groups in which the given
