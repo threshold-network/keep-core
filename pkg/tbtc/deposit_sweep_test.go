@@ -490,6 +490,48 @@ func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 	}
 }
 
+// TestValidateDepositSweepProposal_FailsClosedOnReservationParametersError
+// exercises the fail-closed posture required by reservationsActive's doc
+// comment: when reservationsActive is true, a ReservationParameters
+// failure must hard-fail proposal validation, not silently degrade to a
+// reservations-inactive posture. This is the mirror image of
+// TestValidateDepositSweepProposal_SweepFeeSoftCheck above, which
+// deliberately passes reservationsActive=false to dodge this same stub
+// chain's always-erroring ReservationParameters.
+func TestValidateDepositSweepProposal_FailsClosedOnReservationParametersError(t *testing.T) {
+	var walletPublicKeyHash [20]byte
+	stubChain := depositSweepFeeCheckChain{}
+	btcChain := newLocalBitcoinChain()
+
+	proposal := &DepositSweepProposal{
+		SweepTxFee: big.NewInt(1),
+	}
+
+	logger := &capturingLogger{}
+
+	_, err := ValidateDepositSweepProposal(
+		logger,
+		walletPublicKeyHash,
+		proposal,
+		0,
+		true,
+		stubChain,
+		btcChain,
+	)
+	if err == nil {
+		t.Fatal(
+			"expected validation to fail closed when reservationsActive " +
+				"is true and ReservationParameters errors",
+		)
+	}
+	if !strings.Contains(err.Error(), "reservation parameters") {
+		t.Errorf(
+			"expected error to mention reservation parameters, got: [%v]",
+			err,
+		)
+	}
+}
+
 // TestValidateDepositSweepProposal_RejectsReservedDeposit exercises the
 // follower-side defense-in-depth check: a deposit revealed against the
 // reservation vault must be rejected here even if the leader (running a

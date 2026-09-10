@@ -127,17 +127,12 @@ type depositSweepAction struct {
 	// coordinationBlock is the coordination block of the coordination
 	// round that produced proposal - the same block the leader used in
 	// coordinationExecutor.executeLeaderRoutine to compute
-	// CoordinationProposalRequest.ReservationsActive. It is derived
-	// from proposalProcessingStartBlock (see newDepositSweepAction)
-	// rather than passed in directly, because proposalProcessingStartBlock
-	// - not the coordination block - is the value threaded through the
-	// node's proposal-handling call path
-	// (processCoordinationResult -> handleDepositSweepProposal). It must
-	// be used (rather than proposalProcessingStartBlock itself, a
-	// strictly later block - the end of the coordination window) so
-	// that this follower's ReservationsActivationBlock comparison in
-	// execute() agrees with the leader's, at the same block height, for
-	// the same round.
+	// CoordinationProposalRequest.ReservationsActive. It must be used
+	// (rather than proposalProcessingStartBlock itself, a strictly
+	// later block - the end of the coordination window) so that this
+	// follower's ReservationsActivationBlock comparison in execute()
+	// agrees with the leader's, at the same block height, for the
+	// same round.
 	coordinationBlock uint64
 
 	requiredFundingTxConfirmations   uint
@@ -389,9 +384,9 @@ func ValidateDepositSweepProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *DepositSweepProposal,
 	requiredFundingTxConfirmations uint,
-	// reservationsActive reports whether the reservations feature is
-	// live for the network and block this validation is running at,
-	// i.e. ReservationsActivationBlock(network) <= currentBlock. It
+	// reservationsActive reports whether reservations were live at the
+	// coordination block for this proposal round, i.e.
+	// ReservationsActivationBlock(network) <= coordinationBlock. It
 	// must be derived from that comparison, not from whether
 	// ReservationParameters below happens to succeed - see
 	// ReservationsActivationBlock's doc comment. When false, the
