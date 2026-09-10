@@ -9,7 +9,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/operator"
 )
 
-// TODO: Consider moving the local `Signer` out of `keep-common` to this file.
+// TODO: Consider moving the local `Signer` out of `pkg/chain/local` to this file.
 type signer struct {
 	*commonlocal.Signer
 }

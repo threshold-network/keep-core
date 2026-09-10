@@ -11,7 +11,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/operator"
 )
 
-// TODO: Consider moving the `EthereumSigner` out of `keep-common` to this file.
+// TODO: Consider moving the `EthereumSigner` out of `ethutil` to this file.
 type signer struct {
 	*ethutil.EthereumSigner
 }
