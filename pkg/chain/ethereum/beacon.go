@@ -415,11 +415,13 @@ func (bc *BeaconChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool
 	//
 	// Peers whose provider holds tBTC eligible stake would keep their admission
 	// through the tBTC branch; the ones that would lose it are those this
-	// branch alone carries. How quickly that would surface as disconnections is
-	// not a fixed interval: the watchtower re-checks connected peers
-	// periodically, but what follows also depends on what each node's own RPC
-	// endpoint reports, on the checks running asynchronously per peer, and on
-	// how connection closure and its queues behave.
+	// branch alone carries. The watchtower sweeps every connected peer once per
+	// libp2p.FirewallCheckTick and drops the ones that no longer validate. That
+	// constant is the nominal interval between sweeps, not a bound on how long
+	// a peer that stopped being recognized stays connected: a sweep re-reads
+	// this predicate through the node's own RPC endpoint, the per-peer checks
+	// run asynchronously, and closing the connection is a further step behind
+	// them.
 	hasStakeDelegation, err := bc.admission.HasStakeDelegation(
 		stakingProvider,
 	)

@@ -147,9 +147,13 @@ func TTokens(amount int64) *big.Int {
 	)
 }
 
-// Key returns the chain private key derived from the given index. Deriving
-// keys from a fixed scalar keeps every address in a test run reproducible;
-// these keys are synthetic and correspond to no address holding anything.
+// Key returns the chain private key whose scalar is the given index. These are
+// the canonical low-scalar keys: public knowledge rather than secrets, with
+// addresses that exist on mainnet and carry live nonces. That is harmless here
+// because the only endpoint these keys are ever offered to is the local one
+// this package serves - the configured chain ID is mainnet's, so it is the
+// endpoint and nothing else that keeps them off a live chain. All the fixture
+// asks of them is that they be distinct and reproducible across runs.
 func Key(t *testing.T, index int64) *ecdsa.PrivateKey {
 	t.Helper()
 

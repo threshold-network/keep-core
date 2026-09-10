@@ -177,8 +177,10 @@ func TestAdmission_GenuineDenialIsCached(t *testing.T) {
 
 // readsThroughFault is the trace a validation produces when the given read is
 // the one that fails: everything up to that read, then that read twice. The
-// repeat is the binding's error resolver replaying the call to ask the chain
-// for a revert reason, which is why a failing read costs two calls and a
+// repeat is keep-common's error resolver, not anything go-ethereum does: the
+// generated contract wrapper hands a failed call to ErrorResolver.ResolveError,
+// which re-invokes the same method on the same contract to decode a revert
+// reason out of the answer. A failing read therefore costs two calls where a
 // successful one costs a single call.
 func readsThroughFault(
 	reads []ethtest.ExpectedCall,

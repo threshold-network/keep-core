@@ -219,13 +219,19 @@ func admissionPolicy(applications []firewall.Application) net.Firewall {
 	)
 }
 
+// connectNetwork opens the network provider. The indirection exists so the
+// admission policy the client hands the network layer can be read back without
+// a host behind it - see tbtcAdmissionReader in pkg/chain/ethereum for the same
+// pattern on the chain reads.
+var connectNetwork = libp2p.Connect
+
 func initializeNetwork(
 	ctx context.Context,
 	applications []firewall.Application,
 	operatorPrivateKey *operator.PrivateKey,
 	blockCounter chain.BlockCounter,
 ) (net.Provider, error) {
-	netProvider, err := libp2p.Connect(
+	netProvider, err := connectNetwork(
 		ctx,
 		clientConfig.LibP2P,
 		operatorPrivateKey,

@@ -54,10 +54,15 @@ const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
 )
 
-// tbtcAdmissionReader narrows the WalletRegistry down to the two reads that
-// decide whether a peer is admitted to the network. *ecdsacontract.WalletRegistry
-// satisfies it as it stands; the indirection exists so the admission predicate
-// can be exercised without a chain behind it.
+// tbtcAdmissionReader narrows the WalletRegistry down to the two reads the
+// admission predicate decides on. *ecdsacontract.WalletRegistry satisfies it as
+// it stands; the indirection exists so the predicate can be exercised without a
+// chain behind it.
+//
+// EligibleStake is not admission's alone, though: TbtcChain.EligibleStake is
+// routed through this same seam, and the heartbeat path reads a staking
+// provider's stake through that accessor to decide whether the operator is
+// unstaking. A reader substituted here is therefore answering both.
 type tbtcAdmissionReader interface {
 	OperatorToStakingProvider(operator common.Address) (common.Address, error)
 	EligibleStake(stakingProvider common.Address) (*big.Int, error)
@@ -337,6 +342,17 @@ func (tc *TbtcChain) Staking() (chain.Address, error) {
 // The leading FALSE is the static allow list, which production builds empty.
 // This method contributes the third disjunct only; BeaconChain.IsRecognized
 // contributes the second and deliberately keeps the rolesOf predicate.
+//
+// Two things the disjunction does are not visible in that formula. It is
+// evaluated left to right, and an application that fails ends it outright
+// instead of deferring to the next disjunct, so an identity only this branch
+// would admit is refused - with an error rather than a non-recognition -
+// whenever the beacon branch's own reads are failing. Beacon-side RPC health is
+// therefore a hard dependency of tBTC admission and not an independent branch.
+// And a genuine non-recognition is remembered for
+// firewall.NegativeIsRecognizedCachePeriod, so a provider authorized after
+// being turned away stays refused, with nothing re-read, until that entry
+// expires.
 //
 // Mapping an operator to a staking provider is not by itself a boundary, since
 // registering an operator is permissionless on both registries. The boundary is

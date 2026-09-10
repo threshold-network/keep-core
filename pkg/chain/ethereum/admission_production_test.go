@@ -60,8 +60,8 @@ func connectAdmissionFixture(t *testing.T) (
 
 // caseOperatorKey returns the operator public key of one admission table
 // identity, derived with the same conversion the client applies to its own
-// key. These are synthetic keys; no address holding anything on a live chain
-// is involved.
+// key. See ethtest.Key for what those keys are and why deriving identities
+// from them costs nothing here.
 func caseOperatorKey(
 	t *testing.T,
 	admissionCase ethtest.AdmissionCase,
