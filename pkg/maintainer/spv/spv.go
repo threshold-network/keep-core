@@ -512,7 +512,7 @@ func (c *proofInfoCache) load(
 // in the same pass, and pairing a stale tip with a freshly-read transaction
 // confirmation count would derive the wrong proof start block.
 // currentBlockHeight is therefore re-fetched on every call.
-func (c *proofInfoCache) currentBlockHeight(
+func currentBlockHeight(
 	btcChain bitcoin.Chain,
 ) (uint, error) {
 	latestBlockHeight, err := btcChain.GetLatestBlockHeight()
@@ -576,7 +576,7 @@ func getProofInfo(
 	if err := cache.load(spvChain, btcDiffChain); err != nil {
 		return 0, 0, proofSkipNone, err
 	}
-	latestBlockHeight, err := cache.currentBlockHeight(btcChain)
+	latestBlockHeight, err := currentBlockHeight(btcChain)
 	if err != nil {
 		return 0, 0, proofSkipNone, err
 	}
