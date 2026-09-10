@@ -345,7 +345,18 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 			return StaleDepositResolutionNotified, nil
 		}
 
-		if now-notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds()) {
+		if now < notifiedAt || now-notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds()) {
+			// now < notifiedAt is treated the same as "interval not yet
+			// elapsed" rather than falling through to retry: now is a
+			// caller-supplied, not-guaranteed-monotonic tick token (see
+			// getWalletForTick's doc comment), so without this guard a
+			// clock adjustment or an out-of-order now would underflow
+			// the subtraction below to a huge uint32 and fail OPEN -
+			// resubmitting immediately instead of waiting out the
+			// backoff. Staying in Keep is the safe direction for an
+			// ambiguous time comparison; a genuine elapsed interval will
+			// still be observed on a later tick with a larger now.
+			//
 			// NotifyStaleReservedDeposit's generated chain binding
 			// returns as soon as the transaction is submitted, not once
 			// it mines (mining is handled by a background ForceMining

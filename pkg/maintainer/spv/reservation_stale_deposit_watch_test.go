@@ -389,6 +389,67 @@ func TestReservationStaleDepositWatcher_NotifiedNotConfirmedIsRetried(t *testing
 	}
 }
 
+// TestReservationStaleDepositWatcher_RenotifyBackoffSurvivesNowBeforeNotifiedAt
+// is a regression test for an unguarded uint32 subtraction: now is a
+// caller-supplied, not-guaranteed-monotonic tick token (see
+// getWalletForTick's doc comment), so a tick whose now is smaller than the
+// deposit's recorded notifiedAt must not underflow now-notifiedAt to a huge
+// value and treat the backoff window as already elapsed - that would
+// resubmit NotifyStaleReservedDeposit immediately instead of waiting out
+// actionTimeoutRenotifyInterval.
+func TestReservationStaleDepositWatcher_RenotifyBackoffSurvivesNowBeforeNotifiedAt(t *testing.T) {
+	spvChain := newLocalChain()
+
+	key := reservationDepositKey(0xB018)
+	wallet := walletPKH()
+	spvChain.setReservedDeposit(key, wallet, true)
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{
+		State: tbtc.StateUnknown,
+	})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		RequestNonce: 1,
+	})
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStatePending,
+		TimeoutAt: 100,
+	})
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{})
+
+	// First tick: submit the notification, recording notifiedAt = 5_000.
+	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
+	}
+
+	// A later call with now < notifiedAt (e.g. a clock adjustment, or an
+	// out-of-order tick). Without the now < notifiedAt guard,
+	// now-notifiedAt underflows to approximately 2^32 and is never less
+	// than the renotify interval, so the code falls through and
+	// resubmits immediately. The guard must keep this call in the
+	// backoff window instead.
+	res, err = watcher.CheckStaleReservedDeposit(key, 4_000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res != StaleDepositResolutionKeep {
+		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
+	}
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 1 {
+		t.Fatalf(
+			"expected now < notifiedAt to be treated as still within the "+
+				"backoff window (no resubmission), got %d total submissions",
+			len(calls),
+		)
+	}
+}
+
 func TestReservationStaleDepositWatcher_NilDepositKeyError(t *testing.T) {
 	spvChain := newLocalChain()
 
