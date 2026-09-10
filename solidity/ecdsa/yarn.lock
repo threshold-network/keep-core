@@ -1412,7 +1412,6 @@ __metadata:
   resolution: "@keep-network/ecdsa@workspace:."
   dependencies:
     "@keep-network/hardhat-helpers": "npm:^0.6.0-pre.15"
-    "@keep-network/hardhat-local-networks-config": "npm:^0.1.0-pre.4"
     "@keep-network/random-beacon": "npm:development"
     "@keep-network/sortition-pools": "npm:^2.0.0-pre.16"
     "@nomicfoundation/hardhat-chai-matchers": "npm:^1.0.6"
@@ -1432,6 +1431,7 @@ __metadata:
     "@types/node": "npm:^17.0.10"
     chai: "npm:^4.3.4"
     chai-as-promised: "npm:^7.1.1"
+    deepmerge: "npm:^4.2.2"
     eslint: "npm:^7.32.0"
     ethers: "npm:^5.5.3"
     fs-extra: "npm:^11.2.0"
@@ -1449,6 +1449,7 @@ __metadata:
     ts-node: "npm:^10.4.0"
     typechain: "npm:^6.1.0"
     typescript: "npm:^4.5.4"
+    untildify: "npm:^4.0.0"
   languageName: unknown
   linkType: soft
 
@@ -1463,18 +1464,6 @@ __metadata:
     hardhat: ^2.10.0
     hardhat-deploy: ^0.11.11
   checksum: 10c0/584803efa4aac6b81f8be9e24dab48ecd838adb33d8d54baeb4394ba92210d6cba40e12317604b25452fb4028cb2815194681469a526bea4a304749110854bf2
-  languageName: node
-  linkType: hard
-
-"@keep-network/hardhat-local-networks-config@npm:^0.1.0-pre.4":
-  version: 0.1.0-pre.4
-  resolution: "@keep-network/hardhat-local-networks-config@npm:0.1.0-pre.4"
-  dependencies:
-    deepmerge: "npm:^4.2.2"
-    untildify: "npm:^4.0.0"
-  peerDependencies:
-    hardhat: ^2.0.8
-  checksum: 10c0/ef718645d44b320be3c09c6d394b2a320d2487b5a54e96b21cfa55cff6269aa2749d5921ee8b66ed014f70a0cb90cfe2b70e196a18d1baf77a3b29d4bdf209cc
   languageName: node
   linkType: hard
 

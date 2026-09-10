@@ -1511,24 +1511,11 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@keep-network/hardhat-local-networks-config@npm:^0.1.0-pre.0":
-  version: 0.1.0-pre.0
-  resolution: "@keep-network/hardhat-local-networks-config@npm:0.1.0-pre.0"
-  dependencies:
-    deepmerge: "npm:^4.2.2"
-    untildify: "npm:^4.0.0"
-  peerDependencies:
-    hardhat: ^2.0.8
-  checksum: 10c0/05d1a2764c41b9701c3031bc467b9571081c53f54a761c7c5d25c9cd31162af980dfd3a18f9bc8ae3696f93e88e8effa64c67e3081ffe28a68914fa930bf3a93
-  languageName: node
-  linkType: hard
-
 "@keep-network/random-beacon@workspace:.":
   version: 0.0.0-use.local
   resolution: "@keep-network/random-beacon@workspace:."
   dependencies:
     "@keep-network/hardhat-helpers": "npm:^0.6.0-pre.15"
-    "@keep-network/hardhat-local-networks-config": "npm:^0.1.0-pre.0"
     "@keep-network/sortition-pools": "npm:^2.0.0-pre.16"
     "@nomiclabs/hardhat-ethers": "npm:^2.0.6"
     "@nomiclabs/hardhat-etherscan": "npm:^3.1.0"
@@ -1545,6 +1532,7 @@ __metadata:
     "@types/mocha": "npm:^9.0.0"
     "@types/node": "npm:^16.10.5"
     chai: "npm:^4.3.4"
+    deepmerge: "npm:^4.2.2"
     eslint: "npm:^7.32.0"
     ethereum-waffle: "npm:^3.4.0"
     ethers: "npm:^5.4.7"
@@ -1562,6 +1550,7 @@ __metadata:
     ts-node: "npm:^10.2.1"
     typechain: "npm:^7.0.0"
     typescript: "npm:^4.4.3"
+    untildify: "npm:^4.0.0"
   languageName: unknown
   linkType: soft
 
