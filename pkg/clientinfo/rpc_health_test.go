@@ -14,7 +14,6 @@ import (
 	log2 "github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	keepclientinfo "github.com/keep-network/keep-core/pkg/keepcommon/clientinfo"
 )
 
 // --- fakes ---
@@ -520,7 +519,7 @@ func TestRPCHealthChecker_StartIdempotent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	eth := &fakeEthereumRPC{currentBlock: 12345}
 	btc := &fakeBitcoinChain{latestHeight: 800000}
 	checker := NewRPCHealthChecker(registry, eth, btc, time.Hour)
@@ -576,7 +575,7 @@ func TestRPCHealthChecker_GoroutinesStopOnCancel(t *testing.T) {
 	eth := &countingEthereumRPC{fakeEthereumRPC: fakeEthereumRPC{currentBlock: 100}, calls: &ethCalls}
 	btc := &countingBitcoinChain{fakeBitcoinChain: fakeBitcoinChain{latestHeight: 100}, calls: &btcCalls}
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	checker := NewRPCHealthChecker(registry, eth, btc, 5*time.Millisecond)
 	checker.Start(ctx)
 

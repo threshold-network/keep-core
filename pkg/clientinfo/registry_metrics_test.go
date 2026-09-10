@@ -1,11 +1,12 @@
 package clientinfo
 
 import (
+	"context"
 	"testing"
 )
 
 func TestRegistryNewMetricGauge(t *testing.T) {
-	registry := NewRegistry()
+	registry := newRegistry(context.Background())
 
 	gauge, err := registry.NewMetricGauge("test-gauge")
 	if err != nil {
@@ -22,7 +23,7 @@ func TestRegistryNewMetricGauge(t *testing.T) {
 }
 
 func TestRegistryNewMetricGaugeObserver(t *testing.T) {
-	registry := NewRegistry()
+	registry := newRegistry(context.Background())
 
 	input := func() float64 {
 		return 1
@@ -43,7 +44,7 @@ func TestRegistryNewMetricGaugeObserver(t *testing.T) {
 }
 
 func TestRegistryNewMetricInfo(t *testing.T) {
-	registry := NewRegistry()
+	registry := newRegistry(context.Background())
 
 	if _, err := registry.NewMetricInfo("test-info", []Label{}); err == nil {
 		t.Fatalf("should fail when creating info without labels")

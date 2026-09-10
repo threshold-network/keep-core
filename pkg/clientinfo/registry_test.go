@@ -1,6 +1,7 @@
 package clientinfo
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,7 +17,7 @@ var registry *Registry
 const port = 9799
 
 func TestMain(m *testing.M) {
-	registry = NewRegistry()
+	registry = newRegistry(context.Background())
 	registry.EnableServer(port)
 
 	os.Exit(m.Run())

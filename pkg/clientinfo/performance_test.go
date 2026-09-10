@@ -8,8 +8,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	keepclientinfo "github.com/keep-network/keep-core/pkg/keepcommon/clientinfo"
 )
 
 // TestConcurrentCounterIncrement tests that concurrent counter increments
@@ -18,7 +16,7 @@ func TestConcurrentCounterIncrement(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	const (
@@ -52,7 +50,7 @@ func TestConcurrentCounterDifferentMetrics(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	const (
@@ -116,7 +114,7 @@ func TestConcurrentDurationRecording(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	const (
@@ -170,7 +168,7 @@ func TestConcurrentGaugeSet(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	const (
@@ -206,7 +204,7 @@ func TestConcurrentDifferentOperations(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	const (
@@ -265,7 +263,7 @@ func TestHistogramBucketPlacement(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	metricName := "test_duration_seconds"
@@ -325,7 +323,7 @@ func TestMetricsInitialization(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	// Test counters
@@ -363,7 +361,7 @@ func TestMetricsInitialization(t *testing.T) {
 func TestContextCancelation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	// Cancel context immediately
@@ -431,7 +429,7 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	expectedCounters := []string{MetricFirewallOnChainChecksTotal}
@@ -468,7 +466,7 @@ func TestDepositSweepProofSubmissionCountersRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	expectedCounters := []string{
@@ -510,7 +508,7 @@ func TestSpvProofSkipCountersRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	expectedCounters := []string{
@@ -550,7 +548,7 @@ func TestDepositSweepMetricsRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
 	counters := []string{

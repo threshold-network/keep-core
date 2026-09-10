@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	keepclientinfo "github.com/keep-network/keep-core/pkg/keepcommon/clientinfo"
 )
 
 func TestRPCHealthMetricTransitions(t *testing.T) {
@@ -15,7 +13,7 @@ func TestRPCHealthMetricTransitions(t *testing.T) {
 	eth := &fakeEthereumRPC{currentBlock: 100}
 	btc := &fakeBitcoinChain{latestHeight: 100}
 	checker := newTestChecker(eth, btc)
-	checker.registry = &Registry{keepclientinfo.NewRegistry(), ctx}
+	checker.registry = newRegistry(ctx)
 	checker.registerMetrics()
 	sources := checker.healthSources()
 	for name := range sources {
@@ -121,7 +119,7 @@ func TestEthereumProbeDeadline(t *testing.T) {
 func TestMaintainerMetricsRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	metrics := NewPerformanceMetrics(ctx, registry)
 	defer metrics.Stop()
 	for _, name := range []string{
