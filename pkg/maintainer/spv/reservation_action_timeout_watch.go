@@ -351,7 +351,20 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 		}
 
 		if item.notifiedAt != 0 &&
-			now-item.notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds()) {
+			(now < item.notifiedAt ||
+				now-item.notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds())) {
+			// now < item.notifiedAt is treated the same as "interval not
+			// yet elapsed" rather than falling through to retry: now is a
+			// caller-supplied, not-guaranteed-monotonic tick token (see
+			// nowFn's doc comment), so without this guard a clock
+			// adjustment or an out-of-order now would underflow the
+			// subtraction below to a huge uint32 and fail OPEN -
+			// resubmitting immediately instead of waiting out the
+			// backoff. Staying in the skip branch is the safe direction
+			// for an ambiguous time comparison; a genuine elapsed
+			// interval will still be observed on a later tick with a
+			// larger now.
+			//
 			// A timeout notification was attempted recently for this
 			// action generation while it remains Pending; give it time
 			// to land before resubmitting a timeout notification on
@@ -661,13 +674,20 @@ func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
 	for walletPublicKeyHash := range wallets {
 		wallet, err := ratw.spvChain.GetWallet(walletPublicKeyHash)
 		if err != nil {
+			// Transient RPC failure, not a definitive "wallet is Live"
+			// outcome: re-queue the wallet on the new
+			// strandingRecheckWallets set (already reset above for
+			// this drain, and self-dedupes) so the next tick's drain
+			// retries it instead of permanently losing the deferred
+			// recheck.
 			logger.Errorf(
 				"failed to fetch wallet [0x%x] state for deferred "+
 					"stranding re-check after action timeout "+
-					"notification: [%v]",
+					"notification: [%v]; re-queuing for the next drain",
 				walletPublicKeyHash,
 				err,
 			)
+			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
 			continue
 		}
 
@@ -678,12 +698,16 @@ func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
 		if err := ratw.strandingWatcher.checkReservationStrandingForWallet(
 			walletPublicKeyHash,
 		); err != nil {
+			// Same transient-failure reasoning as the GetWallet error
+			// above: re-queue rather than silently drop the recheck.
 			logger.Errorf(
 				"deferred stranding re-check after action timeout "+
-					"notification failed for wallet [0x%x]: [%v]",
+					"notification failed for wallet [0x%x]: [%v]; "+
+					"re-queuing for the next drain",
 				walletPublicKeyHash,
 				err,
 			)
+			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
 		}
 	}
 }

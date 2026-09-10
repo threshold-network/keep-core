@@ -1400,3 +1400,142 @@ func TestReservationActionTimeoutWatcher_NextActionCheckBatch_NoCapNeeded(t *tes
 		)
 	}
 }
+
+// TestReservationActionTimeoutWatcher_PollPendingActions_RenotifyBackoffSurvivesNowBeforeNotifiedAt
+// is a regression test for an unguarded uint32 subtraction: now is a
+// caller-supplied, not-guaranteed-monotonic tick token (see nowFn's doc
+// comment), so a tick whose now is smaller than the pending action's
+// recorded notifiedAt must not underflow now-notifiedAt to a huge value
+// and treat the backoff window as already elapsed - that would resubmit
+// NotifyReservationActionTimeout immediately instead of waiting out
+// actionTimeoutRenotifyInterval.
+func TestReservationActionTimeoutWatcher_PollPendingActions_RenotifyBackoffSurvivesNowBeforeNotifiedAt(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	wallet := walletPKH()
+	key := reservationKey(0x3010)
+
+	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil)
+
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	// Seed the entry directly with notifiedAt already recorded, as if a
+	// notification had been submitted on a previous tick at now=5_000.
+	ratw.pendingActions[actionEventKey(key, 1)] = &pendingAction{
+		reservationKey: key,
+		requestNonce:   1,
+		notifiedAt:     5_000,
+	}
+
+	// A later tick with now < notifiedAt (e.g. a clock adjustment, or an
+	// out-of-order tick). Without the now < notifiedAt guard,
+	// now-notifiedAt underflows to approximately 2^32 and is never less
+	// than the renotify interval, so the code falls through and
+	// resubmits immediately. The guard must keep this tick in the
+	// backoff window instead.
+	ratw.nowFn = func() uint32 { return 4_000 }
+
+	if err := ratw.pollPendingActions(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
+		t.Fatalf(
+			"expected now < notifiedAt to be treated as still within the "+
+				"backoff window (no resubmission), got %d submissions",
+			len(calls),
+		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnGetWalletError
+// verifies that a transient GetWallet failure during a deferred stranding
+// recheck re-queues the wallet on strandingRecheckWallets for the next
+// tick's drain, instead of permanently losing the recheck the way a bare
+// continue would.
+func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnGetWalletError(t *testing.T) {
+	spvChain := newLocalChain()
+	wallet := walletPKH()
+
+	// No spvChain.setWallet call for this wallet: GetWallet returns "no
+	// wallet for given PKH", simulating a transient RPC failure.
+	ratw := NewReservationActionTimeoutWatcher(
+		spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain),
+	)
+	ratw.strandingRecheckWallets[wallet] = struct{}{}
+
+	ratw.drainStrandingRechecks()
+
+	if _, ok := ratw.strandingRecheckWallets[wallet]; !ok {
+		t.Fatalf(
+			"expected wallet to be re-queued for the next drain after a " +
+				"GetWallet error",
+		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnStrandingCheckError
+// verifies that a transient checkReservationStrandingForWallet failure
+// (e.g. WalletReservations RPC unavailable) re-queues the wallet the same
+// way a GetWallet failure does, rather than silently dropping the deferred
+// recheck.
+func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnStrandingCheckError(t *testing.T) {
+	spvChain := newLocalChain()
+	wallet := walletPKH()
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+	spvChain.walletReservationsErr = errors.New("rpc unavailable")
+
+	strandingWatcher := newReservationStrandingWatcher(spvChain)
+	strandingWatcher.retryDelay = time.Millisecond
+
+	ratw := NewReservationActionTimeoutWatcher(
+		spvChain, 0, common.Address{}, strandingWatcher,
+	)
+	ratw.strandingRecheckWallets[wallet] = struct{}{}
+
+	ratw.drainStrandingRechecks()
+
+	if _, ok := ratw.strandingRecheckWallets[wallet]; !ok {
+		t.Fatalf(
+			"expected wallet to be re-queued for the next drain after a " +
+				"stranding-check error",
+		)
+	}
+}
+
+// TestReservationActionTimeoutWatcher_DrainStrandingRechecks_SucceedsDoesNotRequeue
+// verifies that a wallet whose drain succeeds (a still-Live wallet needs
+// no stranding notification) is NOT re-queued - only a transient RPC
+// failure should cause a deferred recheck to survive into the next drain.
+func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_SucceedsDoesNotRequeue(t *testing.T) {
+	spvChain := newLocalChain()
+	wallet := walletPKH()
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateLive})
+
+	ratw := NewReservationActionTimeoutWatcher(
+		spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain),
+	)
+	ratw.strandingRecheckWallets[wallet] = struct{}{}
+
+	ratw.drainStrandingRechecks()
+
+	if _, ok := ratw.strandingRecheckWallets[wallet]; ok {
+		t.Fatalf("expected a successfully-drained wallet not to be re-queued")
+	}
+}
