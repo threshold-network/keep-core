@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	chainEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
+	chainEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 )
 
 func TestEthereumAdapter_HeaderByNumber(t *testing.T) {

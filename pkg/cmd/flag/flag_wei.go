@@ -1,7 +1,7 @@
 package flag
 
 import (
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/spf13/pflag"
 )
 

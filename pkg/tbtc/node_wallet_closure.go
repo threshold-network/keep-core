@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 )
 
 // archiveClosedWallets archives closed or terminated wallets.

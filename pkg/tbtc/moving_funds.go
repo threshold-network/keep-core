@@ -9,7 +9,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"go.uber.org/zap"
 )
 

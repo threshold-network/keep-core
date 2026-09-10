@@ -19,8 +19,8 @@ import (
 	"golang.org/x/term"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
+	commonEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
-	commonEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/maintainer"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
 	"github.com/keep-network/keep-core/pkg/storage"

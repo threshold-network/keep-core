@@ -21,7 +21,7 @@ import (
 	ethereumEcdsa "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen"
 	ethereumTbtc "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen"
 	ethereumThreshold "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen"
-	commonEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
+	commonEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 

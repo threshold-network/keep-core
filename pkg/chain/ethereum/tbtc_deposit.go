@@ -9,7 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"

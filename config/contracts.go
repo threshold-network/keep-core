@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/viper"
 
 	chainEthereum "github.com/keep-network/keep-core/pkg/chain/ethereum"
-	commonEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
+	commonEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 
 	ethereumBeacon "github.com/keep-network/keep-core/pkg/chain/ethereum/beacon/gen"
 	ethereumEcdsa "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen"

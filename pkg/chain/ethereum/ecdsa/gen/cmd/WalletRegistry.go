@@ -15,9 +15,9 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/abi"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/contract"
-	chainutil "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-core/pkg/keepcommon/cmd"
-	"github.com/keep-network/keep-core/pkg/keepcommon/utils/decode"
+	chainutil "github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
+	"github.com/keep-network/keep-core/pkg/cmd"
+	"github.com/keep-network/keep-core/pkg/decode"
 
 	"github.com/spf13/cobra"
 )

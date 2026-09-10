@@ -2,7 +2,7 @@ package network
 
 import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 )
 
 // Type is a type used for networks enumeration.

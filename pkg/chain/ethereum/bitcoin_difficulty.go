@@ -13,8 +13,8 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 	"github.com/keep-network/keep-core/pkg/maintainer"
 )
 

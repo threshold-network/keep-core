@@ -27,8 +27,8 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	ecdsacontract "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/contract"
 	tbtccontract "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/internal/byteutils"
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 

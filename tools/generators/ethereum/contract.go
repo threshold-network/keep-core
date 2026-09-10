@@ -50,7 +50,7 @@ func main() {
 
 	chainUtilPackage := flag.String(
 		"chain-util-package",
-		"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil",
+		"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil",
 		"Host chain utils package imported from the generated code",
 	)
 

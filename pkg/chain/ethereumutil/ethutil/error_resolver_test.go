@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"

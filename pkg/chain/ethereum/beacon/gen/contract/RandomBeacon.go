@@ -21,8 +21,8 @@ import (
 	"github.com/ipfs/go-log"
 
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/beacon/gen/abi"
-	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
-	chainutil "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+	chainutil "github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 	"github.com/keep-network/keep-core/pkg/subscription"
 )
 

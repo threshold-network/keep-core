@@ -7,7 +7,7 @@ import (
 
 	"github.com/keep-network/keep-core/build"
 	chainEthereum "github.com/keep-network/keep-core/pkg/chain/ethereum"
-	commonEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
+	commonEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 )
 
 func nodeHeader(addrStrings []string, operator string, port int, ethereumConfig commonEthereum.Config) {

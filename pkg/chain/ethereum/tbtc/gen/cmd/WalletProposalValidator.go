@@ -13,8 +13,8 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
-	chainutil "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-core/pkg/keepcommon/cmd"
+	chainutil "github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
+	"github.com/keep-network/keep-core/pkg/cmd"
 
 	"github.com/spf13/cobra"
 )
