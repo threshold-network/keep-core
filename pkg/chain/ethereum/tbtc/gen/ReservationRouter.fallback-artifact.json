@@ -90,6 +90,25 @@
           "internalType": "uint64",
           "name": "requestNonce",
           "type": "uint64"
+        }
+      ],
+      "name": "ReservationAcceptanceTimedOut",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint256",
+          "name": "reservationKey",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "requestNonce",
+          "type": "uint64"
         },
         {
           "indexed": true,
@@ -148,31 +167,6 @@
       "anonymous": false,
       "inputs": [
         {
-          "indexed": true,
-          "internalType": "uint256",
-          "name": "reservationKey",
-          "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint64",
-          "name": "requestNonce",
-          "type": "uint64"
-        },
-        {
-          "indexed": false,
-          "internalType": "enum Reservation.ActionType",
-          "name": "actionType",
-          "type": "uint8"
-        }
-      ],
-      "name": "ReservationActionTimedOut",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
           "indexed": false,
           "internalType": "uint64",
           "name": "maxReservationsAmountPerWallet",
@@ -217,6 +211,19 @@
         }
       ],
       "name": "ReservationLateSettled",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint32",
+          "name": "activeReservationsCount",
+          "type": "uint32"
+        }
+      ],
+      "name": "ReservationOccupancyChanged",
       "type": "event"
     },
     {
@@ -325,6 +332,25 @@
           "internalType": "uint64",
           "name": "requestNonce",
           "type": "uint64"
+        }
+      ],
+      "name": "ReservationReanchorTimedOut",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint256",
+          "name": "reservationKey",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "requestNonce",
+          "type": "uint64"
         },
         {
           "indexed": true,
@@ -343,6 +369,12 @@
           "internalType": "uint64",
           "name": "newAnchorAmount",
           "type": "uint64"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "minerFee",
+          "type": "uint64"
         }
       ],
       "name": "ReservationReanchored",
@@ -359,19 +391,6 @@
         }
       ],
       "name": "ReservationRetryCreditMinted",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": false,
-          "internalType": "address",
-          "name": "reservationRouter",
-          "type": "address"
-        }
-      ],
-      "name": "ReservationRouterSet",
       "type": "event"
     },
     {
@@ -450,6 +469,19 @@
       "type": "function"
     },
     {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "depositKey",
+          "type": "uint256"
+        }
+      ],
+      "name": "forceStaleReservedDeposit",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
       "inputs": [],
       "name": "governance",
       "outputs": [
@@ -468,11 +500,19 @@
           "internalType": "uint256",
           "name": "reservationKey",
           "type": "uint256"
-        },
+        }
+      ],
+      "name": "notifyReservationAcceptanceTimedOut",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
         {
-          "internalType": "uint32[]",
-          "name": "walletMembersIDs",
-          "type": "uint32[]"
+          "internalType": "uint256",
+          "name": "reservationKey",
+          "type": "uint256"
         }
       ],
       "name": "notifyReservationActionTimeout",
@@ -489,19 +529,6 @@
         }
       ],
       "name": "notifyReservationStranded",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "reservationKey",
-          "type": "uint256"
-        }
-      ],
-      "name": "notifyReservationAcceptanceTimedOut",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
@@ -626,11 +653,6 @@
               "type": "address"
             },
             {
-              "internalType": "uint64",
-              "name": "amount",
-              "type": "uint64"
-            },
-            {
               "internalType": "bytes32",
               "name": "actionDataHash",
               "type": "bytes32"
@@ -639,6 +661,11 @@
               "internalType": "bytes32",
               "name": "sourceAnchorUtxoHash",
               "type": "bytes32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "amount",
+              "type": "uint64"
             },
             {
               "internalType": "bool",
@@ -661,13 +688,28 @@
               "type": "uint32"
             },
             {
+              "internalType": "uint64",
+              "name": "retryCreditSourceNonce",
+              "type": "uint64"
+            },
+            {
               "internalType": "bool",
               "name": "isPartial",
               "type": "bool"
             },
             {
+              "internalType": "uint32",
+              "name": "termSeconds",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "dissolutionDelay",
+              "type": "uint32"
+            },
+            {
               "internalType": "uint64",
-              "name": "retryCreditSourceNonce",
+              "name": "minAmount",
               "type": "uint64"
             }
           ],
@@ -716,6 +758,11 @@
           "internalType": "uint64",
           "name": "reservationMaxSingleAmount",
           "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "maxActiveReservations",
+          "type": "uint32"
         }
       ],
       "stateMutability": "view",
@@ -868,6 +915,11 @@
               "internalType": "uint64",
               "name": "cumulativeReanchorFee",
               "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "reanchorCooldownUntil",
+              "type": "uint32"
             }
           ],
           "internalType": "struct Reservation.ReservationRequest",
@@ -899,11 +951,6 @@
     },
     {
       "inputs": [
-        {
-          "internalType": "uint8",
-          "name": "proofType",
-          "type": "uint8"
-        },
         {
           "components": [
             {
@@ -964,25 +1011,80 @@
           "type": "tuple"
         },
         {
+          "internalType": "uint256",
+          "name": "reservationKey",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint64",
+          "name": "requestNonce",
+          "type": "uint64"
+        }
+      ],
+      "name": "submitReservationAcceptanceProof",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
           "components": [
             {
+              "internalType": "bytes4",
+              "name": "version",
+              "type": "bytes4"
+            },
+            {
+              "internalType": "bytes",
+              "name": "inputVector",
+              "type": "bytes"
+            },
+            {
+              "internalType": "bytes",
+              "name": "outputVector",
+              "type": "bytes"
+            },
+            {
+              "internalType": "bytes4",
+              "name": "locktime",
+              "type": "bytes4"
+            }
+          ],
+          "internalType": "struct BitcoinTx.Info",
+          "name": "txInfo",
+          "type": "tuple"
+        },
+        {
+          "components": [
+            {
+              "internalType": "bytes",
+              "name": "merkleProof",
+              "type": "bytes"
+            },
+            {
+              "internalType": "uint256",
+              "name": "txIndexInBlock",
+              "type": "uint256"
+            },
+            {
+              "internalType": "bytes",
+              "name": "bitcoinHeaders",
+              "type": "bytes"
+            },
+            {
               "internalType": "bytes32",
-              "name": "txHash",
+              "name": "coinbasePreimage",
               "type": "bytes32"
             },
             {
-              "internalType": "uint32",
-              "name": "txOutputIndex",
-              "type": "uint32"
-            },
-            {
-              "internalType": "uint64",
-              "name": "txOutputValue",
-              "type": "uint64"
+              "internalType": "bytes",
+              "name": "coinbaseProof",
+              "type": "bytes"
             }
           ],
-          "internalType": "struct BitcoinTx.UTXO",
-          "name": "mainUtxo",
+          "internalType": "struct BitcoinTx.Proof",
+          "name": "proof",
           "type": "tuple"
         },
         {
@@ -996,7 +1098,7 @@
           "type": "uint64"
         }
       ],
-      "name": "submitReservationProof",
+      "name": "submitReservationReanchorProof",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
@@ -1088,25 +1190,6 @@
       "name": "updateReservationParameters",
       "outputs": [],
       "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "bytes20",
-          "name": "walletPubKeyHash",
-          "type": "bytes20"
-        }
-      ],
-      "name": "walletReservations",
-      "outputs": [
-        {
-          "internalType": "uint256[]",
-          "name": "",
-          "type": "uint256[]"
-        }
-      ],
-      "stateMutability": "view",
       "type": "function"
     },
     {

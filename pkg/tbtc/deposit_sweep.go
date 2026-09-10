@@ -11,6 +11,8 @@ import (
 	"github.com/ipfs/go-log/v2"
 	"go.uber.org/zap"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
@@ -58,24 +60,6 @@ const (
 	// Exported for the external tbtc_test package to compare it against the
 	// canonical tbtcpg value (guarded by TestSweepFeeConstantsMirrorTbtcpg).
 	DepositScriptByteSize = 126
-	// reservationParametersFetchRetries bounds how many consecutive
-	// ReservationParameters attempts ValidateDepositSweepProposal makes
-	// before concluding reservations are not currently active. Mirrors
-	// tbtcpg.reservationParametersFetchRetries's reasoning: a
-	// reservation-related Bridge call that doesn't exist yet on the
-	// deployed contract (pre-upgrade) fails deterministically on every
-	// attempt, while a transient RPC hiccup against an otherwise-live
-	// reservation system usually recovers within a few - and the
-	// consequence of guessing wrong the other way (co-signing a sweep of
-	// a genuinely reserved deposit) is irreversible, so a single failed
-	// attempt is not enough evidence to draw that conclusion. Retried
-	// identically on both the leader (tbtcpg) and follower (here) sides:
-	// no retry count eliminates the chance of independent followers
-	// reaching different conclusions from independent RPC calls, but
-	// fewer attempts only makes a wrong conclusion more likely, never
-	// less, so there is no safety argument for the follower retrying
-	// less than the leader.
-	reservationParametersFetchRetries = 3
 )
 
 // DepositKey identifies a deposit by the outpoint of its funding transaction.
@@ -128,12 +112,28 @@ type depositSweepAction struct {
 	chain    Chain
 	btcChain bitcoin.Chain
 
+	// ethereumNetwork is the network this action's node is connected to.
+	// Combined with coordinationBlock, it determines whether the
+	// reservations feature is live for this action via
+	// ReservationsActivationBlock - see the call site in execute().
+	ethereumNetwork ethereum.Network
+
 	sweepingWallet      wallet
 	transactionExecutor *walletTransactionExecutor
 
 	proposal                     *DepositSweepProposal
 	proposalProcessingStartBlock uint64
 	proposalExpiryBlock          uint64
+	// coordinationBlock is the coordination block of the coordination
+	// round that produced proposal - the same block the leader used in
+	// coordinationExecutor.executeLeaderRoutine to compute
+	// CoordinationProposalRequest.ReservationsActive. It must be used
+	// (rather than proposalProcessingStartBlock itself, a strictly
+	// later block - the end of the coordination window) so that this
+	// follower's ReservationsActivationBlock comparison in execute()
+	// agrees with the leader's, at the same block height, for the
+	// same round.
+	coordinationBlock uint64
 
 	requiredFundingTxConfirmations   uint
 	signingTimeoutSafetyMarginBlocks uint64
@@ -151,6 +151,7 @@ func newDepositSweepAction(
 	logger *zap.SugaredLogger,
 	chain Chain,
 	btcChain bitcoin.Chain,
+	ethereumNetwork ethereum.Network,
 	sweepingWallet wallet,
 	signingExecutor walletSigningExecutor,
 	proposal *DepositSweepProposal,
@@ -158,6 +159,7 @@ func newDepositSweepAction(
 	proposalExpiryBlock uint64,
 	waitForBlockFn waitForBlockFn,
 	transactionMonitor *transactionMonitor,
+	coordinationBlock uint64,
 ) *depositSweepAction {
 	transactionExecutor := newWalletTransactionExecutor(
 		btcChain,
@@ -168,15 +170,30 @@ func newDepositSweepAction(
 
 	transactionExecutor.setTransactionMonitor(transactionMonitor)
 
+	// coordinationBlock is passed in explicitly by the caller (ultimately
+	// processCoordinationResult's result.window.coordinationBlock), rather
+	// than being recovered here by reversing the fixed
+	// coordinationDurationBlocks offset from proposalProcessingStartBlock:
+	// that reversal is an unguarded uint64 subtraction that underflows to
+	// approximately 2^64 whenever proposalProcessingStartBlock is smaller
+	// than coordinationDurationBlocks, which would silently flip
+	// reservationsActive to true and reject legitimate reserved deposits.
+	// Passing the real value through avoids the arithmetic entirely and
+	// keeps this follower's activation check aligned with the leader's,
+	// which is evaluated at the coordination block itself in
+	// coordinationExecutor.executeLeaderRoutine.
+
 	return &depositSweepAction{
 		logger:                           logger,
 		chain:                            chain,
 		btcChain:                         btcChain,
+		ethereumNetwork:                  ethereumNetwork,
 		sweepingWallet:                   sweepingWallet,
 		transactionExecutor:              transactionExecutor,
 		proposal:                         proposal,
 		proposalProcessingStartBlock:     proposalProcessingStartBlock,
 		proposalExpiryBlock:              proposalExpiryBlock,
+		coordinationBlock:                coordinationBlock,
 		requiredFundingTxConfirmations:   DepositSweepRequiredFundingTxConfirmations,
 		signingTimeoutSafetyMarginBlocks: depositSweepSigningTimeoutSafetyMarginBlocks,
 		broadcastTimeout:                 depositSweepBroadcastTimeout,
@@ -198,11 +215,29 @@ func (dsa *depositSweepAction) execute() error {
 
 	walletPublicKeyHash := bitcoin.PublicKeyHash(dsa.wallet().publicKey)
 
+	// reservationsActive gates the reserved-deposit filter in
+	// ValidateDepositSweepProposal on the real per-network activation
+	// state, not on whether the ReservationParameters chain call happens
+	// to succeed - see ReservationsActivationBlock's doc comment.
+	//
+	// It is derived from dsa.coordinationBlock (the block at which the
+	// coordination round started and the leader made its own
+	// ReservationsActive determination via
+	// coordinationExecutor.executeLeaderRoutine), not from
+	// dsa.proposalProcessingStartBlock. proposalProcessingStartBlock is
+	// the coordination window's end block - strictly later than the
+	// coordination block - so using it here would let the leader and a
+	// follower evaluate ReservationsActivationBlock at two different
+	// block heights for the same coordination round and potentially
+	// disagree about whether reservations are active.
+	reservationsActive := dsa.coordinationBlock >= ReservationsActivationBlock(dsa.ethereumNetwork)
+
 	validatedDeposits, err := ValidateDepositSweepProposal(
 		validateProposalLogger,
 		walletPublicKeyHash,
 		dsa.proposal,
 		dsa.requiredFundingTxConfirmations,
+		reservationsActive,
 		dsa.chain,
 		dsa.btcChain,
 	)
@@ -349,6 +384,15 @@ func ValidateDepositSweepProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *DepositSweepProposal,
 	requiredFundingTxConfirmations uint,
+	// reservationsActive reports whether reservations were live at the
+	// coordination block for this proposal round, i.e.
+	// ReservationsActivationBlock(network) <= coordinationBlock. It
+	// must be derived from that comparison, not from whether
+	// ReservationParameters below happens to succeed - see
+	// ReservationsActivationBlock's doc comment. When false, the
+	// reserved-deposit filter below - including the ReservationParameters
+	// call it depends on - is skipped entirely.
+	reservationsActive bool,
 	chain interface {
 		// PastDepositRevealedEvents fetches past deposit reveal events according
 		// to the provided filter or unfiltered if the filter is nil. Returned
@@ -396,14 +440,12 @@ func ValidateDepositSweepProposal(
 		// Bridge reservation parameters, including the reservation vault
 		// address used to cheaply pre-filter which deposits are worth an
 		// IsReservedDeposit call at all. Called once per validation
-		// (before this loop), not per deposit. Fetched unconditionally,
-		// so it IS reached pre-upgrade; a failure is treated as
-		// "reservations not active" and the whole reserved-deposit
-		// filter below is skipped for this validation, mirroring the
-		// leader-side degradation in the deposit-sweep coordination
-		// task - it must not turn into every follower rejecting every
-		// sweep proposal before the Bridge exposes the reservation
-		// contracts.
+		// (before this loop), not per deposit, and only when
+		// reservationsActive is true - see that parameter's doc comment.
+		// A failure here is a hard error: reservationsActive already
+		// established the feature is live for this network and block, so
+		// a failing call at that point is a genuine chain problem, not
+		// evidence the feature is inactive.
 		ReservationParameters() (*ReservationParameters, error)
 
 		// IsReservedDeposit returns true if the given deposit was revealed
@@ -434,41 +476,23 @@ func ValidateDepositSweepProposal(
 	}
 
 	// Determine the reservation vault once per validation, not per
-	// deposit, and retry a bounded number of times before concluding
-	// reservations are not currently active - mirroring
-	// tbtcpg.findDeposits's identical leader-side degradation (see
-	// reservationParametersFetchRetries's doc comment for the reasoning,
-	// including why the follower retries exactly as many times as the
-	// leader rather than fewer). A failure here must not turn into
-	// every follower rejecting every deposit-sweep proposal pre-upgrade.
-	// This does not weaken safety: the IsReservedDeposit call below,
-	// for any deposit the cheap vault-match prefilter flags as a
-	// candidate, still rejects the proposal outright on error rather
-	// than skipping - see its call site for why the two calls take
-	// opposite failure postures.
-	reservationsActive := true
+	// deposit, and only when reservationsActive - see that parameter's
+	// doc comment for why gating on ReservationsActivationBlock instead
+	// of this call's success/failure matters. This does not weaken
+	// safety: the IsReservedDeposit call below, for any deposit the
+	// cheap vault-match prefilter flags as a candidate, still rejects
+	// the proposal outright on error rather than skipping - see its
+	// call site for why the two calls take opposite failure postures.
 	var reservationParams *ReservationParameters
-	var reservationParamsErr error
-	for attempt := 1; attempt <= reservationParametersFetchRetries; attempt++ {
+	if reservationsActive {
+		var reservationParamsErr error
 		reservationParams, reservationParamsErr = chain.ReservationParameters()
-		if reservationParamsErr == nil {
-			break
+		if reservationParamsErr != nil {
+			return nil, fmt.Errorf(
+				"cannot get reservation parameters: [%v]",
+				reservationParamsErr,
+			)
 		}
-		validateProposalLogger.Debugf(
-			"failed to fetch reservation parameters (attempt %d/%d): [%v]",
-			attempt,
-			reservationParametersFetchRetries,
-			reservationParamsErr,
-		)
-	}
-	if reservationParamsErr != nil {
-		validateProposalLogger.Infof(
-			"reservation parameters unavailable after %d attempts, "+
-				"skipping reserved deposit filter: [%v]",
-			reservationParametersFetchRetries,
-			reservationParamsErr,
-		)
-		reservationsActive = false
 	}
 
 	for i, depositKey := range proposal.DepositsKeys {
@@ -563,10 +587,10 @@ func ValidateDepositSweepProposal(
 		// Reuse the vault already carried by matchingEvent - fetched above
 		// for unrelated reasons - instead of an extra chain call, to cheaply
 		// pre-filter which deposits are worth an IsReservedDeposit call at
-		// all. Only consulted when reservationsActive (see the
-		// once-per-validation fetch above this loop); skipped entirely
-		// otherwise so this call, like ReservationParameters, degrades
-		// gracefully pre-upgrade instead of rejecting every proposal.
+		// all. Only consulted when reservationsActive (see that
+		// parameter's doc comment); skipped entirely otherwise so the
+		// feature's pre-activation state never triggers a chain call
+		// that would fail deterministically on a non-upgraded Bridge.
 		if reservationsActive && depositTargetsReservationVault(
 			matchingEvent.Vault,
 			reservationParams.ReservationVault,

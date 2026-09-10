@@ -46,13 +46,6 @@ type BitcoinTxProof3 struct {
 	CoinbaseProof    []byte
 }
 
-// BitcoinTxUTXO4 is an auto generated low-level Go binding around an user-defined struct.
-type BitcoinTxUTXO4 struct {
-	TxHash        [32]byte
-	TxOutputIndex uint32
-	TxOutputValue uint64
-}
-
 // ReservationReservationAction is an auto generated low-level Go binding around an user-defined struct.
 type ReservationReservationAction struct {
 	TargetWalletPubKeyHash  [20]byte
@@ -63,15 +56,18 @@ type ReservationReservationAction struct {
 	State                   uint8
 	FeePaid                 bool
 	Redeemer                common.Address
-	Amount                  uint64
 	ActionDataHash          [32]byte
 	SourceAnchorUtxoHash    [32]byte
+	Amount                  uint64
 	UsedRetryCredit         bool
 	WatchtowerDefaultDelay  uint32
 	WatchtowerLevelOneDelay uint32
 	WatchtowerLevelTwoDelay uint32
-	IsPartial               bool
 	RetryCreditSourceNonce  uint64
+	IsPartial               bool
+	TermSeconds             uint32
+	DissolutionDelay        uint32
+	MinAmount               uint64
 }
 
 // ReservationReservationRequest is an auto generated low-level Go binding around an user-defined struct.
@@ -89,11 +85,12 @@ type ReservationReservationRequest struct {
 	RetryCredit           bool
 	DissolutionEligibleAt uint32
 	CumulativeReanchorFee uint64
+	ReanchorCooldownUntil uint32
 }
 
 // ReservationRouterMetaData contains all meta data concerning the ReservationRouter contract.
 var ReservationRouterMetaData = &bind.MetaData{
-	ABI: "[{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"oldGovernance\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"GovernanceTransferred\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint8\",\"name\":\"version\",\"type\":\"uint8\"}],\"name\":\"Initialized\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"timeoutAt\",\"type\":\"uint32\"}],\"name\":\"ReservationAcceptanceRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"owner\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"anchorTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"anchorAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"expiresAt\",\"type\":\"uint32\"}],\"name\":\"ReservationAccepted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"}],\"name\":\"ReservationActionSuperseded\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"enumReservation.ActionType\",\"name\":\"actionType\",\"type\":\"uint8\"}],\"name\":\"ReservationActionTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"maxReservationsAmountPerWallet\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"reservationMaxSingleAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"maxActiveReservations\",\"type\":\"uint32\"}],\"name\":\"ReservationCapsUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"enumReservation.ActionType\",\"name\":\"actionType\",\"type\":\"uint8\"}],\"name\":\"ReservationLateSettled\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"reservationMinAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"reservationTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"reservationTermSeconds\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"reservationDissolutionDelay\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"reservationMaxTotalAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"maxReservationsPerWallet\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"reservationActionTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"reservationRenewalWindowSeconds\",\"type\":\"uint32\"}],\"name\":\"ReservationParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"sourceWalletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"targetWalletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"}],\"name\":\"ReservationReanchorRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"newWalletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"newAnchorTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"newAnchorAmount\",\"type\":\"uint64\"}],\"name\":\"ReservationReanchored\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"}],\"name\":\"ReservationRetryCreditMinted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"reservationRouter\",\"type\":\"address\"}],\"name\":\"ReservationRouterSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"owner\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"anchorAmount\",\"type\":\"uint64\"}],\"name\":\"ReservationStranded\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"reservationVault\",\"type\":\"address\"}],\"name\":\"ReservationVaultUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"ReservedDepositMarkedStale\",\"type\":\"event\"},{\"inputs\":[],\"name\":\"activeReservationsCount\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"count\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"maxActive\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"governance\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"}],\"name\":\"notifyReservationActionTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"}],\"name\":\"notifyReservationStranded\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"}],\"name\":\"notifyReservationAcceptanceTimedOut\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},,{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"notifyStaleReservedDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"pendingReservedDeposits\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"\",\"type\":\"uint64\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"requestReservationAcceptance\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"bytes20\",\"name\":\"targetWalletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"requestReservationReanchor\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"}],\"name\":\"reservationActions\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes20\",\"name\":\"targetWalletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"timeoutAt\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"enumReservation.ActionType\",\"name\":\"actionType\",\"type\":\"uint8\"},{\"internalType\":\"enumReservation.ActionState\",\"name\":\"state\",\"type\":\"uint8\"},{\"internalType\":\"bool\",\"name\":\"feePaid\",\"type\":\"bool\"},{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"internalType\":\"bytes32\",\"name\":\"actionDataHash\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"sourceAnchorUtxoHash\",\"type\":\"bytes32\"},{\"internalType\":\"bool\",\"name\":\"usedRetryCredit\",\"type\":\"bool\"},{\"internalType\":\"uint32\",\"name\":\"watchtowerDefaultDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"watchtowerLevelOneDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"watchtowerLevelTwoDelay\",\"type\":\"uint32\"},{\"internalType\":\"bool\",\"name\":\"isPartial\",\"type\":\"bool\"},{\"internalType\":\"uint64\",\"name\":\"retryCreditSourceNonce\",\"type\":\"uint64\"}],\"internalType\":\"structReservation.ReservationAction\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"anchorTxHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"anchorTxOutputIndex\",\"type\":\"uint32\"}],\"name\":\"reservationByAnchorUtxo\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"reservationCaps\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"maxReservationsAmountPerWallet\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationMaxSingleAmount\",\"type\":\"uint64\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"reservationParameters\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"reservationVault\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"reservationMinAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"reservationTermSeconds\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationDissolutionDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"reservationMaxTotalAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationTotalAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"maxReservationsPerWallet\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationActionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationRenewalWindowSeconds\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"reservationRouter\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"}],\"name\":\"reservations\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"owner\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"mintedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"acceptedAt\",\"type\":\"uint32\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint64\",\"name\":\"anchorAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"expiresAt\",\"type\":\"uint32\"},{\"internalType\":\"bytes32\",\"name\":\"anchorTxHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"anchorTxOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"enumReservation.ReservationState\",\"name\":\"state\",\"type\":\"uint8\"},{\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"internalType\":\"bool\",\"name\":\"retryCredit\",\"type\":\"bool\"},{\"internalType\":\"uint32\",\"name\":\"dissolutionEligibleAt\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"cumulativeReanchorFee\",\"type\":\"uint64\"}],\"internalType\":\"structReservation.ReservationRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"reservedDepositWallet\",\"outputs\":[{\"internalType\":\"bytes20\",\"name\":\"\",\"type\":\"bytes20\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint8\",\"name\":\"proofType\",\"type\":\"uint8\"},{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"txInfo\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"proof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"}],\"name\":\"submitReservationProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"transferGovernance\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"maxReservationsAmountPerWallet\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationMaxSingleAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"maxActiveReservations\",\"type\":\"uint32\"}],\"name\":\"updateReservationCaps\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"reservationVault\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"reservationMinAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"reservationTermSeconds\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationDissolutionDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"reservationMaxTotalAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"maxReservationsPerWallet\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationActionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationRenewalWindowSeconds\",\"type\":\"uint32\"}],\"name\":\"updateReservationParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"walletReservations\",\"outputs\":[{\"internalType\":\"uint256[]\",\"name\":\"\",\"type\":\"uint256[]\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"walletReservationsAmount\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"\",\"type\":\"uint64\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"walletReservationsCount\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
+	ABI: "[{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"oldGovernance\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"GovernanceTransferred\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint8\",\"name\":\"version\",\"type\":\"uint8\"}],\"name\":\"Initialized\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"timeoutAt\",\"type\":\"uint32\"}],\"name\":\"ReservationAcceptanceRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"}],\"name\":\"ReservationAcceptanceTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"owner\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"anchorTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"anchorAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"expiresAt\",\"type\":\"uint32\"}],\"name\":\"ReservationAccepted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"}],\"name\":\"ReservationActionSuperseded\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"maxReservationsAmountPerWallet\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"reservationMaxSingleAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"maxActiveReservations\",\"type\":\"uint32\"}],\"name\":\"ReservationCapsUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"enumReservation.ActionType\",\"name\":\"actionType\",\"type\":\"uint8\"}],\"name\":\"ReservationLateSettled\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"activeReservationsCount\",\"type\":\"uint32\"}],\"name\":\"ReservationOccupancyChanged\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"reservationMinAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"reservationTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"reservationTermSeconds\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"reservationDissolutionDelay\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"reservationMaxTotalAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"maxReservationsPerWallet\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"reservationActionTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"reservationRenewalWindowSeconds\",\"type\":\"uint32\"}],\"name\":\"ReservationParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"sourceWalletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"targetWalletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"}],\"name\":\"ReservationReanchorRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"}],\"name\":\"ReservationReanchorTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"newWalletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"newAnchorTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"newAnchorAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"minerFee\",\"type\":\"uint64\"}],\"name\":\"ReservationReanchored\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"}],\"name\":\"ReservationRetryCreditMinted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"owner\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"anchorAmount\",\"type\":\"uint64\"}],\"name\":\"ReservationStranded\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"reservationVault\",\"type\":\"address\"}],\"name\":\"ReservationVaultUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"ReservedDepositMarkedStale\",\"type\":\"event\"},{\"inputs\":[],\"name\":\"activeReservationsCount\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"count\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"maxActive\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"forceStaleReservedDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"governance\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"}],\"name\":\"notifyReservationAcceptanceTimedOut\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"}],\"name\":\"notifyReservationActionTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"}],\"name\":\"notifyReservationStranded\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"notifyStaleReservedDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"pendingReservedDeposits\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"\",\"type\":\"uint64\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"requestReservationAcceptance\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"bytes20\",\"name\":\"targetWalletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"requestReservationReanchor\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"}],\"name\":\"reservationActions\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes20\",\"name\":\"targetWalletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"timeoutAt\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"enumReservation.ActionType\",\"name\":\"actionType\",\"type\":\"uint8\"},{\"internalType\":\"enumReservation.ActionState\",\"name\":\"state\",\"type\":\"uint8\"},{\"internalType\":\"bool\",\"name\":\"feePaid\",\"type\":\"bool\"},{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"bytes32\",\"name\":\"actionDataHash\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"sourceAnchorUtxoHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"internalType\":\"bool\",\"name\":\"usedRetryCredit\",\"type\":\"bool\"},{\"internalType\":\"uint32\",\"name\":\"watchtowerDefaultDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"watchtowerLevelOneDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"watchtowerLevelTwoDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"retryCreditSourceNonce\",\"type\":\"uint64\"},{\"internalType\":\"bool\",\"name\":\"isPartial\",\"type\":\"bool\"},{\"internalType\":\"uint32\",\"name\":\"termSeconds\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"dissolutionDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"minAmount\",\"type\":\"uint64\"}],\"internalType\":\"structReservation.ReservationAction\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"anchorTxHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"anchorTxOutputIndex\",\"type\":\"uint32\"}],\"name\":\"reservationByAnchorUtxo\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"reservationCaps\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"maxReservationsAmountPerWallet\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationMaxSingleAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"maxActiveReservations\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"reservationParameters\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"reservationVault\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"reservationMinAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"reservationTermSeconds\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationDissolutionDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"reservationMaxTotalAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationTotalAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"maxReservationsPerWallet\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationActionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationRenewalWindowSeconds\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"reservationRouter\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"}],\"name\":\"reservations\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"owner\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"mintedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"acceptedAt\",\"type\":\"uint32\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint64\",\"name\":\"anchorAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"expiresAt\",\"type\":\"uint32\"},{\"internalType\":\"bytes32\",\"name\":\"anchorTxHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"anchorTxOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"enumReservation.ReservationState\",\"name\":\"state\",\"type\":\"uint8\"},{\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"},{\"internalType\":\"bool\",\"name\":\"retryCredit\",\"type\":\"bool\"},{\"internalType\":\"uint32\",\"name\":\"dissolutionEligibleAt\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"cumulativeReanchorFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"reanchorCooldownUntil\",\"type\":\"uint32\"}],\"internalType\":\"structReservation.ReservationRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"reservedDepositWallet\",\"outputs\":[{\"internalType\":\"bytes20\",\"name\":\"\",\"type\":\"bytes20\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"txInfo\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"proof\",\"type\":\"tuple\"},{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"}],\"name\":\"submitReservationAcceptanceProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"txInfo\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"proof\",\"type\":\"tuple\"},{\"internalType\":\"uint256\",\"name\":\"reservationKey\",\"type\":\"uint256\"},{\"internalType\":\"uint64\",\"name\":\"requestNonce\",\"type\":\"uint64\"}],\"name\":\"submitReservationReanchorProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"transferGovernance\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"maxReservationsAmountPerWallet\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationMaxSingleAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"maxActiveReservations\",\"type\":\"uint32\"}],\"name\":\"updateReservationCaps\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"reservationVault\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"reservationMinAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"reservationTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"reservationTermSeconds\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationDissolutionDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"reservationMaxTotalAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"maxReservationsPerWallet\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationActionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"reservationRenewalWindowSeconds\",\"type\":\"uint32\"}],\"name\":\"updateReservationParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"walletReservationsAmount\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"\",\"type\":\"uint64\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"walletReservationsCount\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
 }
 
 // ReservationRouterABI is the input ABI used to generate the binding from.
@@ -351,7 +348,7 @@ func (_ReservationRouter *ReservationRouterCallerSession) PendingReservedDeposit
 
 // ReservationActions is a free data retrieval call binding the contract method 0xcec8c6e9.
 //
-// Solidity: function reservationActions(uint256 reservationKey, uint64 requestNonce) view returns((bytes20,uint32,uint32,uint64,uint8,uint8,bool,address,uint64,bytes32,bytes32,bool,uint32,uint32,uint32,bool,uint64))
+// Solidity: function reservationActions(uint256 reservationKey, uint64 requestNonce) view returns((bytes20,uint32,uint32,uint64,uint8,uint8,bool,address,bytes32,bytes32,uint64,bool,uint32,uint32,uint32,uint64,bool,uint32,uint32,uint64))
 func (_ReservationRouter *ReservationRouterCaller) ReservationActions(opts *bind.CallOpts, reservationKey *big.Int, requestNonce uint64) (ReservationReservationAction, error) {
 	var out []interface{}
 	err := _ReservationRouter.contract.Call(opts, &out, "reservationActions", reservationKey, requestNonce)
@@ -368,14 +365,14 @@ func (_ReservationRouter *ReservationRouterCaller) ReservationActions(opts *bind
 
 // ReservationActions is a free data retrieval call binding the contract method 0xcec8c6e9.
 //
-// Solidity: function reservationActions(uint256 reservationKey, uint64 requestNonce) view returns((bytes20,uint32,uint32,uint64,uint8,uint8,bool,address,uint64,bytes32,bytes32,bool,uint32,uint32,uint32,bool,uint64))
+// Solidity: function reservationActions(uint256 reservationKey, uint64 requestNonce) view returns((bytes20,uint32,uint32,uint64,uint8,uint8,bool,address,bytes32,bytes32,uint64,bool,uint32,uint32,uint32,uint64,bool,uint32,uint32,uint64))
 func (_ReservationRouter *ReservationRouterSession) ReservationActions(reservationKey *big.Int, requestNonce uint64) (ReservationReservationAction, error) {
 	return _ReservationRouter.Contract.ReservationActions(&_ReservationRouter.CallOpts, reservationKey, requestNonce)
 }
 
 // ReservationActions is a free data retrieval call binding the contract method 0xcec8c6e9.
 //
-// Solidity: function reservationActions(uint256 reservationKey, uint64 requestNonce) view returns((bytes20,uint32,uint32,uint64,uint8,uint8,bool,address,uint64,bytes32,bytes32,bool,uint32,uint32,uint32,bool,uint64))
+// Solidity: function reservationActions(uint256 reservationKey, uint64 requestNonce) view returns((bytes20,uint32,uint32,uint64,uint8,uint8,bool,address,bytes32,bytes32,uint64,bool,uint32,uint32,uint32,uint64,bool,uint32,uint32,uint64))
 func (_ReservationRouter *ReservationRouterCallerSession) ReservationActions(reservationKey *big.Int, requestNonce uint64) (ReservationReservationAction, error) {
 	return _ReservationRouter.Contract.ReservationActions(&_ReservationRouter.CallOpts, reservationKey, requestNonce)
 }
@@ -413,10 +410,11 @@ func (_ReservationRouter *ReservationRouterCallerSession) ReservationByAnchorUtx
 
 // ReservationCaps is a free data retrieval call binding the contract method 0x63dfb29c.
 //
-// Solidity: function reservationCaps() view returns(uint64 maxReservationsAmountPerWallet, uint64 reservationMaxSingleAmount)
+// Solidity: function reservationCaps() view returns(uint64 maxReservationsAmountPerWallet, uint64 reservationMaxSingleAmount, uint32 maxActiveReservations)
 func (_ReservationRouter *ReservationRouterCaller) ReservationCaps(opts *bind.CallOpts) (struct {
 	MaxReservationsAmountPerWallet uint64
 	ReservationMaxSingleAmount     uint64
+	MaxActiveReservations          uint32
 }, error) {
 	var out []interface{}
 	err := _ReservationRouter.contract.Call(opts, &out, "reservationCaps")
@@ -424,6 +422,7 @@ func (_ReservationRouter *ReservationRouterCaller) ReservationCaps(opts *bind.Ca
 	outstruct := new(struct {
 		MaxReservationsAmountPerWallet uint64
 		ReservationMaxSingleAmount     uint64
+		MaxActiveReservations          uint32
 	})
 	if err != nil {
 		return *outstruct, err
@@ -431,6 +430,7 @@ func (_ReservationRouter *ReservationRouterCaller) ReservationCaps(opts *bind.Ca
 
 	outstruct.MaxReservationsAmountPerWallet = *abi.ConvertType(out[0], new(uint64)).(*uint64)
 	outstruct.ReservationMaxSingleAmount = *abi.ConvertType(out[1], new(uint64)).(*uint64)
+	outstruct.MaxActiveReservations = *abi.ConvertType(out[2], new(uint32)).(*uint32)
 
 	return *outstruct, err
 
@@ -438,20 +438,22 @@ func (_ReservationRouter *ReservationRouterCaller) ReservationCaps(opts *bind.Ca
 
 // ReservationCaps is a free data retrieval call binding the contract method 0x63dfb29c.
 //
-// Solidity: function reservationCaps() view returns(uint64 maxReservationsAmountPerWallet, uint64 reservationMaxSingleAmount)
+// Solidity: function reservationCaps() view returns(uint64 maxReservationsAmountPerWallet, uint64 reservationMaxSingleAmount, uint32 maxActiveReservations)
 func (_ReservationRouter *ReservationRouterSession) ReservationCaps() (struct {
 	MaxReservationsAmountPerWallet uint64
 	ReservationMaxSingleAmount     uint64
+	MaxActiveReservations          uint32
 }, error) {
 	return _ReservationRouter.Contract.ReservationCaps(&_ReservationRouter.CallOpts)
 }
 
 // ReservationCaps is a free data retrieval call binding the contract method 0x63dfb29c.
 //
-// Solidity: function reservationCaps() view returns(uint64 maxReservationsAmountPerWallet, uint64 reservationMaxSingleAmount)
+// Solidity: function reservationCaps() view returns(uint64 maxReservationsAmountPerWallet, uint64 reservationMaxSingleAmount, uint32 maxActiveReservations)
 func (_ReservationRouter *ReservationRouterCallerSession) ReservationCaps() (struct {
 	MaxReservationsAmountPerWallet uint64
 	ReservationMaxSingleAmount     uint64
+	MaxActiveReservations          uint32
 }, error) {
 	return _ReservationRouter.Contract.ReservationCaps(&_ReservationRouter.CallOpts)
 }
@@ -574,7 +576,7 @@ func (_ReservationRouter *ReservationRouterCallerSession) ReservationRouter() (c
 
 // Reservations is a free data retrieval call binding the contract method 0x067cf832.
 //
-// Solidity: function reservations(uint256 reservationKey) view returns((address,uint64,uint32,bytes20,uint64,uint32,bytes32,uint32,uint8,uint64,bool,uint32,uint64))
+// Solidity: function reservations(uint256 reservationKey) view returns((address,uint64,uint32,bytes20,uint64,uint32,bytes32,uint32,uint8,uint64,bool,uint32,uint64,uint32))
 func (_ReservationRouter *ReservationRouterCaller) Reservations(opts *bind.CallOpts, reservationKey *big.Int) (ReservationReservationRequest, error) {
 	var out []interface{}
 	err := _ReservationRouter.contract.Call(opts, &out, "reservations", reservationKey)
@@ -591,14 +593,14 @@ func (_ReservationRouter *ReservationRouterCaller) Reservations(opts *bind.CallO
 
 // Reservations is a free data retrieval call binding the contract method 0x067cf832.
 //
-// Solidity: function reservations(uint256 reservationKey) view returns((address,uint64,uint32,bytes20,uint64,uint32,bytes32,uint32,uint8,uint64,bool,uint32,uint64))
+// Solidity: function reservations(uint256 reservationKey) view returns((address,uint64,uint32,bytes20,uint64,uint32,bytes32,uint32,uint8,uint64,bool,uint32,uint64,uint32))
 func (_ReservationRouter *ReservationRouterSession) Reservations(reservationKey *big.Int) (ReservationReservationRequest, error) {
 	return _ReservationRouter.Contract.Reservations(&_ReservationRouter.CallOpts, reservationKey)
 }
 
 // Reservations is a free data retrieval call binding the contract method 0x067cf832.
 //
-// Solidity: function reservations(uint256 reservationKey) view returns((address,uint64,uint32,bytes20,uint64,uint32,bytes32,uint32,uint8,uint64,bool,uint32,uint64))
+// Solidity: function reservations(uint256 reservationKey) view returns((address,uint64,uint32,bytes20,uint64,uint32,bytes32,uint32,uint8,uint64,bool,uint32,uint64,uint32))
 func (_ReservationRouter *ReservationRouterCallerSession) Reservations(reservationKey *big.Int) (ReservationReservationRequest, error) {
 	return _ReservationRouter.Contract.Reservations(&_ReservationRouter.CallOpts, reservationKey)
 }
@@ -632,37 +634,6 @@ func (_ReservationRouter *ReservationRouterSession) ReservedDepositWallet(deposi
 // Solidity: function reservedDepositWallet(uint256 depositKey) view returns(bytes20)
 func (_ReservationRouter *ReservationRouterCallerSession) ReservedDepositWallet(depositKey *big.Int) ([20]byte, error) {
 	return _ReservationRouter.Contract.ReservedDepositWallet(&_ReservationRouter.CallOpts, depositKey)
-}
-
-// WalletReservations is a free data retrieval call binding the contract method 0x78699d2f.
-//
-// Solidity: function walletReservations(bytes20 walletPubKeyHash) view returns(uint256[])
-func (_ReservationRouter *ReservationRouterCaller) WalletReservations(opts *bind.CallOpts, walletPubKeyHash [20]byte) ([]*big.Int, error) {
-	var out []interface{}
-	err := _ReservationRouter.contract.Call(opts, &out, "walletReservations", walletPubKeyHash)
-
-	if err != nil {
-		return *new([]*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new([]*big.Int)).(*[]*big.Int)
-
-	return out0, err
-
-}
-
-// WalletReservations is a free data retrieval call binding the contract method 0x78699d2f.
-//
-// Solidity: function walletReservations(bytes20 walletPubKeyHash) view returns(uint256[])
-func (_ReservationRouter *ReservationRouterSession) WalletReservations(walletPubKeyHash [20]byte) ([]*big.Int, error) {
-	return _ReservationRouter.Contract.WalletReservations(&_ReservationRouter.CallOpts, walletPubKeyHash)
-}
-
-// WalletReservations is a free data retrieval call binding the contract method 0x78699d2f.
-//
-// Solidity: function walletReservations(bytes20 walletPubKeyHash) view returns(uint256[])
-func (_ReservationRouter *ReservationRouterCallerSession) WalletReservations(walletPubKeyHash [20]byte) ([]*big.Int, error) {
-	return _ReservationRouter.Contract.WalletReservations(&_ReservationRouter.CallOpts, walletPubKeyHash)
 }
 
 // WalletReservationsAmount is a free data retrieval call binding the contract method 0x63481e98.
@@ -727,25 +698,67 @@ func (_ReservationRouter *ReservationRouterCallerSession) WalletReservationsCoun
 	return _ReservationRouter.Contract.WalletReservationsCount(&_ReservationRouter.CallOpts, walletPubKeyHash)
 }
 
-// NotifyReservationActionTimeout is a paid mutator transaction binding the contract method 0x88aa5729.
+// ForceStaleReservedDeposit is a paid mutator transaction binding the contract method 0x9fa3f062.
 //
-// Solidity: function notifyReservationActionTimeout(uint256 reservationKey, uint32[] walletMembersIDs) returns()
-func (_ReservationRouter *ReservationRouterTransactor) NotifyReservationActionTimeout(opts *bind.TransactOpts, reservationKey *big.Int, walletMembersIDs []uint32) (*types.Transaction, error) {
-	return _ReservationRouter.contract.Transact(opts, "notifyReservationActionTimeout", reservationKey, walletMembersIDs)
+// Solidity: function forceStaleReservedDeposit(uint256 depositKey) returns()
+func (_ReservationRouter *ReservationRouterTransactor) ForceStaleReservedDeposit(opts *bind.TransactOpts, depositKey *big.Int) (*types.Transaction, error) {
+	return _ReservationRouter.contract.Transact(opts, "forceStaleReservedDeposit", depositKey)
 }
 
-// NotifyReservationActionTimeout is a paid mutator transaction binding the contract method 0x88aa5729.
+// ForceStaleReservedDeposit is a paid mutator transaction binding the contract method 0x9fa3f062.
 //
-// Solidity: function notifyReservationActionTimeout(uint256 reservationKey, uint32[] walletMembersIDs) returns()
-func (_ReservationRouter *ReservationRouterSession) NotifyReservationActionTimeout(reservationKey *big.Int, walletMembersIDs []uint32) (*types.Transaction, error) {
-	return _ReservationRouter.Contract.NotifyReservationActionTimeout(&_ReservationRouter.TransactOpts, reservationKey, walletMembersIDs)
+// Solidity: function forceStaleReservedDeposit(uint256 depositKey) returns()
+func (_ReservationRouter *ReservationRouterSession) ForceStaleReservedDeposit(depositKey *big.Int) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.ForceStaleReservedDeposit(&_ReservationRouter.TransactOpts, depositKey)
 }
 
-// NotifyReservationActionTimeout is a paid mutator transaction binding the contract method 0x88aa5729.
+// ForceStaleReservedDeposit is a paid mutator transaction binding the contract method 0x9fa3f062.
 //
-// Solidity: function notifyReservationActionTimeout(uint256 reservationKey, uint32[] walletMembersIDs) returns()
-func (_ReservationRouter *ReservationRouterTransactorSession) NotifyReservationActionTimeout(reservationKey *big.Int, walletMembersIDs []uint32) (*types.Transaction, error) {
-	return _ReservationRouter.Contract.NotifyReservationActionTimeout(&_ReservationRouter.TransactOpts, reservationKey, walletMembersIDs)
+// Solidity: function forceStaleReservedDeposit(uint256 depositKey) returns()
+func (_ReservationRouter *ReservationRouterTransactorSession) ForceStaleReservedDeposit(depositKey *big.Int) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.ForceStaleReservedDeposit(&_ReservationRouter.TransactOpts, depositKey)
+}
+
+// NotifyReservationAcceptanceTimedOut is a paid mutator transaction binding the contract method 0x6985237a.
+//
+// Solidity: function notifyReservationAcceptanceTimedOut(uint256 reservationKey) returns()
+func (_ReservationRouter *ReservationRouterTransactor) NotifyReservationAcceptanceTimedOut(opts *bind.TransactOpts, reservationKey *big.Int) (*types.Transaction, error) {
+	return _ReservationRouter.contract.Transact(opts, "notifyReservationAcceptanceTimedOut", reservationKey)
+}
+
+// NotifyReservationAcceptanceTimedOut is a paid mutator transaction binding the contract method 0x6985237a.
+//
+// Solidity: function notifyReservationAcceptanceTimedOut(uint256 reservationKey) returns()
+func (_ReservationRouter *ReservationRouterSession) NotifyReservationAcceptanceTimedOut(reservationKey *big.Int) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.NotifyReservationAcceptanceTimedOut(&_ReservationRouter.TransactOpts, reservationKey)
+}
+
+// NotifyReservationAcceptanceTimedOut is a paid mutator transaction binding the contract method 0x6985237a.
+//
+// Solidity: function notifyReservationAcceptanceTimedOut(uint256 reservationKey) returns()
+func (_ReservationRouter *ReservationRouterTransactorSession) NotifyReservationAcceptanceTimedOut(reservationKey *big.Int) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.NotifyReservationAcceptanceTimedOut(&_ReservationRouter.TransactOpts, reservationKey)
+}
+
+// NotifyReservationActionTimeout is a paid mutator transaction binding the contract method 0x626fd71a.
+//
+// Solidity: function notifyReservationActionTimeout(uint256 reservationKey) returns()
+func (_ReservationRouter *ReservationRouterTransactor) NotifyReservationActionTimeout(opts *bind.TransactOpts, reservationKey *big.Int) (*types.Transaction, error) {
+	return _ReservationRouter.contract.Transact(opts, "notifyReservationActionTimeout", reservationKey)
+}
+
+// NotifyReservationActionTimeout is a paid mutator transaction binding the contract method 0x626fd71a.
+//
+// Solidity: function notifyReservationActionTimeout(uint256 reservationKey) returns()
+func (_ReservationRouter *ReservationRouterSession) NotifyReservationActionTimeout(reservationKey *big.Int) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.NotifyReservationActionTimeout(&_ReservationRouter.TransactOpts, reservationKey)
+}
+
+// NotifyReservationActionTimeout is a paid mutator transaction binding the contract method 0x626fd71a.
+//
+// Solidity: function notifyReservationActionTimeout(uint256 reservationKey) returns()
+func (_ReservationRouter *ReservationRouterTransactorSession) NotifyReservationActionTimeout(reservationKey *big.Int) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.NotifyReservationActionTimeout(&_ReservationRouter.TransactOpts, reservationKey)
 }
 
 // NotifyReservationStranded is a paid mutator transaction binding the contract method 0xf95ea36f.
@@ -767,27 +780,6 @@ func (_ReservationRouter *ReservationRouterSession) NotifyReservationStranded(re
 // Solidity: function notifyReservationStranded(uint256 reservationKey) returns()
 func (_ReservationRouter *ReservationRouterTransactorSession) NotifyReservationStranded(reservationKey *big.Int) (*types.Transaction, error) {
 	return _ReservationRouter.Contract.NotifyReservationStranded(&_ReservationRouter.TransactOpts, reservationKey)
-}
-
-// NotifyReservationAcceptanceTimedOut is a paid mutator transaction binding the contract method 0x00000000.
-//
-// Solidity: function notifyReservationAcceptanceTimedOut(uint256 reservationKey) returns()
-func (_ReservationRouter *ReservationRouterTransactor) NotifyReservationAcceptanceTimedOut(opts *bind.TransactOpts, reservationKey *big.Int) (*types.Transaction, error) {
-	return _ReservationRouter.contract.Transact(opts, "notifyReservationAcceptanceTimedOut", reservationKey)
-}
-
-// NotifyReservationAcceptanceTimedOut is a paid mutator transaction binding the contract method 0x00000000.
-//
-// Solidity: function notifyReservationAcceptanceTimedOut(uint256 reservationKey) returns()
-func (_ReservationRouter *ReservationRouterSession) NotifyReservationAcceptanceTimedOut(reservationKey *big.Int) (*types.Transaction, error) {
-	return _ReservationRouter.Contract.NotifyReservationAcceptanceTimedOut(&_ReservationRouter.TransactOpts, reservationKey)
-}
-
-// NotifyReservationAcceptanceTimedOut is a paid mutator transaction binding the contract method 0x00000000.
-//
-// Solidity: function notifyReservationAcceptanceTimedOut(uint256 reservationKey) returns()
-func (_ReservationRouter *ReservationRouterTransactorSession) NotifyReservationAcceptanceTimedOut(reservationKey *big.Int) (*types.Transaction, error) {
-	return _ReservationRouter.Contract.NotifyReservationAcceptanceTimedOut(&_ReservationRouter.TransactOpts, reservationKey)
 }
 
 // NotifyStaleReservedDeposit is a paid mutator transaction binding the contract method 0x6ceb1b54.
@@ -853,25 +845,46 @@ func (_ReservationRouter *ReservationRouterTransactorSession) RequestReservation
 	return _ReservationRouter.Contract.RequestReservationReanchor(&_ReservationRouter.TransactOpts, reservationKey, targetWalletPubKeyHash)
 }
 
-// SubmitReservationProof is a paid mutator transaction binding the contract method 0x668a4980.
+// SubmitReservationAcceptanceProof is a paid mutator transaction binding the contract method 0xe24ad1ae.
 //
-// Solidity: function submitReservationProof(uint8 proofType, (bytes4,bytes,bytes,bytes4) txInfo, (bytes,uint256,bytes,bytes32,bytes) proof, (bytes32,uint32,uint64) mainUtxo, uint256 reservationKey, uint64 requestNonce) returns()
-func (_ReservationRouter *ReservationRouterTransactor) SubmitReservationProof(opts *bind.TransactOpts, proofType uint8, txInfo BitcoinTxInfo4, proof BitcoinTxProof3, mainUtxo BitcoinTxUTXO4, reservationKey *big.Int, requestNonce uint64) (*types.Transaction, error) {
-	return _ReservationRouter.contract.Transact(opts, "submitReservationProof", proofType, txInfo, proof, mainUtxo, reservationKey, requestNonce)
+// Solidity: function submitReservationAcceptanceProof((bytes4,bytes,bytes,bytes4) txInfo, (bytes,uint256,bytes,bytes32,bytes) proof, uint256 reservationKey, uint64 requestNonce) returns()
+func (_ReservationRouter *ReservationRouterTransactor) SubmitReservationAcceptanceProof(opts *bind.TransactOpts, txInfo BitcoinTxInfo4, proof BitcoinTxProof3, reservationKey *big.Int, requestNonce uint64) (*types.Transaction, error) {
+	return _ReservationRouter.contract.Transact(opts, "submitReservationAcceptanceProof", txInfo, proof, reservationKey, requestNonce)
 }
 
-// SubmitReservationProof is a paid mutator transaction binding the contract method 0x668a4980.
+// SubmitReservationAcceptanceProof is a paid mutator transaction binding the contract method 0xe24ad1ae.
 //
-// Solidity: function submitReservationProof(uint8 proofType, (bytes4,bytes,bytes,bytes4) txInfo, (bytes,uint256,bytes,bytes32,bytes) proof, (bytes32,uint32,uint64) mainUtxo, uint256 reservationKey, uint64 requestNonce) returns()
-func (_ReservationRouter *ReservationRouterSession) SubmitReservationProof(proofType uint8, txInfo BitcoinTxInfo4, proof BitcoinTxProof3, mainUtxo BitcoinTxUTXO4, reservationKey *big.Int, requestNonce uint64) (*types.Transaction, error) {
-	return _ReservationRouter.Contract.SubmitReservationProof(&_ReservationRouter.TransactOpts, proofType, txInfo, proof, mainUtxo, reservationKey, requestNonce)
+// Solidity: function submitReservationAcceptanceProof((bytes4,bytes,bytes,bytes4) txInfo, (bytes,uint256,bytes,bytes32,bytes) proof, uint256 reservationKey, uint64 requestNonce) returns()
+func (_ReservationRouter *ReservationRouterSession) SubmitReservationAcceptanceProof(txInfo BitcoinTxInfo4, proof BitcoinTxProof3, reservationKey *big.Int, requestNonce uint64) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.SubmitReservationAcceptanceProof(&_ReservationRouter.TransactOpts, txInfo, proof, reservationKey, requestNonce)
 }
 
-// SubmitReservationProof is a paid mutator transaction binding the contract method 0x668a4980.
+// SubmitReservationAcceptanceProof is a paid mutator transaction binding the contract method 0xe24ad1ae.
 //
-// Solidity: function submitReservationProof(uint8 proofType, (bytes4,bytes,bytes,bytes4) txInfo, (bytes,uint256,bytes,bytes32,bytes) proof, (bytes32,uint32,uint64) mainUtxo, uint256 reservationKey, uint64 requestNonce) returns()
-func (_ReservationRouter *ReservationRouterTransactorSession) SubmitReservationProof(proofType uint8, txInfo BitcoinTxInfo4, proof BitcoinTxProof3, mainUtxo BitcoinTxUTXO4, reservationKey *big.Int, requestNonce uint64) (*types.Transaction, error) {
-	return _ReservationRouter.Contract.SubmitReservationProof(&_ReservationRouter.TransactOpts, proofType, txInfo, proof, mainUtxo, reservationKey, requestNonce)
+// Solidity: function submitReservationAcceptanceProof((bytes4,bytes,bytes,bytes4) txInfo, (bytes,uint256,bytes,bytes32,bytes) proof, uint256 reservationKey, uint64 requestNonce) returns()
+func (_ReservationRouter *ReservationRouterTransactorSession) SubmitReservationAcceptanceProof(txInfo BitcoinTxInfo4, proof BitcoinTxProof3, reservationKey *big.Int, requestNonce uint64) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.SubmitReservationAcceptanceProof(&_ReservationRouter.TransactOpts, txInfo, proof, reservationKey, requestNonce)
+}
+
+// SubmitReservationReanchorProof is a paid mutator transaction binding the contract method 0x6af550d1.
+//
+// Solidity: function submitReservationReanchorProof((bytes4,bytes,bytes,bytes4) txInfo, (bytes,uint256,bytes,bytes32,bytes) proof, uint256 reservationKey, uint64 requestNonce) returns()
+func (_ReservationRouter *ReservationRouterTransactor) SubmitReservationReanchorProof(opts *bind.TransactOpts, txInfo BitcoinTxInfo4, proof BitcoinTxProof3, reservationKey *big.Int, requestNonce uint64) (*types.Transaction, error) {
+	return _ReservationRouter.contract.Transact(opts, "submitReservationReanchorProof", txInfo, proof, reservationKey, requestNonce)
+}
+
+// SubmitReservationReanchorProof is a paid mutator transaction binding the contract method 0x6af550d1.
+//
+// Solidity: function submitReservationReanchorProof((bytes4,bytes,bytes,bytes4) txInfo, (bytes,uint256,bytes,bytes32,bytes) proof, uint256 reservationKey, uint64 requestNonce) returns()
+func (_ReservationRouter *ReservationRouterSession) SubmitReservationReanchorProof(txInfo BitcoinTxInfo4, proof BitcoinTxProof3, reservationKey *big.Int, requestNonce uint64) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.SubmitReservationReanchorProof(&_ReservationRouter.TransactOpts, txInfo, proof, reservationKey, requestNonce)
+}
+
+// SubmitReservationReanchorProof is a paid mutator transaction binding the contract method 0x6af550d1.
+//
+// Solidity: function submitReservationReanchorProof((bytes4,bytes,bytes,bytes4) txInfo, (bytes,uint256,bytes,bytes32,bytes) proof, uint256 reservationKey, uint64 requestNonce) returns()
+func (_ReservationRouter *ReservationRouterTransactorSession) SubmitReservationReanchorProof(txInfo BitcoinTxInfo4, proof BitcoinTxProof3, reservationKey *big.Int, requestNonce uint64) (*types.Transaction, error) {
+	return _ReservationRouter.Contract.SubmitReservationReanchorProof(&_ReservationRouter.TransactOpts, txInfo, proof, reservationKey, requestNonce)
 }
 
 // TransferGovernance is a paid mutator transaction binding the contract method 0xd38bfff4.
@@ -1365,6 +1378,151 @@ func (_ReservationRouter *ReservationRouterFilterer) ParseReservationAcceptanceR
 	return event, nil
 }
 
+// ReservationRouterReservationAcceptanceTimedOutIterator is returned from FilterReservationAcceptanceTimedOut and is used to iterate over the raw logs and unpacked data for ReservationAcceptanceTimedOut events raised by the ReservationRouter contract.
+type ReservationRouterReservationAcceptanceTimedOutIterator struct {
+	Event *ReservationRouterReservationAcceptanceTimedOut // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *ReservationRouterReservationAcceptanceTimedOutIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(ReservationRouterReservationAcceptanceTimedOut)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(ReservationRouterReservationAcceptanceTimedOut)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *ReservationRouterReservationAcceptanceTimedOutIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *ReservationRouterReservationAcceptanceTimedOutIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// ReservationRouterReservationAcceptanceTimedOut represents a ReservationAcceptanceTimedOut event raised by the ReservationRouter contract.
+type ReservationRouterReservationAcceptanceTimedOut struct {
+	ReservationKey *big.Int
+	RequestNonce   uint64
+	Raw            types.Log // Blockchain specific contextual infos
+}
+
+// FilterReservationAcceptanceTimedOut is a free log retrieval operation binding the contract event 0xabb9ad55de7c942fc95bc485fc9af9854d1917197d5e458b4739590542cf53c3.
+//
+// Solidity: event ReservationAcceptanceTimedOut(uint256 indexed reservationKey, uint64 requestNonce)
+func (_ReservationRouter *ReservationRouterFilterer) FilterReservationAcceptanceTimedOut(opts *bind.FilterOpts, reservationKey []*big.Int) (*ReservationRouterReservationAcceptanceTimedOutIterator, error) {
+
+	var reservationKeyRule []interface{}
+	for _, reservationKeyItem := range reservationKey {
+		reservationKeyRule = append(reservationKeyRule, reservationKeyItem)
+	}
+
+	logs, sub, err := _ReservationRouter.contract.FilterLogs(opts, "ReservationAcceptanceTimedOut", reservationKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return &ReservationRouterReservationAcceptanceTimedOutIterator{contract: _ReservationRouter.contract, event: "ReservationAcceptanceTimedOut", logs: logs, sub: sub}, nil
+}
+
+// WatchReservationAcceptanceTimedOut is a free log subscription operation binding the contract event 0xabb9ad55de7c942fc95bc485fc9af9854d1917197d5e458b4739590542cf53c3.
+//
+// Solidity: event ReservationAcceptanceTimedOut(uint256 indexed reservationKey, uint64 requestNonce)
+func (_ReservationRouter *ReservationRouterFilterer) WatchReservationAcceptanceTimedOut(opts *bind.WatchOpts, sink chan<- *ReservationRouterReservationAcceptanceTimedOut, reservationKey []*big.Int) (event.Subscription, error) {
+
+	var reservationKeyRule []interface{}
+	for _, reservationKeyItem := range reservationKey {
+		reservationKeyRule = append(reservationKeyRule, reservationKeyItem)
+	}
+
+	logs, sub, err := _ReservationRouter.contract.WatchLogs(opts, "ReservationAcceptanceTimedOut", reservationKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(ReservationRouterReservationAcceptanceTimedOut)
+				if err := _ReservationRouter.contract.UnpackLog(event, "ReservationAcceptanceTimedOut", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseReservationAcceptanceTimedOut is a log parse operation binding the contract event 0xabb9ad55de7c942fc95bc485fc9af9854d1917197d5e458b4739590542cf53c3.
+//
+// Solidity: event ReservationAcceptanceTimedOut(uint256 indexed reservationKey, uint64 requestNonce)
+func (_ReservationRouter *ReservationRouterFilterer) ParseReservationAcceptanceTimedOut(log types.Log) (*ReservationRouterReservationAcceptanceTimedOut, error) {
+	event := new(ReservationRouterReservationAcceptanceTimedOut)
+	if err := _ReservationRouter.contract.UnpackLog(event, "ReservationAcceptanceTimedOut", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
 // ReservationRouterReservationAcceptedIterator is returned from FilterReservationAccepted and is used to iterate over the raw logs and unpacked data for ReservationAccepted events raised by the ReservationRouter contract.
 type ReservationRouterReservationAcceptedIterator struct {
 	Event *ReservationRouterReservationAccepted // Event containing the contract specifics and raw log
@@ -1678,152 +1836,6 @@ func (_ReservationRouter *ReservationRouterFilterer) ParseReservationActionSuper
 	return event, nil
 }
 
-// ReservationRouterReservationActionTimedOutIterator is returned from FilterReservationActionTimedOut and is used to iterate over the raw logs and unpacked data for ReservationActionTimedOut events raised by the ReservationRouter contract.
-type ReservationRouterReservationActionTimedOutIterator struct {
-	Event *ReservationRouterReservationActionTimedOut // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *ReservationRouterReservationActionTimedOutIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(ReservationRouterReservationActionTimedOut)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(ReservationRouterReservationActionTimedOut)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *ReservationRouterReservationActionTimedOutIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *ReservationRouterReservationActionTimedOutIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// ReservationRouterReservationActionTimedOut represents a ReservationActionTimedOut event raised by the ReservationRouter contract.
-type ReservationRouterReservationActionTimedOut struct {
-	ReservationKey *big.Int
-	RequestNonce   uint64
-	ActionType     uint8
-	Raw            types.Log // Blockchain specific contextual infos
-}
-
-// FilterReservationActionTimedOut is a free log retrieval operation binding the contract event 0xd3bb43b8c8b259f4da0efa2c7a34ce683c05d6e31864299fa4a867bb3ff218ba.
-//
-// Solidity: event ReservationActionTimedOut(uint256 indexed reservationKey, uint64 requestNonce, uint8 actionType)
-func (_ReservationRouter *ReservationRouterFilterer) FilterReservationActionTimedOut(opts *bind.FilterOpts, reservationKey []*big.Int) (*ReservationRouterReservationActionTimedOutIterator, error) {
-
-	var reservationKeyRule []interface{}
-	for _, reservationKeyItem := range reservationKey {
-		reservationKeyRule = append(reservationKeyRule, reservationKeyItem)
-	}
-
-	logs, sub, err := _ReservationRouter.contract.FilterLogs(opts, "ReservationActionTimedOut", reservationKeyRule)
-	if err != nil {
-		return nil, err
-	}
-	return &ReservationRouterReservationActionTimedOutIterator{contract: _ReservationRouter.contract, event: "ReservationActionTimedOut", logs: logs, sub: sub}, nil
-}
-
-// WatchReservationActionTimedOut is a free log subscription operation binding the contract event 0xd3bb43b8c8b259f4da0efa2c7a34ce683c05d6e31864299fa4a867bb3ff218ba.
-//
-// Solidity: event ReservationActionTimedOut(uint256 indexed reservationKey, uint64 requestNonce, uint8 actionType)
-func (_ReservationRouter *ReservationRouterFilterer) WatchReservationActionTimedOut(opts *bind.WatchOpts, sink chan<- *ReservationRouterReservationActionTimedOut, reservationKey []*big.Int) (event.Subscription, error) {
-
-	var reservationKeyRule []interface{}
-	for _, reservationKeyItem := range reservationKey {
-		reservationKeyRule = append(reservationKeyRule, reservationKeyItem)
-	}
-
-	logs, sub, err := _ReservationRouter.contract.WatchLogs(opts, "ReservationActionTimedOut", reservationKeyRule)
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(ReservationRouterReservationActionTimedOut)
-				if err := _ReservationRouter.contract.UnpackLog(event, "ReservationActionTimedOut", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseReservationActionTimedOut is a log parse operation binding the contract event 0xd3bb43b8c8b259f4da0efa2c7a34ce683c05d6e31864299fa4a867bb3ff218ba.
-//
-// Solidity: event ReservationActionTimedOut(uint256 indexed reservationKey, uint64 requestNonce, uint8 actionType)
-func (_ReservationRouter *ReservationRouterFilterer) ParseReservationActionTimedOut(log types.Log) (*ReservationRouterReservationActionTimedOut, error) {
-	event := new(ReservationRouterReservationActionTimedOut)
-	if err := _ReservationRouter.contract.UnpackLog(event, "ReservationActionTimedOut", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
 // ReservationRouterReservationCapsUpdatedIterator is returned from FilterReservationCapsUpdated and is used to iterate over the raw logs and unpacked data for ReservationCapsUpdated events raised by the ReservationRouter contract.
 type ReservationRouterReservationCapsUpdatedIterator struct {
 	Event *ReservationRouterReservationCapsUpdated // Event containing the contract specifics and raw log
@@ -2100,6 +2112,140 @@ func (_ReservationRouter *ReservationRouterFilterer) WatchReservationLateSettled
 func (_ReservationRouter *ReservationRouterFilterer) ParseReservationLateSettled(log types.Log) (*ReservationRouterReservationLateSettled, error) {
 	event := new(ReservationRouterReservationLateSettled)
 	if err := _ReservationRouter.contract.UnpackLog(event, "ReservationLateSettled", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// ReservationRouterReservationOccupancyChangedIterator is returned from FilterReservationOccupancyChanged and is used to iterate over the raw logs and unpacked data for ReservationOccupancyChanged events raised by the ReservationRouter contract.
+type ReservationRouterReservationOccupancyChangedIterator struct {
+	Event *ReservationRouterReservationOccupancyChanged // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *ReservationRouterReservationOccupancyChangedIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(ReservationRouterReservationOccupancyChanged)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(ReservationRouterReservationOccupancyChanged)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *ReservationRouterReservationOccupancyChangedIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *ReservationRouterReservationOccupancyChangedIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// ReservationRouterReservationOccupancyChanged represents a ReservationOccupancyChanged event raised by the ReservationRouter contract.
+type ReservationRouterReservationOccupancyChanged struct {
+	ActiveReservationsCount uint32
+	Raw                     types.Log // Blockchain specific contextual infos
+}
+
+// FilterReservationOccupancyChanged is a free log retrieval operation binding the contract event 0xb16e810047677a95f8b21f557051282ce59cccb89e551069aa254ffdfed8a001.
+//
+// Solidity: event ReservationOccupancyChanged(uint32 activeReservationsCount)
+func (_ReservationRouter *ReservationRouterFilterer) FilterReservationOccupancyChanged(opts *bind.FilterOpts) (*ReservationRouterReservationOccupancyChangedIterator, error) {
+
+	logs, sub, err := _ReservationRouter.contract.FilterLogs(opts, "ReservationOccupancyChanged")
+	if err != nil {
+		return nil, err
+	}
+	return &ReservationRouterReservationOccupancyChangedIterator{contract: _ReservationRouter.contract, event: "ReservationOccupancyChanged", logs: logs, sub: sub}, nil
+}
+
+// WatchReservationOccupancyChanged is a free log subscription operation binding the contract event 0xb16e810047677a95f8b21f557051282ce59cccb89e551069aa254ffdfed8a001.
+//
+// Solidity: event ReservationOccupancyChanged(uint32 activeReservationsCount)
+func (_ReservationRouter *ReservationRouterFilterer) WatchReservationOccupancyChanged(opts *bind.WatchOpts, sink chan<- *ReservationRouterReservationOccupancyChanged) (event.Subscription, error) {
+
+	logs, sub, err := _ReservationRouter.contract.WatchLogs(opts, "ReservationOccupancyChanged")
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(ReservationRouterReservationOccupancyChanged)
+				if err := _ReservationRouter.contract.UnpackLog(event, "ReservationOccupancyChanged", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseReservationOccupancyChanged is a log parse operation binding the contract event 0xb16e810047677a95f8b21f557051282ce59cccb89e551069aa254ffdfed8a001.
+//
+// Solidity: event ReservationOccupancyChanged(uint32 activeReservationsCount)
+func (_ReservationRouter *ReservationRouterFilterer) ParseReservationOccupancyChanged(log types.Log) (*ReservationRouterReservationOccupancyChanged, error) {
+	event := new(ReservationRouterReservationOccupancyChanged)
+	if err := _ReservationRouter.contract.UnpackLog(event, "ReservationOccupancyChanged", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
@@ -2413,6 +2559,151 @@ func (_ReservationRouter *ReservationRouterFilterer) ParseReservationReanchorReq
 	return event, nil
 }
 
+// ReservationRouterReservationReanchorTimedOutIterator is returned from FilterReservationReanchorTimedOut and is used to iterate over the raw logs and unpacked data for ReservationReanchorTimedOut events raised by the ReservationRouter contract.
+type ReservationRouterReservationReanchorTimedOutIterator struct {
+	Event *ReservationRouterReservationReanchorTimedOut // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *ReservationRouterReservationReanchorTimedOutIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(ReservationRouterReservationReanchorTimedOut)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(ReservationRouterReservationReanchorTimedOut)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *ReservationRouterReservationReanchorTimedOutIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *ReservationRouterReservationReanchorTimedOutIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// ReservationRouterReservationReanchorTimedOut represents a ReservationReanchorTimedOut event raised by the ReservationRouter contract.
+type ReservationRouterReservationReanchorTimedOut struct {
+	ReservationKey *big.Int
+	RequestNonce   uint64
+	Raw            types.Log // Blockchain specific contextual infos
+}
+
+// FilterReservationReanchorTimedOut is a free log retrieval operation binding the contract event 0xaddda906af6f28651762b3b2dfea5990d1267c197c1b7d9ca1485c3f46d95626.
+//
+// Solidity: event ReservationReanchorTimedOut(uint256 indexed reservationKey, uint64 requestNonce)
+func (_ReservationRouter *ReservationRouterFilterer) FilterReservationReanchorTimedOut(opts *bind.FilterOpts, reservationKey []*big.Int) (*ReservationRouterReservationReanchorTimedOutIterator, error) {
+
+	var reservationKeyRule []interface{}
+	for _, reservationKeyItem := range reservationKey {
+		reservationKeyRule = append(reservationKeyRule, reservationKeyItem)
+	}
+
+	logs, sub, err := _ReservationRouter.contract.FilterLogs(opts, "ReservationReanchorTimedOut", reservationKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return &ReservationRouterReservationReanchorTimedOutIterator{contract: _ReservationRouter.contract, event: "ReservationReanchorTimedOut", logs: logs, sub: sub}, nil
+}
+
+// WatchReservationReanchorTimedOut is a free log subscription operation binding the contract event 0xaddda906af6f28651762b3b2dfea5990d1267c197c1b7d9ca1485c3f46d95626.
+//
+// Solidity: event ReservationReanchorTimedOut(uint256 indexed reservationKey, uint64 requestNonce)
+func (_ReservationRouter *ReservationRouterFilterer) WatchReservationReanchorTimedOut(opts *bind.WatchOpts, sink chan<- *ReservationRouterReservationReanchorTimedOut, reservationKey []*big.Int) (event.Subscription, error) {
+
+	var reservationKeyRule []interface{}
+	for _, reservationKeyItem := range reservationKey {
+		reservationKeyRule = append(reservationKeyRule, reservationKeyItem)
+	}
+
+	logs, sub, err := _ReservationRouter.contract.WatchLogs(opts, "ReservationReanchorTimedOut", reservationKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(ReservationRouterReservationReanchorTimedOut)
+				if err := _ReservationRouter.contract.UnpackLog(event, "ReservationReanchorTimedOut", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseReservationReanchorTimedOut is a log parse operation binding the contract event 0xaddda906af6f28651762b3b2dfea5990d1267c197c1b7d9ca1485c3f46d95626.
+//
+// Solidity: event ReservationReanchorTimedOut(uint256 indexed reservationKey, uint64 requestNonce)
+func (_ReservationRouter *ReservationRouterFilterer) ParseReservationReanchorTimedOut(log types.Log) (*ReservationRouterReservationReanchorTimedOut, error) {
+	event := new(ReservationRouterReservationReanchorTimedOut)
+	if err := _ReservationRouter.contract.UnpackLog(event, "ReservationReanchorTimedOut", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
 // ReservationRouterReservationReanchoredIterator is returned from FilterReservationReanchored and is used to iterate over the raw logs and unpacked data for ReservationReanchored events raised by the ReservationRouter contract.
 type ReservationRouterReservationReanchoredIterator struct {
 	Event *ReservationRouterReservationReanchored // Event containing the contract specifics and raw log
@@ -2487,12 +2778,13 @@ type ReservationRouterReservationReanchored struct {
 	NewWalletPubKeyHash [20]byte
 	NewAnchorTxHash     [32]byte
 	NewAnchorAmount     uint64
+	MinerFee            uint64
 	Raw                 types.Log // Blockchain specific contextual infos
 }
 
-// FilterReservationReanchored is a free log retrieval operation binding the contract event 0xe42922c665e9600f84def7070f9dfeeb5dd650fb3522fb6bb2326e676bd23319.
+// FilterReservationReanchored is a free log retrieval operation binding the contract event 0x6abf29e547ef7d6337ebe840df4763ee22dded050e33407330f49472adf1f689.
 //
-// Solidity: event ReservationReanchored(uint256 indexed reservationKey, uint64 requestNonce, bytes20 indexed newWalletPubKeyHash, bytes32 newAnchorTxHash, uint64 newAnchorAmount)
+// Solidity: event ReservationReanchored(uint256 indexed reservationKey, uint64 requestNonce, bytes20 indexed newWalletPubKeyHash, bytes32 newAnchorTxHash, uint64 newAnchorAmount, uint64 minerFee)
 func (_ReservationRouter *ReservationRouterFilterer) FilterReservationReanchored(opts *bind.FilterOpts, reservationKey []*big.Int, newWalletPubKeyHash [][20]byte) (*ReservationRouterReservationReanchoredIterator, error) {
 
 	var reservationKeyRule []interface{}
@@ -2512,9 +2804,9 @@ func (_ReservationRouter *ReservationRouterFilterer) FilterReservationReanchored
 	return &ReservationRouterReservationReanchoredIterator{contract: _ReservationRouter.contract, event: "ReservationReanchored", logs: logs, sub: sub}, nil
 }
 
-// WatchReservationReanchored is a free log subscription operation binding the contract event 0xe42922c665e9600f84def7070f9dfeeb5dd650fb3522fb6bb2326e676bd23319.
+// WatchReservationReanchored is a free log subscription operation binding the contract event 0x6abf29e547ef7d6337ebe840df4763ee22dded050e33407330f49472adf1f689.
 //
-// Solidity: event ReservationReanchored(uint256 indexed reservationKey, uint64 requestNonce, bytes20 indexed newWalletPubKeyHash, bytes32 newAnchorTxHash, uint64 newAnchorAmount)
+// Solidity: event ReservationReanchored(uint256 indexed reservationKey, uint64 requestNonce, bytes20 indexed newWalletPubKeyHash, bytes32 newAnchorTxHash, uint64 newAnchorAmount, uint64 minerFee)
 func (_ReservationRouter *ReservationRouterFilterer) WatchReservationReanchored(opts *bind.WatchOpts, sink chan<- *ReservationRouterReservationReanchored, reservationKey []*big.Int, newWalletPubKeyHash [][20]byte) (event.Subscription, error) {
 
 	var reservationKeyRule []interface{}
@@ -2559,9 +2851,9 @@ func (_ReservationRouter *ReservationRouterFilterer) WatchReservationReanchored(
 	}), nil
 }
 
-// ParseReservationReanchored is a log parse operation binding the contract event 0xe42922c665e9600f84def7070f9dfeeb5dd650fb3522fb6bb2326e676bd23319.
+// ParseReservationReanchored is a log parse operation binding the contract event 0x6abf29e547ef7d6337ebe840df4763ee22dded050e33407330f49472adf1f689.
 //
-// Solidity: event ReservationReanchored(uint256 indexed reservationKey, uint64 requestNonce, bytes20 indexed newWalletPubKeyHash, bytes32 newAnchorTxHash, uint64 newAnchorAmount)
+// Solidity: event ReservationReanchored(uint256 indexed reservationKey, uint64 requestNonce, bytes20 indexed newWalletPubKeyHash, bytes32 newAnchorTxHash, uint64 newAnchorAmount, uint64 minerFee)
 func (_ReservationRouter *ReservationRouterFilterer) ParseReservationReanchored(log types.Log) (*ReservationRouterReservationReanchored, error) {
 	event := new(ReservationRouterReservationReanchored)
 	if err := _ReservationRouter.contract.UnpackLog(event, "ReservationReanchored", log); err != nil {
@@ -2709,140 +3001,6 @@ func (_ReservationRouter *ReservationRouterFilterer) WatchReservationRetryCredit
 func (_ReservationRouter *ReservationRouterFilterer) ParseReservationRetryCreditMinted(log types.Log) (*ReservationRouterReservationRetryCreditMinted, error) {
 	event := new(ReservationRouterReservationRetryCreditMinted)
 	if err := _ReservationRouter.contract.UnpackLog(event, "ReservationRetryCreditMinted", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// ReservationRouterReservationRouterSetIterator is returned from FilterReservationRouterSet and is used to iterate over the raw logs and unpacked data for ReservationRouterSet events raised by the ReservationRouter contract.
-type ReservationRouterReservationRouterSetIterator struct {
-	Event *ReservationRouterReservationRouterSet // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *ReservationRouterReservationRouterSetIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(ReservationRouterReservationRouterSet)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(ReservationRouterReservationRouterSet)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *ReservationRouterReservationRouterSetIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *ReservationRouterReservationRouterSetIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// ReservationRouterReservationRouterSet represents a ReservationRouterSet event raised by the ReservationRouter contract.
-type ReservationRouterReservationRouterSet struct {
-	ReservationRouter common.Address
-	Raw               types.Log // Blockchain specific contextual infos
-}
-
-// FilterReservationRouterSet is a free log retrieval operation binding the contract event 0xd9eacf62803dd1f1bb5342d8eb5951546c371915e06223f589c0c95486c7c769.
-//
-// Solidity: event ReservationRouterSet(address reservationRouter)
-func (_ReservationRouter *ReservationRouterFilterer) FilterReservationRouterSet(opts *bind.FilterOpts) (*ReservationRouterReservationRouterSetIterator, error) {
-
-	logs, sub, err := _ReservationRouter.contract.FilterLogs(opts, "ReservationRouterSet")
-	if err != nil {
-		return nil, err
-	}
-	return &ReservationRouterReservationRouterSetIterator{contract: _ReservationRouter.contract, event: "ReservationRouterSet", logs: logs, sub: sub}, nil
-}
-
-// WatchReservationRouterSet is a free log subscription operation binding the contract event 0xd9eacf62803dd1f1bb5342d8eb5951546c371915e06223f589c0c95486c7c769.
-//
-// Solidity: event ReservationRouterSet(address reservationRouter)
-func (_ReservationRouter *ReservationRouterFilterer) WatchReservationRouterSet(opts *bind.WatchOpts, sink chan<- *ReservationRouterReservationRouterSet) (event.Subscription, error) {
-
-	logs, sub, err := _ReservationRouter.contract.WatchLogs(opts, "ReservationRouterSet")
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(ReservationRouterReservationRouterSet)
-				if err := _ReservationRouter.contract.UnpackLog(event, "ReservationRouterSet", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseReservationRouterSet is a log parse operation binding the contract event 0xd9eacf62803dd1f1bb5342d8eb5951546c371915e06223f589c0c95486c7c769.
-//
-// Solidity: event ReservationRouterSet(address reservationRouter)
-func (_ReservationRouter *ReservationRouterFilterer) ParseReservationRouterSet(log types.Log) (*ReservationRouterReservationRouterSet, error) {
-	event := new(ReservationRouterReservationRouterSet)
-	if err := _ReservationRouter.contract.UnpackLog(event, "ReservationRouterSet", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log

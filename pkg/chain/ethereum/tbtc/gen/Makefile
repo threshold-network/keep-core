@@ -87,14 +87,22 @@ include ../../common/gen/Makefile
 # the ABI already embedded in the committed bindings (re-derived from
 # ReservationRouterMetaData.ABI, with the "struct"/"enum"/"contract"
 # internalType prefix space abigen's metadata packer strips put back;
-# verified by round-tripping through the same abigen + keep-common
-# generator invocation and diffing byte-identical against
-# abi/ReservationRouter.go, contract/ReservationRouter.go, and
-# cmd/ReservationRouter.go) - only when the real artifact is missing,
-# and only in the `development` environment, which already tolerates
-# placeholder addresses (see the _address/% rule above). Non-development
-# builds still hard-fail if the real artifact is ever missing there,
-# since a real deployed address must never be substituted silently.
+# round-tripped through the same abigen + keep-common generator
+# invocation and diffed byte-identical against abi/ReservationRouter.go,
+# contract/ReservationRouter.go, and cmd/ReservationRouter.go). That
+# round-trip only proves internal self-consistency with our own
+# committed bindings - it is a closed loop that cannot detect the real
+# on-chain contract's ABI having diverged from what's committed, which
+# is exactly what happened before threshold-network/keep-core#4281 was
+# fixed. Run `make verify-vendored-fallback` against a real fetched
+# ReservationRouter.json whenever this vendored file is touched or
+# needs re-verification; see that target below for why it can't run as
+# part of this rule. This fallback only applies when the real artifact
+# is missing, and only in the `development` environment, which already
+# tolerates placeholder addresses (see the _address/% rule above).
+# Non-development builds still hard-fail if the real artifact is ever
+# missing there, since a real deployed address must never be
+# substituted silently.
 # Remove this rule once tbtc-v2 publishes the real artifact upstream.
 ${artifacts_dir}/ReservationRouter.json:
 ifeq ($(environment), development)
@@ -105,6 +113,37 @@ ifeq ($(environment), development)
 else
 	@[ -f "$@" ] || { echo "$@ does not exist!"; exit 1; }
 endif
+
+# verify-vendored-fallback checks ReservationRouter.fallback-artifact.json's ABI
+# against a REAL fetched ReservationRouter.json, catching drift between the
+# vendored copy and the actual on-chain contract that the round-trip check in
+# the comment above (self-consistency against our own committed bindings only)
+# cannot catch. It needs the real artifact to exist, which is exactly the case
+# the fallback rule above exists to handle the absence of - wiring this into
+# `all`/`generate` would make the common case (real artifact missing) fail the
+# build. Run it manually, or in a separate CI job with npm/network access,
+# whenever ReservationRouter.fallback-artifact.json is touched or needs
+# re-verification. Compares the full canonicalized `.abi` array (sorted by
+# function name, jq -S) rather than hand-picking fields, so it naturally
+# catches missing/renamed functions, added/removed/reordered parameters, and
+# type changes alike.
+.PHONY: verify-vendored-fallback
+verify-vendored-fallback:
+	@[ -f "${artifacts_dir}/ReservationRouter.json" ] || { \
+		echo "verify-vendored-fallback requires a real ${artifacts_dir}/ReservationRouter.json (fetch @keep-network/tbtc-v2 with npm/network access before running this target)"; \
+		exit 1; \
+	}
+	@vendored=$$(mktemp) && real=$$(mktemp) && \
+	jq -S '.abi | sort_by(.name)' ReservationRouter.fallback-artifact.json > "$$vendored" && \
+	jq -S '.abi | sort_by(.name)' ${artifacts_dir}/ReservationRouter.json > "$$real" && \
+	if diff -u "$$vendored" "$$real"; then \
+		echo "ReservationRouter.fallback-artifact.json ABI matches the real artifact"; \
+		rm -f "$$vendored" "$$real"; \
+	else \
+		echo "ReservationRouter.fallback-artifact.json ABI differs from the real artifact - regenerate the vendored fallback (see threshold-network/keep-core#4281)"; \
+		rm -f "$$vendored" "$$real"; \
+		exit 1; \
+	fi
 
 # @keep-network/tbtc-v2@development on npm publishes Bridge.json and
 # WalletProposalValidator.json, but both are stale relative to the
@@ -120,21 +159,26 @@ endif
 # round-tripping through the same abigen + keep-common generator
 # invocation, producing a clean `go build ./...`) before anything reads
 # the artifact. Only in `development`; only when the methods are
-# actually missing, so a real future npm publish makes this a no-op
-# without needing to be removed first. Non-development builds are
-# untouched. Remove this whole block once tbtc-v2 publishes the real
-# methods upstream.
+# missing, or present under the matching name but with a stale shape
+# (e.g. a pre-reservation-feature isReservedDeposit/
+# validateReservationAnchorProposal that happens to share a name with
+# the reservation-feature method but not its parameter shape) - a
+# name-only match is deliberately treated the same as missing, see the
+# shape checks below - so a real future npm publish with the correct
+# signatures makes this a no-op without needing to be removed first.
+# Non-development builds are untouched. Remove this whole block once
+# tbtc-v2 publishes the real methods upstream.
 .PHONY: patch-artifacts
 check_artifacts: patch-artifacts
 patch-artifacts:
 ifeq ($(environment), development)
-	@jq -e '.abi[] | select(.name == "isReservedDeposit")' ${artifacts_dir}/Bridge.json >/dev/null 2>&1 || { \
-		echo "Bridge - artifact missing reservation methods, patching in vendored fallback (see threshold-network/keep-core#4281)"; \
+	@jq -e '.abi[] | select(.name == "isReservedDeposit") | select((.inputs | length) == 1 and .inputs[0].type == "uint256" and (.outputs | length) == 1 and .outputs[0].type == "bool")' ${artifacts_dir}/Bridge.json >/dev/null 2>&1 || { \
+		echo "Bridge - artifact missing reservation methods (or isReservedDeposit has a stale signature), patching in vendored fallback (see threshold-network/keep-core#4281)"; \
 		jq --slurpfile extra Bridge.reservation-methods-fallback.json '.abi += $$extra[0]' ${artifacts_dir}/Bridge.json > ${artifacts_dir}/Bridge.json.patched && \
 		mv ${artifacts_dir}/Bridge.json.patched ${artifacts_dir}/Bridge.json; \
 	}
-	@jq -e '.abi[] | select(.name == "validateReservationAnchorProposal")' ${artifacts_dir}/WalletProposalValidator.json >/dev/null 2>&1 || { \
-		echo "WalletProposalValidator - artifact missing reservation methods, patching in vendored fallback (see threshold-network/keep-core#4281)"; \
+	@jq -e '.abi[] | select(.name == "validateReservationAnchorProposal") | select(((.inputs[0] // {}).components // []) | any(.name == "requestNonce"))' ${artifacts_dir}/WalletProposalValidator.json >/dev/null 2>&1 || { \
+		echo "WalletProposalValidator - artifact missing reservation methods (or validateReservationAnchorProposal has a stale signature missing requestNonce), patching in vendored fallback (see threshold-network/keep-core#4281)"; \
 		jq --slurpfile extra WalletProposalValidator.reservation-methods-fallback.json '.abi += $$extra[0]' ${artifacts_dir}/WalletProposalValidator.json > ${artifacts_dir}/WalletProposalValidator.json.patched && \
 		mv ${artifacts_dir}/WalletProposalValidator.json.patched ${artifacts_dir}/WalletProposalValidator.json; \
 	}

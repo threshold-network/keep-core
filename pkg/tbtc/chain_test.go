@@ -1580,11 +1580,18 @@ func (lc *localChain) RequestReservationReanchor(
 	panic("unsupported")
 }
 
-func (lc *localChain) SubmitReservationProof(
-	proofType uint8,
+func (lc *localChain) SubmitReservationAcceptanceProof(
 	txInfo *BitcoinTxInfo,
 	proof *BitcoinTxProof,
-	mainUtxo *BitcoinTxUTXO,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) SubmitReservationReanchorProof(
+	txInfo *BitcoinTxInfo,
+	proof *BitcoinTxProof,
 	reservationKey *big.Int,
 	requestNonce uint64,
 ) error {
@@ -1593,7 +1600,6 @@ func (lc *localChain) SubmitReservationProof(
 
 func (lc *localChain) NotifyReservationActionTimeout(
 	reservationKey *big.Int,
-	walletMembersIDs []uint32,
 ) error {
 	panic("unsupported")
 }
@@ -1612,6 +1618,12 @@ func (lc *localChain) NotifyStaleReservedDeposit(
 func (lc *localChain) NotifyReservationStranded(
 	reservationKey *big.Int,
 ) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) WalletTerminationCause(
+	walletPublicKeyHash [20]byte,
+) (WalletTerminationCause, error) {
 	panic("unsupported")
 }
 

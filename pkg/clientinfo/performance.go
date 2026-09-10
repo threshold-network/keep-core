@@ -37,7 +37,7 @@ type PerformanceMetrics struct {
 	registry *Registry
 	cancel   context.CancelFunc
 
-	// reservationsEnabled mirrors tbtc.Config.Reservations.LeaderDutiesEnabled. Gates
+	// reservationsEnabled mirrors tbtc.Config.ReservationsEnabled. Gates
 	// registration of the reservation-specific gauge metrics (active_
 	// reservations_count, max_active_reservations, live_wallets_count,
 	// wallet_reservations_count) so a non-reservation deployment's metric
@@ -232,7 +232,7 @@ func (pm *PerformanceMetrics) registerWalletActionMetrics() {
 	// For each action type, register: total, success_total, failed_total, duration_seconds
 	// Reservation action types are registered unconditionally: reservation
 	// action execution in node_proposals.go is not itself gated on
-	// Tbtc.Reservations.LeaderDutiesEnabled, so an operator running with the flag
+	// Tbtc.ReservationsEnabled, so an operator running with the flag
 	// disabled can still execute anchor/re-anchor actions post-activation.
 	// Gating registration here would leave increments to those
 	// wallet_action_reservation_* counters silently dropped

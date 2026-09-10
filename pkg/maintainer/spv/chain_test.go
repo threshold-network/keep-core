@@ -60,8 +60,7 @@ type submittedStaleReservedDeposit struct {
 // submittedReservationActionTimeout records a NotifyReservationActionTimeout
 // call for assertion in tests.
 type submittedReservationActionTimeout struct {
-	reservationKey   *big.Int
-	walletMembersIDs []uint32
+	reservationKey *big.Int
 }
 
 // reservedDepositRecord is the local-chain-side booking for a reserved
@@ -103,6 +102,11 @@ type localChain struct {
 	submittedAcceptanceTimeouts []*big.Int
 	reservationParameters       *tbtc.ReservationParameters
 	reservationAnchorUtxoIndex  map[[36]byte]*big.Int
+	// walletTerminationCauses is keyed by wallet public key hash; a missing
+	// entry defaults to tbtc.WalletTerminationCauseUnknown, matching the
+	// production zero-value default when no pre-termination event is found.
+	walletTerminationCauses     map[[20]byte]tbtc.WalletTerminationCause
+	walletTerminationCauseCalls int
 
 	// Error-injection fields for the reservation watcher chain-error
 	// passthrough tests: nil (the default) means the corresponding method
@@ -116,6 +120,7 @@ type localChain struct {
 	notifyStaleReservedDepositErr          error
 	pastNewWalletRegisteredEventsErr       error
 	notifyReservationStrandedErrByKey      map[string]error
+	walletTerminationCauseErr              error
 
 	// Wallet registration and pending-action-request event state for the
 	// watcher dispatch and reservation proof loop tests.
@@ -131,15 +136,21 @@ type localChain struct {
 	// Error fields for testing on-chain submit failure metrics
 	submitDepositSweepProofErr error
 	submitRedemptionProofErr   error
-	// submitReservationProofHook, when non-nil, overrides the default
-	// success stub and gives the test full control over
-	// SubmitReservationProof behavior (e.g. to assert arguments or return
-	// an error).
-	submitReservationProofHook func(
-		proofType uint8,
+	// submitReservationAcceptanceProofHook, when non-nil, overrides the
+	// default success stub and gives the test full control over
+	// SubmitReservationAcceptanceProof behavior (e.g. to assert arguments
+	// or return an error).
+	submitReservationAcceptanceProofHook func(
 		txInfo *tbtc.BitcoinTxInfo,
 		proof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error
+	// submitReservationReanchorProofHook is the SubmitReservationReanchorProof
+	// analog of submitReservationAcceptanceProofHook.
+	submitReservationReanchorProofHook func(
+		txInfo *tbtc.BitcoinTxInfo,
+		proof *tbtc.BitcoinTxProof,
 		reservationKey *big.Int,
 		requestNonce uint64,
 	) error
@@ -847,22 +858,37 @@ func (c *errorBlockCounterChain) BlockCounter() (chain.BlockCounter, error) {
 	return nil, c.err
 }
 
-// SubmitReservationProof is a stub matching the reservation additions on
-// the production Chain interface.
-func (lc *localChain) SubmitReservationProof(
-	proofType uint8,
+// SubmitReservationAcceptanceProof is a stub matching the reservation
+// additions on the production Chain interface.
+func (lc *localChain) SubmitReservationAcceptanceProof(
 	txInfo *tbtc.BitcoinTxInfo,
 	proof *tbtc.BitcoinTxProof,
-	mainUtxo *tbtc.BitcoinTxUTXO,
 	reservationKey *big.Int,
 	requestNonce uint64,
 ) error {
-	if lc.submitReservationProofHook != nil {
-		return lc.submitReservationProofHook(
-			proofType,
+	if lc.submitReservationAcceptanceProofHook != nil {
+		return lc.submitReservationAcceptanceProofHook(
 			txInfo,
 			proof,
-			mainUtxo,
+			reservationKey,
+			requestNonce,
+		)
+	}
+	panic("unsupported")
+}
+
+// SubmitReservationReanchorProof is the SubmitReservationAcceptanceProof
+// analog for re-anchor action generations.
+func (lc *localChain) SubmitReservationReanchorProof(
+	txInfo *tbtc.BitcoinTxInfo,
+	proof *tbtc.BitcoinTxProof,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	if lc.submitReservationReanchorProofHook != nil {
+		return lc.submitReservationReanchorProofHook(
+			txInfo,
+			proof,
 			reservationKey,
 			requestNonce,
 		)
@@ -875,7 +901,6 @@ func (lc *localChain) SubmitReservationProof(
 // Chain interface to drive the notification path.
 func (lc *localChain) NotifyReservationActionTimeout(
 	reservationKey *big.Int,
-	walletMembersIDs []uint32,
 ) error {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
@@ -883,8 +908,7 @@ func (lc *localChain) NotifyReservationActionTimeout(
 	lc.submittedActionTimeouts = append(
 		lc.submittedActionTimeouts,
 		&submittedReservationActionTimeout{
-			reservationKey:   reservationKey,
-			walletMembersIDs: walletMembersIDs,
+			reservationKey: reservationKey,
 		},
 	)
 
@@ -990,6 +1014,49 @@ func (lc *localChain) getSubmittedReservationStrandedKeys() []*big.Int {
 	out := make([]*big.Int, len(lc.submittedStrandedKeys))
 	copy(out, lc.submittedStrandedKeys)
 	return out
+}
+
+// WalletTerminationCause returns the cause installed via
+// setWalletTerminationCause, or tbtc.WalletTerminationCauseUnknown if none
+// was installed for this wallet - matching production's zero-result
+// default when no pre-termination event is found.
+func (lc *localChain) WalletTerminationCause(
+	walletPublicKeyHash [20]byte,
+) (tbtc.WalletTerminationCause, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.walletTerminationCauseCalls++
+
+	if lc.walletTerminationCauseErr != nil {
+		return tbtc.WalletTerminationCauseUnknown, lc.walletTerminationCauseErr
+	}
+
+	return lc.walletTerminationCauses[walletPublicKeyHash], nil
+}
+
+// getWalletTerminationCauseCallCount returns how many times
+// WalletTerminationCause has been invoked.
+func (lc *localChain) getWalletTerminationCauseCallCount() int {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.walletTerminationCauseCalls
+}
+
+// setWalletTerminationCause installs the cause WalletTerminationCause
+// returns for the given wallet.
+func (lc *localChain) setWalletTerminationCause(
+	walletPublicKeyHash [20]byte,
+	cause tbtc.WalletTerminationCause,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.walletTerminationCauses == nil {
+		lc.walletTerminationCauses = make(map[[20]byte]tbtc.WalletTerminationCause)
+	}
+	lc.walletTerminationCauses[walletPublicKeyHash] = cause
 }
 
 // GetReservation returns the reservation previously installed via

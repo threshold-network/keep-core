@@ -602,7 +602,7 @@ func TestNode_HandleDepositSweepProposal_WalletNotControlled(t *testing.T) {
 	uncontrolledWallet := uncontrolledWalletFor(signer)
 	proposal := &DepositSweepProposal{}
 
-	n.handleDepositSweepProposal(uncontrolledWallet, proposal, 10, 100)
+	n.handleDepositSweepProposal(uncontrolledWallet, proposal, 10, 100, 0)
 
 	if count := dispatchedActionsCount(n); count != 0 {
 		t.Errorf("expected no dispatched actions for uncontrolled wallet, got %d", count)
@@ -621,7 +621,7 @@ func TestNode_HandleDepositSweepProposal_WalletBusy(t *testing.T) {
 		n.walletDispatcher.actions[walletKey] = ActionDepositSweep
 	}()
 
-	n.handleDepositSweepProposal(signer.wallet, &DepositSweepProposal{}, 10, 100)
+	n.handleDepositSweepProposal(signer.wallet, &DepositSweepProposal{}, 10, 100, 0)
 
 	actionType, ok := func() (WalletActionType, bool) {
 		n.walletDispatcher.actionsMutex.Lock()
@@ -649,6 +649,7 @@ func TestNode_HandleDepositSweepProposal_DispatchesAction(t *testing.T) {
 		&DepositSweepProposal{SweepTxFee: big.NewInt(0)},
 		10,
 		100,
+		0,
 	)
 
 	waitForDispatcherIdle(t, n)

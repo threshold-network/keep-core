@@ -41,11 +41,9 @@ Maintainer:
     TransactionLimit: 80
     RestartBackoffTime: "2h"
     IdleBackoffTime: "15m"
-    Reservations:
-      LeaderDutiesEnabled: true
+    ReservationProofsEnabled: true
 Tbtc:
-  Reservations:
-    LeaderDutiesEnabled: true
+  ReservationsEnabled: true
 
 Developer:
   RandomBeaconAddress: "0xcf64c2a367341170cb4e09cf8c0ed137d8473ceb"

@@ -74,18 +74,13 @@ RUN make get_artifacts environment=$ENVIRONMENT
 # ReservationRouter (and the rest of the tbtc module's required_contracts) under the
 # `development` npm tag. Until then, `get_artifacts` fetches a tbtc-v2 package whose
 # Bridge/WalletProposalValidator/RedemptionWatchtower don't yet expose the reservation
-# methods this PR binds against, and has no ReservationRouter artifact at all. The
-# `client.yml` workflow locally compiles tbtc-v2 PR #1112 (pinned SHA) and drops its
-# compiled ABI artifacts for the tbtc module's required_contracts at
-# ./ci-shims/tbtc-artifacts/*.json when it runs; this only overrides the tbtc module's
+# methods this PR binds against, and has no ReservationRouter artifact at all.
+# Missing/stale reservation ABI methods are patched in at generate-time via the
+# vendored fallback artifacts in pkg/chain/ethereum/tbtc/gen/Makefile (see the
+# ReservationRouter.fallback-artifact.json rule and the patch-artifacts target) -
+# see threshold-network/keep-core#4281. This only affects the tbtc module's
 # artifacts, and only for `environment=development` (PR CI) builds - sepolia/mainnet
 # builds and the beacon/ecdsa/threshold modules are untouched.
-COPY ./ci-shims/tbtc-artifacts /tmp/tbtc-artifacts
-RUN if { [ -z "$ENVIRONMENT" ] || [ "$ENVIRONMENT" = "development" ]; } && ls /tmp/tbtc-artifacts/*.json >/dev/null 2>&1; then \
-	echo "Using tbtc-v2 module artifacts built from tbtc-v2 PR #1112 (temporary shim)"; \
-	cp /tmp/tbtc-artifacts/*.json \
-		$APP_DIR/tmp/contracts/development/@keep-network/tbtc-v2/artifacts/; \
-fi
 
 # Need this to resolve imports in generated Ethereum commands.
 COPY ./config $APP_DIR/config

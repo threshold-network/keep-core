@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 
 	"github.com/keep-network/keep-core/internal/testutils"
@@ -193,6 +195,12 @@ func TestDepositSweepAction_Execute(t *testing.T) {
 				logger.With(),
 				hostChain,
 				bitcoinChain,
+				// Mainnet has no reservationsActivationBlocks entry, so
+				// ReservationsActivationBlock returns math.MaxUint64 and
+				// reservationsActive is false for this scenario suite,
+				// which never configures reservation state - matching
+				// this test's pre-launch, reservations-inactive intent.
+				ethereum.Mainnet,
 				wallet,
 				signingExecutor,
 				proposal,
@@ -202,6 +210,7 @@ func TestDepositSweepAction_Execute(t *testing.T) {
 					return nil
 				},
 				nil,
+				0,
 			)
 
 			// Modify the default parameters of the action to make
@@ -445,11 +454,15 @@ func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 
 			logger := &capturingLogger{}
 
+			// This test only exercises the fee soft check; reservations
+			// are irrelevant here, so keep them inactive to avoid the
+			// stub chain's always-erroring ReservationParameters.
 			_, err := ValidateDepositSweepProposal(
 				logger,
 				walletPublicKeyHash,
 				proposal,
 				0,
+				false,
 				stubChain,
 				btcChain,
 			)
@@ -474,6 +487,48 @@ func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+// TestValidateDepositSweepProposal_FailsClosedOnReservationParametersError
+// exercises the fail-closed posture required by reservationsActive's doc
+// comment: when reservationsActive is true, a ReservationParameters
+// failure must hard-fail proposal validation, not silently degrade to a
+// reservations-inactive posture. This is the mirror image of
+// TestValidateDepositSweepProposal_SweepFeeSoftCheck above, which
+// deliberately passes reservationsActive=false to dodge this same stub
+// chain's always-erroring ReservationParameters.
+func TestValidateDepositSweepProposal_FailsClosedOnReservationParametersError(t *testing.T) {
+	var walletPublicKeyHash [20]byte
+	stubChain := depositSweepFeeCheckChain{}
+	btcChain := newLocalBitcoinChain()
+
+	proposal := &DepositSweepProposal{
+		SweepTxFee: big.NewInt(1),
+	}
+
+	logger := &capturingLogger{}
+
+	_, err := ValidateDepositSweepProposal(
+		logger,
+		walletPublicKeyHash,
+		proposal,
+		0,
+		true,
+		stubChain,
+		btcChain,
+	)
+	if err == nil {
+		t.Fatal(
+			"expected validation to fail closed when reservationsActive " +
+				"is true and ReservationParameters errors",
+		)
+	}
+	if !strings.Contains(err.Error(), "reservation parameters") {
+		t.Errorf(
+			"expected error to mention reservation parameters, got: [%v]",
+			err,
+		)
 	}
 }
 
@@ -620,6 +675,7 @@ func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
 		walletPublicKeyHash,
 		proposal,
 		0,
+		true,
 		hostChain,
 		bitcoinChain,
 	)
@@ -631,15 +687,37 @@ func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
 	}
 }
 
-// TestValidateDepositSweepProposal_SweepsWhenReservationParametersUnavailable
-// mirrors tbtcpg's TestFindDepositsToSweep_ReservationParametersUnavailableSweepsAll
-// on the follower side: when ReservationParameters() itself is
-// unavailable (unconfigured here, mirroring a pre-upgrade Bridge), the
-// whole reserved-deposit filter must be skipped rather than rejecting
-// the proposal - even for a deposit IsReservedDeposit would otherwise
-// flag, since without the reservation vault address the vault-match
-// prefilter can never even run.
-func TestValidateDepositSweepProposal_SweepsWhenReservationParametersUnavailable(t *testing.T) {
+// TestDepositSweepAction_Execute_ReservationsActiveFromCoordinationBlock
+// exercises depositSweepAction.execute()'s own reservationsActive
+// computation end-to-end - never a hardcoded bool downstream of it, unlike
+// TestValidateDepositSweepProposal_RejectsReservedDeposit above, which
+// stubs reservationsActive as a literal true and therefore could not have
+// caught a bug in how execute() derives that value.
+//
+// Both subtests below sweep a deposit revealed against a reservation
+// vault and rely on execute() to reject it whenever - and only whenever -
+// reservations are active at dsa.coordinationBlock, the same block height
+// coordinationExecutor.executeLeaderRoutine (coordination.go) uses to
+// populate CoordinationProposalRequest.ReservationsActive for the
+// leader's own proposal:
+//
+//   - "mismatch window, follower agrees with leader" configures an
+//     activation block strictly between coordinationBlock and
+//     proposalProcessingStartBlock (the coordination window's end block,
+//     always coordinationDurationBlocks after coordinationBlock - see
+//     coordinationWindow.endBlock). Before this fix, execute() derived
+//     reservationsActive from proposalProcessingStartBlock directly and
+//     would have wrongly computed it as active here, diverging from the
+//     leader's coordinationBlock-based "not yet active" determination for
+//     the exact same round, and rejecting a reservation the leader itself
+//     considered safe to sweep.
+//   - "developer network, already active" uses ethereum.Developer, whose
+//     ReservationsActivationBlock is always 0, so reservations are active
+//     at both coordinationBlock and proposalProcessingStartBlock. This
+//     proves the reserved-deposit filter actually engages through
+//     execute()'s real wiring, not merely when reservationsActive is
+//     asserted directly against ValidateDepositSweepProposal.
+func TestDepositSweepAction_Execute_ReservationsActiveFromCoordinationBlock(t *testing.T) {
 	scenarios, err := test.LoadDepositSweepTestScenarios()
 	if err != nil {
 		t.Fatal(err)
@@ -652,125 +730,228 @@ func TestValidateDepositSweepProposal_SweepsWhenReservationParametersUnavailable
 		t.Fatal("scenario has no deposits to reserve")
 	}
 
-	hostChain := Connect()
-	bitcoinChain := newLocalBitcoinChain()
-
-	wallet := wallet{publicKey: scenario.WalletPublicKey}
-	walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
-
-	for _, transaction := range scenario.InputTransactions {
-		if err := bitcoinChain.BroadcastTransaction(transaction); err != nil {
-			t.Fatal(err)
-		}
+	tests := map[string]struct {
+		network                      ethereum.Network
+		proposalProcessingStartBlock uint64
+		// activationBlock is ignored for ethereum.Developer, which always
+		// activates at block 0 regardless of reservationsActivationBlocks.
+		activationBlock uint64
+		expectRejected  bool
+	}{
+		"mismatch window, follower agrees with leader": {
+			network: ethereum.Sepolia,
+			// coordinationBlock = 1100 - coordinationDurationBlocks = 1000.
+			proposalProcessingStartBlock: 1100,
+			activationBlock:              1050,
+			expectRejected:               false,
+		},
+		"developer network, already active": {
+			network: ethereum.Developer,
+			// coordinationBlock = 500 - coordinationDurationBlocks = 400.
+			proposalProcessingStartBlock: 500,
+			activationBlock:              0,
+			expectRejected:               true,
+		},
 	}
 
-	depositsKeys := make([]DepositKey, len(scenario.Deposits))
-	depositsExtraInfo := make([]struct {
-		*Deposit
-		FundingTx *bitcoin.Transaction
-	}, len(scenario.Deposits))
-	depositsRevealBlocks := make([]*big.Int, len(scenario.Deposits))
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			coordinationBlock := tc.proposalProcessingStartBlock - coordinationDurationBlocks
 
-	for i, deposit := range scenario.Deposits {
-		fundingTxHash := deposit.Utxo.Outpoint.TransactionHash
-		fundingOutputIndex := deposit.Utxo.Outpoint.OutputIndex
+			if tc.network != ethereum.Developer {
+				reservationsActivationBlocks[tc.network] = tc.activationBlock
+				t.Cleanup(func() { delete(reservationsActivationBlocks, tc.network) })
+			}
 
-		fundingTx, err := bitcoinChain.GetTransaction(fundingTxHash)
-		if err != nil {
-			t.Fatal(err)
-		}
+			hostChain := Connect()
+			bitcoinChain := newLocalBitcoinChain()
 
-		depositsKeys[i] = DepositKey{
-			FundingTxHash:      fundingTxHash,
-			FundingOutputIndex: fundingOutputIndex,
-		}
-		depositsExtraInfo[i] = struct {
-			*Deposit
-			FundingTx *bitcoin.Transaction
-		}{
-			Deposit:   (*Deposit)(deposit),
-			FundingTx: fundingTx,
-		}
+			wallet := wallet{publicKey: scenario.WalletPublicKey}
+			walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
 
-		depositRevealBlock := uint64(100 * i)
-		depositsRevealBlocks[i] = big.NewInt(int64(depositRevealBlock))
+			for _, transaction := range scenario.InputTransactions {
+				if err := bitcoinChain.BroadcastTransaction(transaction); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-		err = hostChain.setPastDepositRevealedEvents(
-			&DepositRevealedEventFilter{
-				StartBlock:          depositRevealBlock,
-				EndBlock:            &depositRevealBlock,
-				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-			},
-			[]*DepositRevealedEvent{
-				{
-					FundingTxHash:       fundingTxHash,
-					FundingOutputIndex:  fundingOutputIndex,
-					Depositor:           deposit.Depositor,
-					Amount:              uint64(deposit.Utxo.Value),
-					BlindingFactor:      deposit.BlindingFactor,
-					WalletPublicKeyHash: deposit.WalletPublicKeyHash,
-					RefundPublicKeyHash: deposit.RefundPublicKeyHash,
-					RefundLocktime:      deposit.RefundLocktime,
-					Vault:               deposit.Vault,
-					BlockNumber:         depositRevealBlock,
+			depositsKeys := make([]DepositKey, len(scenario.Deposits))
+			depositsExtraInfo := make([]struct {
+				*Deposit
+				FundingTx *bitcoin.Transaction
+			}, len(scenario.Deposits))
+			depositsRevealBlocks := make([]*big.Int, len(scenario.Deposits))
+
+			reservationVault := chain.Address("0xReservationVaultForExecuteTest00000001")
+
+			for i, deposit := range scenario.Deposits {
+				fundingTxHash := deposit.Utxo.Outpoint.TransactionHash
+				fundingOutputIndex := deposit.Utxo.Outpoint.OutputIndex
+
+				fundingTx, err := bitcoinChain.GetTransaction(fundingTxHash)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				depositsKeys[i] = DepositKey{
+					FundingTxHash:      fundingTxHash,
+					FundingOutputIndex: fundingOutputIndex,
+				}
+				depositsExtraInfo[i] = struct {
+					*Deposit
+					FundingTx *bitcoin.Transaction
+				}{
+					Deposit:   (*Deposit)(deposit),
+					FundingTx: fundingTx,
+				}
+
+				depositRevealBlock := uint64(100 * i)
+				depositsRevealBlocks[i] = big.NewInt(int64(depositRevealBlock))
+
+				eventVault := deposit.Vault
+				if i == 0 {
+					// The first deposit's vault is overridden to match the
+					// reservation vault configured below, so the pre-filter
+					// lets it reach the IsReservedDeposit check this test
+					// exercises.
+					eventVault = &reservationVault
+				}
+
+				err = hostChain.setPastDepositRevealedEvents(
+					&DepositRevealedEventFilter{
+						StartBlock:          depositRevealBlock,
+						EndBlock:            &depositRevealBlock,
+						WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+					},
+					[]*DepositRevealedEvent{
+						{
+							FundingTxHash:       fundingTxHash,
+							FundingOutputIndex:  fundingOutputIndex,
+							Depositor:           deposit.Depositor,
+							Amount:              uint64(deposit.Utxo.Value),
+							BlindingFactor:      deposit.BlindingFactor,
+							WalletPublicKeyHash: deposit.WalletPublicKeyHash,
+							RefundPublicKeyHash: deposit.RefundPublicKeyHash,
+							RefundLocktime:      deposit.RefundLocktime,
+							Vault:               eventVault,
+							BlockNumber:         depositRevealBlock,
+						},
+					},
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				hostChain.setDepositRequest(
+					fundingTxHash,
+					fundingOutputIndex,
+					&DepositChainRequest{
+						Depositor: deposit.Depositor,
+						Amount:    uint64(deposit.Utxo.Value),
+						Vault:     deposit.Vault,
+						ExtraData: deposit.ExtraData,
+					},
+				)
+			}
+
+			proposal := &DepositSweepProposal{
+				DepositsKeys:         depositsKeys,
+				SweepTxFee:           big.NewInt(scenario.Fee),
+				DepositsRevealBlocks: depositsRevealBlocks,
+			}
+
+			if err := hostChain.setDepositSweepProposalValidationResult(
+				walletPublicKeyHash,
+				proposal,
+				depositsExtraInfo,
+				true,
+			); err != nil {
+				t.Fatal(err)
+			}
+
+			reservedKey := hostChain.BuildDepositKey(
+				depositsKeys[0].FundingTxHash,
+				depositsKeys[0].FundingOutputIndex,
+			)
+			hostChain.setReservedDeposit(reservedKey, true)
+			hostChain.setReservationParameters(&ReservationParameters{
+				ReservationVault: reservationVault,
+			})
+
+			var walletMainUtxoHash [32]byte
+			if scenario.WalletMainUtxo != nil {
+				walletMainUtxoHash = hostChain.ComputeMainUtxoHash(scenario.WalletMainUtxo)
+			}
+			hostChain.setWallet(walletPublicKeyHash, &WalletChainData{
+				MainUtxoHash: walletMainUtxoHash,
+			})
+
+			signingExecutor := newMockWalletSigningExecutor()
+			rawSignatures := make([]*tecdsa.Signature, len(scenario.Signatures))
+			for i, signature := range scenario.Signatures {
+				rawSignatures[i] = &tecdsa.Signature{
+					R: signature.R,
+					S: signature.S,
+				}
+			}
+			signingExecutor.setSignatures(
+				scenario.ExpectedSigHashes,
+				tc.proposalProcessingStartBlock,
+				rawSignatures,
+			)
+
+			action := newDepositSweepAction(
+				logger.With(),
+				hostChain,
+				bitcoinChain,
+				tc.network,
+				wallet,
+				signingExecutor,
+				proposal,
+				tc.proposalProcessingStartBlock,
+				tc.proposalProcessingStartBlock+depositSweepProposalValidityBlocks,
+				func(ctx context.Context, blockHeight uint64) error {
+					return nil
 				},
-			},
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
+				nil,
+				coordinationBlock,
+			)
+			action.requiredFundingTxConfirmations = 1
+			action.broadcastCheckDelay = 1 * time.Second
 
-		hostChain.setDepositRequest(
-			fundingTxHash,
-			fundingOutputIndex,
-			&DepositChainRequest{
-				Depositor: deposit.Depositor,
-				Amount:    uint64(deposit.Utxo.Value),
-				Vault:     deposit.Vault,
-				ExtraData: deposit.ExtraData,
-			},
-		)
-	}
+			err = action.execute()
 
-	proposal := &DepositSweepProposal{
-		DepositsKeys:         depositsKeys,
-		SweepTxFee:           big.NewInt(scenario.Fee),
-		DepositsRevealBlocks: depositsRevealBlocks,
-	}
+			if tc.expectRejected {
+				if err == nil {
+					t.Fatal("expected execute to reject the reserved deposit")
+				}
+				if !strings.Contains(err.Error(), "reserved") {
+					t.Errorf("expected error to mention the reserved deposit, got: [%v]", err)
+				}
+				return
+			}
 
-	if err := hostChain.setDepositSweepProposalValidationResult(
-		walletPublicKeyHash,
-		proposal,
-		depositsExtraInfo,
-		true,
-	); err != nil {
-		t.Fatal(err)
-	}
+			if err != nil {
+				t.Fatalf(
+					"expected execute to succeed (reservationsActive false "+
+						"at coordinationBlock [%v], matching the leader's own "+
+						"determination), got: [%v]",
+					coordinationBlock,
+					err,
+				)
+			}
 
-	// Mark the first deposit as reserved. It must sweep anyway: without
-	// ReservationParameters, the vault-match prefilter cannot run at
-	// all, so IsReservedDeposit is never even called for it.
-	reservedKey := hostChain.BuildDepositKey(
-		depositsKeys[0].FundingTxHash,
-		depositsKeys[0].FundingOutputIndex,
-	)
-	hostChain.setReservedDeposit(reservedKey, true)
-	// Deliberately not calling setReservationParameters: hostChain's
-	// ReservationParameters() returns an error until it's configured,
-	// mirroring a pre-upgrade Bridge.
-
-	if _, err := ValidateDepositSweepProposal(
-		&capturingLogger{},
-		walletPublicKeyHash,
-		proposal,
-		0,
-		hostChain,
-		bitcoinChain,
-	); err != nil {
-		t.Fatalf(
-			"expected validation to succeed when reservation parameters "+
-				"are unavailable, got: [%v]",
-			err,
-		)
+			broadcastedSweepTransaction, err := bitcoinChain.GetTransaction(
+				scenario.ExpectedSweepTransactionHash,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			testutils.AssertBytesEqual(
+				t,
+				scenario.ExpectedSweepTransaction.Serialize(),
+				broadcastedSweepTransaction.Serialize(),
+			)
+		})
 	}
 }

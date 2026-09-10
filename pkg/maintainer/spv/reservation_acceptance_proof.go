@@ -7,12 +7,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// ProofTypeReservationAcceptance is the value passed to
-// SubmitReservationProof as proofType for a reservation acceptance SPV
-// proof. The numeric value mirrors the on-chain ReservationProofType enum
-// (1 = Acceptance).
-const ProofTypeReservationAcceptance uint8 = 1
-
 // SubmitReservationAcceptanceProof drives the SPV proof submission for a
 // reservation acceptance action generation. The caller (the reservation
 // proof loop) supplies the (reservationKey, requestNonce) pair of the
@@ -21,8 +15,8 @@ const ProofTypeReservationAcceptance uint8 = 1
 // coordinator. The proof is fetched from btcChain, the anchor transaction
 // is rebuilt locally to extract the deposit UTXO that was anchored, and the
 // proof is submitted directly to the Bridge via the SPV maintainer's
-// SubmitReservationProof entry point (not via MaintainerProxy: reservations
-// are not reimbursed).
+// SubmitReservationAcceptanceProof entry point (not via MaintainerProxy:
+// reservations are not reimbursed).
 //
 // requiredConfirmations must be > 0; the SPV maintainer relies on it to
 // assemble the proof.
@@ -66,7 +60,7 @@ func submitReservationAcceptanceProof(
 		spvChain,
 		spvProofAssembler,
 		metricsRecorder,
-		ProofTypeReservationAcceptance,
+		spvChain.SubmitReservationAcceptanceProof,
 		"reservation_acceptance_proof",
 		tbtc.ReservationActionTypeAcceptance,
 		"acceptance",
