@@ -395,8 +395,8 @@ func TestBuildReservationAnchorProposalAbi(t *testing.T) {
 	proposal := &tbtc.ReservationAnchorProposal{
 		DepositFundingTxHash:      fundingTxHash,
 		DepositFundingOutputIndex: 7,
-		// Non-zero RequestNonce exercises the P0 #3 fix's new mapping:
-		// a zero value on both sides would silently pass even if the
+		// Non-zero RequestNonce exercises the RequestNonce mapping: a
+		// zero value on both sides would silently pass even if the
 		// builder omitted the field.
 		RequestNonce: 17,
 		AnchorTxFee:  big.NewInt(1500),
@@ -485,8 +485,8 @@ func TestBuildReservationReanchorProposalAbi(t *testing.T) {
 
 	proposal := &tbtc.ReservationReanchorProposal{
 		ReservationKey: big.NewInt(54321),
-		// Non-zero RequestNonce exercises the P0 #3 fix's new mapping:
-		// a zero value on both sides would silently pass even if the
+		// Non-zero RequestNonce exercises the RequestNonce mapping: a
+		// zero value on both sides would silently pass even if the
 		// builder omitted the field.
 		RequestNonce:              23,
 		TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
@@ -714,6 +714,132 @@ func TestEarliestRegistrationEventBlock(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveEarliestWalletRegistrationBlock exercises the pure-logic
+// core of TbtcChain.earliestWalletRegistrationBlock: the backward,
+// doubling-window walk that resolves a wallet's actual earliest
+// NewWalletRegistered block instead of giving up after one fixed
+// lookback window. The surrounding TbtcChain method depends on real
+// go-ethereum simulated-backend infrastructure that does not exist
+// anywhere in pkg/chain/ethereum today (a package-wide gap, explicitly
+// deferred), so this pure-logic core is tested directly instead,
+// mirroring the existing pattern in this file (e.g.
+// resolveCustodiedReservationKeys).
+func TestResolveEarliestWalletRegistrationBlock(t *testing.T) {
+	event := func(blockNumber uint64) *tbtc.NewWalletRegisteredEvent {
+		return &tbtc.NewWalletRegisteredEvent{BlockNumber: blockNumber}
+	}
+
+	t.Run("found in the initial window - single query", func(t *testing.T) {
+		var queried []uint64
+		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			queried = append(queried, startBlock)
+			return []*tbtc.NewWalletRegisteredEvent{event(900000)}, nil
+		}
+
+		actual, err := resolveEarliestWalletRegistrationBlock(1000000, fetch)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if actual != 900000 {
+			t.Errorf("expected block [900000], actual [%d]", actual)
+		}
+		if len(queried) != 1 {
+			t.Fatalf("expected exactly one query, got %d: %v", len(queried), queried)
+		}
+	})
+
+	t.Run("not found in the initial window - widens backward and finds it", func(t *testing.T) {
+		var queried []uint64
+		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			queried = append(queried, startBlock)
+			if len(queried) == 1 {
+				return nil, nil
+			}
+			return []*tbtc.NewWalletRegisteredEvent{event(600000)}, nil
+		}
+
+		actual, err := resolveEarliestWalletRegistrationBlock(1000000, fetch)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if actual != 600000 {
+			t.Errorf("expected block [600000], actual [%d]", actual)
+		}
+		if len(queried) != 2 {
+			t.Fatalf("expected exactly two queries, got %d: %v", len(queried), queried)
+		}
+		if queried[1] >= queried[0] {
+			t.Errorf(
+				"expected the second query's start block [%d] to be further back than the first [%d]",
+				queried[1],
+				queried[0],
+			)
+		}
+	})
+
+	t.Run("never found - walks all the way back to genesis then stops", func(t *testing.T) {
+		var queried []uint64
+		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			queried = append(queried, startBlock)
+			return nil, nil
+		}
+
+		actual, err := resolveEarliestWalletRegistrationBlock(1000000, fetch)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if actual != 0 {
+			t.Errorf("expected block [0], actual [%d]", actual)
+		}
+		if len(queried) == 0 {
+			t.Fatal("expected at least one query")
+		}
+		if last := queried[len(queried)-1]; last != 0 {
+			t.Errorf("expected the walk to terminate at genesis (start block 0), last queried [%d]", last)
+		}
+		// The walk must not loop forever re-querying genesis once reached.
+		genesisQueries := 0
+		for _, sb := range queried {
+			if sb == 0 {
+				genesisQueries++
+			}
+		}
+		if genesisQueries != 1 {
+			t.Errorf("expected exactly one genesis query, got %d in %v", genesisQueries, queried)
+		}
+	})
+
+	t.Run("chain younger than the initial window - first query already starts at genesis", func(t *testing.T) {
+		var queried []uint64
+		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			queried = append(queried, startBlock)
+			return []*tbtc.NewWalletRegisteredEvent{event(10)}, nil
+		}
+
+		actual, err := resolveEarliestWalletRegistrationBlock(50, fetch)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if actual != 10 {
+			t.Errorf("expected block [10], actual [%d]", actual)
+		}
+		if len(queried) != 1 || queried[0] != 0 {
+			t.Errorf("expected a single query starting at genesis, got %v", queried)
+		}
+	})
+
+	t.Run("fetch error propagates immediately", func(t *testing.T) {
+		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			return nil, fmt.Errorf("simulated fetch failure")
+		}
+
+		_, err := resolveEarliestWalletRegistrationBlock(1000000, fetch)
+		if err == nil {
+			t.Fatal("expected fetch error to propagate out of resolveEarliestWalletRegistrationBlock")
+		}
+	})
 }
 
 // TestResolveWalletTerminationCause exercises the pure-logic core of

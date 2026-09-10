@@ -20,6 +20,7 @@ import (
 	"math"
 	"math/big"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -55,14 +56,15 @@ const (
 const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
 
-	// reservationRegistrationLookBackBlocks bounds the
-	// NewWalletRegistered event lookup performed by
-	// earliestWalletRegistrationBlock to the last ~30 days (216000
-	// blocks at Ethereum's ~12s block time). Establishing
-	// WalletReservations' own reservation-event bound by calling
-	// earliestWalletRegistrationBlock would otherwise cost exactly the
-	// unbounded genesis-to-tip eth_getLogs query that bound exists to
-	// avoid, for every wallet with a non-zero reservation count. This
+	// reservationRegistrationLookBackBlocks sizes the initial window of
+	// the NewWalletRegistered event lookup performed by
+	// earliestWalletRegistrationBlock: the last ~30 days (216000 blocks
+	// at Ethereum's ~12s block time). That method walks the window
+	// backwards, doubling it each time nothing is found, until it finds
+	// the wallet's actual registration block or reaches genesis, then
+	// memoizes the result - so this constant only controls how many
+	// round trips the common case (a wallet closed shortly after
+	// registering) needs, not the correctness of the final bound. This
 	// mirrors the identical 30-day convention already used elsewhere in
 	// the reservation feature for startup/catch-up scan bounds (see
 	// pkg/maintainer/spv/reservation_wiring.go's
@@ -94,6 +96,13 @@ type TbtcChain struct {
 	// constructed against the Bridge address (see reservationRouterBinding for
 	// the address invariant explanation).
 	reservationRouter *tbtccontract.ReservationRouter
+	// walletRegistrationBlockCache memoizes the result of
+	// earliestWalletRegistrationBlock per wallet public key hash for the
+	// lifetime of this chain adapter. NewWalletRegistered fires once per
+	// wallet registration and a past registration is immutable, so a
+	// resolved block never goes stale and repeat lookups for the same
+	// wallet cost nothing beyond the first.
+	walletRegistrationBlockCache sync.Map
 	// ecdsaDkgValidatorAddress optional; when zero, TBTC uses defaultGroupParameters(network).
 	ecdsaDkgValidatorAddress common.Address
 
@@ -1059,23 +1068,34 @@ func (tc *TbtcChain) NotifyReservationStranded(
 // FraudChallengeDefeatTimedOut priority order - not necessarily the most
 // recently emitted one.
 //
-// The search is unbounded (from block 0): each of the three events fires
-// at most once per wallet in the wallet's entire history. This is not a
-// single cold-path call made once per wallet close: pkg/maintainer/spv
-// calls it from the stranding startup catch-up scan (up to 3 attempts
-// per Closed/Terminated wallet found by that scan), that scan's
-// second-chance retry pass for wallets it could not resolve the first
-// time, the live OnWalletClosed subscription handler (immediately before
-// a stranding notification, as originally documented), and -
-// conditionally - from the 1-minute action-timeout poll loop's recheck
-// path whenever a Reanchor-type reservation action times out against a
-// wallet that is already Closed/Terminated.
+// The three event queries are bounded by earliestWalletRegistrationBlock
+// (the same registration-block resolution WalletReservations uses,
+// memoized per wallet - see that method's doc comment) instead of
+// scanning from genesis: a wallet cannot have been terminated before it
+// registered. This is not a single cold-path call made once per wallet
+// close: pkg/maintainer/spv calls it from the stranding startup
+// catch-up scan (up to 3 attempts per Closed/Terminated wallet found
+// by that scan), that scan's second-chance retry pass for wallets it
+// could not resolve the first time, the live OnWalletClosed
+// subscription handler (immediately before a stranding notification,
+// as originally documented), and - conditionally - from the 1-minute
+// action-timeout poll loop's recheck path whenever a Reanchor-type
+// reservation action times out against a wallet that is already
+// Closed/Terminated. A failure to resolve the registration bound
+// falls back to genesis (StartBlock 0), matching WalletReservations'
+// own fallback, so a transient RPC error degrades to the previous
+// unbounded behavior rather than skipping a real termination event.
 func (tc *TbtcChain) WalletTerminationCause(
 	walletPublicKeyHash [20]byte,
 ) (tbtc.WalletTerminationCause, error) {
+	startBlock, err := tc.earliestWalletRegistrationBlock(walletPublicKeyHash)
+	if err != nil {
+		startBlock = 0
+	}
+
 	filter := [][20]byte{walletPublicKeyHash}
 
-	movingFundsEvents, err := tc.bridge.PastMovingFundsTimedOutEvents(0, nil, filter)
+	movingFundsEvents, err := tc.bridge.PastMovingFundsTimedOutEvents(startBlock, nil, filter)
 	if err != nil {
 		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
 			"cannot get past MovingFundsTimedOut events for wallet [0x%x]: [%v]",
@@ -1087,7 +1107,7 @@ func (tc *TbtcChain) WalletTerminationCause(
 		return cause, nil
 	}
 
-	movedFundsSweepEvents, err := tc.bridge.PastMovedFundsSweepTimedOutEvents(0, nil, filter)
+	movedFundsSweepEvents, err := tc.bridge.PastMovedFundsSweepTimedOutEvents(startBlock, nil, filter)
 	if err != nil {
 		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
 			"cannot get past MovedFundsSweepTimedOut events for wallet [0x%x]: [%v]",
@@ -1099,7 +1119,7 @@ func (tc *TbtcChain) WalletTerminationCause(
 		return cause, nil
 	}
 
-	fraudChallengeEvents, err := tc.bridge.PastFraudChallengeDefeatTimedOutEvents(0, nil, filter)
+	fraudChallengeEvents, err := tc.bridge.PastFraudChallengeDefeatTimedOutEvents(startBlock, nil, filter)
 	if err != nil {
 		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
 			"cannot get past FraudChallengeDefeatTimedOut events for wallet [0x%x]: [%v]",
@@ -1284,17 +1304,18 @@ func (tc *TbtcChain) WalletReservationsCount(
 // full-history event scan for them avoids an unbounded eth_getLogs query
 // (genesis to tip) on every wallet-close notification for the common
 // case. Wallets that do have reservations pay a reservation-event scan
-// bounded by earliestWalletRegistrationBlock, which itself now bounds
-// its own NewWalletRegistered lookup to the last
-// reservationRegistrationLookBackBlocks blocks (plus a reorg-safety
-// margin) rather than scanning genesis to tip - see that constant's doc
-// comment. The registration lookup falls back to genesis only when it
-// itself fails or finds nothing in that window, so establishing the
-// bound no longer costs the same unbounded eth_getLogs query the bound
-// exists to avoid. Governance-capped reservation volume keeps the
-// reservation-having case rare in absolute terms, and correctness
-// (never missing a real reservation) takes priority over narrowing the
-// block range further here.
+// bounded by earliestWalletRegistrationBlock, which resolves the
+// wallet's actual earliest registration block by walking
+// NewWalletRegistered events backwards in doubling windows from the
+// chain tip until one is found or genesis is reached, then memoizes
+// the result for the lifetime of this chain adapter - see that
+// method's doc comment. This correctly bounds the dominant case (a
+// wallet closed long after it registered) instead of degenerating
+// into the genesis-to-tip scan the bound exists to avoid.
+// Governance-capped reservation volume keeps the reservation-having
+// case rare in absolute terms, and correctness (never missing a real
+// reservation) takes priority over narrowing the block range further
+// here.
 func (tc *TbtcChain) WalletReservations(
 	walletPublicKeyHash [20]byte,
 ) ([]*big.Int, error) {
@@ -1357,42 +1378,47 @@ func (tc *TbtcChain) WalletReservations(
 	)
 }
 
-// earliestWalletRegistrationBlock returns the earliest block at which the
-// given wallet was registered. The registration-event lookup itself is
-// bounded to the last reservationRegistrationLookBackBlocks blocks (plus
-// a reservationRegistrationReorgSafetyBlocks reorg-safety margin),
-// falling back to genesis (StartBlock 0) when the current block cannot
-// be determined or the chain is younger than that bound - see those
-// constants' doc comments for the rationale. Returns 0 if no
-// registration event is found within the lookup window (caller falls
-// back to a full-history scan of the reservation events themselves,
-// which is always correct, just potentially slower). A wallet can
-// register multiple times across its lifetime, so the earliest
-// registration found is the safe lower bound for any reservation event
-// for that wallet.
+// earliestWalletRegistrationBlock returns the actual earliest block at
+// which the given wallet was registered. NewWalletRegistered events are
+// walked backwards from the current chain tip - see
+// resolveEarliestWalletRegistrationBlock for the doubling-window walk
+// itself - until a registration event is found or genesis is reached.
+// NewWalletRegistered fires once per wallet registration and a past
+// registration is immutable, so the resolved block is memoized in
+// tc.walletRegistrationBlockCache for the lifetime of this chain
+// adapter instance: repeat lookups for the same wallet cost nothing
+// beyond the first. Returns 0 (unmemoized) if the current block cannot
+// be determined, or if no registration event is found anywhere back to
+// genesis (caller falls back to a full-history scan of the reservation
+// events themselves, which is always correct, just potentially
+// slower). A wallet can register multiple times across its lifetime,
+// so the earliest registration found by the walk is the safe lower
+// bound for any reservation event for that wallet.
 func (tc *TbtcChain) earliestWalletRegistrationBlock(
 	walletPublicKeyHash [20]byte,
 ) (uint64, error) {
-	// Bound the registration-event lookup itself: without this, every
-	// call establishing WalletReservations' own bound would cost exactly
-	// the unbounded genesis-to-tip eth_getLogs query that bound exists
-	// to avoid. A failure to get the current block, or a chain younger
-	// than the look-back window, leaves registrationLookupStartBlock at
-	// its zero value (genesis) - the caller already treats an error
-	// returned from this method the same way, so no separate logging is
-	// needed here.
-	var registrationLookupStartBlock uint64
-	if currentBlock, err := tc.blockCounter.CurrentBlock(); err == nil {
-		lookBack := reservationRegistrationLookBackBlocks + reservationRegistrationReorgSafetyBlocks
-		if currentBlock > lookBack {
-			registrationLookupStartBlock = currentBlock - lookBack
-		}
+	if cached, ok := tc.walletRegistrationBlockCache.Load(walletPublicKeyHash); ok {
+		return cached.(uint64), nil
 	}
 
-	registrationEvents, err := tc.PastNewWalletRegisteredEvents(
-		&tbtc.NewWalletRegisteredEventFilter{
-			StartBlock:          registrationLookupStartBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	currentBlock, err := tc.blockCounter.CurrentBlock()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot get current block to resolve registration block for wallet [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	registrationBlock, err := resolveEarliestWalletRegistrationBlock(
+		currentBlock,
+		func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			return tc.PastNewWalletRegisteredEvents(
+				&tbtc.NewWalletRegisteredEventFilter{
+					StartBlock:          startBlock,
+					WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+			)
 		},
 	)
 	if err != nil {
@@ -1403,7 +1429,62 @@ func (tc *TbtcChain) earliestWalletRegistrationBlock(
 		)
 	}
 
-	return earliestRegistrationEventBlock(registrationEvents), nil
+	if registrationBlock != 0 {
+		tc.walletRegistrationBlockCache.Store(walletPublicKeyHash, registrationBlock)
+	}
+
+	return registrationBlock, nil
+}
+
+// resolveEarliestWalletRegistrationBlock is the pure-logic core of
+// earliestWalletRegistrationBlock: given the current chain tip and a
+// callback that fetches NewWalletRegistered events for one wallet from a
+// given start block through the tip, it walks the start block backwards
+// - beginning at the last reservationRegistrationLookBackBlocks blocks
+// (plus a reservationRegistrationReorgSafetyBlocks reorg-safety margin),
+// doubling the window and shifting further back each time nothing is
+// found - until a registration event turns up or the walk reaches
+// genesis (start block 0). Extracted as a standalone function -
+// mirroring the existing pattern in this file (e.g.
+// resolveCustodiedReservationKeys, resolveWalletTerminationCause) - so
+// the walk/doubling logic can be unit tested directly with a fake
+// fetchEvents callback, since the surrounding TbtcChain method depends
+// on real go-ethereum simulated-backend infrastructure that does not
+// exist anywhere in pkg/chain/ethereum today (a package-wide gap,
+// explicitly deferred). Returns 0 if genesis is reached without finding
+// a registration event.
+func resolveEarliestWalletRegistrationBlock(
+	currentBlock uint64,
+	fetchEvents func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error),
+) (uint64, error) {
+	windowSize := reservationRegistrationLookBackBlocks + reservationRegistrationReorgSafetyBlocks
+
+	var startBlock uint64
+	if currentBlock > windowSize {
+		startBlock = currentBlock - windowSize
+	}
+
+	for {
+		events, err := fetchEvents(startBlock)
+		if err != nil {
+			return 0, err
+		}
+
+		if registrationBlock := earliestRegistrationEventBlock(events); registrationBlock != 0 {
+			return registrationBlock, nil
+		}
+
+		if startBlock == 0 {
+			return 0, nil
+		}
+
+		if startBlock > windowSize {
+			startBlock -= windowSize
+		} else {
+			startBlock = 0
+		}
+		windowSize *= 2
+	}
 }
 
 // earliestRegistrationEventBlock is the pure-logic core of
