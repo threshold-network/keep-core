@@ -1182,7 +1182,6 @@ __metadata:
     "@openzeppelin/hardhat-upgrades": "npm:^1.20.0"
     "@tenderly/hardhat-tenderly": "npm:1.0.12"
     "@thesis-co/eslint-config": "https://codeload.github.com/thesis/eslint-config/tar.gz/e63608fab2a1ad5c8fe89873bf0d4d4f9ef4a081"
-    "@thesis/solidity-contracts": "github:thesis/solidity-contracts#4985bcf"
     "@threshold-network/solidity-contracts": "npm:1.3.0-dev.14"
     "@typechain/ethers-v5": "npm:^9.0.0"
     "@typechain/hardhat": "npm:^4.0.0"
