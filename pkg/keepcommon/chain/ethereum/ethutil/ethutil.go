@@ -8,7 +8,7 @@ import (
 	"io/ioutil"
 	"math/big"
 
-	chainEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
+	chainEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 
 	"github.com/ipfs/go-log"
 

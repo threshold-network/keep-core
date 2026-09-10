@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	keepclientinfo "github.com/keep-network/keep-common/pkg/clientinfo"
+	keepclientinfo "github.com/keep-network/keep-core/pkg/keepcommon/clientinfo"
 )
 
 // TestRedemptionProposalCountersRegistered tests that the redemption

@@ -7,10 +7,10 @@ import (
 
 	"github.com/ipfs/go-log"
 
-	"github.com/keep-network/keep-common/pkg/logging"
 	"github.com/keep-network/keep-core/build"
 	"github.com/keep-network/keep-core/cmd"
 	"github.com/keep-network/keep-core/config"
+	"github.com/keep-network/keep-core/pkg/keepcommon/logging"
 )
 
 //go:generate make gen_proto

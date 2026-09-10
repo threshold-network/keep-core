@@ -7,9 +7,9 @@ import (
 
 	"github.com/ipfs/go-log/v2"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 	"go.uber.org/zap"
 )
 

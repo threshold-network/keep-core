@@ -12,7 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
+	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
 )
 
 func TestLatestBlockNumberContactsRPCOnEveryCall(t *testing.T) {

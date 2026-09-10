@@ -5,7 +5,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 	pflag "github.com/spf13/pflag"
 )
 

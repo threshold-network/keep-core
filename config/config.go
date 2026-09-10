@@ -18,9 +18,9 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
-	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	commonEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/maintainer"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
 	"github.com/keep-network/keep-core/pkg/storage"

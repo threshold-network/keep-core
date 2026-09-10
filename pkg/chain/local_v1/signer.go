@@ -4,8 +4,8 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	commonlocal "github.com/keep-network/keep-common/pkg/chain/local"
 	"github.com/keep-network/keep-core/pkg/chain"
+	commonlocal "github.com/keep-network/keep-core/pkg/keepcommon/chain/local"
 	"github.com/keep-network/keep-core/pkg/operator"
 )
 

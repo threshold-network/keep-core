@@ -13,8 +13,8 @@ import (
 
 	log2 "github.com/ipfs/go-log/v2"
 
-	keepclientinfo "github.com/keep-network/keep-common/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	keepclientinfo "github.com/keep-network/keep-core/pkg/keepcommon/clientinfo"
 )
 
 // --- fakes ---

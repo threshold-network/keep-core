@@ -11,7 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/keep-network/keep-common/pkg/rate"
+	"github.com/keep-network/keep-core/pkg/keepcommon/rate"
 )
 
 func TestRateLimiter(t *testing.T) {

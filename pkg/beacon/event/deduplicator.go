@@ -3,7 +3,7 @@ package event
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/keep-network/keep-common/pkg/cache"
+	"github.com/keep-network/keep-core/pkg/keepcommon/cache"
 	"math/big"
 	"sync"
 	"time"

@@ -3,8 +3,8 @@ package tbtc
 import (
 	"fmt"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 )
 
 // archiveClosedWallets archives closed or terminated wallets.

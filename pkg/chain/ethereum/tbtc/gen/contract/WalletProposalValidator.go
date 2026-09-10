@@ -16,9 +16,9 @@ import (
 
 	"github.com/ipfs/go-log"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
-	chainutil "github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
+	"github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
+	chainutil "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
 )
 
 // Create a package-level logger for this contract. The logger exists at

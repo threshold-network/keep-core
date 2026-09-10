@@ -7,7 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	chainEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
+	chainEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 )
 
 type ethereumAdapter struct {

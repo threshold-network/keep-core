@@ -3,7 +3,7 @@ package ethereum
 import (
 	"github.com/spf13/cobra"
 
-	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
+	commonEthereum "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum"
 )
 
 // Command if a wrapper for cobra.Command that holds Ethereum config used by the

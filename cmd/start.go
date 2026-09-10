@@ -7,9 +7,9 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/tbtcpg"
 
-	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/build"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
+	"github.com/keep-network/keep-core/pkg/keepcommon/persistence"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/storage"
 

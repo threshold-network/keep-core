@@ -13,11 +13,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 
-	chainutil "github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-common/pkg/cmd"
-	"github.com/keep-network/keep-common/pkg/utils/decode"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/abi"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/contract"
+	chainutil "github.com/keep-network/keep-core/pkg/keepcommon/chain/ethereum/ethutil"
+	"github.com/keep-network/keep-core/pkg/keepcommon/cmd"
+	"github.com/keep-network/keep-core/pkg/keepcommon/utils/decode"
 
 	"github.com/spf13/cobra"
 )

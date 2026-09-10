@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	keepclientinfo "github.com/keep-network/keep-common/pkg/clientinfo"
+	keepclientinfo "github.com/keep-network/keep-core/pkg/keepcommon/clientinfo"
 )
 
 // TestConcurrentCounterIncrement tests that concurrent counter increments

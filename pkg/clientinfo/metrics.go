@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keep-network/keep-common/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/keepcommon/clientinfo"
 	"github.com/keep-network/keep-core/pkg/net"
 )
 

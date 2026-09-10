@@ -8,7 +8,7 @@ import (
 
 	"github.com/ipfs/go-log"
 
-	"github.com/keep-network/keep-common/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/keepcommon/clientinfo"
 )
 
 var logger = log.Logger("keep-clientinfo")
