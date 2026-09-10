@@ -126,6 +126,15 @@ type Deposit struct {
 // FindDeposits finds deposits according to the given criteria. It always
 // performs a full-history scan (from block 0) to ensure all matching deposits
 // are returned regardless of age.
+//
+// reservationsActive controls whether reserved deposits are filtered out of
+// the result - see findDeposits' reservationsActive doc comment for the
+// mechanics. Callers no longer get a value baked in here: pass
+// tbtc.CoordinationProposalRequest.ReservationsActive (or an equivalent
+// activation-block comparison) when the result feeds a decision that must
+// respect reservations, such as moving_funds.go's unswept-deposit guard.
+// Listing-only callers with no reservations-awareness need (e.g.
+// cmd/maintainercli.go) should keep passing false explicitly.
 func FindDeposits(
 	chain Chain,
 	btcChain bitcoin.Chain,
@@ -133,6 +142,7 @@ func FindDeposits(
 	maxNumberOfDeposits int,
 	skipSwept bool,
 	skipUnconfirmed bool,
+	reservationsActive bool,
 ) ([]*Deposit, error) {
 	return findDeposits(
 		logger,
@@ -143,12 +153,7 @@ func FindDeposits(
 		skipSwept,
 		skipUnconfirmed,
 		0,
-		// FindDeposits is a generic full-history maintenance query (see
-		// its callers in cmd/maintainercli.go and moving_funds.go), not
-		// part of the coordinated deposit-sweep proposal path, so it
-		// always returns every matching deposit regardless of
-		// reservation status rather than filtering some out.
-		false,
+		reservationsActive,
 	)
 }
 

@@ -1271,3 +1271,79 @@ func TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck(t *testing.T) {
 		)
 	}
 }
+
+// TestFindDeposits_ReservationsActive verifies that FindDeposits' explicit
+// reservationsActive parameter actually reaches findDeposits' reserved-
+// deposit filter rather than being silently ignored. moving_funds.go's
+// unswept-deposit guard calls FindDeposits with
+// request.ReservationsActive precisely so a reserved deposit is treated as
+// already handled (excluded) once reservations are live, instead of
+// permanently blocking moving-funds proposal generation. Listing-only
+// callers such as cmd/maintainercli.go pass false to preserve the legacy
+// behavior of always returning every matching deposit.
+func TestFindDeposits_ReservationsActive(t *testing.T) {
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tests := map[string]struct {
+		reservationsActive bool
+		expectedCount      int
+	}{
+		"reservations active: reserved deposit excluded": {
+			reservationsActive: true,
+			expectedCount:      0,
+		},
+		"reservations inactive: reserved deposit included": {
+			reservationsActive: false,
+			expectedCount:      1,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			tbtcChain := tbtcpg.NewLocalChain()
+			btcChain := tbtcpg.NewLocalBitcoinChain()
+
+			tbtcChain.SetDepositMinAge(3600)
+			tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+				ReservationVault: testReservationVaultAddress,
+			})
+
+			reservationVault := testReservationVaultAddress
+			// FindDeposits always performs a full-history scan
+			// (filterStartBlock 0), regardless of reservationsActive,
+			// so the fixture must register the event under the same
+			// StartBlock: 0 filter FindDeposits queries with.
+			depositHash := setupVaultGroupingDeposit(
+				t, tbtcChain, btcChain, walletPublicKeyHash, 0,
+				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				0, 100, &reservationVault,
+			)
+			tbtcChain.SetReservedDeposit(
+				tbtcChain.BuildDepositKey(depositHash, 0), true,
+			)
+
+			deposits, err := tbtcpg.FindDeposits(
+				tbtcChain,
+				btcChain,
+				walletPublicKeyHash,
+				10,
+				true,
+				true,
+				test.reservationsActive,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if len(deposits) != test.expectedCount {
+				t.Fatalf(
+					"unexpected deposit count\nexpected: %d\nactual:   %d",
+					test.expectedCount,
+					len(deposits),
+				)
+			}
+		})
+	}
+}

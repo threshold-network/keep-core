@@ -657,3 +657,128 @@ func TestResolveCustodiedReservationKeys(t *testing.T) {
 		}
 	})
 }
+
+// TestEarliestRegistrationEventBlock exercises the pure-logic core of
+// TbtcChain.earliestWalletRegistrationBlock: given a set of
+// NewWalletRegistered events already scoped to one wallet, resolve the
+// block number of the earliest one. The surrounding TbtcChain method
+// depends on real go-ethereum simulated-backend infrastructure that does
+// not exist anywhere in pkg/chain/ethereum today (a package-wide gap,
+// explicitly deferred), so this pure-logic core is tested directly
+// instead, mirroring the existing pattern in this file (e.g.
+// resolveCustodiedReservationKeys).
+func TestEarliestRegistrationEventBlock(t *testing.T) {
+	event := func(blockNumber uint64) *tbtc.NewWalletRegisteredEvent {
+		return &tbtc.NewWalletRegisteredEvent{BlockNumber: blockNumber}
+	}
+
+	tests := map[string]struct {
+		events        []*tbtc.NewWalletRegisteredEvent
+		expectedBlock uint64
+	}{
+		"zero registration events found": {
+			events:        nil,
+			expectedBlock: 0,
+		},
+		"exactly one registration event": {
+			events:        []*tbtc.NewWalletRegisteredEvent{event(500)},
+			expectedBlock: 500,
+		},
+		"multiple registration events - earliest wins regardless of order": {
+			events: []*tbtc.NewWalletRegisteredEvent{
+				event(900),
+				event(300),
+				event(700),
+			},
+			expectedBlock: 300,
+		},
+		"nil entry and zero-block entry are ignored": {
+			events: []*tbtc.NewWalletRegisteredEvent{
+				event(0),
+				nil,
+				event(600),
+			},
+			expectedBlock: 600,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actual := earliestRegistrationEventBlock(test.events)
+			if actual != test.expectedBlock {
+				t.Errorf(
+					"expected earliest block [%d], actual [%d]",
+					test.expectedBlock,
+					actual,
+				)
+			}
+		})
+	}
+}
+
+// TestResolveWalletTerminationCause exercises the pure-logic core of
+// TbtcChain.WalletTerminationCause: the fixed MovingFundsTimedOut ->
+// MovedFundsSweepTimedOut -> FraudChallengeDefeatTimedOut priority order
+// documented on WalletTerminationCause. The two "both present" subtests
+// pin the case the doc comment now calls out explicitly - more than one
+// pre-termination timeout event found for the same wallet, which is not
+// expected in normal Bridge operation but is not verified impossible by
+// the surrounding method - confirming the higher-priority cause always
+// wins rather than being left as an untested assumption.
+func TestResolveWalletTerminationCause(t *testing.T) {
+	tests := map[string]struct {
+		movingFundsEventCount     int
+		movedFundsSweepEventCount int
+		fraudChallengeEventCount  int
+		expectedCause             tbtc.WalletTerminationCause
+	}{
+		"no events found": {
+			expectedCause: tbtc.WalletTerminationCauseUnknown,
+		},
+		"only moving funds timed out": {
+			movingFundsEventCount: 1,
+			expectedCause:         tbtc.WalletTerminationCauseMovingFundsTimeout,
+		},
+		"only moved funds sweep timed out": {
+			movedFundsSweepEventCount: 1,
+			expectedCause:             tbtc.WalletTerminationCauseMovedFundsSweepTimeout,
+		},
+		"only fraud challenge defeat timed out": {
+			fraudChallengeEventCount: 1,
+			expectedCause:            tbtc.WalletTerminationCauseFraudChallengeDefeat,
+		},
+		"moving funds and fraud challenge both present - moving funds wins": {
+			movingFundsEventCount:    1,
+			fraudChallengeEventCount: 1,
+			expectedCause:            tbtc.WalletTerminationCauseMovingFundsTimeout,
+		},
+		"moved funds sweep and fraud challenge both present - moved funds sweep wins": {
+			movedFundsSweepEventCount: 1,
+			fraudChallengeEventCount:  1,
+			expectedCause:             tbtc.WalletTerminationCauseMovedFundsSweepTimeout,
+		},
+		"all three present - moving funds still wins": {
+			movingFundsEventCount:     1,
+			movedFundsSweepEventCount: 1,
+			fraudChallengeEventCount:  1,
+			expectedCause:             tbtc.WalletTerminationCauseMovingFundsTimeout,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actual := resolveWalletTerminationCause(
+				test.movingFundsEventCount,
+				test.movedFundsSweepEventCount,
+				test.fraudChallengeEventCount,
+			)
+			if actual != test.expectedCause {
+				t.Errorf(
+					"expected termination cause [%v], actual [%v]",
+					test.expectedCause,
+					actual,
+				)
+			}
+		})
+	}
+}
