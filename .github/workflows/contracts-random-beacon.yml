@@ -228,7 +228,8 @@ jobs:
         run: |
           set -e
           sha256sum export.json > /tmp/manifest.txt
-          find export -type f | sort | xargs sha256sum >> /tmp/manifest.txt
+          # Sort paths consistently across developer machines and CI locales.
+          find export -type f | LC_ALL=C sort | xargs sha256sum >> /tmp/manifest.txt
           if ! diff -q export-baseline.sha256 /tmp/manifest.txt > /dev/null; then
             echo '::error::export.json/export/ artifact byte-identity mismatch against solidity/random-beacon/export-baseline.sha256.'
             echo '::error::If this change is intentional, regenerate the baseline locally (see the job comment above) and commit it alongside this change.'
