@@ -169,10 +169,10 @@ func findDeposits(
 	skipSwept bool,
 	skipUnconfirmed bool,
 	filterStartBlock uint64,
-	// reservationsActive reports whether the reservations feature is
-	// live for the network and block this scan is running at, i.e.
-	// tbtc.ReservationsActivationBlock(network) <= currentBlock. It must
-	// be derived from that comparison, not from whether
+	// reservationsActive reports whether reservations were live at the
+	// coordination block for this proposal round, i.e.
+	// tbtc.ReservationsActivationBlock(network) <= coordinationBlock. It
+	// must be derived from that comparison, not from whether
 	// ReservationParameters below happens to succeed - see
 	// tbtc.ReservationsActivationBlock's doc comment. When false, the
 	// reserved-deposit filter below - including the ReservationParameters
@@ -252,12 +252,11 @@ func findDeposits(
 		if reservationsActive && depositTargetsReservationVault(event.Vault, reservationParams.ReservationVault) {
 			isReserved, err := chain.IsReservedDeposit(depositKey)
 			if err != nil {
-				taskLogger.Errorf(
-					"failed to check if deposit [%s] is reserved: [%v]",
+				return nil, fmt.Errorf(
+					"failed to check if deposit [%s] is reserved: [%w]",
 					depositKeyStr,
 					err,
 				)
-				continue
 			}
 			if isReserved {
 				taskLogger.Infof("skipping reserved deposit [%s]", depositKeyStr)

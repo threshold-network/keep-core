@@ -1,6 +1,8 @@
 package tbtcpg_test
 
 import (
+	"errors"
+	"math/big"
 	"reflect"
 	"testing"
 	"time"
@@ -1345,5 +1347,73 @@ func TestFindDeposits_ReservationsActive(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+// reservationCheckErrorChain wraps a LocalChain to force IsReservedDeposit
+// to return an error, simulating an RPC failure against the reservation
+// vault oracle.
+type reservationCheckErrorChain struct {
+	*tbtcpg.LocalChain
+	reservationCheckErr error
+}
+
+func (c *reservationCheckErrorChain) IsReservedDeposit(
+	depositKey *big.Int,
+) (bool, error) {
+	return false, c.reservationCheckErr
+}
+
+// TestFindDeposits_IsReservedDepositError verifies that an IsReservedDeposit
+// RPC failure propagates as a hard error from findDeposits instead of being
+// logged and silently dropped, which would treat the RPC error the same as
+// "not reserved" and drop the deposit from the result. moving_funds.go's
+// unswept-deposit guard checks len(unsweptDeposits) > 0, so silently
+// dropping the deposit here would let a genuinely-unswept reservation hide
+// from that check and allow a moving-funds proposal to proceed
+// incorrectly. The fix makes this a hard error instead so the round aborts
+// and retries next window.
+func TestFindDeposits_IsReservedDepositError(t *testing.T) {
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	tbtcChain.SetDepositMinAge(3600)
+	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault: testReservationVaultAddress,
+	})
+
+	reservationVault := testReservationVaultAddress
+	// FindDeposits always performs a full-history scan (filterStartBlock
+	// 0), so the fixture must register the event under the same
+	// StartBlock: 0 filter FindDeposits queries with.
+	setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, 0,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		0, 100, &reservationVault,
+	)
+
+	errChain := &reservationCheckErrorChain{
+		LocalChain:          tbtcChain,
+		reservationCheckErr: errors.New("rpc timeout"),
+	}
+
+	deposits, err := tbtcpg.FindDeposits(
+		errChain,
+		btcChain,
+		walletPublicKeyHash,
+		10,
+		true,
+		true,
+		true,
+	)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if deposits != nil {
+		t.Fatalf("expected no deposits on error, got: %v", deposits)
 	}
 }
