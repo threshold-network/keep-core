@@ -1,0 +1,34 @@
+{
+  "Title": "wallet-migration trigger: emits re-anchor proposal for first active reservation",
+  "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+  "SourceWalletState": "MovingFunds",
+  "SourceWalletMainUtxoHash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "SourceWalletMainUtxoValue": 500000,
+  "SourceWalletMainUtxoTxHash": "2222222222222222222222222222222222222222222222222222222222222222",
+  "SourceWalletMainUtxoTxIndex": 0,
+  "TargetWalletPublicKeyHash": "0x92a6ec889a8fa34f731e639edede4c75e184307c",
+  "LiveWalletsCount": 4,
+  "MovingFundsDustThreshold": 1000000,
+  "ReservationTxMaxFee": 100000,
+  "EstimateSatPerVByteFee": 1,
+  "ReanchorTxFee": 0,
+  "Reservations": [
+    {
+      "ReservationKey": "0000000000000000000000000000000000000000000000000000000000aaaa01",
+      "WalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+      "AnchorTxHash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "AnchorTxOutputIndex": 1,
+      "AnchorValue": 100000,
+      "State": "Active",
+      "RequestNonce": 0,
+      "HasPendingAction": false,
+      "PendingActionState": "Unknown"
+    }
+  ],
+  "ExpectedProposal": {
+    "ReservationKey": "0xaaaa01",
+    "RequestNonce": 1,
+    "TargetWalletPublicKeyHash": "0x92a6ec889a8fa34f731e639edede4c75e184307c",
+    "ReanchorTxFee": 550
+  }
+}

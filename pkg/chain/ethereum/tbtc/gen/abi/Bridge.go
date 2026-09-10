@@ -121,7 +121,7 @@ type WalletsWallet struct {
 
 // BridgeMetaData contains all meta data concerning the Bridge contract.
 var BridgeMetaData = &bind.MetaData{
-	ABI: "[{\"inputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"constructor\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"name\":\"DepositParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"fundingTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"depositor\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"DepositRevealed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sweepTxHash\",\"type\":\"bytes32\"}],\"name\":\"DepositsSwept\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sighash\",\"type\":\"bytes32\"}],\"name\":\"FraudChallengeDefeatTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sighash\",\"type\":\"bytes32\"}],\"name\":\"FraudChallengeDefeated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sighash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint8\",\"name\":\"v\",\"type\":\"uint8\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"r\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"s\",\"type\":\"bytes32\"}],\"name\":\"FraudChallengeSubmitted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"FraudParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"oldGovernance\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"GovernanceTransferred\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint8\",\"name\":\"version\",\"type\":\"uint8\"}],\"name\":\"Initialized\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTxOutputIndex\",\"type\":\"uint32\"}],\"name\":\"MovedFundsSweepTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sweepTxHash\",\"type\":\"bytes32\"}],\"name\":\"MovedFundsSwept\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsBelowDustReported\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes20[]\",\"name\":\"targetWallets\",\"type\":\"bytes20[]\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"submitter\",\"type\":\"address\"}],\"name\":\"MovingFundsCommitmentSubmitted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"}],\"name\":\"MovingFundsCompleted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"MovingFundsParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsTimeoutReset\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"NewWalletRegistered\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[],\"name\":\"NewWalletRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"RedemptionParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"}],\"name\":\"RedemptionRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"RedemptionTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"redemptionWatchtower\",\"type\":\"address\"}],\"name\":\"RedemptionWatchtowerSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"redemptionTxHash\",\"type\":\"bytes32\"}],\"name\":\"RedemptionsCompleted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"spvMaintainer\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"SpvMaintainerStatusUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"treasury\",\"type\":\"address\"}],\"name\":\"TreasuryUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"VaultStatusUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletClosed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletClosing\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletMovingFunds\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"name\":\"WalletParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletTerminated\",\"type\":\"event\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyX\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyY\",\"type\":\"bytes32\"}],\"name\":\"__ecdsaWalletCreatedCallback\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyX\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyY\",\"type\":\"bytes32\"}],\"name\":\"__ecdsaWalletHeartbeatFailedCallback\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"activeWalletPubKeyHash\",\"outputs\":[{\"internalType\":\"bytes20\",\"name\":\"\",\"type\":\"bytes20\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"contractReferences\",\"outputs\":[{\"internalType\":\"contractBank\",\"name\":\"bank\",\"type\":\"address\"},{\"internalType\":\"contractIRelay\",\"name\":\"relay\",\"type\":\"address\"},{\"internalType\":\"contractIWalletRegistry\",\"name\":\"ecdsaWalletRegistry\",\"type\":\"address\"},{\"internalType\":\"contractReimbursementPool\",\"name\":\"reimbursementPool\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"preimage\",\"type\":\"bytes\"},{\"internalType\":\"bool\",\"name\":\"witness\",\"type\":\"bool\"}],\"name\":\"defeatFraudChallenge\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"heartbeatMessage\",\"type\":\"bytes\"}],\"name\":\"defeatFraudChallengeWithHeartbeat\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"depositParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"deposits\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"depositor\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"revealedAt\",\"type\":\"uint32\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"sweptAt\",\"type\":\"uint32\"},{\"internalType\":\"bytes32\",\"name\":\"extraData\",\"type\":\"bytes32\"}],\"internalType\":\"structDeposit.DepositRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"challengeKey\",\"type\":\"uint256\"}],\"name\":\"fraudChallenges\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"challenger\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"depositAmount\",\"type\":\"uint256\"},{\"internalType\":\"uint32\",\"name\":\"reportedAt\",\"type\":\"uint32\"},{\"internalType\":\"bool\",\"name\":\"resolved\",\"type\":\"bool\"}],\"internalType\":\"structFraud.FraudChallenge\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"fraudParameters\",\"outputs\":[{\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"getRedemptionWatchtower\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"governance\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"_bank\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_relay\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_treasury\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_ecdsaWalletRegistry\",\"type\":\"address\"},{\"internalType\":\"addresspayable\",\"name\":\"_reimbursementPool\",\"type\":\"address\"},{\"internalType\":\"uint96\",\"name\":\"_txProofDifficultyFactor\",\"type\":\"uint96\"}],\"name\":\"initialize\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"isVaultTrusted\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"liveWalletsCount\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"requestKey\",\"type\":\"uint256\"}],\"name\":\"movedFundsSweepRequests\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint64\",\"name\":\"value\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"createdAt\",\"type\":\"uint32\"},{\"internalType\":\"enumMovingFunds.MovedFundsSweepRequestState\",\"name\":\"state\",\"type\":\"uint8\"}],\"internalType\":\"structMovingFunds.MovedFundsSweepRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"movingFundsParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"bytes\",\"name\":\"preimageSha256\",\"type\":\"bytes\"}],\"name\":\"notifyFraudChallengeDefeatTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTxOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"}],\"name\":\"notifyMovedFundsSweepTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"}],\"name\":\"notifyMovingFundsBelowDust\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"}],\"name\":\"notifyMovingFundsTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"notifyRedemptionTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"notifyRedemptionVeto\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"walletMainUtxo\",\"type\":\"tuple\"}],\"name\":\"notifyWalletCloseable\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"notifyWalletClosingPeriodElapsed\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"redemptionKey\",\"type\":\"uint256\"}],\"name\":\"pendingRedemptions\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"}],\"internalType\":\"structRedemption.RedemptionRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"balanceOwner\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"redemptionData\",\"type\":\"bytes\"}],\"name\":\"receiveBalanceApproval\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"redemptionParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"activeWalletMainUtxo\",\"type\":\"tuple\"}],\"name\":\"requestNewWallet\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"}],\"name\":\"requestRedemption\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"resetMovingFundsTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.DepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"}],\"name\":\"revealDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.DepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"},{\"internalType\":\"bytes32\",\"name\":\"extraData\",\"type\":\"bytes32\"}],\"name\":\"revealDepositWithExtraData\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"redemptionWatchtower\",\"type\":\"address\"}],\"name\":\"setRedemptionWatchtower\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"spvMaintainer\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"setSpvMaintainerStatus\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"setVaultStatus\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"utxoKey\",\"type\":\"uint256\"}],\"name\":\"spentMainUTXOs\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"sweepTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"sweepProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"submitDepositSweepProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"preimageSha256\",\"type\":\"bytes\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"r\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"s\",\"type\":\"bytes32\"},{\"internalType\":\"uint8\",\"name\":\"v\",\"type\":\"uint8\"}],\"internalType\":\"structBitcoinTx.RSVSignature\",\"name\":\"signature\",\"type\":\"tuple\"}],\"name\":\"submitFraudChallenge\",\"outputs\":[],\"stateMutability\":\"payable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"sweepTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"sweepProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"}],\"name\":\"submitMovedFundsSweepProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"walletMainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"uint256\",\"name\":\"walletMemberIndex\",\"type\":\"uint256\"},{\"internalType\":\"bytes20[]\",\"name\":\"targetWallets\",\"type\":\"bytes20[]\"}],\"name\":\"submitMovingFundsCommitment\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"movingFundsTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"movingFundsProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"submitMovingFundsProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"redemptionTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"redemptionProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"submitRedemptionProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"redemptionKey\",\"type\":\"uint256\"}],\"name\":\"timedOutRedemptions\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"}],\"internalType\":\"structRedemption.RedemptionRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"transferGovernance\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"treasury\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"txProofDifficultyFactor\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"name\":\"updateDepositParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateFraudParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateMovingFundsParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateRedemptionParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"treasury\",\"type\":\"address\"}],\"name\":\"updateTreasury\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"name\":\"updateWalletParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"walletParameters\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"wallets\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"mainUtxoHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint64\",\"name\":\"pendingRedemptionsValue\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"createdAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsRequestedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"closingStartedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"pendingMovedFundsSweepRequestsCount\",\"type\":\"uint32\"},{\"internalType\":\"enumWallets.WalletState\",\"name\":\"state\",\"type\":\"uint8\"},{\"internalType\":\"bytes32\",\"name\":\"movingFundsTargetWalletsCommitmentHash\",\"type\":\"bytes32\"}],\"internalType\":\"structWallets.Wallet\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
+	ABI: "[{\"inputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"constructor\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"name\":\"DepositParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"fundingTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"depositor\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"DepositRevealed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newVault\",\"type\":\"address\"}],\"name\":\"DepositVaultFixed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sweepTxHash\",\"type\":\"bytes32\"}],\"name\":\"DepositsSwept\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sighash\",\"type\":\"bytes32\"}],\"name\":\"FraudChallengeDefeatTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sighash\",\"type\":\"bytes32\"}],\"name\":\"FraudChallengeDefeated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sighash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint8\",\"name\":\"v\",\"type\":\"uint8\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"r\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"s\",\"type\":\"bytes32\"}],\"name\":\"FraudChallengeSubmitted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"FraudParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"oldGovernance\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"GovernanceTransferred\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint8\",\"name\":\"version\",\"type\":\"uint8\"}],\"name\":\"Initialized\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTxOutputIndex\",\"type\":\"uint32\"}],\"name\":\"MovedFundsSweepTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"sweepTxHash\",\"type\":\"bytes32\"}],\"name\":\"MovedFundsSwept\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsBelowDustReported\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes20[]\",\"name\":\"targetWallets\",\"type\":\"bytes20[]\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"submitter\",\"type\":\"address\"}],\"name\":\"MovingFundsCommitmentSubmitted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"}],\"name\":\"MovingFundsCompleted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"MovingFundsParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"MovingFundsTimeoutReset\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"NewWalletRegistered\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[],\"name\":\"NewWalletRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"oldRebateStaking\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newRebateStaking\",\"type\":\"address\"}],\"name\":\"RebateStakingRepaired\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"rebateStaking\",\"type\":\"address\"}],\"name\":\"RebateStakingSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"RedemptionParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"}],\"name\":\"RedemptionRequested\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"RedemptionTimedOut\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"redemptionWatchtower\",\"type\":\"address\"}],\"name\":\"RedemptionWatchtowerSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"redemptionTxHash\",\"type\":\"bytes32\"}],\"name\":\"RedemptionsCompleted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"spvMaintainer\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"SpvMaintainerStatusUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"treasury\",\"type\":\"address\"}],\"name\":\"TreasuryUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"VaultStatusUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletClosed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletClosing\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletMovingFunds\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"indexed\":false,\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"indexed\":false,\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"name\":\"WalletParametersUpdated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"WalletTerminated\",\"type\":\"event\"},{\"stateMutability\":\"payable\",\"type\":\"fallback\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyX\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyY\",\"type\":\"bytes32\"}],\"name\":\"__ecdsaWalletCreatedCallback\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyX\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"publicKeyY\",\"type\":\"bytes32\"}],\"name\":\"__ecdsaWalletHeartbeatFailedCallback\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"activeWalletPubKeyHash\",\"outputs\":[{\"internalType\":\"bytes20\",\"name\":\"\",\"type\":\"bytes20\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"contractReferences\",\"outputs\":[{\"internalType\":\"contractBank\",\"name\":\"bank\",\"type\":\"address\"},{\"internalType\":\"contractIRelay\",\"name\":\"relay\",\"type\":\"address\"},{\"internalType\":\"contractIWalletRegistry\",\"name\":\"ecdsaWalletRegistry\",\"type\":\"address\"},{\"internalType\":\"contractReimbursementPool\",\"name\":\"reimbursementPool\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"preimage\",\"type\":\"bytes\"},{\"internalType\":\"bool\",\"name\":\"witness\",\"type\":\"bool\"}],\"name\":\"defeatFraudChallenge\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"heartbeatMessage\",\"type\":\"bytes\"}],\"name\":\"defeatFraudChallengeWithHeartbeat\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"depositParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"deposits\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"depositor\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"revealedAt\",\"type\":\"uint32\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"sweptAt\",\"type\":\"uint32\"},{\"internalType\":\"bytes32\",\"name\":\"extraData\",\"type\":\"bytes32\"}],\"internalType\":\"structDeposit.DepositRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"challengeKey\",\"type\":\"uint256\"}],\"name\":\"fraudChallenges\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"challenger\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"depositAmount\",\"type\":\"uint256\"},{\"internalType\":\"uint32\",\"name\":\"reportedAt\",\"type\":\"uint32\"},{\"internalType\":\"bool\",\"name\":\"resolved\",\"type\":\"bool\"}],\"internalType\":\"structFraud.FraudChallenge\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"fraudParameters\",\"outputs\":[{\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"getRebateStaking\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"getRedemptionWatchtower\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"getReservationRouter\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"governance\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"_bank\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_relay\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_treasury\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"_ecdsaWalletRegistry\",\"type\":\"address\"},{\"internalType\":\"addresspayable\",\"name\":\"_reimbursementPool\",\"type\":\"address\"},{\"internalType\":\"uint96\",\"name\":\"_txProofDifficultyFactor\",\"type\":\"uint96\"}],\"name\":\"initialize\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"initializeV2_FixVaultZeroDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newRebateStaking\",\"type\":\"address\"}],\"name\":\"initializeV5_RepairRebateStaking\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"depositKey\",\"type\":\"uint256\"}],\"name\":\"isReservedDeposit\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"isVaultTrusted\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"liveWalletsCount\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"requestKey\",\"type\":\"uint256\"}],\"name\":\"movedFundsSweepRequests\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint64\",\"name\":\"value\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"createdAt\",\"type\":\"uint32\"},{\"internalType\":\"enumMovingFunds.MovedFundsSweepRequestState\",\"name\":\"state\",\"type\":\"uint8\"}],\"internalType\":\"structMovingFunds.MovedFundsSweepRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"movingFundsParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"bytes\",\"name\":\"preimageSha256\",\"type\":\"bytes\"}],\"name\":\"notifyFraudChallengeDefeatTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"movingFundsTxHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTxOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"}],\"name\":\"notifyMovedFundsSweepTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"}],\"name\":\"notifyMovingFundsBelowDust\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"}],\"name\":\"notifyMovingFundsTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"notifyRedemptionTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"}],\"name\":\"notifyRedemptionVeto\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"walletMainUtxo\",\"type\":\"tuple\"}],\"name\":\"notifyWalletCloseable\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"notifyWalletClosingPeriodElapsed\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"redemptionKey\",\"type\":\"uint256\"}],\"name\":\"pendingRedemptions\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"}],\"internalType\":\"structRedemption.RedemptionRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"balanceOwner\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"redemptionData\",\"type\":\"bytes\"}],\"name\":\"receiveBalanceApproval\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"redemptionParameters\",\"outputs\":[{\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"activeWalletMainUtxo\",\"type\":\"tuple\"}],\"name\":\"requestNewWallet\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes\",\"name\":\"redeemerOutputScript\",\"type\":\"bytes\"},{\"internalType\":\"uint64\",\"name\":\"amount\",\"type\":\"uint64\"}],\"name\":\"requestRedemption\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"resetMovingFundsTimeout\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.DepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"}],\"name\":\"revealDeposit\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"fundingTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"uint32\",\"name\":\"fundingOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"bytes8\",\"name\":\"blindingFactor\",\"type\":\"bytes8\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes20\",\"name\":\"refundPubKeyHash\",\"type\":\"bytes20\"},{\"internalType\":\"bytes4\",\"name\":\"refundLocktime\",\"type\":\"bytes4\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"internalType\":\"structDeposit.DepositRevealInfo\",\"name\":\"reveal\",\"type\":\"tuple\"},{\"internalType\":\"bytes32\",\"name\":\"extraData\",\"type\":\"bytes32\"}],\"name\":\"revealDepositWithExtraData\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"rebateStaking\",\"type\":\"address\"}],\"name\":\"setRebateStaking\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"redemptionWatchtower\",\"type\":\"address\"}],\"name\":\"setRedemptionWatchtower\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"_reservationRouter\",\"type\":\"address\"}],\"name\":\"setReservationRouter\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"spvMaintainer\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"setSpvMaintainerStatus\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"isTrusted\",\"type\":\"bool\"}],\"name\":\"setVaultStatus\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"utxoKey\",\"type\":\"uint256\"}],\"name\":\"spentMainUTXOs\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"sweepTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"sweepProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"address\",\"name\":\"vault\",\"type\":\"address\"}],\"name\":\"submitDepositSweepProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"walletPublicKey\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"preimageSha256\",\"type\":\"bytes\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"r\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"s\",\"type\":\"bytes32\"},{\"internalType\":\"uint8\",\"name\":\"v\",\"type\":\"uint8\"}],\"internalType\":\"structBitcoinTx.RSVSignature\",\"name\":\"signature\",\"type\":\"tuple\"}],\"name\":\"submitFraudChallenge\",\"outputs\":[],\"stateMutability\":\"payable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"sweepTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"sweepProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"}],\"name\":\"submitMovedFundsSweepProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"walletMainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"uint32[]\",\"name\":\"walletMembersIDs\",\"type\":\"uint32[]\"},{\"internalType\":\"uint256\",\"name\":\"walletMemberIndex\",\"type\":\"uint256\"},{\"internalType\":\"bytes20[]\",\"name\":\"targetWallets\",\"type\":\"bytes20[]\"}],\"name\":\"submitMovingFundsCommitment\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"movingFundsTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"movingFundsProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"submitMovingFundsProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"components\":[{\"internalType\":\"bytes4\",\"name\":\"version\",\"type\":\"bytes4\"},{\"internalType\":\"bytes\",\"name\":\"inputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes\",\"name\":\"outputVector\",\"type\":\"bytes\"},{\"internalType\":\"bytes4\",\"name\":\"locktime\",\"type\":\"bytes4\"}],\"internalType\":\"structBitcoinTx.Info\",\"name\":\"redemptionTx\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes\",\"name\":\"merkleProof\",\"type\":\"bytes\"},{\"internalType\":\"uint256\",\"name\":\"txIndexInBlock\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"bitcoinHeaders\",\"type\":\"bytes\"},{\"internalType\":\"bytes32\",\"name\":\"coinbasePreimage\",\"type\":\"bytes32\"},{\"internalType\":\"bytes\",\"name\":\"coinbaseProof\",\"type\":\"bytes\"}],\"internalType\":\"structBitcoinTx.Proof\",\"name\":\"redemptionProof\",\"type\":\"tuple\"},{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"txHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint32\",\"name\":\"txOutputIndex\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"txOutputValue\",\"type\":\"uint64\"}],\"internalType\":\"structBitcoinTx.UTXO\",\"name\":\"mainUtxo\",\"type\":\"tuple\"},{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"submitRedemptionProof\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"redemptionKey\",\"type\":\"uint256\"}],\"name\":\"timedOutRedemptions\",\"outputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"redeemer\",\"type\":\"address\"},{\"internalType\":\"uint64\",\"name\":\"requestedAmount\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"treasuryFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"txMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"requestedAt\",\"type\":\"uint32\"}],\"internalType\":\"structRedemption.RedemptionRequest\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newGovernance\",\"type\":\"address\"}],\"name\":\"transferGovernance\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"treasury\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"txProofDifficultyFactor\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"depositDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"depositTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"depositRevealAheadPeriod\",\"type\":\"uint32\"}],\"name\":\"updateDepositParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint96\",\"name\":\"fraudChallengeDepositAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudChallengeDefeatTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"fraudSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"fraudNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateFraudParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"movingFundsTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"movingFundsDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutResetDelay\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movingFundsTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"},{\"internalType\":\"uint16\",\"name\":\"movingFundsCommitmentGasOffset\",\"type\":\"uint16\"},{\"internalType\":\"uint64\",\"name\":\"movedFundsSweepTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"movedFundsSweepTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"movedFundsSweepTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateMovingFundsParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint64\",\"name\":\"redemptionDustThreshold\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTreasuryFeeDivisor\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxFee\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"redemptionTxMaxTotalFee\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeout\",\"type\":\"uint32\"},{\"internalType\":\"uint96\",\"name\":\"redemptionTimeoutSlashingAmount\",\"type\":\"uint96\"},{\"internalType\":\"uint32\",\"name\":\"redemptionTimeoutNotifierRewardMultiplier\",\"type\":\"uint32\"}],\"name\":\"updateRedemptionParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"treasury\",\"type\":\"address\"}],\"name\":\"updateTreasury\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"name\":\"updateWalletParameters\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"walletParameters\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"walletCreationPeriod\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletCreationMaxBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint64\",\"name\":\"walletClosureMinBtcBalance\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletMaxAge\",\"type\":\"uint32\"},{\"internalType\":\"uint64\",\"name\":\"walletMaxBtcTransfer\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"walletClosingPeriod\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes20\",\"name\":\"walletPubKeyHash\",\"type\":\"bytes20\"}],\"name\":\"wallets\",\"outputs\":[{\"components\":[{\"internalType\":\"bytes32\",\"name\":\"ecdsaWalletID\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"mainUtxoHash\",\"type\":\"bytes32\"},{\"internalType\":\"uint64\",\"name\":\"pendingRedemptionsValue\",\"type\":\"uint64\"},{\"internalType\":\"uint32\",\"name\":\"createdAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"movingFundsRequestedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"closingStartedAt\",\"type\":\"uint32\"},{\"internalType\":\"uint32\",\"name\":\"pendingMovedFundsSweepRequestsCount\",\"type\":\"uint32\"},{\"internalType\":\"enumWallets.WalletState\",\"name\":\"state\",\"type\":\"uint8\"},{\"internalType\":\"bytes32\",\"name\":\"movingFundsTargetWalletsCommitmentHash\",\"type\":\"bytes32\"}],\"internalType\":\"structWallets.Wallet\",\"name\":\"\",\"type\":\"tuple\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
 }
 
 // BridgeABI is the input ABI used to generate the binding from.
@@ -528,6 +528,37 @@ func (_Bridge *BridgeCallerSession) FraudParameters() (struct {
 	return _Bridge.Contract.FraudParameters(&_Bridge.CallOpts)
 }
 
+// GetRebateStaking is a free data retrieval call binding the contract method 0x3edf8238.
+//
+// Solidity: function getRebateStaking() view returns(address)
+func (_Bridge *BridgeCaller) GetRebateStaking(opts *bind.CallOpts) (common.Address, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "getRebateStaking")
+
+	if err != nil {
+		return *new(common.Address), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+
+	return out0, err
+
+}
+
+// GetRebateStaking is a free data retrieval call binding the contract method 0x3edf8238.
+//
+// Solidity: function getRebateStaking() view returns(address)
+func (_Bridge *BridgeSession) GetRebateStaking() (common.Address, error) {
+	return _Bridge.Contract.GetRebateStaking(&_Bridge.CallOpts)
+}
+
+// GetRebateStaking is a free data retrieval call binding the contract method 0x3edf8238.
+//
+// Solidity: function getRebateStaking() view returns(address)
+func (_Bridge *BridgeCallerSession) GetRebateStaking() (common.Address, error) {
+	return _Bridge.Contract.GetRebateStaking(&_Bridge.CallOpts)
+}
+
 // GetRedemptionWatchtower is a free data retrieval call binding the contract method 0x5f3281ca.
 //
 // Solidity: function getRedemptionWatchtower() view returns(address)
@@ -559,6 +590,37 @@ func (_Bridge *BridgeCallerSession) GetRedemptionWatchtower() (common.Address, e
 	return _Bridge.Contract.GetRedemptionWatchtower(&_Bridge.CallOpts)
 }
 
+// GetReservationRouter is a free data retrieval call binding the contract method 0x5157ec0a.
+//
+// Solidity: function getReservationRouter() view returns(address)
+func (_Bridge *BridgeCaller) GetReservationRouter(opts *bind.CallOpts) (common.Address, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "getReservationRouter")
+
+	if err != nil {
+		return *new(common.Address), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+
+	return out0, err
+
+}
+
+// GetReservationRouter is a free data retrieval call binding the contract method 0x5157ec0a.
+//
+// Solidity: function getReservationRouter() view returns(address)
+func (_Bridge *BridgeSession) GetReservationRouter() (common.Address, error) {
+	return _Bridge.Contract.GetReservationRouter(&_Bridge.CallOpts)
+}
+
+// GetReservationRouter is a free data retrieval call binding the contract method 0x5157ec0a.
+//
+// Solidity: function getReservationRouter() view returns(address)
+func (_Bridge *BridgeCallerSession) GetReservationRouter() (common.Address, error) {
+	return _Bridge.Contract.GetReservationRouter(&_Bridge.CallOpts)
+}
+
 // Governance is a free data retrieval call binding the contract method 0x5aa6e675.
 //
 // Solidity: function governance() view returns(address)
@@ -588,6 +650,37 @@ func (_Bridge *BridgeSession) Governance() (common.Address, error) {
 // Solidity: function governance() view returns(address)
 func (_Bridge *BridgeCallerSession) Governance() (common.Address, error) {
 	return _Bridge.Contract.Governance(&_Bridge.CallOpts)
+}
+
+// IsReservedDeposit is a free data retrieval call binding the contract method 0x93df529b.
+//
+// Solidity: function isReservedDeposit(uint256 depositKey) view returns(bool)
+func (_Bridge *BridgeCaller) IsReservedDeposit(opts *bind.CallOpts, depositKey *big.Int) (bool, error) {
+	var out []interface{}
+	err := _Bridge.contract.Call(opts, &out, "isReservedDeposit", depositKey)
+
+	if err != nil {
+		return *new(bool), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(bool)).(*bool)
+
+	return out0, err
+
+}
+
+// IsReservedDeposit is a free data retrieval call binding the contract method 0x93df529b.
+//
+// Solidity: function isReservedDeposit(uint256 depositKey) view returns(bool)
+func (_Bridge *BridgeSession) IsReservedDeposit(depositKey *big.Int) (bool, error) {
+	return _Bridge.Contract.IsReservedDeposit(&_Bridge.CallOpts, depositKey)
+}
+
+// IsReservedDeposit is a free data retrieval call binding the contract method 0x93df529b.
+//
+// Solidity: function isReservedDeposit(uint256 depositKey) view returns(bool)
+func (_Bridge *BridgeCallerSession) IsReservedDeposit(depositKey *big.Int) (bool, error) {
+	return _Bridge.Contract.IsReservedDeposit(&_Bridge.CallOpts, depositKey)
 }
 
 // IsVaultTrusted is a free data retrieval call binding the contract method 0xe53c0b55.
@@ -1204,6 +1297,48 @@ func (_Bridge *BridgeTransactorSession) Initialize(_bank common.Address, _relay 
 	return _Bridge.Contract.Initialize(&_Bridge.TransactOpts, _bank, _relay, _treasury, _ecdsaWalletRegistry, _reimbursementPool, _txProofDifficultyFactor)
 }
 
+// InitializeV2FixVaultZeroDeposit is a paid mutator transaction binding the contract method 0x456ffee0.
+//
+// Solidity: function initializeV2_FixVaultZeroDeposit() returns()
+func (_Bridge *BridgeTransactor) InitializeV2FixVaultZeroDeposit(opts *bind.TransactOpts) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "initializeV2_FixVaultZeroDeposit")
+}
+
+// InitializeV2FixVaultZeroDeposit is a paid mutator transaction binding the contract method 0x456ffee0.
+//
+// Solidity: function initializeV2_FixVaultZeroDeposit() returns()
+func (_Bridge *BridgeSession) InitializeV2FixVaultZeroDeposit() (*types.Transaction, error) {
+	return _Bridge.Contract.InitializeV2FixVaultZeroDeposit(&_Bridge.TransactOpts)
+}
+
+// InitializeV2FixVaultZeroDeposit is a paid mutator transaction binding the contract method 0x456ffee0.
+//
+// Solidity: function initializeV2_FixVaultZeroDeposit() returns()
+func (_Bridge *BridgeTransactorSession) InitializeV2FixVaultZeroDeposit() (*types.Transaction, error) {
+	return _Bridge.Contract.InitializeV2FixVaultZeroDeposit(&_Bridge.TransactOpts)
+}
+
+// InitializeV5RepairRebateStaking is a paid mutator transaction binding the contract method 0x1ebf670d.
+//
+// Solidity: function initializeV5_RepairRebateStaking(address newRebateStaking) returns()
+func (_Bridge *BridgeTransactor) InitializeV5RepairRebateStaking(opts *bind.TransactOpts, newRebateStaking common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "initializeV5_RepairRebateStaking", newRebateStaking)
+}
+
+// InitializeV5RepairRebateStaking is a paid mutator transaction binding the contract method 0x1ebf670d.
+//
+// Solidity: function initializeV5_RepairRebateStaking(address newRebateStaking) returns()
+func (_Bridge *BridgeSession) InitializeV5RepairRebateStaking(newRebateStaking common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.InitializeV5RepairRebateStaking(&_Bridge.TransactOpts, newRebateStaking)
+}
+
+// InitializeV5RepairRebateStaking is a paid mutator transaction binding the contract method 0x1ebf670d.
+//
+// Solidity: function initializeV5_RepairRebateStaking(address newRebateStaking) returns()
+func (_Bridge *BridgeTransactorSession) InitializeV5RepairRebateStaking(newRebateStaking common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.InitializeV5RepairRebateStaking(&_Bridge.TransactOpts, newRebateStaking)
+}
+
 // NotifyFraudChallengeDefeatTimeout is a paid mutator transaction binding the contract method 0x79fc4eb3.
 //
 // Solidity: function notifyFraudChallengeDefeatTimeout(bytes walletPublicKey, uint32[] walletMembersIDs, bytes preimageSha256) returns()
@@ -1498,6 +1633,27 @@ func (_Bridge *BridgeTransactorSession) RevealDepositWithExtraData(fundingTx Bit
 	return _Bridge.Contract.RevealDepositWithExtraData(&_Bridge.TransactOpts, fundingTx, reveal, extraData)
 }
 
+// SetRebateStaking is a paid mutator transaction binding the contract method 0xca73c462.
+//
+// Solidity: function setRebateStaking(address rebateStaking) returns()
+func (_Bridge *BridgeTransactor) SetRebateStaking(opts *bind.TransactOpts, rebateStaking common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "setRebateStaking", rebateStaking)
+}
+
+// SetRebateStaking is a paid mutator transaction binding the contract method 0xca73c462.
+//
+// Solidity: function setRebateStaking(address rebateStaking) returns()
+func (_Bridge *BridgeSession) SetRebateStaking(rebateStaking common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetRebateStaking(&_Bridge.TransactOpts, rebateStaking)
+}
+
+// SetRebateStaking is a paid mutator transaction binding the contract method 0xca73c462.
+//
+// Solidity: function setRebateStaking(address rebateStaking) returns()
+func (_Bridge *BridgeTransactorSession) SetRebateStaking(rebateStaking common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetRebateStaking(&_Bridge.TransactOpts, rebateStaking)
+}
+
 // SetRedemptionWatchtower is a paid mutator transaction binding the contract method 0xbe26ebad.
 //
 // Solidity: function setRedemptionWatchtower(address redemptionWatchtower) returns()
@@ -1517,6 +1673,27 @@ func (_Bridge *BridgeSession) SetRedemptionWatchtower(redemptionWatchtower commo
 // Solidity: function setRedemptionWatchtower(address redemptionWatchtower) returns()
 func (_Bridge *BridgeTransactorSession) SetRedemptionWatchtower(redemptionWatchtower common.Address) (*types.Transaction, error) {
 	return _Bridge.Contract.SetRedemptionWatchtower(&_Bridge.TransactOpts, redemptionWatchtower)
+}
+
+// SetReservationRouter is a paid mutator transaction binding the contract method 0xd394a4d3.
+//
+// Solidity: function setReservationRouter(address _reservationRouter) returns()
+func (_Bridge *BridgeTransactor) SetReservationRouter(opts *bind.TransactOpts, _reservationRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.contract.Transact(opts, "setReservationRouter", _reservationRouter)
+}
+
+// SetReservationRouter is a paid mutator transaction binding the contract method 0xd394a4d3.
+//
+// Solidity: function setReservationRouter(address _reservationRouter) returns()
+func (_Bridge *BridgeSession) SetReservationRouter(_reservationRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetReservationRouter(&_Bridge.TransactOpts, _reservationRouter)
+}
+
+// SetReservationRouter is a paid mutator transaction binding the contract method 0xd394a4d3.
+//
+// Solidity: function setReservationRouter(address _reservationRouter) returns()
+func (_Bridge *BridgeTransactorSession) SetReservationRouter(_reservationRouter common.Address) (*types.Transaction, error) {
+	return _Bridge.Contract.SetReservationRouter(&_Bridge.TransactOpts, _reservationRouter)
 }
 
 // SetSpvMaintainerStatus is a paid mutator transaction binding the contract method 0x5f2b2d0d.
@@ -1834,6 +2011,27 @@ func (_Bridge *BridgeTransactorSession) UpdateWalletParameters(walletCreationPer
 	return _Bridge.Contract.UpdateWalletParameters(&_Bridge.TransactOpts, walletCreationPeriod, walletCreationMinBtcBalance, walletCreationMaxBtcBalance, walletClosureMinBtcBalance, walletMaxAge, walletMaxBtcTransfer, walletClosingPeriod)
 }
 
+// Fallback is a paid mutator transaction binding the contract fallback function.
+//
+// Solidity: fallback() payable returns()
+func (_Bridge *BridgeTransactor) Fallback(opts *bind.TransactOpts, calldata []byte) (*types.Transaction, error) {
+	return _Bridge.contract.RawTransact(opts, calldata)
+}
+
+// Fallback is a paid mutator transaction binding the contract fallback function.
+//
+// Solidity: fallback() payable returns()
+func (_Bridge *BridgeSession) Fallback(calldata []byte) (*types.Transaction, error) {
+	return _Bridge.Contract.Fallback(&_Bridge.TransactOpts, calldata)
+}
+
+// Fallback is a paid mutator transaction binding the contract fallback function.
+//
+// Solidity: fallback() payable returns()
+func (_Bridge *BridgeTransactorSession) Fallback(calldata []byte) (*types.Transaction, error) {
+	return _Bridge.Contract.Fallback(&_Bridge.TransactOpts, calldata)
+}
+
 // BridgeDepositParametersUpdatedIterator is returned from FilterDepositParametersUpdated and is used to iterate over the raw logs and unpacked data for DepositParametersUpdated events raised by the Bridge contract.
 type BridgeDepositParametersUpdatedIterator struct {
 	Event *BridgeDepositParametersUpdated // Event containing the contract specifics and raw log
@@ -2127,6 +2325,151 @@ func (_Bridge *BridgeFilterer) WatchDepositRevealed(opts *bind.WatchOpts, sink c
 func (_Bridge *BridgeFilterer) ParseDepositRevealed(log types.Log) (*BridgeDepositRevealed, error) {
 	event := new(BridgeDepositRevealed)
 	if err := _Bridge.contract.UnpackLog(event, "DepositRevealed", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeDepositVaultFixedIterator is returned from FilterDepositVaultFixed and is used to iterate over the raw logs and unpacked data for DepositVaultFixed events raised by the Bridge contract.
+type BridgeDepositVaultFixedIterator struct {
+	Event *BridgeDepositVaultFixed // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeDepositVaultFixedIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeDepositVaultFixed)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeDepositVaultFixed)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeDepositVaultFixedIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeDepositVaultFixedIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeDepositVaultFixed represents a DepositVaultFixed event raised by the Bridge contract.
+type BridgeDepositVaultFixed struct {
+	DepositKey *big.Int
+	NewVault   common.Address
+	Raw        types.Log // Blockchain specific contextual infos
+}
+
+// FilterDepositVaultFixed is a free log retrieval operation binding the contract event 0x6851c9da8832e374b52353e89727e1f35bd403bf45bc19c889e416393bd53973.
+//
+// Solidity: event DepositVaultFixed(uint256 indexed depositKey, address newVault)
+func (_Bridge *BridgeFilterer) FilterDepositVaultFixed(opts *bind.FilterOpts, depositKey []*big.Int) (*BridgeDepositVaultFixedIterator, error) {
+
+	var depositKeyRule []interface{}
+	for _, depositKeyItem := range depositKey {
+		depositKeyRule = append(depositKeyRule, depositKeyItem)
+	}
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "DepositVaultFixed", depositKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeDepositVaultFixedIterator{contract: _Bridge.contract, event: "DepositVaultFixed", logs: logs, sub: sub}, nil
+}
+
+// WatchDepositVaultFixed is a free log subscription operation binding the contract event 0x6851c9da8832e374b52353e89727e1f35bd403bf45bc19c889e416393bd53973.
+//
+// Solidity: event DepositVaultFixed(uint256 indexed depositKey, address newVault)
+func (_Bridge *BridgeFilterer) WatchDepositVaultFixed(opts *bind.WatchOpts, sink chan<- *BridgeDepositVaultFixed, depositKey []*big.Int) (event.Subscription, error) {
+
+	var depositKeyRule []interface{}
+	for _, depositKeyItem := range depositKey {
+		depositKeyRule = append(depositKeyRule, depositKeyItem)
+	}
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "DepositVaultFixed", depositKeyRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeDepositVaultFixed)
+				if err := _Bridge.contract.UnpackLog(event, "DepositVaultFixed", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseDepositVaultFixed is a log parse operation binding the contract event 0x6851c9da8832e374b52353e89727e1f35bd403bf45bc19c889e416393bd53973.
+//
+// Solidity: event DepositVaultFixed(uint256 indexed depositKey, address newVault)
+func (_Bridge *BridgeFilterer) ParseDepositVaultFixed(log types.Log) (*BridgeDepositVaultFixed, error) {
+	event := new(BridgeDepositVaultFixed)
+	if err := _Bridge.contract.UnpackLog(event, "DepositVaultFixed", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
@@ -4550,6 +4893,275 @@ func (_Bridge *BridgeFilterer) WatchNewWalletRequested(opts *bind.WatchOpts, sin
 func (_Bridge *BridgeFilterer) ParseNewWalletRequested(log types.Log) (*BridgeNewWalletRequested, error) {
 	event := new(BridgeNewWalletRequested)
 	if err := _Bridge.contract.UnpackLog(event, "NewWalletRequested", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeRebateStakingRepairedIterator is returned from FilterRebateStakingRepaired and is used to iterate over the raw logs and unpacked data for RebateStakingRepaired events raised by the Bridge contract.
+type BridgeRebateStakingRepairedIterator struct {
+	Event *BridgeRebateStakingRepaired // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeRebateStakingRepairedIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeRebateStakingRepaired)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeRebateStakingRepaired)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeRebateStakingRepairedIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeRebateStakingRepairedIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeRebateStakingRepaired represents a RebateStakingRepaired event raised by the Bridge contract.
+type BridgeRebateStakingRepaired struct {
+	OldRebateStaking common.Address
+	NewRebateStaking common.Address
+	Raw              types.Log // Blockchain specific contextual infos
+}
+
+// FilterRebateStakingRepaired is a free log retrieval operation binding the contract event 0x3e9cf92a8b1e7b429a80cef0378c64004ed9e723a896f58a2bb02005bb34d8c5.
+//
+// Solidity: event RebateStakingRepaired(address oldRebateStaking, address newRebateStaking)
+func (_Bridge *BridgeFilterer) FilterRebateStakingRepaired(opts *bind.FilterOpts) (*BridgeRebateStakingRepairedIterator, error) {
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "RebateStakingRepaired")
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeRebateStakingRepairedIterator{contract: _Bridge.contract, event: "RebateStakingRepaired", logs: logs, sub: sub}, nil
+}
+
+// WatchRebateStakingRepaired is a free log subscription operation binding the contract event 0x3e9cf92a8b1e7b429a80cef0378c64004ed9e723a896f58a2bb02005bb34d8c5.
+//
+// Solidity: event RebateStakingRepaired(address oldRebateStaking, address newRebateStaking)
+func (_Bridge *BridgeFilterer) WatchRebateStakingRepaired(opts *bind.WatchOpts, sink chan<- *BridgeRebateStakingRepaired) (event.Subscription, error) {
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "RebateStakingRepaired")
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeRebateStakingRepaired)
+				if err := _Bridge.contract.UnpackLog(event, "RebateStakingRepaired", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseRebateStakingRepaired is a log parse operation binding the contract event 0x3e9cf92a8b1e7b429a80cef0378c64004ed9e723a896f58a2bb02005bb34d8c5.
+//
+// Solidity: event RebateStakingRepaired(address oldRebateStaking, address newRebateStaking)
+func (_Bridge *BridgeFilterer) ParseRebateStakingRepaired(log types.Log) (*BridgeRebateStakingRepaired, error) {
+	event := new(BridgeRebateStakingRepaired)
+	if err := _Bridge.contract.UnpackLog(event, "RebateStakingRepaired", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeRebateStakingSetIterator is returned from FilterRebateStakingSet and is used to iterate over the raw logs and unpacked data for RebateStakingSet events raised by the Bridge contract.
+type BridgeRebateStakingSetIterator struct {
+	Event *BridgeRebateStakingSet // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeRebateStakingSetIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeRebateStakingSet)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeRebateStakingSet)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeRebateStakingSetIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeRebateStakingSetIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeRebateStakingSet represents a RebateStakingSet event raised by the Bridge contract.
+type BridgeRebateStakingSet struct {
+	RebateStaking common.Address
+	Raw           types.Log // Blockchain specific contextual infos
+}
+
+// FilterRebateStakingSet is a free log retrieval operation binding the contract event 0xd1d9d4e9f516cb983e81d2a124ec97cb8d4ff00637f2a7f3229eadbed84e2df6.
+//
+// Solidity: event RebateStakingSet(address rebateStaking)
+func (_Bridge *BridgeFilterer) FilterRebateStakingSet(opts *bind.FilterOpts) (*BridgeRebateStakingSetIterator, error) {
+
+	logs, sub, err := _Bridge.contract.FilterLogs(opts, "RebateStakingSet")
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeRebateStakingSetIterator{contract: _Bridge.contract, event: "RebateStakingSet", logs: logs, sub: sub}, nil
+}
+
+// WatchRebateStakingSet is a free log subscription operation binding the contract event 0xd1d9d4e9f516cb983e81d2a124ec97cb8d4ff00637f2a7f3229eadbed84e2df6.
+//
+// Solidity: event RebateStakingSet(address rebateStaking)
+func (_Bridge *BridgeFilterer) WatchRebateStakingSet(opts *bind.WatchOpts, sink chan<- *BridgeRebateStakingSet) (event.Subscription, error) {
+
+	logs, sub, err := _Bridge.contract.WatchLogs(opts, "RebateStakingSet")
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeRebateStakingSet)
+				if err := _Bridge.contract.UnpackLog(event, "RebateStakingSet", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseRebateStakingSet is a log parse operation binding the contract event 0xd1d9d4e9f516cb983e81d2a124ec97cb8d4ff00637f2a7f3229eadbed84e2df6.
+//
+// Solidity: event RebateStakingSet(address rebateStaking)
+func (_Bridge *BridgeFilterer) ParseRebateStakingSet(log types.Log) (*BridgeRebateStakingSet, error) {
+	event := new(BridgeRebateStakingSet)
+	if err := _Bridge.contract.UnpackLog(event, "RebateStakingSet", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log

@@ -331,6 +331,7 @@ func TestGetProofInfo(t *testing.T) {
 					localChain,
 					localChain,
 					DefaultMaxProofHeaders,
+					newProofInfoCache(),
 				)
 			if err != nil {
 				t.Fatal(err)
@@ -434,6 +435,7 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 		localChain,
 		localChain,
 		DefaultMaxProofHeaders,
+		newProofInfoCache(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -443,6 +445,61 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 		t,
 		"skip reason",
 		int(proofSkipOutsideRelayRange),
+		int(skipReason),
+	)
+}
+
+// TestGetProofInfo_NormalizesZeroMaxProofHeaders pins the maxProofHeaders==0
+// normalization to its single central location inside getProofInfo. Any
+// Config built programmatically without going through flag registration
+// (which applies the 144 default; see cmd/flags.go) would otherwise pass a
+// zero maxProofHeaders straight through and skip every proof as
+// proofSkipExceededMaxHeaders after zero headers - this is the regression
+// this test would catch. Both getProofInfo callers (the generic SPV loop
+// and the reservation proof loop) rely on this same normalization.
+func TestGetProofInfo_NormalizesZeroMaxProofHeaders(t *testing.T) {
+	const proofStart = 790270
+
+	transactionHash, err := bitcoin.NewHashFromString(
+		"44c568bc0eac07a2a9c2b46829be5b5d46e7d00e17bfb613f506a75ccf86a473",
+		bitcoin.InternalByteOrder,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	localChain := newLocalChain()
+	btcChain := newLocalBitcoinChain()
+	if err := populateBlockHeaders(
+		btcChain,
+		proofStart,
+		proofStart+19,
+		func(uint) *big.Int { return big.NewInt(32) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	btcChain.addTransactionConfirmations(transactionHash, 20)
+
+	localChain.setTxProofDifficultyFactor(big.NewInt(6))
+	localChain.setCurrentEpoch(392)
+	localChain.setCurrentAndPrevEpochDifficulty(big.NewInt(16), big.NewInt(32))
+
+	_, _, skipReason, err := getProofInfo(
+		transactionHash,
+		btcChain,
+		localChain,
+		localChain,
+		0,
+		newProofInfoCache(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"skip reason",
+		int(proofSkipNone),
 		int(skipReason),
 	)
 }

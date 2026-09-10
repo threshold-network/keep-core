@@ -201,6 +201,7 @@ func (n *node) getCoordinationExecutor(
 
 	executor := newCoordinationExecutor(
 		n.chain,
+		n.ethereumNetwork,
 		wallet,
 		membersIndexes,
 		operatorAddress,

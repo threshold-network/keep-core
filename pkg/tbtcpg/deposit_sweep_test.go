@@ -1,6 +1,7 @@
 package tbtcpg_test
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -422,6 +423,7 @@ func setupVaultGroupingDeposit(
 			WalletPublicKeyHash: walletPublicKeyHash,
 			FundingTxHash:       fundingTxHash,
 			FundingOutputIndex:  outputIndex,
+			Vault:               vault,
 		},
 	)
 	if err != nil {
@@ -1107,4 +1109,298 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 			)
 		}
 	})
+}
+
+// TestFindDepositsToSweep_ExcludesReservedDeposits verifies that findDeposits
+// skips reservation-vault deposits IsReservedDeposit reports as reserved, so
+// a wallet's reservation-vault deposits never starve its ordinary deposits
+// of sweeping by winning the largest-group selection in
+// FindDepositsToSweep.
+func TestFindDepositsToSweep_ExcludesReservedDeposits(t *testing.T) {
+	currentBlock := uint64(300000)
+	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+	tbtcChain.SetDepositMinAge(3600)
+	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault: testReservationVaultAddress,
+	})
+
+	// 1 ordinary (non-reserved) deposit.
+	ordinaryHash := setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+		"6666666666666666666666666666666666666666666666666666666666666666",
+		0, 290000, nil,
+	)
+
+	reservationVault := testReservationVaultAddress
+
+	// 2 reservation-vault deposits: without exclusion this would be the
+	// larger group and would starve the ordinary deposit above.
+	reservedHash1 := setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+		"7777777777777777777777777777777777777777777777777777777777777777",
+		0, 290001, &reservationVault,
+	)
+	reservedHash2 := setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+		"8888888888888888888888888888888888888888888888888888888888888888",
+		0, 290002, &reservationVault,
+	)
+
+	tbtcChain.SetReservedDeposit(
+		tbtcChain.BuildDepositKey(reservedHash1, 0), true,
+	)
+	tbtcChain.SetReservedDeposit(
+		tbtcChain.BuildDepositKey(reservedHash2, 0), true,
+	)
+
+	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+	deposits, err := task.FindDepositsToSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(deposits) != 1 {
+		t.Fatalf(
+			"expected exactly 1 deposit (reserved ones excluded), got %d",
+			len(deposits),
+		)
+	}
+	if deposits[0].FundingTxHash != ordinaryHash {
+		t.Errorf(
+			"expected the ordinary deposit %v, got %v",
+			ordinaryHash,
+			deposits[0].FundingTxHash,
+		)
+	}
+	for _, d := range deposits {
+		if d.FundingTxHash == reservedHash1 || d.FundingTxHash == reservedHash2 {
+			t.Errorf(
+				"reserved deposit %v should have been excluded",
+				d.FundingTxHash,
+			)
+		}
+	}
+}
+
+// TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck verifies that
+// findDeposits never consults IsReservedDeposit for a deposit whose
+// DepositRevealed event vault does not match the configured reservation
+// vault: such a deposit is swept normally even when the chain would report
+// it as reserved, because the cheap event.Vault pre-filter is expected to
+// exclude it from the reserved-deposit check entirely.
+func TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck(t *testing.T) {
+	currentBlock := uint64(300000)
+	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+	tbtcChain.SetDepositMinAge(3600)
+	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault: testReservationVaultAddress,
+	})
+
+	otherVault := chain.Address("0xNotTheReservationVault1234567890abcdef12")
+
+	// The deposit's vault does not match the configured reservation
+	// vault, so the pre-filter must skip it without ever calling
+	// IsReservedDeposit. It is marked reserved anyway to prove that: if
+	// IsReservedDeposit were consulted and honored, this deposit would
+	// have been excluded from the sweep.
+	depositHash := setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+		"9999999999999999999999999999999999999999999999999999999999999999",
+		0, 290000, &otherVault,
+	)
+	tbtcChain.SetReservedDeposit(
+		tbtcChain.BuildDepositKey(depositHash, 0), true,
+	)
+
+	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+	deposits, err := task.FindDepositsToSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(deposits) != 1 || deposits[0].FundingTxHash != depositHash {
+		t.Fatalf(
+			"expected the non-matching-vault deposit %v to sweep "+
+				"normally, got %v",
+			depositHash,
+			deposits,
+		)
+	}
+}
+
+// TestFindDepositsToSweep_ReservationParametersUnavailableSweepsAll verifies
+// that findDeposits degrades to sweeping all candidate deposits normally,
+// rather than aborting, when ReservationParameters() fails -- the expected
+// state before the Bridge upgrade that introduces reservations exposes this
+// call.
+func TestFindDepositsToSweep_ReservationParametersUnavailableSweepsAll(t *testing.T) {
+	currentBlock := uint64(300000)
+	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+	tbtcChain.SetDepositMinAge(3600)
+	// Deliberately not calling SetReservationParameters: LocalChain's
+	// ReservationParameters() returns an error until it's configured,
+	// mirroring the pre-upgrade Bridge.
+
+	reservationVault := testReservationVaultAddress
+
+	// A deposit revealed against what would be the reservation vault,
+	// and marked reserved. It must still sweep normally because the
+	// reservation parameters lookup itself failed.
+	depositHash := setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		0, 290000, &reservationVault,
+	)
+	tbtcChain.SetReservedDeposit(
+		tbtcChain.BuildDepositKey(depositHash, 0), true,
+	)
+
+	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+	deposits, err := task.FindDepositsToSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(deposits) != 1 || deposits[0].FundingTxHash != depositHash {
+		t.Fatalf(
+			"expected all deposits to sweep normally when reservation "+
+				"parameters are unavailable, got %v",
+			deposits,
+		)
+	}
+}
+
+// reservationParametersFlakyChain wraps a tbtcpg.Chain, failing the first
+// failuresBeforeSuccess calls to ReservationParameters() and delegating to
+// the wrapped chain on every call after that (including the eventual
+// successful one and any subsequent ones). Everything else delegates
+// straight through.
+type reservationParametersFlakyChain struct {
+	tbtcpg.Chain
+	failuresBeforeSuccess int
+	calls                 int
+}
+
+func (c *reservationParametersFlakyChain) ReservationParameters() (
+	*tbtc.ReservationParameters,
+	error,
+) {
+	c.calls++
+	if c.calls <= c.failuresBeforeSuccess {
+		return nil, fmt.Errorf(
+			"simulated transient failure (call %d)",
+			c.calls,
+		)
+	}
+	return c.Chain.ReservationParameters()
+}
+
+// TestFindDepositsToSweep_ReservationParametersRetriesTransientFailure
+// verifies findDeposits retries a failing ReservationParameters() call a
+// bounded number of times before concluding reservations are inactive,
+// so a transient RPC hiccup (as opposed to the method being permanently
+// absent pre-upgrade) does not cause a genuinely reserved deposit to be
+// swept as a default one.
+func TestFindDepositsToSweep_ReservationParametersRetriesTransientFailure(t *testing.T) {
+	currentBlock := uint64(300000)
+	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+	tbtcChain.SetDepositMinAge(3600)
+	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault: testReservationVaultAddress,
+	})
+
+	reservationVault := testReservationVaultAddress
+	depositHash := setupVaultGroupingDeposit(
+		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		0, 290000, &reservationVault,
+	)
+	tbtcChain.SetReservedDeposit(
+		tbtcChain.BuildDepositKey(depositHash, 0), true,
+	)
+
+	// Fails on the first 2 attempts, succeeds on the 3rd - within the
+	// retry budget, so the reserved deposit must still be excluded.
+	flakyChain := &reservationParametersFlakyChain{
+		Chain:                 tbtcChain,
+		failuresBeforeSuccess: 2,
+	}
+
+	task := tbtcpg.NewDepositSweepTask(flakyChain, btcChain)
+	deposits, err := task.FindDepositsToSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(deposits) != 0 {
+		t.Fatalf(
+			"expected the reserved deposit to be excluded after "+
+				"ReservationParameters recovers within its retry "+
+				"budget, got %v",
+			deposits,
+		)
+	}
+	if flakyChain.calls != 3 {
+		t.Fatalf(
+			"expected exactly 3 ReservationParameters attempts "+
+				"(2 failures + 1 success), got %d",
+			flakyChain.calls,
+		)
+	}
 }

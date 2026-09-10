@@ -15,7 +15,7 @@ func TestRedemptionProposalCountersRegistered(t *testing.T) {
 	defer cancel()
 
 	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, false)
 	defer pm.Stop()
 
 	expectedCounters := []string{

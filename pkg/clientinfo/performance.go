@@ -37,6 +37,16 @@ type PerformanceMetrics struct {
 	registry *Registry
 	cancel   context.CancelFunc
 
+	// reservationsEnabled mirrors tbtc.Config.Reservations.LeaderDutiesEnabled. Gates
+	// registration of the reservation-specific gauge metrics (active_
+	// reservations_count, max_active_reservations, live_wallets_count,
+	// wallet_reservations_count) so a non-reservation deployment's metric
+	// surface does not change. The reservation wallet action counters
+	// (reservation_anchor, reservation_reanchor) are registered
+	// unconditionally regardless of this flag, because reservation action
+	// execution itself is not gated on it - see registerAllMetrics.
+	reservationsEnabled bool
+
 	countersMutex sync.RWMutex
 	counters      map[string]*counter
 
@@ -72,14 +82,22 @@ const (
 )
 
 // NewPerformanceMetrics creates a new performance metrics instance.
-func NewPerformanceMetrics(ctx context.Context, registry *Registry) *PerformanceMetrics {
+// reservationsEnabled gates registration of the reservation-specific gauge
+// metrics only (see registerAllMetrics); the reservation wallet action
+// counters are registered unconditionally.
+func NewPerformanceMetrics(
+	ctx context.Context,
+	registry *Registry,
+	reservationsEnabled bool,
+) *PerformanceMetrics {
 	ctx, cancel := context.WithCancel(ctx)
 	pm := &PerformanceMetrics{
-		registry:   registry,
-		cancel:     cancel,
-		counters:   make(map[string]*counter),
-		histograms: make(map[string]*histogram),
-		gauges:     make(map[string]*gauge),
+		registry:            registry,
+		cancel:              cancel,
+		reservationsEnabled: reservationsEnabled,
+		counters:            make(map[string]*counter),
+		histograms:          make(map[string]*histogram),
+		gauges:              make(map[string]*gauge),
 	}
 
 	// Register all metrics upfront with 0 values so they appear in /metrics endpoint
@@ -212,7 +230,18 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 // duration histograms with 0 initial values.
 func (pm *PerformanceMetrics) registerWalletActionMetrics() {
 	// For each action type, register: total, success_total, failed_total, duration_seconds
-	for _, actionType := range GetAllWalletActionTypes() {
+	// Reservation action types are registered unconditionally: reservation
+	// action execution in node_proposals.go is not itself gated on
+	// Tbtc.Reservations.LeaderDutiesEnabled, so an operator running with the flag
+	// disabled can still execute anchor/re-anchor actions post-activation.
+	// Gating registration here would leave increments to those
+	// wallet_action_reservation_* counters silently dropped
+	// (IncrementCounter no-ops on an unregistered name), losing
+	// observability without any signal.
+	actionTypes := append(GetAllWalletActionTypes(), GetReservationWalletActionTypes()...)
+
+	for _, actionType := range actionTypes {
+
 		actionCounters := []string{
 			WalletActionMetricName(actionType, "total"),
 			WalletActionMetricName(actionType, "success_total"),
@@ -354,6 +383,15 @@ func (pm *PerformanceMetrics) registerGaugeMetrics() {
 		MetricRAMUtilizationPercent,
 		MetricSwapUtilizationPercent,
 	}
+	if pm.reservationsEnabled {
+		gauges = append(
+			gauges,
+			MetricReservationActiveReservationsCount,
+			MetricReservationMaxActiveReservations,
+			MetricReservationLiveWalletsCount,
+			MetricReservationWalletReservationsCount,
+		)
+	}
 
 	pm.gaugesMutex.Lock()
 	for _, name := range gauges {
@@ -393,11 +431,8 @@ func (pm *PerformanceMetrics) IncrementCounter(name string, value float64) {
 	if !ok {
 		// Counter not pre-registered. Pre-registration is enforced by
 		// registerAllMetrics() and tested by the *_CountersRegistered
-		// tests. The original slow path lazily added the counter to
-		// pm.counters on first increment but never called
-		// ObserveApplicationSource, so the value lived in memory but
-		// never reached /metrics; the current code silently ignores
-		// the increment. Review the registration list if a counter
+		// tests; an unregistered name is silently dropped here rather
+		// than created. Review the registration list if a counter
 		// appears here unexpectedly.
 		return
 	}
@@ -694,6 +729,16 @@ const (
 	MetricCPULoadPercent         = "cpu_load_percent"
 	MetricRAMUtilizationPercent  = "ram_utilization_percent"
 	MetricSwapUtilizationPercent = "swap_utilization_percent"
+
+	// Reservation Metrics (m1 reservations feature; only registered when
+	// reservationsEnabled - see NewPerformanceMetrics). These are leading
+	// indicators of reservation capacity approaching its cap: without
+	// them, an operator cannot see acceptances approaching the cap before
+	// they silently stop.
+	MetricReservationActiveReservationsCount = "active_reservations_count"
+	MetricReservationMaxActiveReservations   = "max_active_reservations"
+	MetricReservationLiveWalletsCount        = "live_wallets_count"
+	MetricReservationWalletReservationsCount = "wallet_reservations_count"
 )
 
 // Network join request failure reasons. These are the low-cardinality
@@ -744,8 +789,8 @@ func GetAllNetworkJoinFailureReasons() []string {
 	}
 }
 
-// GetAllWalletActionTypes returns all wallet action types that should be tracked.
-// ActionNoop is excluded as it's a no-op action.
+// GetAllWalletActionTypes returns all non-reservation wallet action types that
+// should be tracked. ActionNoop is excluded as it's a no-op action.
 func GetAllWalletActionTypes() []string {
 	return []string{
 		"heartbeat",
@@ -753,5 +798,14 @@ func GetAllWalletActionTypes() []string {
 		"redemption",
 		"moving_funds",
 		"moved_funds_sweep",
+	}
+}
+
+// GetReservationWalletActionTypes returns all reservation-specific wallet
+// action types that should be tracked.
+func GetReservationWalletActionTypes() []string {
+	return []string{
+		"reservation_anchor",
+		"reservation_reanchor",
 	}
 }

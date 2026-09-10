@@ -5,12 +5,14 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ipfs/go-log/v2"
 	"go.uber.org/zap"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
@@ -56,6 +58,24 @@ const (
 	// Exported for the external tbtc_test package to compare it against the
 	// canonical tbtcpg value (guarded by TestSweepFeeConstantsMirrorTbtcpg).
 	DepositScriptByteSize = 126
+	// reservationParametersFetchRetries bounds how many consecutive
+	// ReservationParameters attempts ValidateDepositSweepProposal makes
+	// before concluding reservations are not currently active. Mirrors
+	// tbtcpg.reservationParametersFetchRetries's reasoning: a
+	// reservation-related Bridge call that doesn't exist yet on the
+	// deployed contract (pre-upgrade) fails deterministically on every
+	// attempt, while a transient RPC hiccup against an otherwise-live
+	// reservation system usually recovers within a few - and the
+	// consequence of guessing wrong the other way (co-signing a sweep of
+	// a genuinely reserved deposit) is irreversible, so a single failed
+	// attempt is not enough evidence to draw that conclusion. Retried
+	// identically on both the leader (tbtcpg) and follower (here) sides:
+	// no retry count eliminates the chance of independent followers
+	// reaching different conclusions from independent RPC calls, but
+	// fewer attempts only makes a wrong conclusion more likely, never
+	// less, so there is no safety argument for the follower retrying
+	// less than the leader.
+	reservationParametersFetchRetries = 3
 )
 
 // DepositKey identifies a deposit by the outpoint of its funding transaction.
@@ -364,6 +384,38 @@ func ValidateDepositSweepProposal(
 			fundingTxHash bitcoin.Hash,
 			fundingOutputIndex uint32,
 		) (*DepositChainRequest, bool, error)
+
+		// BuildDepositKey calculates a deposit key for the given funding
+		// transaction hash and output index.
+		BuildDepositKey(
+			fundingTxHash bitcoin.Hash,
+			fundingOutputIndex uint32,
+		) *big.Int
+
+		// ReservationParameters gets the current on-chain values of the
+		// Bridge reservation parameters, including the reservation vault
+		// address used to cheaply pre-filter which deposits are worth an
+		// IsReservedDeposit call at all. Called once per validation
+		// (before this loop), not per deposit. Fetched unconditionally,
+		// so it IS reached pre-upgrade; a failure is treated as
+		// "reservations not active" and the whole reserved-deposit
+		// filter below is skipped for this validation, mirroring the
+		// leader-side degradation in the deposit-sweep coordination
+		// task - it must not turn into every follower rejecting every
+		// sweep proposal before the Bridge exposes the reservation
+		// contracts.
+		ReservationParameters() (*ReservationParameters, error)
+
+		// IsReservedDeposit returns true if the given deposit was revealed
+		// with the reservation vault address and is therefore a
+		// reservation rather than a default deposit. This is the
+		// follower-side counterpart to the leader-path reserved-deposit
+		// filter in the deposit-sweep coordination task: a follower must
+		// not co-sign a reserved-deposit sweep. Only called for deposits
+		// whose revealed vault matches the current reservation vault AND
+		// only once ReservationParameters above has been fetched
+		// successfully - see the call site.
+		IsReservedDeposit(depositKey *big.Int) (bool, error)
 	},
 	btcChain bitcoin.Chain,
 ) ([]*Deposit, error) {
@@ -379,6 +431,44 @@ func ValidateDepositSweepProposal(
 
 	if len(proposal.DepositsKeys) != len(proposal.DepositsRevealBlocks) {
 		return nil, fmt.Errorf("proposal's reveal blocks list has a wrong length")
+	}
+
+	// Determine the reservation vault once per validation, not per
+	// deposit, and retry a bounded number of times before concluding
+	// reservations are not currently active - mirroring
+	// tbtcpg.findDeposits's identical leader-side degradation (see
+	// reservationParametersFetchRetries's doc comment for the reasoning,
+	// including why the follower retries exactly as many times as the
+	// leader rather than fewer). A failure here must not turn into
+	// every follower rejecting every deposit-sweep proposal pre-upgrade.
+	// This does not weaken safety: the IsReservedDeposit call below,
+	// for any deposit the cheap vault-match prefilter flags as a
+	// candidate, still rejects the proposal outright on error rather
+	// than skipping - see its call site for why the two calls take
+	// opposite failure postures.
+	reservationsActive := true
+	var reservationParams *ReservationParameters
+	var reservationParamsErr error
+	for attempt := 1; attempt <= reservationParametersFetchRetries; attempt++ {
+		reservationParams, reservationParamsErr = chain.ReservationParameters()
+		if reservationParamsErr == nil {
+			break
+		}
+		validateProposalLogger.Debugf(
+			"failed to fetch reservation parameters (attempt %d/%d): [%v]",
+			attempt,
+			reservationParametersFetchRetries,
+			reservationParamsErr,
+		)
+	}
+	if reservationParamsErr != nil {
+		validateProposalLogger.Infof(
+			"reservation parameters unavailable after %d attempts, "+
+				"skipping reserved deposit filter: [%v]",
+			reservationParametersFetchRetries,
+			reservationParamsErr,
+		)
+		reservationsActive = false
 	}
 
 	for i, depositKey := range proposal.DepositsKeys {
@@ -468,6 +558,50 @@ func ValidateDepositSweepProposal(
 				depositDisplayIndex,
 				err,
 			)
+		}
+
+		// Reuse the vault already carried by matchingEvent - fetched above
+		// for unrelated reasons - instead of an extra chain call, to cheaply
+		// pre-filter which deposits are worth an IsReservedDeposit call at
+		// all. Only consulted when reservationsActive (see the
+		// once-per-validation fetch above this loop); skipped entirely
+		// otherwise so this call, like ReservationParameters, degrades
+		// gracefully pre-upgrade instead of rejecting every proposal.
+		if reservationsActive && depositTargetsReservationVault(
+			matchingEvent.Vault,
+			reservationParams.ReservationVault,
+		) {
+			// Hard reject, unlike the fee soft-check below: that check
+			// is log-only specifically to avoid splitting signers during
+			// a mixed-version rollout (see its comment ahead of
+			// warnIfProposedWalletTxFeeBelowBufferedFloor). Sweeping a
+			// reservation is irreversible, so here the tradeoff flips -
+			// a stalled sweep (some followers reject, signing doesn't
+			// reach threshold) is the acceptable cost, not a wrongly
+			// swept reservation.
+			validateProposalLogger.Infof(
+				"deposit [%v] - checking reservation status",
+				depositDisplayIndex,
+			)
+
+			depositReservationKey := chain.BuildDepositKey(
+				depositKey.FundingTxHash,
+				depositKey.FundingOutputIndex,
+			)
+			isReserved, err := chain.IsReservedDeposit(depositReservationKey)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot check reservation status for deposit [%v]: [%v]",
+					depositDisplayIndex,
+					err,
+				)
+			}
+			if isReserved {
+				return nil, fmt.Errorf(
+					"deposit [%v] is a reserved deposit and cannot be swept",
+					depositDisplayIndex,
+				)
+			}
 		}
 
 		depositRequest, found, err := chain.GetDepositRequest(
@@ -700,4 +834,22 @@ func assembleDepositSweepTransaction(
 	})
 
 	return builder, nil
+}
+
+// depositTargetsReservationVault reports whether depositVault (a deposit's
+// revealed vault, nil for a vault-less deposit) matches reservationVault
+// (the current on-chain reservation vault address). Mirrors
+// tbtcpg.depositTargetsReservationVault - kept as a separate, unexported
+// copy since pkg/tbtc and pkg/tbtcpg share no reservation-helpers package.
+func depositTargetsReservationVault(
+	depositVault *chain.Address,
+	reservationVault chain.Address,
+) bool {
+	if depositVault == nil {
+		return false
+	}
+	return strings.EqualFold(
+		string(*depositVault),
+		string(reservationVault),
+	)
 }

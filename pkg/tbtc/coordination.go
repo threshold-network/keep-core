@@ -5,14 +5,19 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/internal/pb"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
+
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/internal/pb"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -20,7 +25,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -66,7 +70,48 @@ const (
 	// upgrade to a binary containing this constant before the activation block
 	// is reached.
 	DepositSweepEveryWindowActivationBlock = uint64(24559289)
+	// reservationsActivationBlocks maps each Ethereum network to the block
+	// height at which reservation actions (anchor, re-anchor) become
+	// available in the coordination checklist. All operators must upgrade
+	// to a binary containing this table before a network's activation
+	// block is reached, mirroring DepositSweepEveryWindowActivationBlock's
+	// precondition above. Only ethereum.Developer and ethereum.Unknown
+	// (local/dev chains) activate the feature immediately at block 0;
+	// every other public network MUST have an explicit entry here, or
+	// reservationsActivationBlock never activates the feature for it
+	// (see that function) instead of silently defaulting to block 0.
+	//
+	// Each public network's rollout block must be added to
+	// reservationsActivationBlocks only when a real height is chosen; an
+	// invented placeholder is indistinguishable at runtime from a real one
+	// and is exactly the silently-live landmine this table exists to
+	// prevent. Networks without an entry fall through to math.MaxUint64
+	// and never activate.
 )
+
+// reservationsActivationBlocks maps each Ethereum network to its
+// reservations activation block. See the doc comment above.
+var reservationsActivationBlocks = map[ethereum.Network]uint64{}
+
+// reservationsActivationBlock returns the reservations activation block
+// height for the given network. Only ethereum.Developer and
+// ethereum.Unknown (local/dev chains) return 0, meaning reservation
+// actions are active immediately. Every other network without an
+// explicit entry in reservationsActivationBlocks returns
+// math.MaxUint64, so an unrecognized public network never activates the
+// feature instead of silently inheriting an immediate-activation
+// default.
+func reservationsActivationBlock(network ethereum.Network) uint64 {
+	if network == ethereum.Developer || network == ethereum.Unknown {
+		return 0
+	}
+
+	if block, ok := reservationsActivationBlocks[network]; ok {
+		return block
+	}
+
+	return math.MaxUint64
+}
 
 // errCoordinationExecutorBusy is an error returned when the coordination
 // executor cannot execute the requested coordination due to an ongoing one.
@@ -290,7 +335,8 @@ func (cm *coordinationMessage) Type() string {
 type coordinationExecutor struct {
 	lock *semaphore.Weighted
 
-	chain Chain
+	chain           Chain
+	ethereumNetwork ethereum.Network
 
 	coordinatedWallet wallet
 	membersIndexes    []group.MemberIndex
@@ -316,6 +362,7 @@ type coordinationExecutor struct {
 // given wallet.
 func newCoordinationExecutor(
 	chain Chain,
+	ethereumNetwork ethereum.Network,
 	coordinatedWallet wallet,
 	membersIndexes []group.MemberIndex,
 	operatorAddress chain.Address,
@@ -328,6 +375,7 @@ func newCoordinationExecutor(
 	return &coordinationExecutor{
 		lock:                semaphore.NewWeighted(1),
 		chain:               chain,
+		ethereumNetwork:     ethereumNetwork,
 		coordinatedWallet:   coordinatedWallet,
 		membersIndexes:      membersIndexes,
 		operatorAddress:     operatorAddress,
@@ -586,8 +634,11 @@ func (ce *coordinationExecutor) getActionsChecklist(
 
 	var actions []WalletActionType
 
-	// Redemption action is a priority action and should be checked on every
-	// coordination window.
+	// Redemption is a priority action and should be checked on every
+	// coordination window: unlike MovingFunds (and, pre-activation, the
+	// sweep actions) which remain frequency-gated below for throughput
+	// reasons, an unredeemed request risks user funds being stuck, not
+	// just throughput.
 	actions = append(actions, ActionRedemption)
 
 	// Other actions should be checked with a lower frequency. The default
@@ -621,6 +672,33 @@ func (ce *coordinationExecutor) getActionsChecklist(
 		if windowIndex%frequencyWindows == 0 {
 			actions = append(actions, ActionMovingFunds)
 		}
+	}
+
+	// Reservation actions (acceptance, re-anchor) are custody-critical like
+	// Redemption and are checked on every coordination window once the
+	// activation block is reached, not frequency-gated like the
+	// throughput-driven DepositSweep/MovedFundsSweep/MovingFunds actions
+	// above: a delayed reservation acceptance or re-anchor risks the
+	// on-chain ReservationActionTimeout backstop firing before the wallet
+	// subsystem gets a chance to act. There is no per-operator enable
+	// flag here; the activation block is derived per-network (see
+	// reservationsActivationBlock), which keeps leader and follower
+	// checklists in agreement without relying on local config (a
+	// follower whose local config diverged from the leader's would
+	// otherwise fault an honest leader's reservation proposal as
+	// FaultLeaderMistake because the action would not appear in its own
+	// checklist).
+	//
+	// Note: because getActionsChecklist appends reservation actions after
+	// Redemption/DepositSweep/MovedFundsSweep/MovingFunds and
+	// ProposalGenerator.Generate returns on the first checklist action
+	// that yields a proposal, a wallet with steady redemption/sweep
+	// traffic can still delay reservation acceptance/re-anchor even
+	// though the checklist entry itself is unconditional. This is an
+	// accepted tradeoff bounded by ReservationActionTimeout, not a bug.
+	if coordinationBlock >= reservationsActivationBlock(ce.ethereumNetwork) {
+		actions = append(actions, ActionReservationAnchor)
+		actions = append(actions, ActionReservationReanchor)
 	}
 
 	// #nosec G404 (insecure random number source (rand))

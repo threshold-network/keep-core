@@ -165,4 +165,108 @@ type Chain interface {
 	// the deposit reveal before a deposit becomes eligible for
 	// a processing.
 	GetDepositMinAge() (uint32, error)
+
+	// ValidateReservationAnchorProposal validates the given reservation
+	// anchor proposal against the chain. Returns an error if the proposal
+	// is not valid or nil otherwise.
+	ValidateReservationAnchorProposal(
+		walletPublicKeyHash [20]byte,
+		proposal *tbtc.ReservationAnchorProposal,
+		depositExtraInfo struct {
+			*tbtc.Deposit
+			FundingTx *bitcoin.Transaction
+		},
+	) error
+
+	// ValidateReservationReanchorProposal validates the given reservation
+	// re-anchor proposal against the chain. Returns an error if the
+	// proposal is not valid or nil otherwise.
+	ValidateReservationReanchorProposal(
+		sourceWalletPublicKeyHash [20]byte,
+		proposal *tbtc.ReservationReanchorProposal,
+	) error
+
+	// RequestReservationAcceptance requests a reservation acceptance action
+	// generation for the given reservation. The reservation must be in a
+	// state that allows acceptance.
+	// Eligibility is checked by the reservation proposal builder and enforced by the Bridge.
+	RequestReservationAcceptance(
+		reservationKey *big.Int,
+		walletPublicKeyHash [20]byte,
+	) error
+
+	// RequestReservationReanchor requests a reservation re-anchor action
+	// generation for the given reservation, targeting the given wallet.
+	RequestReservationReanchor(
+		reservationKey *big.Int,
+		targetWalletPublicKeyHash [20]byte,
+	) error
+
+	// NotifyMovingFundsBelowDust notifies the Bridge that the given wallet's
+	// main UTXO has fallen below the moving funds dust threshold, ending
+	// the moving funds process and starting wallet closing immediately.
+	// mainUtxo may be nil when the wallet has no main UTXO at all; the
+	// Bridge only uses it to verify the on-chain balance it already holds
+	// for the wallet, so it is ignored in that case.
+	NotifyMovingFundsBelowDust(
+		walletPublicKeyHash [20]byte,
+		mainUtxo *bitcoin.UnspentTransactionOutput,
+	) error
+
+	// GetReservation returns the on-chain reservation record. An absent key is represented by ReservationStateUnknown; errors report chain-call or conversion failures.
+	GetReservation(reservationKey *big.Int) (*tbtc.Reservation, error)
+
+	// GetReservationAction returns the nonce-bound on-chain action record. An absent generation is represented by ReservationActionStateUnknown; errors report chain-call or conversion failures.
+	GetReservationAction(
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) (*tbtc.ReservationAction, error)
+
+	// ReservationParameters gets the current on-chain values of the Bridge
+	// reservation parameters.
+	ReservationParameters() (*tbtc.ReservationParameters, error)
+
+	// ReservationCaps returns the cap parameters that gate reservation
+	// acceptance: the maximum aggregate satoshi amount a single wallet may
+	// custody across all of its reservations, and the maximum satoshi
+	// amount any single reservation may anchor.
+	ReservationCaps() (maxReservationsAmountPerWallet uint64, reservationMaxSingleAmount uint64, err error)
+
+	// WalletReservationsAmount returns the aggregate satoshi amount
+	// currently anchored by the given wallet across all of its
+	// reservations.
+	WalletReservationsAmount(walletPublicKeyHash [20]byte) (uint64, error)
+
+	// WalletReservationsCount returns the number of reservations currently
+	// custodied by the given wallet.
+	WalletReservationsCount(walletPublicKeyHash [20]byte) (uint32, error)
+
+	// WalletReservations returns the reservation keys for all reservations
+	// currently custodied by the given wallet.
+	WalletReservations(walletPublicKeyHash [20]byte) ([]*big.Int, error)
+
+	// ActiveReservationsCount returns the current count of active
+	// reservations across all wallets and the cap on that count.
+	ActiveReservationsCount() (count uint32, maxActive uint32, err error)
+
+	// IsReservedDeposit returns true if the given deposit was revealed
+	// with the reservation vault address and is therefore a reservation
+	// rather than a default deposit.
+	IsReservedDeposit(depositKey *big.Int) (bool, error)
+
+	// PastReservationAcceptanceRequestedEvents fetches past
+	// ReservationAcceptanceRequested events according to the provided
+	// filter or unfiltered if the filter is nil. Returned events are sorted
+	// by the block number in the ascending order.
+	PastReservationAcceptanceRequestedEvents(
+		filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+	) ([]*tbtc.ReservationAcceptanceRequestedEvent, error)
+
+	// PastReservationReanchorRequestedEvents fetches past
+	// ReservationReanchorRequested events according to the provided
+	// filter or unfiltered if the filter is nil. Returned events are
+	// sorted by the block number in the ascending order.
+	PastReservationReanchorRequestedEvents(
+		filter *tbtc.ReservationReanchorRequestedEventFilter,
+	) ([]*tbtc.ReservationReanchorRequestedEvent, error)
 }

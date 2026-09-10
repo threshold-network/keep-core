@@ -2,6 +2,8 @@ package spv
 
 import (
 	"time"
+
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 const (
@@ -80,4 +82,14 @@ type Config struct {
 	// BIP94 minimum-difficulty runs) where the default 144 headers is
 	// insufficient.
 	MaxProofHeaders uint
+	// Reservations controls SPV proof submission for reservation acceptance
+	// and re-anchor action generations.
+	//
+	// OPERATOR NOTE: This flag only controls SPV proof submission in the
+	// maintainer process. Proposal generation and watcher wiring in the client
+	// process are gated by the separate Tbtc.Reservations.LeaderDutiesEnabled flag.
+	// An operator MUST enable BOTH flags ([Tbtc.Reservations] in the client
+	// and [Maintainer.Spv.Reservations] in the maintainer) for the reservation
+	// feature to work end-to-end.
+	Reservations tbtc.ReservationsConfig
 }
