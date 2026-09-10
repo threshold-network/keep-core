@@ -461,3 +461,139 @@ func TestFetchReservationAcceptanceFundingTxs_StopsAfterEarlyMatch(t *testing.T)
 		)
 	}
 }
+
+// activeReservationsCapChain wraps LocalChain, overriding
+// ActiveReservationsCount to report a usable (count, cap) pair. The
+// embedded LocalChain's own ActiveReservationsCount always reports (0, 0),
+// and checkReservationAcceptanceEligibility fails closed whenever
+// maxActiveReservations is 0 (treating it as "not configured" rather than
+// unlimited), so no candidate can ever pass eligibility against the bare
+// fixture -- this override is required for any test that needs
+// findReservationAcceptanceCandidate to actually find a candidate.
+type activeReservationsCapChain struct {
+	*LocalChain
+}
+
+func (c *activeReservationsCapChain) ActiveReservationsCount() (uint32, uint32, error) {
+	return 0, 1000, nil
+}
+
+// TestFindReservationAcceptanceCandidate_SkippedCandidatesDoNotConsumeCap
+// is a regression test for the cap-vs-skip ordering bug the PR-4324 review
+// flagged: candidatesExamined used to be incremented before the
+// skipDepositKeys check, so a deposit already rejected earlier in the same
+// Run() call -- and therefore present in skipDepositKeys on Run's retry --
+// still consumed a slot of the maxReservationAcceptanceCandidatesPerRun
+// budget even though it was never actually re-examined this pass. This
+// registers exactly maxReservationAcceptanceCandidatesPerRun already-
+// skipped candidates ahead of one genuinely eligible candidate, in
+// oldest-first order: under the pre-fix ordering the cap would be
+// exhausted by the skipped candidates alone, and the eligible one -- which
+// sorts after all of them -- would never be reached. Under the fix,
+// skipped candidates cost nothing against the cap and the eligible one is
+// found.
+func TestFindReservationAcceptanceCandidate_SkippedCandidatesDoNotConsumeCap(t *testing.T) {
+	lc := &activeReservationsCapChain{LocalChain: NewLocalChain()}
+	btcChain := NewLocalBitcoinChain()
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
+
+	walletPublicKeyHash := [20]byte{9, 8, 7, 6, 5, 4, 3, 2, 1}
+	vault := chain.Address("0xReservationVaultAddress1234567890abcdef12345678")
+
+	lc.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault:          vault,
+		ReservationMinAmount:      1000,
+		ReservationTxMaxFee:       5000,
+		MaxReservationsPerWallet:  5,
+		ReservationMaxTotalAmount: 100000000,
+	})
+	lc.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+	lc.SetDepositMinAge(3600)
+
+	blockCounter := NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(300000)
+	lc.SetBlockCounter(blockCounter)
+
+	currentBlock := uint64(300000)
+	filterStartBlock := currentBlock - ReservationAcceptanceLookBackBlocks
+	filter := &tbtc.DepositRevealedEventFilter{
+		StartBlock:          filterStartBlock,
+		EndBlock:            &currentBlock,
+		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	}
+
+	// maxReservationAcceptanceCandidatesPerRun candidates, all pre-marked
+	// as already skipped and given the earliest block numbers, so
+	// oldest-first order walks every one of them before the eligible
+	// candidate registered below.
+	skipDepositKeys := make(map[string]bool)
+	for i := range maxReservationAcceptanceCandidatesPerRun {
+		fundingTxHash := bitcoin.Hash{byte(i)}
+		if err := lc.AddPastDepositRevealedEvent(filter, &tbtc.DepositRevealedEvent{
+			BlockNumber:         filterStartBlock + uint64(i),
+			WalletPublicKeyHash: walletPublicKeyHash,
+			Vault:               &vault,
+			FundingTxHash:       fundingTxHash,
+			FundingOutputIndex:  0,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		depositKey := lc.BuildDepositKey(fundingTxHash, 0)
+		skipDepositKeys[depositKey.Text(16)] = true
+	}
+
+	// One genuinely eligible candidate, given the latest block number so
+	// it is walked last, after every skipped candidate above.
+	eligibleFundingTxHash := bitcoin.Hash{0xEE}
+	eligibleAmount := uint64(2000000)
+	if err := lc.AddPastDepositRevealedEvent(filter, &tbtc.DepositRevealedEvent{
+		BlockNumber:         filterStartBlock + uint64(maxReservationAcceptanceCandidatesPerRun),
+		WalletPublicKeyHash: walletPublicKeyHash,
+		Vault:               &vault,
+		FundingTxHash:       eligibleFundingTxHash,
+		FundingOutputIndex:  0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc.SetDepositRequest(eligibleFundingTxHash, 0, &tbtc.DepositChainRequest{
+		Amount:     eligibleAmount,
+		RevealedAt: time.Now().Add(-2 * time.Hour),
+		SweptAt:    time.Unix(0, 0),
+		Vault:      &vault,
+	})
+	btcChain.SetTransaction(eligibleFundingTxHash, &bitcoin.Transaction{})
+	btcChain.SetTransactionConfirmations(
+		eligibleFundingTxHash,
+		tbtc.DepositSweepRequiredFundingTxConfirmations,
+	)
+	eligibleDepositKey := lc.BuildDepositKey(eligibleFundingTxHash, 0)
+	lc.SetReservation(eligibleDepositKey, &tbtc.Reservation{
+		State:        tbtc.ReservationStateUnknown,
+		RequestNonce: 0,
+	})
+
+	task := NewReservationAcceptanceTask(lc, btcChain)
+
+	candidate, err := task.findReservationAcceptanceCandidate(
+		logger,
+		walletPublicKeyHash,
+		skipDepositKeys,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if candidate == nil {
+		t.Fatal(
+			"expected the eligible candidate past the skipped window to " +
+				"be found; got nil, which means the skipped candidates " +
+				"consumed the per-run cap before it was ever examined",
+		)
+	}
+	if candidate.DepositKey.Cmp(eligibleDepositKey) != 0 {
+		t.Errorf(
+			"expected the found candidate's deposit key to be [%v], got [%v]",
+			eligibleDepositKey,
+			candidate.DepositKey,
+		)
+	}
+}

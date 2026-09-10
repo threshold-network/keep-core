@@ -496,6 +496,15 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			continue
 		}
 
+		depositKey := rat.chain.BuildDepositKey(
+			event.FundingTxHash,
+			event.FundingOutputIndex,
+		)
+
+		if skipDepositKeys[depositKey.Text(16)] {
+			continue
+		}
+
 		if candidatesExamined >= maxReservationAcceptanceCandidatesPerRun {
 			taskLogger.Warnf(
 				"reached max reservation acceptance candidates per run "+
@@ -506,15 +515,6 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			break
 		}
 		candidatesExamined++
-
-		depositKey := rat.chain.BuildDepositKey(
-			event.FundingTxHash,
-			event.FundingOutputIndex,
-		)
-
-		if skipDepositKeys[depositKey.Text(16)] {
-			continue
-		}
 
 		depositRequest, foundRequest, err := rat.chain.GetDepositRequest(
 			event.FundingTxHash,
@@ -812,10 +812,14 @@ func (p *reservationAcceptanceFundingTxPipeline) next(
 // candidate has already been consumed via next(), or not at all. A lookup
 // already in flight when stop is called is not interrupted -- it still
 // runs to completion or hits its own
-// reservationAcceptanceFundingTxLookupTimeout -- so calling stop bounds
-// the number of "wasted" fetches past the caller's answer to at most
-// reservationAcceptanceFundingTxLookupWorkers - 1, no matter how many
-// candidates remain unexamined.
+// reservationAcceptanceFundingTxLookupTimeout. The dispatcher checks
+// stopCh before acquiring each new dispatch slot, giving stop() priority
+// over launching another lookup, so calling stop typically bounds the
+// number of "wasted" fetches past the caller's answer to roughly
+// reservationAcceptanceFundingTxLookupWorkers - 1 -- but because Go's
+// select can still occasionally choose an already-ready dispatch slot
+// over an already-closed stopCh, this is a best-effort reduction, not a
+// strict bound, no matter how many candidates remain unexamined.
 func (p *reservationAcceptanceFundingTxPipeline) stop() {
 	p.stopOnce.Do(func() { close(p.stopCh) })
 }
@@ -826,19 +830,25 @@ func (p *reservationAcceptanceFundingTxPipeline) stop() {
 // reservationAcceptanceFundingTxPipeline the caller pulls results from one
 // index at a time via next(). At most
 // reservationAcceptanceFundingTxLookupWorkers lookups ever run
-// concurrently, exactly as the previous eager implementation enforced --
-// but unlike that implementation, which launched every candidate's fetch
-// before the caller could inspect any result, fetches here are dispatched
-// lazily and stop altogether the moment the caller calls the returned
-// pipeline's stop() (see findReservationAcceptanceCandidate, which does so
-// via defer once it either finds a fully eligible candidate or exhausts
-// every candidate). For a wallet with maxReservationAcceptanceCandidatesPerRun
-// (50) pending candidates whose oldest one turns out to be eligible, this
-// bounds the number of Bitcoin RPCs issued to roughly
-// reservationAcceptanceFundingTxLookupWorkers instead of unconditionally
-// paying for all 50, while still tolerating one slow or unhealthy
-// candidate exactly as before (see
-// reservationAcceptanceFundingTxLookupTimeout).
+// concurrently -- a strict cap, exactly as the previous eager
+// implementation enforced with its shared worker goroutines. This is a
+// bound on concurrency, not on the total number of Bitcoin RPCs issued
+// over the pipeline's lifetime: unlike that implementation, which
+// launched every candidate's fetch before the caller could inspect any
+// result, fetches here are dispatched lazily and the dispatcher only
+// stops handing out new candidates once the caller calls the returned
+// pipeline's stop() (see findReservationAcceptanceCandidate, which does
+// so via defer once it either finds a fully eligible candidate or
+// exhausts every candidate). Because the dispatcher waits on stop(), not
+// on the caller actually consuming each result via next(), a caller whose
+// own per-candidate work (e.g. Ethereum round-trips) is slower than the
+// Bitcoin lookups can still see up to every one of
+// maxReservationAcceptanceCandidatesPerRun (50) pending candidates
+// dispatched before stop() is observed; the early-stop savings this
+// affords on top of the strict concurrency cap are best-effort, not an
+// absolute bound on total RPCs issued (see
+// reservationAcceptanceFundingTxLookupTimeout for the per-candidate
+// timeout that still applies to each dispatched lookup).
 func (rat *ReservationAcceptanceTask) fetchReservationAcceptanceFundingTxs(
 	candidates []*reservationAcceptanceFundingTxCandidate,
 ) *reservationAcceptanceFundingTxPipeline {
@@ -861,15 +871,25 @@ func (rat *ReservationAcceptanceTask) fetchReservationAcceptanceFundingTxs(
 
 	// The dispatcher below walks candidates in their given (oldest-first)
 	// order, acquiring a dispatchSlots slot before starting each one's
-	// fetch, so at most `workers` fetches ever run concurrently -- the
-	// same bound the previous eager implementation enforced with its
-	// shared worker goroutines. Unlike that implementation, it checks
-	// pipeline.stopCh before every dispatch, so it stops handing out new
-	// candidates the moment the caller calls stop(), instead of having
-	// already started every candidate's fetch before the caller could
-	// react.
+	// fetch, so at most `workers` fetches ever run concurrently -- a
+	// strict bound, the same one the previous eager implementation
+	// enforced with its shared worker goroutines. It gives stop()
+	// priority over dispatching another candidate: it checks
+	// pipeline.stopCh non-blockingly before attempting to acquire a slot,
+	// and returns immediately without acquiring or launching if stop has
+	// already been observed. This narrows, but -- because Go's select can
+	// still occasionally choose an already-ready dispatchSlots send over
+	// an already-closed stopCh in the slot-acquisition select below --
+	// does not strictly eliminate, the window in which one extra
+	// candidate's fetch can be launched after the caller calls stop().
 	go func() {
 		for i, candidate := range candidates {
+			select {
+			case <-pipeline.stopCh:
+				return
+			default:
+			}
+
 			select {
 			case dispatchSlots <- struct{}{}:
 			case <-pipeline.stopCh:
