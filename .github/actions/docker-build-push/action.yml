@@ -34,7 +34,7 @@ runs:
 
     - name: Load environment variables
       if: inputs.push == 'true'
-      uses: threshold-network/ci/actions/load-env-variables@4e5a710bc94d6abba62abbb6b8c70adfd10af83f
+      uses: threshold-network/ci/actions/load-env-variables@20b35345d276a3c7365e3829b8078387a7c9dccb
       with:
         environment: ${{ inputs.environment }}
 
