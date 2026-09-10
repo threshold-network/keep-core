@@ -126,9 +126,9 @@ type ReservationStaleDepositWatcher struct {
 	// operatorAddress identifies this process for
 	// reservationOperatorStaggerOffset (see reservation_wiring.go), used
 	// to stagger a deposit's FIRST NotifyStaleReservedDeposit attempt.
-	// Left unset (the zero address) until SetOperatorAddress is called;
-	// production wiring (WireReservationWatchers) calls it once after
-	// construction.
+	// It is a required constructor parameter, not a post-construction
+	// setter, so a watcher can never be constructed in a partially-
+	// initialized state that would silently skip staggering.
 	operatorAddress common.Address
 
 	// attempted records every deposit key for which
@@ -709,11 +709,10 @@ func (rsdw *ReservationStaleDepositWatcher) isWalletLive(
 // events since rsdw.lastSeenBlock, adds every reserved deposit among
 // them to the actively-polled (pending) set, then re-runs
 // CheckStaleReservedDeposit for every deposit already in that set. A
-// deposit is dropped entirely once it resolves Drop (no longer
-// reserved, released to the default sweep path, or swept) or Notified
-// (its acceptance action has advanced past pending) - both mean it can
-// never go stale again, so re-checking it forever would be wasted
-// RPCs. A deposit that instead resolves Keep because its assigned
+// deposit is removed once it resolves Drop (it is no longer a
+// staleness candidate) or Notified (a prior stale-deposit release was
+// confirmed on-chain); neither needs further polling. A deposit that
+// instead resolves Keep because its assigned
 // wallet has gone Live is moved to the parked set rather than
 // re-checked every tick going forward: the wallet may still transition
 // away from Live (e.g. MovingFunds/Closing/Terminated) before

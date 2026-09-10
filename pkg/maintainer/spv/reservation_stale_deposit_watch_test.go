@@ -248,7 +248,7 @@ func TestReservationStaleDepositWatcher_ZeroWalletSkips(t *testing.T) {
 }
 
 // TestReservationStaleDepositWatcher_NotifiedConfirmedOnRecheckIsRetired
-// verifies Finding 6's confirm-before-terminal contract: submitting
+// verifies the confirm-before-terminal contract: submitting
 // NotifyStaleReservedDeposit resolves Keep, not Notified, and only a
 // LATER call that observes the reservation actually reporting
 // ReservationStateClosed on-chain retires the deposit as Notified. This
@@ -318,7 +318,7 @@ func TestReservationStaleDepositWatcher_NotifiedConfirmedOnRecheckIsRetired(t *t
 }
 
 // TestReservationStaleDepositWatcher_NotifiedNotConfirmedIsRetried covers
-// the other half of Finding 6's contract: if a later tick's re-check
+// the other half of that contract: if a later tick's re-check
 // does NOT observe ReservationStateClosed, the deposit must stay tracked
 // (resolution Keep, never Drop or Notified) rather than being silently
 // and permanently lost, and once actionTimeoutRenotifyInterval elapses
