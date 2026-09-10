@@ -21,25 +21,24 @@ import (
 type reservationProofBitcoinChain struct {
 	*localBitcoinChain
 
-	// getTransactionsForPublicKeyHashCalls counts calls that reach the
-	// embedded localBitcoinChain's full-body fetch, letting tests assert
-	// walletTransactionsForProof's cache actually skips it when nothing
-	// changed for a wallet since the previous pass.
-	getTransactionsForPublicKeyHashCalls int
+	// getTransactionCalls counts calls that reach the embedded chain's
+	// single-transaction body fetch, letting tests assert
+	// walletTransactionsForProof's cache actually skips fetching bodies
+	// when nothing changed for a wallet since the previous pass.
+	getTransactionCalls int
 }
 
 func newReservationProofBitcoinChain() *reservationProofBitcoinChain {
 	return &reservationProofBitcoinChain{localBitcoinChain: newLocalBitcoinChain()}
 }
 
-// GetTransactionsForPublicKeyHash counts each call reaching the embedded
-// chain's full-body fetch; see getTransactionsForPublicKeyHashCalls.
-func (c *reservationProofBitcoinChain) GetTransactionsForPublicKeyHash(
-	publicKeyHash [20]byte,
-	limit int,
-) ([]*bitcoin.Transaction, error) {
-	c.getTransactionsForPublicKeyHashCalls++
-	return c.localBitcoinChain.GetTransactionsForPublicKeyHash(publicKeyHash, limit)
+// GetTransaction counts each call reaching the embedded chain's
+// single-transaction body fetch; see getTransactionCalls.
+func (c *reservationProofBitcoinChain) GetTransaction(
+	transactionHash bitcoin.Hash,
+) (*bitcoin.Transaction, error) {
+	c.getTransactionCalls++
+	return c.localBitcoinChain.GetTransaction(transactionHash)
 }
 
 // GetTxHashesForPublicKeyHash derives hashes from the same confirmed
@@ -642,6 +641,52 @@ func TestProveReservationTransaction(t *testing.T) {
 		)
 		if err == nil {
 			t.Fatal("expected submit error to propagate")
+		}
+	})
+
+	t.Run("skips a non-matching candidate to reach a later unconfirmed matching one", func(t *testing.T) {
+		// nonMatching is deliberately NOT registered with any confirmations
+		// on btcChain: if the loop failed to skip it via isMatch and instead
+		// called getProofInfo on it, GetTransactionConfirmations would
+		// return "transaction not found" and proveReservationTransaction
+		// would return that as an error. A nil error here is therefore
+		// direct evidence the non-matching candidate was never examined
+		// past the isMatch check, and the walk continued to matching.
+		nonMatching := &bitcoin.Transaction{Locktime: 1}
+		matching := &bitcoin.Transaction{Locktime: 2}
+
+		spvChain, btcChain := newFixture(2) // insufficient confirmations
+		btcChain.addTransactionConfirmations(matching.Hash(), 2)
+
+		isMatch := func(transaction *bitcoin.Transaction) bool {
+			return transaction.Hash() == matching.Hash()
+		}
+
+		submitted := false
+		err := proveReservationTransaction(
+			[]*bitcoin.Transaction{nonMatching, matching},
+			isMatch,
+			btcChain,
+			spvChain,
+			spvChain,
+			DefaultMaxProofHeaders,
+			newProofInfoCache(),
+			nil,
+			func(hash bitcoin.Hash, requiredConfirmations uint) error {
+				submitted = true
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatalf(
+				"unexpected error (a non-nil error here would mean the "+
+					"non-matching candidate was processed instead of "+
+					"skipped): %v",
+				err,
+			)
+		}
+		if submitted {
+			t.Error("expected submit not to be called for insufficient confirmations")
 		}
 	})
 }
@@ -1467,11 +1512,11 @@ func TestProveReservationTransaction_SelectsConfirmedRBFCandidate(t *testing.T) 
 	}
 }
 
-// TestWalletTransactionsForProof verifies the wallet transaction cache
-// underlying Finding 2's fix: a pass whose lightweight
-// GetTxHashesForPublicKeyHash check shows no change for a wallet since the
-// previous pass reuses the previous pass's fetched transaction bodies
-// instead of calling GetTransactionsForPublicKeyHash again, and a pass that
+// TestWalletTransactionsForProof verifies that unchanged transaction hashes
+// reuse cached bodies and a changed hash set triggers a refetch: a pass
+// whose lightweight GetTxHashesForPublicKeyHash check shows no change for a
+// wallet since the previous pass reuses the previous pass's fetched
+// transaction bodies instead of fetching them again, and a pass that
 // observes a new confirmed transaction for the wallet does refetch.
 func TestWalletTransactionsForProof(t *testing.T) {
 	btcChain := newReservationProofBitcoinChain()
@@ -1497,10 +1542,10 @@ func TestWalletTransactionsForProof(t *testing.T) {
 	if len(transactions) != 1 {
 		t.Fatalf("expected 1 transaction, got %d", len(transactions))
 	}
-	if btcChain.getTransactionsForPublicKeyHashCalls != 1 {
+	if btcChain.getTransactionCalls != 1 {
 		t.Fatalf(
-			"expected 1 full-history fetch after the first pass, got %d",
-			btcChain.getTransactionsForPublicKeyHashCalls,
+			"expected 1 transaction body fetch after the first pass, got %d",
+			btcChain.getTransactionCalls,
 		)
 	}
 
@@ -1513,11 +1558,11 @@ func TestWalletTransactionsForProof(t *testing.T) {
 	if len(transactions) != 1 {
 		t.Fatalf("expected 1 transaction, got %d", len(transactions))
 	}
-	if btcChain.getTransactionsForPublicKeyHashCalls != 1 {
+	if btcChain.getTransactionCalls != 1 {
 		t.Fatalf(
-			"expected the full-history fetch to be skipped when nothing "+
+			"expected transaction body fetches to be skipped when nothing "+
 				"changed, but call count is now %d",
-			btcChain.getTransactionsForPublicKeyHashCalls,
+			btcChain.getTransactionCalls,
 		)
 	}
 
@@ -1538,16 +1583,16 @@ func TestWalletTransactionsForProof(t *testing.T) {
 	if len(transactions) != 2 {
 		t.Fatalf("expected 2 transactions after the wallet's history changed, got %d", len(transactions))
 	}
-	if btcChain.getTransactionsForPublicKeyHashCalls != 2 {
+	if btcChain.getTransactionCalls != 3 {
 		t.Fatalf(
-			"expected the full-history fetch to run again after a change, "+
-				"got call count %d",
-			btcChain.getTransactionsForPublicKeyHashCalls,
+			"expected transaction bodies to be refetched (both hashes) "+
+				"after a change, got cumulative call count %d",
+			btcChain.getTransactionCalls,
 		)
 	}
 }
 
-// TestEvictStaleWalletTransactionCacheEntries verifies Finding 2's fix: a
+// TestEvictStaleWalletTransactionCacheEntries verifies that a
 // wallet's walletTransactionCache entry survives as long as either the
 // acceptance or the re-anchor pending-event map still tracks a pending
 // action for it, and is evicted only once neither map does - mirroring

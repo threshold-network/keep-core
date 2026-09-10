@@ -110,12 +110,25 @@ func walletTransactionsForProof(
 		return cached.transactions, nil
 	}
 
-	transactions, err := btcChain.GetTransactionsForPublicKeyHash(
-		walletPublicKeyHash,
-		limit,
-	)
-	if err != nil {
-		return nil, err
+	// Fetch transaction bodies for the already-known hash list instead of
+	// calling GetTransactionsForPublicKeyHash, whose Electrum implementation
+	// would otherwise re-fetch the same hash list via a second
+	// GetTxHashesForPublicKeyHash call internally. Respect the limit by
+	// taking the latest 'limit' hashes (hashes are ordered ascending, latest
+	// at the end), matching GetTransactionsForPublicKeyHash's own semantics.
+	selectedTxHashes := txHashes
+	if len(txHashes) > limit {
+		selectedTxHashes = txHashes[len(txHashes)-limit:]
+	}
+
+	transactions := make([]*bitcoin.Transaction, len(selectedTxHashes))
+	for i, txHash := range selectedTxHashes {
+		transaction, err := btcChain.GetTransaction(txHash)
+		if err != nil {
+			return nil, fmt.Errorf("cannot get transaction: [%v]", err)
+		}
+
+		transactions[i] = transaction
 	}
 
 	state.walletTransactionCache[walletPublicKeyHash] = &walletTransactionCacheEntry{
