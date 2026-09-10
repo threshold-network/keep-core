@@ -131,8 +131,9 @@ jobs:
     # (TBTC_V2_REF below) with no build failure. This job compiles the
     # real tbtc-v2 Solidity contracts directly and diffs their ABI against
     # the vendored fallback, failing loudly on any divergence. Cheap
-    # (checkout + yarn install + hardhat compile + one jq diff) and runs
-    # on every event, every branch, mirroring btcec-vendor-byte-identity's
+    # (checkout + yarn install + hardhat compile + one jq diff) and
+    # runs whenever the Client workflow runs, without an additional
+    # job-level path gate, mirroring btcec-vendor-byte-identity's
     # rationale for not gating by path.
     #
     # tbtc-v2 ref: threshold-network/tbtc-v2#1112 (which adds

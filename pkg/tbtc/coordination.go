@@ -75,10 +75,10 @@ const (
 	// available in the coordination checklist. All operators must upgrade
 	// to a binary containing this table before a network's activation
 	// block is reached, mirroring DepositSweepEveryWindowActivationBlock's
-	// precondition above. Only ethereum.Developer and ethereum.Unknown
-	// (local/dev chains) activate the feature immediately at block 0;
-	// every other public network MUST have an explicit entry here, or
-	// reservationsActivationBlock never activates the feature for it
+	// precondition above. Only ethereum.Developer activates the feature
+	// immediately at block 0; every other network, including
+	// ethereum.Unknown, MUST have an explicit entry here, or
+	// ReservationsActivationBlock never activates the feature for it
 	// (see that function) instead of silently defaulting to block 0.
 	//
 	// Each public network's rollout block must be added to

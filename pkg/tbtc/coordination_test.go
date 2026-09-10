@@ -765,7 +765,7 @@ func TestCoordinationExecutor_GetLeader(t *testing.T) {
 func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 	// All test cases below exercise the pre-activation code path. Reservation
 	// activation is per-network: this test sets ethereumNetwork to Mainnet,
-	// for which reservationsActivationBlock returns math.MaxUint64, so no
+	// for which ReservationsActivationBlock returns math.MaxUint64, so no
 	// real block height activates reservations here. Reservation actions
 	// therefore never appear in any expectedChecklist below; see
 	// TestCoordinationExecutor_GetActionsChecklist_Reservations for the
