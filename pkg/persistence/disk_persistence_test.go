@@ -267,6 +267,10 @@ func TestProtectedDiskPersistence_RefuseSnapshot_NameCollision(t *testing.T) {
 }
 
 func TestDiskPersistence_StoragePermission(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("cannot verify storage permission enforcement when running as root; " +
+			"root bypasses Unix file permission checks entirely")
+	}
 	var tests = map[string]struct {
 		newDiskPersistenceFn func(dataDir string) (RWHandle, error)
 	}{
