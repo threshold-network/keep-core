@@ -28,30 +28,9 @@ const TASK_CHECK_ACCOUNTS_COUNT = "check-accounts-count"
 
 const hardhatVerifyEnabled = process.env.DISABLE_HARDHAT_VERIFY !== "true"
 
-/**
- * Random-beacon `export/` is gitignored in the random-beacon package, so CI never
- * has ../random-beacon/export. Prefer committed `external/random-beacon-export/deploy`
- * (mirrors npm export scripts with a fixed 05_approve_*) before falling back to node_modules.
- */
+// Legacy deployment replay uses the reviewed, committed Beacon snapshot.
 function resolveRandomBeaconExport(subdir: "deploy" | "artifacts"): string {
-  const local = path.join(__dirname, "../random-beacon/export", subdir)
-  if (fs.existsSync(local)) {
-    return local
-  }
-  if (subdir === "deploy") {
-    const bundledDeploy = path.join(
-      __dirname,
-      "external/random-beacon-export/deploy"
-    )
-    if (fs.existsSync(bundledDeploy)) {
-      return bundledDeploy
-    }
-  }
-  return path.join(
-    __dirname,
-    "node_modules/@keep-network/random-beacon/export",
-    subdir
-  )
+  return path.join(__dirname, "external/random-beacon-export", subdir)
 }
 
 const thresholdSolidityCompilerConfig = {
@@ -236,11 +215,11 @@ const config: HardhatUserConfig = {
       // with `yarn link` command.
       development: [
         "node_modules/@threshold-network/solidity-contracts/deployments/development",
-        fs.existsSync(
+        ...(fs.existsSync(
           path.join(__dirname, "../random-beacon/deployments/development")
         )
-          ? path.join(__dirname, "../random-beacon/deployments/development")
-          : "node_modules/@keep-network/random-beacon/deployments/development",
+          ? [path.join(__dirname, "../random-beacon/deployments/development")]
+          : []),
       ],
       // Use local deployments/sepolia only - npm artifacts have transactionHash
       // that causes "cannot get the transaction" errors with some RPC nodes.
@@ -257,7 +236,6 @@ const config: HardhatUserConfig = {
           paths: [
             "@threshold-network/solidity-contracts/contracts/token/T.sol",
             "@threshold-network/solidity-contracts/contracts/staking/TokenStaking.sol",
-            "@keep-network/random-beacon/contracts/api/IRandomBeacon.sol",
             "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol",
           ],
           keep: true,

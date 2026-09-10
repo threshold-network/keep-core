@@ -194,20 +194,9 @@ jobs:
   # regenerate solidity/random-beacon/export-baseline.sha256 with the
   # same commands below and commit it alongside the change.
   #
-  # Note: the manifest covers the full export/ tree, including artifacts
-  # of external dependencies deployed onto the local test network
-  # (@keep-network/sortition-pools, @openzeppelin/*, @thesis/*,
-  # @threshold-network/*). This is safe from upstream-publish flakiness:
-  # install-yarn-deps runs `yarn install --immutable` against the
-  # committed yarn.lock, which pins each of these to a concrete resolved
-  # version (e.g. `@keep-network/sortition-pools@npm:^2.0.0-pre.16`
-  # resolves to a fixed `2.0.0-pre.16` in yarn.lock, not whatever the
-  # range currently resolves to upstream) - external artifacts only
-  # change when yarn.lock itself changes. So a diff under
-  # export/artifacts/@* means a dependency version bump landed in this
-  # PR/branch; regenerate the baseline as part of that same change, the
-  # same way as any other intentional export-shape change described
-  # above.
+  # The manifest includes the frozen legacy contracts and remaining external
+  # artifacts. Vendored sources/artifacts are committed; yarn.lock pins the
+  # installed dependencies. Regenerate this baseline when either changes.
   contracts-export-byte-identity:
     needs: contracts-detect-changes
     if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
@@ -283,16 +272,7 @@ jobs:
       - name: Resolve latest contracts
         run: |
           yarn up \
-            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
-            @keep-network/sortition-pools
-
-      # TODO: Remove this step. We replace sortition pools for deployment on testnet
-      # with forked contracts that were tweaked to make operators joining the pool
-      # easier. This should never be used outside of the test environment. On
-      # test environment it should be used temporarily only.
-      - name: Use Sortition Pool forked contracts
-        run: |
-          yarn up @keep-network/sortition-pools@github:keep-network/sortition-pools#test-fork
+            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }}
 
       - name: Configure tenderly
         env:
@@ -381,8 +361,7 @@ jobs:
       - name: Resolve latest contracts
         run: |
           yarn up \
-            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
-            @keep-network/sortition-pools
+            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }}
       
       - name: Deploy contracts
         env:

@@ -5,12 +5,10 @@ import {
   TASK_REGISTER,
   TASK_INITIALIZE_STAKING,
   TASK_ADD_BETA_OPERATOR,
-} from "@keep-network/random-beacon/export/tasks/initialize"
-import {
-  authorize,
-  register,
-  addBetaOperator,
-} from "@keep-network/random-beacon/export/tasks/utils"
+} from "./legacy-random-beacon/initialize"
+import { authorize } from "./legacy-random-beacon/utils/authorize"
+import { register } from "./legacy-random-beacon/utils/register"
+import { addBetaOperator } from "./legacy-random-beacon/utils/add_beta_operator"
 
 // Tasks for the ECDSA application.
 const TASK_INITIALIZE_ECDSA = `${TASK_INITIALIZE}:ecdsa`

@@ -12,7 +12,8 @@
     "deploy/",
     "export/",
     "tasks/",
-    "export.json"
+    "export.json",
+    "external/random-beacon-export/"
   ],
   "scripts": {
     "install:deps": "corepack enable && corepack prepare yarn@4.12.0 --activate && yarn install",
@@ -71,8 +72,6 @@
     "typescript": "^4.5.4"
   },
   "dependencies": {
-    "@keep-network/random-beacon": "development",
-    "@keep-network/sortition-pools": "^2.0.0-pre.16",
     "@openzeppelin/contracts": "^4.9.6",
     "@openzeppelin/contracts-upgradeable": "^4.9.6",
     "@threshold-network/solidity-contracts": "1.3.0-dev.14"

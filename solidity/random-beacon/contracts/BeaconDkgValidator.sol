@@ -15,7 +15,7 @@
 pragma solidity 0.8.17;
 
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
+import "./legacy/sortition/SortitionPool.sol";
 import "./libraries/BytesLib.sol";
 import {BeaconDkg as DKG} from "./libraries/BeaconDkg.sol";
 

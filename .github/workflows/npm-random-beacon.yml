@@ -45,7 +45,6 @@ jobs:
         # to the new TokenStaking API.
         run: |
           yarn up --exact \
-            @keep-network/sortition-pools \
             @threshold-network/solidity-contracts@1.3.0-dev.11
 
       # Deploy contracts to a local network to generate deployment artifacts that

@@ -6,9 +6,12 @@ external/npm
 hardhat-dependency-compiler/
 export.json
 gasReporterOutput.json
+.yarn/install-state.gz
 
 # Contract artifacts
 artifacts/
+!external/random-beacon-export/artifacts/
+!external/random-beacon-export/artifacts/**
 deployments/*
 !deployments/mainnet
 !deployments/sepolia
