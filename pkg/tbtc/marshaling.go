@@ -544,6 +544,12 @@ func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
 	rap.DepositFundingOutputIndex = pbMsg.DepositFundingOutputIndex
 	rap.RequestNonce = pbMsg.RequestNonce
 	rap.AnchorTxFee = new(big.Int).SetBytes(pbMsg.AnchorTxFee)
+	if rap.AnchorTxFee.Sign() <= 0 {
+		return fmt.Errorf(
+			"invalid anchor transaction fee value: [%v]",
+			rap.AnchorTxFee,
+		)
+	}
 
 	return nil
 }
@@ -618,8 +624,20 @@ func (rrp *ReservationReanchorProposal) Unmarshal(data []byte) error {
 	}
 
 	rrp.ReservationKey = new(big.Int).SetBytes(pbMsg.ReservationKey)
+	if rrp.ReservationKey.Sign() <= 0 {
+		return fmt.Errorf(
+			"invalid reservation key value: [%v]",
+			rrp.ReservationKey,
+		)
+	}
 	rrp.RequestNonce = pbMsg.RequestNonce
 	rrp.ReanchorTxFee = new(big.Int).SetBytes(pbMsg.ReanchorTxFee)
+	if rrp.ReanchorTxFee.Sign() <= 0 {
+		return fmt.Errorf(
+			"invalid re-anchor transaction fee value: [%v]",
+			rrp.ReanchorTxFee,
+		)
+	}
 
 	return nil
 }

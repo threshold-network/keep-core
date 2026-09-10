@@ -127,9 +127,8 @@ jobs:
     # fragments) whenever @keep-network/tbtc-v2 hasn't yet published the
     # real reservation contracts under the `development` npm tag (see
     # threshold-network/keep-core#4281). That vendored copy can silently
-    # drift from the real, currently-deployed contract ABI with no build
-    # failure - exactly what happened once already (see the P0 findings
-    # this job exists to prevent from recurring). This job compiles the
+    # drift from the ABI compiled from the pinned upstream tbtc-v2 ref
+    # (TBTC_V2_REF below) with no build failure. This job compiles the
     # real tbtc-v2 Solidity contracts directly and diffs their ABI against
     # the vendored fallback, failing loudly on any divergence. Cheap
     # (checkout + yarn install + hardhat compile + one jq diff) and runs
