@@ -40,9 +40,9 @@ func Configure(levelDirectiveString string) error {
 
 // Takes a levelDirective that can have one of three formats:
 //
-//     <log-level> |
-//     <subsystem>=<log-level> |
-//     <subsystem-prefix>*=<log-level>
+//	<log-level> |
+//	<subsystem>=<log-level> |
+//	<subsystem-prefix>*=<log-level>
 //
 // In the first form, the given log-level is set on all subsystems.
 //

@@ -1,4 +1,4 @@
-// Package encryption adds a layer to store data on disk encrypted in case 
+// Package encryption adds a layer to store data on disk encrypted in case
 // a filesystem is compromised.
 // Under the hood we use "golang.org/x/crypto/nacl/secretbox" for encryption.
 // Secretbox uses XSalsa20 and Poly1305 to encrypt an array of bytes with

@@ -40,7 +40,8 @@ var (
 // InitConstFlags initializes flags useful for constant contract interactions,
 // meaning contract interactions that do not require transaction submission and
 // are used for inspecting chain state. These flags include:
-//   --block flag to check an interaction's result value at a specific block.
+//
+//	--block flag to check an interaction's result value at a specific block.
 func InitConstFlags(cmd *cobra.Command) {
 	flag.BigIntVarPFlag(
 		cmd.Flags(),
@@ -55,7 +56,9 @@ func InitConstFlags(cmd *cobra.Command) {
 // InitNonConstFlags initializes flags useful for non-constant contract interactions,
 // meaning contract interactions that can be submitted as transactions and are
 // used for modifying chain state. These flags include:
-//   --submit flag to submit an interaction as a transaction,
+//
+//	--submit flag to submit an interaction as a transaction,
+//
 // as well as all flags in ConstFlags.
 func InitNonConstFlags(cmd *cobra.Command) {
 	InitConstFlags(cmd)
@@ -72,7 +75,9 @@ func InitNonConstFlags(cmd *cobra.Command) {
 // meaning contract interactions that can be submitted as transactions and are
 // used for modifying chain state with a payload that includes ETH. These flags
 // include:
-//   --value flag to specify the ETH amount to send with the interaction,
+//
+//	--value flag to specify the ETH amount to send with the interaction,
+//
 // as well as all flags in NonConstFlags.
 func InitPayableFlags(cmd *cobra.Command) {
 	InitNonConstFlags(cmd)
@@ -97,7 +102,7 @@ type ComposableArgChecker func(*cobra.Command, []string) error
 //
 // As an example, this allows for two BeforeFuncs to be composed as:
 //
-//   ComposableArgChecker(checkFlagAValue).AndThen(ComposableArgChecker(checkFlagBValue))
+//	ComposableArgChecker(checkFlagAValue).AndThen(ComposableArgChecker(checkFlagBValue))
 //
 // The resulting ComposableArgChecker will run checkFlagAValue and, if it
 // passes, checkFlagBValue.
