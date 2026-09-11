@@ -169,8 +169,10 @@ func initBitcoinElectrumFlags(cmd *cobra.Command, cfg *config.Config) {
 		"bitcoin.electrum.fallbackURLs",
 		[]string{},
 		"Comma-separated list of alternate Electrum server URLs used for "+
-			"failover when the primary server becomes unavailable. Ignored "+
-			"when the primary URL is explicitly configured (pinned).",
+			"failover when the primary server becomes unavailable. When no "+
+			"primary URL is configured, these take the place of the embedded "+
+			"candidate list; an explicitly configured primary stays pinned "+
+			"with these as its fallbacks.",
 	)
 
 	cmd.Flags().DurationVar(

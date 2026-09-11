@@ -86,22 +86,38 @@ func (c *Config) selectElectrumServer(urls []string, rng *rand.Rand) error {
 
 	// Retain the other connection settings while configuring the server pool.
 	c.Bitcoin.Electrum.URL = selectedURL
-	c.Bitcoin.Electrum.FallbackURLs = nil
-	for _, url := range urls {
-		if url != selectedURL {
-			c.Bitcoin.Electrum.FallbackURLs = append(c.Bitcoin.Electrum.FallbackURLs, url)
-		}
-	}
 
-	// Shuffle the fallback candidates using the injected rng so each process
-	// derives its own independent rotation order instead of always retaining
-	// the embedded list order.
-	// #nosec G404 (insecure random number source (rand))
-	// Ordering fallback candidates does not require secure randomness.
+	// Operator-supplied fallbacks are explicit configuration and take
+	// precedence over the embedded candidates: honor them as-is (minus the
+	// selected primary) and do not append the embedded remainder on top of
+	// them. Without operator fallbacks, retain the embedded remainder for
+	// automatic failover in a per-process shuffled order.
 	fallbackURLs := c.Bitcoin.Electrum.FallbackURLs
-	rng.Shuffle(len(fallbackURLs), func(i, j int) {
-		fallbackURLs[i], fallbackURLs[j] = fallbackURLs[j], fallbackURLs[i]
-	})
+	if len(fallbackURLs) > 0 {
+		filtered := fallbackURLs[:0]
+		for _, url := range fallbackURLs {
+			if url != selectedURL {
+				filtered = append(filtered, url)
+			}
+		}
+		c.Bitcoin.Electrum.FallbackURLs = filtered
+	} else {
+		for _, url := range urls {
+			if url != selectedURL {
+				fallbackURLs = append(fallbackURLs, url)
+			}
+		}
+		c.Bitcoin.Electrum.FallbackURLs = fallbackURLs
+
+		// Shuffle the embedded fallback candidates using the injected rng so
+		// each process derives its own independent rotation order instead of
+		// always retaining the embedded list order.
+		// #nosec G404 (insecure random number source (rand))
+		// Ordering fallback candidates does not require secure randomness.
+		rng.Shuffle(len(fallbackURLs), func(i, j int) {
+			fallbackURLs[i], fallbackURLs[j] = fallbackURLs[j], fallbackURLs[i]
+		})
+	}
 
 	return nil
 }

@@ -53,9 +53,9 @@ KeyFile = "/Users/someuser/ethereum/data/keystore/UTC--2018-03-11T01-37-33.20276
 # URL = "tcp://electrumx.server.io:50001"
 
 # Comma-separated list of alternate Electrum server URLs used for automatic
-# failover. When URL is omitted, the remaining embedded servers are retained
-# as failover candidates; when URL is explicit, it stays pinned and fallbacks
-# are ignored.
+# failover. When URL is omitted, these take the place of the embedded
+# candidate list; when URL is explicit, it stays the pinned primary and these
+# are used as its fallbacks.
 # FallbackURLs = "ssl://backup1.example:50002,ssl://backup2.example:50002"
 
 # Timeout for a single attempt of Electrum connection establishment.

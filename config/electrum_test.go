@@ -212,3 +212,109 @@ func TestResolveElectrumMultiURLFile(t *testing.T) {
 		t.Fatalf("unexpected fallback count: %v", cfg.Bitcoin.Electrum.FallbackURLs)
 	}
 }
+
+// TestSelectElectrumServerHonorsOperatorFallbacks guards the operator arm path
+// for failover: an operator-supplied fallback list must survive auto-selection
+// instead of being overwritten by the embedded candidate remainder.
+func TestSelectElectrumServerHonorsOperatorFallbacks(t *testing.T) {
+	t.Run("operator list replaces embedded remainder", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.Bitcoin.Electrum.FallbackURLs = []string{
+			"wss://op1.example:443",
+			"wss://op2.example:443",
+		}
+
+		embedded := []string{
+			"wss://embedded1.example:443",
+			"wss://embedded2.example:443",
+		}
+		if err := cfg.selectElectrumServer(embedded, rand.New(&fakeRandSource{1})); err != nil {
+			t.Fatal(err)
+		}
+
+		expected := []string{"wss://op1.example:443", "wss://op2.example:443"}
+		if !reflect.DeepEqual(cfg.Bitcoin.Electrum.FallbackURLs, expected) {
+			t.Fatalf(
+				"operator fallbacks were not retained\nexpected: %v\nactual:   %v",
+				expected,
+				cfg.Bitcoin.Electrum.FallbackURLs,
+			)
+		}
+	})
+
+	t.Run("selected primary is deduped from operator list", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.Bitcoin.Electrum.FallbackURLs = []string{
+			"wss://embedded1.example:443", // equals the only embedded candidate
+			"wss://op1.example:443",
+		}
+
+		if err := cfg.selectElectrumServer(
+			[]string{"wss://embedded1.example:443"},
+			rand.New(&fakeRandSource{1}),
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		expected := []string{"wss://op1.example:443"}
+		if !reflect.DeepEqual(cfg.Bitcoin.Electrum.FallbackURLs, expected) {
+			t.Fatalf(
+				"selected primary not deduped from operator fallbacks\nexpected: %v\nactual:   %v",
+				expected,
+				cfg.Bitcoin.Electrum.FallbackURLs,
+			)
+		}
+	})
+}
+
+// TestResolveElectrumKeepsOperatorFallbacks covers the full resolution path:
+// operator fallbacks set with no explicit URL survive auto-selection, and an
+// explicit URL keeps both itself (pinned) and the operator fallbacks.
+func TestResolveElectrumKeepsOperatorFallbacks(t *testing.T) {
+	t.Run("auto-selected primary keeps operator fallbacks", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.Bitcoin.Network = bitcoin.Mainnet
+		cfg.Bitcoin.Electrum.FallbackURLs = []string{"wss://op1.example:443"}
+
+		if err := cfg.resolveElectrum(rand.New(&fakeRandSource{1})); err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg.Bitcoin.Electrum.URL != "wss://electrum.boar.network:2083" {
+			t.Fatalf("unexpected primary: %v", cfg.Bitcoin.Electrum.URL)
+		}
+
+		expected := []string{"wss://op1.example:443"}
+		if !reflect.DeepEqual(cfg.Bitcoin.Electrum.FallbackURLs, expected) {
+			t.Fatalf(
+				"operator fallbacks lost in auto-select path\nexpected: %v\nactual:   %v",
+				expected,
+				cfg.Bitcoin.Electrum.FallbackURLs,
+			)
+		}
+	})
+
+	t.Run("explicit URL stays pinned with operator fallbacks", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.Bitcoin.Network = bitcoin.Mainnet
+		cfg.Bitcoin.Electrum.URL = "ssl://explicit.example:50002"
+		cfg.Bitcoin.Electrum.FallbackURLs = []string{"ssl://backup.example:50002"}
+
+		if err := cfg.resolveElectrum(rand.New(&fakeRandSource{1})); err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg.Bitcoin.Electrum.URL != "ssl://explicit.example:50002" {
+			t.Fatalf("explicit URL was unpinned: %v", cfg.Bitcoin.Electrum.URL)
+		}
+
+		expected := []string{"ssl://backup.example:50002"}
+		if !reflect.DeepEqual(cfg.Bitcoin.Electrum.FallbackURLs, expected) {
+			t.Fatalf(
+				"operator fallbacks lost with explicit URL\nexpected: %v\nactual:   %v",
+				expected,
+				cfg.Bitcoin.Electrum.FallbackURLs,
+			)
+		}
+	})
+}
