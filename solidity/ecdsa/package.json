@@ -36,7 +36,7 @@
     "prepublishOnly": "hardhat prepare-artifacts --network $npm_config_network"
   },
   "devDependencies": {
-    "@keep-network/hardhat-helpers": "^0.6.0-pre.15",
+    "@keep-network/hardhat-helpers": "github:threshold-network/hardhat-helpers#v0.6.0-pre.21",
     "@keep-network/hardhat-local-networks-config": "^0.1.0-pre.4",
     "@nomicfoundation/hardhat-chai-matchers": "^1.0.6",
     "@nomicfoundation/hardhat-verify": "^2.1.3",
