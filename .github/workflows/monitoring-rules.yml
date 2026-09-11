@@ -1,0 +1,37 @@
+name: Monitoring Rules
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - "infrastructure/monitoring/**"
+  pull_request:
+    paths:
+      - "infrastructure/monitoring/**"
+
+jobs:
+  promtool-validate:
+    name: Validate Prometheus alert rules
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/monitoring/maintainer
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download and install promtool
+        run: |
+          curl -sSL -o prometheus.tar.gz \
+            https://github.com/prometheus/prometheus/releases/download/v2.55.1/prometheus-2.55.1.linux-amd64.tar.gz
+          tar xzf prometheus.tar.gz
+          sudo mv prometheus-2.55.1.linux-amd64/promtool /usr/local/bin/promtool
+          promtool --version
+
+      - name: Check Prometheus config
+        run: promtool check config prometheus.example.yml
+
+      - name: Test Prometheus alert rules
+        run: promtool test rules rules.test.yml

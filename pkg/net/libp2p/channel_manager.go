@@ -50,11 +50,7 @@ type channelManager struct {
 	topics      map[string]*pubsub.Topic
 
 	// metricsRecorder is optional and used for recording performance metrics
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-		SetGauge(name string, value float64)
-		RecordDuration(name string, duration time.Duration)
-	}
+	metricsRecorder fullMetricsRecorder
 }
 
 func newChannelManager(
@@ -126,11 +122,7 @@ func (cm *channelManager) getChannel(name string) (*channel, error) {
 
 // setMetricsRecorder sets the metrics recorder for the channel manager
 // and wires it into existing channels.
-func (cm *channelManager) setMetricsRecorder(recorder interface {
-	IncrementCounter(name string, value float64)
-	SetGauge(name string, value float64)
-	RecordDuration(name string, duration time.Duration)
-}) {
+func (cm *channelManager) setMetricsRecorder(recorder fullMetricsRecorder) {
 	// Wire metrics into existing channels
 	cm.channelsMutex.Lock()
 	defer cm.channelsMutex.Unlock()

@@ -7,10 +7,10 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/tbtcpg"
 
-	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/build"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	"github.com/keep-network/keep-core/pkg/operator"
+	"github.com/keep-network/keep-core/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/storage"
 
 	"github.com/spf13/cobra"
@@ -139,11 +139,13 @@ func start(cmd *cobra.Command) error {
 
 			rpcHealthChecker := clientinfo.NewRPCHealthChecker(
 				clientInfoRegistry,
-				blockCounter,
+				tbtcChain,
 				btcChain,
 				clientConfig.ClientInfo.RPCHealthCheckInterval,
 			)
-			rpcHealthChecker.Start(ctx)
+			// An unavailable RPC must not delay starting the node's
+			// initialization (beacon and tbtc).
+			go rpcHealthChecker.Start(ctx)
 		}
 
 		err = beacon.Initialize(
@@ -231,7 +233,7 @@ func initializeClientInfo(
 	signing chain.Signing,
 	blockCounter chain.BlockCounter,
 ) *clientinfo.Registry {
-	registry, isConfigured := clientinfo.Initialize(ctx, config.ClientInfo.Port)
+	registry, isConfigured := clientinfo.Initialize(ctx, config.ClientInfo)
 	if !isConfigured {
 		logger.Infof("client info endpoint not configured")
 		return nil

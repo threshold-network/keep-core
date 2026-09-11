@@ -1,10 +1,18 @@
 package ephemeral
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcec"
 )
+
+// ErrInvalidPublicKey is returned by UnmarshalPublicKey when the given bytes
+// do not decode to a valid point on the curve. Wrapped into the returned
+// error via %w so callers up the stack (including retry-policy code) can
+// classify the failure with errors.Is regardless of the underlying decoder's
+// error type.
+var ErrInvalidPublicKey = errors.New("invalid ephemeral public key")
 
 // PrivateKey is an ephemeral private elliptic curve key.
 type PrivateKey btcec.PrivateKey
@@ -58,7 +66,7 @@ func UnmarshalPrivateKey(bytes []byte) *PrivateKey {
 func UnmarshalPublicKey(bytes []byte) (*PublicKey, error) {
 	pubKey, err := btcec.ParsePubKey(bytes, curve())
 	if err != nil {
-		return nil, fmt.Errorf("could not parse ephemeral public key: [%v]", err)
+		return nil, fmt.Errorf("%w: [%w]", ErrInvalidPublicKey, err)
 	}
 
 	return (*PublicKey)(pubKey), nil

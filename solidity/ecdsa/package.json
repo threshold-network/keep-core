@@ -15,7 +15,7 @@
     "export.json"
   ],
   "scripts": {
-    "install:deps": "corepack enable && corepack prepare yarn@4.8.1 --activate && yarn install",
+    "install:deps": "corepack enable && corepack prepare yarn@4.12.0 --activate && yarn install",
     "prepare": "npx tsc -p tsconfig.export.json",
     "format": "npm run lint",
     "format:fix": "npm run lint:fix",
@@ -37,12 +37,12 @@
   },
   "devDependencies": {
     "@keep-network/hardhat-helpers": "^0.6.0-pre.15",
-    "@keep-network/hardhat-local-networks-config": "^0.1.0-pre.4",
+    "@keep-network/hardhat-local-networks-config": "github:threshold-network/hardhat-local-networks-config#6dff5bc8648127ca5d8696c321076bddb6d4142a",
     "@nomicfoundation/hardhat-chai-matchers": "^1.0.6",
     "@nomicfoundation/hardhat-verify": "^2.1.3",
     "@nomiclabs/hardhat-ethers": "^2.0.6",
     "@openzeppelin/hardhat-upgrades": "^1.20.4",
-    "@tenderly/hardhat-tenderly": ">=1.0.13 <1.2.0",
+    "@tenderly/hardhat-tenderly": "1.0.12",
     "@thesis-co/eslint-config": "https://codeload.github.com/thesis/eslint-config/tar.gz/778365bbebb6b056bf973d25c57b8b466d21cbcf",
     "@typechain/ethers-v5": "^8.0.5",
     "@typechain/hardhat": "^4.0.0",
@@ -58,7 +58,7 @@
     "hardhat": "2.29.0",
     "hardhat-contract-sizer": "^2.3.0",
     "hardhat-dependency-compiler": "^1.1.2",
-    "hardhat-deploy": "^0.11.11",
+    "hardhat-deploy": "^1.0.4",
     "hardhat-gas-reporter": "^2.3.0",
     "prettier": "^2.5.1",
     "prettier-plugin-sh": "^0.8.1",
@@ -78,11 +78,11 @@
     "@threshold-network/solidity-contracts": "1.3.0-dev.14"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=24.0.0"
   },
   "resolutions": {
     "ethereumjs-abi": "npm:0.6.8",
     "get-func-name": "^2.0.2"
   },
-  "packageManager": "yarn@4.8.1+sha512.bc946f2a022d7a1a38adfc15b36a66a3807a67629789496c3714dd1703d2e6c6b1c69ff9ec3b43141ac7a1dd853b7685638eb0074300386a59c18df351ef8ff6"
+  "packageManager": "yarn@4.12.0+sha512.f45ab632439a67f8bc759bf32ead036a1f413287b9042726b7cc4818b7b49e14e9423ba49b18f9e06ea4941c1ad062385b1d8760a8d5091a1a31e5f6219afca8"
 }

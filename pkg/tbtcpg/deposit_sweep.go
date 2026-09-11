@@ -18,9 +18,10 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// Use the worst-case 126-byte deposit script with embedded extra data for estimation.
-// This will ensure that deposit sweep transaction fees are not underestimated.
-const depositScriptByteSize = 126
+// DepositScriptByteSize is the worst-case 126-byte deposit script with embedded
+// extra data used for transaction size estimation. This ensures that deposit
+// sweep transaction fees are not underestimated.
+const DepositScriptByteSize = 126
 
 // DepositSweepLookBackBlocks is the look-back period in blocks used
 // when searching for submitted deposit-related events. It's equal to
@@ -147,7 +148,7 @@ func FindDeposits(
 // The filterStartBlock parameter controls the earliest block from which
 // deposit-revealed events are queried.
 func findDeposits(
-	fnLogger log.StandardLogger,
+	taskLogger log.StandardLogger,
 	chain Chain,
 	btcChain bitcoin.Chain,
 	walletPublicKeyHash [20]byte,
@@ -156,7 +157,7 @@ func findDeposits(
 	skipUnconfirmed bool,
 	filterStartBlock uint64,
 ) ([]*Deposit, error) {
-	fnLogger.Infof("reading revealed deposits from chain")
+	taskLogger.Infof("reading revealed deposits from chain")
 
 	depositMinAgeSeconds, err := chain.GetDepositMinAge()
 	if err != nil {
@@ -182,14 +183,14 @@ func findDeposits(
 		)
 	}
 
-	fnLogger.Infof("found [%d] DepositRevealed events", len(depositRevealedEvents))
+	taskLogger.Infof("found [%d] DepositRevealed events", len(depositRevealedEvents))
 
 	// Take the oldest first
 	sort.SliceStable(depositRevealedEvents, func(i, j int) bool {
 		return depositRevealedEvents[i].BlockNumber < depositRevealedEvents[j].BlockNumber
 	})
 
-	fnLogger.Infof("getting deposits details")
+	taskLogger.Infof("getting deposits details")
 
 	resultSliceCapacity := len(depositRevealedEvents)
 	if maxNumberOfDeposits > 0 {
@@ -208,7 +209,7 @@ func findDeposits(
 		depositKey := chain.BuildDepositKey(event.FundingTxHash, event.FundingOutputIndex)
 		depositKeyStr := depositKey.Text(16)
 
-		fnLogger.Debugf("getting details of deposit [%s]", depositKeyStr)
+		taskLogger.Debugf("getting details of deposit [%s]", depositKeyStr)
 
 		depositRequest, found, err := chain.GetDepositRequest(
 			event.FundingTxHash,
@@ -230,13 +231,13 @@ func findDeposits(
 
 		matureAt := depositRequest.RevealedAt.Add(depositMinAge)
 		if !timeNow.After(matureAt) {
-			fnLogger.Infof("deposit [%s] is not old enough", depositKeyStr)
+			taskLogger.Infof("deposit [%s] is not old enough", depositKeyStr)
 			continue
 		}
 
 		isSwept := depositRequest.SweptAt.Unix() != 0
 		if skipSwept && isSwept {
-			fnLogger.Debugf("deposit [%s] is already swept", depositKeyStr)
+			taskLogger.Debugf("deposit [%s] is already swept", depositKeyStr)
 			continue
 		}
 
@@ -245,14 +246,14 @@ func findDeposits(
 			event.FundingTxHash,
 		)
 		if err != nil {
-			fnLogger.Errorf(
+			taskLogger.Errorf(
 				"failed to get bitcoin transaction confirmations: [%v]",
 				err,
 			)
 		}
 
 		if skipUnconfirmed && confirmations < tbtc.DepositSweepRequiredFundingTxConfirmations {
-			fnLogger.Debugf(
+			taskLogger.Debugf(
 				"deposit [%s] funding transaction doesn't have enough confirmations: [%d/%d]",
 				depositKeyStr,
 				confirmations,
@@ -495,7 +496,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 			// the deposits stay unswept. Log it distinctly at WARN so operators
 			// can tell this apart from a benign "no deposits to sweep" outcome;
 			// in particular, a safe-minimum-fee abort (see
-			// minWalletTxSatPerVByteFee) can indicate a misconfigured, too-low
+			// MinWalletTxSatPerVByteFee) can indicate a misconfigured, too-low
 			// per-deposit maximum fee that will strand deposits until governance
 			// raises it.
 			taskLogger.Warnf("cannot estimate sweep transaction fee: [%v]", err)
@@ -507,18 +508,12 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 
 	taskLogger.Infof("sweep transaction fee: [%d]", fee)
 
-	depositsKeys := make([]struct {
-		FundingTxHash      bitcoin.Hash
-		FundingOutputIndex uint32
-	}, len(deposits))
+	depositsKeys := make([]tbtc.DepositKey, len(deposits))
 
 	depositsRevealBlocks := make([]*big.Int, len(deposits))
 
 	for i, deposit := range deposits {
-		depositsKeys[i] = struct {
-			FundingTxHash      bitcoin.Hash
-			FundingOutputIndex uint32
-		}{
+		depositsKeys[i] = tbtc.DepositKey{
 			FundingTxHash:      deposit.FundingTxHash,
 			FundingOutputIndex: deposit.FundingOutputIndex,
 		}
@@ -565,7 +560,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 //   - 1 P2WPKH output
 //
 // An error is returned if any estimated fee exceeds the maximum fee allowed by
-// the Bridge contract, or if the minimum safe fee (see minWalletTxSatPerVByteFee)
+// the Bridge contract, or if the minimum safe fee (see MinWalletTxSatPerVByteFee)
 // required to avoid a stuck, unbumpable sweep would itself exceed that Bridge
 // maximum.
 func EstimateDepositsSweepFee(
@@ -596,7 +591,7 @@ func EstimateDepositsSweepFee(
 	} else {
 		sweepMaxSize, err := chain.GetDepositSweepMaxSize()
 		if err != nil {
-			return nil, fmt.Errorf("cannot get sweep max size: [%v]", sweepMaxSize)
+			return nil, fmt.Errorf("cannot get sweep max size: [%w]", err)
 		}
 
 		for i := 1; i <= int(sweepMaxSize); i++ {
@@ -639,7 +634,7 @@ func estimateDepositsSweepFee(
 		// 1 P2WPKH main UTXO input.
 		AddPublicKeyHashInputs(1, true).
 		// depositsCount P2WSH deposit inputs.
-		AddScriptHashInputs(depositsCount, depositScriptByteSize, true).
+		AddScriptHashInputs(depositsCount, DepositScriptByteSize, true).
 		// 1 P2WPKH output.
 		AddPublicKeyHashOutputs(1, true).
 		VirtualSize()

@@ -57,6 +57,11 @@ COPY ./pkg/tecdsa/gen $APP_DIR/pkg/tecdsa/gen
 COPY ./pkg/protocol/announcer/gen $APP_DIR/pkg/protocol/announcer/gen
 COPY ./pkg/protocol/inactivity/gen $APP_DIR/pkg/protocol/inactivity/gen
 
+# The vendored code generators used by `make generate` (see
+# tools/generators/ethereum, invoked from
+# pkg/chain/ethereum/common/gen/Makefile) must be present before
+# generation runs.
+COPY ./tools $APP_DIR/tools
 
 # Install code generators.
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0

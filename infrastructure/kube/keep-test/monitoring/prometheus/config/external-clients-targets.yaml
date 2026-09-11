@@ -1,4 +1,0 @@
-- targets:
-    - bst-a01.test.keep.boar.network:9601
-    - keep-validator-0.eks-ap-northeast-2-secure.staging.staked.cloud:9601
-    - bootstrap-alpha.test.threshold.p2p.org:9601

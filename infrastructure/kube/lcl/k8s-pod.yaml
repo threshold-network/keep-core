@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: Pod
-metadata:
-  name: keep-dev-environment
-spec:
-  containers:
-  - name: keep-client
-    image: gcr.io/keep.network/keep-client

@@ -16,9 +16,9 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 
-	"github.com/keep-network/keep-common/pkg/wrappers"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/internal/byteutils"
+	"github.com/keep-network/keep-core/pkg/wrappers"
 )
 
 var (
@@ -1286,7 +1286,7 @@ func connectWithRetry(
 	return result, err
 }
 
-func requestWithRetry[K interface{}](
+func requestWithRetry[K any](
 	parentCtx context.Context,
 	c *Connection,
 	requestFn func(ctx context.Context, client *electrum.Client) (K, error),

@@ -25,3 +25,6 @@ deployments/*
 
 # Migration results (may contain sensitive info)
 migration-results.json
+
+# Yarn
+.yarn/install-state.gz
