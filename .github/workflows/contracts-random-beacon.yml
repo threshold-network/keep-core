@@ -189,7 +189,7 @@ jobs:
           working-directory: ./solidity/random-beacon
 
       - name: Get upstream packages versions
-        uses: threshold-network/ci/actions/upstream-builds-query@91f574f226348afad6b87beb353a4e9718f2b652
+        uses: threshold-network/ci/actions/upstream-builds-query@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         id: upstream-builds-query
         with:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: threshold-network/ci/actions/npm-version-bump@91f574f226348afad6b87beb353a4e9718f2b652
+        uses: threshold-network/ci/actions/npm-version-bump@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         with:
           work-dir: solidity/random-beacon
           environment: ${{ github.event.inputs.environment }}
@@ -246,7 +246,7 @@ jobs:
           gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
 
       - name: Notify CI about completion of the workflow
-        uses: threshold-network/ci/actions/notify-workflow-completed@91f574f226348afad6b87beb353a4e9718f2b652
+        uses: threshold-network/ci/actions/notify-workflow-completed@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:
@@ -287,7 +287,7 @@ jobs:
           working-directory: ./solidity/random-beacon
 
       - name: Get upstream packages versions
-        uses: threshold-network/ci/actions/upstream-builds-query@91f574f226348afad6b87beb353a4e9718f2b652
+        uses: threshold-network/ci/actions/upstream-builds-query@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         id: upstream-builds-query
         with:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
@@ -309,7 +309,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: threshold-network/ci/actions/npm-version-bump@91f574f226348afad6b87beb353a4e9718f2b652
+        uses: threshold-network/ci/actions/npm-version-bump@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         with:
           work-dir: solidity/random-beacon
           environment: dapp-dev-${{ github.event.inputs.environment }}
@@ -331,7 +331,7 @@ jobs:
           gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
 
       - name: Notify CI about completion of the workflow
-        uses: threshold-network/ci/actions/notify-workflow-completed@91f574f226348afad6b87beb353a4e9718f2b652
+        uses: threshold-network/ci/actions/notify-workflow-completed@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:

@@ -42,7 +42,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: threshold-network/ci/actions/npm-version-bump@91f574f226348afad6b87beb353a4e9718f2b652
+        uses: threshold-network/ci/actions/npm-version-bump@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         with:
           work-dir: ./solidity/ecdsa
           environment: dev
