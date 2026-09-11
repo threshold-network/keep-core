@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keep-network/keep-common/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -148,8 +147,8 @@ func (r *Registry) ObserveApplicationSource(
 func (r *Registry) RegisterMetricClientInfo(version string) {
 	_, err := r.NewMetricInfo(
 		ClientInfoMetricName,
-		[]clientinfo.Label{
-			clientinfo.NewLabel("version", version),
+		[]Label{
+			NewLabel("version", version),
 		},
 	)
 	if err != nil {
@@ -162,7 +161,7 @@ func (r *Registry) observe(
 	input Source,
 	tick time.Duration,
 ) {
-	observer, err := r.NewMetricGaugeObserver(name, clientinfo.MetricObserverInput(input))
+	observer, err := r.NewMetricGaugeObserver(name, MetricObserverInput(input))
 	if err != nil {
 		// Check if the error is due to metric already existing (expected in some cases)
 		errStr := err.Error()
