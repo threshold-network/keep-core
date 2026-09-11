@@ -20,9 +20,10 @@ legacy snapshot must be explicit, reviewed changes. Keep this README outside
 
 ## Source
 
-The scripts are the TypeScript-compiled output of `solidity/random-beacon/deploy/*.ts`,
-produced by `yarn prepack` (i.e. `tsc -p tsconfig.export.json`) in the
-`@keep-network/random-beacon` package.
+Except for the hand-maintained `05_approve_random_beacon_in_token_staking.js`
+(see Format below), the scripts are the TypeScript-compiled output of
+`solidity/random-beacon/deploy/*.ts`, produced by `yarn prepack` (i.e.
+`tsc -p tsconfig.export.json`) in the `@keep-network/random-beacon` package.
 
 ## Format
 
