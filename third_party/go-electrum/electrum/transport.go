@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -63,12 +64,37 @@ func NewSSLTransport(ctx context.Context, addr string, config *tls.Config) (*TCP
 	return tcp, nil
 }
 
+// maxLineSize bounds a single line read from the transport. Without a limit,
+// a server withholding the trailing newline could force unbounded buffering.
+const maxLineSize = 1 << 20
+
+// readBoundedLine reads up to and including the next nl-terminated line,
+// accumulating buffer-sized chunks across bufio.ErrBufferFull. It returns an
+// error once the accumulated line exceeds limit, instead of buffering
+// without bound.
+func readBoundedLine(reader *bufio.Reader, limit int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice(nl)
+		line = append(line, chunk...)
+		if len(line) > limit {
+			return nil, fmt.Errorf("line exceeds maximum size of %d bytes", limit)
+		}
+		if err == nil {
+			return line, nil
+		}
+		if err != bufio.ErrBufferFull {
+			return nil, err
+		}
+	}
+}
+
 func (t *TCPTransport) listen() {
 	defer t.Close()
 	reader := bufio.NewReader(t.conn)
 
 	for {
-		line, err := reader.ReadBytes(nl)
+		line, err := readBoundedLine(reader, maxLineSize)
 		if err != nil {
 			select {
 			case t.errors <- err:

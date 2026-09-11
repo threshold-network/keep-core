@@ -70,7 +70,7 @@ type ListUnspentResp struct {
 
 // ListUnspentResult represents the content of the result field in the response to ListUnspent()
 type ListUnspentResult struct {
-	Height   uint32 `json:"height"`
+	Height   int32  `json:"height"`
 	Position uint32 `json:"tx_pos"`
 	Hash     string `json:"tx_hash"`
 	Value    uint64 `json:"value"`

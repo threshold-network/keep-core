@@ -41,6 +41,10 @@ func NewWebSocketTransport(
 		return nil, err
 	}
 
+	// Bound per-message allocation: without a limit, a hostile or buggy
+	// server can force unbounded reads via ReadMessage.
+	conn.SetReadLimit(1 << 20)
+
 	ws := &WebSocketTransport{
 		conn:      conn,
 		responses: make(chan []byte),

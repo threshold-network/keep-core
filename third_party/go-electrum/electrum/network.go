@@ -182,8 +182,8 @@ func (e *apiErr) UnmarshalJSON(data []byte) error {
 	case string:
 		e.Message = v
 	case map[string]interface{}:
-		if _, ok := v["code"]; ok {
-			e.Code = int(v["code"].(float64))
+		if code, ok := v["code"].(float64); ok {
+			e.Code = int(code)
 		}
 
 		if _, ok := v["message"]; ok {
@@ -212,56 +212,76 @@ func (s *Client) listen() {
 		if s.transport == nil {
 			break
 		}
-		select {
-		case <-s.quit:
-			return
-		case err := <-s.transport.Errors():
-			select {
-			case s.Error <- err:
-			default:
-			}
-			s.Shutdown()
-			return
-		case bytes := <-s.transport.Responses():
-			result := &container{
-				content: bytes,
-			}
 
-			msg := &response{}
-			err := json.Unmarshal(bytes, msg)
-			if err != nil {
-				if DebugMode {
-					log.Printf("unmarshal received message [%s] failed: [%v]", bytes, err)
+		exit := func() (exit bool) {
+			// A hostile or malformed response must never propagate a panic
+			// out of the read loop goroutine; recover, log, and keep the
+			// loop running unless the client is shutting down anyway.
+			defer func() {
+				if r := recover(); r != nil {
+					if DebugMode {
+						log.Printf("recovered from panic while processing message: %v", r)
+					}
+					exit = s.IsShutdown()
 				}
-				result.err = fmt.Errorf("Unmarshal received message failed: %v", err)
-			} else if msg.Error != nil {
-				result.err = msg.Error
-			}
+			}()
 
-			if len(msg.Method) > 0 {
-				s.pushHandlersLock.RLock()
-				handlers := s.pushHandlers[msg.Method]
-				s.pushHandlersLock.RUnlock()
+			select {
+			case <-s.quit:
+				return true
+			case err := <-s.transport.Errors():
+				select {
+				case s.Error <- err:
+				default:
+				}
+				s.Shutdown()
+				return true
+			case bytes := <-s.transport.Responses():
+				result := &container{
+					content: bytes,
+				}
 
-				for _, handler := range handlers {
+				msg := &response{}
+				err := json.Unmarshal(bytes, msg)
+				if err != nil {
+					if DebugMode {
+						log.Printf("unmarshal received message [%s] failed: [%v]", bytes, err)
+					}
+					result.err = fmt.Errorf("Unmarshal received message failed: %v", err)
+				} else if msg.Error != nil {
+					result.err = msg.Error
+				}
+
+				if len(msg.Method) > 0 {
+					s.pushHandlersLock.RLock()
+					handlers := s.pushHandlers[msg.Method]
+					s.pushHandlersLock.RUnlock()
+
+					for _, handler := range handlers {
+						select {
+						case handler <- result:
+						default:
+						}
+					}
+				}
+
+				s.handlersLock.RLock()
+				c, ok := s.handlers[msg.ID]
+				s.handlersLock.RUnlock()
+
+				if ok {
 					select {
-					case handler <- result:
-					default:
+					case c <- result:
+					case <-s.quit:
+						return true
 					}
 				}
 			}
+			return false
+		}()
 
-			s.handlersLock.RLock()
-			c, ok := s.handlers[msg.ID]
-			s.handlersLock.RUnlock()
-
-			if ok {
-				select {
-				case c <- result:
-				case <-s.quit:
-					return
-				}
-			}
+		if exit {
+			return
 		}
 	}
 }

@@ -140,6 +140,60 @@ func TestShutdownInterruptsWebSocketWrite(t *testing.T) {
 	}
 }
 
+// TestShutdownInterruptsTCPWrite is the TCPTransport parity case for
+// TestShutdownInterruptsWebSocketWrite: a blocked write must be unblocked by
+// Client.Shutdown aborting the transport, not left hanging on the socket.
+func TestShutdownInterruptsTCPWrite(t *testing.T) {
+	for _, method := range []string{"verification", "keepalive"} {
+		t.Run(method, func(t *testing.T) {
+			clientConn, serverConn := net.Pipe()
+			defer serverConn.Close()
+			socket := &gatedWriteConn{Conn: clientConn, started: make(chan struct{}), closed: make(chan struct{})}
+			transport := &TCPTransport{conn: socket, done: make(chan struct{})}
+			// No reader is needed for a write that fails on socket closure.
+			client := &Client{transport: transport, quit: make(chan struct{}), handlers: make(map[uint64]chan *container)}
+			atomic.StoreUint32(&socket.gate, 1)
+			result := make(chan error, 1)
+			go func() {
+				if method == "verification" {
+					_, _, err := client.ServerVersion(context.Background())
+					result <- err
+				} else {
+					result <- client.Ping(context.Background())
+				}
+			}()
+			select {
+			case <-socket.started:
+			case <-time.After(time.Second):
+				t.Fatal("RPC did not enter the TCP write")
+			}
+			func() {
+				defer func() {
+					if p := recover(); p != nil {
+						t.Errorf("shutdown panicked during an active TCP write: %v", p)
+					}
+				}()
+				client.Shutdown()
+			}()
+			select {
+			case <-socket.closed:
+			default:
+				t.Error("shutdown returned without aborting the socket")
+			}
+			// Release and join the writer even when the regression is present.
+			socket.Close()
+			select {
+			case err := <-result:
+				if err == nil {
+					t.Error("expected the aborted write to fail")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("shutdown did not unblock the TCP writer")
+			}
+		})
+	}
+}
+
 func TestAbortReleasesPendingResponseAndReaders(t *testing.T) {
 	conn, peer := net.Pipe()
 	defer peer.Close()
