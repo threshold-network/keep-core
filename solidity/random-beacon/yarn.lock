@@ -1511,11 +1511,24 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@keep-network/hardhat-local-networks-config@github:threshold-network/hardhat-local-networks-config#6dff5bc8648127ca5d8696c321076bddb6d4142a":
+  version: 0.1.0-tlabs.0
+  resolution: "@keep-network/hardhat-local-networks-config@https://github.com/threshold-network/hardhat-local-networks-config.git#commit=6dff5bc8648127ca5d8696c321076bddb6d4142a"
+  dependencies:
+    deepmerge: "npm:^4.2.2"
+    untildify: "npm:^4.0.0"
+  peerDependencies:
+    hardhat: ^2.0.8
+  checksum: 10c0/c6fe0ab5ded18f1275d3e4f0c3a9b30cc68450354faff40e7c78bbaf329486a24fb80f30dc9bf88017afb7a627fc57ef8faf909160454ab40149785b190dba09
+  languageName: node
+  linkType: hard
+
 "@keep-network/random-beacon@workspace:.":
   version: 0.0.0-use.local
   resolution: "@keep-network/random-beacon@workspace:."
   dependencies:
     "@keep-network/hardhat-helpers": "npm:^0.6.0-pre.15"
+    "@keep-network/hardhat-local-networks-config": "github:threshold-network/hardhat-local-networks-config#6dff5bc8648127ca5d8696c321076bddb6d4142a"
     "@keep-network/sortition-pools": "npm:^2.0.0-pre.16"
     "@nomiclabs/hardhat-ethers": "npm:^2.0.6"
     "@nomiclabs/hardhat-etherscan": "npm:^3.1.0"
@@ -1532,7 +1545,6 @@ __metadata:
     "@types/mocha": "npm:^9.0.0"
     "@types/node": "npm:^16.10.5"
     chai: "npm:^4.3.4"
-    deepmerge: "npm:^4.2.2"
     eslint: "npm:^7.32.0"
     ethereum-waffle: "npm:^3.4.0"
     ethers: "npm:^5.4.7"
@@ -1550,7 +1562,6 @@ __metadata:
     ts-node: "npm:^10.2.1"
     typechain: "npm:^7.0.0"
     typescript: "npm:^4.4.3"
-    untildify: "npm:^4.0.0"
   languageName: unknown
   linkType: soft
 

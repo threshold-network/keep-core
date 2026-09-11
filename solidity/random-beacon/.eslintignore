@@ -6,4 +6,3 @@ export/
 hardhat-dependency-compiler/
 typechain/
 export.json
-local-networks-config/

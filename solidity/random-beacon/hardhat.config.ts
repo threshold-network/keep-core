@@ -1,5 +1,5 @@
 import "@nomiclabs/hardhat-etherscan"
-import "./local-networks-config"
+import "@keep-network/hardhat-local-networks-config"
 import "@keep-network/hardhat-helpers"
 import "@nomiclabs/hardhat-ethers"
 import "hardhat-deploy"
