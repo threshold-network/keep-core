@@ -3,8 +3,8 @@
 pragma solidity 0.8.17;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
-import "@keep-network/random-beacon/contracts/ReimbursementPool.sol";
+import "../legacy/sortition/SortitionPool.sol";
+import "../legacy/random-beacon/ReimbursementPool.sol";
 import "../WalletRegistry.sol";
 import "../EcdsaDkgValidator.sol";
 import "../libraries/Wallets.sol";

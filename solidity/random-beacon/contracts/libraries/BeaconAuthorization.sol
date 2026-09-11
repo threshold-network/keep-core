@@ -22,7 +22,7 @@
 
 pragma solidity 0.8.17;
 
-import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
+import "../legacy/sortition/SortitionPool.sol";
 import "@threshold-network/solidity-contracts/contracts/staking/IStaking.sol";
 
 /// @notice Library managing the state of stake authorizations for the operator

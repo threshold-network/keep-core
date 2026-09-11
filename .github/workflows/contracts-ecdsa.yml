@@ -206,20 +206,9 @@ jobs:
   # intentional, regenerate the baseline locally and commit
   # solidity/ecdsa/export-baseline.sha256 alongside the change.
   #
-  # Note: the manifest covers the full export/ tree, including artifacts
-  # of external dependencies deployed onto the local test network
-  # (@keep-network/random-beacon, @keep-network/sortition-pools,
-  # @openzeppelin/*, @thesis/*, @threshold-network/*). This is safe from
-  # upstream-publish flakiness: install-yarn-deps runs `yarn install
-  # --immutable` against the committed yarn.lock, which pins each of
-  # these to a concrete resolved version (e.g. `@keep-network/
-  # random-beacon@npm:development` resolves to a fixed `2.1.0-dev.18` in
-  # yarn.lock, not whatever the "development" dist-tag currently points
-  # to upstream) - external artifacts only change when yarn.lock itself
-  # changes. So a diff under export/artifacts/@* means a dependency
-  # version bump landed in this PR/branch; regenerate the baseline as
-  # part of that same change, the same way as any other intentional
-  # export-shape change described above.
+  # The manifest includes the frozen legacy contracts and remaining external
+  # artifacts. Vendored sources/artifacts are committed; yarn.lock pins the
+  # installed dependencies. Regenerate this baseline when either changes.
   contracts-export-byte-identity:
     needs: contracts-detect-changes
     if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
@@ -250,15 +239,42 @@ jobs:
         run: |
           set -e
           sha256sum export.json > /tmp/manifest.txt
-          find export -type f | sort | xargs sha256sum >> /tmp/manifest.txt
+          # Sort paths consistently across developer machines and CI locales.
+          find export -type f | LC_ALL=C sort | xargs sha256sum >> /tmp/manifest.txt
           if ! diff -q export-baseline.sha256 /tmp/manifest.txt > /dev/null; then
             echo "::error::export.json / export/ artifacts differ from the committed baseline (solidity/ecdsa/export-baseline.sha256)."
-            echo "::error::If this change is intentional, regenerate the baseline locally (yarn deploy:test --network hardhat --export export.json && yarn prepack, then hash export.json and export/) and commit solidity/ecdsa/export-baseline.sha256 alongside it."
+            echo "::error::If this change is intentional, regenerate the baseline locally (yarn deploy:test --network hardhat --export export.json && yarn prepack, then sha256sum export.json > export-baseline.sha256 && find export -type f | LC_ALL=C sort | xargs sha256sum >> export-baseline.sha256) and commit solidity/ecdsa/export-baseline.sha256 alongside it."
             diff export-baseline.sha256 /tmp/manifest.txt || true
             exit 1
           fi
           echo "export byte-identity OK"
 
+  # Verifies that the committed artifact JSONs in solidity/ecdsa/external/random-beacon-export/artifacts/
+  # match the recorded SHA256 hashes in VENDOR.json. This closes the gap left by artifactSha256 which
+  # records the pristine pre-stripping upstream hash (by design) and cannot verify the committed files.
+  contracts-random-beacon-export-artifacts-byte-identity:
+    needs: contracts-detect-changes
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Verify random beacon export artifact byte-identity
+        run: |
+          set -e
+          MISMATCH=0
+          while IFS= read -r line; do
+            KEY=$(echo "$line" | cut -d':' -f1)
+            EXPECTED=$(echo "$line" | cut -d':' -f2)
+            ACTUAL=$(sha256sum "solidity/ecdsa/external/random-beacon-export/artifacts/$KEY" 2>/dev/null | cut -d' ' -f1)
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "::error::Artifact $KEY mismatch: expected $EXPECTED, got $ACTUAL"
+              MISMATCH=1
+            fi
+          done < <(jq -r '.committedSha256 | to_entries | .[] | "\(.key):\(.value)"' solidity/ecdsa/external/random-beacon-export/VENDOR.json)
+          if [ $MISMATCH -ne 0 ]; then
+            exit 1
+          fi
+          echo 'committed artifact byte-identity OK'
   contracts-deployment-testnet:
     needs: [contracts-build-and-test]
     if: |
@@ -290,22 +306,11 @@ jobs:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
           query: |
             threshold-contracts-version = github.com/threshold-network/solidity-contracts#version
-            random-beacon-version = github.com/keep-network/keep-core/random-beacon#version
 
       - name: Resolve latest contracts
         run: |
           yarn up \
-            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
-            @keep-network/random-beacon@${{ steps.upstream-builds-query.outputs.random-beacon-version }} \
-            @keep-network/sortition-pools
-
-      # TODO: Remove this step. We replace sortition pools for deployment on testnet
-      # with forked contracts that were tweaked to make operators joining the pool
-      # easier. This should never be used outside of the test environment. On
-      # test environment it should be used temporarily only.
-      - name: Use Sortition Pool forked contracts
-        run: |
-          yarn up @keep-network/sortition-pools@github:keep-network/sortition-pools#test-fork
+            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }}
 
       - name: Configure tenderly
         env:
@@ -390,14 +395,11 @@ jobs:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
           query: |
             threshold-contracts-version = github.com/threshold-network/solidity-contracts#version
-            random-beacon-version = github.com/keep-network/keep-core/random-beacon#version
 
       - name: Resolve latest contracts
         run: |
           yarn up \
-            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
-            @keep-network/random-beacon@${{ steps.upstream-builds-query.outputs.random-beacon-version }} \
-            @keep-network/sortition-pools
+            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }}
       
       - name: Deploy contracts
         env:
