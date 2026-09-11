@@ -24,6 +24,19 @@
     "contracts/ReimbursementPool.sol/ReimbursementPool.json": "ca443da8001bf6e224b10f36c80db159cbc65b170e1521993c7a47cbbe70fdec",
     "@keep-network/sortition-pools/contracts/SortitionPool.sol/SortitionPool.json": "170b8915288ea6fd504bb4f2272cf8868995d3ebdf2d91d04acd39e1619c359c"
   },
+  "committedSha256": {
+    "contracts/libraries/BeaconAuthorization.sol/BeaconAuthorization.json": "1b1cec54dd0ba61e4115d99592f21384655be08f07cf34d99bc30de83026ae4d",
+    "contracts/libraries/BeaconDkg.sol/BeaconDkg.json": "12932aa4f8ff11115c1890e3c1a91f6698d6326ac9375852722848f77c54eac2",
+    "contracts/BeaconDkgValidator.sol/BeaconDkgValidator.json": "986c92c37ad94c36ce960075aedea41d9868d7d1beb954830777bfbf49c091b8",
+    "contracts/libraries/BeaconInactivity.sol/BeaconInactivity.json": "ebb85e7faaf6a5cf92fec25020f1394872f9169cf802748d7b916d1154cdae83",
+    "contracts/libraries/BLS.sol/BLS.json": "f06fe052ec3d633b37a07505e4d3c8c021fbe29ae808a5d4cd8d1ea139af0d98",
+    "contracts/RandomBeacon.sol/RandomBeacon.json": "26d500a02e01cd885c4f7afbf7931639471fe18f8ca2bacbc144fb5386f7fbcc",
+    "contracts/RandomBeaconChaosnet.sol/RandomBeaconChaosnet.json": "98a2c106c70ba39847fed3f0eeb9a27cd18e6680b3f1821248ba180dc9ff7ec5",
+    "contracts/RandomBeaconGovernance.sol/RandomBeaconGovernance.json": "f5a550ccfd1f5f5f060ec2359e59a9597e9fd7b526cd923967e2a019a172b441",
+    "contracts/test/RandomBeaconStub.sol/RandomBeaconStub.json": "e060d03716c5703b12934a0184f1ba4d24963f5ae2e7086c1dbd76ba36fa6bb2",
+    "contracts/ReimbursementPool.sol/ReimbursementPool.json": "6076f9f9976433461dd02d9d27f51681e45cd84c824cf51f6e140e7a6b986865",
+    "@keep-network/sortition-pools/contracts/SortitionPool.sol/SortitionPool.json": "ee2ce2742667798646a19ea4bdf4fcc77779f0d42f5f498889ba11fcddff584e"
+  },
   "changes": [
     "Only required legacy artifacts are retained.",
     "Duplicate evm assembly/opcodes are omitted; ABI, bytecode, metadata, and storage layout are preserved.",

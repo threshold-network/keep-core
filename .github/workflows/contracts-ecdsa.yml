@@ -243,12 +243,38 @@ jobs:
           find export -type f | LC_ALL=C sort | xargs sha256sum >> /tmp/manifest.txt
           if ! diff -q export-baseline.sha256 /tmp/manifest.txt > /dev/null; then
             echo "::error::export.json / export/ artifacts differ from the committed baseline (solidity/ecdsa/export-baseline.sha256)."
-            echo "::error::If this change is intentional, regenerate the baseline locally (yarn deploy:test --network hardhat --export export.json && yarn prepack, then hash export.json and export/) and commit solidity/ecdsa/export-baseline.sha256 alongside it."
+            echo "::error::If this change is intentional, regenerate the baseline locally (yarn deploy:test --network hardhat --export export.json && yarn prepack, then sha256sum export.json > export-baseline.sha256 && find export -type f | LC_ALL=C sort | xargs sha256sum >> export-baseline.sha256) and commit solidity/ecdsa/export-baseline.sha256 alongside it."
             diff export-baseline.sha256 /tmp/manifest.txt || true
             exit 1
           fi
           echo "export byte-identity OK"
 
+  # Verifies that the committed artifact JSONs in solidity/ecdsa/external/random-beacon-export/artifacts/
+  # match the recorded SHA256 hashes in VENDOR.json. This closes the gap left by artifactSha256 which
+  # records the pristine pre-stripping upstream hash (by design) and cannot verify the committed files.
+  contracts-random-beacon-export-artifacts-byte-identity:
+    needs: contracts-detect-changes
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Verify random beacon export artifact byte-identity
+        run: |
+          set -e
+          MISMATCH=0
+          while IFS= read -r line; do
+            KEY=$(echo "$line" | cut -d':' -f1)
+            EXPECTED=$(echo "$line" | cut -d':' -f2)
+            ACTUAL=$(sha256sum "solidity/ecdsa/external/random-beacon-export/artifacts/$KEY" 2>/dev/null | cut -d' ' -f1)
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "::error::Artifact $KEY mismatch: expected $EXPECTED, got $ACTUAL"
+              MISMATCH=1
+            fi
+          done < <(jq -r '.committedSha256 | to_entries | .[] | "\(.key):\(.value)"' solidity/ecdsa/external/random-beacon-export/VENDOR.json)
+          if [ $MISMATCH -ne 0 ]; then
+            exit 1
+          fi
+          echo 'committed artifact byte-identity OK'
   contracts-deployment-testnet:
     needs: [contracts-build-and-test]
     if: |
