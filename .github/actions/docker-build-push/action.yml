@@ -32,9 +32,12 @@ runs:
         restore-keys: |
           ${{ runner.os }}-buildx-
 
+    # Environment values (GCR registry, project id, network id) are resolved by
+    # load-env-variables from this pinned threshold-network/ci revision; changing
+    # them requires re-pinning the SHA used below.
     - name: Load environment variables
       if: inputs.push == 'true'
-      uses: threshold-network/ci/actions/load-env-variables@20b35345d276a3c7365e3829b8078387a7c9dccb
+      uses: threshold-network/ci/actions/load-env-variables@91f574f226348afad6b87beb353a4e9718f2b652
       with:
         environment: ${{ inputs.environment }}
 

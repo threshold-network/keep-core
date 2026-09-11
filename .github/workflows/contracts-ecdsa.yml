@@ -191,7 +191,7 @@ jobs:
           working-directory: ./solidity/ecdsa
 
       - name: Get upstream packages versions
-        uses: threshold-network/ci/actions/upstream-builds-query@20b35345d276a3c7365e3829b8078387a7c9dccb
+        uses: threshold-network/ci/actions/upstream-builds-query@91f574f226348afad6b87beb353a4e9718f2b652
         id: upstream-builds-query
         with:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
@@ -228,7 +228,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: threshold-network/ci/actions/npm-version-bump@20b35345d276a3c7365e3829b8078387a7c9dccb
+        uses: threshold-network/ci/actions/npm-version-bump@91f574f226348afad6b87beb353a4e9718f2b652
         with:
           work-dir: solidity/ecdsa
           environment: ${{ github.event.inputs.environment }}
@@ -250,7 +250,7 @@ jobs:
           gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
 
       - name: Notify CI about completion of the workflow
-        uses: threshold-network/ci/actions/notify-workflow-completed@20b35345d276a3c7365e3829b8078387a7c9dccb
+        uses: threshold-network/ci/actions/notify-workflow-completed@91f574f226348afad6b87beb353a4e9718f2b652
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:
@@ -291,7 +291,7 @@ jobs:
           working-directory: ./solidity/ecdsa
 
       - name: Get upstream packages versions
-        uses: threshold-network/ci/actions/upstream-builds-query@20b35345d276a3c7365e3829b8078387a7c9dccb
+        uses: threshold-network/ci/actions/upstream-builds-query@91f574f226348afad6b87beb353a4e9718f2b652
         id: upstream-builds-query
         with:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
@@ -315,7 +315,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: threshold-network/ci/actions/npm-version-bump@20b35345d276a3c7365e3829b8078387a7c9dccb
+        uses: threshold-network/ci/actions/npm-version-bump@91f574f226348afad6b87beb353a4e9718f2b652
         with:
           work-dir: solidity/ecdsa
           environment: dapp-dev-${{ github.event.inputs.environment }}
@@ -337,7 +337,7 @@ jobs:
           gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
 
       - name: Notify CI about completion of the workflow
-        uses: threshold-network/ci/actions/notify-workflow-completed@20b35345d276a3c7365e3829b8078387a7c9dccb
+        uses: threshold-network/ci/actions/notify-workflow-completed@91f574f226348afad6b87beb353a4e9718f2b652
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:

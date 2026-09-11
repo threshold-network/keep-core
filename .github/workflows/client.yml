@@ -130,7 +130,7 @@ jobs:
           echo "revision=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       - name: Load environment variables
-        uses: threshold-network/ci/actions/load-env-variables@20b35345d276a3c7365e3829b8078387a7c9dccb
+        uses: threshold-network/ci/actions/load-env-variables@91f574f226348afad6b87beb353a4e9718f2b652
         if: github.event_name == 'workflow_dispatch'
         with:
           environment: ${{ github.event.inputs.environment }}
@@ -268,7 +268,7 @@ jobs:
 
       - name: Notify CI about completion of the workflow
         if: github.event_name == 'workflow_dispatch'
-        uses: threshold-network/ci/actions/notify-workflow-completed@20b35345d276a3c7365e3829b8078387a7c9dccb
+        uses: threshold-network/ci/actions/notify-workflow-completed@91f574f226348afad6b87beb353a4e9718f2b652
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:

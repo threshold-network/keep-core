@@ -58,7 +58,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: threshold-network/ci/actions/npm-version-bump@20b35345d276a3c7365e3829b8078387a7c9dccb
+        uses: threshold-network/ci/actions/npm-version-bump@91f574f226348afad6b87beb353a4e9718f2b652
         with:
           work-dir: ./solidity/random-beacon
           environment: dev
