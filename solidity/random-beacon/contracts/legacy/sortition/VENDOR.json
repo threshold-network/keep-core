@@ -85,6 +85,11 @@
     "package/contracts/SortitionPool.sol": "d81d8cad798e53745bec0b71c0bfd0b2a32c0f8678165048eb9142d9c8114221",
     "package/contracts/SortitionTree.sol": "ca43b3e7c8ee362d787f0d12262d397fe916973d9015d738e534751fb1025521"
   },
+  "interfaceSha256": {
+    "IApproveAndCall.sol": "211e50c2984546d5ad4ff78991beb2ce344c0573d203fb505132903715991597",
+    "IERC20WithPermit.sol": "8fa746c4fa1820230c91eec5689c1026bb6369e0ec9ed01976be1b8cdf09bb47",
+    "IReceiveApproval.sol": "158a8fe35674f1edf2e58223ae9dc7da58b317cc2be3f4cf8e7996ccfcafad6e"
+  },
   "changes": [
     "Only the two Thesis interface import paths were made local."
   ],
