@@ -1,295 +1,64 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
-import { deployments, ethers, getUnnamedAccounts, helpers } from "hardhat"
+import { deployments, ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
-import { createMock } from "./helpers/mock"
 import {
   constants,
   params,
-  initializeWalletOwner,
-  updateWalletRegistryParams,
+  setupAllowlist,
+  walletRegistryFixture,
 } from "./fixtures"
-import { legacyTokenStakingAt } from "./utils/operators"
 
-import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { Mock } from "./helpers/mock"
-import type { ContractTransaction } from "ethers"
+import type { ContractTransaction, Signer } from "ethers"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
+  Allowlist,
   WalletRegistry,
-  SortitionPool,
-  TokenStaking,
-  T,
-  IApplication,
   WalletRegistryGovernance,
-  IStaking,
+  SortitionPool,
 } from "../typechain"
 
-const { mineBlocks } = helpers.time
 const { to1e18 } = helpers.number
-
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
-
 const ZERO_ADDRESS = ethers.constants.AddressZero
-const MAX_UINT64 = ethers.BigNumber.from("18446744073709551615") // 2^64 - 1
+const MAX_UINT64 = ethers.BigNumber.from("18446744073709551615")
 
-/*
- * LEGACY TESTS DEPRECATED - TIP-092 Migration
- *
- * The following code block (lines 154-3679) contains legacy authorization tests
- * that were written for the pre-TIP-092 TokenStaking API. These tests use methods
- * that were removed during the Beta Staker Consolidation (TIP-092):
- * - TokenStaking.stake()
- * - TokenStaking.increaseAuthorization()
- * - TokenStaking.processSlashing()
- * - TokenStaking.approveApplication()
- * - TokenStaking.topUp()
- *
- * Current State:
- * - These tests CANNOT execute due to TypeScript compilation errors
- * - The deprecated methods no longer exist in TokenStaking v1.3.0-dev.16+
- * - Uncommenting this block will break TypeScript compilation for entire file
- *
- * Migration Path:
- * - Issue #3839: "Migrate ECDSA tests to Allowlist mode"
- * - Target: Rewrite these tests using Allowlist-based authorization
- * - Pattern: Follow Migration Scenario Tests (lines 3700-4254) as reference
- * - Timeline: Tracked in project roadmap
- *
- * Why Preserved:
- * - Valuable test patterns for authorization workflows
- * - Reference for understanding pre-TIP-092 behavior
- * - Edge cases worth preserving during migration
- * - Documentation of legacy authorization model
- *
- * Active Tests:
- * - Migration Scenario Tests (lines 3700-4254) are ACTIVE and PASSING
- * - These tests validate dual-mode authorization (TokenStaking vs Allowlist)
- * - 100% branch coverage for _currentAuthorizationSource() function
- */
-
-/**
- * Helper Functions for Migration Scenario Tests
- *
- * These helpers extract common patterns from test setups to improve
- * code maintainability and reduce duplication.
- */
-
-/**
- * Sets up real TokenStaking authorization for a staking provider using actual
- * contract calls instead of smock.fake. This avoids a known smock issue where
- * createMock({address: existingAddress}) corrupts EVM storage in a way that
- * evm_revert cannot restore, breaking subsequent test suites.
- *
- * @param t - T token contract for minting
- * @param staking - TokenStaking contract
- * @param walletRegistry - WalletRegistry contract (application to authorize)
- * @param deployer - Deployer signer (can mint tokens)
- * @param stakingProvider - Staking provider signer
- * @param beneficiary - Beneficiary signer
- * @param amount - Amount to stake and authorize
- */
-async function setupRealStaking(
-  t: T,
-  staking: TokenStaking,
-  walletRegistry: WalletRegistry,
-  deployer: SignerWithAddress,
-  stakingProvider: SignerWithAddress,
-  beneficiary: SignerWithAddress,
-  amount: any
-): Promise<void> {
-  await t.connect(deployer).mint(stakingProvider.address, amount)
-  await t.connect(stakingProvider).approve(staking.address, amount)
-  await legacyTokenStakingAt(staking, stakingProvider).stake(
-    stakingProvider.address,
-    beneficiary.address,
-    stakingProvider.address,
-    amount
-  )
-  await legacyTokenStakingAt(staking, stakingProvider).increaseAuthorization(
-    stakingProvider.address,
-    walletRegistry.address,
-    amount
-  )
-}
-
-/**
- * Deactivates chaosnet mode on the SortitionPool to allow operators to join.
- * SortitionPool deploys in chaosnet mode by default, requiring explicit deactivation.
- *
- * @param sortitionPool - The SortitionPool contract instance
- */
-async function deactivateChaosnetMode(
-  sortitionPool: SortitionPool
-): Promise<void> {
-  const { chaosnetOwner } = await helpers.signers.getNamedSigners()
-  await sortitionPool.connect(chaosnetOwner).deactivateChaosnet()
-}
-
-/**
- * Triggers authorization callback by impersonating the staking/allowlist contract.
- * WalletRegistry validates that authorizationIncreased() is called by the staking contract,
- * so we must impersonate the contract address to successfully trigger the callback.
- *
- * @param walletRegistry - The WalletRegistry contract instance
- * @param contractAddress - Address of staking or allowlist contract to impersonate
- * @param stakingProvider - Staking provider receiving authorization
- * @param fromAmount - Previous authorization amount (typically 0 for new authorization)
- * @param toAmount - New authorization amount
- */
-async function triggerAuthorizationCallback(
-  walletRegistry: WalletRegistry,
-  contractAddress: string,
-  stakingProvider: string,
-  fromAmount: any,
-  toAmount: any
-): Promise<void> {
-  await ethers.provider.send("hardhat_impersonateAccount", [contractAddress])
-  await ethers.provider.send("hardhat_setBalance", [
-    contractAddress,
-    "0x56BC75E2D63100000", // 100 ETH for gas
-  ])
-  const contractSigner = await ethers.getSigner(contractAddress)
-
-  await walletRegistry
-    .connect(contractSigner)
-    .authorizationIncreased(stakingProvider, fromAmount, toAmount)
-
-  await ethers.provider.send("hardhat_stopImpersonatingAccount", [
-    contractAddress,
-  ])
-}
-
-/**
- * Joins sortition pool if operator is not already in the pool.
- * Prevents "already in pool" errors by checking membership first.
- *
- * @param walletRegistry - The WalletRegistry contract instance
- * @param operator - The operator signer to join the pool
- */
-async function joinPoolIfNotMember(
-  walletRegistry: WalletRegistry,
-  operator: SignerWithAddress
-): Promise<void> {
-  const isInPool = await walletRegistry.isOperatorInPool(operator.address)
-  if (!isInPool) {
-    await walletRegistry.connect(operator).joinSortitionPool()
-  }
-}
-
-/* TEMPORARILY COMMENTED OUT - START
-
-describe.skip("TokenStaking Integration (DEPRECATED TIP-092)", () => {
-  /**
-   * DEPRECATED: These tests validate TokenStaking.approveApplication()
-   * which does not exist in production TokenStaking v1.3.0-dev.16.
-   *
-   * Production State:
-   * - RandomBeacon/ECDSA applications are FROZEN (skipApplication = true)
-   * - approveApplication() method removed from production contract
-   * - Only TACo application remains functional in TokenStaking
-   *
-   * Migration:
-   * - Issue: #3839 "Migrate ECDSA tests to Allowlist mode"
-   * - New approach: walletRegistryFixture({ useAllowlist: true })
-   *
-   * References:
-   * - TIP-092: Beta Staker Consolidation
-   * - TIP-100: TokenStaking sunset timeline
-   * - Allowlist.sol: Replacement authorization contract
-   *
-   * Implementation Status:
-   * - Dual-mode fixtures implemented and working
-   * - TypeScript compilation successful
-   * - Full test validation deferred pending Allowlist migration
-   * - Strategic migration tracked in issue #3839
-   */
-
-// Original tests preserved for reference during migration
-// Will be rewritten for Allowlist mode or archived
-
-/* TEMPORARILY COMMENTED OUT - START (Second legacy test block)
-
-describe("WalletRegistry - Authorization", () => {
-  let t: T
+describe("WalletRegistry - Allowlist Authorization", () => {
   let walletRegistry: WalletRegistry
   let walletRegistryGovernance: WalletRegistryGovernance
   let sortitionPool: SortitionPool
-  let staking: TokenStaking
-
+  let allowlist: Allowlist
   let deployer: SignerWithAddress
   let governance: SignerWithAddress
-
-  let owner: SignerWithAddress
   let stakingProvider: SignerWithAddress
   let operator: SignerWithAddress
-  let authorizer: SignerWithAddress
-  let beneficiary: SignerWithAddress
   let thirdParty: SignerWithAddress
-  let walletOwner: Mock<IWalletOwner>
-  let slasher: Mock<IApplication>
+  let walletOwnerSigner: Signer
+  const providerWeight = to1e18(1000000)
+  const { minimumAuthorization } = params
 
-  const stakedAmount = to1e18(1000000) // 1M T
-  let minimumAuthorization
+  // Deploy separately so a cold run and the 100-operator setup each have their
+  // own hook timeout.
+  before("deploy contracts", async () => {
+    await deployments.fixture()
+  })
 
-  before("load test fixture", async () => {
-    await deployments.fixture(["WalletRegistry"])
-
-    t = await helpers.contracts.getContract("T")
-    walletRegistry = await helpers.contracts.getContract("WalletRegistry")
-    walletRegistryGovernance = await helpers.contracts.getContract(
-      "WalletRegistryGovernance"
-    )
-    sortitionPool = await helpers.contracts.getContract("EcdsaSortitionPool")
-    staking = await helpers.contracts.getContract("TokenStaking")
-
-    const accounts = await getUnnamedAccounts()
-    owner = await ethers.getSigner(accounts[1])
-    stakingProvider = await ethers.getSigner(accounts[2])
-    operator = await ethers.getSigner(accounts[3])
-    authorizer = await ethers.getSigner(accounts[4])
-    beneficiary = await ethers.getSigner(accounts[5])
-    thirdParty = await ethers.getSigner(accounts[6])
-    ;({ deployer, governance } = await helpers.signers.getNamedSigners())
-
-    const { chaosnetOwner } = await helpers.signers.getNamedSigners()
-    await sortitionPool.connect(chaosnetOwner).deactivateChaosnet()
-
-    walletOwner = await initializeWalletOwner(
+  before("load Allowlist fixture", async () => {
+    const fixture = await walletRegistryFixture({ useAllowlist: true })
+    ;({
+      walletRegistry,
       walletRegistryGovernance,
-      governance
-    )
-
-    await updateWalletRegistryParams(walletRegistryGovernance, governance)
-
-    await t.connect(deployer).mint(owner.address, stakedAmount)
-    await t.connect(owner).approve(staking.address, stakedAmount)
-    await legacyTokenStakingAt(staking, owner).stake(
-      stakingProvider.address,
-      beneficiary.address,
-      authorizer.address,
-      stakedAmount
-    )
-
-    minimumAuthorization = await walletRegistry.minimumAuthorization()
-
-    // Initialize slasher - fake application capable of slashing the
-    // staking provider.
-    slasher = await createMock<IApplication>("IApplication")
-    await legacyTokenStakingAt(staking, deployer).approveApplication(slasher.address)
-    await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
-      stakingProvider.address,
-      slasher.address,
-      stakedAmount
-    )
-
-    // Fund slasher so that it can call T TokenStaking functions
-    await (
-      await ethers.getSigners()
-    )[0].sendTransaction({
-      to: slasher.address,
-      value: ethers.utils.parseEther("100"),
-    })
+      sortitionPool,
+      deployer,
+      governance,
+      thirdParty,
+    } = fixture)
+    allowlist = fixture.allowlist
+    walletOwnerSigner = fixture.walletOwner.wallet
+    // Named accounts are separate from the 100 operators registered by the fixture.
+    const signers = await helpers.signers.getNamedSigners()
+    stakingProvider = signers.esdm
+    operator = signers.chaosnetOwner
   })
 
   describe("registerOperator", () => {
@@ -300,11 +69,6 @@ describe("WalletRegistry - Authorization", () => {
         ).to.be.revertedWith("Operator can not be zero address")
       })
     })
-
-    // It is not possible to update operator address. Once the operator is
-    // registered for the given staking provider, it must remain the same.
-    // Staking provider address is unique for each stake delegation - see T
-    // TokenStaking contract.
     context(
       "when operator has been already registered for the staking provider",
       () => {
@@ -325,9 +89,6 @@ describe("WalletRegistry - Authorization", () => {
               .connect(stakingProvider)
               .registerOperator(operator.address)
           ).to.be.revertedWith("Operator already set for the staking provider")
-
-          // should revert even if it's another operator than the one previously
-          // registered for the staking provider
           await expect(
             walletRegistry
               .connect(stakingProvider)
@@ -336,9 +97,6 @@ describe("WalletRegistry - Authorization", () => {
         })
       }
     )
-
-    // Some other staking provider is using the given operator address.
-    // Should not happen in practice but we should protect against it.
     context("when the operator is already in use", () => {
       before(async () => {
         await createSnapshot()
@@ -359,10 +117,6 @@ describe("WalletRegistry - Authorization", () => {
         ).to.be.revertedWith("Operator address already in use")
       })
     })
-
-    // This is the normal, happy path. Stake owner delegated their stake to
-    // the staking provider, and the staking provider is registering operator
-    // for ECDSA application.
     context("when staking provider is registering new operator", () => {
       let tx: ContractTransaction
 
@@ -402,37 +156,21 @@ describe("WalletRegistry - Authorization", () => {
           .false
       })
     })
-
-    // It is possible to approve authorization decrease request immediately
-    // in case the operator was not yet registered by the staking provider.
-    // It makes sense because non-registered operator could not be in the
-    // sortition pool, so there is no state that could be not in sync.
-    // However, we need to ensure this is not exploited by malicious stakers.
-    // We do not want to let operators with a pending authorization decrease
-    // request that can be immediately approved to join the sortition pool.
-    // If there is a pending authorization decrease for the staking provider,
-    // it must be first approved before operator for that staking provider is
-    // registered.
     context("when there is a pending authorization decrease request", () => {
       before(async () => {
         await createSnapshot()
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            stakedAmount
-          )
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, providerWeight)
 
         const deauthorizingBy = to1e18(1)
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
+        await allowlist
+          .connect(deployer)
+          .requestWeightDecrease(
             stakingProvider.address,
-            walletRegistry.address,
-            deauthorizingBy
+            providerWeight.sub(deauthorizingBy)
           )
       })
 
@@ -450,34 +188,23 @@ describe("WalletRegistry - Authorization", () => {
         )
       })
     })
-
-    // This is a continuation of the previous test case - in case there is
-    // a staking provider who has not yet registered the operator and there is
-    // an authorization decrease requested for that staking provider, upon
-    // approving that authorization decrease request, staking provider can
-    // register an operator.
     context("when authorization decrease request was approved", () => {
       let tx: ContractTransaction
 
       before(async () => {
         await createSnapshot()
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            stakedAmount
-          )
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, providerWeight)
 
         const deauthorizingBy = to1e18(1)
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
+        await allowlist
+          .connect(deployer)
+          .requestWeightDecrease(
             stakingProvider.address,
-            walletRegistry.address,
-            deauthorizingBy
+            providerWeight.sub(deauthorizingBy)
           )
 
         await walletRegistry.approveAuthorizationDecrease(
@@ -516,50 +243,40 @@ describe("WalletRegistry - Authorization", () => {
   })
 
   describe("authorizationIncreased", () => {
-    context("when called not by the staking contract", () => {
+    context("when called not by the Allowlist contract", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry
             .connect(thirdParty)
-            .authorizationIncreased(stakingProvider.address, 0, stakedAmount)
-        ).to.be.revertedWithCustomError(walletRegistry, "CallerNotStakingContract")
+            .authorizationIncreased(stakingProvider.address, 0, providerWeight)
+        ).to.be.revertedWithCustomError(
+          walletRegistry,
+          "CallerNotStakingContract"
+        )
       })
     })
 
     context("when authorization is below the minimum", () => {
       it("should revert", async () => {
         await expect(
-          staking
-            .connect(authorizer)
-            .increaseAuthorization(
+          allowlist
+            .connect(deployer)
+            .addStakingProvider(
               stakingProvider.address,
-              walletRegistry.address,
               minimumAuthorization.sub(1)
             )
         ).to.be.revertedWith("Authorization below the minimum")
       })
     })
-
-    // This is normal, happy path for a new delegation. Stake owner delegated
-    // their stake to the staking provider, and while still being in the
-    // dashboard (assuming staker is the authorizer), increased authorization
-    // for ECDSA application. Staking provider has not registered operator yet.
-    // This will happen later.
     context("when the operator is unknown", () => {
-      // Minimum possible authorization - the minimum authorized amount for
-      // ECDSA as set in `minimumAuthorization` parameter.
       context("when increasing to the minimum possible value", () => {
         let tx: ContractTransaction
 
         before(async () => {
           await createSnapshot()
-          tx = await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              minimumAuthorization
-            )
+          tx = await allowlist
+            .connect(deployer)
+            .addStakingProvider(stakingProvider.address, minimumAuthorization)
         })
 
         after(async () => {
@@ -577,21 +294,14 @@ describe("WalletRegistry - Authorization", () => {
             )
         })
       })
-
-      // Maximum possible authorization - the entire stake delegated to the
-      // staking provider.
-      context("when increasing to the maximum possible value", () => {
+      context("when increasing to a weight above the minimum", () => {
         let tx: ContractTransaction
 
         before(async () => {
           await createSnapshot()
-          tx = await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              stakedAmount
-            )
+          tx = await allowlist
+            .connect(deployer)
+            .addStakingProvider(stakingProvider.address, providerWeight)
         })
 
         after(async () => {
@@ -601,16 +311,10 @@ describe("WalletRegistry - Authorization", () => {
         it("should emit AuthorizationIncreased", async () => {
           await expect(tx)
             .to.emit(walletRegistry, "AuthorizationIncreased")
-            .withArgs(stakingProvider.address, ZERO_ADDRESS, 0, stakedAmount)
+            .withArgs(stakingProvider.address, ZERO_ADDRESS, 0, providerWeight)
         })
       })
     })
-
-    // This is normal, happy path for staking provider acting before the
-    // authorizer, most probably because authorizer is someone else than the
-    // stake owner. Stake owner delegated their stake to the staking provider,
-    // staking provider registered operator for ECDSA, and after that, the
-    // authorizer increased the authorization for the staking provider.
     context("when the operator is registered", () => {
       before(async () => {
         await createSnapshot()
@@ -623,22 +327,15 @@ describe("WalletRegistry - Authorization", () => {
       after(async () => {
         await restoreSnapshot()
       })
-
-      // Minimum possible authorization - the minimum authorized amount for
-      // ECDSA as set in `minimumAuthorization` parameter.
       context("when increasing to the minimum possible value", () => {
         let tx: ContractTransaction
 
         before(async () => {
           await createSnapshot()
 
-          tx = await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              minimumAuthorization
-            )
+          tx = await allowlist
+            .connect(deployer)
+            .addStakingProvider(stakingProvider.address, minimumAuthorization)
         })
 
         after(async () => {
@@ -656,22 +353,15 @@ describe("WalletRegistry - Authorization", () => {
             )
         })
       })
-
-      // Maximum possible authorization - the entire stake delegated to the
-      // staking provider.
-      context("when increasing to the maximum possible value", () => {
+      context("when increasing to a weight above the minimum", () => {
         let tx: ContractTransaction
 
         before(async () => {
           await createSnapshot()
 
-          tx = await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              stakedAmount
-            )
+          tx = await allowlist
+            .connect(deployer)
+            .addStakingProvider(stakingProvider.address, providerWeight)
         })
 
         after(async () => {
@@ -685,7 +375,7 @@ describe("WalletRegistry - Authorization", () => {
               stakingProvider.address,
               operator.address,
               0,
-              stakedAmount
+              providerWeight
             )
         })
       })
@@ -693,60 +383,42 @@ describe("WalletRegistry - Authorization", () => {
   })
 
   describe("authorizationDecreaseRequested", () => {
-    context("when called not by the staking contract", () => {
+    context("when called not by the Allowlist contract", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry
             .connect(thirdParty)
             .authorizationDecreaseRequested(stakingProvider.address, 100, 99)
-        ).to.be.revertedWithCustomError(walletRegistry, "CallerNotStakingContract")
+        ).to.be.revertedWithCustomError(
+          walletRegistry,
+          "CallerNotStakingContract"
+        )
       })
     })
-
-    // This is normal happy path in case the stake owner wants to cancel the
-    // authorization before staking provider started their set up procedure.
-    // Given the operator was not registered yet by the staking provider, we
-    // can allow the authorization decrease to be processed immediately if it
-    // is valid.
     context("when the operator is unknown", () => {
       before(async () => {
         await createSnapshot()
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            stakedAmount
-          )
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, providerWeight)
       })
 
       after(async () => {
         await restoreSnapshot()
       })
-
-      // This is not valid authorization decrease request - one most decrease
-      // to 0 or to some value above the minimum.
       context("when decreasing to a non-zero value below the minimum", () => {
         it("should revert", async () => {
           const deauthorizingTo = minimumAuthorization.sub(1)
-          const deauthorizingBy = stakedAmount.sub(deauthorizingTo)
 
           await expect(
-            staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                walletRegistry.address,
-                deauthorizingBy
-              )
+            allowlist
+              .connect(deployer)
+              .requestWeightDecrease(stakingProvider.address, deauthorizingTo)
           ).to.be.revertedWith(
             "Authorization amount should be 0 or above the minimum"
           )
         })
       })
-
-      // Decreasing to zero when operator was not set up yet - authorization
-      // decrease request is valid and can be approved
       context("when decreasing to zero", () => {
         let tx: ContractTransaction
         const decreasingTo = 0
@@ -755,14 +427,10 @@ describe("WalletRegistry - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              walletRegistry.address,
-              decreasingBy
-            )
+          decreasingBy = providerWeight.sub(decreasingTo)
+          tx = await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(stakingProvider.address, decreasingTo)
         })
 
         after(async () => {
@@ -784,7 +452,7 @@ describe("WalletRegistry - Authorization", () => {
             .withArgs(
               stakingProvider.address,
               ZERO_ADDRESS,
-              stakedAmount,
+              providerWeight,
               decreasingTo,
               now
             )
@@ -808,14 +476,10 @@ describe("WalletRegistry - Authorization", () => {
           await createSnapshot()
 
           decreasingTo = minimumAuthorization
-          decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              walletRegistry.address,
-              decreasingBy
-            )
+          decreasingBy = providerWeight.sub(decreasingTo)
+          tx = await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(stakingProvider.address, decreasingTo)
         })
 
         after(async () => {
@@ -837,7 +501,7 @@ describe("WalletRegistry - Authorization", () => {
             .withArgs(
               stakingProvider.address,
               ZERO_ADDRESS,
-              stakedAmount,
+              providerWeight,
               decreasingTo,
               now
             )
@@ -861,14 +525,10 @@ describe("WalletRegistry - Authorization", () => {
           await createSnapshot()
 
           decreasingTo = minimumAuthorization.add(1)
-          decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              walletRegistry.address,
-              decreasingBy
-            )
+          decreasingBy = providerWeight.sub(decreasingTo)
+          tx = await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(stakingProvider.address, decreasingTo)
         })
 
         after(async () => {
@@ -890,7 +550,7 @@ describe("WalletRegistry - Authorization", () => {
             .withArgs(
               stakingProvider.address,
               ZERO_ADDRESS,
-              stakedAmount,
+              providerWeight,
               decreasingTo,
               now
             )
@@ -912,12 +572,11 @@ describe("WalletRegistry - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
+          await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(
               stakingProvider.address,
-              walletRegistry.address,
-              deauthorizingFirst
+              providerWeight.sub(deauthorizingFirst)
             )
         })
 
@@ -927,8 +586,6 @@ describe("WalletRegistry - Authorization", () => {
 
         context("when change period is equal delay", () => {
           before(async () => {
-            // this should be the default situation from the fixture setup so we
-            // just confirm it here
             const {
               authorizationDecreaseDelay,
               authorizationDecreaseChangePeriod,
@@ -943,12 +600,11 @@ describe("WalletRegistry - Authorization", () => {
               await createSnapshot()
               await helpers.time.increaseTime(params.authorizationDecreaseDelay)
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
+              await allowlist
+                .connect(deployer)
+                .requestWeightDecrease(
                   stakingProvider.address,
-                  walletRegistry.address,
-                  deauthorizingSecond
+                  providerWeight.sub(deauthorizingSecond)
                 )
             })
 
@@ -972,12 +628,11 @@ describe("WalletRegistry - Authorization", () => {
                 params.authorizationDecreaseDelay - 60 // -1min
               )
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
+              await allowlist
+                .connect(deployer)
+                .requestWeightDecrease(
                   stakingProvider.address,
-                  walletRegistry.address,
-                  deauthorizingSecond
+                  providerWeight.sub(deauthorizingSecond)
                 )
             })
 
@@ -1007,12 +662,11 @@ describe("WalletRegistry - Authorization", () => {
               .connect(governance)
               .finalizeAuthorizationDecreaseChangePeriodUpdate()
 
-            await staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
+            await allowlist
+              .connect(deployer)
+              .requestWeightDecrease(
                 stakingProvider.address,
-                walletRegistry.address,
-                deauthorizingSecond
+                providerWeight.sub(deauthorizingSecond)
               )
           })
 
@@ -1053,12 +707,11 @@ describe("WalletRegistry - Authorization", () => {
               await createSnapshot()
               await helpers.time.increaseTime(params.authorizationDecreaseDelay)
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
+              await allowlist
+                .connect(deployer)
+                .requestWeightDecrease(
                   stakingProvider.address,
-                  walletRegistry.address,
-                  deauthorizingSecond
+                  providerWeight.sub(deauthorizingSecond)
                 )
             })
 
@@ -1082,12 +735,11 @@ describe("WalletRegistry - Authorization", () => {
                 params.authorizationDecreaseDelay - newChangePeriod + 60
               ) // +1min
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
+              await allowlist
+                .connect(deployer)
+                .requestWeightDecrease(
                   stakingProvider.address,
-                  walletRegistry.address,
-                  deauthorizingSecond
+                  providerWeight.sub(deauthorizingSecond)
                 )
             })
 
@@ -1111,12 +763,11 @@ describe("WalletRegistry - Authorization", () => {
                 params.authorizationDecreaseDelay - newChangePeriod - 60 // -1min
               )
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
+              await allowlist
+                .connect(deployer)
+                .requestWeightDecrease(
                   stakingProvider.address,
-                  walletRegistry.address,
-                  deauthorizingSecond
+                  providerWeight.sub(deauthorizingSecond)
                 )
             })
 
@@ -1135,19 +786,12 @@ describe("WalletRegistry - Authorization", () => {
         })
       })
     })
-
-    // The most popular scenario - operator is registered, it has an
-    // authorization and that authorization is decreased after some time.
     context("when the operator is registered", () => {
       before(async () => {
         await createSnapshot()
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            stakedAmount
-          )
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, providerWeight)
         await walletRegistry
           .connect(stakingProvider)
           .registerOperator(operator.address)
@@ -1160,16 +804,11 @@ describe("WalletRegistry - Authorization", () => {
       context("when decreasing to a non-zero value below the minimum", () => {
         it("should revert", async () => {
           const deauthorizingTo = minimumAuthorization.sub(1)
-          const deauthorizingBy = stakedAmount.sub(deauthorizingTo)
 
           await expect(
-            staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                walletRegistry.address,
-                deauthorizingBy
-              )
+            allowlist
+              .connect(deployer)
+              .requestWeightDecrease(stakingProvider.address, deauthorizingTo)
           ).to.be.revertedWith(
             "Authorization amount should be 0 or above the minimum"
           )
@@ -1184,14 +823,10 @@ describe("WalletRegistry - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              walletRegistry.address,
-              decreasingBy
-            )
+          decreasingBy = providerWeight.sub(decreasingTo)
+          tx = await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(stakingProvider.address, decreasingTo)
         })
 
         after(async () => {
@@ -1212,7 +847,7 @@ describe("WalletRegistry - Authorization", () => {
             .withArgs(
               stakingProvider.address,
               operator.address,
-              stakedAmount,
+              providerWeight,
               decreasingTo,
               MAX_UINT64
             )
@@ -1236,14 +871,10 @@ describe("WalletRegistry - Authorization", () => {
           await createSnapshot()
 
           decreasingTo = minimumAuthorization
-          decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              walletRegistry.address,
-              decreasingBy
-            )
+          decreasingBy = providerWeight.sub(decreasingTo)
+          tx = await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(stakingProvider.address, decreasingTo)
         })
 
         after(async () => {
@@ -1264,7 +895,7 @@ describe("WalletRegistry - Authorization", () => {
             .withArgs(
               stakingProvider.address,
               operator.address,
-              stakedAmount,
+              providerWeight,
               decreasingTo,
               MAX_UINT64
             )
@@ -1288,14 +919,10 @@ describe("WalletRegistry - Authorization", () => {
           await createSnapshot()
 
           decreasingTo = minimumAuthorization.add(1)
-          decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              walletRegistry.address,
-              decreasingBy
-            )
+          decreasingBy = providerWeight.sub(decreasingTo)
+          tx = await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(stakingProvider.address, decreasingTo)
         })
 
         after(async () => {
@@ -1316,7 +943,7 @@ describe("WalletRegistry - Authorization", () => {
             .withArgs(
               stakingProvider.address,
               operator.address,
-              stakedAmount,
+              providerWeight,
               decreasingTo,
               MAX_UINT64
             )
@@ -1340,12 +967,11 @@ describe("WalletRegistry - Authorization", () => {
 
           await walletRegistry.connect(operator).joinSortitionPool()
 
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
+          await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(
               stakingProvider.address,
-              walletRegistry.address,
-              deauthorizingFirst
+              providerWeight.sub(deauthorizingFirst)
             )
         })
 
@@ -1355,8 +981,6 @@ describe("WalletRegistry - Authorization", () => {
 
         context("when change period is equal delay", () => {
           before(async () => {
-            // this should be the default situation from the fixture setup so we
-            // just confirm it here
             const {
               authorizationDecreaseDelay,
               authorizationDecreaseChangePeriod,
@@ -1370,12 +994,11 @@ describe("WalletRegistry - Authorization", () => {
             before(async () => {
               await createSnapshot()
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
+              await allowlist
+                .connect(deployer)
+                .requestWeightDecrease(
                   stakingProvider.address,
-                  walletRegistry.address,
-                  deauthorizingSecond
+                  providerWeight.sub(deauthorizingSecond)
                 )
             })
 
@@ -1425,12 +1048,11 @@ describe("WalletRegistry - Authorization", () => {
               before(async () => {
                 await createSnapshot()
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
+                await allowlist
+                  .connect(deployer)
+                  .requestWeightDecrease(
                     stakingProvider.address,
-                    walletRegistry.address,
-                    deauthorizingSecond
+                    providerWeight.sub(deauthorizingSecond)
                   )
               })
 
@@ -1463,12 +1085,11 @@ describe("WalletRegistry - Authorization", () => {
                   params.authorizationDecreaseDelay - 60 // -1min
                 )
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
+                await allowlist
+                  .connect(deployer)
+                  .requestWeightDecrease(
                     stakingProvider.address,
-                    walletRegistry.address,
-                    deauthorizingSecond
+                    providerWeight.sub(deauthorizingSecond)
                   )
               })
 
@@ -1516,12 +1137,11 @@ describe("WalletRegistry - Authorization", () => {
             before(async () => {
               await createSnapshot()
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
+              await allowlist
+                .connect(deployer)
+                .requestWeightDecrease(
                   stakingProvider.address,
-                  walletRegistry.address,
-                  deauthorizingSecond
+                  providerWeight.sub(deauthorizingSecond)
                 )
             })
 
@@ -1560,12 +1180,11 @@ describe("WalletRegistry - Authorization", () => {
             context("when called before delay passed", () => {
               it("should revert", async () => {
                 await expect(
-                  staking
-                    .connect(authorizer)
-                    ["requestAuthorizationDecrease(address,address,uint96)"](
+                  allowlist
+                    .connect(deployer)
+                    .requestWeightDecrease(
                       stakingProvider.address,
-                      walletRegistry.address,
-                      deauthorizingSecond
+                      providerWeight.sub(deauthorizingSecond)
                     )
                 ).to.be.revertedWith(
                   "Not enough time passed since the original request"
@@ -1580,12 +1199,11 @@ describe("WalletRegistry - Authorization", () => {
                   params.authorizationDecreaseDelay
                 )
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
+                await allowlist
+                  .connect(deployer)
+                  .requestWeightDecrease(
                     stakingProvider.address,
-                    walletRegistry.address,
-                    deauthorizingSecond
+                    providerWeight.sub(deauthorizingSecond)
                   )
               })
 
@@ -1635,12 +1253,11 @@ describe("WalletRegistry - Authorization", () => {
             before(async () => {
               await createSnapshot()
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
+              await allowlist
+                .connect(deployer)
+                .requestWeightDecrease(
                   stakingProvider.address,
-                  walletRegistry.address,
-                  deauthorizingSecond
+                  providerWeight.sub(deauthorizingSecond)
                 )
             })
 
@@ -1690,12 +1307,11 @@ describe("WalletRegistry - Authorization", () => {
 
               it("should revert", async () => {
                 await expect(
-                  staking
-                    .connect(authorizer)
-                    ["requestAuthorizationDecrease(address,address,uint96)"](
+                  allowlist
+                    .connect(deployer)
+                    .requestWeightDecrease(
                       stakingProvider.address,
-                      walletRegistry.address,
-                      deauthorizingSecond
+                      providerWeight.sub(deauthorizingSecond)
                     )
                 ).to.be.revertedWith(
                   "Not enough time passed since the original request"
@@ -1710,12 +1326,11 @@ describe("WalletRegistry - Authorization", () => {
                   params.authorizationDecreaseDelay - newChangePeriod + 60 // +1min
                 )
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
+                await allowlist
+                  .connect(deployer)
+                  .requestWeightDecrease(
                     stakingProvider.address,
-                    walletRegistry.address,
-                    deauthorizingSecond
+                    providerWeight.sub(deauthorizingSecond)
                   )
               })
 
@@ -1747,12 +1362,11 @@ describe("WalletRegistry - Authorization", () => {
                   params.authorizationDecreaseDelay
                 )
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
+                await allowlist
+                  .connect(deployer)
+                  .requestWeightDecrease(
                     stakingProvider.address,
-                    walletRegistry.address,
-                    deauthorizingSecond
+                    providerWeight.sub(deauthorizingSecond)
                   )
               })
 
@@ -1785,13 +1399,9 @@ describe("WalletRegistry - Authorization", () => {
   describe("approveAuthorizationDecrease", () => {
     before(async () => {
       await createSnapshot()
-      await staking
-        .connect(authorizer)
-        .increaseAuthorization(
-          stakingProvider.address,
-          walletRegistry.address,
-          stakedAmount
-        )
+      await allowlist
+        .connect(deployer)
+        .addStakingProvider(stakingProvider.address, providerWeight)
     })
 
     after(async () => {
@@ -1811,14 +1421,13 @@ describe("WalletRegistry - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          const deauthorizingBy = stakedAmount
+          const deauthorizingBy = providerWeight
 
-          staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
+          await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(
               stakingProvider.address,
-              walletRegistry.address,
-              deauthorizingBy
+              providerWeight.sub(deauthorizingBy)
             )
         })
 
@@ -1830,7 +1439,6 @@ describe("WalletRegistry - Authorization", () => {
           const tx = await walletRegistry.approveAuthorizationDecrease(
             stakingProvider.address
           )
-          // ok, did not revert
           await expect(tx)
             .to.emit(walletRegistry, "AuthorizationDecreaseApproved")
             .withArgs(stakingProvider.address)
@@ -1846,13 +1454,12 @@ describe("WalletRegistry - Authorization", () => {
           .connect(stakingProvider)
           .registerOperator(operator.address)
 
-        const deauthorizingBy = stakedAmount
-        staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
+        const deauthorizingBy = providerWeight
+        await allowlist
+          .connect(deployer)
+          .requestWeightDecrease(
             stakingProvider.address,
-            walletRegistry.address,
-            deauthorizingBy
+            providerWeight.sub(deauthorizingBy)
           )
       })
 
@@ -1863,8 +1470,6 @@ describe("WalletRegistry - Authorization", () => {
       context("when the pool was not updated", () => {
         before(async () => {
           await createSnapshot()
-
-          // even if we wait for the entire delay, it should not help
           await helpers.time.increaseTime(params.authorizationDecreaseDelay)
         })
 
@@ -1919,13 +1524,19 @@ describe("WalletRegistry - Authorization", () => {
         })
 
         it("should reduce authorized stake amount", async () => {
-          expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
-            0
-          )
+          expect(
+            await allowlist.authorizedStake(
+              stakingProvider.address,
+              walletRegistry.address
+            )
+          ).to.equal(0)
+          expect(
+            await walletRegistry.eligibleStake(stakingProvider.address)
+          ).to.equal(0)
         })
 
         it("should emit AuthorizationDecreaseApproved event", async () => {
-          expect(tx)
+          await expect(tx)
             .to.emit(walletRegistry, "AuthorizationDecreaseApproved")
             .withArgs(stakingProvider.address)
         })
@@ -1941,226 +1552,12 @@ describe("WalletRegistry - Authorization", () => {
     })
   })
 
-  describe("involuntaryAuthorizationDecrease", () => {
-    context("when called not by the staking contract", () => {
-      it("should revert", async () => {
-        await expect(
-          walletRegistry
-            .connect(thirdParty)
-            .involuntaryAuthorizationDecrease(stakingProvider.address, 100, 99)
-        ).to.be.revertedWithCustomError(walletRegistry, "CallerNotStakingContract")
-      })
-    })
-
-    context("when the operator is unknown", () => {
-      const slashedAmount = to1e18(100)
-      let tx: ContractTransaction
-
-      before(async () => {
-        await createSnapshot()
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            stakedAmount
-          )
-
-        // lock the pool for DKG
-        // we lock the pool to ensure that the update is ignored for the
-        // operator and that involuntaryAuthorizationDecrease logic in this
-        // case is basically a pass-through
-        await walletRegistry.connect(walletOwner.wallet).requestNewWallet()
-
-        // slash!
-        await staking
-          .connect(slasher.wallet)
-          .slash(slashedAmount, [stakingProvider.address])
-        tx = await staking.connect(thirdParty).processSlashing(1)
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      it("should ignore the update", async () => {
-        await expect(tx).to.not.emit(
-          walletRegistry,
-          "InvoluntaryAuthorizationDecreaseFailed"
-        )
-      })
-    })
-
-    context("when the operator is known", () => {
-      before(async () => {
-        await createSnapshot()
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            stakedAmount
-          )
-
-        await walletRegistry
-          .connect(stakingProvider)
-          .registerOperator(operator.address)
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      context("when the operator is not in the sortition pool", () => {
-        const slashedAmount = to1e18(100)
-        let tx: ContractTransaction
-
-        before(async () => {
-          await createSnapshot()
-
-          // lock the pool for DKG
-          // we lock the pool to ensure that the update is ignored for the
-          // operator and that involuntaryAuthorizationDecrease logic in this
-          // case is basically a pass-through
-          await walletRegistry.connect(walletOwner.wallet).requestNewWallet()
-
-          // slash!
-          await staking
-            .connect(slasher.wallet)
-            .slash(slashedAmount, [stakingProvider.address])
-          tx = await staking.connect(thirdParty).processSlashing(1)
-        })
-
-        after(async () => {
-          await restoreSnapshot()
-        })
-
-        it("should ignore the update", async () => {
-          await expect(tx).to.not.emit(
-            walletRegistry,
-            "InvoluntaryAuthorizationDecreaseFailed"
-          )
-        })
-      })
-
-      context("when the operator is in the sortition pool", () => {
-        before(async () => {
-          await createSnapshot()
-          await walletRegistry.connect(operator).joinSortitionPool()
-        })
-
-        after(async () => {
-          await restoreSnapshot()
-        })
-
-        context("when the sortition pool is locked", () => {
-          const slashedAmount = to1e18(100)
-          let tx: ContractTransaction
-
-          before(async () => {
-            await createSnapshot()
-
-            // lock the pool for DKG
-            await walletRegistry.connect(walletOwner.wallet).requestNewWallet()
-
-            // and slash!
-            await staking
-              .connect(slasher.wallet)
-              .slash(slashedAmount, [stakingProvider.address])
-            tx = await staking.connect(thirdParty).processSlashing(1)
-          })
-
-          after(async () => {
-            await restoreSnapshot()
-          })
-
-          it("should not update the pool", async () => {
-            expect(await walletRegistry.isOperatorUpToDate(operator.address)).to
-              .be.false
-          })
-
-          it("should emit InvoluntaryAuthorizationDecreaseFailed event", async () => {
-            await expect(tx)
-              .to.emit(walletRegistry, "InvoluntaryAuthorizationDecreaseFailed")
-              .withArgs(
-                stakingProvider.address,
-                operator.address,
-                stakedAmount,
-                stakedAmount.sub(slashedAmount)
-              )
-          })
-        })
-
-        context("when the sortition pool is not locked", () => {
-          context("when the authorization drops to above the minimum", () => {
-            const slashedAmount = to1e18(100)
-            let tx: ContractTransaction
-
-            before(async () => {
-              await createSnapshot()
-
-              // slash!
-              await staking
-                .connect(slasher.wallet)
-                .slash(slashedAmount, [stakingProvider.address])
-              tx = await staking.connect(thirdParty).processSlashing(1)
-            })
-
-            after(async () => {
-              await restoreSnapshot()
-            })
-
-            it("should update operator status", async () => {
-              expect(await walletRegistry.isOperatorUpToDate(operator.address))
-                .to.be.true
-            })
-
-            it("should not emit InvoluntaryAuthorizationDecreaseFailed event", async () => {
-              await expect(tx).to.not.emit(
-                walletRegistry,
-                "InvoluntaryAuthorizationDecreaseFailed"
-              )
-            })
-          })
-
-          context(
-            "when the authorized amount drops to below the minimum",
-            () => {
-              before(async () => {
-                const slashingTo = minimumAuthorization.sub(1)
-                const slashingBy = stakedAmount.sub(slashingTo)
-
-                await createSnapshot()
-
-                // slash!
-                await staking
-                  .connect(slasher.wallet)
-                  .slash(slashingBy, [stakingProvider.address])
-
-                await staking.connect(thirdParty).processSlashing(1)
-              })
-
-              after(async () => {
-                await restoreSnapshot()
-              })
-
-              it("should remove operator from the sortition pool", async () => {
-                expect(await walletRegistry.isOperatorInPool(operator.address))
-                  .to.be.false
-              })
-            }
-          )
-        })
-      })
-    })
-  })
-
   describe("joinSortitionPool", () => {
     context("when the operator is unknown", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.connect(thirdParty).joinSortitionPool()
-        ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
+        ).to.be.revertedWith("Unknown operator")
       })
     })
 
@@ -2184,47 +1581,6 @@ describe("WalletRegistry - Authorization", () => {
       })
     })
 
-    // The only option for it to happen is when there was a slashing.
-    context(
-      "when the authorization dropped below the minimum but is still non-zero",
-      () => {
-        before(async () => {
-          await createSnapshot()
-
-          await walletRegistry
-            .connect(stakingProvider)
-            .registerOperator(operator.address)
-
-          const authorizedAmount = minimumAuthorization
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              authorizedAmount
-            )
-
-          const slashingTo = minimumAuthorization.sub(1)
-          const slashedAmount = authorizedAmount.sub(slashingTo)
-
-          await staking
-            .connect(slasher.wallet)
-            .slash(slashedAmount, [stakingProvider.address])
-          await staking.connect(thirdParty).processSlashing(1)
-        })
-
-        after(async () => {
-          await restoreSnapshot()
-        })
-
-        it("should revert", async () => {
-          await expect(
-            walletRegistry.connect(operator).joinSortitionPool()
-          ).to.be.revertedWith("Authorization below the minimum")
-        })
-      }
-    )
-
     context("when the operator has the minimum stake authorized", () => {
       let tx: ContractTransaction
 
@@ -2235,13 +1591,9 @@ describe("WalletRegistry - Authorization", () => {
           .connect(stakingProvider)
           .registerOperator(operator.address)
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            minimumAuthorization
-          )
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, minimumAuthorization)
 
         tx = await walletRegistry.connect(operator).joinSortitionPool()
       })
@@ -2282,13 +1634,9 @@ describe("WalletRegistry - Authorization", () => {
 
           authorizedStake = minimumAuthorization.mul(2)
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              authorizedStake
-            )
+          await allowlist
+            .connect(deployer)
+            .addStakingProvider(stakingProvider.address, authorizedStake)
 
           await walletRegistry.connect(operator).joinSortitionPool()
         })
@@ -2320,26 +1668,17 @@ describe("WalletRegistry - Authorization", () => {
           .connect(stakingProvider)
           .registerOperator(operator.address)
 
-        const authorizedStake = stakedAmount
+        const authorizedStake = providerWeight
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            authorizedStake
-          )
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, authorizedStake)
 
         deauthorizingTo = minimumAuthorization.add(to1e18(1337))
-        const deauthorizingBy = authorizedStake.sub(deauthorizingTo)
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            walletRegistry.address,
-            deauthorizingBy
-          )
+        await allowlist
+          .connect(deployer)
+          .requestWeightDecrease(stakingProvider.address, deauthorizingTo)
 
         await walletRegistry.connect(operator).joinSortitionPool()
       })
@@ -2367,78 +1706,6 @@ describe("WalletRegistry - Authorization", () => {
         ).to.equal(params.authorizationDecreaseDelay)
       })
     })
-
-    context(
-      "when operator is in the process of deauthorizing but also increased authorization in the meantime",
-      () => {
-        let expectedAuthorizedStake
-
-        before(async () => {
-          await createSnapshot()
-
-          await walletRegistry
-            .connect(stakingProvider)
-            .registerOperator(operator.address)
-
-          const authorizedStake = minimumAuthorization.add(to1e18(100))
-
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              authorizedStake
-            )
-
-          const deauthorizingTo = minimumAuthorization.add(to1e18(50))
-          const deauthorizingBy = authorizedStake.sub(deauthorizingTo)
-
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              walletRegistry.address,
-              deauthorizingBy
-            )
-
-          const increasingBy = to1e18(5000)
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              increasingBy
-            )
-
-          expectedAuthorizedStake = deauthorizingTo.add(increasingBy)
-
-          await walletRegistry.connect(operator).joinSortitionPool()
-        })
-
-        after(async () => {
-          await restoreSnapshot()
-        })
-
-        it("should insert operator into the pool", async () => {
-          expect(await walletRegistry.isOperatorInPool(operator.address)).to.be
-            .true
-        })
-
-        it("should use a correct stake weight", async () => {
-          expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
-            expectedAuthorizedStake.div(constants.poolWeightDivisor)
-          )
-        })
-
-        it("should activate authorization decrease delay", async () => {
-          expect(
-            await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address
-            )
-          ).to.equal(params.authorizationDecreaseDelay)
-        })
-      }
-    )
   })
 
   describe("updateOperatorStatus", () => {
@@ -2446,7 +1713,7 @@ describe("WalletRegistry - Authorization", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.updateOperatorStatus(thirdParty.address)
-        ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
+        ).to.be.revertedWith("Unknown operator")
       })
     })
 
@@ -2469,13 +1736,9 @@ describe("WalletRegistry - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              minimumAuthorization
-            )
+          await allowlist
+            .connect(deployer)
+            .addStakingProvider(stakingProvider.address, minimumAuthorization)
 
           tx = await walletRegistry
             .connect(thirdParty)
@@ -2504,21 +1767,16 @@ describe("WalletRegistry - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              stakedAmount
-            )
+          await allowlist
+            .connect(deployer)
+            .addStakingProvider(stakingProvider.address, providerWeight)
 
           const deauthorizingBy = to1e18(100)
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
+          await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(
               stakingProvider.address,
-              walletRegistry.address,
-              deauthorizingBy
+              providerWeight.sub(deauthorizingBy)
             )
 
           tx = await walletRegistry
@@ -2559,11 +1817,10 @@ describe("WalletRegistry - Authorization", () => {
           .connect(stakingProvider)
           .registerOperator(operator.address)
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(
             stakingProvider.address,
-            walletRegistry.address,
             minimumAuthorization.mul(2)
           )
 
@@ -2574,52 +1831,6 @@ describe("WalletRegistry - Authorization", () => {
         await restoreSnapshot()
       })
 
-      context("when the authorization increased", () => {
-        let tx: ContractTransaction
-        let expectedWeight
-
-        before(async () => {
-          await createSnapshot()
-
-          const topUp = to1e18(1337)
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              topUp
-            )
-
-          // initial authorization was 2 x minimum
-          // it was increased by 1337 tokens
-          // so the final authorization should be 2 x minimum + 1337
-          expectedWeight = minimumAuthorization
-            .mul(2)
-            .add(topUp)
-            .div(constants.poolWeightDivisor)
-
-          tx = await walletRegistry
-            .connect(thirdParty)
-            .updateOperatorStatus(operator.address)
-        })
-
-        after(async () => {
-          await restoreSnapshot()
-        })
-
-        it("should update the pool", async () => {
-          expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
-            expectedWeight
-          )
-        })
-
-        it("should emit OperatorStatusUpdated", async () => {
-          await expect(tx)
-            .to.emit(walletRegistry, "OperatorStatusUpdated")
-            .withArgs(stakingProvider.address, operator.address)
-        })
-      })
-
       context(
         "when there was an authorization decrease request to non-zero",
         () => {
@@ -2628,22 +1839,12 @@ describe("WalletRegistry - Authorization", () => {
 
           before(async () => {
             await createSnapshot()
-
-            // initial authorization was 2 x minimum
-            // we want to decrease to minimum + 1337
             const deauthorizingTo = minimumAuthorization.add(to1e18(1337))
-            const deauthorizingBy = minimumAuthorization
-              .mul(2)
-              .sub(deauthorizingTo)
             expectedWeight = deauthorizingTo.div(constants.poolWeightDivisor)
 
-            await staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                walletRegistry.address,
-                deauthorizingBy
-              )
+            await allowlist
+              .connect(deployer)
+              .requestWeightDecrease(stakingProvider.address, deauthorizingTo)
 
             tx = await walletRegistry
               .connect(thirdParty)
@@ -2684,17 +1885,9 @@ describe("WalletRegistry - Authorization", () => {
           before(async () => {
             await createSnapshot()
 
-            // initial authorization was 2 x minimum
-            // we want to decrease to zero
-            const deauthorizingBy = minimumAuthorization.mul(2)
-
-            await staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                walletRegistry.address,
-                deauthorizingBy
-              )
+            await allowlist
+              .connect(deployer)
+              .requestWeightDecrease(stakingProvider.address, 0)
 
             tx = await walletRegistry
               .connect(thirdParty)
@@ -2708,73 +1901,6 @@ describe("WalletRegistry - Authorization", () => {
           it("should remove operator from the sortition pool", async () => {
             expect(await walletRegistry.isOperatorInPool(operator.address)).to
               .be.false
-          })
-
-          it("should activate authorization decrease delay", async () => {
-            expect(
-              await walletRegistry.remainingAuthorizationDecreaseDelay(
-                stakingProvider.address
-              )
-            ).to.equal(params.authorizationDecreaseDelay)
-          })
-
-          it("should emit OperatorStatusUpdated", async () => {
-            await expect(tx)
-              .to.emit(walletRegistry, "OperatorStatusUpdated")
-              .withArgs(stakingProvider.address, operator.address)
-          })
-        }
-      )
-
-      context(
-        "when operator is in the process of deauthorizing but also increased authorization in the meantime",
-        () => {
-          let tx: ContractTransaction
-          let expectedWeight
-
-          before(async () => {
-            await createSnapshot()
-
-            // initial authorization was 2 x minimum
-            // we want to decrease to minimum + 1337
-            // and then decrease by 7331
-            const deauthorizingTo = minimumAuthorization.add(to1e18(1337))
-            const deauthorizingBy = minimumAuthorization
-              .mul(2)
-              .sub(deauthorizingTo)
-            const increasingBy = to1e18(7331)
-            const increasingTo = deauthorizingTo.add(increasingBy)
-            expectedWeight = increasingTo.div(constants.poolWeightDivisor)
-
-            await staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                walletRegistry.address,
-                deauthorizingBy
-              )
-
-            await staking
-              .connect(authorizer)
-              .increaseAuthorization(
-                stakingProvider.address,
-                walletRegistry.address,
-                increasingBy
-              )
-
-            tx = await walletRegistry
-              .connect(thirdParty)
-              .updateOperatorStatus(operator.address)
-          })
-
-          after(async () => {
-            await restoreSnapshot()
-          })
-
-          it("should update the pool", async () => {
-            expect(
-              await sortitionPool.getPoolWeight(operator.address)
-            ).to.equal(expectedWeight)
           })
 
           it("should activate authorization decrease delay", async () => {
@@ -2811,13 +1937,9 @@ describe("WalletRegistry - Authorization", () => {
         await createSnapshot()
 
         authorizedAmount = minimumAuthorization
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            authorizedAmount
-          )
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, authorizedAmount)
       })
 
       after(async () => {
@@ -2842,21 +1964,16 @@ describe("WalletRegistry - Authorization", () => {
 
           authorizedAmount = minimumAuthorization.add(to1e18(2000))
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              authorizedAmount
-            )
+          await allowlist
+            .connect(deployer)
+            .addStakingProvider(stakingProvider.address, authorizedAmount)
 
           deauthorizingAmount = to1e18(1337)
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
+          await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(
               stakingProvider.address,
-              walletRegistry.address,
-              deauthorizingAmount
+              authorizedAmount.sub(deauthorizingAmount)
             )
         })
 
@@ -2877,21 +1994,13 @@ describe("WalletRegistry - Authorization", () => {
         await createSnapshot()
 
         const authorizedAmount = minimumAuthorization
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            authorizedAmount
-          )
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, authorizedAmount)
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            walletRegistry.address,
-            authorizedAmount
-          )
+        await allowlist
+          .connect(deployer)
+          .requestWeightDecrease(stakingProvider.address, 0)
       })
 
       after(async () => {
@@ -2910,21 +2019,13 @@ describe("WalletRegistry - Authorization", () => {
         await createSnapshot()
 
         const authorizedAmount = minimumAuthorization.add(1200)
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            authorizedAmount
-          )
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, authorizedAmount)
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            walletRegistry.address,
-            authorizedAmount
-          )
+        await allowlist
+          .connect(deployer)
+          .requestWeightDecrease(stakingProvider.address, 0)
 
         await walletRegistry.approveAuthorizationDecrease(
           stakingProvider.address
@@ -2941,43 +2042,6 @@ describe("WalletRegistry - Authorization", () => {
         ).to.equal(0)
       })
     })
-
-    // The only option for it to happen is when there was a slashing.
-    context(
-      "when the authorization dropped below the minimum but is still non-zero",
-      () => {
-        before(async () => {
-          await createSnapshot()
-
-          const authorizedAmount = minimumAuthorization
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              authorizedAmount
-            )
-
-          const slashingTo = minimumAuthorization.sub(1)
-          const slashedAmount = authorizedAmount.sub(slashingTo)
-
-          await staking
-            .connect(slasher.wallet)
-            .slash(slashedAmount, [stakingProvider.address])
-          await staking.connect(thirdParty).processSlashing(1)
-        })
-
-        after(async () => {
-          await restoreSnapshot()
-        })
-
-        it("should return zero", async () => {
-          expect(
-            await walletRegistry.eligibleStake(stakingProvider.address)
-          ).to.equal(0)
-        })
-      }
-    )
   })
 
   describe("remainingAuthorizationDecreaseDelay", () => {
@@ -2985,35 +2049,23 @@ describe("WalletRegistry - Authorization", () => {
       await createSnapshot()
 
       const authorizedAmount = minimumAuthorization.add(1200)
-      await staking
-        .connect(authorizer)
-        .increaseAuthorization(
-          stakingProvider.address,
-          walletRegistry.address,
-          authorizedAmount
-        )
+      await allowlist
+        .connect(deployer)
+        .addStakingProvider(stakingProvider.address, authorizedAmount)
 
       await walletRegistry
         .connect(stakingProvider)
         .registerOperator(operator.address)
       await walletRegistry.connect(operator).joinSortitionPool()
 
-      await staking
-        .connect(authorizer)
-        ["requestAuthorizationDecrease(address,address,uint96)"](
-          stakingProvider.address,
-          walletRegistry.address,
-          authorizedAmount
-        )
+      await allowlist
+        .connect(deployer)
+        .requestWeightDecrease(stakingProvider.address, 0)
     })
 
     after(async () => {
       await restoreSnapshot()
     })
-
-    // These tests cover only basic cases. More scenarios such as operator not
-    // registered for the staking provider has been covered in tests for other
-    // functions.
 
     it("should not activate before sortition pool is updated", async () => {
       expect(
@@ -3053,8 +2105,6 @@ describe("WalletRegistry - Authorization", () => {
           stakingProvider.address
         )
       ).to.equal(0)
-
-      // ...and should remain zero
       await helpers.time.increaseTime(3600) // +1h
       expect(
         await walletRegistry.remainingAuthorizationDecreaseDelay(
@@ -3067,11 +2117,9 @@ describe("WalletRegistry - Authorization", () => {
   describe("isOperatorUpToDate", () => {
     context("when the operator is unknown", () => {
       it("should revert", async () => {
-        it("should revert", async () => {
-          await expect(
-            walletRegistry.isOperatorUpToDate(thirdParty.address)
-          ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
-        })
+        await expect(
+          walletRegistry.isOperatorUpToDate(thirdParty.address)
+        ).to.be.revertedWith("Unknown operator")
       })
     })
 
@@ -3099,13 +2147,9 @@ describe("WalletRegistry - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              minimumAuthorization
-            )
+          await allowlist
+            .connect(deployer)
+            .addStakingProvider(stakingProvider.address, minimumAuthorization)
         })
 
         after(async () => {
@@ -3127,11 +2171,10 @@ describe("WalletRegistry - Authorization", () => {
           .connect(stakingProvider)
           .registerOperator(operator.address)
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(
             stakingProvider.address,
-            walletRegistry.address,
             minimumAuthorization.mul(2)
           )
 
@@ -3149,106 +2192,17 @@ describe("WalletRegistry - Authorization", () => {
         })
       })
 
-      context("when authorization was increased", () => {
-        before(async () => {
-          await createSnapshot()
-
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              to1e18(1337)
-            )
-        })
-
-        after(async () => {
-          await restoreSnapshot()
-        })
-
-        context("when sortition pool was not yet updated", () => {
-          it("should return false", async () => {
-            expect(await walletRegistry.isOperatorUpToDate(operator.address)).to
-              .be.false
-          })
-        })
-
-        context("when the sortition pool was updated", () => {
-          it("should return true", async () => {
-            await walletRegistry.updateOperatorStatus(operator.address)
-            expect(await walletRegistry.isOperatorUpToDate(operator.address)).to
-              .be.true
-          })
-        })
-      })
-
       context("when authorization decrease was requested", () => {
         before(async () => {
           await createSnapshot()
 
           const deauthorizingBy = to1e18(1)
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
+          await allowlist
+            .connect(deployer)
+            .requestWeightDecrease(
               stakingProvider.address,
-              walletRegistry.address,
-              deauthorizingBy
+              minimumAuthorization.mul(2).sub(deauthorizingBy)
             )
-        })
-
-        after(async () => {
-          await restoreSnapshot()
-        })
-
-        context("when sortition pool was not yet updated", () => {
-          it("should return false", async () => {
-            expect(await walletRegistry.isOperatorUpToDate(operator.address)).to
-              .be.false
-          })
-        })
-
-        context("when the sortition pool was updated", () => {
-          it("should return true", async () => {
-            await walletRegistry.updateOperatorStatus(operator.address)
-            expect(await walletRegistry.isOperatorUpToDate(operator.address)).to
-              .be.true
-          })
-        })
-      })
-
-      context("when operator was slashed when the pool was locked", () => {
-        before(async () => {
-          await createSnapshot()
-
-          // Increase authorization to the maximum possible value and update
-          // sortition pool. This way, any slashing from `slasher` application
-          // will affect authorized stake amount for WalletRegistry.
-          const authorized = await staking.authorizedStake(
-            stakingProvider.address,
-            walletRegistry.address
-          )
-          const increaseBy = stakedAmount.sub(authorized)
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              walletRegistry.address,
-              increaseBy
-            )
-          await walletRegistry.updateOperatorStatus(operator.address)
-
-          // lock the pool for DKG
-          await walletRegistry.connect(walletOwner.wallet).requestNewWallet()
-
-          // and slash!
-          await staking
-            .connect(slasher.wallet)
-            .slash(to1e18(100), [stakingProvider.address])
-          await staking.connect(thirdParty).processSlashing(1)
-
-          // unlock the pool by stopping DKG
-          await mineBlocks(params.dkgSeedTimeout)
-          await walletRegistry.notifySeedTimeout()
         })
 
         after(async () => {
@@ -3273,1011 +2227,246 @@ describe("WalletRegistry - Authorization", () => {
     })
   })
 
-  // Testing final states for scenarios when functions are invoked one after
-  // another. Operator is known and registered in the sortition pool.
-  context("mixed interactions", () => {
-    let initialIncrease
-
-    before(async () => {
+  describe("Allowlist provider lifecycle", () => {
+    beforeEach(async () => {
       await createSnapshot()
-
-      await walletRegistry
-        .connect(stakingProvider)
-        .registerOperator(operator.address)
-
-      // Authorized almost the entire staked amount but leave some margin for
-      // authorization increase.
-      initialIncrease = stakedAmount.sub(to1e18(20000))
-      await staking
-        .connect(authorizer)
-        .increaseAuthorization(
-          stakingProvider.address,
-          walletRegistry.address,
-          initialIncrease
-        )
-      await walletRegistry.connect(operator).joinSortitionPool()
     })
 
-    after(async () => {
+    afterEach(async () => {
       await restoreSnapshot()
     })
 
-    // Invoke `increaseAuthorization` after `increaseAuthorization`.
-    describe("authorizationIncreased -> authorizationIncreased", () => {
-      let secondIncrease
-
-      before(async () => {
-        await createSnapshot()
-
-        secondIncrease = to1e18(11111)
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            secondIncrease
-          )
-
-        await walletRegistry
-          .connect(operator)
-          .updateOperatorStatus(operator.address)
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      it("should have correct eligible stake", async () => {
-        expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
-        ).to.equal(initialIncrease.add(secondIncrease))
-      })
-
-      it("should have operator status updated", async () => {
-        expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-          .true
-      })
+    it("should restrict adding providers and decreasing weights to the Allowlist owner", async () => {
+      await expect(
+        allowlist
+          .connect(thirdParty)
+          .addStakingProvider(stakingProvider.address, providerWeight)
+      ).to.be.revertedWith("Ownable: caller is not the owner")
+      await allowlist
+        .connect(deployer)
+        .addStakingProvider(stakingProvider.address, providerWeight)
+      await expect(
+        allowlist
+          .connect(thirdParty)
+          .requestWeightDecrease(stakingProvider.address, minimumAuthorization)
+      ).to.be.revertedWith("Ownable: caller is not the owner")
     })
 
-    // Invoke `increaseAuthorization` after `authorizationDecreaseRequested`.
-    // The decrease is not yet approved when `increaseAuthorization` is called.
-    describe("authorizationDecreaseRequested -> authorizationIncreased", () => {
-      let firstDecrease
-      let secondIncrease
-
-      before(async () => {
-        await createSnapshot()
-
-        firstDecrease = to1e18(111)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            walletRegistry.address,
-            firstDecrease
-          )
-        await walletRegistry
-          .connect(operator)
-          .updateOperatorStatus(operator.address)
-
-        secondIncrease = to1e18(11111)
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            secondIncrease
-          )
-        await walletRegistry
-          .connect(operator)
-          .updateOperatorStatus(operator.address)
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      it("should have correct eligible stake", async () => {
-        expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
-        ).to.equal(initialIncrease.sub(firstDecrease).add(secondIncrease))
-      })
-
-      it("should have operator status updated", async () => {
-        expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-          .true
-      })
+    it("should reject adding weight to an already allowlisted provider", async () => {
+      await allowlist
+        .connect(deployer)
+        .addStakingProvider(stakingProvider.address, providerWeight)
+      await expect(
+        allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, providerWeight)
+      ).to.be.revertedWithCustomError(allowlist, "StakingProviderAlreadyAdded")
+      expect(
+        await walletRegistry.eligibleStake(stakingProvider.address)
+      ).to.equal(providerWeight)
     })
 
-    // Invoke `increaseAuthorization` after `approveAuthorizationDecrease`.
-    // The decrease is approved when `increaseAuthorization` is called.
-    describe("non-zero approveAuthorizationDecrease -> authorizationIncreased", () => {
-      let firstDecrease
-      let secondIncrease
-
-      before(async () => {
-        await createSnapshot()
-
-        firstDecrease = to1e18(222)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            walletRegistry.address,
-            firstDecrease
-          )
+    const targetWeights = [params.minimumAuthorization, ethers.constants.Zero]
+    targetWeights.forEach((targetWeight) => {
+      it(`should finalize a decrease to ${targetWeight} after synchronizing the pool and waiting`, async () => {
+        await allowlist
+          .connect(deployer)
+          .addStakingProvider(stakingProvider.address, providerWeight)
         await walletRegistry
-          .connect(operator)
-          .updateOperatorStatus(operator.address)
-
-        await helpers.time.increaseTime(params.authorizationDecreaseDelay)
-        await walletRegistry.approveAuthorizationDecrease(
-          stakingProvider.address
-        )
-
-        secondIncrease = to1e18(7311)
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            secondIncrease
-          )
-        await walletRegistry
-          .connect(operator)
-          .updateOperatorStatus(operator.address)
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      it("should have correct eligible stake", async () => {
-        expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
-        ).to.equal(initialIncrease.sub(firstDecrease).add(secondIncrease))
-      })
-
-      it("should have operator status updated", async () => {
-        expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-          .true
-      })
-    })
-
-    // Invoke `increaseAuthorization` after the authorization was decreased to 0.
-    describe("to-zero approveAuthorizationDecrease -> authorizationIncreased", () => {
-      let secondIncrease
-
-      before(async () => {
-        await createSnapshot()
-
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            walletRegistry.address,
-            initialIncrease
-          )
-        await walletRegistry
-          .connect(operator)
-          .updateOperatorStatus(operator.address)
-
-        await helpers.time.increaseTime(params.authorizationDecreaseDelay)
-        await walletRegistry.approveAuthorizationDecrease(
-          stakingProvider.address
-        )
-
-        secondIncrease = minimumAuthorization.add(to1e18(21))
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            secondIncrease
-          )
+          .connect(stakingProvider)
+          .registerOperator(operator.address)
         await walletRegistry.connect(operator).joinSortitionPool()
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      it("should have correct eligible stake", async () => {
+        await allowlist
+          .connect(deployer)
+          .requestWeightDecrease(stakingProvider.address, targetWeight)
+        expect(
+          await allowlist.authorizedStake(
+            stakingProvider.address,
+            walletRegistry.address
+          )
+        ).to.equal(providerWeight)
         expect(
           await walletRegistry.eligibleStake(stakingProvider.address)
-        ).to.equal(secondIncrease)
-      })
-
-      it("should have operator status updated", async () => {
-        expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-          .true
-      })
-    })
-
-    // Invoke `increaseAuthorization` after `involuntaryAuthorizationDecrease`
-    // when the authorization amount dropped below the minimum authorization.
-    describe("below-minimum involuntaryAuthorizationDecrease -> authorizationIncreased", () => {
-      let slashingTo
-      let secondIncrease
-
-      before(async () => {
-        await createSnapshot()
-
-        slashingTo = minimumAuthorization.sub(1)
-        const slashedAmount = initialIncrease.sub(slashingTo)
-
-        await staking
-          .connect(slasher.wallet)
-          .slash(slashedAmount, [stakingProvider.address])
-        await staking.connect(thirdParty).processSlashing(1)
-
-        // Give the stake owner some more T and let them top-up the stake before
-        // they increase the authorization again.
-        secondIncrease = to1e18(10000)
-        await t.connect(deployer).mint(owner.address, secondIncrease)
-        await t.connect(owner).approve(staking.address, secondIncrease)
-        await staking
-          .connect(owner)
-          .topUp(stakingProvider.address, secondIncrease)
-
-        // And finally increase!
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            walletRegistry.address,
-            secondIncrease
-          )
-        await walletRegistry.connect(operator).joinSortitionPool()
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      it("should have correct eligible stake", async () => {
-        expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
-        ).to.equal(slashingTo.add(secondIncrease))
-      })
-
-      it("should have operator status updated", async () => {
-        expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-          .true
-      })
-    })
-
-    describe("authorizationDecreaseRequested -> involuntaryAuthorizationDecrease", () => {
-      let decreasedAmount
-      let slashingTo
-
-      before(async () => {
-        await createSnapshot()
-
-        decreasedAmount = to1e18(20000)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            walletRegistry.address,
-            decreasedAmount
-          )
+        ).to.equal(targetWeight)
         await walletRegistry
-          .connect(operator)
+          .connect(thirdParty)
           .updateOperatorStatus(operator.address)
-
-        slashingTo = initialIncrease.sub(to1e18(100))
-        const slashedAmount = initialIncrease.sub(slashingTo)
-
-        await staking
-          .connect(slasher.wallet)
-          .slash(slashedAmount, [stakingProvider.address])
-        await staking.connect(thirdParty).processSlashing(1)
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      it("should have correct eligible stake", async () => {
-        expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
-        ).to.equal(slashingTo.sub(decreasedAmount))
-      })
-
-      it("should have operator status updated", async () => {
-        expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-          .true
-      })
-    })
-
-    describe("authorizationDecreaseRequested -> involuntaryAuthorizationDecrease -> approveAuthorizationDecrease", () => {
-      let decreasedAmount
-      let slashingTo
-
-      before(async () => {
-        await createSnapshot()
-
-        decreasedAmount = to1e18(20000)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            walletRegistry.address,
-            decreasedAmount
-          )
-        await walletRegistry
-          .connect(operator)
-          .updateOperatorStatus(operator.address)
-
-        slashingTo = initialIncrease.sub(to1e18(100))
-        const slashedAmount = initialIncrease.sub(slashingTo)
-
-        await staking
-          .connect(slasher.wallet)
-          .slash(slashedAmount, [stakingProvider.address])
-        await staking.connect(thirdParty).processSlashing(1)
-
         await helpers.time.increaseTime(params.authorizationDecreaseDelay)
-        await walletRegistry.approveAuthorizationDecrease(
+        const tx = await walletRegistry
+          .connect(thirdParty)
+          .approveAuthorizationDecrease(stakingProvider.address)
+        await expect(tx)
+          .to.emit(allowlist, "WeightDecreaseFinalized")
+          .withArgs(stakingProvider.address, providerWeight, targetWeight)
+        const info = await allowlist.stakingProviders(stakingProvider.address)
+        expect(info.weight).to.equal(targetWeight)
+        expect(info.pendingNewWeight).to.equal(0)
+        expect(info.decreasePending).to.be.false
+        expect(
+          await walletRegistry.pendingAuthorizationDecrease(
+            stakingProvider.address
+          )
+        ).to.equal(0)
+        expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
+          .true
+      })
+    })
+
+    it("should allow a removed provider to be added again with the same operator", async () => {
+      await allowlist
+        .connect(deployer)
+        .addStakingProvider(stakingProvider.address, providerWeight)
+      await walletRegistry
+        .connect(stakingProvider)
+        .registerOperator(operator.address)
+      await walletRegistry.connect(operator).joinSortitionPool()
+      await allowlist
+        .connect(deployer)
+        .requestWeightDecrease(stakingProvider.address, 0)
+      await walletRegistry.updateOperatorStatus(operator.address)
+      await helpers.time.increaseTime(params.authorizationDecreaseDelay)
+      await walletRegistry.approveAuthorizationDecrease(stakingProvider.address)
+      expect(await walletRegistry.isOperatorInPool(operator.address)).to.be
+        .false
+      await allowlist
+        .connect(deployer)
+        .addStakingProvider(stakingProvider.address, minimumAuthorization)
+      await walletRegistry.connect(operator).joinSortitionPool()
+      expect(
+        await walletRegistry.stakingProviderToOperator(stakingProvider.address)
+      ).to.equal(operator.address)
+      expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
+        minimumAuthorization.div(constants.poolWeightDivisor)
+      )
+      expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
+        .true
+    })
+
+    it("should defer pool synchronization while a wallet is being created", async () => {
+      await allowlist
+        .connect(deployer)
+        .addStakingProvider(stakingProvider.address, providerWeight)
+      await walletRegistry
+        .connect(stakingProvider)
+        .registerOperator(operator.address)
+      await walletRegistry.connect(operator).joinSortitionPool()
+      await walletRegistry.connect(walletOwnerSigner).requestNewWallet()
+      await allowlist
+        .connect(deployer)
+        .requestWeightDecrease(stakingProvider.address, minimumAuthorization)
+      await expect(
+        walletRegistry.updateOperatorStatus(operator.address)
+      ).to.be.revertedWith("Sortition pool locked")
+      expect(
+        await walletRegistry.remainingAuthorizationDecreaseDelay(
           stakingProvider.address
         )
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      it("should have correct eligible stake", async () => {
-        expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
-        ).to.equal(slashingTo.sub(decreasedAmount))
-      })
-
-      it("should have operator status updated", async () => {
-        expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-          .true
-      })
-    })
-
-    describe("approveAuthorizationDecrease -> involuntaryAuthorizationDecrease", () => {
-      let decreasedAmount
-      let slashingTo
-
-      before(async () => {
-        await createSnapshot()
-
-        decreasedAmount = to1e18(1000)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            walletRegistry.address,
-            decreasedAmount
-          )
-        await walletRegistry
-          .connect(operator)
-          .updateOperatorStatus(operator.address)
-
-        await helpers.time.increaseTime(params.authorizationDecreaseDelay)
-        await walletRegistry.approveAuthorizationDecrease(
+      ).to.equal(MAX_UINT64)
+      await helpers.time.mineBlocks(params.dkgSeedTimeout)
+      await walletRegistry.notifySeedTimeout()
+      await walletRegistry.updateOperatorStatus(operator.address)
+      expect(
+        await walletRegistry.remainingAuthorizationDecreaseDelay(
           stakingProvider.address
         )
+      ).to.equal(params.authorizationDecreaseDelay)
+      expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
+        minimumAuthorization.div(constants.poolWeightDivisor)
+      )
+    })
 
-        slashingTo = initialIncrease.sub(to1e18(2500))
-        const slashedAmount = initialIncrease
-          .sub(decreasedAmount)
-          .sub(slashingTo)
-
-        await staking
-          .connect(slasher.wallet)
-          .slash(slashedAmount, [stakingProvider.address])
-        await staking.connect(thirdParty).processSlashing(1)
-      })
-
-      after(async () => {
-        await restoreSnapshot()
-      })
-
-      it("should have correct eligible stake", async () => {
-        expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
-        ).to.equal(slashingTo)
-      })
-
-      it("should have operator status updated", async () => {
-        expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-          .true
+    const callbacks = [
+      "authorizationIncreased",
+      "authorizationDecreaseRequested",
+      "involuntaryAuthorizationDecrease",
+    ] as const
+    callbacks.forEach((method) => {
+      it(`should reject ${method} from the legacy staking contract after migration`, async () => {
+        const stakingAddress = await walletRegistry.staking()
+        await ethers.provider.send("hardhat_impersonateAccount", [
+          stakingAddress,
+        ])
+        await ethers.provider.send("hardhat_setBalance", [
+          stakingAddress,
+          "0x56BC75E2D63100000",
+        ])
+        try {
+          const signer = await ethers.getSigner(stakingAddress)
+          await expect(
+            walletRegistry
+              .connect(signer)
+              [method](
+                stakingProvider.address,
+                providerWeight,
+                minimumAuthorization
+              )
+          ).to.be.revertedWithCustomError(
+            walletRegistry,
+            "CallerNotStakingContract"
+          )
+        } finally {
+          await ethers.provider.send("hardhat_stopImpersonatingAccount", [
+            stakingAddress,
+          ])
+        }
       })
     })
   })
 })
 
-// TEMPORARILY COMMENTED OUT - END (Second legacy test block) */
-
-// TEMPORARILY COMMENTED OUT - END */
-// }) // End of describe.skip("TokenStaking Integration (DEPRECATED TIP-092)")
-
-/**
- * Migration Scenario Tests - TIP-092 Dual-Mode Authorization
- *
- * Purpose: Comprehensive testing of authorization routing behavior during migration
- *          from TokenStaking to Allowlist-based authorization.
- *
- * Test Coverage:
- * - Pre-upgrade mode: Authorization routes to TokenStaking (allowlist = address(0))
- * - Post-upgrade mode: Authorization routes to Allowlist (allowlist != address(0))
- * - NOT MIGRATED touchpoints: Slashing and beneficiary queries stay on TokenStaking
- * - Upgrade flow: Transition from TokenStaking to Allowlist via initializeV2()
- * - Edge cases: Zero address validation, re-initialization prevention
- *
- * Related Source Code:
- * - WalletRegistry.sol:1333-1342: _currentAuthorizationSource() helper
- * - WalletRegistry.sol:428-431: initializeV2() upgrade function
- * - Callsites: lines 494, 502, 596, 619, 1260, 1325
- */
-describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
+describe("WalletRegistry - Allowlist migration", () => {
   let walletRegistry: WalletRegistry
-  let sortitionPool: SortitionPool
-  let staking: TokenStaking
-  let t: T
-
   let deployer: SignerWithAddress
-  let governance: SignerWithAddress
   let stakingProvider: SignerWithAddress
   let operator: SignerWithAddress
-  let beneficiary: SignerWithAddress
 
-  const { minimumAuthorization } = params
-  const stakedAmount = to1e18(1000000) // 1M T
-
-  before("load test fixture", async () => {
-    // Deploy fixture BEFORE taking snapshot. The order matters because
-    // deployments.fixture() caches an internal EVM snapshot. If we took
-    // our snapshot first (lower ID), restoreSnapshot() would call
-    // evm_revert(lowerID) which invalidates ALL snapshots with higher IDs
-    // — including the deploy cache. This would break deployments.fixture()
-    // for all subsequent test suites (e.g., Slashing, WalletCreation).
+  beforeEach(async () => {
     await deployments.fixture()
-
-    await createSnapshot()
-
-    t = await helpers.contracts.getContract("T")
     walletRegistry = await helpers.contracts.getContract("WalletRegistry")
-    sortitionPool = await helpers.contracts.getContract("EcdsaSortitionPool")
-    staking = await helpers.contracts.getContract("TokenStaking")
-
-    // Get named signers for deployer and governance (these have ownership permissions)
-    const namedSigners = await helpers.signers.getNamedSigners()
-    deployer = namedSigners.deployer
-    governance = namedSigners.governance
-
-    // Get unnamed signers for test accounts
-    const accounts = await getUnnamedAccounts()
-    stakingProvider = await ethers.getSigner(accounts[0])
-    operator = await ethers.getSigner(accounts[1])
-    beneficiary = await ethers.getSigner(accounts[2])
-
-    await updateWalletRegistryParams(
-      await helpers.contracts.getContract("WalletRegistryGovernance"),
-      governance
+    const signers = await helpers.signers.getNamedSigners()
+    deployer = signers.deployer
+    stakingProvider = signers.esdm
+    operator = signers.chaosnetOwner
+    const sortitionPool: SortitionPool = await helpers.contracts.getContract(
+      "EcdsaSortitionPool"
     )
+    await sortitionPool.connect(signers.chaosnetOwner).deactivateChaosnet()
   })
 
-  after(async () => {
-    await restoreSnapshot()
-  })
-
-  /**
-   * Pre-Upgrade Mode Tests
-   *
-   * Context: Before initializeV2() is called, allowlist = address(0).
-   * Expected: _currentAuthorizationSource() returns staking contract,
-   *           all authorization queries route to TokenStaking.
-   *
-   * Coverage: Tests the false branch of ternary operator in _currentAuthorizationSource()
-   */
-  describe.skip("Pre-Upgrade Mode (TokenStaking Authorization)", () => {
-    before(async () => {
-      await createSnapshot()
-
-      // Setup: Use real TokenStaking for authorization (avoids smock.fake
-      // storage corruption that breaks evm_revert for subsequent tests)
-      await setupRealStaking(
-        t,
-        staking,
-        walletRegistry,
-        deployer,
-        stakingProvider,
-        beneficiary,
-        minimumAuthorization
-      )
-
-      // Setup: Deactivate chaosnet to allow operators to join sortition pool
-      await deactivateChaosnetMode(sortitionPool)
-
-      // Setup: Register operator with authorized stake
-      await walletRegistry
-        .connect(stakingProvider)
-        .registerOperator(operator.address)
-    })
-
-    after(async () => {
-      await restoreSnapshot()
-    })
-
-    it("should have allowlist unset (address zero) before upgrade", async () => {
-      expect(await walletRegistry.allowlist()).to.equal(ZERO_ADDRESS)
-    })
-
-    /**
-     * Test: eligibleStake view queries TokenStaking
-     * Callsite: WalletRegistry.sol:1260
-     * Coverage: _currentAuthorizationSource() → staking (line 1341)
-     */
-    it("should query TokenStaking for eligible stake via eligibleStake()", async () => {
-      const eligibleStake = await walletRegistry.eligibleStake(
-        stakingProvider.address
-      )
-      expect(eligibleStake).to.equal(minimumAuthorization)
-    })
-
-    /**
-     * Test: joinSortitionPool queries TokenStaking
-     * Callsite: WalletRegistry.sol:494
-     * Coverage: _currentAuthorizationSource() → staking (line 1341)
-     */
-    it("should query TokenStaking when operator joins sortition pool", async () => {
-      await walletRegistry.connect(operator).joinSortitionPool()
-      expect(await walletRegistry.isOperatorInPool(operator.address)).to.be.true
-    })
-
-    /**
-     * Test: isOperatorUpToDate queries TokenStaking
-     * Callsite: WalletRegistry.sol:1325
-     * Coverage: _currentAuthorizationSource() → staking (line 1341)
-     */
-    it("should query TokenStaking for isOperatorUpToDate check", async () => {
-      await createSnapshot()
-
-      // Operator must be in pool to check up-to-date status
-      await joinPoolIfNotMember(walletRegistry, operator)
-      expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-        .true
-
-      await restoreSnapshot()
-    })
-
-    /**
-     * Test: updateOperatorStatus queries TokenStaking
-     * Callsite: WalletRegistry.sol:502
-     * Coverage: _currentAuthorizationSource() → staking (line 1341)
-     */
-    it("should query TokenStaking when updating operator status", async () => {
-      await createSnapshot()
-
-      // Operator must be in pool to update status
-      await joinPoolIfNotMember(walletRegistry, operator)
-      await walletRegistry.updateOperatorStatus(operator.address)
-      expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-        .true
-
-      await restoreSnapshot()
-    })
-  })
-
-  /**
-   * Post-Upgrade Mode Tests
-   *
-   * Context: After initializeV2(allowlist) is called, allowlist != address(0).
-   * Expected: _currentAuthorizationSource() returns allowlist contract,
-   *           all authorization queries route to Allowlist.
-   *
-   * Coverage: Tests the true branch of ternary operator in _currentAuthorizationSource()
-   */
-  describe("Post-Upgrade Mode (Allowlist Authorization)", () => {
-    let allowlist: Mock<IStaking>
-
-    before(async () => {
-      await createSnapshot()
-
-      // Setup: Create allowlist fake and initialize WalletRegistry (triggers upgrade)
-      allowlist = await createMock<IStaking>("IStaking")
-      await allowlist.authorizedStake.returns(minimumAuthorization)
-      await walletRegistry.initializeV2(allowlist.address)
-
-      // Setup: Deactivate chaosnet to allow operators to join sortition pool
-      await deactivateChaosnetMode(sortitionPool)
-
-      // Setup: Register operator (authorization now routed to allowlist)
-      await walletRegistry
-        .connect(stakingProvider)
-        .registerOperator(operator.address)
-    })
-
-    after(async () => {
-      await restoreSnapshot()
-    })
-
-    it("should have allowlist set after initializeV2", async () => {
-      expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
-    })
-
-    /**
-     * Test: eligibleStake view queries Allowlist
-     * Callsite: WalletRegistry.sol:1260
-     * Coverage: _currentAuthorizationSource() → allowlist (line 1340)
-     */
-    it("should query Allowlist for eligible stake via eligibleStake()", async () => {
-      const eligibleStake = await walletRegistry.eligibleStake(
-        stakingProvider.address
-      )
-      expect(eligibleStake).to.equal(minimumAuthorization)
-      // The assertion above already proves the allowlist branch ran: the value
-      // returned is the one this mock is configured with. A call-count check on
-      // `authorizedStake` is not available -- it is `view`, so Solidity reaches
-      // it by STATICCALL, where the mock cannot record anything.
-    })
-
-    /**
-     * Test: joinSortitionPool queries Allowlist
-     * Callsite: WalletRegistry.sol:494
-     * Coverage: _currentAuthorizationSource() → allowlist (line 1340)
-     */
-    it("should query Allowlist when operator joins sortition pool", async () => {
-      await walletRegistry.connect(operator).joinSortitionPool()
-      expect(await walletRegistry.isOperatorInPool(operator.address)).to.be.true
-      // The assertion above already proves the allowlist branch ran: the value
-      // returned is the one this mock is configured with. A call-count check on
-      // `authorizedStake` is not available -- it is `view`, so Solidity reaches
-      // it by STATICCALL, where the mock cannot record anything.
-    })
-
-    /**
-     * Test: isOperatorUpToDate queries Allowlist
-     * Callsite: WalletRegistry.sol:1325
-     * Coverage: _currentAuthorizationSource() → allowlist (line 1340)
-     */
-    it("should query Allowlist for isOperatorUpToDate check", async () => {
-      await joinPoolIfNotMember(walletRegistry, operator)
-      expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-        .true
-      // The assertion above already proves the allowlist branch ran: the value
-      // returned is the one this mock is configured with. A call-count check on
-      // `authorizedStake` is not available -- it is `view`, so Solidity reaches
-      // it by STATICCALL, where the mock cannot record anything.
-    })
-
-    /**
-     * Test: updateOperatorStatus queries Allowlist
-     * Callsite: WalletRegistry.sol:502
-     * Coverage: _currentAuthorizationSource() → allowlist (line 1340)
-     */
-    it("should query Allowlist when updating operator status", async () => {
-      await joinPoolIfNotMember(walletRegistry, operator)
-      await walletRegistry.updateOperatorStatus(operator.address)
-
-      // `authorizedStake` is `view`, so a call-count assertion is impossible --
-      // Solidity reaches it by STATICCALL and the mock cannot record there.
-      // This is the stronger check anyway: the operator is only up to date if
-      // the registry read the allowlist's stake and synced the pool to it, so
-      // it fails if the allowlist branch is skipped.
-      expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-        .true
-    })
-
-    /**
-     * Test: Authorization increase from Allowlist accepted
-     * Tests onlyStakingContract modifier with allowlist set
-     */
-    it("should accept authorizationIncreased from Allowlist contract", async () => {
-      // Trigger authorization callback from allowlist contract
-      await expect(
-        triggerAuthorizationCallback(
-          walletRegistry,
-          allowlist.address,
-          stakingProvider.address,
-          ethers.BigNumber.from(0),
-          minimumAuthorization
-        )
-      ).to.not.be.reverted
-    })
-  })
-
-  /**
-   * NOT MIGRATED Touchpoint Tests
-   *
-   * Context: Some functions do NOT use _currentAuthorizationSource().
-   * Expected: These functions always use staking contract, even after initializeV2().
-   *
-   * Rationale:
-   * - withdrawRewards: Beneficiary roles remain in TokenStaking (WalletRegistry.sol:440-452)
-   * - challengeDkgResult: Stake custody and slashing remain in TokenStaking (WalletRegistry.sol:950-966)
-   */
-  describe.skip("NOT MIGRATED Touchpoints", () => {
-    let allowlist: Mock<IStaking>
-
-    before(async () => {
-      await createSnapshot()
-
-      // Setup: Use real TokenStaking for beneficiary roles (NOT migrated to Allowlist)
-      await setupRealStaking(
-        t,
-        staking,
-        walletRegistry,
-        deployer,
-        stakingProvider,
-        beneficiary,
-        minimumAuthorization
-      )
-
-      // Setup: Create allowlist fake and upgrade (but beneficiary still in TokenStaking)
-      allowlist = await createMock<IStaking>("IStaking")
-      await allowlist.authorizedStake.returns(minimumAuthorization)
-      await walletRegistry.initializeV2(allowlist.address)
-
-      // Setup: Trigger authorization callback from allowlist (post-upgrade)
-      await triggerAuthorizationCallback(
-        walletRegistry,
-        allowlist.address,
-        stakingProvider.address,
-        ethers.BigNumber.from(0),
-        minimumAuthorization
-      )
-
-      // Setup: Register operator with allowlist authorization
-      await walletRegistry
-        .connect(stakingProvider)
-        .registerOperator(operator.address)
-    })
-
-    after(async () => {
-      await restoreSnapshot()
-    })
-
-    /**
-     * Test: withdrawRewards always uses staking.rolesOf() for beneficiary lookup
-     * NOT using _currentAuthorizationSource()
-     * Direct call: staking.rolesOf() at line 456
-     */
-    it("should query TokenStaking for beneficiary in withdrawRewards (post-upgrade)", async () => {
-      // This test verifies that even after initializeV2, beneficiary lookup
-      // goes to TokenStaking, not Allowlist
-      expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
-
-      // Note: withdrawRewards requires actual rewards to test fully
-      // This test validates the pattern - beneficiary lookup stays on TokenStaking
-      const roles = await staking.rolesOf(stakingProvider.address)
-      expect(roles.beneficiary).to.equal(beneficiary.address)
-    })
-  })
-
-  /**
-   * Upgrade Flow Tests
-   *
-   * Context: Tests the transition from pre-upgrade to post-upgrade mode.
-   * Expected: initializeV2() switches authorization routing from staking to allowlist.
-   *
-   * Coverage: Tests upgrade transition and operator continuity
-   */
-  describe.skip("Upgrade Flow", () => {
-    let allowlist: Mock<IStaking>
-
-    before(async () => {
-      await createSnapshot()
-
-      // Setup: Use real TokenStaking authorization (pre-upgrade state)
-      await setupRealStaking(
-        t,
-        staking,
-        walletRegistry,
-        deployer,
-        stakingProvider,
-        beneficiary,
-        minimumAuthorization
-      )
-
-      // Setup: Deactivate chaosnet to allow operators to join sortition pool
-      await deactivateChaosnetMode(sortitionPool)
-
-      // Setup: Register operator and join pool (before upgrade)
-      await walletRegistry
-        .connect(stakingProvider)
-        .registerOperator(operator.address)
-      await walletRegistry.connect(operator).joinSortitionPool()
-    })
-
-    after(async () => {
-      await restoreSnapshot()
-    })
-
-    /**
-     * Test: Complete upgrade transition
-     * Validates authorization routing switches from TokenStaking to Allowlist
-     */
-    it("should transition from TokenStaking to Allowlist on initializeV2", async () => {
-      await createSnapshot()
-
-      // Verify pre-upgrade state
-      expect(await walletRegistry.allowlist()).to.equal(ZERO_ADDRESS)
-      const preUpgradeStake = await walletRegistry.eligibleStake(
-        stakingProvider.address
-      )
-      expect(preUpgradeStake).to.equal(minimumAuthorization)
-
-      // Perform upgrade
-      allowlist = await createMock<IStaking>("IStaking")
-      const upgradedAmount = to1e18(50000) // 50k T (different from TokenStaking)
-      await allowlist.authorizedStake.returns(upgradedAmount)
-
-      await walletRegistry.initializeV2(allowlist.address)
-
-      // Verify post-upgrade state
-      expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
-      const postUpgradeStake = await walletRegistry.eligibleStake(
-        stakingProvider.address
-      )
-      expect(postUpgradeStake).to.equal(upgradedAmount)
-
-      await restoreSnapshot()
-    })
-
-    /**
-     * Test: Pre-existing operators continue functioning after upgrade
-     * Validates operator continuity during migration
-     */
-    it("should allow pre-existing operators to continue after upgrade", async () => {
-      await createSnapshot()
-
-      // Operator already in pool before upgrade
-      expect(await walletRegistry.isOperatorInPool(operator.address)).to.be.true
-
-      // Perform upgrade
-      allowlist = await createMock<IStaking>("IStaking")
-      await allowlist.authorizedStake.returns(minimumAuthorization)
-      await walletRegistry.initializeV2(allowlist.address)
-
-      // Operator still in pool and functional
-      expect(await walletRegistry.isOperatorInPool(operator.address)).to.be.true
-      await walletRegistry.updateOperatorStatus(operator.address)
-      expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
-        .true
-
-      await restoreSnapshot()
-    })
-
-    /**
-     * Test: Weight-based operator exclusion after upgrade
-     * Validates migration strategy for redundant operator removal
-     *
-     * Related: migration-strategy-details.md:50-54 (weight-based exclusion)
-     */
-    it("should enable operator exclusion via zero weight in allowlist", async () => {
-      await createSnapshot()
-
-      // Setup: Allowlist with zero authorization (excludes operator)
-      allowlist = await createMock<IStaking>("IStaking")
-      await allowlist.authorizedStake.returns(0) // Zero weight = excluded
-      await walletRegistry.initializeV2(allowlist.address)
-
-      // Operator excluded (eligible stake = 0)
-      const stake = await walletRegistry.eligibleStake(stakingProvider.address)
-      expect(stake).to.equal(0)
-
-      // NOTE: Operator already in pool from before() hook may still be considered up-to-date
-      // This test verifies that eligibleStake returns 0, which is the key behavior for exclusion
-      // The operator's up-to-date status depends on when they joined relative to the upgrade
-
-      await restoreSnapshot()
-    })
-  })
-
-  /**
-   * Edge Case Tests
-   *
-   * Context: Validates error handling and security measures.
-   * Expected: Proper validation and revert behavior.
-   */
-  describe("Edge Cases", () => {
-    let allowlist: Mock<IStaking>
-
-    before(async () => {
-      await createSnapshot()
-    })
-
-    after(async () => {
-      await restoreSnapshot()
-    })
-
-    /**
-     * Test: Zero address validation
-     * Validates initializeV2 rejects zero address
-     */
-    it("should revert initializeV2 with zero address", async () => {
-      await expect(
-        walletRegistry.initializeV2(ZERO_ADDRESS)
-      ).to.be.revertedWithCustomError(walletRegistry, "AllowlistAddressZero")
-    })
-
-    /**
-     * Test: Re-initialization prevention
-     * Validates OpenZeppelin Initializable guard
-     */
-    it("should revert on second initializeV2 call (re-initialization prevention)", async () => {
-      await createSnapshot()
-
-      // First call succeeds
-      allowlist = await createMock<IStaking>("IStaking")
-      await walletRegistry.initializeV2(allowlist.address)
-      expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
-
-      // Second call fails
-      const allowlist2 = await createMock<IStaking>("IStaking")
-      await expect(
-        walletRegistry.initializeV2(allowlist2.address)
-      ).to.be.revertedWith("Initializable: contract is already initialized")
-
-      // Allowlist unchanged
-      expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
-
-      await restoreSnapshot()
-    })
-
-    /**
-     * Test: Allowlist state persistence
-     * Validates storage consistency across operations
-     */
-    it("should persist allowlist address across multiple operations", async () => {
-      await createSnapshot()
-
-      allowlist = await createMock<IStaking>("IStaking")
-      await allowlist.authorizedStake.returns(minimumAuthorization)
-
-      await walletRegistry.initializeV2(allowlist.address)
-      const addressAfterInit = await walletRegistry.allowlist()
-      expect(addressAfterInit).to.equal(allowlist.address)
-
-      // Perform multiple operations
+  it("should preserve existing operator registrations when switching authorization to the Allowlist", async () => {
+    await walletRegistry
+      .connect(stakingProvider)
+      .registerOperator(operator.address)
+    expect(await walletRegistry.allowlist()).to.equal(ZERO_ADDRESS)
+    expect(
       await walletRegistry.eligibleStake(stakingProvider.address)
-      await walletRegistry.eligibleStake(operator.address)
-      await walletRegistry.eligibleStake(beneficiary.address)
+    ).to.equal(0)
+    const allowlist = await setupAllowlist(walletRegistry, deployer)
+    await allowlist
+      .connect(deployer)
+      .addStakingProvider(stakingProvider.address, params.minimumAuthorization)
+    expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
+    expect(
+      await walletRegistry.stakingProviderToOperator(stakingProvider.address)
+    ).to.equal(operator.address)
+    expect(
+      await walletRegistry.eligibleStake(stakingProvider.address)
+    ).to.equal(params.minimumAuthorization)
+    await walletRegistry.connect(operator).joinSortitionPool()
+    expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be.true
+  })
 
-      // Allowlist address remains unchanged
-      expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
+  it("should reject a zero Allowlist address", async () => {
+    await expect(
+      walletRegistry.initializeV2(ZERO_ADDRESS)
+    ).to.be.revertedWithCustomError(walletRegistry, "AllowlistAddressZero")
+  })
 
-      await restoreSnapshot()
-    })
-
-    /**
-     * Test: Branch coverage for _currentAuthorizationSource
-     * Validates both branches of ternary operator are exercised
-     *
-     * Coverage Target: 100% branch coverage for lines 1333-1342
-     */
-    it("should exercise both branches of _currentAuthorizationSource ternary operator", async () => {
-      await createSnapshot()
-
-      // Branch 1: allowlist = address(0) → returns staking
-      expect(await walletRegistry.allowlist()).to.equal(ZERO_ADDRESS)
-      const stakeBefore = await walletRegistry.eligibleStake(
-        stakingProvider.address
-      )
-      expect(stakeBefore).to.be.gte(0) // Validates staking branch executed
-
-      // Branch 2: allowlist != address(0) → returns allowlist
-      allowlist = await createMock<IStaking>("IStaking")
-      await allowlist.authorizedStake.returns(minimumAuthorization)
-      await walletRegistry.initializeV2(allowlist.address)
-
-      expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
-      const stakeAfter = await walletRegistry.eligibleStake(
-        stakingProvider.address
-      )
-      // `stakeAfter` being the allowlist's configured value *is* the proof that
-      // the allowlist branch executed -- the staking branch would not return it.
-      expect(stakeAfter).to.equal(minimumAuthorization)
-
-      await restoreSnapshot()
-    })
+  it("should keep the Allowlist address after a rejected reinitialization", async () => {
+    const allowlist = await setupAllowlist(walletRegistry, deployer)
+    await expect(
+      walletRegistry.initializeV2(operator.address)
+    ).to.be.revertedWith("Initializable: contract is already initialized")
+    expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
   })
 })
