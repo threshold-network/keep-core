@@ -93,5 +93,15 @@ func (c *Config) selectElectrumServer(urls []string, rng *rand.Rand) error {
 		}
 	}
 
+	// Shuffle the fallback candidates using the injected rng so each process
+	// derives its own independent rotation order instead of always retaining
+	// the embedded list order.
+	// #nosec G404 (insecure random number source (rand))
+	// Ordering fallback candidates does not require secure randomness.
+	fallbackURLs := c.Bitcoin.Electrum.FallbackURLs
+	rng.Shuffle(len(fallbackURLs), func(i, j int) {
+		fallbackURLs[i], fallbackURLs[j] = fallbackURLs[j], fallbackURLs[i]
+	})
+
 	return nil
 }

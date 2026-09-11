@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/spf13/viper"
 	"golang.org/x/exp/slices"
 
 	"github.com/keep-network/keep-core/pkg/chain/ethereum"
@@ -423,4 +424,54 @@ func TestReadConfig_ReadContracts(t *testing.T) {
 			validate(ethereum.WalletProposalValidatorContractName, test.expectedWalletProposalValidatorAddress)
 		})
 	}
+}
+
+// TestUnmarshalElectrumFallbackURLs guards the operator arm path for the
+// Electrum failover feature: the fallbackURLs config key must reach
+// electrum.Config.FallbackURLs through the production viper decode path
+// (with the same decode hooks unmarshalConfig applies).
+func TestUnmarshalElectrumFallbackURLs(t *testing.T) {
+	t.Run("string slice form", func(t *testing.T) {
+		viper.Set("bitcoin.electrum.fallbackURLs", []string{
+			"wss://one.example:443",
+			"wss://two.example:443",
+		})
+		defer viper.Set("bitcoin.electrum.fallbackURLs", nil)
+
+		cfg := &Config{}
+		if err := unmarshalConfig(cfg); err != nil {
+			t.Fatalf("failed to unmarshal config: [%v]", err)
+		}
+
+		expected := []string{"wss://one.example:443", "wss://two.example:443"}
+		if !reflect.DeepEqual(cfg.Bitcoin.Electrum.FallbackURLs, expected) {
+			t.Errorf(
+				"unexpected FallbackURLs\nexpected: %v\nactual:   %v",
+				expected,
+				cfg.Bitcoin.Electrum.FallbackURLs,
+			)
+		}
+	})
+
+	t.Run("comma-separated string form", func(t *testing.T) {
+		viper.Set(
+			"bitcoin.electrum.fallbackURLs",
+			"wss://three.example:443,wss://four.example:443",
+		)
+		defer viper.Set("bitcoin.electrum.fallbackURLs", nil)
+
+		cfg := &Config{}
+		if err := unmarshalConfig(cfg); err != nil {
+			t.Fatalf("failed to unmarshal config: [%v]", err)
+		}
+
+		expected := []string{"wss://three.example:443", "wss://four.example:443"}
+		if !reflect.DeepEqual(cfg.Bitcoin.Electrum.FallbackURLs, expected) {
+			t.Errorf(
+				"unexpected FallbackURLs\nexpected: %v\nactual:   %v",
+				expected,
+				cfg.Bitcoin.Electrum.FallbackURLs,
+			)
+		}
+	})
 }
