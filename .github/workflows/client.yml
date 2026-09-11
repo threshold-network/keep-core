@@ -68,6 +68,8 @@ jobs:
               - './go.sum'
               - './third_party/**'
               - './.github/workflows/client.yml'
+# btcec-vendor-byte-identity runs on every event, every branch - gating by path was
+# producing broken `if:` combinations with no upside.
   btcec-vendor-byte-identity:
     # Enforces the VENDOR.md byte-identity recipe and runs the
     # vendored upstream test suite. The root module's `go test ./...`
@@ -119,11 +121,85 @@ jobs:
         run: |
           cd third_party/btcsuite/btcec && go test ./...
 
+  electrum-vendor-byte-identity:
+    # Enforces the VENDOR.md byte-identity recipe for go-electrum and
+    # runs the vendored upstream test suite. Mirrors the btcec-vendor-byte-identity
+    # job pattern: runs on every event, every branch without path gating.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.1'
+
+      - name: Verify vendored go-electrum byte identity vs upstream v0.0.0-20240206170935-6038cb594daa
+        run: |
+          set -e
+          go mod download github.com/keep-network/go-electrum@v0.0.0-20240206170935-6038cb594daa
+          upstream="$(go env GOMODCACHE)/github.com/keep-network/go-electrum@v0.0.0-20240206170935-6038cb594daa/electrum"
+          rm -rf /tmp/electrum-upstream
+          cp -R "$upstream" /tmp/electrum-upstream
+          chmod -R u+w /tmp/electrum-upstream
+          gofmt -w /tmp/electrum-upstream
+
+          # Hash manifest comparison: every file in the upstream tree
+          # (minus vendoring-only files and locally patched files) must match
+          # the vendored copy byte-for-byte, and the file set must match exactly.
+          manifest() {
+            ( cd "$1" && find . -type f \
+                ! -name go.mod ! -name go.sum ! -name LICENSE ! -name VENDOR.md \
+                ! -name network.go ! -name transport.go ! -name transport_ws.go \
+                ! -name scripthash.go \
+                ! -name cancellation_test.go ! -name network_test.go \
+                -print0 | sort -z | xargs -0 sha256sum )
+          }
+          manifest /tmp/electrum-upstream | sort > /tmp/up.txt
+          manifest third_party/go-electrum/electrum | sort > /tmp/vend.txt
+          if ! diff -q /tmp/up.txt /tmp/vend.txt > /dev/null; then
+            echo '::error::Vendored go-electrum differs from upstream v0.0.0-20240206170935-6038cb594daa beyond the allowed local patches:'
+            diff /tmp/up.txt /tmp/vend.txt | head -40
+            exit 1
+          fi
+
+          # Verify file sets match (no extra or missing files outside exclusions)
+          filelist() {
+            ( cd "$1" && find . -type f \
+                ! -name go.mod ! -name go.sum ! -name LICENSE ! -name VENDOR.md \
+                ! -name network.go ! -name transport.go ! -name transport_ws.go \
+                ! -name scripthash.go \
+                ! -name cancellation_test.go ! -name network_test.go \
+                -printf '%P\n' | sort )
+          }
+          filelist /tmp/electrum-upstream > /tmp/up_files.txt
+          filelist third_party/go-electrum/electrum > /tmp/vend_files.txt
+          if ! diff -q /tmp/up_files.txt /tmp/vend_files.txt > /dev/null; then
+            echo '::error::File set mismatch between upstream and vendored go-electrum (outside allowed patches):'
+            diff /tmp/up_files.txt /tmp/vend_files.txt
+            exit 1
+          fi
+          echo 'byte-identity OK'
+
+      - name: Verify local patches differ from upstream
+        run: |
+          set -e
+          go mod download github.com/keep-network/go-electrum@v0.0.0-20240206170935-6038cb594daa
+          upstream="$(go env GOMODCACHE)/github.com/keep-network/go-electrum@v0.0.0-20240206170935-6038cb594daa/electrum"
+          # The four patched files MUST differ from upstream.
+          for f in network.go transport.go transport_ws.go scripthash.go; do
+            if diff -q "$upstream/$f" "third_party/go-electrum/electrum/$f" > /dev/null; then
+              echo "::error::Patched file $f is byte-identical to upstream - local patch appears missing"
+              exit 1
+            fi
+          done
+          echo 'local patches verified (non-empty diffs)'
+
+      - name: Run vendored go-electrum test suite
+        run: |
+          cd third_party/go-electrum && go test -race ./...
+
   electrum-lifecycle:
-    needs: client-detect-changes
-    if: |
-      github.event_name != 'pull_request'
-        || needs.client-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -136,6 +212,9 @@ jobs:
           go test -race -timeout 3m -count=1
           ./pkg/bitcoin/electrum ./config
           github.com/checksum0/go-electrum/electrum
+      - name: Run vendored go-electrum test suite standalone
+        run: |
+          cd third_party/go-electrum && go test -race ./...
 
   client-build-test-publish:
     needs: client-detect-changes
