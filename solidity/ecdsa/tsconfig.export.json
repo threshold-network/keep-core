@@ -3,7 +3,6 @@
   "exclude": ["./test", "./typechain"],
   "compilerOptions": {
     "target": "es5",
-    "outDir": "export",
-    "allowJs": true
+    "outDir": "export"
   }
 }
