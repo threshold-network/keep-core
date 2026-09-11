@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@keep-network/hardhat-helpers": "^0.6.0-pre.15",
-    "@keep-network/hardhat-local-networks-config": "^0.1.0-pre.4",
+    "@keep-network/hardhat-local-networks-config": "github:threshold-network/hardhat-local-networks-config#6dff5bc8648127ca5d8696c321076bddb6d4142a",
     "@nomicfoundation/hardhat-chai-matchers": "^1.0.6",
     "@nomicfoundation/hardhat-verify": "^2.1.3",
     "@nomiclabs/hardhat-ethers": "^2.0.6",
