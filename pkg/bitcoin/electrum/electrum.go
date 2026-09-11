@@ -4,8 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -14,7 +18,6 @@ import (
 	"github.com/checksum0/go-electrum/electrum"
 	"github.com/ipfs/go-log"
 	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/internal/byteutils"
@@ -36,6 +39,20 @@ type Connection struct {
 	serverURLs  []string
 	serverIndex int
 	newClient   func(context.Context, string) (electrumClient, error)
+	// verifiedGenesisHash is the genesis_hash reported by the first server
+	// features response this connection ever verified. Every subsequent
+	// candidate must report the same genesis hash (or omit the field).
+	// Accessed only while clientMutex is held.
+	verifiedGenesisHash string
+	// lastTipHeight is the most recently observed chain tip height, used to
+	// sanity-check the tip reported right after a (re)connect. Accessed only
+	// while clientMutex is held.
+	lastTipHeight uint
+	// pendingTipSanityCheck is set whenever the live client changes (a
+	// (re)connect, failover, or primary re-canonicalization) and cleared
+	// after the first subsequent tip height read compares it against
+	// lastTipHeight. Accessed only while clientMutex is held.
+	pendingTipSanityCheck bool
 }
 
 // Connect initializes handle with provided Config.
@@ -75,13 +92,24 @@ func connect(
 		config:      config,
 		clientMutex: &sync.Mutex{},
 		newClient:   newClient,
-		serverURLs:  []string{config.URL},
 	}
 
+	if config.URL != "" {
+		c.serverURLs = append(c.serverURLs, config.URL)
+	}
 	for _, url := range config.FallbackURLs {
 		if url != "" && !slices.Contains(c.serverURLs, url) {
 			c.serverURLs = append(c.serverURLs, url)
 		}
+	}
+	if len(c.serverURLs) == 0 {
+		return nil, fmt.Errorf("no electrum server URLs configured")
+	}
+
+	if len(c.serverURLs) > 1 {
+		logger.Infof("electrum failover armed with [%d] servers", len(c.serverURLs))
+	} else {
+		logger.Infof("single server configured; failover unavailable")
 	}
 
 	if err := c.electrumConnect(parentCtx, parentCtx); err != nil {
@@ -354,6 +382,30 @@ func (c *Connection) GetLatestBlockHeight() (uint, error) {
 			tip, err := client.SubscribeHeadersSingle(ctx)
 			if err != nil {
 				return 0, fmt.Errorf("failed to get the blocks tip height: [%w]", err)
+			}
+
+			if tip.Height > 0 {
+				newTip := uint(tip.Height)
+				if c.pendingTipSanityCheck {
+					c.pendingTipSanityCheck = false
+					if c.lastTipHeight > 0 {
+						diff := int64(newTip) - int64(c.lastTipHeight)
+						if diff < 0 {
+							diff = -diff
+						}
+						if diff > 500 {
+							logger.Warnf(
+								"electrum tip height changed by [%d] blocks "+
+									"after reconnecting (was [%d], now [%d]); "+
+									"this is expected during a legitimate reorg",
+								diff,
+								c.lastTipHeight,
+								newTip,
+							)
+						}
+					}
+				}
+				c.lastTipHeight = newTip
 			}
 
 			return tip.Height, nil
@@ -778,6 +830,17 @@ func (c *Connection) getScriptMempool(
 	return convertedItems, nil
 }
 
+// utxoValue converts a server-reported UTXO amount to the signed satoshi
+// value bitcoin.UnspentTransactionOutput expects. A malicious or buggy
+// server could report a value that overflows int64; reject it outright
+// rather than silently wrapping it negative.
+func utxoValue(value uint64) (int64, error) {
+	if value > math.MaxInt64 {
+		return 0, fmt.Errorf("unexpected UTXO value from Electrum server")
+	}
+	return int64(value), nil
+}
+
 // GetUtxosForPublicKeyHash gets unspent outputs of confirmed transactions that
 // are controlled by the given public key hash (either a P2PKH or P2WPKH script).
 // The returned UTXOs are ordered by block height in the ascending order, i.e.
@@ -833,7 +896,22 @@ func (c *Connection) GetUtxosForPublicKeyHash(
 		},
 	)
 
-	return convertUtxoItems(items)
+	utxos := make([]*bitcoin.UnspentTransactionOutput, len(items))
+	for i, item := range items {
+		value, err := utxoValue(item.value)
+		if err != nil {
+			return nil, err
+		}
+		utxos[i] = &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: item.txHash,
+				OutputIndex:     item.outputIndex,
+			},
+			Value: value,
+		}
+	}
+
+	return utxos, nil
 }
 
 // GetMempoolUtxosForPublicKeyHash gets unspent outputs of unconfirmed transactions
@@ -889,15 +967,16 @@ func (c *Connection) GetMempoolUtxosForPublicKeyHash(
 func convertUtxoItems(items []*scriptUtxoItem) ([]*bitcoin.UnspentTransactionOutput, error) {
 	utxos := make([]*bitcoin.UnspentTransactionOutput, len(items))
 	for i, item := range items {
-		if item.value > math.MaxInt64 {
-			return nil, fmt.Errorf("UTXO value exceeds int64 range: [%v]", item.value)
+		value, err := utxoValue(item.value)
+		if err != nil {
+			return nil, err
 		}
 		utxos[i] = &bitcoin.UnspentTransactionOutput{
 			Outpoint: &bitcoin.TransactionOutpoint{
 				TransactionHash: item.txHash,
 				OutputIndex:     item.outputIndex,
 			},
-			Value: int64(item.value),
+			Value: value,
 		}
 	}
 
@@ -989,7 +1068,7 @@ func (c *Connection) getScriptUtxos(
 					txHash:      txHash,
 					outputIndex: item.Position,
 					value:       item.Value,
-					blockHeight: item.Height,
+					blockHeight: uint32(item.Height),
 				},
 			)
 		}
@@ -1054,23 +1133,46 @@ func isElectrumFeeOracleFailure(err error) bool {
 		strings.Contains(s, "-32603")
 }
 
+// isTransportFailure reports whether err is a transport/connection-class
+// failure (a dead socket, a request timeout, or the client shutting down) as
+// opposed to a JSON-RPC application-level error returned by a server that is
+// alive and responding correctly (tx-not-found, tx-rejected,
+// height-out-of-range, -32602/-32603, etc). Only a transport failure means
+// the current server is unhealthy; an application error means it answered
+// and failing away from it would not help.
+func isTransportFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, electrum.ErrServerShutdown) ||
+		errors.Is(err, electrum.ErrTimeout) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, io.EOF) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
 // getFeeBtcPerKbOnce issues a single blockchain.estimatefee call (no multi-minute
 // retry loop). Persistent RPC errors for one confirmation target should not
 // exhaust RequestRetryTimeout; EstimateSatPerVByteFee tries looser targets next.
-func (c *Connection) getFeeBtcPerKbOnce(blocks uint32) (float32, error) {
+// budgetCtx bounds both reconnection and the request itself; callers share
+// one budget across every confirmation target they try.
+func (c *Connection) getFeeBtcPerKbOnce(budgetCtx context.Context, blocks uint32) (float32, error) {
 	c.clientMutex.Lock()
 	defer c.clientMutex.Unlock()
-	if err := c.reconnectIfShutdown(c.parentCtx, c.parentCtx); err != nil {
+	if err := c.reconnectIfShutdown(c.parentCtx, budgetCtx); err != nil {
 		return 0, err
 	}
 	requestCtx, requestCancel := context.WithTimeout(
-		c.parentCtx,
+		budgetCtx,
 		c.config.RequestTimeout,
 	)
 	defer requestCancel()
 	fee, err := c.client.GetFee(requestCtx, blocks)
 	if err != nil {
-		if !isElectrumFeeOracleFailure(err) {
+		if isTransportFailure(err) {
 			c.failover(c.parentCtx)
 		}
 		return 0, fmt.Errorf("request failed: [%w]", err)
@@ -1086,8 +1188,19 @@ func (c *Connection) EstimateSatPerVByteFee(blocks uint32) (int64, error) {
 	sawFeeOracleFailure := false
 	sawNonOracleFailure := false
 
+	// One retry budget covers every confirmation target tried below, so a
+	// slow or unresponsive server cannot multiply RequestRetryTimeout by the
+	// number of fallback targets.
+	budgetCtx, budgetCancel := context.WithTimeout(c.parentCtx, c.config.RequestRetryTimeout)
+	defer budgetCancel()
+
 	for _, b := range targets {
-		btcPerKbFee, err := c.getFeeBtcPerKbOnce(b)
+		if budgetCtx.Err() != nil {
+			lastErr = budgetCtx.Err()
+			sawNonOracleFailure = true
+			break
+		}
+		btcPerKbFee, err := c.getFeeBtcPerKbOnce(budgetCtx, b)
 		if err != nil {
 			lastErr = err
 			if isElectrumFeeOracleFailure(err) {
@@ -1201,10 +1314,9 @@ func convertBtcKbToSatVByte(btcPerKbFee float32) int64 {
 	return int64(math.Round(satPerVByte))
 }
 
-// electrumConnect tries every configured server in turn within the connection
-// retry budget. budgetCtx also carries any enclosing request retry deadline;
-// callerCtx distinguishes caller cancellation from internal timeout expiry.
-// The caller holds clientMutex after initialization.
+// electrumConnect cycles through configured servers after failed attempts,
+// until the connection and enclosing retry budgets are exhausted - it is not
+// guaranteed to reach every configured URL.
 func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error {
 	return wrappers.DoWithDefaultRetry(
 		budgetCtx,
@@ -1217,19 +1329,30 @@ func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error
 
 			var closeClient func()
 			if err == nil {
-				closeClient = watchClientCancellation(c.parentCtx, client)
-				// Verification is an RPC with its own timeout, independent of
-				// dialing but still bounded by the caller and retry deadlines.
+				// Verification is an RPC with its own timeout, independent
+				// of dialing but still bounded by the caller and retry
+				// deadlines. When ctx (this attempt's connect retry budget)
+				// cannot cover the full request timeout, requestCtx below
+				// inherits ctx's own nearer deadline instead of getting its
+				// own timer (context.WithTimeout reuses the tighter parent
+				// deadline) - so a truncated verification failure and an
+				// expired ctx are the same event, and the check below
+				// correctly treats it as budget exhaustion rather than
+				// candidate health.
 				requestCtx, requestCancel := context.WithTimeout(ctx, c.config.RequestTimeout)
-				// A provisional client's write may not observe its RPC context.
-				// Abort its transport when verification exhausts any deadline.
+				// While the client is provisional, only the requestCtx
+				// abort watcher is installed: a blocked write cannot
+				// outlive verification. The long-lived parentCtx watcher is
+				// installed only once the client is published.
 				stopVerification := context.AfterFunc(requestCtx, client.Abort)
+				var genesisHash string
 				err = requestCtx.Err()
 				if err == nil {
-					err = verifyServer(requestCtx, client, url)
+					genesisHash, err = verifyServer(requestCtx, client, url, c.verifiedGenesisHash)
 				}
-				// Stop before cancelling or retaining the client. An expired
-				// context must not leave an aborted client published as healthy.
+				// Stop before cancelling or retaining the client. An
+				// expired context must not leave an aborted client
+				// published as healthy.
 				stopVerification()
 				if err == nil {
 					err = requestCtx.Err()
@@ -1239,28 +1362,53 @@ func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error
 				}
 				requestCancel()
 				if err != nil {
-					closeClient()
+					go client.Abort()
+				} else {
+					c.verifiedGenesisHash = genesisHash
+					closeClient = watchClientCancellation(c.parentCtx, client)
 				}
 			}
 			if err != nil {
 				// Preserve the candidate when its attempt was interrupted by
-				// the caller. Internal timeouts still indicate server failure.
-				if callerCtx.Err() == nil && c.parentCtx.Err() == nil {
+				// the caller, by parentCtx cancellation, or by the
+				// enclosing connect retry budget expiring mid-attempt
+				// (ctx.Err() != nil at this point covers both a genuinely
+				// expired budget and a verification requestCtx that shared
+				// that same expired deadline). A genuine candidate failure
+				// - a dial or verification error while ctx was still live -
+				// is the only case that indicates server health and should
+				// advance to the next configured URL.
+				if callerCtx.Err() == nil &&
+					c.parentCtx.Err() == nil &&
+					ctx.Err() == nil {
 					c.nextServer()
 				}
 				return err
 			}
 			c.client = client
 			c.closeClient = closeClient
+			c.pendingTipSanityCheck = true
 			return nil
 		},
 	)
 }
 
-func verifyServer(ctx context.Context, client electrumClient, url string) error {
+// verifyServer confirms a candidate speaks a supported protocol version and,
+// if it reports a genesis hash, that the hash matches the connection's chain
+// reference. expectedGenesisHash is the hash previously adopted for this
+// connection, or "" if no server has reported one yet. It returns the hash
+// this connection should use going forward (unchanged, newly adopted, or
+// still empty), or an error if the candidate is verifiably on a different
+// chain.
+func verifyServer(
+	ctx context.Context,
+	client electrumClient,
+	url string,
+	expectedGenesisHash string,
+) (string, error) {
 	version, protocol, err := client.ServerVersion(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get server version: [%w]", err)
+		return "", fmt.Errorf("failed to get server version: [%w]", err)
 	}
 	logger.Infof(
 		"connected to electrum server [version: [%s], protocol: [%s]]",
@@ -1275,7 +1423,43 @@ func verifyServer(ctx context.Context, client electrumClient, url string) error 
 			strings.Join(supportedProtocolVersions, ","),
 		)
 	}
-	return nil
+
+	features, err := client.ServerFeatures(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get server features: [%w]", err)
+	}
+
+	if features == nil || features.GenesisHash == "" {
+		logger.Warnf(
+			"electrum server [%s] did not report a genesis hash; its chain "+
+				"identity could not be verified",
+			url,
+		)
+		return expectedGenesisHash, nil
+	}
+
+	if expectedGenesisHash == "" {
+		logger.Warnf(
+			"adopting genesis hash [%s] reported by electrum server [%s] as "+
+				"this connection's chain reference",
+			features.GenesisHash,
+			url,
+		)
+		return features.GenesisHash, nil
+	}
+
+	if !strings.EqualFold(expectedGenesisHash, features.GenesisHash) {
+		return "", fmt.Errorf(
+			"electrum server [%s] reported genesis hash [%s], which does not "+
+				"match this connection's chain reference [%s]; the server "+
+				"appears to be on a different chain",
+			url,
+			features.GenesisHash,
+			expectedGenesisHash,
+		)
+	}
+
+	return expectedGenesisHash, nil
 }
 
 // nextServer, retireClient, and failover are called with clientMutex held.
@@ -1285,46 +1469,79 @@ func (c *Connection) nextServer() {
 
 func (c *Connection) retireClient() {
 	c.client = nil
-	c.closeClient()
+	if c.closeClient != nil {
+		c.closeClient()
+	}
 	c.closeClient = nil
 }
 
 func (c *Connection) failover(callerCtx context.Context) {
-	// Cancellation belongs to the caller, not to the server's health. A single
-	// configured URL remains pinned and retains the existing retry behavior.
-	// An expired internal retry budget must still retire an unresponsive server.
-	if callerCtx.Err() != nil || c.parentCtx.Err() != nil || len(c.serverURLs) < 2 {
+	// Cancellation belongs to the caller, not to the server's health.
+	if callerCtx.Err() != nil || c.parentCtx.Err() != nil {
 		return
 	}
 	c.retireClient()
 	c.nextServer()
-	logger.Warn("electrum request failed; trying the next configured server")
+	// A single configured URL now retires and re-dials the same server on a
+	// transport failure instead of wedging on a half-open socket; explicit or
+	// pinned URLs keep the existing retry semantics otherwise.
+	if len(c.serverURLs) > 1 {
+		logger.Warn("electrum request failed; trying the next configured server")
+	} else {
+		logger.Warn("electrum request failed; reconnecting to the configured server")
+	}
 }
+
+// healAfterConsecutivePings is the number of consecutive successful keepalive
+// pings on a non-primary server before Connection attempts to re-canonicalize
+// the primary (index 0) as the live client.
+const healAfterConsecutivePings = 2
 
 func (c *Connection) keepAlive() {
 	ticker := time.NewTicker(c.config.KeepAliveInterval)
 	defer ticker.Stop()
 
+	consecutiveSuccesses := 0
+
 	for {
 		select {
 		case <-ticker.C:
-			_, err := requestWithRetry(
-				c.parentCtx,
-				c,
-				func(ctx context.Context, client electrumClient) (interface{}, error) {
-					return nil, client.Ping(ctx)
-				},
-				"Ping",
-			)
-			if err != nil {
+			c.clientMutex.Lock()
+			if err := c.reconnectIfShutdown(c.parentCtx, c.parentCtx); err != nil {
+				c.clientMutex.Unlock()
+				logger.Errorf(
+					"failed to reconnect to the electrum server during keepalive: [%v]",
+					err,
+				)
+				consecutiveSuccesses = 0
+				continue
+			}
+
+			pingCtx, pingCancel := context.WithTimeout(c.parentCtx, c.config.RequestTimeout)
+			pingErr := c.client.Ping(pingCtx)
+			pingCancel()
+
+			if pingErr != nil {
+				c.failover(c.parentCtx)
+				c.clientMutex.Unlock()
 				logger.Errorf(
 					"failed to ping the electrum server; "+
 						"please verify health of the electrum server: [%v]",
-					err,
+					pingErr,
 				)
-			} else {
-				// Adjust ticker starting at the time of the latest successful ping.
-				ticker.Reset(c.config.KeepAliveInterval)
+				consecutiveSuccesses = 0
+				continue
+			}
+
+			// Adjust ticker starting at the time of the latest successful ping.
+			ticker.Reset(c.config.KeepAliveInterval)
+			consecutiveSuccesses++
+			onFallback := c.serverIndex != 0
+			c.clientMutex.Unlock()
+
+			if onFallback && consecutiveSuccesses >= healAfterConsecutivePings {
+				c.healPrimary()
+				consecutiveSuccesses = 0
 			}
 		case <-c.parentCtx.Done():
 			// Each client's cancellation callback closes its transport even
@@ -1333,6 +1550,65 @@ func (c *Connection) keepAlive() {
 			return
 		}
 	}
+}
+
+// healPrimary re-verifies the primary (index 0) server after the connection
+// has been running on a fallback for healAfterConsecutivePings consecutive
+// keepalive pings. It dials and verifies a fresh client without holding
+// clientMutex, so concurrent requests keep flowing through the current
+// (fallback) client while the primary is probed. On success, the current
+// client is retired and the freshly verified primary is published in its
+// place. On any failure the current client is left untouched; the caller
+// tries again after another healAfterConsecutivePings successful pings.
+func (c *Connection) healPrimary() {
+	primaryURL := c.serverURLs[0]
+
+	connectCtx, connectCancel := context.WithTimeout(c.parentCtx, c.config.ConnectTimeout)
+	client, err := c.newClient(connectCtx, primaryURL)
+	connectCancel()
+	if err != nil {
+		logger.Debugf("primary electrum server re-verification failed to dial: [%v]", err)
+		return
+	}
+
+	c.clientMutex.Lock()
+	expectedGenesisHash := c.verifiedGenesisHash
+	c.clientMutex.Unlock()
+
+	requestCtx, requestCancel := context.WithTimeout(c.parentCtx, c.config.RequestTimeout)
+	stopVerification := context.AfterFunc(requestCtx, client.Abort)
+	genesisHash, err := verifyServer(requestCtx, client, primaryURL, expectedGenesisHash)
+	stopVerification()
+	if err == nil {
+		err = requestCtx.Err()
+	}
+	if err == nil {
+		err = c.parentCtx.Err()
+	}
+	requestCancel()
+	if err != nil {
+		go client.Abort()
+		logger.Debugf("primary electrum server re-verification failed: [%v]", err)
+		return
+	}
+
+	c.clientMutex.Lock()
+	defer c.clientMutex.Unlock()
+
+	if c.serverIndex == 0 || c.parentCtx.Err() != nil {
+		// Another path already restored the primary, or the connection is
+		// shutting down; discard this candidate.
+		go client.Abort()
+		return
+	}
+
+	c.retireClient()
+	c.serverIndex = 0
+	c.client = client
+	c.closeClient = watchClientCancellation(c.parentCtx, client)
+	c.verifiedGenesisHash = genesisHash
+	c.pendingTipSanityCheck = true
+	logger.Infof("re-canonicalized primary electrum server [%s]", primaryURL)
 }
 
 func requestWithRetry[K any](
@@ -1360,10 +1636,19 @@ func requestWithRetry[K any](
 			requestCtx, requestCancel := context.WithTimeout(ctx, c.config.RequestTimeout)
 			defer requestCancel()
 
+			// An established client's write is not bound by the RPC
+			// context: the vendored request() writes synchronously before
+			// selecting on ctx.Done(). Abort the transport if the
+			// per-request deadline elapses so a blocked write cannot
+			// outlive its own request.
+			stopAbort := context.AfterFunc(requestCtx, c.client.Abort)
 			r, err := requestFn(requestCtx, c.client)
+			stopAbort()
 
 			if err != nil {
-				c.failover(parentCtx)
+				if isTransportFailure(err) {
+					c.failover(parentCtx)
+				}
 				return fmt.Errorf("request failed: [%w]", err)
 			}
 

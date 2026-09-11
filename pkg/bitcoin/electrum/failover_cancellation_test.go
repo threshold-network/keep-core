@@ -2,7 +2,6 @@ package electrum
 
 import (
 	"context"
-	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -37,6 +36,48 @@ func (w *blockedClientWrite) call(context.Context) error {
 	defer close(w.finished)
 	<-w.unblock
 	return io.ErrClosedPipe
+}
+
+// TestRequestTimeoutAbortsBlockedWrite is a regression test for a bug where
+// an established client's blocked transport write was not aborted when only
+// the per-request RequestTimeout elapsed: the vendored request() writes
+// synchronously before selecting on ctx.Done(), so a write that ignores its
+// context (like a real blocked syscall) could hang past its own request's
+// timeout. requestWithRetry now races an abort watcher against the request
+// itself, so the write is aborted - and the request fails - within roughly
+// RequestTimeout, without needing the outer parent context to be cancelled.
+func TestRequestTimeoutAbortsBlockedWrite(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := new(failoverTestClient)
+	write := newBlockedClientWrite(client)
+	client.header = func(ctx context.Context) (*electrum.SubscribeHeadersResult, error) {
+		return nil, write.call(ctx)
+	}
+	config := failoverTestConfig()
+	config.RequestTimeout = 50 * time.Millisecond
+	config.RequestRetryTimeout = 60 * time.Millisecond
+	connection, err := connect(parent, config, func(context.Context, string) (electrumClient, error) {
+		return client, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		write.release()
+	})
+	start := time.Now()
+	if _, err := connection.GetLatestBlockHeight(); err == nil {
+		t.Fatal("expected the blocked write to fail once RequestTimeout elapsed")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("RequestTimeout did not unblock the write promptly: %v", elapsed)
+	}
+	if parent.Err() != nil {
+		t.Fatal("the outer parent context must not need to be cancelled")
+	}
+	client.awaitShutdown(t)
 }
 
 func TestConnectionCancellationUnblocksTransportWrite(t *testing.T) {
@@ -86,7 +127,7 @@ func TestConnectionCancellationUnblocksTransportWrite(t *testing.T) {
 						defer close(finished)
 						var err error
 						if operation == "fee" {
-							_, err = connection.getFeeBtcPerKbOnce(1)
+							_, err = connection.getFeeBtcPerKbOnce(parent, 1)
 						} else {
 							_, err = connection.GetLatestBlockHeight()
 						}
@@ -174,7 +215,7 @@ func TestConnectionCancellationClosesReplacementDuringRetiredCleanup(t *testing.
 	config := failoverTestConfig()
 	config.RequestRetryTimeout = 50 * time.Millisecond
 	first := &failoverTestClient{header: func(context.Context) (*electrum.SubscribeHeadersResult, error) {
-		return nil, errors.New("server unavailable")
+		return nil, electrum.ErrServerShutdown
 	}}
 	closing := blockClientShutdown(t, first)
 	second := new(failoverTestClient)

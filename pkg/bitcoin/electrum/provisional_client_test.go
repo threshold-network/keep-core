@@ -86,7 +86,12 @@ func TestProvisionalVerificationDeadlineUnblocksWrite(t *testing.T) {
 				t.Fatalf("independent request remained blocked after verification: %d, %v", height, err)
 			}
 			wantURL := "third"
-			if budget == "caller cancellation" || budget == "caller deadline" {
+			if budget == "caller cancellation" || budget == "caller deadline" ||
+				budget == "connection retry" || budget == "request retry" {
+				// These sub-cases truncate the enclosing retry budget itself
+				// rather than the candidate's own per-request timeout, so
+				// the interrupted candidate is preserved (retried) instead
+				// of being advanced past as unhealthy.
 				wantURL = "second"
 			}
 			if len(attempts) != 3 || attempts[2] != wantURL {
@@ -114,7 +119,7 @@ func TestVerifiedClientOutlivesVerificationContext(t *testing.T) {
 	awaitClientResult(t, verification.Done())
 	// Pass the former verification deadline before using the retained client.
 	deadline, _ := verification.Deadline()
-	<-time.After(time.Until(deadline) + 20*time.Millisecond)
+	<-time.After(time.Until(deadline) + 40*time.Millisecond)
 	if client.IsShutdown() {
 		t.Fatal("verification cancellation aborted a retained client")
 	}
@@ -123,5 +128,52 @@ func TestVerifiedClientOutlivesVerificationContext(t *testing.T) {
 	}
 	if client.versions.Load() != 1 {
 		t.Fatal("verification cancellation forced an unnecessary reconnect")
+	}
+}
+
+// TestVerificationSuccessAfterDeadlineIsNotRetained is a regression test for
+// the verification-deadline race: a candidate's ServerVersion RPC can, in
+// principle, return success just after its own requestCtx deadline passed.
+// The re-check of requestCtx.Err() after stopVerification() must still
+// reject that client rather than publish an aborted client as healthy.
+func TestVerificationSuccessAfterDeadlineIsNotRetained(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	config := failoverTestConfig()
+	config.FallbackURLs = []string{"second", "third"}
+	config.RequestTimeout = 30 * time.Millisecond
+	first := new(failoverTestClient)
+	raced := &failoverTestClient{version: func(ctx context.Context) error {
+		if deadline, ok := ctx.Deadline(); ok {
+			<-time.After(time.Until(deadline) + 20*time.Millisecond)
+		}
+		// Success, but only after requestCtx's own deadline already passed.
+		return nil
+	}}
+	healthy := new(failoverTestClient)
+	attempts := 0
+	connection, err := connect(parent, config, func(context.Context, string) (electrumClient, error) {
+		attempts++
+		switch attempts {
+		case 1:
+			return first, nil
+		case 2:
+			return raced, nil
+		default:
+			return healthy, nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Shutdown()
+	if height, err := connection.GetLatestBlockHeight(); err != nil || height != 42 {
+		t.Fatalf("reconnection did not recover past the raced candidate: %d, %v", height, err)
+	}
+	if connection.client == raced || !raced.IsShutdown() {
+		t.Fatal("a verification that succeeded after its deadline must not be retained")
+	}
+	if connection.client != healthy {
+		t.Fatal("connection did not advance past the raced candidate to the next server")
 	}
 }

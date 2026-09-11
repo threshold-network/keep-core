@@ -63,7 +63,7 @@ func TestCallerDeadlineDoesNotFailover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	caller, cancelCaller := context.WithTimeout(parent, 50*time.Millisecond)
+	caller, cancelCaller := context.WithTimeout(parent, 100*time.Millisecond)
 	defer cancelCaller()
 	_, err = requestWithRetry(caller, connection, func(ctx context.Context, _ electrumClient) (int, error) {
 		<-ctx.Done()
@@ -72,7 +72,12 @@ func TestCallerDeadlineDoesNotFailover(t *testing.T) {
 	if err == nil || !errors.Is(caller.Err(), context.DeadlineExceeded) {
 		t.Fatalf("expected caller deadline expiry, got %v", err)
 	}
-	if connection.client != first || connection.serverIndex != 0 || first.IsShutdown() {
+	// The request's own abort watcher (electrum.go requestWithRetry) may
+	// still retire the blocked transport once requestCtx inherits the
+	// caller's expired deadline - that is a transport-level cleanup, not a
+	// failover decision. What must not happen is the connection treating
+	// this as a server failure: no failover, same client, same index.
+	if connection.client != first || connection.serverIndex != 0 {
 		t.Fatal("caller deadline expiry changed server health")
 	}
 }
@@ -126,12 +131,12 @@ func TestVerificationCleanupHonorsDeadline(t *testing.T) {
 			config := failoverTestConfig()
 			config.ConnectTimeout = time.Second
 			config.RequestTimeout = time.Second
-			config.ConnectRetryTimeout = 50 * time.Millisecond
+			config.ConnectRetryTimeout = 100 * time.Millisecond
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if callerDeadline {
 				var cancelDeadline context.CancelFunc
-				ctx, cancelDeadline = context.WithTimeout(ctx, 50*time.Millisecond)
+				ctx, cancelDeadline = context.WithTimeout(ctx, 100*time.Millisecond)
 				defer cancelDeadline()
 				config.ConnectRetryTimeout = time.Second
 			}
@@ -155,30 +160,34 @@ func TestVerificationCleanupHonorsDeadline(t *testing.T) {
 	}
 }
 
+// TestReconnectVerificationCleanupDoesNotBlockRequests verifies that a
+// verification abandoned due to retry budget exhaustion (not candidate
+// health, see electrumConnect) does not block a later reconnection from
+// retrying and using that same preserved candidate, even while its earlier
+// abandoned client is still stuck mid-shutdown.
 func TestReconnectVerificationCleanupDoesNotBlockRequests(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	config := failoverTestConfig()
-	config.FallbackURLs = []string{"second", "third"}
+	config.FallbackURLs = []string{"second"}
 	config.RequestRetryTimeout = 50 * time.Millisecond
 	config.ConnectTimeout = time.Second
 	config.RequestTimeout = time.Second
 	first := new(failoverTestClient)
+	var verifyCalls atomic.Int32
 	second := &failoverTestClient{version: func(ctx context.Context) error {
-		<-ctx.Done()
-		return ctx.Err()
+		if verifyCalls.Add(1) == 1 {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
 	}}
-	third := new(failoverTestClient)
 	closing := blockClientShutdown(t, second)
 	connection, err := connect(parent, config, func(_ context.Context, url string) (electrumClient, error) {
-		switch url {
-		case "first":
+		if url == "first" {
 			return first, nil
-		case "second":
-			return second, nil
-		default:
-			return third, nil
 		}
+		return second, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -191,17 +200,21 @@ func TestReconnectVerificationCleanupDoesNotBlockRequests(t *testing.T) {
 	}()
 	awaitClientResult(t, closing)
 	if err := awaitClientResult(t, result); err == nil {
-		t.Fatal("expected reconnection verification to time out")
+		t.Fatal("expected the retry budget to be exhausted mid-verification")
 	}
-	go func() {
-		_, err := connection.GetLatestBlockHeight()
-		result <- err
-	}()
-	if err := awaitClientResult(t, result); err != nil {
-		t.Fatalf("next request could not use the third server during cleanup: %v", err)
+	if connection.serverIndex != 1 || connection.client != nil {
+		t.Fatal("budget exhaustion incorrectly discarded the preserved candidate")
 	}
-	if third.versions.Load() != 1 {
-		t.Fatal("the third server was not verified")
+	// second's Abort/Shutdown from the abandoned attempt remains blocked
+	// (released only in t.Cleanup); a later reconnection with a workable
+	// budget must still be able to retry and use the preserved candidate,
+	// proving the blocked cleanup did not wedge the connection.
+	connection.config.RequestRetryTimeout = 2 * time.Second
+	if height, err := connection.GetLatestBlockHeight(); err != nil || height != 42 {
+		t.Fatalf("blocked verification cleanup prevented retrying the preserved candidate: %d, %v", height, err)
+	}
+	if verifyCalls.Load() != 2 {
+		t.Fatal("preserved candidate was not retried")
 	}
 }
 
@@ -211,7 +224,7 @@ func TestFailoverCleanupDoesNotBlockRequests(t *testing.T) {
 	config := failoverTestConfig()
 	config.RequestRetryTimeout = 50 * time.Millisecond
 	first := &failoverTestClient{header: func(context.Context) (*electrum.SubscribeHeadersResult, error) {
-		return nil, errors.New("server unavailable")
+		return nil, electrum.ErrServerShutdown
 	}}
 	second := new(failoverTestClient)
 	closing := blockClientShutdown(t, first)

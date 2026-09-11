@@ -19,16 +19,21 @@ type electrumClient interface {
 	ListUnspent(context.Context, string) ([]*electrum.ListUnspentResult, error)
 	GetFee(context.Context, uint32) (float32, error)
 	ServerVersion(context.Context) (string, string, error)
+	ServerFeatures(context.Context) (*electrum.ServerFeaturesResult, error)
 	Ping(context.Context) error
 	Abort()
 	Shutdown()
 	IsShutdown() bool
 }
 
-// watchClientCancellation aborts client when ctx is cancelled, independently of
-// the request mutex and keepalive loop. It also covers clients being verified.
-// The returned function unregisters the callback and retires the client without
-// waiting for cleanup. Abort must be idempotent and safe during active writes.
+// watchClientCancellation registers an Abort callback that fires when ctx is
+// done, independently of the request mutex and keepalive loop; it also
+// covers clients still being verified. The returned function unregisters
+// that callback and, if ctx had not yet fired it, asynchronously calls
+// Abort itself so the caller never blocks on transport cleanup. It does not
+// retire the client from the Connection (clear c.client/c.closeClient) -
+// callers that are done with a client must do that themselves. Abort must
+// be idempotent and safe during active writes.
 func watchClientCancellation(ctx context.Context, client electrumClient) func() {
 	stop := context.AfterFunc(ctx, client.Abort)
 	return func() {

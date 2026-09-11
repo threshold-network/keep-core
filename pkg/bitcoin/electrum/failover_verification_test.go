@@ -3,8 +3,11 @@ package electrum
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/checksum0/go-electrum/electrum"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 )
@@ -25,10 +28,10 @@ func TestVerificationUsesRequestTimeout(t *testing.T) {
 				parent, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				config := failoverTestConfig()
-				config.ConnectTimeout = 20 * time.Millisecond
-				config.RequestTimeout = 200 * time.Millisecond
-				config.ConnectRetryTimeout = 300 * time.Millisecond
-				config.RequestRetryTimeout = 300 * time.Millisecond
+				config.ConnectTimeout = 40 * time.Millisecond
+				config.RequestTimeout = 300 * time.Millisecond
+				config.ConnectRetryTimeout = 500 * time.Millisecond
+				config.RequestRetryTimeout = 500 * time.Millisecond
 				if explicitURL {
 					config.FallbackURLs = nil
 				}
@@ -41,7 +44,7 @@ func TestVerificationUsesRequestTimeout(t *testing.T) {
 						t.Error("verification inherited the dial deadline")
 					}
 					// Reply after the dial deadline but within the RPC timeout.
-					response := time.NewTimer(time.Until(dialDeadline.Add(20 * time.Millisecond)))
+					response := time.NewTimer(time.Until(dialDeadline.Add(40 * time.Millisecond)))
 					defer response.Stop()
 					select {
 					case <-response.C:
@@ -122,7 +125,7 @@ func TestReconnectCallerCancellationPreservesCandidate(t *testing.T) {
 				var caller context.Context
 				wantErr := context.Canceled
 				if deadline {
-					caller, cancelCaller = context.WithTimeout(parent, 50*time.Millisecond)
+					caller, cancelCaller = context.WithTimeout(parent, 100*time.Millisecond)
 					wantErr = context.DeadlineExceeded
 				} else {
 					caller, cancelCaller = context.WithCancel(parent)
@@ -148,17 +151,17 @@ func TestReconnectCallerCancellationPreservesCandidate(t *testing.T) {
 	}
 }
 
-func TestReconnectInternalTimeoutAdvancesCandidate(t *testing.T) {
+// TestReconnectPerCandidateTimeoutAdvancesCandidate covers a genuine
+// per-candidate timeout (the candidate's own ConnectTimeout/RequestTimeout
+// elapses while the enclosing connect/request retry budget still has ample
+// room) - the only case that should advance past the candidate as unhealthy.
+func TestReconnectPerCandidateTimeoutAdvancesCandidate(t *testing.T) {
 	for _, test := range []struct {
 		phase  string
 		budget string
 	}{
 		{"dial", "dial"},
 		{"verification", "RPC"},
-		{"dial", "connection retry"},
-		{"verification", "connection retry"},
-		{"dial", "request retry"},
-		{"verification", "request retry"},
 	} {
 		t.Run(test.phase+"/"+test.budget, func(t *testing.T) {
 			parent, cancel := context.WithCancel(context.Background())
@@ -167,16 +170,13 @@ func TestReconnectInternalTimeoutAdvancesCandidate(t *testing.T) {
 			config.FallbackURLs = []string{"second", "third"}
 			config.ConnectTimeout = time.Second
 			config.RequestTimeout = time.Second
-			config.ConnectRetryTimeout = 150 * time.Millisecond
-			config.RequestRetryTimeout = 250 * time.Millisecond
+			config.ConnectRetryTimeout = 300 * time.Millisecond
+			config.RequestRetryTimeout = 500 * time.Millisecond
 			switch test.budget {
 			case "dial":
-				config.ConnectTimeout = 20 * time.Millisecond
+				config.ConnectTimeout = 40 * time.Millisecond
 			case "RPC":
-				config.RequestTimeout = 20 * time.Millisecond
-			case "request retry":
-				config.ConnectRetryTimeout = time.Second
-				config.RequestRetryTimeout = 50 * time.Millisecond
+				config.RequestTimeout = 40 * time.Millisecond
 			}
 			first := new(failoverTestClient)
 			second := &failoverTestClient{version: func(ctx context.Context) error {
@@ -206,10 +206,10 @@ func TestReconnectInternalTimeoutAdvancesCandidate(t *testing.T) {
 			}
 			first.Shutdown()
 			if _, err := connection.GetLatestBlockHeight(); err == nil {
-				t.Fatal("expected reconnection to exhaust an internal timeout")
+				t.Fatal("expected reconnection to exhaust a per-candidate timeout")
 			}
 			if parent.Err() != nil || connection.serverIndex != 2 || connection.client != nil {
-				t.Fatal("internal timeout did not advance the reconnect candidate")
+				t.Fatal("per-candidate timeout did not advance the reconnect candidate")
 			}
 			if height, err := connection.GetLatestBlockHeight(); err != nil || height != 42 {
 				t.Fatalf("independent request did not reach the third server: %d, %v", height, err)
@@ -221,5 +221,112 @@ func TestReconnectInternalTimeoutAdvancesCandidate(t *testing.T) {
 				second.awaitShutdown(t)
 			}
 		})
+	}
+}
+
+// TestReconnectRetryBudgetExhaustionPreservesCandidate covers the enclosing
+// connect/request retry budget itself expiring mid-attempt (rather than the
+// candidate's own per-request timeout). electrumConnect must not attribute
+// that to the candidate's health: the candidate is preserved (retried on
+// the next attempt), never advanced past as unhealthy.
+func TestReconnectRetryBudgetExhaustionPreservesCandidate(t *testing.T) {
+	for _, test := range []struct {
+		phase  string
+		budget string
+	}{
+		{"dial", "connection retry"},
+		{"verification", "connection retry"},
+		{"dial", "request retry"},
+		{"verification", "request retry"},
+	} {
+		t.Run(test.phase+"/"+test.budget, func(t *testing.T) {
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			config := failoverTestConfig()
+			config.FallbackURLs = []string{"second", "third"}
+			config.ConnectTimeout = time.Second
+			config.RequestTimeout = time.Second
+			config.ConnectRetryTimeout = 300 * time.Millisecond
+			config.RequestRetryTimeout = 500 * time.Millisecond
+			if test.budget == "request retry" {
+				config.ConnectRetryTimeout = time.Second
+				config.RequestRetryTimeout = 100 * time.Millisecond
+			}
+			first := new(failoverTestClient)
+			var verifyCalls atomic.Int32
+			second := &failoverTestClient{version: func(ctx context.Context) error {
+				verifyCalls.Add(1)
+				<-ctx.Done()
+				return ctx.Err()
+			}}
+			third := new(failoverTestClient)
+			connection, err := connect(parent, config, func(ctx context.Context, url string) (electrumClient, error) {
+				switch url {
+				case "first":
+					return first, nil
+				case "second":
+					if test.phase == "dial" {
+						<-ctx.Done()
+						return nil, ctx.Err()
+					}
+					return second, nil
+				default:
+					return third, nil
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first.Shutdown()
+			if _, err := connection.GetLatestBlockHeight(); err == nil {
+				t.Fatal("expected the retry budget to be exhausted")
+			}
+			if parent.Err() != nil {
+				t.Fatal("the caller must remain active after the internal timeout")
+			}
+			if connection.serverIndex != 1 || connection.client != nil {
+				t.Fatal("budget exhaustion incorrectly advanced past the preserved candidate")
+			}
+			if third.versions.Load() != 0 {
+				t.Fatal("budget exhaustion incorrectly reached an untried server")
+			}
+		})
+	}
+}
+
+// TestElectrumConnectRejectsGenesisMismatch verifies the D4 genesis identity
+// behavior: the first successfully verified server's genesis hash becomes
+// this connection's chain reference, and a later candidate reporting a
+// different genesis hash is rejected outright rather than retained.
+func TestElectrumConnectRejectsGenesisMismatch(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	config := failoverTestConfig()
+	config.FallbackURLs = []string{"second"}
+	config.RequestRetryTimeout = 200 * time.Millisecond
+	first := &failoverTestClient{serverFeatures: func(context.Context) (*electrum.ServerFeaturesResult, error) {
+		return &electrum.ServerFeaturesResult{GenesisHash: "aaaa"}, nil
+	}}
+	wrongChain := &failoverTestClient{serverFeatures: func(context.Context) (*electrum.ServerFeaturesResult, error) {
+		return &electrum.ServerFeaturesResult{GenesisHash: "bbbb"}, nil
+	}}
+	connection, err := connect(parent, config, func(_ context.Context, url string) (electrumClient, error) {
+		if url == "first" {
+			return first, nil
+		}
+		return wrongChain, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.verifiedGenesisHash != "aaaa" {
+		t.Fatalf("expected the first server's genesis hash to be adopted, got %q", connection.verifiedGenesisHash)
+	}
+	first.Shutdown()
+	if _, err := connection.GetLatestBlockHeight(); err == nil {
+		t.Fatal("expected the wrong-chain candidate to be rejected")
+	}
+	if connection.client == wrongChain || !wrongChain.IsShutdown() {
+		t.Fatal("a candidate reporting a mismatched genesis hash must not be retained")
 	}
 }

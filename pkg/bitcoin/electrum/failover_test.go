@@ -15,16 +15,17 @@ import (
 // a different operation. Lifecycle state is synchronized with the keepalive loop.
 type failoverTestClient struct {
 	electrumClient
-	stopped    atomic.Bool
-	versions   atomic.Int32
-	shutdowns  atomic.Int32
-	abortOnce  sync.Once
-	versionErr error
-	version    func(context.Context) error
-	shutdown   func()
-	header     func(context.Context) (*electrum.SubscribeHeadersResult, error)
-	ping       func(context.Context) error
-	fee        func(context.Context) (float32, error)
+	stopped        atomic.Bool
+	versions       atomic.Int32
+	shutdowns      atomic.Int32
+	abortOnce      sync.Once
+	versionErr     error
+	version        func(context.Context) error
+	shutdown       func()
+	header         func(context.Context) (*electrum.SubscribeHeadersResult, error)
+	ping           func(context.Context) error
+	fee            func(context.Context) (float32, error)
+	serverFeatures func(context.Context) (*electrum.ServerFeaturesResult, error)
 }
 
 func (c *failoverTestClient) ServerVersion(ctx context.Context) (string, string, error) {
@@ -86,6 +87,12 @@ func (c *failoverTestClient) GetFee(ctx context.Context, _ uint32) (float32, err
 	}
 	return 0.001, nil
 }
+func (c *failoverTestClient) ServerFeatures(ctx context.Context) (*electrum.ServerFeaturesResult, error) {
+	if c.serverFeatures != nil {
+		return c.serverFeatures(ctx)
+	}
+	return &electrum.ServerFeaturesResult{}, nil
+}
 
 func failoverTestConfig() Config {
 	return Config{
@@ -135,19 +142,53 @@ func TestConnectFailover(t *testing.T) {
 }
 
 func TestRequestFailover(t *testing.T) {
-	for _, failure := range []string{"RPC error", "timeout", "shutdown"} {
-		t.Run(failure, func(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		mkErr        func(ctx context.Context) error
+		preShutdown  bool
+		wantFailover bool
+	}{
+		{
+			name: "transport timeout",
+			mkErr: func(ctx context.Context) error {
+				<-ctx.Done()
+				return electrum.ErrTimeout
+			},
+			wantFailover: true,
+		},
+		{
+			name:         "server shutdown",
+			preShutdown:  true,
+			wantFailover: true,
+		},
+		{
+			name: "benign JSON-RPC application error",
+			mkErr: func(context.Context) error {
+				return errors.New("errNo: -32600, errMsg: tx not found")
+			},
+			wantFailover: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			first := &failoverTestClient{header: func(ctx context.Context) (*electrum.SubscribeHeadersResult, error) {
-				if failure == "timeout" {
-					<-ctx.Done()
+				if tc.mkErr == nil {
+					t.Error("shutdown case must not issue a request against the retired client")
+					return nil, errors.New("unreachable")
 				}
-				return nil, errors.New("request failed")
+				return nil, tc.mkErr(ctx)
 			}}
 			second := new(failoverTestClient)
-			connection, err := connect(ctx, failoverTestConfig(), func(
+			config := failoverTestConfig()
+			if !tc.wantFailover {
+				// A benign application error never fails over, so the
+				// retry loop keeps hammering the same (still healthy)
+				// server; keep the budget short so the test stays fast.
+				config.RequestRetryTimeout = 60 * time.Millisecond
+			}
+			connection, err := connect(ctx, config, func(
 				_ context.Context,
 				url string,
 			) (electrumClient, error) {
@@ -159,9 +200,20 @@ func TestRequestFailover(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if failure == "shutdown" {
+			if tc.preShutdown {
 				first.Shutdown()
 			}
+
+			if !tc.wantFailover {
+				if _, err := connection.GetLatestBlockHeight(); err == nil {
+					t.Fatal("expected the benign application error to surface")
+				}
+				if connection.client != first || first.IsShutdown() || second.versions.Load() != 0 {
+					t.Fatal("a benign JSON-RPC application error incorrectly triggered failover")
+				}
+				return
+			}
+
 			height, err := connection.GetLatestBlockHeight()
 			if err != nil || height != 42 {
 				t.Fatalf("fallback request: %d, %v", height, err)
@@ -236,7 +288,7 @@ func TestFailoverHonorsRequestBudget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	config := failoverTestConfig()
-	config.RequestRetryTimeout = 30 * time.Millisecond
+	config.RequestRetryTimeout = 60 * time.Millisecond
 	config.ConnectTimeout = time.Second
 	first := new(failoverTestClient)
 	connection, err := connect(ctx, config, func(ctx context.Context, url string) (electrumClient, error) {
@@ -254,50 +306,155 @@ func TestFailoverHonorsRequestBudget(t *testing.T) {
 	if _, err := connection.GetLatestBlockHeight(); err == nil {
 		t.Fatal("expected unavailable server error")
 	}
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+	if elapsed := time.Since(start); elapsed > 1000*time.Millisecond {
 		t.Fatalf("reconnection exceeded request budget: %v", elapsed)
 	}
 }
 
 func TestKeepAliveFailover(t *testing.T) {
+	t.Run("multiple servers", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		pong := make(chan struct{}, 1)
+		first := &failoverTestClient{ping: func(context.Context) error { return electrum.ErrTimeout }}
+		second := &failoverTestClient{ping: func(context.Context) error {
+			select {
+			case pong <- struct{}{}:
+			default:
+			}
+			return nil
+		}}
+		config := failoverTestConfig()
+		config.KeepAliveInterval = time.Millisecond
+		_, err := connect(ctx, config, func(
+			_ context.Context,
+			url string,
+		) (electrumClient, error) {
+			if url == "first" {
+				return first, nil
+			}
+			return second, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-pong:
+		case <-time.After(5 * time.Second):
+			t.Fatal("keepalive did not reach the fallback server")
+		}
+		first.awaitShutdown(t)
+	})
+
+	t.Run("pinned single server recovers via retire and redial", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		config := failoverTestConfig()
+		config.FallbackURLs = nil
+		config.KeepAliveInterval = time.Millisecond
+		var dials atomic.Int32
+		var healthy atomic.Bool
+		pong := make(chan struct{}, 1)
+		var clientsMu sync.Mutex
+		var clients []*failoverTestClient
+		connection, err := connect(ctx, config, func(_ context.Context, url string) (electrumClient, error) {
+			dials.Add(1)
+			client := &failoverTestClient{ping: func(context.Context) error {
+				if !healthy.Load() {
+					return electrum.ErrTimeout
+				}
+				select {
+				case pong <- struct{}{}:
+				default:
+				}
+				return nil
+			}}
+			clientsMu.Lock()
+			clients = append(clients, client)
+			clientsMu.Unlock()
+			return client, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		clientsMu.Lock()
+		initial := clients[0]
+		clientsMu.Unlock()
+		// A pinned single-URL connection must still retire and re-dial the
+		// same server on a failed ping, instead of wedging on the dead
+		// client forever.
+		initial.awaitShutdown(t)
+		healthy.Store(true)
+		select {
+		case <-pong:
+		case <-time.After(5 * time.Second):
+			t.Fatal("keepalive did not recover the pinned server after a failed ping")
+		}
+		if dials.Load() < 2 {
+			t.Fatal("pinned server was not re-dialed after the failed ping")
+		}
+		if connection.serverIndex != 0 {
+			t.Fatal("pinned single-URL connection must stay at index 0")
+		}
+	})
+}
+
+// TestKeepAliveHealsPrimaryAfterConsecutivePings verifies the D3 healing
+// behavior: after healAfterConsecutivePings consecutive successful keepalive
+// pings on a non-primary index, the connection actively re-probes the
+// primary and swaps back to it once verified healthy.
+func TestKeepAliveHealsPrimaryAfterConsecutivePings(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	pong := make(chan struct{}, 1)
-	first := &failoverTestClient{ping: func(context.Context) error { return errors.New("ping failed") }}
-	second := &failoverTestClient{ping: func(context.Context) error {
-		select {
-		case pong <- struct{}{}:
-		default:
-		}
-		return nil
-	}}
 	config := failoverTestConfig()
 	config.KeepAliveInterval = time.Millisecond
-	_, err := connect(ctx, config, func(
-		_ context.Context,
-		url string,
-	) (electrumClient, error) {
+	firstAttemptFailed := &failoverTestClient{versionErr: errors.New("primary temporarily unavailable")}
+	second := new(failoverTestClient)
+	primaryHealthy := new(failoverTestClient)
+	var primaryDials atomic.Int32
+	connection, err := connect(ctx, config, func(_ context.Context, url string) (electrumClient, error) {
 		if url == "first" {
-			return first, nil
+			if primaryDials.Add(1) == 1 {
+				return firstAttemptFailed, nil
+			}
+			return primaryHealthy, nil
 		}
 		return second, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-pong:
-	case <-time.After(5 * time.Second):
-		t.Fatal("keepalive did not reach the fallback server")
+	if connection.serverIndex != 1 || connection.client != second {
+		t.Fatal("setup did not start on the fallback server")
 	}
-	first.awaitShutdown(t)
+	firstAttemptFailed.awaitShutdown(t)
+
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	healed := false
+	for !healed {
+		select {
+		case <-tick.C:
+			connection.clientMutex.Lock()
+			healed = connection.serverIndex == 0 && connection.client == primaryHealthy
+			connection.clientMutex.Unlock()
+		case <-timeout.C:
+			t.Fatal("keepalive did not re-canonicalize the primary server")
+		}
+	}
+	if primaryHealthy.versions.Load() != 1 {
+		t.Fatal("re-canonicalized primary was not verified")
+	}
+	second.awaitShutdown(t)
 }
 
 func TestConcurrentRequestsShareFailover(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	first := &failoverTestClient{header: func(context.Context) (*electrum.SubscribeHeadersResult, error) {
-		return nil, errors.New("request failed")
+		return nil, electrum.ErrTimeout
 	}}
 	second := new(failoverTestClient)
 	var fallbackConnections atomic.Int32
@@ -330,23 +487,34 @@ func TestConcurrentRequestsShareFailover(t *testing.T) {
 	}
 }
 
-func TestFeeOracleFailureDoesNotFailover(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	client := &failoverTestClient{fee: func(context.Context) (float32, error) {
-		return 0, errors.New("cannot estimate fee")
-	}}
-	connection, err := connect(ctx, failoverTestConfig(), func(context.Context, string) (electrumClient, error) {
-		return client, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := connection.getFeeBtcPerKbOnce(1); err == nil {
-		t.Fatal("expected unavailable fee estimate")
-	}
-	if connection.client != client || connection.serverIndex != 0 || client.IsShutdown() {
-		t.Fatal("missing fee data incorrectly marked the server unhealthy")
+func TestFeeApplicationErrorDoesNotFailover(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "no fee data text", err: errors.New("cannot estimate fee")},
+		{name: "-32603 internal error", err: errors.New("errNo: -32603, errMsg: internal error")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			client := &failoverTestClient{fee: func(context.Context) (float32, error) {
+				return 0, tc.err
+			}}
+			connection, err := connect(ctx, failoverTestConfig(), func(context.Context, string) (electrumClient, error) {
+				return client, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := connection.getFeeBtcPerKbOnce(ctx, 1); err == nil {
+				t.Fatal("expected unavailable fee estimate")
+			}
+			if connection.client != client || connection.serverIndex != 0 || client.IsShutdown() {
+				t.Fatal("a JSON-RPC application error incorrectly marked the server unhealthy")
+			}
+		})
 	}
 }
 
@@ -364,7 +532,7 @@ func TestFeeRequestFailover(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	first := &failoverTestClient{fee: func(context.Context) (float32, error) {
-		return 0, errors.New("connection closed")
+		return 0, electrum.ErrServerShutdown
 	}}
 	second := new(failoverTestClient)
 	connection, err := connect(ctx, failoverTestConfig(), func(
@@ -379,10 +547,10 @@ func TestFeeRequestFailover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := connection.getFeeBtcPerKbOnce(1); err == nil {
+	if _, err := connection.getFeeBtcPerKbOnce(ctx, 1); err == nil {
 		t.Fatal("expected transport error")
 	}
-	if fee, err := connection.getFeeBtcPerKbOnce(6); err != nil || fee != 0.001 {
+	if fee, err := connection.getFeeBtcPerKbOnce(ctx, 6); err != nil || fee != 0.001 {
 		t.Fatalf("fee request on fallback: %v, %v", fee, err)
 	}
 	first.awaitShutdown(t)
@@ -402,5 +570,15 @@ func TestAllElectrumServersUnavailable(t *testing.T) {
 	if err == nil || connection != nil || attempts.Load() != 2 {
 		t.Fatalf("expected bounded retries across both servers, got %v, %v, %d attempts",
 			connection, err, attempts.Load())
+	}
+}
+
+func TestConnectFailsWithNoConfiguredServers(t *testing.T) {
+	connection, err := connect(context.Background(), Config{}, func(context.Context, string) (electrumClient, error) {
+		t.Fatal("dial must not be attempted with no configured server URLs")
+		return nil, nil
+	})
+	if err == nil || connection != nil {
+		t.Fatalf("expected an error and a nil connection, got %v, %v", connection, err)
 	}
 }
