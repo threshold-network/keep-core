@@ -19,7 +19,7 @@ Flags:
       --bitcoin.electrum.requestTimeout duration            Timeout for a single attempt of Electrum protocol request. (default 30s)
       --bitcoin.electrum.requestRetryTimeout duration       Timeout for Electrum protocol request retries. (default 2m0s)
       --bitcoin.electrum.keepAliveInterval duration         Interval for connection keep alive requests. (default 5m0s)
-      --network.bootstrap                                   [DEPRECATED: remove in v3.0] Run the client in bootstrap mode. This flag is deprecated and will be removed in v3.0.
+      --network.bootstrap                                   Run the client in bootstrap mode.
       --network.peers strings                               Addresses of the network bootstrap nodes.
   -p, --network.port int                                    Keep client listening port. (default 3919)
       --network.announcedAddresses strings                  Overwrites the default Keep client address announced in the network. Should be used for NAT or when more advanced firewall rules are applied.
@@ -32,14 +32,7 @@ Flags:
       --tbtc.preParamsGenerationTimeout duration            tECDSA pre-parameters generation timeout. (default 2m0s)
       --tbtc.preParamsGenerationDelay duration              tECDSA pre-parameters generation delay. (default 10s)
       --tbtc.preParamsGenerationConcurrency int             tECDSA pre-parameters generation concurrency. (default 1)
-      --tbtc.keyGenerationConcurrency int                   tECDSA key generation concurrency. (default 16)
-      --tbtc.walletTxSatPerVByteFloor int                   Minimum fee rate (sat/vByte) applied to wallet Bitcoin transactions (deposit sweeps, redemptions, moving funds, moved funds sweeps). Applies to both the leader-side floor in tbtcpg and the follower-side soft check; 0 means use the default. (default 5)
-      --tbtc.walletTxFeeBufferPercent int                   Safety-buffer percentage applied over the per-vByte fee rate (bufferedRate = ceil(rawRate * (100+Percent) / 100)); 0 means use the default. (default 25)
-      --tbtc.transactionMonitor.stuckThreshold duration     Unconfirmed transaction age before a stuck-transaction alert; 0 uses the default. (default 6h0m0s)
-      --tbtc.transactionMonitor.checkInterval duration      Polling interval for wallet transaction confirmations; 0 uses the default. (default 5m0s)
-      --tbtc.transactionMonitor.maxTracked int              Maximum number of wallet transactions tracked in memory; must not exceed 100000; 0 uses the default. (default 1000)
-      --tbtc.transactionMonitor.maxTrackingAge duration     Maximum age of a tracked transaction; must be at least stuckThreshold; 0 uses the default. (default 24h0m0s)
-      --tbtc.transactionMonitor.checkBudget duration        Time budget for one transaction confirmation-check pass; 0 uses the default. (default 2m0s)
+      --tbtc.keyGenerationConcurrency int                   tECDSA key generation concurrency. (default number of cores)
       --developer.bridgeAddress string                      Address of the Bridge smart contract
       --developer.maintainerProxyAddress string             Address of the MaintainerProxy smart contract
       --developer.lightRelayAddress string                  Address of the LightRelay smart contract

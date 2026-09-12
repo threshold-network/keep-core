@@ -30,14 +30,15 @@ Local patches:
   message and keeps the loop running instead of letting the panic escape the
   read-loop goroutine.
 - `transport.go` closes the TCP/TLS socket and unblocks reader channel sends.
-  It also bounds a single line read to 1 MiB (`readBoundedLine`), closing the
-  transport with an error instead of buffering without limit when a server
-  withholds the trailing newline.
+  It also bounds a single line read to 32 MiB (`readBoundedLine`), closing the
+  transport with a distinguishable `ErrMessageTooLarge`-wrapped error instead
+  of buffering without limit when a server withholds the trailing newline or
+  sends an oversized message.
 - `transport_ws.go` closes Gorilla's underlying connection directly. It never
   sends a WebSocket close frame from cancellation: `Conn.Close` supports
   concurrent writes, whereas `WriteMessage` does not. Reader channel sends are
   also interrupted. Shutdown is deliberately an abort rather than a graceful
-  WebSocket close handshake. It also calls `Conn.SetReadLimit(1 << 20)` after
+  WebSocket close handshake. It also calls `Conn.SetReadLimit(32 << 20)` after
   dialing to bound per-message allocation.
 - `scripthash.go` changes `ListUnspentResult.Height` from `uint32` to
   `int32`, matching `GetMempoolResult.Height` and the Electrum protocol's use
