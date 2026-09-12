@@ -1,5 +1,5 @@
 /* eslint-disable no-await-in-loop */
-import { BigNumber } from "ethers"
+
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
@@ -26,13 +26,11 @@ import type { Operator } from "./utils/operators"
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 describe("EcdsaDkgValidator", () => {
-  const dkgSeed: BigNumber = BigNumber.from(
+  const dkgSeed = BigInt(
     "31415926535897932384626433832795028841971693993751058209749445923078164062862",
   )
   const dkgStartBlock = 1337
-  const groupPublicKey: string = ethers.utils.hexValue(
-    ecdsaData.group1.publicKey,
-  )
+  const groupPublicKey: string = ethers.toQuantity(ecdsaData.group1.publicKey)
 
   let selectedOperators: Operator[]
 
@@ -702,8 +700,8 @@ describe("EcdsaDkgValidator", () => {
 
     context("when signatures contain wrong result hash", () => {
       const signWithWrongResultHash = async (signingOperators: Operator[]) => {
-        const wrongResultHash = ethers.utils.keccak256(
-          ethers.utils.defaultAbiCoder.encode(
+        const wrongResultHash = ethers.keccak256(
+          ethers.AbiCoder.defaultAbiCoder().encode(
             ["uint256", "bytes", "uint8[]", "uint256"],
             [
               hardhatNetworkId,
@@ -717,11 +715,11 @@ describe("EcdsaDkgValidator", () => {
         for (let i = 0; i < signingOperators.length; i++) {
           const { signer: ethersSigner } = signingOperators[i]
           const signature = await ethersSigner.signMessage(
-            ethers.utils.arrayify(wrongResultHash),
+            ethers.getBytes(wrongResultHash),
           )
           signatures.push(signature)
         }
-        const signaturesBytes = ethers.utils.hexConcat(signatures)
+        const signaturesBytes = ethers.concat(signatures)
         return signaturesBytes
       }
 

@@ -16,8 +16,8 @@ export async function signOperatorInactivityClaim(
   signatures: string
   signingMembersIndices: number[]
 }> {
-  const messageHash = ethers.utils.keccak256(
-    ethers.utils.defaultAbiCoder.encode(
+  const messageHash = ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
       ["uint256", "uint256", "bytes", "uint8[]"],
       [hardhatNetworkId, nonce, groupPubKey, inactiveMembersIndices],
     ),
@@ -39,14 +39,14 @@ export async function signOperatorInactivityClaim(
     const ethersSigner = signers[i].signer
 
     const signature = await ethersSigner.signMessage(
-      ethers.utils.arrayify(messageHash),
+      ethers.getBytes(messageHash),
     )
 
     signatures.push(signature)
   }
 
   return {
-    signatures: ethers.utils.hexConcat(signatures),
+    signatures: ethers.concat(signatures),
     signingMembersIndices,
   }
 }

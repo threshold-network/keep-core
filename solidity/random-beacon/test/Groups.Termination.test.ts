@@ -2,6 +2,7 @@ import { ethers, helpers } from "hardhat"
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import { noMisbehaved, hashDKGMembers } from "./utils/dkg"
 
 import type { BigNumberish } from "ethers"
@@ -243,7 +244,7 @@ describe("Groups", () => {
     async function addGroups(start: number, numberOfGroups: number) {
       for (let i = start; i <= numberOfGroups; i++) {
         await groups.addGroup(
-          ethers.utils.hexlify(i),
+          ethers.toBeHex(i),
           hashDKGMembers(members, noMisbehaved),
         )
       }
@@ -257,7 +258,9 @@ describe("Groups", () => {
     ) {
       await addGroups(1, expiredCount)
 
-      const currentBlock = await ethers.provider.getBlock("latest")
+      const currentBlock = requireResult(
+        await ethers.provider.getBlock("latest"),
+      )
       await mineBlocksTo(currentBlock.number + groupLifetime)
 
       await addGroups(expiredCount + 1, groupsCount)
@@ -266,7 +269,7 @@ describe("Groups", () => {
         await groups.terminateGroup(terminatedGroups[i])
       }
 
-      return groups.callStatic.selectGroup(beaconValue)
+      return groups.selectGroup.staticCall(beaconValue)
     }
   })
 })

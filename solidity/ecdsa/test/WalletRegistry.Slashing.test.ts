@@ -13,9 +13,8 @@ import type {
   T,
   IRandomBeacon,
 } from "../typechain"
-import type { BigNumber } from "ethers"
 import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { Operator, OperatorID } from "./utils/operators"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
@@ -128,8 +127,8 @@ describe("WalletRegistry - Slashing", () => {
       context.skip(
         "when the passed wallet members identifiers are valid (skipped: TokenStaking slashing queue API differs from legacy tests)",
         () => {
-          let notifierBalanceBefore: BigNumber
-          let notifierBalanceAfter: BigNumber
+          let notifierBalanceBefore: bigint
+          let notifierBalanceAfter: bigint
 
           before(async () => {
             await createSnapshot()
@@ -180,9 +179,7 @@ describe("WalletRegistry - Slashing", () => {
             // Notification rewards are no longer configured in TokenStaking
             // (pushNotificationReward/setNotificationReward methods removed).
             // The notifier receives 0 reward.
-            const receivedReward = notifierBalanceAfter.sub(
-              notifierBalanceBefore,
-            )
+            const receivedReward = notifierBalanceAfter - notifierBalanceBefore
 
             expect(receivedReward).to.equal(0)
           })

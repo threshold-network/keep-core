@@ -1,7 +1,9 @@
+import { toBigInt } from "ethers"
 /* eslint-disable no-underscore-dangle */
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import { expectCalledWith } from "./helpers/mock"
 import { dkgState, walletRegistryFixture } from "./fixtures"
 import { upgradeRandomBeacon } from "./utils/governance"
@@ -15,8 +17,8 @@ import type {
   WalletRegistryStub,
 } from "../typechain"
 import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { ContractTransaction } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
+import type { ContractTransactionResponse } from "ethers"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
@@ -37,7 +39,7 @@ describe("WalletRegistry - Random Beacon", async () => {
 
   describe("requestNewWallet", async () => {
     context("when requestRelayEntry reverts", async () => {
-      let tx: Promise<ContractTransaction>
+      let tx: Promise<ContractTransactionResponse>
 
       before(async () => {
         await createSnapshot()
@@ -61,7 +63,7 @@ describe("WalletRegistry - Random Beacon", async () => {
     })
 
     context("when requestRelayEntry succeeds", async () => {
-      let tx: Promise<ContractTransaction>
+      let tx: Promise<ContractTransactionResponse>
 
       before(async () => {
         await createSnapshot()
@@ -79,7 +81,7 @@ describe("WalletRegistry - Random Beacon", async () => {
 
       it("should call random beacon", async () => {
         await expectCalledWith(randomBeaconFake.requestRelayEntry, [
-          walletRegistry.address,
+          await walletRegistry.getAddress(),
         ])
       })
     })
@@ -114,8 +116,8 @@ describe("WalletRegistry - Random Beacon", async () => {
       })
 
       context("when new wallet was requested", async () => {
-        const relayEntry = ethers.BigNumber.from(ethers.utils.randomBytes(32))
-        let tx: ContractTransaction
+        const relayEntry = toBigInt(ethers.randomBytes(32))
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -124,7 +126,7 @@ describe("WalletRegistry - Random Beacon", async () => {
 
           tx = await walletRegistry
             .connect(randomBeaconFake.wallet)
-            .__beaconCallback(relayEntry, 0)
+            .__beaconCallback(ethers.toBigInt(relayEntry), 0)
         })
 
         after(async () => {
@@ -148,7 +150,7 @@ describe("WalletRegistry - Random Beacon", async () => {
             (
               await walletRegistry.getDkgData()
             ).startBlock
-          ).to.be.equal((await tx.wait()).blockNumber)
+          ).to.be.equal(requireResult(await tx.wait()).blockNumber)
         })
 
         it("should not emit DkgStateLocked event", async () => {
@@ -178,10 +180,7 @@ describe("WalletRegistry - Random Beacon", async () => {
 
           const gasEstimate = await walletRegistry
             .connect(randomBeaconFake.wallet)
-            .estimateGas.__beaconCallback(
-              ethers.BigNumber.from(ethers.utils.randomBytes(32)),
-              0,
-            )
+            .__beaconCallback.estimateGas(toBigInt(ethers.randomBytes(32)), 0)
 
           await expect(gasEstimate).to.be.lte(expectedGasEstimate)
         })
@@ -215,7 +214,7 @@ describe("WalletRegistry - Random Beacon", async () => {
           // BigNumber first was not just redundant: ethers renders one via
           // `toHexString()`, which drops leading zero bytes, so roughly one run
           // in 256 submitted a short entry.
-          const entry = ethers.utils.randomBytes(32)
+          const entry = ethers.randomBytes(32)
 
           const tx = await randomBeaconMock.submitRelayEntry(entry)
 
@@ -239,7 +238,7 @@ async function mockRandomBeacon(
     await ethers.getContractFactory("RandomBeaconStub")
   ).deploy()
 
-  await upgradeRandomBeacon(walletRegistry, randomBeacon.address)
+  await upgradeRandomBeacon(walletRegistry, await randomBeacon.getAddress())
 
   return randomBeacon as RandomBeaconStub
 }

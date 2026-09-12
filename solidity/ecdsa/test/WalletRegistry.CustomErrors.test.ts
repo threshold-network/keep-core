@@ -22,12 +22,12 @@ import type {
   WalletRegistryGovernance,
 } from "../typechain"
 import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 
 const { to1e18 } = helpers.number
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
-const ZERO_ADDRESS = ethers.constants.AddressZero
+const ZERO_ADDRESS = ethers.ZeroAddress
 
 describe.skip("TokenStaking Integration (DEPRECATED TIP-092)", () => {
   /**
@@ -172,13 +172,13 @@ describe("WalletRegistry - Custom Errors", () => {
       })
 
       it("should revert with custom error when unauthorized caller attempts closeWallet", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         await expect(walletRegistry.connect(unauthorized).closeWallet(walletID))
           .to.be.reverted
       })
 
       it("should revert with custom error when unauthorized caller attempts seize", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const walletMembersIDs = [1, 2, 3]
         await expect(
           walletRegistry
@@ -233,15 +233,15 @@ describe("WalletRegistry - Custom Errors", () => {
           "WalletRegistry",
           {
             libraries: {
-              EcdsaInactivity: EcdsaInactivity.address,
+              EcdsaInactivity: await EcdsaInactivity.getAddress(),
             },
           },
         )
         const newImplementation = await WalletRegistryFactory.deploy(
-          sortitionPool.address,
-          staking.address,
+          await sortitionPool.getAddress(),
+          await staking.getAddress(),
         )
-        await newImplementation.deployed()
+        await newImplementation.waitForDeployment()
 
         await expect(newImplementation.initializeV2(ZERO_ADDRESS)).to.be
           .reverted
@@ -276,7 +276,7 @@ describe("WalletRegistry - Custom Errors", () => {
       it("should revert with custom error when notifyOperatorInactivity called with wrong nonce", async () => {
         // This test requires a wallet to be created first
         // For simplicity, we test the nonce check with a mock claim
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const wrongNonce = 999 // Expected nonce is 0 initially
 
         const claim = {
@@ -311,7 +311,7 @@ describe("WalletRegistry - Custom Errors", () => {
       it("should revert with custom error when notifyOperatorInactivity called with invalid group members", async () => {
         // This test requires a wallet with stored members hash
         // We'll test with a mock scenario where hash doesn't match
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const nonce = 0
 
         const claim = {
@@ -335,7 +335,7 @@ describe("WalletRegistry - Custom Errors", () => {
 
     describe("InvalidWalletMembersIdentifiers", () => {
       it("should revert with custom error when seize called with invalid wallet members hash", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const invalidWalletMembersIDs = [1, 2, 3]
 
         await expect(
@@ -352,7 +352,7 @@ describe("WalletRegistry - Custom Errors", () => {
       })
 
       it("should revert with custom error when isWalletMember called with invalid wallet members hash", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const invalidWalletMembersIDs = [1, 2, 3]
 
         await expect(
@@ -368,7 +368,7 @@ describe("WalletRegistry - Custom Errors", () => {
 
     describe("NotSortitionPoolOperator", () => {
       it("should revert with custom error when isWalletMember called with non-sortition pool operator", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const walletMembersIDs = [1, 2, 3]
         const nonOperator = unauthorized.address
 
@@ -397,7 +397,7 @@ describe("WalletRegistry - Custom Errors", () => {
       })
 
       it("should revert with custom error when isWalletMember called with index zero", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const walletMembersIDs = [1, 2, 3]
 
         await expect(
@@ -411,7 +411,7 @@ describe("WalletRegistry - Custom Errors", () => {
       })
 
       it("should revert with custom error when isWalletMember called with index exceeding array length", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const walletMembersIDs = [1, 2, 3]
 
         await expect(
@@ -476,15 +476,15 @@ describe("WalletRegistry - Custom Errors", () => {
         // Creating a mock DKG result for testing
         const dkgResult = {
           submitterMemberIndex: 1,
-          groupPubKey: ethers.utils.hexZeroPad("0x01", 64),
+          groupPubKey: ethers.zeroPadValue("0x01", 64),
           misbehavedMembersIndices: [],
-          signatures: ethers.utils.hexZeroPad("0x", 65 * constants.groupSize),
+          signatures: ethers.zeroPadValue("0x", 65 * constants.groupSize),
           signingMembersIndices: Array.from(
             { length: constants.groupSize },
             (_, i) => i + 1,
           ),
           members: Array.from({ length: constants.groupSize }, (_, i) => i + 1),
-          membersHash: ethers.constants.HashZero,
+          membersHash: ethers.ZeroHash,
         }
 
         // Attempting to challenge with very low gas limit should trigger the error

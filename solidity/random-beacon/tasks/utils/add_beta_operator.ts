@@ -13,10 +13,15 @@ export async function addBetaOperator(
   )
   const chaosnetOwner = await sortitionPool.chaosnetOwner()
 
+  if (await sortitionPool.isBetaOperator(operator)) {
+    console.log(`Operator ${operator} is already a beta operator`)
+    return
+  }
+
   console.log(`Adding ${operator} to the set of beta operators...`)
   await (
     await sortitionPool
       .connect(await ethers.getSigner(chaosnetOwner))
-      .addBetaOperators([operator])
+      .getFunction("addBetaOperators")([operator])
   ).wait()
 }

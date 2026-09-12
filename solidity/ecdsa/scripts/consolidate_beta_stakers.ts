@@ -115,12 +115,12 @@ program
       try {
         const weight = await allowlist.authorizedStake(
           operator,
-          ethers.constants.AddressZero,
+          ethers.ZeroAddress,
         )
         const entity = ENTITY_MAPPINGS[operator.toLowerCase()] || "UNKNOWN"
 
         currentStates[operator] = {
-          weight: ethers.utils.formatEther(weight),
+          weight: ethers.formatEther(weight),
           entity,
         }
 
@@ -128,9 +128,7 @@ program
           ? "→ CONSOLIDATE"
           : "✅ KEEP"
         console.log(
-          `${operator} (${entity}): ${ethers.utils.formatEther(
-            weight,
-          )} T ${status}`,
+          `${operator} (${entity}): ${ethers.formatEther(weight)} T ${status}`,
         )
       } catch (error: any) {
         console.error(`❌ Error checking ${operator}: ${error.message}`)
@@ -222,7 +220,7 @@ program
           const providerInfo = await allowlist.stakingProviders(operator)
           const pendingWeight = providerInfo.pendingNewWeight
 
-          if (pendingWeight.eq(0)) {
+          if (pendingWeight === 0n) {
             console.log(`✅ ${operator}: Pending decrease to 0`)
           } else {
             console.log(`⚠️  ${operator}: No pending decrease found`)
@@ -311,7 +309,7 @@ program
       const entity = ENTITY_MAPPINGS[operator.toLowerCase()] || "UNKNOWN"
       const weight = await allowlist.authorizedStake(
         operator,
-        ethers.constants.AddressZero,
+        ethers.ZeroAddress,
       )
       const providerInfo = await allowlist.stakingProviders(operator)
       const pendingWeight = providerInfo.pendingNewWeight
@@ -319,12 +317,13 @@ program
       const status = OPERATORS_TO_CONSOLIDATE.includes(operator)
         ? "CONSOLIDATE"
         : "KEEP"
-      const pending = pendingWeight.gt(0)
-        ? ` (pending: ${ethers.utils.formatEther(pendingWeight)})`
-        : ""
+      const pending =
+        pendingWeight > 0n
+          ? ` (pending: ${ethers.formatEther(pendingWeight)})`
+          : ""
 
       console.log(`${operator} (${entity})`)
-      console.log(`  Weight: ${ethers.utils.formatEther(weight)} T${pending}`)
+      console.log(`  Weight: ${ethers.formatEther(weight)} T${pending}`)
       console.log(`  Plan: ${status}`)
     }
   })

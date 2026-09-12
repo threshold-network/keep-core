@@ -14,7 +14,9 @@ async function genesis(hre: HardhatRuntimeEnvironment) {
 
   const randomBeacon = await helpers.contracts.getContract("RandomBeacon")
 
-  const genesisTx = await randomBeacon.connect(governance).genesis()
+  const genesisTx = await randomBeacon
+    .connect(governance)
+    .getFunction("genesis")()
   await genesisTx.wait()
 
   console.log("Genesis was triggered successfully")

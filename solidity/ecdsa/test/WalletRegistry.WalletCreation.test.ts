@@ -1,6 +1,8 @@
+import { toBeHex } from "ethers"
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import { constants, dkgState, params, walletRegistryFixture } from "./fixtures"
 import ecdsaData from "./data/ecdsa"
 import {
@@ -19,7 +21,7 @@ import { assertGasUsed } from "./helpers/gas"
 import { legacyTokenStakingAt } from "./utils/operators"
 
 import type { Operator } from "./utils/operators"
-import type { BigNumber, ContractTransaction, Signer } from "ethers"
+import type { ContractTransactionResponse, Signer } from "ethers"
 import type {
   IWalletOwner,
   SortitionPool,
@@ -29,7 +31,7 @@ import type {
   IRandomBeacon,
   DkgChallenger,
 } from "../typechain"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { DkgResult, DkgResultSubmittedEventArgs } from "./utils/dkg"
 import type { Mock } from "./helpers/mock"
 
@@ -37,7 +39,7 @@ const { to1e18 } = helpers.number
 const { mineBlocks, mineBlocksTo } = helpers.time
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
-const { keccak256 } = ethers.utils
+const { keccak256 } = ethers
 const { provider } = ethers
 
 describe.skip("TokenStaking Integration (DEPRECATED TIP-092)", () => {
@@ -71,13 +73,9 @@ describe.skip("TokenStaking Integration (DEPRECATED TIP-092)", () => {
 
 describe("WalletRegistry - Wallet Creation", async () => {
   const dkgTimeout: number = params.dkgResultSubmissionTimeout
-  const groupPublicKey: string = ethers.utils.hexValue(
-    ecdsaData.group1.publicKey,
-  )
-  const groupPublicKey2: string = ethers.utils.hexValue(
-    ecdsaData.group2.publicKey,
-  )
-  const walletID: string = ethers.utils.keccak256(groupPublicKey)
+  const groupPublicKey: string = ethers.toQuantity(ecdsaData.group1.publicKey)
+  const groupPublicKey2: string = ethers.toQuantity(ecdsaData.group2.publicKey)
+  const walletID: string = ethers.keccak256(groupPublicKey)
 
   const stubDkgResult: DkgResult = {
     submitterMemberIndex: 1,
@@ -139,7 +137,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
     context("when called by the wallet owner", async () => {
       context("with initial contract state", async () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before("start wallet creation", async () => {
           await createSnapshot()
@@ -201,7 +199,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
           context("with relay entry submitted", async () => {
             let startBlock: number
-            let dkgSeed: BigNumber
+            let dkgSeed: bigint
 
             before("submit relay entry", async () => {
               await createSnapshot()
@@ -371,7 +369,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
         context("with relay entry submitted", async () => {
           let startBlock: number
-          let dkgSeed: BigNumber
+          let dkgSeed: bigint
 
           before(async () => {
             await createSnapshot()
@@ -536,7 +534,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           .connect(walletOwner.wallet)
           .requestNewWallet()
 
-        requestNewWalletStartBlock = (await tx.wait()).blockNumber
+        requestNewWalletStartBlock = requireResult(await tx.wait()).blockNumber
       })
 
       after(async () => {
@@ -582,7 +580,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
         context("with relay entry submitted", async () => {
           let startBlock: number
-          let dkgSeed: BigNumber
+          let dkgSeed: bigint
 
           before(async () => {
             await createSnapshot()
@@ -638,7 +636,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
               before("submit dkg result", async () => {
                 await createSnapshot()
 
-                let tx: ContractTransaction
+                let tx: ContractTransactionResponse
                 ;({
                   transaction: tx,
                   dkgResult,
@@ -651,7 +649,9 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   noMisbehaved,
                 ))
 
-                resultSubmissionBlock = (await tx.wait()).blockNumber
+                resultSubmissionBlock = requireResult(
+                  await tx.wait(),
+                ).blockNumber
               })
 
               after(async () => {
@@ -786,7 +786,9 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   await createSnapshot()
 
                   const tx = await walletRegistry.challengeDkgResult(dkgResult)
-                  challengeBlockNumber = (await tx.wait()).blockNumber
+                  challengeBlockNumber = requireResult(
+                    await tx.wait(),
+                  ).blockNumber
                 })
 
                 after(async () => {
@@ -884,7 +886,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
         context("with relay entry submitted", async () => {
           let startBlock: number
-          let dkgSeed: BigNumber
+          let dkgSeed: bigint
 
           before(async () => {
             await createSnapshot()
@@ -986,7 +988,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
               })
 
               context("with enough signatures on the result", async () => {
-                let tx: ContractTransaction
+                let tx: ContractTransactionResponse
                 let dkgResult: DkgResult
                 let dkgResultHash: string
 
@@ -1144,7 +1146,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
               before(async () => {
                 await createSnapshot()
 
-                let tx: ContractTransaction
+                let tx: ContractTransactionResponse
                 ;({
                   transaction: tx,
                   dkgResult,
@@ -1157,7 +1159,9 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   noMisbehaved,
                 ))
 
-                resultSubmissionBlock = (await tx.wait()).blockNumber
+                resultSubmissionBlock = requireResult(
+                  await tx.wait(),
+                ).blockNumber
               })
 
               after(async () => {
@@ -1240,7 +1244,9 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
                     const tx =
                       await walletRegistry.challengeDkgResult(dkgResult)
-                    challengeBlockNumber = (await tx.wait()).blockNumber
+                    challengeBlockNumber = requireResult(
+                      await tx.wait(),
+                    ).blockNumber
                   })
 
                   after(async () => {
@@ -1271,7 +1277,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
                   context("with a fresh dkg result", async () => {
                     context("", async () => {
-                      let tx: ContractTransaction
+                      let tx: ContractTransactionResponse
                       let expectedEventArgs: DkgResultSubmittedEventArgs
 
                       before(async () => {
@@ -1410,7 +1416,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
             )
 
             context("with misbehaved members", async () => {
-              let tx: ContractTransaction
+              let tx: ContractTransactionResponse
               let dkgResult: DkgResult
               let dkgResultHash: string
 
@@ -1556,7 +1562,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
         context("with relay entry submitted", async () => {
           let startBlock: number
-          let dkgSeed: BigNumber
+          let dkgSeed: bigint
 
           before("submit relay entry", async () => {
             await createSnapshot()
@@ -1586,14 +1592,14 @@ describe("WalletRegistry - Wallet Creation", async () => {
             let dkgResultHash: string
             let dkgResult: DkgResult
             let submitter: SignerWithAddress
-            let submitterInitialBalance: BigNumber
+            let submitterInitialBalance: bigint
 
             const submitterIndex = 1
 
             before(async () => {
               await createSnapshot()
 
-              let tx: ContractTransaction
+              let tx: ContractTransactionResponse
               ;({
                 transaction: tx,
                 dkgResult,
@@ -1609,7 +1615,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 submitterIndex,
               ))
 
-              resultSubmissionBlock = (await tx.wait()).blockNumber
+              resultSubmissionBlock = requireResult(await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -1652,7 +1658,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
               })
 
               context("when called by a DKG result submitter", async () => {
-                let tx: ContractTransaction
+                let tx: ContractTransactionResponse
 
                 before(async () => {
                   await createSnapshot()
@@ -1697,13 +1703,13 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 it("should refund ETH to a submitter", async () => {
                   const postDkgResultApprovalSubmitterInitialBalance =
                     await provider.getBalance(await submitter.getAddress())
-                  const diff = postDkgResultApprovalSubmitterInitialBalance.sub(
-                    submitterInitialBalance,
-                  )
+                  const diff =
+                    postDkgResultApprovalSubmitterInitialBalance -
+                    submitterInitialBalance
 
                   expect(diff).to.be.gt(0)
                   expect(diff).to.be.lt(
-                    ethers.utils.parseUnits("1200000", "gwei"), // 0.0012 ETH
+                    ethers.parseUnits("1200000", "gwei"), // 0.0012 ETH
                   )
                 })
 
@@ -1755,8 +1761,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 )
 
                 context("when the third party is eligible", async () => {
-                  let tx: ContractTransaction
-                  let thirdPartyInitialBalance: BigNumber
+                  let tx: ContractTransactionResponse
+                  let thirdPartyInitialBalance: bigint
 
                   before(async () => {
                     await createSnapshot()
@@ -1787,18 +1793,17 @@ describe("WalletRegistry - Wallet Creation", async () => {
                       await provider.getBalance(await thirdParty.getAddress())
                     const { dkgResultSubmissionGas } =
                       await walletRegistry.gasParameters()
-                    const feeForDkgSubmission = dkgResultSubmissionGas.mul(
-                      (await tx.wait()).effectiveGasPrice,
-                    )
+                    const feeForDkgSubmission =
+                      dkgResultSubmissionGas *
+                      requireResult(await tx.wait()).gasPrice
                     // submission part was done by someone else and this is why
                     // we add submission dkg fee to the initial balance
                     const diff =
-                      postDkgResultApprovalThirdPartyInitialBalance.sub(
-                        thirdPartyInitialBalance.add(feeForDkgSubmission),
-                      )
+                      postDkgResultApprovalThirdPartyInitialBalance -
+                      (thirdPartyInitialBalance + feeForDkgSubmission)
                     expect(diff).to.be.gt(0)
                     expect(diff).to.be.lt(
-                      ethers.utils.parseUnits("1000000", "gwei"), // 0,001 ETH
+                      ethers.parseUnits("1000000", "gwei"), // 0,001 ETH
                     )
                   })
                 })
@@ -1834,7 +1839,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
               await walletRegistry.challengeDkgResult(maliciousDkgResult)
 
-              let tx: ContractTransaction
+              let tx: ContractTransactionResponse
               ;({
                 transaction: tx,
                 dkgResult,
@@ -1849,7 +1854,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 anotherSubmitterIndex,
               ))
 
-              resultSubmissionBlock = (await tx.wait()).blockNumber
+              resultSubmissionBlock = requireResult(await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -1881,8 +1886,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
             })
 
             context("with challenge period passed", async () => {
-              let tx: ContractTransaction
-              let initalAnotherSubmitterBalance: BigNumber
+              let tx: ContractTransactionResponse
+              let initalAnotherSubmitterBalance: bigint
 
               before(async () => {
                 await createSnapshot()
@@ -1933,26 +1938,25 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   await provider.getBalance(await anotherSubmitter.getAddress())
                 const { dkgResultSubmissionGas } =
                   await walletRegistry.gasParameters()
-                const feeForDkgSubmission = dkgResultSubmissionGas.mul(
-                  (await tx.wait()).effectiveGasPrice,
-                )
+                const feeForDkgSubmission =
+                  dkgResultSubmissionGas *
+                  requireResult(await tx.wait()).gasPrice
                 // submission part was done by someone else and this is why
                 // we add submission dkg fee to the initial balance
                 const diff =
-                  postDkgResultApprovalAnotherSubmitterInitialBalance.sub(
-                    initalAnotherSubmitterBalance.add(feeForDkgSubmission),
-                  )
+                  postDkgResultApprovalAnotherSubmitterInitialBalance -
+                  (initalAnotherSubmitterBalance + feeForDkgSubmission)
 
                 expect(diff).to.be.gt(0)
                 expect(diff).to.be.lt(
-                  ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
+                  ethers.parseUnits("2000000", "gwei"), // 0,002 ETH
                 )
               })
             })
           })
 
           context("with max periods duration", async () => {
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
             let dkgResultHash: string
             let submitter: SignerWithAddress
 
@@ -1998,10 +2002,10 @@ describe("WalletRegistry - Wallet Creation", async () => {
           context("with misbehaved operators", async () => {
             const misbehavedIndices = [2, 9, 11, 30, 60, 64]
             let misbehavedIds: number[]
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
             let dkgResult: DkgResult
             let submitter: SignerWithAddress
-            let submitterInitialBalance: BigNumber
+            let submitterInitialBalance: bigint
 
             before(async () => {
               await createSnapshot()
@@ -2061,13 +2065,13 @@ describe("WalletRegistry - Wallet Creation", async () => {
             it("should refund ETH to a submitter", async () => {
               const postDkgResultApprovalSubmitterInitialBalance =
                 await provider.getBalance(await submitter.getAddress())
-              const diff = postDkgResultApprovalSubmitterInitialBalance.sub(
-                submitterInitialBalance,
-              )
+              const diff =
+                postDkgResultApprovalSubmitterInitialBalance -
+                submitterInitialBalance
 
-              expect(diff).to.be.gt(ethers.utils.parseUnits("-1000000", "gwei")) // -0,001 ETH
+              expect(diff).to.be.gt(ethers.parseUnits("-1000000", "gwei")) // -0,001 ETH
               expect(diff).to.be.lt(
-                ethers.utils.parseUnits("1000000", "gwei"), // 0,001 ETH
+                ethers.parseUnits("1000000", "gwei"), // 0,001 ETH
               )
             })
 
@@ -2085,7 +2089,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
               let dkgResult: DkgResult
               let submitter: SignerWithAddress
-              let tx: Promise<ContractTransaction>
+              let tx: Promise<ContractTransactionResponse>
 
               before(async () => {
                 await createSnapshot()
@@ -2177,7 +2181,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
       context("with new wallet creation started", async () => {
         let startBlock: number
-        let dkgSeed: BigNumber
+        let dkgSeed: bigint
 
         before(
           "request new wallet creation and submit relay entry",
@@ -2204,7 +2208,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           let dkgResultHash: string
           let dkgResult: DkgResult
           let submitter: SignerWithAddress
-          let submitterInitialBalance: BigNumber
+          let submitterInitialBalance: bigint
 
           const newResultPublicKey = ecdsaData.group2.publicKey
           const newWalletID = keccak256(newResultPublicKey)
@@ -2230,7 +2234,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           })
 
           context("when called by a DKG result submitter", async () => {
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
 
             before(async () => {
               await createSnapshot()
@@ -2275,13 +2279,13 @@ describe("WalletRegistry - Wallet Creation", async () => {
             it("should refund ETH to a submitter", async () => {
               const postDkgResultApprovalSubmitterInitialBalance =
                 await provider.getBalance(await submitter.getAddress())
-              const diff = postDkgResultApprovalSubmitterInitialBalance.sub(
-                submitterInitialBalance,
-              )
+              const diff =
+                postDkgResultApprovalSubmitterInitialBalance -
+                submitterInitialBalance
 
               expect(diff).to.be.gt(0)
               expect(diff).to.be.lt(
-                ethers.utils.parseUnits("1200000", "gwei"), // 0.0012 ETH
+                ethers.parseUnits("1200000", "gwei"), // 0.0012 ETH
               )
             })
           })
@@ -2296,14 +2300,16 @@ describe("WalletRegistry - Wallet Creation", async () => {
       let dkgResult: DkgResult
       let dkgResultHash: string
       let startBlock: number
-      let dkgSeed: BigNumber
+      let dkgSeed: bigint
 
       before("setup malicious DKG result", async () => {
         await createSnapshot()
 
         // Deploy challenger contract
         const DkgChallenger = await ethers.getContractFactory("DkgChallenger")
-        dkgChallenger = await DkgChallenger.deploy(walletRegistry.address)
+        dkgChallenger = await DkgChallenger.deploy(
+          await walletRegistry.getAddress(),
+        )
 
         // Request new wallet
         await walletRegistry.connect(walletOwner.wallet).requestNewWallet()
@@ -2333,7 +2339,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           .to.emit(walletRegistry, "DkgResultChallenged")
           .withArgs(
             dkgResultHash,
-            dkgChallenger.address,
+            await dkgChallenger.getAddress(),
             "Invalid group members",
           )
       })
@@ -2365,7 +2371,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
           context("with relay entry submitted", async () => {
             let startBlock: number
-            let dkgSeed: BigNumber
+            let dkgSeed: bigint
 
             before("submit relay entry", async () => {
               await createSnapshot()
@@ -2394,7 +2400,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
               before(async () => {
                 await createSnapshot()
 
-                let tx: ContractTransaction
+                let tx: ContractTransactionResponse
                 ;({
                   transaction: tx,
                   dkgResult,
@@ -2409,7 +2415,9 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   noMisbehaved,
                 ))
 
-                resultSubmissionBlock = (await tx.wait()).blockNumber
+                resultSubmissionBlock = requireResult(
+                  await tx.wait(),
+                ).blockNumber
               })
 
               after(async () => {
@@ -2420,8 +2428,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 context.skip(
                   "called by a third party (skipped: no processSlashing on dev TokenStaking)",
                   async () => {
-                    let challengeTx: ContractTransaction
-                    let slashingTx: ContractTransaction
+                    let challengeTx: ContractTransactionResponse
+                    let slashingTx: ContractTransactionResponse
 
                     before(async () => {
                       await createSnapshot()
@@ -2501,8 +2509,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 context.skip(
                   "called by a third party (skipped: no processSlashing on dev TokenStaking)",
                   async () => {
-                    let challengeTx: ContractTransaction
-                    let slashingTx: ContractTransaction
+                    let challengeTx: ContractTransactionResponse
+                    let slashingTx: ContractTransactionResponse
 
                     before(async () => {
                       await createSnapshot()
@@ -2608,8 +2616,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 let dkgResult: DkgResult
                 let submitter: SignerWithAddress
 
-                let challengeTx: ContractTransaction
-                let slashingTx: ContractTransaction
+                let challengeTx: ContractTransactionResponse
+                let slashingTx: ContractTransactionResponse
 
                 before(async () => {
                   await createSnapshot()
@@ -2683,7 +2691,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
               async () => {
                 const misbehavedIndices = [2, 9, 30, 11, 60, 64]
 
-                let tx: ContractTransaction
+                let tx: ContractTransactionResponse
                 let dkgResult: DkgResult
                 let dkgResultHash: string
 
@@ -2730,7 +2738,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
             context("when misbehaved members contains duplicates", async () => {
               const misbehavedIndices = [2, 9, 30, 30, 60, 64]
 
-              let tx: ContractTransaction
+              let tx: ContractTransactionResponse
               let dkgResult: DkgResult
               let dkgResultHash: string
 
@@ -2808,7 +2816,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 before(async () => {
                   await createSnapshot()
 
-                  let tx: ContractTransaction
+                  let tx: ContractTransactionResponse
                   ;({
                     transaction: tx,
                     dkgResult,
@@ -2830,7 +2838,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 context(
                   "when staking.seize() succeeds (normal operation)",
                   async () => {
-                    let challengeTx: ContractTransaction
+                    let challengeTx: ContractTransactionResponse
 
                     before(async () => {
                       await createSnapshot()
@@ -2867,8 +2875,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
                     })
 
                     it("should use less gas than current implementation (bytecode optimization)", async () => {
-                      const receipt = await challengeTx.wait()
-                      const gasUsed = receipt.gasUsed.toNumber()
+                      const receipt = requireResult(await challengeTx.wait())
+                      const gasUsed = Number(receipt.gasUsed)
                       expect(gasUsed).to.be.lessThan(1_850_000)
                     })
                   },
@@ -2899,7 +2907,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
       context("with new wallet creation started", async () => {
         let startBlock: number
-        let dkgSeed: BigNumber
+        let dkgSeed: bigint
 
         before(
           "request new wallet creation and submit relay entry",
@@ -2937,7 +2945,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           before(async () => {
             await createSnapshot()
 
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
             ;({
               transaction: tx,
               dkgResult,
@@ -2952,7 +2960,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
               noMisbehaved,
             ))
 
-            resultSubmissionBlock = (await tx.wait()).blockNumber
+            resultSubmissionBlock = requireResult(await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -2963,8 +2971,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
             context.skip(
               "called by a third party (skipped: no processSlashing on dev TokenStaking)",
               async () => {
-                let challengeTx: ContractTransaction
-                let slashingTx: ContractTransaction
+                let challengeTx: ContractTransactionResponse
+                let slashingTx: ContractTransactionResponse
 
                 before(async () => {
                   await createSnapshot()
@@ -3050,8 +3058,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
             context.skip(
               "called by a third party (skipped: no processSlashing on dev TokenStaking)",
               async () => {
-                let challengeTx: ContractTransaction
-                let slashingTx: ContractTransaction
+                let challengeTx: ContractTransactionResponse
+                let slashingTx: ContractTransactionResponse
 
                 before(async () => {
                   await createSnapshot()
@@ -3148,8 +3156,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
             let dkgResult: DkgResult
             let submitter: SignerWithAddress
 
-            let challengeTx: ContractTransaction
-            let slashingTx: ContractTransaction
+            let challengeTx: ContractTransactionResponse
+            let slashingTx: ContractTransactionResponse
 
             before(async () => {
               await createSnapshot()
@@ -3331,7 +3339,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
         expectedSubmissionOffset += blocksToMine
 
         await expect(
-          walletRegistry.callStatic.notifyDkgTimeout(),
+          walletRegistry.notifyDkgTimeout.staticCall(),
         ).to.be.revertedWith("DKG has not timed out")
 
         await walletRegistry.challengeDkgResult(dkgResult)
@@ -3371,7 +3379,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
     context("with new wallet creation in progress", async () => {
       let startBlock: number
-      let dkgSeed: BigNumber
+      let dkgSeed: bigint
 
       before("request new wallet creation and submit relay entry", async () => {
         await createSnapshot()
@@ -3443,7 +3451,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           .connect(walletOwner.wallet)
           .requestNewWallet()
 
-        requestNewWalletStartBlock = (await tx.wait()).blockNumber
+        requestNewWalletStartBlock = requireResult(await tx.wait()).blockNumber
       })
 
       after(async () => {
@@ -3538,7 +3546,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           .connect(walletOwner.wallet)
           .requestNewWallet()
 
-        requestNewWalletStartBlock = (await tx.wait()).blockNumber
+        requestNewWalletStartBlock = requireResult(await tx.wait()).blockNumber
       })
 
       after(async () => {
@@ -3597,8 +3605,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
           })
 
           context("called by a third party", async () => {
-            let tx: ContractTransaction
-            let initThirdPartyBalance: BigNumber
+            let tx: ContractTransactionResponse
+            let initThirdPartyBalance: bigint
 
             before(async () => {
               await createSnapshot()
@@ -3636,12 +3644,10 @@ describe("WalletRegistry - Wallet Creation", async () => {
               const postNotifyThirdPartyBalance = await provider.getBalance(
                 thirdParty.address,
               )
-              const diff = postNotifyThirdPartyBalance.sub(
-                initThirdPartyBalance,
-              )
+              const diff = postNotifyThirdPartyBalance - initThirdPartyBalance
               expect(diff).to.be.gt(0)
               expect(diff).to.be.lt(
-                ethers.utils.parseUnits("100000", "gwei"), // 0,0001 ETH
+                ethers.parseUnits("100000", "gwei"), // 0,0001 ETH
               )
             })
 
@@ -3689,7 +3695,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
           .connect(walletOwner.wallet)
           .requestNewWallet()
 
-        requestNewWalletStartBlock = (await tx.wait()).blockNumber
+        requestNewWalletStartBlock = requireResult(await tx.wait()).blockNumber
       })
 
       after(async () => {
@@ -3759,8 +3765,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
             })
 
             context("called by a third party", async () => {
-              let tx: ContractTransaction
-              let initThirdPartyBalance: BigNumber
+              let tx: ContractTransactionResponse
+              let initThirdPartyBalance: bigint
 
               before(async () => {
                 await createSnapshot()
@@ -3791,12 +3797,10 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 const postNotifyThirdPartyBalance = await provider.getBalance(
                   thirdParty.address,
                 )
-                const diff = postNotifyThirdPartyBalance.sub(
-                  initThirdPartyBalance,
-                )
+                const diff = postNotifyThirdPartyBalance - initThirdPartyBalance
                 expect(diff).to.be.gt(0)
                 expect(diff).to.be.lt(
-                  ethers.utils.parseUnits("100000", "gwei"), // 0,0001 ETH
+                  ethers.parseUnits("100000", "gwei"), // 0,0001 ETH
                 )
               })
 
@@ -3828,7 +3832,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
     })
 
     context("when dkg was triggered", async () => {
-      let dkgSeed: BigNumber
+      let dkgSeed: bigint
 
       before(async () => {
         await createSnapshot()
@@ -3848,7 +3852,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
       it("should be the same group as if called the sortition pool directly", async () => {
         const exectedGroup = await sortitionPool.selectGroup(
           constants.groupSize,
-          ethers.utils.hexZeroPad(dkgSeed.toHexString(), 32),
+          ethers.zeroPadValue(toBeHex(dkgSeed), 32),
         )
         const actualGroup = await walletRegistry.selectGroup()
         expect(exectedGroup).to.be.deep.equal(actualGroup)
@@ -3883,7 +3887,7 @@ async function assertDkgResultCleanData(walletRegistry: WalletRegistryStub) {
   ).to.eq(0)
 
   expect(dkgData.submittedResultHash, "unexpected submittedResultHash").to.eq(
-    ethers.constants.HashZero,
+    ethers.ZeroHash,
   )
 
   expect(dkgData.submittedResultBlock, "unexpected submittedResultBlock").to.eq(

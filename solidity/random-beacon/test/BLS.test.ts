@@ -37,13 +37,13 @@ describe("BLS", () => {
 
   it("should use reasonable amount of gas", async () => {
     // Corresponding test in Go library: bls_test.go TestThresholdBLS
-    const gasEstimate = await bls.estimateGas.verify(
+    const gasEstimate = await bls.verify.estimateGas(
       "0x1644bcbb604e3608225d1826bab0b926f2df4fb506e1aa3641d5ab350ebceb5825c7df94f3a87e9dd6e11865dfdbdd3db69eab4951c8bc2250fb51da5f813009131e0c9e6d90d91741458b522b57ca99b597dd922dd31f61a2f69412ce3220d31a1ec4b09ef2ea1d6ba7cad98386f6049b5eec5fb3a40408229dc75c5759f184",
       "0x15c30f4b6cf6dbbcbdcc10fe22f54c8170aea44e198139b776d512d8f027319a1b9e8bfaf1383978231ce98e42bafc8129f473fc993cf60ce327f7d223460663",
       "0x23cbfa4b2fcbf43a44d8a4b2a9aa1a9123f183794fa7b53c633c2de7ada5b5ca174f81900dc4ca5672768d51c12dfcb0eac2aafba0a66ac54b76f689dc1fe321",
     )
     // make sure no change will make the verification more expensive than it is now
-    await expect(gasEstimate.toNumber()).to.be.lessThan(
+    await expect(Number(gasEstimate)).to.be.lessThan(
       306682,
       "BLS verification is too expensive",
     )

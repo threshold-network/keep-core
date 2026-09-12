@@ -2,16 +2,17 @@ import { ethers } from "hardhat"
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import blsData from "./data/bls"
 import { constants } from "./fixtures"
 import { noMisbehaved, hashDKGMembers } from "./utils/dkg"
 import { hashUint32Array } from "./utils/groups"
 
 import type { GroupsStub } from "../typechain"
-import type { ContractTransaction } from "ethers"
+import type { ContractTransactionResponse } from "ethers"
 import type { Groups } from "../typechain/contracts/test/GroupsStub"
 
-const { keccak256 } = ethers.utils
+const { keccak256 } = ethers
 
 const fixture = async () => {
   const GroupsStub = await ethers.getContractFactory("GroupsStub")
@@ -21,7 +22,7 @@ const fixture = async () => {
 }
 
 describe("Groups", () => {
-  const groupPublicKey: string = ethers.utils.hexValue(blsData.groupPubKey)
+  const groupPublicKey: string = ethers.toQuantity(blsData.groupPubKey)
   const members: number[] = []
 
   let groups: GroupsStub
@@ -55,7 +56,7 @@ describe("Groups", () => {
 
   describe("addGroup", async () => {
     context("when no groups are registered", async () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       context("with no misbehaved members", async () => {
         beforeEach(async () => {
@@ -83,7 +84,7 @@ describe("Groups", () => {
 
           expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
           expect(storedGroup.registrationBlockNumber).to.be.equal(
-            (await tx.wait()).blockNumber
+            requireResult(await tx.wait()).blockNumber,
           )
           expect(storedGroup.membersHash).to.be.equal(hashUint32Array(members))
         })
@@ -189,7 +190,7 @@ describe("Groups", () => {
       context("with unique group public key", async () => {
         const newGroupPublicKey = groupPublicKey
 
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         beforeEach(async () => {
           tx = await groups.addGroup(
@@ -216,7 +217,7 @@ describe("Groups", () => {
 
           expect(storedGroup.groupPubKey).to.be.equal(newGroupPublicKey)
           expect(storedGroup.registrationBlockNumber).to.be.equal(
-            (await tx.wait()).blockNumber
+            requireResult(await tx.wait()).blockNumber,
           )
           expect(storedGroup.membersHash).to.be.equal(
             hashUint32Array(newGroupMembers),

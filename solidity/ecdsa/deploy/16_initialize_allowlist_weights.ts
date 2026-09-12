@@ -97,8 +97,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const currentOwner = await allowlist.owner()
   const ownerSigner = await ethers.getSigner(currentOwner)
 
-  console.log(`Allowlist address: ${allowlist.address}`)
-  console.log(`WalletRegistry address: ${walletRegistry.address}`)
+  console.log(`Allowlist address: ${await allowlist.getAddress()}`)
+  console.log(`WalletRegistry address: ${await walletRegistry.getAddress()}`)
   console.log(`Allowlist owner: ${currentOwner}`)
   console.log(`Owner signer: ${await ownerSigner.getAddress()}`)
   console.log()
@@ -136,10 +136,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       // eslint-disable-next-line no-await-in-loop
       const existingWeight = await allowlist.authorizedStake(
         op.stakingProvider,
-        ethers.constants.AddressZero,
+        ethers.ZeroAddress,
       )
 
-      if (existingWeight.gt(0)) {
+      if (existingWeight > 0n) {
         console.log(
           `Skipping ${op.identification} (${op.stakingProvider.slice(
             0,
@@ -168,7 +168,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       // eslint-disable-next-line no-await-in-loop
       const tx = await allowlist
         .connect(ownerSigner)
-        .addStakingProvider(op.stakingProvider, op.weight)
+        .getFunction("addStakingProvider")(op.stakingProvider, op.weight)
 
       // eslint-disable-next-line no-await-in-loop
       const receipt = await tx.wait()
@@ -204,7 +204,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const currentAllowlist = await walletRegistry.allowlist()
 
-  if (currentAllowlist === ethers.constants.AddressZero) {
+  if (currentAllowlist === ethers.ZeroAddress) {
     console.error("ERROR: WalletRegistry V2 is not initialized!")
     console.error()
     console.error("Please run the upgrade script first:")
@@ -218,12 +218,15 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     return false
   }
 
-  if (currentAllowlist.toLowerCase() !== allowlist.address.toLowerCase()) {
+  if (
+    currentAllowlist.toLowerCase() !==
+    (await allowlist.getAddress()).toLowerCase()
+  ) {
     console.error(
       "ERROR: WalletRegistry is initialized with a different Allowlist!",
     )
     console.error(`  Current: ${currentAllowlist}`)
-    console.error(`  Expected: ${allowlist.address}`)
+    console.error(`  Expected: ${await allowlist.getAddress()}`)
     return false
   }
 
@@ -266,8 +269,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       {
         timestamp: new Date().toISOString(),
         network: hre.network.name,
-        allowlistAddress: allowlist.address,
-        walletRegistryAddress: walletRegistry.address,
+        allowlistAddress: await allowlist.getAddress(),
+        walletRegistryAddress: await walletRegistry.getAddress(),
         weightsSource: weightsData.metadata.source,
         weightsGeneratedAt: weightsData.metadata.generatedAt,
         summary: {
@@ -318,7 +321,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
       const tx = await allowlist
         .connect(ownerSigner)
-        .transferOwnership(governance)
+        .getFunction("transferOwnership")(governance)
 
       await tx.wait()
 

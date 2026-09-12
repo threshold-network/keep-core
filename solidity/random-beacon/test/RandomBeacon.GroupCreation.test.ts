@@ -1,9 +1,11 @@
+import { toBeHex } from "ethers"
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 
 import { ethers, helpers } from "hardhat"
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import blsData from "./data/bls"
 import { constants, dkgState, params, randomBeaconDeployment } from "./fixtures"
 import {
@@ -20,15 +22,15 @@ import { registerOperators } from "./utils/operators"
 import { selectGroup, createGroup, hashUint32Array } from "./utils/groups"
 import { fakeTokenStaking } from "./mocks/staking"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { BigNumber, BytesLike, ContractTransaction } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
+import type { BytesLike, ContractTransactionResponse } from "ethers"
 import type { Operator } from "./utils/operators"
 import type { BeaconDkg as DKG } from "../typechain/contracts/test/RandomBeaconStub"
 import type { Mock } from "./helpers/mock"
 import type { RandomBeacon, SortitionPool, T, TokenStaking } from "../typechain"
 
 const { mineBlocks, mineBlocksTo } = helpers.time
-const { keccak256 } = ethers.utils
+const { keccak256 } = ethers
 const { provider } = ethers
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
@@ -39,7 +41,7 @@ type RandomBeaconTest = RandomBeacon & {
   roughlyAddGroup: (
     groupPubKey: BytesLike,
     groupMembersHash: BytesLike,
-  ) => Promise<ContractTransaction>
+  ) => Promise<ContractTransactionResponse>
 }
 
 const fixture = async () => {
@@ -73,7 +75,7 @@ const fixture = async () => {
 describe("RandomBeacon - Group Creation", () => {
   const dkgTimeout: number =
     constants.offchainDkgTime + params.dkgResultSubmissionTimeout
-  const groupPublicKey: string = ethers.utils.hexValue(blsData.groupPubKey)
+  const groupPublicKey: string = ethers.toQuantity(blsData.groupPubKey)
 
   let thirdParty: SignerWithAddress
   let signers: Operator[]
@@ -99,7 +101,7 @@ describe("RandomBeacon - Group Creation", () => {
 
   describe("genesis", async () => {
     context("when called by a third party", async () => {
-      let tx: Promise<ContractTransaction>
+      let tx: Promise<ContractTransactionResponse>
 
       before("run genesis", async () => {
         await createSnapshot()
@@ -117,8 +119,8 @@ describe("RandomBeacon - Group Creation", () => {
     })
 
     context("with initial contract state", async () => {
-      let tx: ContractTransaction
-      let expectedSeed: BigNumber
+      let tx: ContractTransactionResponse
+      let expectedSeed: bigint
 
       before("run genesis", async () => {
         await createSnapshot()
@@ -147,13 +149,13 @@ describe("RandomBeacon - Group Creation", () => {
     context("with no registered groups", async () => {
       context("with genesis in progress", async () => {
         let startBlock: number
-        let genesisSeed: BigNumber
+        let genesisSeed: bigint
 
         before("run genesis", async () => {
           await createSnapshot()
 
           const [genesisTx, seed] = await genesis(randomBeacon)
-          startBlock = (await genesisTx.wait()).blockNumber
+          startBlock = requireResult(await genesisTx.wait()).blockNumber
           genesisSeed = seed
         })
 
@@ -299,13 +301,13 @@ describe("RandomBeacon - Group Creation", () => {
 
     context("when genesis dkg started", async () => {
       let startBlock: number
-      let genesisSeed: BigNumber
+      let genesisSeed: bigint
 
       before("run genesis", async () => {
         await createSnapshot()
 
         const [genesisTx, seed] = await genesis(randomBeacon)
-        startBlock = (await genesisTx.wait()).blockNumber
+        startBlock = requireResult(await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -474,13 +476,13 @@ describe("RandomBeacon - Group Creation", () => {
 
     context("when genesis dkg started", async () => {
       let startBlock: number
-      let genesisSeed: BigNumber
+      let genesisSeed: bigint
 
       before("run genesis", async () => {
         await createSnapshot()
 
         const [genesisTx, seed] = await genesis(randomBeacon)
-        startBlock = (await genesisTx.wait()).blockNumber
+        startBlock = requireResult(await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -551,7 +553,7 @@ describe("RandomBeacon - Group Creation", () => {
           before(async () => {
             await createSnapshot()
 
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
             ;({
               transaction: tx,
               dkgResult,
@@ -564,7 +566,7 @@ describe("RandomBeacon - Group Creation", () => {
               noMisbehaved,
             ))
 
-            resultSubmissionBlock = (await tx.wait()).blockNumber
+            resultSubmissionBlock = requireResult(await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -690,7 +692,7 @@ describe("RandomBeacon - Group Creation", () => {
               await createSnapshot()
 
               const tx = await randomBeacon.challengeDkgResult(dkgResult)
-              challengeBlockNumber = (await tx.wait()).blockNumber
+              challengeBlockNumber = requireResult(await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -755,14 +757,14 @@ describe("RandomBeacon - Group Creation", () => {
 
     context("with group creation in progress", async () => {
       let startBlock: number
-      let genesisSeed: BigNumber
+      let genesisSeed: bigint
 
       before("run genesis", async () => {
         await createSnapshot()
 
         const [genesisTx, seed] = await genesis(randomBeacon)
 
-        startBlock = (await genesisTx.wait()).blockNumber
+        startBlock = requireResult(await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -807,7 +809,7 @@ describe("RandomBeacon - Group Creation", () => {
           })
 
           context("with enough signatures on the result", async () => {
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
             let dkgResult: DKG.ResultStruct
             let dkgResultHash: string
 
@@ -857,7 +859,7 @@ describe("RandomBeacon - Group Creation", () => {
           })
 
           context("with not enough signatures on the result", async () => {
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
             let dkgResult: DKG.ResultStruct
             let dkgResultHash: string
 
@@ -998,7 +1000,7 @@ describe("RandomBeacon - Group Creation", () => {
             before(async () => {
               await createSnapshot()
 
-              let tx: ContractTransaction
+              let tx: ContractTransactionResponse
               ;({
                 transaction: tx,
                 dkgResult,
@@ -1011,7 +1013,7 @@ describe("RandomBeacon - Group Creation", () => {
                 noMisbehaved,
               ))
 
-              resultSubmissionBlock = (await tx.wait()).blockNumber
+              resultSubmissionBlock = requireResult(await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -1077,7 +1079,7 @@ describe("RandomBeacon - Group Creation", () => {
               )
 
               const tx = await randomBeacon.challengeDkgResult(dkgResult)
-              challengeBlockNumber = (await tx.wait()).blockNumber
+              challengeBlockNumber = requireResult(await tx.wait()).blockNumber
             })
 
             after(async () => {
@@ -1085,7 +1087,7 @@ describe("RandomBeacon - Group Creation", () => {
             })
 
             describe("group registration", async () => {
-              let tx: ContractTransaction
+              let tx: ContractTransactionResponse
 
               before(async () => {
                 await createSnapshot()
@@ -1197,7 +1199,7 @@ describe("RandomBeacon - Group Creation", () => {
             })
 
             context("with misbehaved members", async () => {
-              let tx: ContractTransaction
+              let tx: ContractTransactionResponse
               let dkgResult: DKG.ResultStruct
               let dkgResultHash: string
 
@@ -1411,14 +1413,14 @@ describe("RandomBeacon - Group Creation", () => {
 
     context("with group creation in progress", async () => {
       let startBlock: number
-      let genesisSeed: BigNumber
+      let genesisSeed: bigint
 
       before("run genesis", async () => {
         await createSnapshot()
 
         const [genesisTx, seed] = await genesis(randomBeacon)
 
-        startBlock = (await genesisTx.wait()).blockNumber
+        startBlock = requireResult(await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -1456,14 +1458,14 @@ describe("RandomBeacon - Group Creation", () => {
           let dkgResultHash: string
           let dkgResult: DKG.ResultStruct
           let submitter: SignerWithAddress
-          let submitterInitialBalance: BigNumber
+          let submitterInitialBalance: bigint
 
           const submitterIndex = 1
 
           before(async () => {
             await createSnapshot()
 
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
             ;({
               transaction: tx,
               dkgResult,
@@ -1479,7 +1481,7 @@ describe("RandomBeacon - Group Creation", () => {
               submitterIndex,
             ))
 
-            resultSubmissionBlock = (await tx.wait()).blockNumber
+            resultSubmissionBlock = requireResult(await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -1522,7 +1524,7 @@ describe("RandomBeacon - Group Creation", () => {
             })
 
             context("when called by a DKG result submitter", async () => {
-              let tx: ContractTransaction
+              let tx: ContractTransactionResponse
 
               before(async () => {
                 await createSnapshot()
@@ -1559,7 +1561,7 @@ describe("RandomBeacon - Group Creation", () => {
 
                 expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
                 expect(storedGroup.registrationBlockNumber).to.be.equal(
-                  (await tx.wait()).blockNumber
+                  requireResult(await tx.wait()).blockNumber,
                 )
                 expect(storedGroup.membersHash).to.be.equal(
                   hashUint32Array(dkgResult.members),
@@ -1578,11 +1580,11 @@ describe("RandomBeacon - Group Creation", () => {
 
               it("should refund ETH", async () => {
                 const postBalance = await provider.getBalance(submitter.address)
-                const diff = postBalance.sub(submitterInitialBalance)
+                const diff = postBalance - submitterInitialBalance
 
                 expect(diff).to.be.gt(0)
                 expect(diff).to.be.lt(
-                  ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
+                  ethers.parseUnits("2000000", "gwei"), // 0,002 ETH
                 )
               })
             })
@@ -1613,8 +1615,8 @@ describe("RandomBeacon - Group Creation", () => {
               })
 
               context("when the third party is eligible", async () => {
-                let tx: Promise<ContractTransaction>
-                let initApproverBalance: BigNumber
+                let tx: Promise<ContractTransactionResponse>
+                let initApproverBalance: bigint
 
                 before(async () => {
                   await createSnapshot()
@@ -1640,7 +1642,7 @@ describe("RandomBeacon - Group Creation", () => {
                   const postBalance = await provider.getBalance(
                     thirdParty.address,
                   )
-                  const diff = postBalance.sub(initApproverBalance)
+                  const diff = postBalance - initApproverBalance
 
                   expect(diff).to.be.gt(0)
                   // The third party did not submit the result so we are not
@@ -1662,7 +1664,7 @@ describe("RandomBeacon - Group Creation", () => {
           // Submit a second result by another submitter
           const anotherSubmitterIndex = 6
           let anotherSubmitter: SignerWithAddress
-          let anotherSubmitterInitialBalance: BigNumber
+          let anotherSubmitterInitialBalance: bigint
 
           before(async () => {
             await createSnapshot()
@@ -1680,7 +1682,7 @@ describe("RandomBeacon - Group Creation", () => {
 
             await randomBeacon.challengeDkgResult(maliciousDkgResult)
 
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
             ;({
               transaction: tx,
               dkgResult,
@@ -1696,7 +1698,7 @@ describe("RandomBeacon - Group Creation", () => {
               anotherSubmitterIndex,
             ))
 
-            resultSubmissionBlock = (await tx.wait()).blockNumber
+            resultSubmissionBlock = requireResult(await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -1728,7 +1730,7 @@ describe("RandomBeacon - Group Creation", () => {
           })
 
           context("with challenge period passed", async () => {
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
 
             before(async () => {
               await createSnapshot()
@@ -1763,7 +1765,7 @@ describe("RandomBeacon - Group Creation", () => {
 
               expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
               expect(storedGroup.registrationBlockNumber).to.be.equal(
-                (await tx.wait()).blockNumber
+                requireResult(await tx.wait()).blockNumber,
               )
               expect(storedGroup.membersHash).to.be.equal(
                 hashUint32Array(dkgResult.members),
@@ -1784,11 +1786,11 @@ describe("RandomBeacon - Group Creation", () => {
               const postBalance = await provider.getBalance(
                 anotherSubmitter.address,
               )
-              const diff = postBalance.sub(anotherSubmitterInitialBalance)
+              const diff = postBalance - anotherSubmitterInitialBalance
 
               expect(diff).to.be.gt(0)
               expect(diff).to.be.lt(
-                ethers.utils.parseUnits("2400000", "gwei"), // 0,0024 ETH
+                ethers.parseUnits("2400000", "gwei"), // 0,0024 ETH
               )
             })
           })
@@ -1796,7 +1798,7 @@ describe("RandomBeacon - Group Creation", () => {
       })
 
       context("with max periods duration", async () => {
-        let tx: Promise<ContractTransaction>
+        let tx: Promise<ContractTransactionResponse>
 
         before(async () => {
           await createSnapshot()
@@ -1834,10 +1836,10 @@ describe("RandomBeacon - Group Creation", () => {
       context("with misbehaved operators", async () => {
         const misbehavedIndices: number[] = [2, 9, 11, 30, 60, 64]
         let misbehavedIds: number[]
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
         let dkgResult: DKG.ResultStruct
         let submitter: SignerWithAddress
-        let submitterInitialBalance: BigNumber
+        let submitterInitialBalance: bigint
 
         before(async () => {
           await createSnapshot()
@@ -1896,11 +1898,11 @@ describe("RandomBeacon - Group Creation", () => {
 
         it("should refund ETH", async () => {
           const postBalance = await provider.getBalance(submitter.address)
-          const diff = postBalance.sub(submitterInitialBalance)
+          const diff = postBalance - submitterInitialBalance
 
           expect(diff).to.be.gt(0)
           expect(diff).to.be.lt(
-            ethers.utils.parseUnits("1000000", "gwei"), // 0,001 ETH
+            ethers.parseUnits("1000000", "gwei"), // 0,001 ETH
           )
         })
       })
@@ -1914,8 +1916,8 @@ describe("RandomBeacon - Group Creation", () => {
 
           let dkgResult: DKG.ResultStruct
           let submitter: SignerWithAddress
-          let submitterInitialBalance: BigNumber
-          let tx: Promise<ContractTransaction>
+          let submitterInitialBalance: bigint
+          let tx: Promise<ContractTransactionResponse>
 
           before(async () => {
             await createSnapshot()
@@ -1944,11 +1946,11 @@ describe("RandomBeacon - Group Creation", () => {
 
           it("should refund ETH", async () => {
             const postBalance = await provider.getBalance(submitter.address)
-            const diff = postBalance.sub(submitterInitialBalance)
+            const diff = postBalance - submitterInitialBalance
 
             expect(diff).to.be.gt(0)
             expect(diff).to.be.lt(
-              ethers.utils.parseUnits("1000000", "gwei"), // 0,001 ETH
+              ethers.parseUnits("1000000", "gwei"), // 0,001 ETH
             )
           })
         },
@@ -1959,8 +1961,8 @@ describe("RandomBeacon - Group Creation", () => {
 
         let dkgResult: DKG.ResultStruct
         let submitter: SignerWithAddress
-        let tx: Promise<ContractTransaction>
-        let submitterInitialBalance: BigNumber
+        let tx: Promise<ContractTransactionResponse>
+        let submitterInitialBalance: bigint
 
         before(async () => {
           await createSnapshot()
@@ -1989,11 +1991,11 @@ describe("RandomBeacon - Group Creation", () => {
 
         it("should refund ETH", async () => {
           const postBalance = await provider.getBalance(submitter.address)
-          const diff = postBalance.sub(submitterInitialBalance)
+          const diff = postBalance - submitterInitialBalance
 
           expect(diff).to.be.gt(0)
           expect(diff).to.be.lt(
-            ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
+            ethers.parseUnits("2000000", "gwei"), // 0,002 ETH
           )
         })
       })
@@ -2017,7 +2019,7 @@ describe("RandomBeacon - Group Creation", () => {
 
         const [genesisTx] = await genesis(randomBeacon)
 
-        startBlock = (await genesisTx.wait()).blockNumber
+        startBlock = requireResult(await genesisTx.wait()).blockNumber
       })
 
       after(async () => {
@@ -2092,8 +2094,8 @@ describe("RandomBeacon - Group Creation", () => {
         })
 
         context("called by a third party", async () => {
-          let tx: ContractTransaction
-          let initialThirdPartyBalance: BigNumber
+          let tx: ContractTransactionResponse
+          let initialThirdPartyBalance: bigint
 
           before(async () => {
             await createSnapshot()
@@ -2122,10 +2124,10 @@ describe("RandomBeacon - Group Creation", () => {
 
           it("should refund ETH", async () => {
             const postBalance = await provider.getBalance(thirdParty.address)
-            const diff = postBalance.sub(initialThirdPartyBalance)
+            const diff = postBalance - initialThirdPartyBalance
             expect(diff).to.be.gt(0)
             expect(diff).to.be.lt(
-              ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
+              ethers.parseUnits("2000000", "gwei"), // 0,002 ETH
             )
           })
         })
@@ -2155,14 +2157,14 @@ describe("RandomBeacon - Group Creation", () => {
 
     context("with group creation in progress", async () => {
       let startBlock: number
-      let genesisSeed: BigNumber
+      let genesisSeed: bigint
 
       before("run genesis", async () => {
         await createSnapshot()
 
         const [genesisTx, seed] = await genesis(randomBeacon)
 
-        startBlock = (await genesisTx.wait()).blockNumber
+        startBlock = requireResult(await genesisTx.wait()).blockNumber
         genesisSeed = seed
       })
 
@@ -2289,7 +2291,7 @@ describe("RandomBeacon - Group Creation", () => {
           before(async () => {
             await createSnapshot()
 
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
             ;({
               transaction: tx,
               dkgResult,
@@ -2304,7 +2306,7 @@ describe("RandomBeacon - Group Creation", () => {
               noMisbehaved,
             ))
 
-            resultSubmissionBlock = (await tx.wait()).blockNumber
+            resultSubmissionBlock = requireResult(await tx.wait()).blockNumber
           })
 
           after(async () => {
@@ -2313,8 +2315,8 @@ describe("RandomBeacon - Group Creation", () => {
 
           context("at the beginning of challenge period", async () => {
             context("called by a third party", async () => {
-              let challengeTx: ContractTransaction
-              let slashingTx: ContractTransaction
+              let challengeTx: ContractTransactionResponse
+              let slashingTx: ContractTransactionResponse
 
               before(async () => {
                 await createSnapshot()
@@ -2366,11 +2368,11 @@ describe("RandomBeacon - Group Creation", () => {
                   .to.emit(staking, "NotifierRewarded")
                   .withArgs(
                     thirdParty.address,
-                    constants.tokenStakingNotificationReward
-                      .mul(
+                    (constants.tokenStakingNotificationReward *
+                      BigInt(
                         params.dkgMaliciousResultNotificationRewardMultiplier,
-                      )
-                      .div(100),
+                      )) /
+                      100n,
                   )
               })
 
@@ -2407,8 +2409,8 @@ describe("RandomBeacon - Group Creation", () => {
             })
 
             context("called by a third party", async () => {
-              let challengeTx: ContractTransaction
-              let slashingTx: ContractTransaction
+              let challengeTx: ContractTransactionResponse
+              let slashingTx: ContractTransactionResponse
 
               before(async () => {
                 await createSnapshot()
@@ -2460,11 +2462,11 @@ describe("RandomBeacon - Group Creation", () => {
                   .to.emit(staking, "NotifierRewarded")
                   .withArgs(
                     thirdParty.address,
-                    constants.tokenStakingNotificationReward
-                      .mul(
+                    (constants.tokenStakingNotificationReward *
+                      BigInt(
                         params.dkgMaliciousResultNotificationRewardMultiplier,
-                      )
-                      .div(100),
+                      )) /
+                      100n,
                   )
               })
 
@@ -2507,7 +2509,7 @@ describe("RandomBeacon - Group Creation", () => {
 
           context("with token staking seize call failure", async () => {
             let tokenStakingFake: Mock<TokenStaking>
-            let tx: Promise<ContractTransaction>
+            let tx: Promise<ContractTransactionResponse>
 
             before(async () => {
               await createSnapshot()
@@ -2565,8 +2567,8 @@ describe("RandomBeacon - Group Creation", () => {
             let dkgResultHash: string
             let dkgResult: DKG.ResultStruct
             let submitter: SignerWithAddress
-            let challengeTx: ContractTransaction
-            let slashingTx: ContractTransaction
+            let challengeTx: ContractTransactionResponse
+            let slashingTx: ContractTransactionResponse
 
             before(async () => {
               await createSnapshot()
@@ -2626,9 +2628,11 @@ describe("RandomBeacon - Group Creation", () => {
                 .to.emit(staking, "NotifierRewarded")
                 .withArgs(
                   thirdParty.address,
-                  constants.tokenStakingNotificationReward
-                    .mul(params.dkgMaliciousResultNotificationRewardMultiplier)
-                    .div(100),
+                  (constants.tokenStakingNotificationReward *
+                    BigInt(
+                      params.dkgMaliciousResultNotificationRewardMultiplier,
+                    )) /
+                    100n,
                 )
             })
 
@@ -2683,7 +2687,7 @@ describe("RandomBeacon - Group Creation", () => {
       let dkgResult: DKG.ResultStruct
 
       const [genesisTx] = await genesis(randomBeacon)
-      const startBlock = (await genesisTx.wait()).blockNumber
+      const startBlock = requireResult(await genesisTx.wait()).blockNumber
 
       await mineBlocks(constants.offchainDkgTime)
 
@@ -2765,7 +2769,7 @@ describe("RandomBeacon - Group Creation", () => {
       expectedSubmissionOffset += blocksToMine
 
       await expect(
-        randomBeacon.callStatic.notifyDkgTimeout(),
+        randomBeacon.notifyDkgTimeout.staticCall(),
       ).to.be.revertedWith("DKG has not timed out")
 
       await randomBeacon.challengeDkgResult(dkgResult)
@@ -2813,7 +2817,7 @@ describe("RandomBeacon - Group Creation", () => {
     })
 
     context("when dkg was triggered", async () => {
-      let genesisSeed: BigNumber
+      let genesisSeed: bigint
 
       before(async () => {
         await createSnapshot()
@@ -2834,7 +2838,7 @@ describe("RandomBeacon - Group Creation", () => {
       it("should be the same group as if called the sortition pool directly", async () => {
         const exectedGroup = await sortitionPool.selectGroup(
           constants.groupSize,
-          ethers.utils.hexZeroPad(genesisSeed.toHexString(), 32),
+          ethers.zeroPadValue(toBeHex(genesisSeed), 32),
         )
         const actualGroup = await randomBeacon.selectGroup()
         expect(exectedGroup).to.be.deep.equal(actualGroup)
@@ -2871,7 +2875,7 @@ async function assertDkgResultCleanData(randomBeacon: {
   ).to.eq(0)
 
   expect(dkgData.submittedResultHash, "unexpected submittedResultHash").to.eq(
-    ethers.constants.HashZero,
+    ethers.ZeroHash,
   )
 
   expect(dkgData.submittedResultBlock, "unexpected submittedResultBlock").to.eq(
