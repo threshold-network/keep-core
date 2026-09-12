@@ -12,6 +12,7 @@
   "compilerOptions": {
     "esModuleInterop": true,
     "noImplicitAny": true,
-    "downlevelIteration": true
+    "downlevelIteration": true,
+    "skipLibCheck": true
   }
 }
