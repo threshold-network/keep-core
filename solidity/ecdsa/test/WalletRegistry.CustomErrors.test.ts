@@ -12,17 +12,17 @@ import {
   setupAllowlist,
 } from "./fixtures"
 
-import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { IRandomBeacon } from "../typechain/IRandomBeacon"
-import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
+  IWalletOwner,
+  IRandomBeacon,
   WalletRegistry,
   SortitionPool,
   TokenStaking,
   T,
   WalletRegistryGovernance,
 } from "../typechain"
+import type { Mock } from "./helpers/mock"
+import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 
 const { to1e18 } = helpers.number
 const { createSnapshot, restoreSnapshot } = helpers.snapshot

@@ -50,10 +50,8 @@ import { createMock } from "../helpers/mock"
 import { registerOperators } from "../utils/operators"
 import { fakeRandomBeacon } from "../utils/randomBeacon"
 
-import type { IWalletOwner } from "../../typechain/IWalletOwner"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { Operator } from "../utils/operators"
 import type {
+  IWalletOwner,
   SortitionPool,
   ReimbursementPool,
   WalletRegistry,
@@ -64,6 +62,8 @@ import type {
   IRandomBeacon,
   Allowlist,
 } from "../../typechain"
+import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { Operator } from "../utils/operators"
 import type { Mock } from "../helpers/mock"
 
 const { to1e18 } = helpers.number

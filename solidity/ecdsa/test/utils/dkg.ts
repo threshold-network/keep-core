@@ -12,8 +12,8 @@ import type { SortitionPool, WalletRegistry } from "../../typechain"
 import type { Operator } from "./operators"
 import type {
   DkgResultSubmittedEvent,
-  ResultStruct,
-} from "../../typechain/EcdsaDkg"
+  EcdsaDkg,
+} from "../../typechain/contracts/WalletRegistry"
 
 const { provider } = ethers
 
@@ -284,7 +284,7 @@ export function hashDKGMembers(
 export interface DkgResultSubmittedEventArgs {
   resultHash: string
   seed: BigNumber
-  result: ResultStruct
+  result: EcdsaDkg.ResultStruct
 }
 
 // Decode this event explicitly. The assertion was introduced as a workaround
