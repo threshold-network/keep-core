@@ -18,7 +18,9 @@ replace (
 	// (GO-2022-1098, GO-2024-2818, GO-2024-3189) into the Bitcoin consensus,
 	// wire, and script packages.
 	github.com/btcsuite/btcd/btcec => ./third_party/btcsuite/btcec
-	github.com/checksum0/go-electrum => github.com/keep-network/go-electrum v0.0.0-20240206170935-6038cb594daa
+	// The pinned fork needs a concurrency-safe transport abort for cancellation.
+	// See third_party/go-electrum/VENDOR.md for provenance and local changes.
+	github.com/checksum0/go-electrum => ./third_party/go-electrum
 	// Temporary replacement until v1.28.2 is released containing `protodelim` package.
 	// See https://github.com/protocolbuffers/protobuf-go/commit/fb0abd915897428ccfdd6b03b48ad8219751ee54
 	google.golang.org/protobuf/dev => google.golang.org/protobuf v1.28.2-0.20220831092852-f930b1dc76e8

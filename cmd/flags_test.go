@@ -88,6 +88,13 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: "tcp://url.to.electrum:18332",
 		defaultValue:          "",
 	},
+	"bitcoin.electrum.fallbackURLs": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Bitcoin.Electrum.FallbackURLs },
+		flagName:              "--bitcoin.electrum.fallbackURLs",
+		flagValue:             "wss://one.example:443,wss://two.example:443",
+		expectedValueFromFlag: []string{"wss://one.example:443", "wss://two.example:443"},
+		defaultValue:          []string{},
+	},
 	"bitcoin.electrum.connectTimeout": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Bitcoin.Electrum.ConnectTimeout },
 		flagName:              "--bitcoin.electrum.connectTimeout",

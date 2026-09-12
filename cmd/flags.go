@@ -164,6 +164,17 @@ func initBitcoinElectrumFlags(cmd *cobra.Command, cfg *config.Config) {
 		"URL to the Electrum server in format: `scheme://hostname:port`.",
 	)
 
+	cmd.Flags().StringSliceVar(
+		&cfg.Bitcoin.Electrum.FallbackURLs,
+		"bitcoin.electrum.fallbackURLs",
+		[]string{},
+		"Comma-separated list of alternate Electrum server URLs used for "+
+			"failover when the primary server becomes unavailable. When no "+
+			"primary URL is configured, these are appended behind the "+
+			"auto-selected embedded primary; an explicitly configured "+
+			"primary URL remains preferred, with these tried on failure.",
+	)
+
 	cmd.Flags().DurationVar(
 		&cfg.Bitcoin.Electrum.ConnectTimeout,
 		"bitcoin.electrum.connectTimeout",
