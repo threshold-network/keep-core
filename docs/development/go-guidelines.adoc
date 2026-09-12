@@ -72,13 +72,11 @@ There are a few common patterns for testing in the Keep codebase:
 
 Keep numeric validation and narrowing in the same function. A checked conversion
 should return the converted value and an error, so callers cannot accidentally
-validate one value and cast another. Use `group.MemberIndexFromUint32` for member
-indices decoded from protocol messages or persisted signers. It checks the type
-range; the protocol still checks actual group membership.
+validate one value and cast another. Use `group.MemberIndexFromUint32` for member indices decoded from protocol messages or persisted signers. It checks the type range; wire/protocol messages get their membership re-checked downstream, but persisted signer records do not, so persisted-signer callers must reject zero at decode time instead. Note: `MemberIndex` is currently a type alias, not a defined type, so this helper is a convention, not a compiler-enforced guarantee; a future refactor to a defined type would close this gap.
 
 Use `new(big.Int).SetUint64(value)` to construct a nonnegative `big.Int` from an
 unsigned block number or transaction index. When serializing a `big.Int` into a
-fixed-width unsigned field, check `IsUint64` first. For signed Bitcoin amounts,
+fixed-width unsigned field, check `IsUint64` first. For narrower unsigned destinations, also check the destination type's upper bound before converting. For signed Bitcoin amounts,
 reject negative inputs before converting to unsigned ABI fields and check the
 upper bound before converting unsigned responses to `int64`. Check arithmetic
 before it can overflow; a check on an already-wrapped fee cannot recover the
@@ -89,8 +87,9 @@ value. Existing deterministic retry and coordination seeds use all 64 bits,
 including the sign bit, and Bitcoin version fields preserve their signed 32-bit
 wire encoding. Do not reject, mask, or clamp these values: doing so would change
 protocol behavior. Such conversions use a local `#nosec G115` comment explaining
-the representation contract. Other local exceptions identify the upstream
-library or internal test-only range guarantee. Do not exclude G115 globally or
+the representation contract. Other local exceptions identify the concrete
+upstream-library, domain, or test-only range guarantee that makes the
+conversion safe. Do not exclude G115 globally or
 annotate a conversion without checking its callers and bounds.
 
 Run the G115 check with the same generated-code exclusions used by CI:
