@@ -6,7 +6,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/keep-network/keep-core/config"
 	"github.com/keep-network/keep-core/internal/ethtest"
 	"github.com/keep-network/keep-core/internal/testutils"
@@ -14,7 +16,9 @@ import (
 	"github.com/keep-network/keep-core/pkg/firewall"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
+	localnet "github.com/keep-network/keep-core/pkg/net/local"
 	"github.com/keep-network/keep-core/pkg/net/retransmission"
+	"github.com/keep-network/keep-core/pkg/net/watchtower"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/spf13/cobra"
 )
@@ -82,28 +86,61 @@ func TestIsBootstrap(t *testing.T) {
 func TestStart_AdmissionHandoff(t *testing.T) {
 	backend := ethtest.New(t, ethtest.AdmissionState(t))
 
-	configured := clientConfig.Ethereum
-	t.Cleanup(func() { clientConfig.Ethereum = configured })
-	clientConfig.Ethereum = backend.ChainConfig(t)
+	configuredEthereum := clientConfig.Ethereum
+	configuredNetwork := clientConfig.LibP2P
+	t.Cleanup(func() {
+		clientConfig.Ethereum = configuredEthereum
+		clientConfig.LibP2P = configuredNetwork
+	})
 
-	policy := captureAdmissionPolicy(t, func() error {
+	clientConfig.Ethereum = backend.ChainConfig(t)
+	clientConfig.LibP2P.Bootstrap = false
+	clientConfig.LibP2P.Peers = []string{"ordinary-configured-discovery-peer"}
+
+	handoff := captureAdmissionPolicy(t, func() error {
 		return start(&cobra.Command{})
 	})
 
 	// What the policy admits comes first: the assertions below give up on a
 	// policy whose shape they cannot read, and stopping there would leave the
 	// verdicts unexamined.
-	assertAdmissionTable(t, backend, policy)
-	assertNoStaticBypass(t, policy)
+	assertAdmissionTable(t, backend, handoff.policy)
+	assertNoStaticBypass(t, handoff.policy)
+	assertNetworkConfig(t, clientConfig.LibP2P, handoff.networkConfig)
 
 	// start builds its own chain handles, so there is no instance here to
-	// compare them against; what it handed over is pinned by type and order.
+	// compare it against; what it handed over is pinned by type.
 	assertAdmissionApplicationTypes(
 		t,
-		policy,
-		reflect.TypeOf((*ethereum.BeaconChain)(nil)),
+		handoff.policy,
 		reflect.TypeOf((*ethereum.TbtcChain)(nil)),
 	)
+
+	t.Run("bootstrap_with_configured_discovery_peers", func(t *testing.T) {
+		bootstrapBackend := ethtest.New(t, ethtest.AdmissionState(t))
+		clientConfig.Ethereum = bootstrapBackend.ChainConfig(t)
+		clientConfig.LibP2P.Bootstrap = true
+		clientConfig.LibP2P.Peers = []string{
+			"bootstrap-configured-discovery-peer",
+		}
+
+		bootstrapHandoff := captureAdmissionPolicy(t, func() error {
+			return start(&cobra.Command{})
+		})
+
+		assertAdmissionTable(t, bootstrapBackend, bootstrapHandoff.policy)
+		assertNoStaticBypass(t, bootstrapHandoff.policy)
+		assertNetworkConfig(
+			t,
+			clientConfig.LibP2P,
+			bootstrapHandoff.networkConfig,
+		)
+		assertAdmissionApplicationTypes(
+			t,
+			bootstrapHandoff.policy,
+			reflect.TypeOf((*ethereum.TbtcChain)(nil)),
+		)
+	})
 }
 
 // TestInitializeNetwork_AdmissionComposition covers the assembly the client
@@ -120,38 +157,56 @@ func TestInitializeNetwork_AdmissionComposition(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	beaconChain, tbtcChain, blockCounter, _, operatorPrivateKey, err :=
+	_, tbtcChain, blockCounter, _, operatorPrivateKey, err :=
 		ethereum.Connect(ctx, backend.ChainConfig(t))
 	if err != nil {
 		t.Fatalf("failed to connect to the fixture: %v", err)
 	}
 
-	applications := admissionApplications(beaconChain, tbtcChain)
+	applications := admissionApplications(tbtcChain)
 
-	testutils.AssertIntsEqual(t, "applications", 2, len(applications))
-	if applications[0] != firewall.Application(beaconChain) {
-		t.Error("the beacon chain is not the first application evaluated")
-	}
-	if applications[1] != firewall.Application(tbtcChain) {
-		t.Error("the tBTC chain is not the second application evaluated")
+	testutils.AssertIntsEqual(t, "applications", 1, len(applications))
+	if applications[0] != firewall.Application(tbtcChain) {
+		t.Error("the tBTC chain is not the application evaluated")
 	}
 
-	policy := captureAdmissionPolicy(t, func() error {
-		_, err := initializeNetwork(
-			ctx,
-			applications,
-			operatorPrivateKey,
-			blockCounter,
-		)
-		return err
-	})
+	configuredNetwork := clientConfig.LibP2P
+	t.Cleanup(func() { clientConfig.LibP2P = configuredNetwork })
 
-	assertAdmissionTable(t, backend, policy)
-	assertNoStaticBypass(t, policy)
+	configurations := []struct {
+		name      string
+		bootstrap bool
+		peer      string
+	}{
+		{"ordinary_with_configured_discovery_peers", false, "ordinary-configured-discovery-peer"},
+		{"bootstrap_with_configured_discovery_peers", true, "bootstrap-configured-discovery-peer"},
+	}
 
-	// The policy guards with the very handles it was given, in that order,
-	// rather than with a set assembled somewhere between here and the network.
-	assertAdmissionApplications(t, policy, beaconChain, tbtcChain)
+	for _, configuration := range configurations {
+		t.Run(configuration.name, func(t *testing.T) {
+			clientConfig.LibP2P = configuredNetwork
+			clientConfig.LibP2P.Bootstrap = configuration.bootstrap
+			clientConfig.LibP2P.Peers = []string{configuration.peer}
+
+			handoff := captureAdmissionPolicy(t, func() error {
+				_, err := initializeNetwork(
+					ctx,
+					applications,
+					operatorPrivateKey,
+					blockCounter,
+				)
+				return err
+			})
+
+			assertAdmissionTable(t, backend, handoff.policy)
+			assertNoStaticBypass(t, handoff.policy)
+			assertNetworkConfig(t, clientConfig.LibP2P, handoff.networkConfig)
+
+			// The policy guards with the very handle it was given rather than
+			// with one assembled somewhere between here and the network.
+			assertAdmissionApplications(t, handoff.policy, tbtcChain)
+		})
+	}
 
 	t.Run("what a static bypass looks like", func(t *testing.T) {
 		// The counterexample the assertions above are read against, built as a
@@ -177,6 +232,132 @@ func TestInitializeNetwork_AdmissionComposition(t *testing.T) {
 
 		backend.AssertTrace(t, "reads behind an allow list")
 	})
+}
+
+// TestStart_AdmissionRevocation verifies that a successful decision is read
+// from the wallet registry again. Legacy ownership cannot preserve admission
+// after eligible stake is revoked.
+func TestStart_AdmissionRevocation(t *testing.T) {
+	backend := ethtest.New(t, ethtest.AdmissionState(t))
+	revoked := ethtest.AdmissionCaseNamed(t, "legacy_revoked")
+	backend.SetEligibleStake(revoked.StakingProvider(t), ethtest.TTokens(40_000))
+
+	configuredEthereum := clientConfig.Ethereum
+	t.Cleanup(func() { clientConfig.Ethereum = configuredEthereum })
+	clientConfig.Ethereum = backend.ChainConfig(t)
+
+	policy := captureAdmissionPolicy(t, func() error {
+		return start(&cobra.Command{})
+	}).policy
+
+	revokedKey := caseOperatorKey(t, revoked)
+	backend.ResetCalls()
+	if err := policy.Validate(revokedKey); err != nil {
+		t.Fatalf("expected the peer to be initially admitted: %v", err)
+	}
+	backend.AssertTrace(t, "initial admission reads", revoked.AdmissionReads(t)...)
+
+	backend.SetEligibleStake(revoked.StakingProvider(t), ethtest.TTokens(0))
+	backend.ResetCalls()
+	testutils.AssertErrorsSame(t, firewall.ErrNotRecognized, policy.Validate(revokedKey))
+	backend.AssertTrace(t, "revocation reads", revoked.AdmissionReads(t)...)
+
+	eligible := ethtest.AdmissionCaseNamed(t, "post_legacy_authorized")
+	backend.ResetCalls()
+	if err := policy.Validate(caseOperatorKey(t, eligible)); err != nil {
+		t.Fatalf("expected the eligible control to be admitted: %v", err)
+	}
+	backend.AssertTrace(t, "eligible control reads", eligible.AdmissionReads(t)...)
+
+	unregistered := ethtest.AdmissionCaseNamed(t, "unregistered")
+	backend.ResetCalls()
+	testutils.AssertErrorsSame(
+		t,
+		firewall.ErrNotRecognized,
+		policy.Validate(caseOperatorKey(t, unregistered)),
+	)
+	backend.AssertTrace(
+		t,
+		"unregistered control reads",
+		unregistered.AdmissionReads(t)...,
+	)
+	backend.AssertNoUnexpectedCalls(t)
+}
+
+// TestStart_AdmissionRevocationDisconnects verifies that the production policy
+// is also re-evaluated by the watchtower for established connections.
+func TestStart_AdmissionRevocationDisconnects(t *testing.T) {
+	backend := ethtest.New(t, ethtest.AdmissionState(t))
+	revoked := ethtest.AdmissionCaseNamed(t, "legacy_revoked")
+	eligible := ethtest.AdmissionCaseNamed(t, "post_legacy_authorized")
+	backend.SetEligibleStake(revoked.StakingProvider(t), ethtest.TTokens(40_000))
+
+	configuredEthereum := clientConfig.Ethereum
+	t.Cleanup(func() { clientConfig.Ethereum = configuredEthereum })
+	clientConfig.Ethereum = backend.ChainConfig(t)
+
+	policy := captureAdmissionPolicy(t, func() error {
+		return start(&cobra.Command{})
+	}).policy
+
+	revokedKey := caseOperatorKey(t, revoked)
+	eligibleKey := caseOperatorKey(t, eligible)
+	if err := policy.Validate(revokedKey); err != nil {
+		t.Fatalf("expected the peer to be initially admitted: %v", err)
+	}
+	if err := policy.Validate(eligibleKey); err != nil {
+		t.Fatalf("expected the control peer to be admitted: %v", err)
+	}
+
+	backend.SetEligibleStake(revoked.StakingProvider(t), ethtest.TTokens(0))
+	backend.ResetCalls()
+
+	provider := localnet.Connect()
+	const revokedPeer = "revoked-peer"
+	const eligiblePeer = "eligible-peer"
+	provider.AddPeer(revokedPeer, revokedKey)
+	provider.AddPeer(eligiblePeer, eligibleKey)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	watchtower.NewGuard(
+		ctx,
+		&testutils.MockLogger{},
+		10*time.Millisecond,
+		policy,
+		provider.ConnectionManager(),
+	)
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer poll.Stop()
+
+	for {
+		connected := connectedPeerSet(provider.ConnectionManager())
+		eligibleChecked := operatorLookupObserved(backend, eligible.Operator(t))
+		if !connected[revokedPeer] && connected[eligiblePeer] && eligibleChecked {
+			break
+		}
+
+		select {
+		case <-deadline.C:
+			t.Fatalf(
+				"watchtower did not converge; connected peers: %v; chain calls: %v",
+				connected,
+				backend.Calls(),
+			)
+		case <-poll.C:
+		}
+	}
+
+	if backend.CallCount(ethtest.RandomBeaconContract, "operatorToStakingProvider") != 0 {
+		t.Error("watchtower admission read the beacon operator mapping")
+	}
+	if backend.CallCount(ethtest.TokenStakingContract, "rolesOf") != 0 {
+		t.Error("watchtower admission read legacy token staking roles")
+	}
+	backend.AssertNoUnexpectedCalls(t)
 }
 
 // TestStaticBypassKeys_ReportsAnAllowedKey is the negative control for
@@ -219,28 +400,34 @@ func TestStaticBypassKeys_ReportsAnAllowedKey(t *testing.T) {
 var errNetworkNotOpened = errors.New("the network provider is not opened here")
 
 // captureAdmissionPolicy runs a piece of the client's start path with the
-// network provider constructor stubbed out, and returns the firewall that path
-// handed it. The stub fails, so the path unwinds at the handoff and nothing
-// behind it is started.
-func captureAdmissionPolicy(t *testing.T, run func() error) net.Firewall {
+// network provider constructor stubbed out, and returns the configuration and
+// firewall handed to it. The stub fails, so the path unwinds at the handoff and
+// nothing behind it is started.
+type admissionHandoff struct {
+	networkConfig libp2p.Config
+	policy        net.Firewall
+}
+
+func captureAdmissionPolicy(t *testing.T, run func() error) admissionHandoff {
 	t.Helper()
 
-	var captured net.Firewall
+	var captured admissionHandoff
 	handoffs := 0
 
 	opened := connectNetwork
-	t.Cleanup(func() { connectNetwork = opened })
+	defer func() { connectNetwork = opened }()
 
 	connectNetwork = func(
 		_ context.Context,
-		_ libp2p.Config,
+		config libp2p.Config,
 		_ *operator.PrivateKey,
 		policy net.Firewall,
 		_ *retransmission.Ticker,
 		_ ...libp2p.ConnectOption,
 	) (net.Provider, error) {
 		handoffs++
-		captured = policy
+		captured.networkConfig = config
+		captured.policy = policy
 		return nil, errNetworkNotOpened
 	}
 
@@ -254,19 +441,51 @@ func captureAdmissionPolicy(t *testing.T, run func() error) net.Firewall {
 
 	testutils.AssertIntsEqual(t, "network handoffs", 1, handoffs)
 
-	if captured == nil {
+	if captured.policy == nil {
 		t.Fatal("the network layer was opened with no firewall")
 	}
 
 	return captured
 }
 
+func assertNetworkConfig(t *testing.T, expected, actual libp2p.Config) {
+	t.Helper()
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Errorf("unexpected network configuration\nexpected: %v\nactual:   %v", expected, actual)
+	}
+}
+
+func connectedPeerSet(connectionManager net.ConnectionManager) map[string]bool {
+	connected := make(map[string]bool)
+	for _, peer := range connectionManager.ConnectedPeers() {
+		connected[peer] = true
+	}
+
+	return connected
+}
+
+func operatorLookupObserved(
+	backend *ethtest.Backend,
+	operatorAddress common.Address,
+) bool {
+	for _, call := range backend.CallsTo(
+		ethtest.WalletRegistryContract,
+		"operatorToStakingProvider",
+	) {
+		if len(call.Args) == 1 && call.Args[0] == operatorAddress {
+			return true
+		}
+	}
+
+	return false
+}
+
 // assertAdmissionTable drives every identity of the fixed admission table
 // through the given policy and fails unless both the verdict and the reads
 // that verdict cost are the ones the table pins. The reads are asserted
 // alongside the verdict because a verdict alone cannot tell an on-chain
-// decision apart from a bypass, nor beacon-first evaluation apart from the
-// reverse.
+// decision apart from a bypass or a legacy fallback.
 func assertAdmissionTable(
 	t *testing.T,
 	backend *ethtest.Backend,
@@ -290,10 +509,9 @@ func assertAdmissionTable(
 				testutils.AssertErrorsSame(t, firewall.ErrNotRecognized, err)
 			}
 
-			// The beacon branch opens every one of these reads, so this
-			// identity was judged by the chain rather than short-circuited
-			// ahead of it, and the tBTC branch is read only where the beacon
-			// declined.
+			// Every expected read belongs to the wallet registry, so this
+			// identity was judged by current eligibility without a static or
+			// legacy fallback.
 			backend.AssertTrace(
 				t,
 				"admission reads",

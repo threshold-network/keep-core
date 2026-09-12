@@ -16,11 +16,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/operator"
 )
 
+var _ firewall.Application = (*TbtcChain)(nil)
+
 // connectAdmissionFixture builds both production chain handles through the
 // public Connect path against a deterministic endpoint serving the fixed
-// admission table. Nothing between the JSON-RPC boundary and the predicates is
+// admission table. Nothing between the JSON-RPC boundary and the predicate is
 // substituted: the generated bindings, the chain handle constructors and the
-// production admission adapters are the code under test.
+// production admission adapter are the code under test.
 func connectAdmissionFixture(t *testing.T) (
 	*ethtest.Backend,
 	*BeaconChain,
@@ -78,63 +80,9 @@ func caseOperatorKey(
 	return operatorPublicKey
 }
 
-// TestBeaconChain_IsRecognized_ProductionAdapter drives the beacon branch of
-// the fixed admission table through beaconAdmissionReaderChain, the adapter
-// newBeaconChain installs, and through the token staking binding newBaseChain
-// configures. Every read is answered by the deterministic endpoint, so the
-// result is produced by the production code path rather than by a stand-in
-// predicate.
-func TestBeaconChain_IsRecognized_ProductionAdapter(t *testing.T) {
-	backend, beaconChain, _ := connectAdmissionFixture(t)
-
-	adapter, ok := beaconChain.admission.(*beaconAdmissionReaderChain)
-	if !ok {
-		t.Fatalf(
-			"beacon admission is served by [%T], not the production adapter",
-			beaconChain.admission,
-		)
-	}
-	if adapter.randomBeacon != beaconChain.randomBeacon {
-		t.Error("the beacon adapter reads a different RandomBeacon binding")
-	}
-	if adapter.baseChain != beaconChain.baseChain {
-		t.Error("the beacon adapter reads a different base chain")
-	}
-
-	for _, admissionCase := range ethtest.AdmissionCases() {
-		t.Run(admissionCase.Name, func(t *testing.T) {
-			backend.ResetCalls()
-
-			isRecognized, err := beaconChain.IsRecognized(
-				caseOperatorKey(t, admissionCase),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			testutils.AssertBoolsEqual(
-				t,
-				"beacon recognition",
-				admissionCase.BeaconRecognizes,
-				isRecognized,
-			)
-
-			// An operator the registry does not know costs exactly one read:
-			// the predicate must not go on to ask token staking about the
-			// zero address.
-			backend.AssertTrace(
-				t,
-				"beacon recognition reads",
-				admissionCase.BeaconReads(t)...,
-			)
-			backend.AssertNoUnexpectedCalls(t)
-		})
-	}
-}
-
-// TestTbtcChain_IsRecognized_ProductionAdapter drives the tBTC branch of the
-// same table through the WalletRegistry binding newTbtcChain installs as the
-// admission reader.
+// TestTbtcChain_IsRecognized_ProductionAdapter drives the admission table
+// through the WalletRegistry binding newTbtcChain installs as the admission
+// reader.
 func TestTbtcChain_IsRecognized_ProductionAdapter(t *testing.T) {
 	backend, _, tbtcChain := connectAdmissionFixture(t)
 
@@ -174,6 +122,15 @@ func TestTbtcChain_IsRecognized_ProductionAdapter(t *testing.T) {
 			)
 			backend.AssertNoUnexpectedCalls(t)
 		})
+	}
+}
+
+// TestBeaconChain_DoesNotImplementFirewallApplication keeps beacon operations
+// available without allowing the chain handle to become an admission source.
+func TestBeaconChain_DoesNotImplementFirewallApplication(t *testing.T) {
+	var candidate interface{} = (*BeaconChain)(nil)
+	if _, ok := candidate.(firewall.Application); ok {
+		t.Fatal("the beacon chain implements firewall.Application")
 	}
 }
 
@@ -245,21 +202,13 @@ func TestTbtcChain_IsRecognized_AtMinimumAuthorization(t *testing.T) {
 	backend.AssertNoUnexpectedCalls(t)
 }
 
-// TestAdmission_ProductionConstruction asserts what the public construction
-// path assembles and how the assembled handles behave together. Recognition is
-// evaluated beacon first over an empty static allow list, which is the
-// composition the client starts with.
+// TestAdmission_ProductionConstruction asserts that the public construction
+// path supplies the production WalletRegistry binding used for admission.
 func TestAdmission_ProductionConstruction(t *testing.T) {
 	backend, beaconChain, tbtcChain := connectAdmissionFixture(t)
 
 	if beaconChain.baseChain != tbtcChain.baseChain {
 		t.Error("the two chain handles were given different base chains")
-	}
-	if _, ok := beaconChain.admission.(*beaconAdmissionReaderChain); !ok {
-		t.Errorf(
-			"beacon admission is served by [%T], not the production adapter",
-			beaconChain.admission,
-		)
 	}
 	if tbtcChain.admission != tbtcAdmissionReader(tbtcChain.walletRegistry) {
 		t.Error("tBTC admission is not the constructed WalletRegistry binding")
@@ -267,7 +216,7 @@ func TestAdmission_ProductionConstruction(t *testing.T) {
 
 	allowList := firewall.EmptyAllowList()
 	policy := firewall.AnyApplicationPolicy(
-		[]firewall.Application{beaconChain, tbtcChain},
+		[]firewall.Application{tbtcChain},
 		allowList,
 	)
 
@@ -293,10 +242,8 @@ func TestAdmission_ProductionConstruction(t *testing.T) {
 				testutils.AssertErrorsSame(t, firewall.ErrNotRecognized, err)
 			}
 
-			// Applications are evaluated beacon first: once the beacon
-			// recognizes a peer, the tBTC branch is never consulted. The
-			// beacon branch is always read, so nothing settled this identity
-			// ahead of the chain.
+			// Only WalletRegistry reads are expected, so neither the static
+			// allow list nor legacy beacon state settled this identity.
 			backend.AssertTrace(
 				t,
 				"admission reads",
@@ -307,10 +254,10 @@ func TestAdmission_ProductionConstruction(t *testing.T) {
 	}
 }
 
-// TestBaseChain_RolesOf_ProductionBinding pins the contract the beacon branch
-// reads stake delegations from. The allowlist is a separate deployment holding
-// its own role mapping, and reading roles from it instead of from token
-// staking would silently answer a different question.
+// TestBaseChain_RolesOf_ProductionBinding pins the TokenStaking read retained
+// for callers outside admission. The allowlist is a separate deployment
+// holding its own role mapping, and reading roles from it would silently answer
+// a different question.
 func TestBaseChain_RolesOf_ProductionBinding(t *testing.T) {
 	backend, beaconChain, _ := connectAdmissionFixture(t)
 

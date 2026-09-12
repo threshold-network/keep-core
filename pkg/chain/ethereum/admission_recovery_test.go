@@ -12,33 +12,24 @@ import (
 )
 
 // TestAdmission_TransientChainFaultIsNotADenial walks every chain read the
-// admission predicates still perform and, for each of them in turn, makes the
+// admission predicate performs and, for each of them in turn, makes the
 // endpoint fail. A read failing says nothing about the peer, so validation has
 // to surface the failure rather than report a non-recognition: the firewall
 // caches a non-recognition for an hour and would lock a legitimate peer out
 // for that hour over a momentary fault. Once the fault clears, the very next
 // validation must read the chain again and admit.
 //
-// The identity used throughout is admitted by the tBTC branch alone, so no
-// earlier branch can recognize it first and hide the read under test.
+// The identity used throughout is admitted by positive eligible stake.
 func TestAdmission_TransientChainFaultIsNotADenial(t *testing.T) {
 	var tests = map[string]struct {
 		contract string
 		method   string
 	}{
-		"beacon operator lookup": {
-			contract: ethtest.RandomBeaconContract,
-			method:   "operatorToStakingProvider",
-		},
-		"beacon roles lookup": {
-			contract: ethtest.TokenStakingContract,
-			method:   "rolesOf",
-		},
-		"tbtc operator lookup": {
+		"tbtc_operator_lookup": {
 			contract: ethtest.WalletRegistryContract,
 			method:   "operatorToStakingProvider",
 		},
-		"tbtc eligible stake lookup": {
+		"tbtc_eligible_stake_lookup": {
 			contract: ethtest.WalletRegistryContract,
 			method:   "eligibleStake",
 		},
@@ -46,13 +37,13 @@ func TestAdmission_TransientChainFaultIsNotADenial(t *testing.T) {
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
-			backend, beaconChain, tbtcChain := connectAdmissionFixture(t)
+			backend, _, tbtcChain := connectAdmissionFixture(t)
 
 			admitted := ethtest.AdmissionCaseNamed(t, "post_legacy_authorized")
 			operatorPublicKey := caseOperatorKey(t, admitted)
 
 			policy := firewall.AnyApplicationPolicy(
-				[]firewall.Application{beaconChain, tbtcChain},
+				[]firewall.Application{tbtcChain},
 				firewall.EmptyAllowList(),
 			)
 
@@ -107,6 +98,38 @@ func TestAdmission_TransientChainFaultIsNotADenial(t *testing.T) {
 			backend.AssertNoUnexpectedCalls(t)
 		})
 	}
+
+	t.Run("beacon_faults_are_not_admission_dependencies", func(t *testing.T) {
+		backend, _, tbtcChain := connectAdmissionFixture(t)
+		admitted := ethtest.AdmissionCaseNamed(t, "post_legacy_authorized")
+		policy := firewall.AnyApplicationPolicy(
+			[]firewall.Application{tbtcChain},
+			firewall.EmptyAllowList(),
+		)
+
+		backend.Fail(
+			ethtest.RandomBeaconContract,
+			"operatorToStakingProvider",
+			"beacon mapping unavailable",
+		)
+		backend.Fail(
+			ethtest.TokenStakingContract,
+			"rolesOf",
+			"legacy roles unavailable",
+		)
+		backend.ResetCalls()
+
+		if err := policy.Validate(caseOperatorKey(t, admitted)); err != nil {
+			t.Fatalf("beacon faults changed the admission verdict: %v", err)
+		}
+
+		backend.AssertTrace(
+			t,
+			"admission reads with beacon faults",
+			admitted.AdmissionReads(t)...,
+		)
+		backend.AssertNoUnexpectedCalls(t)
+	})
 }
 
 // TestAdmission_GenuineDenialIsCached characterizes what a real denial costs,
@@ -116,7 +139,7 @@ func TestAdmission_TransientChainFaultIsNotADenial(t *testing.T) {
 // does not readmit the peer, and no chain read is even attempted. Only a
 // policy that has not already denied it sees the new state.
 func TestAdmission_GenuineDenialIsCached(t *testing.T) {
-	backend, beaconChain, tbtcChain := connectAdmissionFixture(t)
+	backend, _, tbtcChain := connectAdmissionFixture(t)
 
 	if firewall.NegativeIsRecognizedCachePeriod != time.Hour {
 		t.Fatalf(
@@ -128,7 +151,7 @@ func TestAdmission_GenuineDenialIsCached(t *testing.T) {
 	denied := ethtest.AdmissionCaseNamed(t, "registered_unauthorized")
 	operatorPublicKey := caseOperatorKey(t, denied)
 
-	applications := []firewall.Application{beaconChain, tbtcChain}
+	applications := []firewall.Application{tbtcChain}
 	policy := firewall.AnyApplicationPolicy(
 		applications,
 		firewall.EmptyAllowList(),
