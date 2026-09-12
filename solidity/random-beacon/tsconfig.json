@@ -11,6 +11,8 @@
   ],
   "compilerOptions": {
     "strict": true,
+    // ts-node also needs an explicit target; its fallback is ES5.
+    "target": "ES2020",
     // TypeScript 6 stopped including every `node_modules/@types` package
     // automatically, which silently drops the mocha and chai globals. These
     // are the three that contribute globals here.
@@ -29,6 +31,7 @@
     "ignoreDeprecations": "6.0",
     "esModuleInterop": true,
     "downlevelIteration": true,
+    "noImplicitAny": true,
     "skipLibCheck": true
   }
 }
