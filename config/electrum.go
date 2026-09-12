@@ -119,5 +119,10 @@ func (c *Config) selectElectrumServer(urls []string, rng *rand.Rand) error {
 		})
 	}
 
+	logger.Infof(
+		"using Electrum fallback servers: [%v]",
+		c.Bitcoin.Electrum.FallbackURLs,
+	)
+
 	return nil
 }
