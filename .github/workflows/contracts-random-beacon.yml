@@ -48,9 +48,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
@@ -74,16 +74,16 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "22.23.1"
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: 3.10.8
 
@@ -114,9 +114,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
@@ -141,9 +141,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
@@ -174,9 +174,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
@@ -189,7 +189,7 @@ jobs:
           working-directory: ./solidity/random-beacon
 
       - name: Get upstream packages versions
-        uses: keep-network/ci/actions/upstream-builds-query@v2
+        uses: threshold-network/ci/actions/upstream-builds-query@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         id: upstream-builds-query
         with:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: keep-network/npm-version-bump@v2
+        uses: threshold-network/ci/actions/npm-version-bump@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         with:
           work-dir: solidity/random-beacon
           environment: ${{ github.event.inputs.environment }}
@@ -246,11 +246,11 @@ jobs:
           gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
 
       - name: Notify CI about completion of the workflow
-        uses: keep-network/ci/actions/notify-workflow-completed@v2
+        uses: threshold-network/ci/actions/notify-workflow-completed@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:
-          module: "github.com/keep-network/keep-core/random-beacon"
+          module: "github.com/threshold-network/keep-core/random-beacon"
           url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           environment: ${{ github.event.inputs.environment }}
           upstream_builds: ${{ github.event.inputs.upstream_builds }}
@@ -272,9 +272,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Using fixed version, because 18.16 was sometimes causing issues with
           # artifacts generation during `hardhat compile` - see
@@ -287,7 +287,7 @@ jobs:
           working-directory: ./solidity/random-beacon
 
       - name: Get upstream packages versions
-        uses: keep-network/ci/actions/upstream-builds-query@v2
+        uses: threshold-network/ci/actions/upstream-builds-query@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         id: upstream-builds-query
         with:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
@@ -309,7 +309,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: keep-network/npm-version-bump@v2
+        uses: threshold-network/ci/actions/npm-version-bump@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         with:
           work-dir: solidity/random-beacon
           environment: dapp-dev-${{ github.event.inputs.environment }}
@@ -331,11 +331,11 @@ jobs:
           gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
 
       - name: Notify CI about completion of the workflow
-        uses: keep-network/ci/actions/notify-workflow-completed@v2
+        uses: threshold-network/ci/actions/notify-workflow-completed@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:
-          module: "github.com/keep-network/keep-core/random-beacon"
+          module: "github.com/threshold-network/keep-core/random-beacon"
           url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           environment: ${{ github.event.inputs.environment }}
           upstream_builds: ${{ github.event.inputs.upstream_builds }}

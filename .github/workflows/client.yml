@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         if: github.event_name == 'pull_request'
 
-      - uses: dorny/paths-filter@v2
+      - uses: dorny/paths-filter@v3
         if: github.event_name == 'pull_request'
         id: filter
         with:
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v4
         if: github.event_name == 'pull_request'
 
-      - uses: dorny/paths-filter@v2
+      - uses: dorny/paths-filter@v3
         if: github.event_name == 'pull_request'
         id: filter
         with:
@@ -130,7 +130,7 @@ jobs:
           echo "revision=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       - name: Load environment variables
-        uses: keep-network/ci/actions/load-env-variables@v2
+        uses: threshold-network/ci/actions/load-env-variables@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         if: github.event_name == 'workflow_dispatch'
         with:
           environment: ${{ github.event.inputs.environment }}
@@ -268,11 +268,11 @@ jobs:
 
       - name: Notify CI about completion of the workflow
         if: github.event_name == 'workflow_dispatch'
-        uses: keep-network/ci/actions/notify-workflow-completed@v2
+        uses: threshold-network/ci/actions/notify-workflow-completed@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:
-          module: "github.com/keep-network/keep-core/client"
+          module: "github.com/threshold-network/keep-core/client"
           url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           environment: ${{ github.event.inputs.environment }}
           upstream_builds: ${{ github.event.inputs.upstream_builds }}
