@@ -38,9 +38,6 @@ const fixture = deployments.createFixture(async () => {
   }
 })
 
-const minedBlockTimestamp = async (tx: ContractTransaction): Promise<number> =>
-  (await ethers.provider.getBlock((await tx.wait()).blockNumber)).timestamp
-
 describe("WalletRegistryGovernance", async () => {
   let governance: SignerWithAddress
   let walletRegistry: WalletRegistry

@@ -11,7 +11,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const WalletRegistry = await deployments.get("WalletRegistry")
 
   // Deploy the Allowlist contract using upgradeable proxy pattern
-  const [allowlist] = await helpers.upgrades.deployProxy("Allowlist", {
+  const [allowlist, proxyDeployment] = await helpers.upgrades.deployProxy("Allowlist", {
     initializerArgs: [WalletRegistry.address],
     factoryOpts: {
       signer: await ethers.getSigner(deployer),

@@ -1764,7 +1764,7 @@ __metadata:
 
 "@openzeppelin/hardhat-upgrades@patch:@openzeppelin/hardhat-upgrades@npm%3A2.5.1#~/.yarn/patches/@openzeppelin-hardhat-upgrades-npm-2.5.1-etherscan-v2.patch":
   version: 2.5.1
-  resolution: "@openzeppelin/hardhat-upgrades@patch:@openzeppelin/hardhat-upgrades@npm%3A2.5.1#~/.yarn/patches/@openzeppelin-hardhat-upgrades-npm-2.5.1-etherscan-v2.patch::version=2.5.1&hash=60fb25"
+  resolution: "@openzeppelin/hardhat-upgrades@patch:@openzeppelin/hardhat-upgrades@npm%3A2.5.1#~/.yarn/patches/@openzeppelin-hardhat-upgrades-npm-2.5.1-etherscan-v2.patch::version=2.5.1&hash=6d2f71"
   dependencies:
     "@openzeppelin/defender-admin-client": "npm:^1.52.0"
     "@openzeppelin/defender-base-client": "npm:^1.52.0"
@@ -1786,7 +1786,7 @@ __metadata:
       optional: true
   bin:
     migrate-oz-cli-project: dist/scripts/migrate-oz-cli-project.js
-  checksum: 10c0/bc68ee608ff6db2ba0797cf2fd79ade2414ff04439b627a6b6fe8facb01cc26d1d0aa089142a156419c5ac29a2bc7020372fcfc82d34ef60bf79e93853110b3b
+  checksum: 10c0/8a15e1ed75c3833f501bca1b53baf56babc4d6055576e92d3b18752a92352dbe7a39c7836d49bff0ba786c7c2fc842773da70aee8a7765c7fed8dd2530295dd4
   languageName: node
   linkType: hard
 
