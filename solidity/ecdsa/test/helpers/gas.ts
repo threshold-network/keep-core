@@ -12,7 +12,6 @@ export async function assertGasUsed(
   delta = 1000,
 ): Promise<void> {
   const receipt = requireResult(await tx.wait())
-  if (!receipt) throw new Error("Transaction has no receipt")
   expect(receipt.gasUsed, "invalid gas used").to.be.closeTo(
     BigInt(expectedGasUsed),
     delta,
