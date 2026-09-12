@@ -25,14 +25,14 @@ export async function genesis(
   randomBeacon: RandomBeacon
 ): Promise<[ContractTransaction, BigNumber]> {
   const tx = await randomBeacon.genesis()
-
+  const receipt = await tx.wait()
   const expectedSeed = ethers.BigNumber.from(
     ethers.utils.keccak256(
       ethers.utils.solidityPack(
         ["uint256", "uint256"],
         [
           "31415926535897932384626433832795028841971693993751058209749445923078164062862",
-          tx.blockNumber,
+          receipt.blockNumber,
         ]
       )
     )

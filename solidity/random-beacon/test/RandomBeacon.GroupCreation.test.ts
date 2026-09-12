@@ -1558,7 +1558,7 @@ describe("RandomBeacon - Group Creation", () => {
 
                 expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
                 expect(storedGroup.registrationBlockNumber).to.be.equal(
-                  tx.blockNumber
+                  (await tx.wait()).blockNumber
                 )
                 expect(storedGroup.membersHash).to.be.equal(
                   hashUint32Array(dkgResult.members)
@@ -1761,7 +1761,7 @@ describe("RandomBeacon - Group Creation", () => {
 
               expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
               expect(storedGroup.registrationBlockNumber).to.be.equal(
-                tx.blockNumber
+                (await tx.wait()).blockNumber
               )
               expect(storedGroup.membersHash).to.be.equal(
                 hashUint32Array(dkgResult.members)
