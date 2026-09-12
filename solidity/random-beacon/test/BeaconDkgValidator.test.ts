@@ -1,13 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 
 import { BigNumber } from "ethers"
-import {
-  ethers,
-  helpers,
-  getUnnamedAccounts,
-  waffle,
-  deployments,
-} from "hardhat"
+import { ethers, helpers, getUnnamedAccounts, deployments } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import blsData from "./data/bls"
@@ -78,7 +73,7 @@ describe("BeaconDkgValidator", () => {
   let validator: DKGValidator
 
   before("load test fixture", async () => {
-    const contracts = await waffle.loadFixture(fixture)
+    const contracts = await loadFixture(fixture)
     const { sortitionPool } = contracts
     validator = contracts.dkgValidator
 

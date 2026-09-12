@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
-import { ethers, waffle, helpers } from "hardhat"
+import { ethers, helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import { randomBeaconDeployment, params } from "./fixtures"
@@ -23,7 +24,7 @@ describe("RandomBeacon - Parameters", () => {
 
     const { governance } = await helpers.signers.getNamedSigners()
 
-    const contracts = await waffle.loadFixture(randomBeaconDeployment)
+    const contracts = await loadFixture(randomBeaconDeployment)
     randomBeacon = contracts.randomBeacon as RandomBeaconStub
     randomBeaconGovernance =
       contracts.randomBeaconGovernance as RandomBeaconGovernance

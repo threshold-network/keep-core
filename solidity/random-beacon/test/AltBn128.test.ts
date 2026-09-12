@@ -1,4 +1,5 @@
-import { ethers, waffle } from "hardhat"
+import { ethers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import type { TestAltBn128 } from "../typechain"
@@ -22,7 +23,7 @@ describe("AltBn128", () => {
   }
 
   beforeEach("load test fixture", async () => {
-    testAltBn128 = await waffle.loadFixture(fixture)
+    testAltBn128 = await loadFixture(fixture)
   })
 
   describe("g1Unmarshal", async () => {

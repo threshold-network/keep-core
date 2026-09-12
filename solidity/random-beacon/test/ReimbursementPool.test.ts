@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 
-import { ethers, waffle, helpers, deployments } from "hardhat"
+import { ethers, helpers, deployments } from "hardhat"
 import { expect } from "chai"
 
 import { params } from "./fixtures"
@@ -11,7 +11,7 @@ import type { ReimbursementPool } from "../typechain"
 
 const ZERO_ADDRESS = ethers.constants.AddressZero
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
-const { provider } = waffle
+const { provider } = ethers
 
 describe("ReimbursementPool", () => {
   let owner: SignerWithAddress

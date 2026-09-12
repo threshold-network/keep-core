@@ -1,4 +1,5 @@
-import { ethers, waffle } from "hardhat"
+import { ethers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import blsData from "./data/bls"
@@ -30,7 +31,7 @@ describe("Groups", () => {
   })
 
   beforeEach("load test fixture", async () => {
-    groups = await waffle.loadFixture(fixture)
+    groups = await loadFixture(fixture)
   })
 
   describe("validatePublicKey", async () => {

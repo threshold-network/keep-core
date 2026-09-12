@@ -1,4 +1,4 @@
-import { ethers, waffle } from "hardhat"
+import { ethers } from "hardhat"
 import { expect } from "chai"
 import { BigNumber } from "ethers"
 
@@ -14,7 +14,7 @@ import type {
   DkgResultSubmittedEvent,
 } from "../../typechain/contracts/libraries/BeaconDkg"
 
-const { provider } = waffle
+const { provider } = ethers
 
 // default Hardhat's networks blockchain, see https://hardhat.org/config/
 export const hardhatNetworkId = 31337
@@ -286,9 +286,8 @@ export interface DkgResultSubmittedEventArgs {
   result: DKG.ResultStruct
 }
 
-// This is a workaround for a bug in ethereum-waffle library that doesn't let
-// verify events that have an array nested in a struct.
-// See: https://github.com/EthWorks/Waffle/issues/245
+// Compare each field explicitly so nested arrays in the result struct produce
+// useful assertion failures.
 export async function expectDkgResultSubmittedEvent(
   tx: ContractTransaction,
   expectedArgs: DkgResultSubmittedEventArgs,
