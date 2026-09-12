@@ -5,7 +5,7 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
 task("genesis", "Triggers the Random Beacon genesis").setAction(
   async (args, hre) => {
     await genesis(hre)
-  }
+  },
 )
 
 async function genesis(hre: HardhatRuntimeEnvironment) {

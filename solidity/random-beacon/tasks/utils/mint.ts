@@ -6,7 +6,7 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
 export async function mint(
   hre: HardhatRuntimeEnvironment,
   owner: string,
-  amount: BigNumberish
+  amount: BigNumberish,
 ): Promise<void> {
   const { ethers, helpers } = hre
   const { to1e18, from1e18 } = helpers.number
@@ -21,7 +21,7 @@ export async function mint(
   const currentBalance: BigNumber = await t.balanceOf(ownerAddress)
 
   console.log(
-    `Account ${ownerAddress} balance is ${from1e18(currentBalance)} T`
+    `Account ${ownerAddress} balance is ${from1e18(currentBalance)} T`,
   )
 
   if (currentBalance.lt(stakeAmount)) {
@@ -38,18 +38,18 @@ export async function mint(
 
   const currentAllowance: BigNumber = await t.allowance(
     ownerAddress,
-    staking.address
+    staking.address,
   )
 
   console.log(
     `Account ${ownerAddress} allowance for ${staking.address} is ${from1e18(
-      currentAllowance
-    )} T`
+      currentAllowance,
+    )} T`,
   )
 
   if (currentAllowance.lt(stakeAmount)) {
     console.log(
-      `Approving ${from1e18(stakeAmount)} T for ${staking.address}...`
+      `Approving ${from1e18(stakeAmount)} T for ${staking.address}...`,
     )
     await (
       await t

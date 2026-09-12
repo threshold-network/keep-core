@@ -594,9 +594,12 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         uint256 dkgMaliciousResultNotificationRewardMultiplier
     ) external onlyGovernance {
         _sortitionPoolRewardsBanDuration = sortitionPoolRewardsBanDuration;
-        _relayEntryTimeoutNotificationRewardMultiplier = relayEntryTimeoutNotificationRewardMultiplier;
-        _unauthorizedSigningNotificationRewardMultiplier = unauthorizedSigningNotificationRewardMultiplier;
-        _dkgMaliciousResultNotificationRewardMultiplier = dkgMaliciousResultNotificationRewardMultiplier;
+        _relayEntryTimeoutNotificationRewardMultiplier =
+            relayEntryTimeoutNotificationRewardMultiplier;
+        _unauthorizedSigningNotificationRewardMultiplier =
+            unauthorizedSigningNotificationRewardMultiplier;
+        _dkgMaliciousResultNotificationRewardMultiplier =
+            dkgMaliciousResultNotificationRewardMultiplier;
         emit RewardParametersUpdated(
             sortitionPoolRewardsBanDuration,
             relayEntryTimeoutNotificationRewardMultiplier,
@@ -667,10 +670,10 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
     ///      random beacon governance contract.
     /// @param requester Requester, can be a contract or EOA
     /// @param isAuthorized True or false
-    function setRequesterAuthorization(address requester, bool isAuthorized)
-        external
-        onlyGovernance
-    {
+    function setRequesterAuthorization(
+        address requester,
+        bool isAuthorized
+    ) external onlyGovernance {
         authorizedRequesters[requester] = isAuthorized;
 
         emit RequesterAuthorizationUpdated(requester, isAuthorized);
@@ -695,10 +698,9 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
     /// @dev Can be called only by the contract guvnor, which should be the
     ///      random beacon governance contract.
     /// @param recipient Recipient of withdrawn rewards.
-    function withdrawIneligibleRewards(address recipient)
-        external
-        onlyGovernance
-    {
+    function withdrawIneligibleRewards(
+        address recipient
+    ) external onlyGovernance {
         sortitionPool.withdrawIneligible(recipient);
     }
 
@@ -986,19 +988,15 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         return groups.groupsRegistry;
     }
 
-    function getGroup(uint64 groupId)
-        external
-        view
-        returns (Groups.Group memory)
-    {
+    function getGroup(
+        uint64 groupId
+    ) external view returns (Groups.Group memory) {
         return groups.getGroup(groupId);
     }
 
-    function getGroup(bytes memory groupPubKey)
-        external
-        view
-        returns (Groups.Group memory)
-    {
+    function getGroup(
+        bytes memory groupPubKey
+    ) external view returns (Groups.Group memory) {
         return groups.getGroup(groupPubKey);
     }
 
@@ -1007,9 +1005,9 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
     ///         random number). Requester must be previously authorized by the
     ///         governance.
     /// @param callbackContract Beacon consumer callback contract.
-    function requestRelayEntry(IRandomBeaconConsumer callbackContract)
-        external
-    {
+    function requestRelayEntry(
+        IRandomBeaconConsumer callbackContract
+    ) external {
         require(
             authorizedRequesters[msg.sender],
             "Requester must be authorized"
@@ -1348,22 +1346,18 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
     ///         is what is used for operator's weight in the sortition pool.
     ///         If the authorized stake minus the pending authorization decrease
     ///         is below the minimum authorization, eligible stake is 0.
-    function eligibleStake(address stakingProvider)
-        external
-        view
-        returns (uint96)
-    {
+    function eligibleStake(
+        address stakingProvider
+    ) external view returns (uint96) {
         return authorization.eligibleStake(staking, stakingProvider);
     }
 
     /// @notice Returns the amount of rewards available for withdrawal for the
     ///         given staking provider. Reverts if staking provider has not
     ///         registered the operator address.
-    function availableRewards(address stakingProvider)
-        external
-        view
-        returns (uint96)
-    {
+    function availableRewards(
+        address stakingProvider
+    ) external view returns (uint96) {
         address operator = stakingProviderToOperator(stakingProvider);
         require(operator != address(0), "Unknown operator");
         return sortitionPool.getAvailableRewards(operator);
@@ -1372,11 +1366,9 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
     /// @notice Returns the amount of stake that is pending authorization
     ///         decrease for the given staking provider. If no authorization
     ///         decrease has been requested, returns zero.
-    function pendingAuthorizationDecrease(address stakingProvider)
-        external
-        view
-        returns (uint96)
-    {
+    function pendingAuthorizationDecrease(
+        address stakingProvider
+    ) external view returns (uint96) {
         return authorization.pendingAuthorizationDecrease(stakingProvider);
     }
 
@@ -1385,30 +1377,24 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
     ///         If the sortition pool state was not updated yet by the operator
     ///         after requesting the authorization decrease, returns
     ///         `type(uint64).max`.
-    function remainingAuthorizationDecreaseDelay(address stakingProvider)
-        external
-        view
-        returns (uint64)
-    {
+    function remainingAuthorizationDecreaseDelay(
+        address stakingProvider
+    ) external view returns (uint64) {
         return
             authorization.remainingAuthorizationDecreaseDelay(stakingProvider);
     }
 
     /// @notice Returns operator registered for the given staking provider.
-    function stakingProviderToOperator(address stakingProvider)
-        public
-        view
-        returns (address)
-    {
+    function stakingProviderToOperator(
+        address stakingProvider
+    ) public view returns (address) {
         return authorization.stakingProviderToOperator[stakingProvider];
     }
 
     /// @notice Returns staking provider of the given operator.
-    function operatorToStakingProvider(address operator)
-        public
-        view
-        returns (address)
-    {
+    function operatorToStakingProvider(
+        address operator
+    ) public view returns (address) {
         return authorization.operatorToStakingProvider[operator];
     }
 

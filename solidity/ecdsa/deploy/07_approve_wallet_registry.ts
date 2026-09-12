@@ -22,7 +22,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const iface = new ethers.utils.Interface(TokenStaking.abi)
   if (!ifaceHasFunction(iface, "approveApplication")) {
     hre.deployments.log(
-      "TokenStaking does not have approveApplication (Threshold TokenStaking); skipping WalletRegistry approval"
+      "TokenStaking does not have approveApplication (Threshold TokenStaking); skipping WalletRegistry approval",
     )
     return
   }
@@ -31,7 +31,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "TokenStaking",
     { from: deployer, log: true, waitConfirmations: 1 },
     "approveApplication",
-    WalletRegistry.address
+    WalletRegistry.address,
   )
 }
 

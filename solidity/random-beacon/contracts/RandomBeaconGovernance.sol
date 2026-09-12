@@ -300,10 +300,9 @@ contract RandomBeaconGovernance is Ownable {
     /// @notice Begins the governance delay update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newGovernanceDelay New governance delay
-    function beginGovernanceDelayUpdate(uint256 _newGovernanceDelay)
-        external
-        onlyOwner
-    {
+    function beginGovernanceDelayUpdate(
+        uint256 _newGovernanceDelay
+    ) external onlyOwner {
         newGovernanceDelay = _newGovernanceDelay;
         /* solhint-disable not-rely-on-time */
         governanceDelayChangeInitiated = block.timestamp;
@@ -362,10 +361,9 @@ contract RandomBeaconGovernance is Ownable {
     /// @notice Begins the relay entry soft timeout update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newRelayEntrySoftTimeout New relay entry submission timeout in blocks
-    function beginRelayEntrySoftTimeoutUpdate(uint256 _newRelayEntrySoftTimeout)
-        external
-        onlyOwner
-    {
+    function beginRelayEntrySoftTimeoutUpdate(
+        uint256 _newRelayEntrySoftTimeout
+    ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
         require(
             _newRelayEntrySoftTimeout > 0,
@@ -407,10 +405,9 @@ contract RandomBeaconGovernance is Ownable {
     /// @notice Begins the relay entry hard timeout update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newRelayEntryHardTimeout New relay entry hard timeout in blocks
-    function beginRelayEntryHardTimeoutUpdate(uint256 _newRelayEntryHardTimeout)
-        external
-        onlyOwner
-    {
+    function beginRelayEntryHardTimeoutUpdate(
+        uint256 _newRelayEntryHardTimeout
+    ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
         newRelayEntryHardTimeout = _newRelayEntryHardTimeout;
         relayEntryHardTimeoutChangeInitiated = block.timestamp;
@@ -448,10 +445,9 @@ contract RandomBeaconGovernance is Ownable {
     /// @notice Begins the callback gas limit update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newCallbackGasLimit New callback gas limit
-    function beginCallbackGasLimitUpdate(uint256 _newCallbackGasLimit)
-        external
-        onlyOwner
-    {
+    function beginCallbackGasLimitUpdate(
+        uint256 _newCallbackGasLimit
+    ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
         // slither-disable-next-line too-many-digits
         require(
@@ -548,10 +544,9 @@ contract RandomBeaconGovernance is Ownable {
     ///         time and authorization decrease delay which value is in seconds.
     /// @dev Can be called only by the contract owner.
     /// @param _newGroupLifetime New group lifetime in blocks
-    function beginGroupLifetimeUpdate(uint256 _newGroupLifetime)
-        external
-        onlyOwner
-    {
+    function beginGroupLifetimeUpdate(
+        uint256 _newGroupLifetime
+    ) external onlyOwner {
         require(_newGroupLifetime > 0, "Group lifetime must be greater than 0");
         /* solhint-disable not-rely-on-time */
         newGroupLifetime = _newGroupLifetime;
@@ -754,7 +749,8 @@ contract RandomBeaconGovernance is Ownable {
             _newDkgSubmitterPrecedencePeriodLength > 0,
             "DKG submitter precedence period length must be > 0"
         );
-        newDkgSubmitterPrecedencePeriodLength = _newDkgSubmitterPrecedencePeriodLength;
+        newDkgSubmitterPrecedencePeriodLength =
+            _newDkgSubmitterPrecedencePeriodLength;
         dkgSubmitterPrecedencePeriodLengthChangeInitiated = block.timestamp;
         emit DkgSubmitterPrecedencePeriodLengthUpdateStarted(
             _newDkgSubmitterPrecedencePeriodLength,
@@ -805,7 +801,8 @@ contract RandomBeaconGovernance is Ownable {
         uint256 _newSortitionPoolRewardsBanDuration
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newSortitionPoolRewardsBanDuration = _newSortitionPoolRewardsBanDuration;
+        newSortitionPoolRewardsBanDuration =
+            _newSortitionPoolRewardsBanDuration;
         sortitionPoolRewardsBanDurationChangeInitiated = block.timestamp;
         emit SortitionPoolRewardsBanDurationUpdateStarted(
             _newSortitionPoolRewardsBanDuration,
@@ -856,7 +853,8 @@ contract RandomBeaconGovernance is Ownable {
             "Maximum value is 100"
         );
 
-        newRelayEntryTimeoutNotificationRewardMultiplier = _newRelayEntryTimeoutNotificationRewardMultiplier;
+        newRelayEntryTimeoutNotificationRewardMultiplier =
+            _newRelayEntryTimeoutNotificationRewardMultiplier;
         relayEntryTimeoutNotificationRewardMultiplierChangeInitiated = block
             .timestamp;
         emit RelayEntryTimeoutNotificationRewardMultiplierUpdateStarted(
@@ -880,7 +878,8 @@ contract RandomBeaconGovernance is Ownable {
             "Maximum value is 100"
         );
 
-        newUnauthorizedSigningNotificationRewardMultiplier = _newUnauthorizedSigningNotificationRewardMultiplier;
+        newUnauthorizedSigningNotificationRewardMultiplier =
+            _newUnauthorizedSigningNotificationRewardMultiplier;
         unauthorizedSigningNotificationRewardMultiplierChangeInitiated = block
             .timestamp;
         emit UnauthorizedSigningNotificationRewardMultiplierUpdateStarted(
@@ -966,7 +965,8 @@ contract RandomBeaconGovernance is Ownable {
             "Maximum value is 100"
         );
 
-        newDkgMaliciousResultNotificationRewardMultiplier = _newDkgMaliciousResultNotificationRewardMultiplier;
+        newDkgMaliciousResultNotificationRewardMultiplier =
+            _newDkgMaliciousResultNotificationRewardMultiplier;
         dkgMaliciousResultNotificationRewardMultiplierChangeInitiated = block
             .timestamp;
         emit DkgMaliciousResultNotificationRewardMultiplierUpdateStarted(
@@ -1016,7 +1016,8 @@ contract RandomBeaconGovernance is Ownable {
         uint96 _newRelayEntrySubmissionFailureSlashingAmount
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newRelayEntrySubmissionFailureSlashingAmount = _newRelayEntrySubmissionFailureSlashingAmount;
+        newRelayEntrySubmissionFailureSlashingAmount =
+            _newRelayEntrySubmissionFailureSlashingAmount;
         relayEntrySubmissionFailureSlashingAmountChangeInitiated = block
             .timestamp;
         emit RelayEntrySubmissionFailureSlashingAmountUpdateStarted(
@@ -1147,7 +1148,8 @@ contract RandomBeaconGovernance is Ownable {
         uint256 _newNotifyOperatorInactivityGasOffset
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newNotifyOperatorInactivityGasOffset = _newNotifyOperatorInactivityGasOffset;
+        newNotifyOperatorInactivityGasOffset =
+            _newNotifyOperatorInactivityGasOffset;
         notifyOperatorInactivityGasOffsetChangeInitiated = block.timestamp;
         emit NotifyOperatorInactivityGasOffsetUpdateStarted(
             _newNotifyOperatorInactivityGasOffset,
@@ -1238,7 +1240,8 @@ contract RandomBeaconGovernance is Ownable {
         uint96 _newMaliciousDkgResultSlashingAmount
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newMaliciousDkgResultSlashingAmount = _newMaliciousDkgResultSlashingAmount;
+        newMaliciousDkgResultSlashingAmount =
+            _newMaliciousDkgResultSlashingAmount;
         maliciousDkgResultSlashingAmountChangeInitiated = block.timestamp;
         emit MaliciousDkgResultSlashingAmountUpdateStarted(
             _newMaliciousDkgResultSlashingAmount,
@@ -1284,7 +1287,8 @@ contract RandomBeaconGovernance is Ownable {
         uint96 _newUnauthorizedSigningSlashingAmount
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newUnauthorizedSigningSlashingAmount = _newUnauthorizedSigningSlashingAmount;
+        newUnauthorizedSigningSlashingAmount =
+            _newUnauthorizedSigningSlashingAmount;
         unauthorizedSigningSlashingAmountChangeInitiated = block.timestamp;
         emit UnauthorizedSigningSlashingAmountUpdateStarted(
             _newUnauthorizedSigningSlashingAmount,
@@ -1325,10 +1329,9 @@ contract RandomBeaconGovernance is Ownable {
     /// @notice Begins the minimum authorization amount update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newMinimumAuthorization New minimum authorization amount.
-    function beginMinimumAuthorizationUpdate(uint96 _newMinimumAuthorization)
-        external
-        onlyOwner
-    {
+    function beginMinimumAuthorizationUpdate(
+        uint96 _newMinimumAuthorization
+    ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
         newMinimumAuthorization = _newMinimumAuthorization;
         minimumAuthorizationChangeInitiated = block.timestamp;
@@ -1410,7 +1413,8 @@ contract RandomBeaconGovernance is Ownable {
         uint64 _newAuthorizationDecreaseChangePeriod
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newAuthorizationDecreaseChangePeriod = _newAuthorizationDecreaseChangePeriod;
+        newAuthorizationDecreaseChangePeriod =
+            _newAuthorizationDecreaseChangePeriod;
         authorizationDecreaseChangePeriodChangeInitiated = block.timestamp;
         emit AuthorizationDecreaseChangePeriodUpdateStarted(
             _newAuthorizationDecreaseChangePeriod,
@@ -1451,10 +1455,10 @@ contract RandomBeaconGovernance is Ownable {
     ///         entry. It can be done by the governance only.
     /// @param requester Requester, can be a contract or EOA
     /// @param isAuthorized True or false
-    function setRequesterAuthorization(address requester, bool isAuthorized)
-        external
-        onlyOwner
-    {
+    function setRequesterAuthorization(
+        address requester,
+        bool isAuthorized
+    ) external onlyOwner {
         randomBeacon.setRequesterAuthorization(requester, isAuthorized);
     }
 
@@ -1782,11 +1786,9 @@ contract RandomBeaconGovernance is Ownable {
     ///         can be committed.
     /// @param changeTimestamp Timestamp indicating the beginning of the change.
     /// @return Remaining time in seconds.
-    function getRemainingChangeTime(uint256 changeTimestamp)
-        internal
-        view
-        returns (uint256)
-    {
+    function getRemainingChangeTime(
+        uint256 changeTimestamp
+    ) internal view returns (uint256) {
         require(changeTimestamp > 0, "Change not initiated");
         /* solhint-disable-next-line not-rely-on-time */
         uint256 elapsed = block.timestamp - changeTimestamp;

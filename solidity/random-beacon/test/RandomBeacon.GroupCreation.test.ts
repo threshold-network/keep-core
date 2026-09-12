@@ -1,6 +1,7 @@
-/* eslint-disable @typescript-eslint/no-unused-expressions, @typescript-eslint/no-extra-semi */
+/* eslint-disable @typescript-eslint/no-unused-expressions */
 
-import { ethers, waffle, helpers } from "hardhat"
+import { ethers, helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import blsData from "./data/bls"
@@ -28,7 +29,7 @@ import type { RandomBeacon, SortitionPool, T, TokenStaking } from "../typechain"
 
 const { mineBlocks, mineBlocksTo } = helpers.time
 const { keccak256 } = ethers.utils
-const { provider } = waffle
+const { provider } = ethers
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 // FIXME: As a workaround for a bug https://github.com/dethcrypto/TypeChain/issues/601
@@ -37,7 +38,7 @@ type RandomBeaconTest = RandomBeacon & {
   getDkgData: () => Promise<DKG.DataStructOutput>
   roughlyAddGroup: (
     groupPubKey: BytesLike,
-    groupMembersHash: BytesLike
+    groupMembersHash: BytesLike,
   ) => Promise<ContractTransaction>
 }
 
@@ -50,7 +51,7 @@ const fixture = async () => {
     contracts.randomBeacon as RandomBeacon,
     contracts.t as T,
     constants.groupSize,
-    1
+    1,
   )
 
   const randomBeacon = contracts.randomBeacon as RandomBeaconTest
@@ -91,7 +92,7 @@ describe("RandomBeacon - Group Creation", () => {
       staking,
       t,
       signers,
-    } = await waffle.loadFixture(fixture))
+    } = await loadFixture(fixture))
 
     randomBeacon = randomBeaconStub
   })
@@ -163,7 +164,7 @@ describe("RandomBeacon - Group Creation", () => {
         context("with dkg result not submitted", async () => {
           it("should revert with 'Current state is not IDLE' error", async () => {
             await expect(randomBeacon.genesis()).to.be.revertedWith(
-              "Current state is not IDLE"
+              "Current state is not IDLE",
             )
           })
         })
@@ -181,7 +182,7 @@ describe("RandomBeacon - Group Creation", () => {
               groupPublicKey,
               genesisSeed,
               startBlock,
-              noMisbehaved
+              noMisbehaved,
             ))
           })
 
@@ -192,7 +193,7 @@ describe("RandomBeacon - Group Creation", () => {
           context("with dkg result not approved", async () => {
             it("should revert with 'Current state is not IDLE' error", async () => {
               await expect(randomBeacon.genesis()).to.be.revertedWith(
-                "Current state is not IDLE"
+                "Current state is not IDLE",
               )
             })
           })
@@ -212,7 +213,7 @@ describe("RandomBeacon - Group Creation", () => {
 
             it("should succeed", async () => {
               await expect(randomBeacon.genesis()).to.be.revertedWith(
-                "Not awaiting genesis"
+                "Not awaiting genesis",
               )
             })
           })
@@ -230,7 +231,7 @@ describe("RandomBeacon - Group Creation", () => {
                 // Mix operators to make the result malicious
                 mixSigners(await selectGroup(sortitionPool, genesisSeed)),
                 startBlock,
-                noMisbehaved
+                noMisbehaved,
               )
 
               await randomBeacon.challengeDkgResult(dkgResult)
@@ -242,7 +243,7 @@ describe("RandomBeacon - Group Creation", () => {
 
             it("should revert", async () => {
               await expect(randomBeacon.genesis()).to.be.revertedWith(
-                "Current state is not IDLE"
+                "Current state is not IDLE",
               )
             })
           })
@@ -281,7 +282,7 @@ describe("RandomBeacon - Group Creation", () => {
 
       it("should revert with 'current state is not IDLE' error", async () => {
         await expect(randomBeacon.genesis()).to.be.revertedWith(
-          "Not awaiting genesis"
+          "Not awaiting genesis",
         )
       })
     })
@@ -291,7 +292,7 @@ describe("RandomBeacon - Group Creation", () => {
     context("with initial contract state", async () => {
       it("should return IDLE state", async () => {
         expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-          dkgState.IDLE
+          dkgState.IDLE,
         )
       })
     })
@@ -315,7 +316,7 @@ describe("RandomBeacon - Group Creation", () => {
       context("at the start of off-chain dkg period", async () => {
         it("should return KEY_GENERATION state", async () => {
           expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-            dkgState.KEY_GENERATION
+            dkgState.KEY_GENERATION,
           )
         })
       })
@@ -333,7 +334,7 @@ describe("RandomBeacon - Group Creation", () => {
 
         it("should return KEY_GENERATION state", async () => {
           expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-            dkgState.KEY_GENERATION
+            dkgState.KEY_GENERATION,
           )
         })
       })
@@ -352,7 +353,7 @@ describe("RandomBeacon - Group Creation", () => {
         context("when dkg result was not submitted", async () => {
           it("should return AWAITING_RESULT state", async () => {
             expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-              dkgState.AWAITING_RESULT
+              dkgState.AWAITING_RESULT,
             )
           })
 
@@ -369,7 +370,7 @@ describe("RandomBeacon - Group Creation", () => {
 
             it("should return AWAITING_RESULT state", async () => {
               expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-                dkgState.AWAITING_RESULT
+                dkgState.AWAITING_RESULT,
               )
             })
           })
@@ -386,7 +387,7 @@ describe("RandomBeacon - Group Creation", () => {
               groupPublicKey,
               genesisSeed,
               startBlock,
-              noMisbehaved
+              noMisbehaved,
             ))
           })
 
@@ -397,7 +398,7 @@ describe("RandomBeacon - Group Creation", () => {
           context("when dkg result was not approved", async () => {
             it("should return CHALLENGE state", async () => {
               expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-                dkgState.CHALLENGE
+                dkgState.CHALLENGE,
               )
             })
           })
@@ -417,7 +418,7 @@ describe("RandomBeacon - Group Creation", () => {
 
             it("should return IDLE state", async () => {
               expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-                dkgState.IDLE
+                dkgState.IDLE,
               )
             })
           })
@@ -434,7 +435,7 @@ describe("RandomBeacon - Group Creation", () => {
               // Mix signers to make the result malicious
               mixSigners(await selectGroup(sortitionPool, genesisSeed)),
               startBlock,
-              noMisbehaved
+              noMisbehaved,
             ))
           })
 
@@ -455,7 +456,7 @@ describe("RandomBeacon - Group Creation", () => {
 
             it("should return AWAITING_RESULT state", async () => {
               expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-                dkgState.AWAITING_RESULT
+                dkgState.AWAITING_RESULT,
               )
             })
           })
@@ -560,7 +561,7 @@ describe("RandomBeacon - Group Creation", () => {
               groupPublicKey,
               genesisSeed,
               startBlock,
-              noMisbehaved
+              noMisbehaved,
             ))
 
             resultSubmissionBlock = (await tx.wait()).blockNumber
@@ -608,7 +609,7 @@ describe("RandomBeacon - Group Creation", () => {
                 await createSnapshot()
 
                 await mineBlocksTo(
-                  resultSubmissionBlock + params.dkgResultChallengePeriodLength
+                  resultSubmissionBlock + params.dkgResultChallengePeriodLength,
                 )
               })
 
@@ -628,7 +629,7 @@ describe("RandomBeacon - Group Creation", () => {
                 await mineBlocksTo(
                   resultSubmissionBlock +
                     params.dkgResultChallengePeriodLength +
-                    1
+                    1,
                 )
               })
 
@@ -647,7 +648,7 @@ describe("RandomBeacon - Group Creation", () => {
               await createSnapshot()
 
               await mineBlocksTo(
-                resultSubmissionBlock + params.dkgResultChallengePeriodLength
+                resultSubmissionBlock + params.dkgResultChallengePeriodLength,
               )
 
               await randomBeacon.connect(submitter).approveDkgResult(dkgResult)
@@ -674,7 +675,7 @@ describe("RandomBeacon - Group Creation", () => {
               // Mix signers to make the result malicious.
               mixSigners(await selectGroup(sortitionPool, genesisSeed)),
               startBlock,
-              noMisbehaved
+              noMisbehaved,
             ))
           })
 
@@ -701,7 +702,7 @@ describe("RandomBeacon - Group Creation", () => {
                 await createSnapshot()
 
                 await mineBlocksTo(
-                  challengeBlockNumber + params.dkgResultSubmissionTimeout
+                  challengeBlockNumber + params.dkgResultSubmissionTimeout,
                 )
               })
 
@@ -719,7 +720,7 @@ describe("RandomBeacon - Group Creation", () => {
                 await createSnapshot()
 
                 await mineBlocksTo(
-                  challengeBlockNumber + params.dkgResultSubmissionTimeout + 1
+                  challengeBlockNumber + params.dkgResultSubmissionTimeout + 1,
                 )
               })
 
@@ -746,8 +747,8 @@ describe("RandomBeacon - Group Creation", () => {
             groupPublicKey,
             signers,
             1,
-            noMisbehaved
-          )
+            noMisbehaved,
+          ),
         ).to.be.revertedWith("Current state is not AWAITING_RESULT")
       })
     })
@@ -788,8 +789,8 @@ describe("RandomBeacon - Group Creation", () => {
                 groupPublicKey,
                 genesisSeed,
                 startBlock,
-                noMisbehaved
-              )
+                noMisbehaved,
+              ),
             ).to.be.revertedWith("Current state is not AWAITING_RESULT")
           })
         })
@@ -824,7 +825,7 @@ describe("RandomBeacon - Group Creation", () => {
                 noMisbehaved,
                 1,
                 undefined,
-                constants.groupThreshold
+                constants.groupThreshold,
               ))
             })
 
@@ -874,7 +875,7 @@ describe("RandomBeacon - Group Creation", () => {
                 noMisbehaved,
                 1,
                 undefined,
-                constants.groupThreshold - 1
+                constants.groupThreshold - 1,
               ))
             })
 
@@ -940,7 +941,7 @@ describe("RandomBeacon - Group Creation", () => {
                 await mineBlocksTo(
                   submissionStartBlockNumber +
                     params.dkgResultSubmissionTimeout -
-                    1
+                    1,
                 )
               })
 
@@ -966,7 +967,8 @@ describe("RandomBeacon - Group Creation", () => {
                 await createSnapshot()
 
                 await mineBlocksTo(
-                  submissionStartBlockNumber + params.dkgResultSubmissionTimeout
+                  submissionStartBlockNumber +
+                    params.dkgResultSubmissionTimeout,
                 )
               })
 
@@ -1006,7 +1008,7 @@ describe("RandomBeacon - Group Creation", () => {
                 groupPublicKey,
                 genesisSeed,
                 startBlock,
-                noMisbehaved
+                noMisbehaved,
               ))
 
               resultSubmissionBlock = (await tx.wait()).blockNumber
@@ -1023,8 +1025,8 @@ describe("RandomBeacon - Group Creation", () => {
                   groupPublicKey,
                   genesisSeed,
                   startBlock,
-                  noMisbehaved
-                )
+                  noMisbehaved,
+                ),
               ).to.be.revertedWith("Current state is not AWAITING_RESULT")
             })
 
@@ -1033,7 +1035,7 @@ describe("RandomBeacon - Group Creation", () => {
                 await createSnapshot()
 
                 await mineBlocksTo(
-                  resultSubmissionBlock + params.dkgResultChallengePeriodLength
+                  resultSubmissionBlock + params.dkgResultChallengePeriodLength,
                 )
 
                 await randomBeacon
@@ -1052,8 +1054,8 @@ describe("RandomBeacon - Group Creation", () => {
                     groupPublicKey,
                     genesisSeed,
                     startBlock,
-                    noMisbehaved
-                  )
+                    noMisbehaved,
+                  ),
                 ).to.be.revertedWith("Sortition pool unlocked")
               })
             })
@@ -1071,7 +1073,7 @@ describe("RandomBeacon - Group Creation", () => {
                 // Mix signers to make the result malicious.
                 mixSigners(await selectGroup(sortitionPool, genesisSeed)),
                 startBlock,
-                noMisbehaved
+                noMisbehaved,
               )
 
               const tx = await randomBeacon.challengeDkgResult(dkgResult)
@@ -1092,7 +1094,7 @@ describe("RandomBeacon - Group Creation", () => {
                   groupPublicKey,
                   genesisSeed,
                   startBlock,
-                  noMisbehaved
+                  noMisbehaved,
                 ))
               })
 
@@ -1145,7 +1147,7 @@ describe("RandomBeacon - Group Creation", () => {
                   await mineBlocksTo(
                     submissionStartBlockNumber +
                       params.dkgResultSubmissionTimeout -
-                      1
+                      1,
                   )
                 })
 
@@ -1172,7 +1174,7 @@ describe("RandomBeacon - Group Creation", () => {
 
                   await mineBlocksTo(
                     submissionStartBlockNumber +
-                      params.dkgResultSubmissionTimeout
+                      params.dkgResultSubmissionTimeout,
                   )
                 })
 
@@ -1215,7 +1217,7 @@ describe("RandomBeacon - Group Creation", () => {
                       groupPublicKey,
                       genesisSeed,
                       startBlock,
-                      misbehavedIndices
+                      misbehavedIndices,
                     ))
                   })
 
@@ -1230,7 +1232,7 @@ describe("RandomBeacon - Group Creation", () => {
                       result: dkgResult,
                     })
                   })
-                }
+                },
               )
             })
           })
@@ -1244,7 +1246,7 @@ describe("RandomBeacon - Group Creation", () => {
                   invalidPublicKey,
                   noMisbehaved,
                   startBlock,
-                  constants.groupThreshold
+                  constants.groupThreshold,
                 )
 
               const submitterIndex = 1
@@ -1264,7 +1266,7 @@ describe("RandomBeacon - Group Creation", () => {
               }
 
               await expect(
-                randomBeacon.connect(submitter).submitDkgResult(dkgResult)
+                randomBeacon.connect(submitter).submitDkgResult(dkgResult),
               ).to.be.revertedWith("Invalid length of the public key")
             })
           })
@@ -1275,7 +1277,7 @@ describe("RandomBeacon - Group Creation", () => {
               await randomBeacon.roughlyAddGroup(
                 groupPublicKey,
                 // group members do not matter for this test
-                "0x0000000000000000000000000000000000000000000000000000000000000000"
+                "0x0000000000000000000000000000000000000000000000000000000000000000",
               )
             })
 
@@ -1290,7 +1292,7 @@ describe("RandomBeacon - Group Creation", () => {
                   groupPublicKey,
                   noMisbehaved,
                   startBlock,
-                  constants.groupThreshold
+                  constants.groupThreshold,
                 )
 
               const submitterIndex = 1
@@ -1310,9 +1312,9 @@ describe("RandomBeacon - Group Creation", () => {
               }
 
               await expect(
-                randomBeacon.connect(submitter).submitDkgResult(dkgResult)
+                randomBeacon.connect(submitter).submitDkgResult(dkgResult),
               ).to.be.revertedWith(
-                "Group with this public key was already registered"
+                "Group with this public key was already registered",
               )
             })
           })
@@ -1338,8 +1340,8 @@ describe("RandomBeacon - Group Creation", () => {
                 groupPublicKey,
                 genesisSeed,
                 startBlock,
-                noMisbehaved
-              )
+                noMisbehaved,
+              ),
             ).to.be.revertedWith("DKG timeout already passed")
           })
         })
@@ -1347,7 +1349,7 @@ describe("RandomBeacon - Group Creation", () => {
 
       // Submission Test Helpers
       async function assertSubmissionSucceeds(
-        submitterIndex: number
+        submitterIndex: number,
       ): Promise<void> {
         const {
           transaction: tx,
@@ -1359,7 +1361,7 @@ describe("RandomBeacon - Group Creation", () => {
           genesisSeed,
           startBlock,
           noMisbehaved,
-          submitterIndex
+          submitterIndex,
         )
 
         await expectDkgResultSubmittedEvent(tx, {
@@ -1371,7 +1373,7 @@ describe("RandomBeacon - Group Creation", () => {
 
       async function assertSubmissionReverts(
         submitterIndex: number,
-        message = "DKG timeout already passed"
+        message = "DKG timeout already passed",
       ): Promise<void> {
         await expect(
           signAndSubmitCorrectDkgResult(
@@ -1380,8 +1382,8 @@ describe("RandomBeacon - Group Creation", () => {
             genesisSeed,
             startBlock,
             noMisbehaved,
-            submitterIndex
-          )
+            submitterIndex,
+          ),
         ).to.be.revertedWith(message)
       }
     })
@@ -1402,7 +1404,7 @@ describe("RandomBeacon - Group Creation", () => {
     context("with initial contract state", async () => {
       it("should revert with 'Current state is not CHALLENGE' error", async () => {
         await expect(
-          randomBeacon.approveDkgResult(stubDkgResult)
+          randomBeacon.approveDkgResult(stubDkgResult),
         ).to.be.revertedWith("Current state is not CHALLENGE")
       })
     })
@@ -1426,7 +1428,7 @@ describe("RandomBeacon - Group Creation", () => {
 
       it("should revert with 'Current state is not CHALLENGE' error", async () => {
         await expect(
-          randomBeacon.approveDkgResult(stubDkgResult)
+          randomBeacon.approveDkgResult(stubDkgResult),
         ).to.be.revertedWith("Current state is not CHALLENGE")
       })
 
@@ -1444,7 +1446,7 @@ describe("RandomBeacon - Group Creation", () => {
         context("with dkg result not submitted", async () => {
           it("should revert with 'Current state is not CHALLENGE' error", async () => {
             await expect(
-              randomBeacon.approveDkgResult(stubDkgResult)
+              randomBeacon.approveDkgResult(stubDkgResult),
             ).to.be.revertedWith("Current state is not CHALLENGE")
           })
         })
@@ -1474,7 +1476,7 @@ describe("RandomBeacon - Group Creation", () => {
               genesisSeed,
               startBlock,
               noMisbehaved,
-              submitterIndex
+              submitterIndex,
             ))
 
             resultSubmissionBlock = (await tx.wait()).blockNumber
@@ -1491,7 +1493,7 @@ describe("RandomBeacon - Group Creation", () => {
               await mineBlocksTo(
                 resultSubmissionBlock +
                   params.dkgResultChallengePeriodLength -
-                  1
+                  1,
               )
             })
 
@@ -1501,7 +1503,7 @@ describe("RandomBeacon - Group Creation", () => {
 
             it("should revert with 'Challenge period has not passed yet' error", async () => {
               await expect(
-                randomBeacon.connect(submitter).approveDkgResult(dkgResult)
+                randomBeacon.connect(submitter).approveDkgResult(dkgResult),
               ).to.be.revertedWith("Challenge period has not passed yet")
             })
           })
@@ -1511,7 +1513,7 @@ describe("RandomBeacon - Group Creation", () => {
               await createSnapshot()
 
               await mineBlocksTo(
-                resultSubmissionBlock + params.dkgResultChallengePeriodLength
+                resultSubmissionBlock + params.dkgResultChallengePeriodLength,
               )
             })
 
@@ -1549,19 +1551,18 @@ describe("RandomBeacon - Group Creation", () => {
 
                 expect(groupsRegistry).to.be.lengthOf(1)
                 expect(groupsRegistry[0]).to.deep.equal(
-                  keccak256(groupPublicKey)
+                  keccak256(groupPublicKey),
                 )
 
-                const storedGroup = await randomBeacon["getGroup(bytes)"](
-                  groupPublicKey
-                )
+                const storedGroup =
+                  await randomBeacon["getGroup(bytes)"](groupPublicKey)
 
                 expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
                 expect(storedGroup.registrationBlockNumber).to.be.equal(
                   (await tx.wait()).blockNumber
                 )
                 expect(storedGroup.membersHash).to.be.equal(
-                  hashUint32Array(dkgResult.members)
+                  hashUint32Array(dkgResult.members),
                 )
               })
 
@@ -1581,7 +1582,7 @@ describe("RandomBeacon - Group Creation", () => {
 
                 expect(diff).to.be.gt(0)
                 expect(diff).to.be.lt(
-                  ethers.utils.parseUnits("2000000", "gwei") // 0,002 ETH
+                  ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
                 )
               })
             })
@@ -1592,7 +1593,7 @@ describe("RandomBeacon - Group Creation", () => {
                   await createSnapshot()
 
                   await mineBlocks(
-                    params.dkgSubmitterPrecedencePeriodLength - 1
+                    params.dkgSubmitterPrecedencePeriodLength - 1,
                   )
                 })
 
@@ -1602,9 +1603,11 @@ describe("RandomBeacon - Group Creation", () => {
 
                 it("should revert", async () => {
                   await expect(
-                    randomBeacon.connect(thirdParty).approveDkgResult(dkgResult)
+                    randomBeacon
+                      .connect(thirdParty)
+                      .approveDkgResult(dkgResult),
                   ).to.be.revertedWith(
-                    "Only the DKG result submitter can approve the result at this moment"
+                    "Only the DKG result submitter can approve the result at this moment",
                   )
                 })
               })
@@ -1618,7 +1621,7 @@ describe("RandomBeacon - Group Creation", () => {
 
                   await mineBlocks(params.dkgSubmitterPrecedencePeriodLength)
                   initApproverBalance = await provider.getBalance(
-                    thirdParty.address
+                    thirdParty.address,
                   )
                   tx = randomBeacon
                     .connect(thirdParty)
@@ -1635,7 +1638,7 @@ describe("RandomBeacon - Group Creation", () => {
 
                 it("should refund ETH", async () => {
                   const postBalance = await provider.getBalance(
-                    thirdParty.address
+                    thirdParty.address,
                   )
                   const diff = postBalance.sub(initApproverBalance)
 
@@ -1672,7 +1675,7 @@ describe("RandomBeacon - Group Creation", () => {
                 mixSigners(await selectGroup(sortitionPool, genesisSeed)),
                 startBlock,
                 noMisbehaved,
-                maliciousSubmitter
+                maliciousSubmitter,
               )
 
             await randomBeacon.challengeDkgResult(maliciousDkgResult)
@@ -1690,7 +1693,7 @@ describe("RandomBeacon - Group Creation", () => {
               genesisSeed,
               startBlock,
               noMisbehaved,
-              anotherSubmitterIndex
+              anotherSubmitterIndex,
             ))
 
             resultSubmissionBlock = (await tx.wait()).blockNumber
@@ -1707,7 +1710,7 @@ describe("RandomBeacon - Group Creation", () => {
               await mineBlocksTo(
                 resultSubmissionBlock +
                   params.dkgResultChallengePeriodLength -
-                  1
+                  1,
               )
             })
 
@@ -1719,7 +1722,7 @@ describe("RandomBeacon - Group Creation", () => {
               await expect(
                 randomBeacon
                   .connect(anotherSubmitter)
-                  .approveDkgResult(dkgResult)
+                  .approveDkgResult(dkgResult),
               ).to.be.revertedWith("Challenge period has not passed yet")
             })
           })
@@ -1731,7 +1734,7 @@ describe("RandomBeacon - Group Creation", () => {
               await createSnapshot()
 
               await mineBlocksTo(
-                resultSubmissionBlock + params.dkgResultChallengePeriodLength
+                resultSubmissionBlock + params.dkgResultChallengePeriodLength,
               )
 
               tx = await randomBeacon
@@ -1755,16 +1758,15 @@ describe("RandomBeacon - Group Creation", () => {
               expect(groupsRegistry).to.be.lengthOf(1)
               expect(groupsRegistry[0]).to.deep.equal(keccak256(groupPublicKey))
 
-              const storedGroup = await randomBeacon["getGroup(bytes)"](
-                groupPublicKey
-              )
+              const storedGroup =
+                await randomBeacon["getGroup(bytes)"](groupPublicKey)
 
               expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
               expect(storedGroup.registrationBlockNumber).to.be.equal(
                 (await tx.wait()).blockNumber
               )
               expect(storedGroup.membersHash).to.be.equal(
-                hashUint32Array(dkgResult.members)
+                hashUint32Array(dkgResult.members),
               )
             })
 
@@ -1780,13 +1782,13 @@ describe("RandomBeacon - Group Creation", () => {
 
             it("should refund ETH", async () => {
               const postBalance = await provider.getBalance(
-                anotherSubmitter.address
+                anotherSubmitter.address,
               )
               const diff = postBalance.sub(anotherSubmitterInitialBalance)
 
               expect(diff).to.be.gt(0)
               expect(diff).to.be.lt(
-                ethers.utils.parseUnits("2400000", "gwei") // 0,0024 ETH
+                ethers.utils.parseUnits("2400000", "gwei"), // 0,0024 ETH
               )
             })
           })
@@ -1806,7 +1808,7 @@ describe("RandomBeacon - Group Creation", () => {
             groupPublicKey,
             genesisSeed,
             startBlock,
-            noMisbehaved
+            noMisbehaved,
           )
 
           await mineBlocks(params.dkgResultChallengePeriodLength)
@@ -1849,7 +1851,7 @@ describe("RandomBeacon - Group Creation", () => {
               groupPublicKey,
               genesisSeed,
               startBlock,
-              misbehavedIndices
+              misbehavedIndices,
             ))
 
           misbehavedIds = misbehavedIndices.map((i) => members[i - 1])
@@ -1863,9 +1865,8 @@ describe("RandomBeacon - Group Creation", () => {
         })
 
         it("should correctly set a group members hash", async () => {
-          const storedGroup = await randomBeacon["getGroup(bytes)"](
-            groupPublicKey
-          )
+          const storedGroup =
+            await randomBeacon["getGroup(bytes)"](groupPublicKey)
 
           // misbehavedIndices: [2, 9, 11, 30, 60, 64]
           const expectedMembers = [...dkgResult.members]
@@ -1876,7 +1877,7 @@ describe("RandomBeacon - Group Creation", () => {
           expectedMembers.splice(55, 1) // index -5
           expectedMembers.splice(58, 1) // index -6
           expect(storedGroup.membersHash).to.be.equal(
-            hashUint32Array(expectedMembers)
+            hashUint32Array(expectedMembers),
           )
         })
 
@@ -1899,7 +1900,7 @@ describe("RandomBeacon - Group Creation", () => {
 
           expect(diff).to.be.gt(0)
           expect(diff).to.be.lt(
-            ethers.utils.parseUnits("1000000", "gwei") // 0,001 ETH
+            ethers.utils.parseUnits("1000000", "gwei"), // 0,001 ETH
           )
         })
       })
@@ -1925,7 +1926,7 @@ describe("RandomBeacon - Group Creation", () => {
                 groupPublicKey,
                 genesisSeed,
                 startBlock,
-                misbehavedIndices
+                misbehavedIndices,
               ))
 
             await mineBlocks(params.dkgResultChallengePeriodLength)
@@ -1947,10 +1948,10 @@ describe("RandomBeacon - Group Creation", () => {
 
             expect(diff).to.be.gt(0)
             expect(diff).to.be.lt(
-              ethers.utils.parseUnits("1000000", "gwei") // 0,001 ETH
+              ethers.utils.parseUnits("1000000", "gwei"), // 0,001 ETH
             )
           })
-        }
+        },
       )
 
       context("when misbehaved members contains duplicates", async () => {
@@ -1970,7 +1971,7 @@ describe("RandomBeacon - Group Creation", () => {
               groupPublicKey,
               genesisSeed,
               startBlock,
-              misbehavedIndices
+              misbehavedIndices,
             ))
 
           await mineBlocks(params.dkgResultChallengePeriodLength)
@@ -1992,7 +1993,7 @@ describe("RandomBeacon - Group Creation", () => {
 
           expect(diff).to.be.gt(0)
           expect(diff).to.be.lt(
-            ethers.utils.parseUnits("2000000", "gwei") // 0,002 ETH
+            ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
           )
         })
       })
@@ -2003,7 +2004,7 @@ describe("RandomBeacon - Group Creation", () => {
     context("with initial contract state", async () => {
       it("should revert with 'DKG has not timed out' error", async () => {
         await expect(randomBeacon.notifyDkgTimeout()).to.be.revertedWith(
-          "DKG has not timed out"
+          "DKG has not timed out",
         )
       })
     })
@@ -2037,7 +2038,7 @@ describe("RandomBeacon - Group Creation", () => {
 
           it("should revert with 'DKG has not timed out' error", async () => {
             await expect(randomBeacon.notifyDkgTimeout()).to.be.revertedWith(
-              "DKG has not timed out"
+              "DKG has not timed out",
             )
           })
         })
@@ -2055,7 +2056,7 @@ describe("RandomBeacon - Group Creation", () => {
 
           it("should revert with 'DKG has not timed out' error", async () => {
             await expect(randomBeacon.notifyDkgTimeout()).to.be.revertedWith(
-              "DKG has not timed out"
+              "DKG has not timed out",
             )
           })
         })
@@ -2073,7 +2074,7 @@ describe("RandomBeacon - Group Creation", () => {
 
           it("should revert with 'DKG has not timed out' error", async () => {
             await expect(randomBeacon.notifyDkgTimeout()).to.be.revertedWith(
-              "DKG has not timed out"
+              "DKG has not timed out",
             )
           })
         })
@@ -2098,7 +2099,7 @@ describe("RandomBeacon - Group Creation", () => {
             await createSnapshot()
 
             initialThirdPartyBalance = await provider.getBalance(
-              await thirdParty.getAddress()
+              await thirdParty.getAddress(),
             )
             tx = await randomBeacon.connect(thirdParty).notifyDkgTimeout()
           })
@@ -2124,7 +2125,7 @@ describe("RandomBeacon - Group Creation", () => {
             const diff = postBalance.sub(initialThirdPartyBalance)
             expect(diff).to.be.gt(0)
             expect(diff).to.be.lt(
-              ethers.utils.parseUnits("2000000", "gwei") // 0,002 ETH
+              ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
             )
           })
         })
@@ -2147,7 +2148,7 @@ describe("RandomBeacon - Group Creation", () => {
     context("with initial contract state", async () => {
       it("should revert with 'Current state is not CHALLENGE' error", async () => {
         await expect(
-          randomBeacon.challengeDkgResult(stubDkgResult)
+          randomBeacon.challengeDkgResult(stubDkgResult),
         ).to.be.revertedWith("Current state is not CHALLENGE")
       })
     })
@@ -2171,7 +2172,7 @@ describe("RandomBeacon - Group Creation", () => {
 
       it("should revert with 'Current state is not CHALLENGE' error", async () => {
         await expect(
-          randomBeacon.challengeDkgResult(stubDkgResult)
+          randomBeacon.challengeDkgResult(stubDkgResult),
         ).to.be.revertedWith("Current state is not CHALLENGE")
       })
 
@@ -2189,7 +2190,7 @@ describe("RandomBeacon - Group Creation", () => {
         context("with dkg result not submitted", async () => {
           it("should revert with 'Current state is not CHALLENGE' error", async () => {
             await expect(
-              randomBeacon.challengeDkgResult(stubDkgResult)
+              randomBeacon.challengeDkgResult(stubDkgResult),
             ).to.be.revertedWith("Current state is not CHALLENGE")
           })
         })
@@ -2217,7 +2218,7 @@ describe("RandomBeacon - Group Creation", () => {
               const invalidMisbehavedIndices = [3, 8, 15, 41]
               const invalidMembersHash = hashDKGMembers(
                 membersIds,
-                invalidMisbehavedIndices
+                invalidMisbehavedIndices,
               )
 
               ;({ dkgResult, dkgResultHash } =
@@ -2228,7 +2229,7 @@ describe("RandomBeacon - Group Creation", () => {
                   startBlock,
                   actualMisbehavedIndices,
                   undefined,
-                  invalidMembersHash
+                  invalidMembersHash,
                 ))
 
               const tx = await randomBeacon
@@ -2240,7 +2241,7 @@ describe("RandomBeacon - Group Creation", () => {
                 .withArgs(
                   dkgResultHash,
                   await thirdParty.getAddress(),
-                  "Invalid members hash"
+                  "Invalid members hash",
                 )
             })
           })
@@ -2250,7 +2251,7 @@ describe("RandomBeacon - Group Creation", () => {
               const invalidMisbehavedIndices = [3]
               const invalidMembersHash = hashDKGMembers(
                 membersIds,
-                invalidMisbehavedIndices
+                invalidMisbehavedIndices,
               )
 
               ;({ dkgResult, dkgResultHash } =
@@ -2261,7 +2262,7 @@ describe("RandomBeacon - Group Creation", () => {
                   startBlock,
                   noMisbehaved,
                   undefined,
-                  invalidMembersHash
+                  invalidMembersHash,
                 ))
 
               const tx = await randomBeacon
@@ -2273,7 +2274,7 @@ describe("RandomBeacon - Group Creation", () => {
                 .withArgs(
                   dkgResultHash,
                   await thirdParty.getAddress(),
-                  "Invalid members hash"
+                  "Invalid members hash",
                 )
             })
           })
@@ -2300,7 +2301,7 @@ describe("RandomBeacon - Group Creation", () => {
               // Mix signers to make the result malicious.
               mixSigners(await selectGroup(sortitionPool, genesisSeed)),
               startBlock,
-              noMisbehaved
+              noMisbehaved,
             ))
 
             resultSubmissionBlock = (await tx.wait()).blockNumber
@@ -2335,7 +2336,7 @@ describe("RandomBeacon - Group Creation", () => {
                   .withArgs(
                     dkgResultHash,
                     await thirdParty.getAddress(),
-                    "Invalid group members"
+                    "Invalid group members",
                   )
               })
 
@@ -2349,14 +2350,14 @@ describe("RandomBeacon - Group Creation", () => {
                   .withArgs(
                     dkgResultHash,
                     params.maliciousDkgResultSlashingAmount,
-                    submitter.address
+                    submitter.address,
                   )
               })
 
               it("should not emit DkgMaliciousResultSlashingFailed event", async () => {
                 await expect(challengeTx).to.not.emit(
                   randomBeacon,
-                  "DkgMaliciousResultSlashingFailed"
+                  "DkgMaliciousResultSlashingFailed",
                 )
               })
 
@@ -2367,16 +2368,16 @@ describe("RandomBeacon - Group Creation", () => {
                     thirdParty.address,
                     constants.tokenStakingNotificationReward
                       .mul(
-                        params.dkgMaliciousResultNotificationRewardMultiplier
+                        params.dkgMaliciousResultNotificationRewardMultiplier,
                       )
-                      .div(100)
+                      .div(100),
                   )
               })
 
               it("should slash malicious result submitter", async () => {
                 const stakingProvider =
                   await randomBeacon.operatorToStakingProvider(
-                    submitter.address
+                    submitter.address,
                   )
 
                 await expect(slashingTx)
@@ -2384,7 +2385,7 @@ describe("RandomBeacon - Group Creation", () => {
                   .withArgs(
                     stakingProvider,
                     params.maliciousDkgResultSlashingAmount,
-                    false
+                    false,
                   )
               })
             })
@@ -2397,7 +2398,7 @@ describe("RandomBeacon - Group Creation", () => {
               await mineBlocksTo(
                 resultSubmissionBlock +
                   params.dkgResultChallengePeriodLength -
-                  1
+                  1,
               )
             })
 
@@ -2429,7 +2430,7 @@ describe("RandomBeacon - Group Creation", () => {
                   .withArgs(
                     dkgResultHash,
                     await thirdParty.getAddress(),
-                    "Invalid group members"
+                    "Invalid group members",
                   )
               })
 
@@ -2443,14 +2444,14 @@ describe("RandomBeacon - Group Creation", () => {
                   .withArgs(
                     dkgResultHash,
                     params.maliciousDkgResultSlashingAmount,
-                    submitter.address
+                    submitter.address,
                   )
               })
 
               it("should not emit DkgMaliciousResultSlashingFailed event", async () => {
                 await expect(challengeTx).to.not.emit(
                   randomBeacon,
-                  "DkgMaliciousResultSlashingFailed"
+                  "DkgMaliciousResultSlashingFailed",
                 )
               })
 
@@ -2461,16 +2462,16 @@ describe("RandomBeacon - Group Creation", () => {
                     thirdParty.address,
                     constants.tokenStakingNotificationReward
                       .mul(
-                        params.dkgMaliciousResultNotificationRewardMultiplier
+                        params.dkgMaliciousResultNotificationRewardMultiplier,
                       )
-                      .div(100)
+                      .div(100),
                   )
               })
 
               it("should slash malicious result submitter", async () => {
                 const stakingProvider =
                   await randomBeacon.operatorToStakingProvider(
-                    submitter.address
+                    submitter.address,
                   )
 
                 await expect(slashingTx)
@@ -2478,7 +2479,7 @@ describe("RandomBeacon - Group Creation", () => {
                   .withArgs(
                     stakingProvider,
                     params.maliciousDkgResultSlashingAmount,
-                    false
+                    false,
                   )
               })
             })
@@ -2489,7 +2490,7 @@ describe("RandomBeacon - Group Creation", () => {
               await createSnapshot()
 
               await mineBlocksTo(
-                resultSubmissionBlock + params.dkgResultChallengePeriodLength
+                resultSubmissionBlock + params.dkgResultChallengePeriodLength,
               )
             })
 
@@ -2499,7 +2500,7 @@ describe("RandomBeacon - Group Creation", () => {
 
             it("should revert with 'Challenge period has already passed' error", async () => {
               await expect(
-                randomBeacon.challengeDkgResult(dkgResult)
+                randomBeacon.challengeDkgResult(dkgResult),
               ).to.be.revertedWith("Challenge period has already passed")
             })
           })
@@ -2533,7 +2534,7 @@ describe("RandomBeacon - Group Creation", () => {
                 .withArgs(
                   dkgResultHash,
                   params.maliciousDkgResultSlashingAmount,
-                  submitter.address
+                  submitter.address,
                 )
             })
           })
@@ -2544,17 +2545,17 @@ describe("RandomBeacon - Group Creation", () => {
               it("should revert with 'Result under challenge is different than the submitted one'", async () => {
                 const modifiedDkgResult: DKG.ResultStruct = { ...dkgResult }
                 const modifiedMembersHash = hashUint32Array(
-                  modifiedDkgResult.members.splice(42, 1)
+                  modifiedDkgResult.members.splice(42, 1),
                 )
                 modifiedDkgResult.membersHash = modifiedMembersHash
 
                 await expect(
-                  randomBeacon.challengeDkgResult(modifiedDkgResult)
+                  randomBeacon.challengeDkgResult(modifiedDkgResult),
                 ).to.be.revertedWith(
-                  "Result under challenge is different than the submitted one"
+                  "Result under challenge is different than the submitted one",
                 )
               })
-            }
+            },
           )
         })
 
@@ -2575,7 +2576,7 @@ describe("RandomBeacon - Group Creation", () => {
                   groupPublicKey,
                   await selectGroup(sortitionPool, genesisSeed),
                   startBlock,
-                  noMisbehaved
+                  noMisbehaved,
                 ))
 
               challengeTx = await randomBeacon
@@ -2595,7 +2596,7 @@ describe("RandomBeacon - Group Creation", () => {
                 .withArgs(
                   dkgResultHash,
                   await thirdParty.getAddress(),
-                  "validation reverted"
+                  "validation reverted",
                 )
             })
 
@@ -2609,14 +2610,14 @@ describe("RandomBeacon - Group Creation", () => {
                 .withArgs(
                   dkgResultHash,
                   params.maliciousDkgResultSlashingAmount,
-                  submitter.address
+                  submitter.address,
                 )
             })
 
             it("should not emit DkgMaliciousResultSlashingFailed event", async () => {
               await expect(challengeTx).to.not.emit(
                 randomBeacon,
-                "DkgMaliciousResultSlashingFailed"
+                "DkgMaliciousResultSlashingFailed",
               )
             })
 
@@ -2627,7 +2628,7 @@ describe("RandomBeacon - Group Creation", () => {
                   thirdParty.address,
                   constants.tokenStakingNotificationReward
                     .mul(params.dkgMaliciousResultNotificationRewardMultiplier)
-                    .div(100)
+                    .div(100),
                 )
             })
 
@@ -2640,10 +2641,10 @@ describe("RandomBeacon - Group Creation", () => {
                 .withArgs(
                   stakingProvider,
                   params.maliciousDkgResultSlashingAmount,
-                  false
+                  false,
                 )
             })
-          }
+          },
         )
 
         context("with correct dkg result submitted", async () => {
@@ -2656,7 +2657,7 @@ describe("RandomBeacon - Group Creation", () => {
               groupPublicKey,
               genesisSeed,
               startBlock,
-              noMisbehaved
+              noMisbehaved,
             ))
           })
 
@@ -2666,7 +2667,7 @@ describe("RandomBeacon - Group Creation", () => {
 
           it("should revert with 'unjustified challenge' error", async () => {
             await expect(
-              randomBeacon.challengeDkgResult(dkgResult)
+              randomBeacon.challengeDkgResult(dkgResult),
             ).to.be.revertedWith("unjustified challenge")
           })
         })
@@ -2692,14 +2693,12 @@ describe("RandomBeacon - Group Creation", () => {
         groupPublicKey,
         signers,
         startBlock,
-        noMisbehaved
+        noMisbehaved,
       ))
 
       await expect(
-        (
-          await randomBeacon.getDkgData()
-        ).resultSubmissionStartBlockOffset,
-        "invalid resultSubmissionStartBlockOffset for result 1 after submission"
+        (await randomBeacon.getDkgData()).resultSubmissionStartBlockOffset,
+        "invalid resultSubmissionStartBlockOffset for result 1 after submission",
       ).to.equal(0)
 
       // Challenge result 1 at the beginning of the challenge period
@@ -2709,10 +2708,8 @@ describe("RandomBeacon - Group Creation", () => {
       let expectedSubmissionOffset = 2
 
       await expect(
-        (
-          await randomBeacon.getDkgData()
-        ).resultSubmissionStartBlockOffset,
-        "invalid resultSubmissionStartBlockOffset for result 1 after challenge"
+        (await randomBeacon.getDkgData()).resultSubmissionStartBlockOffset,
+        "invalid resultSubmissionStartBlockOffset for result 1 after challenge",
       ).to.equal(expectedSubmissionOffset)
 
       // Submit result 2 in the middle of the submission period
@@ -2723,14 +2720,12 @@ describe("RandomBeacon - Group Creation", () => {
         groupPublicKey,
         signers,
         startBlock,
-        noMisbehaved
+        noMisbehaved,
       ))
 
       await expect(
-        (
-          await randomBeacon.getDkgData()
-        ).resultSubmissionStartBlockOffset,
-        "invalid resultSubmissionStartBlockOffset for result 2 after submission"
+        (await randomBeacon.getDkgData()).resultSubmissionStartBlockOffset,
+        "invalid resultSubmissionStartBlockOffset for result 2 after submission",
       ).to.equal(expectedSubmissionOffset) // same as before
 
       expectedSubmissionOffset += blocksToMine
@@ -2742,10 +2737,8 @@ describe("RandomBeacon - Group Creation", () => {
       expectedSubmissionOffset += 2 // 1 block for dkg result submission tx + 1 block for challenge tx
 
       await expect(
-        (
-          await randomBeacon.getDkgData()
-        ).resultSubmissionStartBlockOffset,
-        "invalid resultSubmissionStartBlockOffset for result 2 after challenge"
+        (await randomBeacon.getDkgData()).resultSubmissionStartBlockOffset,
+        "invalid resultSubmissionStartBlockOffset for result 2 after challenge",
       ).to.equal(expectedSubmissionOffset)
 
       // Submit result 3 at the end of the submission period
@@ -2756,14 +2749,12 @@ describe("RandomBeacon - Group Creation", () => {
         groupPublicKey,
         signers,
         startBlock,
-        noMisbehaved
+        noMisbehaved,
       ))
 
       await expect(
-        (
-          await randomBeacon.getDkgData()
-        ).resultSubmissionStartBlockOffset,
-        "invalid resultSubmissionStartBlockOffset for result 3 after submission"
+        (await randomBeacon.getDkgData()).resultSubmissionStartBlockOffset,
+        "invalid resultSubmissionStartBlockOffset for result 3 after submission",
       ).to.equal(expectedSubmissionOffset) // same as before
 
       expectedSubmissionOffset += blocksToMine
@@ -2774,17 +2765,15 @@ describe("RandomBeacon - Group Creation", () => {
       expectedSubmissionOffset += blocksToMine
 
       await expect(
-        randomBeacon.callStatic.notifyDkgTimeout()
+        randomBeacon.callStatic.notifyDkgTimeout(),
       ).to.be.revertedWith("DKG has not timed out")
 
       await randomBeacon.challengeDkgResult(dkgResult)
       expectedSubmissionOffset += 2 // 1 block for dkg result submission tx + 1 block for challenge tx
 
       await expect(
-        (
-          await randomBeacon.getDkgData()
-        ).resultSubmissionStartBlockOffset,
-        "invalid resultSubmissionStartBlockOffset for result 3 after challenge"
+        (await randomBeacon.getDkgData()).resultSubmissionStartBlockOffset,
+        "invalid resultSubmissionStartBlockOffset for result 3 after challenge",
       ).to.equal(expectedSubmissionOffset)
 
       // Submit result 4 after the submission period
@@ -2796,8 +2785,8 @@ describe("RandomBeacon - Group Creation", () => {
           groupPublicKey,
           signers,
           startBlock,
-          noMisbehaved
-        )
+          noMisbehaved,
+        ),
       ).to.be.revertedWith("DKG timeout already passed")
 
       await randomBeacon.notifyDkgTimeout()
@@ -2818,7 +2807,7 @@ describe("RandomBeacon - Group Creation", () => {
 
       it("should revert", async () => {
         await expect(randomBeacon.selectGroup()).to.be.revertedWith(
-          "Sortition pool unlocked"
+          "Sortition pool unlocked",
         )
       })
     })
@@ -2845,7 +2834,7 @@ describe("RandomBeacon - Group Creation", () => {
       it("should be the same group as if called the sortition pool directly", async () => {
         const exectedGroup = await sortitionPool.selectGroup(
           constants.groupSize,
-          ethers.utils.hexZeroPad(genesisSeed.toHexString(), 32)
+          ethers.utils.hexZeroPad(genesisSeed.toHexString(), 32),
         )
         const actualGroup = await randomBeacon.selectGroup()
         expect(exectedGroup).to.be.deep.equal(actualGroup)
@@ -2861,32 +2850,32 @@ async function assertDkgResultCleanData(randomBeacon: {
 
   expect(
     dkgData.parameters.resultChallengePeriodLength,
-    "unexpected resultChallengePeriodLength"
+    "unexpected resultChallengePeriodLength",
   ).to.eq(params.dkgResultChallengePeriodLength)
 
   expect(
     dkgData.parameters.resultSubmissionTimeout,
-    "unexpected resultSubmissionTimeout"
+    "unexpected resultSubmissionTimeout",
   ).to.eq(params.dkgResultSubmissionTimeout)
 
   expect(
     dkgData.parameters.submitterPrecedencePeriodLength,
-    "unexpected submitterPrecedencePeriodLength"
+    "unexpected submitterPrecedencePeriodLength",
   ).to.eq(params.dkgSubmitterPrecedencePeriodLength)
 
   expect(dkgData.startBlock, "unexpected startBlock").to.eq(0)
 
   expect(
     dkgData.resultSubmissionStartBlockOffset,
-    "unexpected resultSubmissionStartBlockOffset"
+    "unexpected resultSubmissionStartBlockOffset",
   ).to.eq(0)
 
   expect(dkgData.submittedResultHash, "unexpected submittedResultHash").to.eq(
-    ethers.constants.HashZero
+    ethers.constants.HashZero,
   )
 
   expect(dkgData.submittedResultBlock, "unexpected submittedResultBlock").to.eq(
-    0
+    0,
   )
 }
 

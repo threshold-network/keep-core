@@ -11,7 +11,7 @@ export async function signOperatorInactivityClaim(
   nonce: number,
   groupPubKey: string,
   inactiveMembersIndices: number[],
-  numberOfSignatures: number
+  numberOfSignatures: number,
 ): Promise<{
   signatures: string
   signingMembersIndices: number[]
@@ -19,8 +19,8 @@ export async function signOperatorInactivityClaim(
   const messageHash = ethers.utils.keccak256(
     ethers.utils.defaultAbiCoder.encode(
       ["uint256", "uint256", "bytes", "uint8[]"],
-      [hardhatNetworkId, nonce, groupPubKey, inactiveMembersIndices]
-    )
+      [hardhatNetworkId, nonce, groupPubKey, inactiveMembersIndices],
+    ),
   )
 
   const signingMembersIndices: number[] = []
@@ -37,9 +37,9 @@ export async function signOperatorInactivityClaim(
     signingMembersIndices.push(signerIndex)
 
     const ethersSigner = signers[i].signer
-    // eslint-disable-next-line no-await-in-loop
+
     const signature = await ethersSigner.signMessage(
-      ethers.utils.arrayify(messageHash)
+      ethers.utils.arrayify(messageHash),
     )
 
     signatures.push(signature)

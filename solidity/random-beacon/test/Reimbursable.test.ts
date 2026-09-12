@@ -12,19 +12,16 @@ describe("Reimbursable", () => {
   let contractToUpdate: SignerWithAddress
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ deployer } = await helpers.signers.getNamedSigners())
-
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;[admin, thirdParty, contractToUpdate] =
       await helpers.signers.getUnnamedSigners()
 
     const ReimbursableImplStub = await ethers.getContractFactory(
       "ReimbursableImplStub",
-      deployer
+      deployer,
     )
     reimbursableImplStub = (await ReimbursableImplStub.deploy(
-      admin.address
+      admin.address,
     )) as ReimbursableImplStub
   })
 
@@ -34,7 +31,7 @@ describe("Reimbursable", () => {
         await expect(
           reimbursableImplStub
             .connect(deployer)
-            .updateReimbursementPool(contractToUpdate.address)
+            .updateReimbursementPool(contractToUpdate.address),
         ).to.be.revertedWith("Caller is not the admin")
       })
     })
@@ -44,7 +41,7 @@ describe("Reimbursable", () => {
         await expect(
           reimbursableImplStub
             .connect(thirdParty)
-            .updateReimbursementPool(contractToUpdate.address)
+            .updateReimbursementPool(contractToUpdate.address),
         ).to.be.revertedWith("Caller is not the admin")
       })
     })
@@ -56,7 +53,7 @@ describe("Reimbursable", () => {
           .updateReimbursementPool(contractToUpdate.address)
 
         expect(await reimbursableImplStub.reimbursementPool()).to.be.equal(
-          contractToUpdate.address
+          contractToUpdate.address,
         )
       })
 
@@ -64,7 +61,7 @@ describe("Reimbursable", () => {
         await expect(
           reimbursableImplStub
             .connect(admin)
-            .updateReimbursementPool(contractToUpdate.address)
+            .updateReimbursementPool(contractToUpdate.address),
         )
           .to.emit(reimbursableImplStub, "ReimbursementPoolUpdated")
           .withArgs(contractToUpdate.address)

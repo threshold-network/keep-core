@@ -1,10 +1,10 @@
-import "@nomiclabs/hardhat-etherscan"
+import "@nomicfoundation/hardhat-verify"
 import "@keep-network/hardhat-local-networks-config"
 import "@keep-network/hardhat-helpers"
 import "@nomiclabs/hardhat-ethers"
 import "hardhat-deploy"
 import "@tenderly/hardhat-tenderly"
-import "@nomiclabs/hardhat-waffle"
+import "@nomicfoundation/hardhat-chai-matchers"
 import "hardhat-gas-reporter"
 import "hardhat-contract-sizer"
 import "@typechain/hardhat"
@@ -52,7 +52,7 @@ if (
   (!Number.isInteger(gasPriceGwei) || gasPriceGwei <= 0)
 ) {
   throw new Error(
-    `Invalid GAS_PRICE_GWEI "${process.env.GAS_PRICE_GWEI}": expected a positive integer (gwei)`
+    `Invalid GAS_PRICE_GWEI "${process.env.GAS_PRICE_GWEI}": expected a positive integer (gwei)`,
   )
 }
 
@@ -230,14 +230,14 @@ const config: HardhatUserConfig = {
 }
 
 task("check-accounts-count", "Checks accounts count").setAction(async () => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires,global-require
+  // eslint-disable-next-line @typescript-eslint/no-require-imports,global-require
   const { constants } = require("./test/fixtures")
 
   if (testConfig.operatorsCount < constants.groupSize) {
     throw new Error(
       "not enough accounts predefined for configured group size: " +
         `expected group size: ${constants.groupSize} ` +
-        `number of predefined accounts: ${testConfig.operatorsCount}`
+        `number of predefined accounts: ${testConfig.operatorsCount}`,
     )
   }
 })

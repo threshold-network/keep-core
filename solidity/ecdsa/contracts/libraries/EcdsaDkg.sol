@@ -192,11 +192,9 @@ library EcdsaDkg {
     /// @notice Determines the current state of group creation. It doesn't take
     ///         timeouts into consideration. The timeouts should be tracked and
     ///         notified separately.
-    function currentState(Data storage self)
-        internal
-        view
-        returns (State state)
-    {
+    function currentState(
+        Data storage self
+    ) internal view returns (State state) {
         state = State.IDLE;
 
         if (self.sortitionPool.isLocked()) {
@@ -290,9 +288,9 @@ library EcdsaDkg {
         return
             currentState(self) == State.AWAITING_RESULT &&
             block.number >
-            (self.startBlock +
-                self.resultSubmissionStartBlockOffset +
-                self.parameters.resultSubmissionTimeout);
+                (self.startBlock +
+                    self.resultSubmissionStartBlockOffset +
+                    self.parameters.resultSubmissionTimeout);
     }
 
     /// @notice Notifies about the seed was not delivered and restores the
@@ -324,17 +322,18 @@ library EcdsaDkg {
     /// @param result Result to approve. Must match the submitted result stored
     ///        during `submitResult`.
     /// @return misbehavedMembers Identifiers of members who misbehaved during DKG.
-    function approveResult(Data storage self, Result calldata result)
-        internal
-        returns (uint32[] memory misbehavedMembers)
-    {
+    function approveResult(
+        Data storage self,
+        Result calldata result
+    ) internal returns (uint32[] memory misbehavedMembers) {
         require(
             currentState(self) == State.CHALLENGE,
             "Current state is not CHALLENGE"
         );
 
-        uint256 challengePeriodEnd = self.submittedResultBlock +
-            self.parameters.resultChallengePeriodLength;
+        uint256 challengePeriodEnd =
+            self.submittedResultBlock +
+                self.parameters.resultChallengePeriodLength;
 
         require(
             block.number > challengePeriodEnd,
@@ -356,8 +355,8 @@ library EcdsaDkg {
         require(
             msg.sender == submitterMember ||
                 block.number >
-                challengePeriodEnd +
-                    self.parameters.submitterPrecedencePeriodLength,
+                    challengePeriodEnd +
+                        self.parameters.submitterPrecedencePeriodLength,
             "Only submitter can approve now"
         );
 
@@ -385,7 +384,10 @@ library EcdsaDkg {
     ///        stored during `submitResult`.
     /// @return maliciousResultHash Hash of the malicious result.
     /// @return maliciousSubmitter Identifier of the malicious submitter.
-    function challengeResult(Data storage self, Result calldata result)
+    function challengeResult(
+        Data storage self,
+        Result calldata result
+    )
         internal
         returns (bytes32 maliciousResultHash, uint32 maliciousSubmitter)
     {
@@ -451,11 +453,10 @@ library EcdsaDkg {
     /// @param result DKG result.
     /// @return True if the result is valid. If the result is invalid it returns
     ///         false and an error message.
-    function isResultValid(Data storage self, Result calldata result)
-        internal
-        view
-        returns (bool, string memory)
-    {
+    function isResultValid(
+        Data storage self,
+        Result calldata result
+    ) internal view returns (bool, string memory) {
         require(self.startBlock > 0, "DKG has not been started");
 
         return self.dkgValidator.validate(result, self.seed, self.startBlock);
@@ -464,9 +465,10 @@ library EcdsaDkg {
     /// @notice Set setSeedTimeout parameter.
     /// @dev State validation is performed by the caller to reduce bytecode size
     ///      by eliminating redundant checks across multiple setter functions.
-    function setSeedTimeout(Data storage self, uint256 newSeedTimeout)
-        internal
-    {
+    function setSeedTimeout(
+        Data storage self,
+        uint256 newSeedTimeout
+    ) internal {
         require(newSeedTimeout > 0, "Value must be greater than zero");
 
         self.parameters.seedTimeout = newSeedTimeout;
@@ -484,9 +486,8 @@ library EcdsaDkg {
             "Value must be greater than zero"
         );
 
-        self
-            .parameters
-            .resultChallengePeriodLength = newResultChallengePeriodLength;
+        self.parameters.resultChallengePeriodLength =
+            newResultChallengePeriodLength;
     }
 
     /// @notice Set resultChallengeExtraGas parameter.
@@ -529,9 +530,8 @@ library EcdsaDkg {
             "Value exceeds result submission timeout"
         );
 
-        self
-            .parameters
-            .submitterPrecedencePeriodLength = newSubmitterPrecedencePeriodLength;
+        self.parameters.submitterPrecedencePeriodLength =
+            newSubmitterPrecedencePeriodLength;
     }
 
     /// @notice Completes DKG by cleaning up state.

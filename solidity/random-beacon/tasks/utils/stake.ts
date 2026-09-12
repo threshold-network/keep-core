@@ -8,7 +8,7 @@ export async function stake(
   provider: string,
   amount: BigNumberish,
   beneficiary?: string,
-  authorizer?: string
+  authorizer?: string,
 ): Promise<void> {
   const { ethers, helpers } = hre
   const { to1e18, from1e18 } = helpers.number
@@ -30,19 +30,18 @@ export async function stake(
 
   const staking = await helpers.contracts.getContract("TokenStaking")
 
-  const { tStake: currentStake } = await staking.callStatic.stakes(
-    providerAddress
-  )
+  const { tStake: currentStake } =
+    await staking.callStatic.stakes(providerAddress)
 
   console.log(
-    `Current stake for ${providerAddress} is ${from1e18(currentStake)} T`
+    `Current stake for ${providerAddress} is ${from1e18(currentStake)} T`,
   )
 
   if (currentStake.eq(0)) {
     console.log(
       `Staking ${from1e18(
-        stakeAmount
-      )} T to the staking provider ${providerAddress}...`
+        stakeAmount,
+      )} T to the staking provider ${providerAddress}...`,
     )
 
     await (
@@ -52,7 +51,7 @@ export async function stake(
           providerAddress,
           beneficiaryAddress,
           authorizerAddress,
-          stakeAmount
+          stakeAmount,
         )
     ).wait()
   } else if (currentStake.lt(stakeAmount)) {
@@ -60,8 +59,8 @@ export async function stake(
 
     console.log(
       `Topping up ${from1e18(
-        topUpAmount
-      )} T to the staking provider ${providerAddress}...`
+        topUpAmount,
+      )} T to the staking provider ${providerAddress}...`,
     )
 
     await (
@@ -75,7 +74,7 @@ export async function stake(
 export async function calculateTokensNeededForStake(
   hre: HardhatRuntimeEnvironment,
   provider: string,
-  amount: BigNumberish
+  amount: BigNumberish,
 ): Promise<BigNumber> {
   const { ethers, helpers } = hre
   const { to1e18, from1e18 } = helpers.number

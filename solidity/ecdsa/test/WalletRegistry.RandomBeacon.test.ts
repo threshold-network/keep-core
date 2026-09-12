@@ -27,7 +27,6 @@ describe("WalletRegistry - Random Beacon", async () => {
   let thirdParty: SignerWithAddress
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({
       walletRegistry,
       walletOwner,
@@ -44,7 +43,7 @@ describe("WalletRegistry - Random Beacon", async () => {
         await createSnapshot()
 
         await randomBeaconFake.requestRelayEntry.reverts(
-          "beacon internal error"
+          "beacon internal error",
         )
 
         tx = walletRegistry.connect(walletOwner.wallet).requestNewWallet()
@@ -98,7 +97,7 @@ describe("WalletRegistry - Random Beacon", async () => {
     context("when called by a third party", async () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.connect(thirdParty).__beaconCallback(123, 456)
+          walletRegistry.connect(thirdParty).__beaconCallback(123, 456),
         ).to.be.revertedWithCustomError(walletRegistry, "CallerNotRandomBeacon")
       })
     })
@@ -109,7 +108,7 @@ describe("WalletRegistry - Random Beacon", async () => {
           await expect(
             walletRegistry
               .connect(randomBeaconFake.wallet)
-              .__beaconCallback(123, 456)
+              .__beaconCallback(123, 456),
           ).to.be.revertedWith("Current state is not AWAITING_SEED")
         })
       })
@@ -134,13 +133,13 @@ describe("WalletRegistry - Random Beacon", async () => {
 
         it("should transition wallet creation state to `AWAITING_RESULT`", async () => {
           await expect(
-            await walletRegistry.getWalletCreationState()
+            await walletRegistry.getWalletCreationState(),
           ).to.be.equal(dkgState.AWAITING_RESULT)
         })
 
         it("should set seed for wallet creation", async () => {
           await expect((await walletRegistry.getDkgData()).seed).to.be.equal(
-            relayEntry
+            relayEntry,
           )
         })
 
@@ -181,7 +180,7 @@ describe("WalletRegistry - Random Beacon", async () => {
             .connect(randomBeaconFake.wallet)
             .estimateGas.__beaconCallback(
               ethers.BigNumber.from(ethers.utils.randomBytes(32)),
-              0
+              0,
             )
 
           await expect(gasEstimate).to.be.lte(expectedGasEstimate)
@@ -222,7 +221,7 @@ describe("WalletRegistry - Random Beacon", async () => {
 
           await expect(
             tx,
-            "Callback failed; inspect callbackGasLimit value is sufficient"
+            "Callback failed; inspect callbackGasLimit value is sufficient",
           ).not.to.emit(randomBeaconMock, "CallbackFailed")
         })
       })
@@ -231,7 +230,7 @@ describe("WalletRegistry - Random Beacon", async () => {
 })
 
 async function mockRandomBeacon(
-  walletRegistry: WalletRegistry
+  walletRegistry: WalletRegistry,
 ): Promise<RandomBeaconStub> {
   // This was a `smock.mock`, but it only ever supplied `.address` — none of
   // smock's storage-override surface (`setVariable`, `getVariable`) was used,

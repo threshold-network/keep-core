@@ -23,7 +23,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "BeaconSortitionPool",
     { from: deployer, log: true, waitConfirmations: 1 },
     "transferChaosnetOwnerRole",
-    chaosnetOwner
+    chaosnetOwner,
   )
 
   if (hre.network.tags.etherscan) {
@@ -31,7 +31,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       await hre.ethers.provider.waitForTransaction(
         BeaconSortitionPool.transactionHash,
         2,
-        300000
+        300000,
       )
     }
     await helpers.etherscan.verify(BeaconSortitionPool)

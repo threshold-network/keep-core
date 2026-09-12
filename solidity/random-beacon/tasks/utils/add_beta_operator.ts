@@ -5,11 +5,11 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
 export async function addBetaOperator(
   hre: HardhatRuntimeEnvironment,
   sortitionPoolDeploymentName: string,
-  operator: string
+  operator: string,
 ): Promise<void> {
   const { ethers, helpers } = hre
   const sortitionPool = await helpers.contracts.getContract(
-    sortitionPoolDeploymentName
+    sortitionPoolDeploymentName,
   )
   const chaosnetOwner = await sortitionPool.chaosnetOwner()
 
