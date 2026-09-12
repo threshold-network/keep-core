@@ -72,15 +72,23 @@ There are a few common patterns for testing in the Keep codebase:
 
 Keep numeric validation and narrowing in the same function. A checked conversion
 should return the converted value and an error, so callers cannot accidentally
-validate one value and cast another. Use `group.MemberIndexFromUint32` for member indices decoded from protocol messages or persisted signers. It checks the type range; wire/protocol messages get their membership re-checked downstream, but persisted signer records do not, so persisted-signer callers must reject zero at decode time instead. Note: `MemberIndex` is currently a type alias, not a defined type, so this helper is a convention, not a compiler-enforced guarantee; a future refactor to a defined type would close this gap.
+validate one value and cast another. Use `group.MemberIndexFromUint32` for
+member indices decoded from protocol messages or persisted signers. It checks
+the type range; wire/protocol messages get their membership re-checked
+downstream, but persisted signer records do not, so persisted-signer callers
+must reject zero at decode time instead. Note: `MemberIndex` is currently a
+type alias, not a defined type, so this helper is a convention, not a
+compiler-enforced guarantee; a future refactor to a defined type would close
+this gap.
 
 Use `new(big.Int).SetUint64(value)` to construct a nonnegative `big.Int` from an
 unsigned block number or transaction index. When serializing a `big.Int` into a
-fixed-width unsigned field, check `IsUint64` first. For narrower unsigned destinations, also check the destination type's upper bound before converting. For signed Bitcoin amounts,
-reject negative inputs before converting to unsigned ABI fields and check the
-upper bound before converting unsigned responses to `int64`. Check arithmetic
-before it can overflow; a check on an already-wrapped fee cannot recover the
-original value.
+fixed-width unsigned field, check `IsUint64` first. For narrower unsigned
+destinations, also check the destination type's upper bound before converting.
+For signed Bitcoin amounts, reject negative inputs before converting to
+unsigned ABI fields and check the upper bound before converting unsigned
+responses to `int64`. Check arithmetic before it can overflow; a check on an
+already-wrapped fee cannot recover the original value.
 
 Some conversions intentionally preserve a bit pattern rather than a numeric
 value. Existing deterministic retry and coordination seeds use all 64 bits,
