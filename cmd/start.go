@@ -73,7 +73,7 @@ func start(cmd *cobra.Command) error {
 
 	netProvider, err := initializeNetwork(
 		ctx,
-		[]firewall.Application{beaconChain, tbtcChain},
+		admissionApplications(beaconChain, tbtcChain),
 		operatorPrivateKey,
 		blockCounter,
 	)
@@ -199,22 +199,43 @@ func isBootstrap() bool {
 	return clientConfig.LibP2P.Bootstrap
 }
 
+// admissionApplications lists the chain handles a peer can be recognized by,
+// in the order the firewall policy evaluates them. The beacon comes first
+// because its predicate is the one that still sees legacy stake delegations.
+func admissionApplications(
+	beaconChain *ethereum.BeaconChain,
+	tbtcChain *ethereum.TbtcChain,
+) []firewall.Application {
+	return []firewall.Application{beaconChain, tbtcChain}
+}
+
+// admissionPolicy builds the firewall policy guarding peer connections. The
+// static allow list is empty, so no peer is admitted without an application
+// recognizing it on chain.
+func admissionPolicy(applications []firewall.Application) net.Firewall {
+	return firewall.AnyApplicationPolicy(
+		applications,
+		firewall.EmptyAllowList(),
+	)
+}
+
+// connectNetwork opens the network provider. The indirection exists so the
+// admission policy the client hands the network layer can be read back without
+// a host behind it - see tbtcAdmissionReader in pkg/chain/ethereum for the same
+// pattern on the chain reads.
+var connectNetwork = libp2p.Connect
+
 func initializeNetwork(
 	ctx context.Context,
 	applications []firewall.Application,
 	operatorPrivateKey *operator.PrivateKey,
 	blockCounter chain.BlockCounter,
 ) (net.Provider, error) {
-	firewall := firewall.AnyApplicationPolicy(
-		applications,
-		firewall.EmptyAllowList(),
-	)
-
-	netProvider, err := libp2p.Connect(
+	netProvider, err := connectNetwork(
 		ctx,
 		clientConfig.LibP2P,
 		operatorPrivateKey,
-		firewall,
+		admissionPolicy(applications),
 		retransmission.NewTicker(blockCounter.WatchBlocks(ctx)),
 	)
 	if err != nil {

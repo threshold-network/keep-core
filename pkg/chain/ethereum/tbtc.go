@@ -54,6 +54,20 @@ const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
 )
 
+// tbtcAdmissionReader narrows the WalletRegistry down to the two reads the
+// admission predicate decides on. *ecdsacontract.WalletRegistry satisfies it as
+// it stands; the indirection exists so the predicate can be exercised without a
+// chain behind it.
+//
+// EligibleStake is not admission's alone, though: TbtcChain.EligibleStake is
+// routed through this same seam, and the heartbeat path reads a staking
+// provider's stake through that accessor to decide whether the operator is
+// unstaking. A reader substituted here is therefore answering both.
+type tbtcAdmissionReader interface {
+	OperatorToStakingProvider(operator common.Address) (common.Address, error)
+	EligibleStake(stakingProvider common.Address) (*big.Int, error)
+}
+
 // TbtcChain represents a TBTC-specific chain handle.
 type TbtcChain struct {
 	*baseChain
@@ -61,6 +75,7 @@ type TbtcChain struct {
 	bridge                  *tbtccontract.Bridge
 	maintainerProxy         *tbtccontract.MaintainerProxy
 	walletRegistry          *ecdsacontract.WalletRegistry
+	admission               tbtcAdmissionReader
 	sortitionPool           *ecdsacontract.EcdsaSortitionPool
 	walletProposalValidator *tbtccontract.WalletProposalValidator
 	redemptionWatchtower    *tbtccontract.RedemptionWatchtower
@@ -271,6 +286,7 @@ func newTbtcChain(
 		bridge:                   bridge,
 		maintainerProxy:          maintainerProxy,
 		walletRegistry:           walletRegistry,
+		admission:                walletRegistry,
 		sortitionPool:            sortitionPool,
 		walletProposalValidator:  walletProposalValidator,
 		redemptionWatchtower:     redemptionWatchtower,
@@ -311,23 +327,62 @@ func (tc *TbtcChain) Staking() (chain.Address, error) {
 }
 
 // IsRecognized checks whether the given operator is recognized by the TbtcChain
-// as eligible to join the network. If the operator has a stake delegation or
-// had a stake delegation in the past, it will be recognized.
+// as eligible to join the network. An operator is recognized when the staking
+// provider it is registered under currently holds eligible stake for the wallet
+// registry.
+//
+// Admission for the client as a whole is a disjunction over every registered
+// application, evaluated by firewall.AnyApplicationPolicy. Written out in full,
+// with Ob and Ot the beacon and tBTC operator-to-staking-provider lookups:
+//
+//	Admit(p) <=> FALSE
+//	             OR ( Ob(p) != 0 AND rolesOf(Ob(p)).owner != 0 )
+//	             OR ( Ot(p) != 0 AND eligibleStake(Ot(p)) > 0 )
+//
+// The leading FALSE is the static allow list, which production builds empty.
+// This method contributes the third disjunct only; BeaconChain.IsRecognized
+// contributes the second and deliberately keeps the rolesOf predicate.
+//
+// Two things the disjunction does are not visible in that formula. It is
+// evaluated left to right, and an application that fails ends it outright
+// instead of deferring to the next disjunct, so an identity only this branch
+// would admit is refused - with an error rather than a non-recognition -
+// whenever the beacon branch's own reads are failing. Beacon-side RPC health is
+// therefore a hard dependency of tBTC admission and not an independent branch.
+// And a genuine non-recognition is remembered for
+// firewall.NegativeIsRecognizedCachePeriod, so a provider authorized after
+// being turned away stays refused, with nothing re-read, until that entry
+// expires.
+//
+// Mapping an operator to a staking provider is not by itself a boundary, since
+// registering an operator is permissionless on both registries. The boundary is
+// the eligible stake: the wallet registry reports zero for a provider whose
+// authorization has fallen below the minimum authorization, and a requested
+// decrease is subtracted the moment it is requested rather than when it is
+// approved. Raising it again takes the authorizer of the authorization source
+// the registry reads.
+//
+// Eligible stake therefore answers what the provider is currently authorized
+// for, not what it currently owes. A provider that is dropping its
+// authorization stays a member of every wallet it was elected to until that
+// wallet is closed, and approving the decrease does not end that membership
+// either. This predicate governs admission to the network only; wallet
+// membership and its obligations are a separate lifecycle it does not observe.
 func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, error) {
 	operatorAddress, err := operatorPublicKeyToChainAddress(operatorPublicKey)
 	if err != nil {
 		return false, fmt.Errorf(
-			"cannot convert from operator key to chain address: [%v]",
+			"cannot convert from operator key to chain address: [%w]",
 			err,
 		)
 	}
 
-	stakingProvider, err := tc.walletRegistry.OperatorToStakingProvider(
+	stakingProvider, err := tc.admission.OperatorToStakingProvider(
 		operatorAddress,
 	)
 	if err != nil {
 		return false, fmt.Errorf(
-			"failed to map operator [%v] to a staking provider: [%v]",
+			"failed to map operator [%v] to a staking provider: [%w]",
 			operatorAddress,
 			err,
 		)
@@ -337,24 +392,21 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 		return false, nil
 	}
 
-	// Check if the staking provider has an owner. This check ensures that there
-	// is/was a stake delegation for the given staking provider.
-	_, _, _, hasStakeDelegation, err := tc.baseChain.RolesOf(
-		chain.Address(stakingProvider.Hex()),
-	)
+	eligibleStake, err := tc.admission.EligibleStake(stakingProvider)
 	if err != nil {
+		// Fail closed. The caller caches a negative result for an hour but
+		// never caches an error, so folding a transient RPC failure into "not
+		// recognized" would lock a legitimate peer out for that whole hour.
 		return false, fmt.Errorf(
-			"failed to check stake delegation for staking provider [%v]: [%v]",
+			"failed to check eligible stake for staking provider [%v]: [%w]",
 			stakingProvider,
 			err,
 		)
 	}
 
-	if !hasStakeDelegation {
-		return false, nil
-	}
-
-	return true, nil
+	// The binding cannot return a nil amount without also returning an error,
+	// but admission must not be able to panic on one.
+	return eligibleStake != nil && eligibleStake.Sign() > 0, nil
 }
 
 // OperatorToStakingProvider returns the staking provider address for the
@@ -386,7 +438,7 @@ func (tc *TbtcChain) OperatorToStakingProvider() (chain.Address, bool, error) {
 // If the authorized stake minus the pending authorization decrease
 // is below the minimum authorization, eligible stake is 0.
 func (tc *TbtcChain) EligibleStake(stakingProvider chain.Address) (*big.Int, error) {
-	eligibleStake, err := tc.walletRegistry.EligibleStake(
+	eligibleStake, err := tc.admission.EligibleStake(
 		common.HexToAddress(stakingProvider.String()),
 	)
 	if err != nil {
