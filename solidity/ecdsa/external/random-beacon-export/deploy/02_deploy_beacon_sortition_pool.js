@@ -9,12 +9,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 var __generator = (this && this.__generator) || function (thisArg, body) {
-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
-    return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
     function verb(n) { return function (v) { return step([n, v]); }; }
     function step(op) {
         if (f) throw new TypeError("Generator is already executing.");
-        while (_) try {
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
             if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
             if (y = 0, t) op = [op[0] & 2, t.value];
             switch (op[0]) {
@@ -63,24 +63,26 @@ var func = function (hre) { return __awaiter(void 0, void 0, void 0, function ()
                 return [4 /*yield*/, execute("BeaconSortitionPool", { from: deployer, log: true, waitConfirmations: 1 }, "transferChaosnetOwnerRole", chaosnetOwner)];
             case 4:
                 _b.sent();
-                if (!hre.network.tags.etherscan) return [3 /*break*/, 7];
+                if (!hre.network.tags.etherscan) return [3 /*break*/, 8];
+                if (!BeaconSortitionPool.transactionHash) return [3 /*break*/, 6];
                 return [4 /*yield*/, hre.ethers.provider.waitForTransaction(BeaconSortitionPool.transactionHash, 2, 300000)];
             case 5:
                 _b.sent();
-                return [4 /*yield*/, helpers.etherscan.verify(BeaconSortitionPool)];
-            case 6:
-                _b.sent();
-                _b.label = 7;
+                _b.label = 6;
+            case 6: return [4 /*yield*/, helpers.etherscan.verify(BeaconSortitionPool)];
             case 7:
-                if (!hre.network.tags.tenderly) return [3 /*break*/, 9];
+                _b.sent();
+                _b.label = 8;
+            case 8:
+                if (!hre.network.tags.tenderly) return [3 /*break*/, 10];
                 return [4 /*yield*/, hre.tenderly.verify({
                         name: "BeaconSortitionPool",
                         address: BeaconSortitionPool.address,
                     })];
-            case 8:
+            case 9:
                 _b.sent();
-                _b.label = 9;
-            case 9: return [2 /*return*/];
+                _b.label = 10;
+            case 10: return [2 /*return*/];
         }
     });
 }); };
