@@ -91,6 +91,7 @@
     "node": ">=24.0.0"
   },
   "resolutions": {
+    "axios": "^1.8.4",
     "ethereumjs-abi": "npm:0.6.8",
     "get-func-name": "^2.0.2",
     "@threshold-network/solidity-contracts@npm:1.3.0-dev.14": "patch:@threshold-network/solidity-contracts@npm%3A1.3.0-dev.14#./.yarn/patches/@threshold-network-solidity-contracts-npm-1.3.0-dev.14-ethers-v6.patch"
