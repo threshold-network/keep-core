@@ -11,7 +11,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const WalletRegistry = await deployments.get("WalletRegistry")
 
   // Deploy the Allowlist contract using upgradeable proxy pattern
-  const [allowlist, proxyDeployment] = await helpers.upgrades.deployProxy(
+  const [allowlist] = await helpers.upgrades.deployProxy(
     "Allowlist",
     {
       initializerArgs: [WalletRegistry.address],
@@ -38,7 +38,11 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   // Log deployment information
   console.log(`Allowlist deployed at: ${allowlist.address}`)
-  console.log(`Allowlist proxy deployed at: ${proxyDeployment.address}`)
+  console.log(
+    `Allowlist proxy admin: ${await hre.upgrades.erc1967.getAdminAddress(
+      allowlist.address
+    )}`
+  )
   console.log(`Allowlist owner: ${await allowlist.owner()} (deployer)`)
   if (governance && governance !== deployer) {
     console.log(
