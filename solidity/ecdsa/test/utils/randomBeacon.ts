@@ -45,7 +45,7 @@ export async function submitRelayEntry(
     .__beaconCallback(relayEntry, 0)
 
   return {
-    startBlock: tx.blockNumber,
+    startBlock: (await tx.wait()).blockNumber,
     dkgSeed: relayEntry,
   }
 }

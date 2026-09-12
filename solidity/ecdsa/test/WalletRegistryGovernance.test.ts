@@ -37,6 +37,9 @@ const fixture = deployments.createFixture(async () => {
   }
 })
 
+const minedBlockTimestamp = async (tx: ContractTransaction): Promise<number> =>
+  (await ethers.provider.getBlock((await tx.wait()).blockNumber)).timestamp
+
 describe("WalletRegistryGovernance", async () => {
   let governance: SignerWithAddress
   let walletRegistry: WalletRegistry
@@ -212,8 +215,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit GovernanceDelayUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(walletRegistryGovernance, "GovernanceDelayUpdateStarted")
           .withArgs(1337, blockTimestamp)
@@ -367,8 +369,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit WalletRegistryGovernanceTransferStarted", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -527,8 +528,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the WalletOwnerUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(walletRegistryGovernance, "WalletOwnerUpdateStarted")
           .withArgs(thirdParty.address, blockTimestamp)
@@ -660,8 +660,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the MinimumAuthorizationUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -796,8 +795,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the AuthorizationDecreaseDelayUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -935,8 +933,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the AuthorizationDecreaseChangePeriodUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -1074,8 +1071,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the MaliciousDkgResultSlashingAmountUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -1214,8 +1210,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgResultSubmissionGasUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -1352,8 +1347,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgResultApprovalGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -1503,8 +1497,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the MaliciousDkgResultNotificationRewardMultiplierUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -1646,8 +1639,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the SortitionPoolRewardsBanDurationUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -1822,8 +1814,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgSeedTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(walletRegistryGovernance, "DkgSeedTimeoutUpdateStarted")
           .withArgs(11, blockTimestamp)
@@ -1985,8 +1976,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgResultChallengePeriodLengthUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -2118,8 +2108,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit DkgResultChallengeExtraGasUpdateStarted", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -2286,8 +2275,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgResultSubmissionTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -2456,8 +2444,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgSubmitterPrecedencePeriodLengthUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -2609,8 +2596,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the ReimbursementPoolUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(walletRegistryGovernance, "ReimbursementPoolUpdateStarted")
           .withArgs(thirdParty.address, blockTimestamp)
@@ -2744,8 +2730,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the NotifyOperatorInactivityGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -2885,8 +2870,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the NotifySeedTimeoutGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,
@@ -3026,8 +3010,7 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the NotifyDkgTimeoutNegativeGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (await ethers.provider.getBlock(tx.blockNumber))
-          .timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             walletRegistryGovernance,

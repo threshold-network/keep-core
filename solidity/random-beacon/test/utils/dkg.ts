@@ -25,14 +25,14 @@ export async function genesis(
   randomBeacon: RandomBeacon
 ): Promise<[ContractTransaction, BigNumber]> {
   const tx = await randomBeacon.genesis()
-
+  const receipt = await tx.wait()
   const expectedSeed = ethers.BigNumber.from(
     ethers.utils.keccak256(
       ethers.utils.solidityPack(
         ["uint256", "uint256"],
         [
           "31415926535897932384626433832795028841971693993751058209749445923078164062862",
-          tx.blockNumber,
+          receipt.blockNumber,
         ]
       )
     )
@@ -295,11 +295,13 @@ export async function expectDkgResultSubmittedEvent(
 ): Promise<void> {
   const eventName = "DkgResultSubmitted"
 
-  const event: DkgResultSubmittedEvent = (await tx.wait()).events.find(
-    (e) => e.event === eventName
-  ) as unknown as DkgResultSubmittedEvent
+  const event = (await tx.wait()).events?.find((e) => e.event === eventName) as
+    | DkgResultSubmittedEvent
+    | undefined
 
-  await expect(event, `Event ${eventName} not emitted`).to.be.not.null
+  if (!event) {
+    throw new Error(`Event ${eventName} not emitted`)
+  }
 
   const actualArgs = event.args
 

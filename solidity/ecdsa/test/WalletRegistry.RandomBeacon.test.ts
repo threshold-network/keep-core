@@ -149,7 +149,7 @@ describe("WalletRegistry - Random Beacon", async () => {
             (
               await walletRegistry.getDkgData()
             ).startBlock
-          ).to.be.equal(tx.blockNumber)
+          ).to.be.equal((await tx.wait()).blockNumber)
         })
 
         it("should not emit DkgStateLocked event", async () => {

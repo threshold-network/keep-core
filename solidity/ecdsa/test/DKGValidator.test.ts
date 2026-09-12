@@ -34,7 +34,7 @@ describe("EcdsaDkgValidator", () => {
     ecdsaData.group1.publicKey
   )
 
-  let selectedOperators
+  let selectedOperators: Operator[]
 
   let prepareDkgResult: (
     _groupMembers: Operator[],
@@ -279,9 +279,9 @@ describe("EcdsaDkgValidator", () => {
 
   describe("validateFields", () => {
     const testValidateFields = async (
-      _groupMembers,
-      _groupPublicKey,
-      _misbehaved,
+      _groupMembers: Operator[],
+      _groupPublicKey: string,
+      _misbehaved: number[],
       _numberOfSignatures = 51
     ) => {
       const dkgResult = await prepareDkgResult(
@@ -532,7 +532,7 @@ describe("EcdsaDkgValidator", () => {
     })
 
     context("when signing members indices array is malformed", async () => {
-      const testSigningMembers = async (_signingMembersIndices) => {
+      const testSigningMembers = async (_signingMembersIndices: number[]) => {
         const dkgResult = await prepareDkgResult(
           selectedOperators,
           selectedOperators,
@@ -602,7 +602,7 @@ describe("EcdsaDkgValidator", () => {
   })
 
   describe("validateGroupMembers", () => {
-    const testValidateGroupMembers = async (_groupMembers) => {
+    const testValidateGroupMembers = async (_groupMembers: Operator[]) => {
       const dkgResult = await prepareDkgResult(
         _groupMembers,
         _groupMembers,
@@ -632,7 +632,10 @@ describe("EcdsaDkgValidator", () => {
   })
 
   describe("validateSignatures", () => {
-    const testValidateSignatures = async (_groupMembers, _signers) => {
+    const testValidateSignatures = async (
+      _groupMembers: Operator[],
+      _signers: Operator[]
+    ) => {
       const dkgResult = await prepareDkgResult(
         _groupMembers,
         _signers,

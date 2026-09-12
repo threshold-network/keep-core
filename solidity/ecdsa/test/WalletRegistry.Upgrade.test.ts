@@ -370,7 +370,9 @@ describe("WalletRegistry - Upgrade", async () => {
             walletRegistryV1,
             expectedNewWalletData.publicKey,
             dkgSeed,
-            requestNewWalletTx.blockNumber,
+            (
+              await requestNewWalletTx.wait()
+            ).blockNumber,
             noMisbehaved
           )
 
@@ -398,7 +400,7 @@ describe("WalletRegistry - Upgrade", async () => {
 
           // Approve DKG result on Wallet Registry V2
           await mineBlocksTo(
-            submitDkgResultTx.blockNumber +
+            (await submitDkgResultTx.wait()).blockNumber +
               params.dkgResultChallengePeriodLength
           )
 

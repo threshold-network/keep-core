@@ -47,7 +47,9 @@ export async function createNewWallet(
     walletRegistry,
     publicKey,
     dkgSeed,
-    requestNewWalletTx.blockNumber,
+    (
+      await requestNewWalletTx.wait()
+    ).blockNumber,
     noMisbehaved
   )
 

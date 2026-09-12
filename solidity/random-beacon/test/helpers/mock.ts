@@ -269,7 +269,7 @@ function toPositional(outputs: ParamType[], value: unknown): unknown[] {
 }
 
 function encodeReturn(fragment: FunctionFragment, value: unknown): string {
-  if (fragment.outputs === null || fragment.outputs.length === 0) {
+  if (fragment.outputs == null || fragment.outputs.length === 0) {
     return "0x"
   }
 
@@ -333,7 +333,7 @@ export async function createMock<T>(
     targetInterface.getSighash(fragment)
   )
   const baseReturns = baseFragments.map((fragment) =>
-    fragment.outputs === null || fragment.outputs.length === 0
+    fragment.outputs == null || fragment.outputs.length === 0
       ? "0x"
       : ethers.utils.defaultAbiCoder.encode(
           fragment.outputs,
