@@ -261,15 +261,17 @@ func TestVerifyServerGenesisHash(t *testing.T) {
 			wantErr:             true,
 		},
 		{
-			name:                "server omitting the field is accepted and reference is unchanged",
+			name:                "server omitting the field is accepted when a reference is set",
 			expectedGenesisHash: mainnetGenesis,
 			serverGenesisHash:   "",
+			wantErr:             false,
 			wantGenesisHash:     mainnetGenesis,
 		},
 		{
 			name:                "first server omitting the field is accepted with no reference adopted",
 			expectedGenesisHash: "",
 			serverGenesisHash:   "",
+			wantErr:             false,
 			wantGenesisHash:     "",
 		},
 	} {
@@ -283,7 +285,7 @@ func TestVerifyServerGenesisHash(t *testing.T) {
 			gotHash, err := verifyServer(context.Background(), client, "server", tc.expectedGenesisHash)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatal("expected a genesis hash mismatch error")
+					t.Fatal("expected an error")
 				}
 				return
 			}
@@ -337,5 +339,71 @@ func TestTipSanityCheckWarnsButAcceptsLargeHeightChange(t *testing.T) {
 	}
 	if connection.lastTipHeight != 100_000 {
 		t.Fatalf("expected tracked tip height 100000, got %d", connection.lastTipHeight)
+	}
+}
+
+// TestGetScriptUtxosPreservesMempoolHeightSentinel verifies getScriptUtxos
+// correctly classifies a mempool item reported with Electrum's -1 height
+// sentinel under both the confirmed and unconfirmed views.
+func TestGetScriptUtxosPreservesMempoolHeightSentinel(t *testing.T) {
+	t.Parallel()
+
+	const mempoolTxHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	for _, tc := range []struct {
+		name      string
+		confirmed bool
+		wantLen   int
+	}{
+		{
+			name:      "confirmed view excludes the mempool item",
+			confirmed: true,
+			wantLen:   0,
+		},
+		{
+			name:      "unconfirmed view includes the mempool item",
+			confirmed: false,
+			wantLen:   1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &failoverTestClient{
+				listUnspent: func(context.Context, string) ([]*electrum.ListUnspentResult, error) {
+					return []*electrum.ListUnspentResult{
+						{
+							Hash:     mempoolTxHash,
+							Position: 0,
+							Value:    1000,
+							Height:   -1,
+						},
+					}, nil
+				},
+			}
+			connection, err := connect(
+				context.Background(),
+				failoverTestConfig(),
+				func(context.Context, string) (electrumClient, error) {
+					return client, nil
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			items, err := connection.getScriptUtxos([]byte{0x00}, tc.confirmed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(items) != tc.wantLen {
+				t.Fatalf("expected [%d] items, got [%d]", tc.wantLen, len(items))
+			}
+			if tc.wantLen == 1 && items[0].blockHeight != -1 {
+				t.Fatalf(
+					"expected the mempool sentinel height -1 to be preserved, got [%d]",
+					items[0].blockHeight,
+				)
+			}
+		})
 	}
 }

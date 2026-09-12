@@ -29,6 +29,45 @@ var (
 	logger                    = log.Logger("keep-electrum")
 )
 
+// watchAbort arranges to call client.Abort if ctx becomes Done and the
+// protected operation has not finished on its own within a short grace
+// period afterward. The returned stop function must be called immediately
+// after the protected operation returns; it signals completion and blocks
+// until the internal watcher goroutine has fully resolved one way or the
+// other, so no abort can fire after the caller has already moved on.
+//
+// This avoids a scheduling race inherent to context.AfterFunc(ctx, f): its
+// stop() can only reliably prevent f from running if called before the
+// runtime actually schedules f's goroutine to execute. Under contention, the
+// watcher goroutine can start and complete client.Abort() before the caller
+// even reaches its stop() call, even though the protected operation had
+// already returned successfully.
+func watchAbort(ctx context.Context, client electrumClient) (stop func()) {
+	done := make(chan struct{})
+	resolved := make(chan struct{})
+
+	go func() {
+		defer close(resolved)
+
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+		}
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Millisecond):
+			go client.Abort()
+		}
+	}()
+
+	return func() {
+		close(done)
+		<-resolved
+	}
+}
+
 // Connection is a handle for interactions with Electrum server.
 type Connection struct {
 	parentCtx   context.Context
@@ -39,9 +78,9 @@ type Connection struct {
 	serverURLs  []string
 	serverIndex int
 	newClient   func(context.Context, string) (electrumClient, error)
-	// verifiedGenesisHash is the genesis_hash reported by the first server
-	// features response this connection ever verified. Every subsequent
-	// candidate must report the same genesis hash (or omit the field).
+	// verifiedGenesisHash is the first non-empty genesis_hash adopted from
+	// a verified candidate. Every later candidate must report the same
+	// hash; a candidate may also omit the field (see verifyServer).
 	// Accessed only while clientMutex is held.
 	verifiedGenesisHash string
 	// lastTipHeight is the most recently observed chain tip height, used to
@@ -987,7 +1026,7 @@ type scriptUtxoItem struct {
 	txHash      bitcoin.Hash
 	outputIndex uint32
 	value       uint64
-	blockHeight uint32
+	blockHeight int32
 }
 
 // getScriptUtxos returns unspent outputs of confirmed/unconfirmed transactions
@@ -1068,7 +1107,7 @@ func (c *Connection) getScriptUtxos(
 					txHash:      txHash,
 					outputIndex: item.Position,
 					value:       item.Value,
-					blockHeight: uint32(item.Height),
+					blockHeight: item.Height,
 				},
 			)
 		}
@@ -1170,7 +1209,9 @@ func (c *Connection) getFeeBtcPerKbOnce(budgetCtx context.Context, blocks uint32
 		c.config.RequestTimeout,
 	)
 	defer requestCancel()
+	stopAbort := watchAbort(requestCtx, c.client)
 	fee, err := c.client.GetFee(requestCtx, blocks)
+	stopAbort()
 	if err != nil {
 		if isTransportFailure(err) {
 			c.failover(c.parentCtx)
@@ -1344,7 +1385,7 @@ func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error
 				// abort watcher is installed: a blocked write cannot
 				// outlive verification. The long-lived parentCtx watcher is
 				// installed only once the client is published.
-				stopVerification := context.AfterFunc(requestCtx, client.Abort)
+				stopVerification := watchAbort(requestCtx, client)
 				var genesisHash string
 				err = requestCtx.Err()
 				if err == nil {
@@ -1393,13 +1434,17 @@ func (c *Connection) electrumConnect(callerCtx, budgetCtx context.Context) error
 	)
 }
 
-// verifyServer confirms a candidate speaks a supported protocol version and,
-// if it reports a genesis hash, that the hash matches the connection's chain
-// reference. expectedGenesisHash is the hash previously adopted for this
-// connection, or "" if no server has reported one yet. It returns the hash
-// this connection should use going forward (unchanged, newly adopted, or
-// still empty), or an error if the candidate is verifiably on a different
-// chain.
+// verifyServer queries the candidate's protocol version (logging a warning
+// if unsupported) and, when the candidate reports a genesis hash, verifies
+// it against the connection's chain reference. A candidate that omits the
+// genesis hash is accepted with a warning (chain identity simply isn't
+// verified for that candidate), and only a candidate reporting a hash that
+// actively mismatches the established reference is rejected.
+// expectedGenesisHash is the hash previously adopted for this connection,
+// or "" if no server has reported one yet. It returns the hash this
+// connection should use going forward (unchanged or newly adopted), or an
+// error if the candidate reports a genesis hash that mismatches the
+// established reference.
 func verifyServer(
 	ctx context.Context,
 	client electrumClient,
@@ -1518,7 +1563,9 @@ func (c *Connection) keepAlive() {
 			}
 
 			pingCtx, pingCancel := context.WithTimeout(c.parentCtx, c.config.RequestTimeout)
+			stopAbort := watchAbort(pingCtx, c.client)
 			pingErr := c.client.Ping(pingCtx)
+			stopAbort()
 			pingCancel()
 
 			if pingErr != nil {
@@ -1576,7 +1623,7 @@ func (c *Connection) healPrimary() {
 	c.clientMutex.Unlock()
 
 	requestCtx, requestCancel := context.WithTimeout(c.parentCtx, c.config.RequestTimeout)
-	stopVerification := context.AfterFunc(requestCtx, client.Abort)
+	stopVerification := watchAbort(requestCtx, client)
 	genesisHash, err := verifyServer(requestCtx, client, primaryURL, expectedGenesisHash)
 	stopVerification()
 	if err == nil {
@@ -1595,9 +1642,11 @@ func (c *Connection) healPrimary() {
 	c.clientMutex.Lock()
 	defer c.clientMutex.Unlock()
 
-	if c.serverIndex == 0 || c.parentCtx.Err() != nil {
-		// Another path already restored the primary, or the connection is
-		// shutting down; discard this candidate.
+	if c.serverIndex == 0 || c.parentCtx.Err() != nil ||
+		c.verifiedGenesisHash != expectedGenesisHash {
+		// Another path already restored the primary, the connection is
+		// shutting down, or the chain reference changed since this
+		// candidate was verified against it; discard this candidate.
 		go client.Abort()
 		return
 	}
@@ -1641,7 +1690,7 @@ func requestWithRetry[K any](
 			// selecting on ctx.Done(). Abort the transport if the
 			// per-request deadline elapses so a blocked write cannot
 			// outlive its own request.
-			stopAbort := context.AfterFunc(requestCtx, c.client.Abort)
+			stopAbort := watchAbort(requestCtx, c.client)
 			r, err := requestFn(requestCtx, c.client)
 			stopAbort()
 

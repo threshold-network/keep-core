@@ -26,6 +26,7 @@ type failoverTestClient struct {
 	ping           func(context.Context) error
 	fee            func(context.Context) (float32, error)
 	serverFeatures func(context.Context) (*electrum.ServerFeaturesResult, error)
+	listUnspent    func(context.Context, string) ([]*electrum.ListUnspentResult, error)
 }
 
 func (c *failoverTestClient) ServerVersion(ctx context.Context) (string, string, error) {
@@ -87,11 +88,25 @@ func (c *failoverTestClient) GetFee(ctx context.Context, _ uint32) (float32, err
 	}
 	return 0.001, nil
 }
+
+// defaultTestGenesisHash is returned by ServerFeatures when no serverFeatures
+// override is set. verifyServer now rejects a candidate that omits the
+// genesis hash, so unrelated failover tests need a non-empty default to
+// keep connecting successfully; tests that specifically exercise genesis
+// hash handling set serverFeatures explicitly.
+const defaultTestGenesisHash = "00000000000000000000000000000000000000000000000000000000000aaa"
+
 func (c *failoverTestClient) ServerFeatures(ctx context.Context) (*electrum.ServerFeaturesResult, error) {
 	if c.serverFeatures != nil {
 		return c.serverFeatures(ctx)
 	}
-	return &electrum.ServerFeaturesResult{}, nil
+	return &electrum.ServerFeaturesResult{GenesisHash: defaultTestGenesisHash}, nil
+}
+func (c *failoverTestClient) ListUnspent(ctx context.Context, scriptHash string) ([]*electrum.ListUnspentResult, error) {
+	if c.listUnspent != nil {
+		return c.listUnspent(ctx, scriptHash)
+	}
+	return nil, nil
 }
 
 func failoverTestConfig() Config {
@@ -581,4 +596,369 @@ func TestConnectFailsWithNoConfiguredServers(t *testing.T) {
 	if err == nil || connection != nil {
 		t.Fatalf("expected an error and a nil connection, got %v, %v", connection, err)
 	}
+}
+
+// TestHealPrimaryDialFailureLeavesFallbackUntouched verifies a failed
+// heal-time dial of the primary leaves the current fallback connection
+// completely untouched.
+func TestHealPrimaryDialFailureLeavesFallbackUntouched(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	config := failoverTestConfig()
+	config.KeepAliveInterval = time.Millisecond
+	firstAttemptFailed := &failoverTestClient{versionErr: errors.New("primary temporarily unavailable")}
+	fallback := new(failoverTestClient)
+	var primaryDials atomic.Int32
+	connection, err := connect(ctx, config, func(_ context.Context, url string) (electrumClient, error) {
+		if url == "first" {
+			if primaryDials.Add(1) == 1 {
+				return firstAttemptFailed, nil
+			}
+			return nil, errors.New("primary still unreachable")
+		}
+		return fallback, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.serverIndex != 1 || connection.client != fallback {
+		t.Fatal("setup did not start on the fallback server")
+	}
+	firstAttemptFailed.awaitShutdown(t)
+
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for primaryDials.Load() < 2 {
+		select {
+		case <-tick.C:
+		case <-timeout.C:
+			t.Fatal("heal attempt did not dial the primary")
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	if connection.serverIndex != 1 || connection.client != fallback || fallback.IsShutdown() {
+		t.Fatal("a failed heal-time dial must leave the fallback connection untouched")
+	}
+}
+
+// TestHealPrimaryVerificationFailureLeavesFallbackUntouched verifies a
+// failed heal-time verification (a genesis hash mismatch) leaves the
+// current fallback connection untouched and aborts the failed candidate
+// exactly once.
+func TestHealPrimaryVerificationFailureLeavesFallbackUntouched(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	config := failoverTestConfig()
+	config.KeepAliveInterval = time.Millisecond
+	firstAttemptFailed := &failoverTestClient{versionErr: errors.New("primary temporarily unavailable")}
+	fallback := new(failoverTestClient)
+	var wrongChainCandidate atomic.Pointer[failoverTestClient]
+	var primaryDials atomic.Int32
+	connection, err := connect(ctx, config, func(_ context.Context, url string) (electrumClient, error) {
+		if url == "first" {
+			if primaryDials.Add(1) == 1 {
+				return firstAttemptFailed, nil
+			}
+			candidate := &failoverTestClient{
+				serverFeatures: func(context.Context) (*electrum.ServerFeaturesResult, error) {
+					return &electrum.ServerFeaturesResult{GenesisHash: "different-chain"}, nil
+				},
+			}
+			wrongChainCandidate.Store(candidate)
+			return candidate, nil
+		}
+		return fallback, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.serverIndex != 1 || connection.client != fallback {
+		t.Fatal("setup did not start on the fallback server")
+	}
+	firstAttemptFailed.awaitShutdown(t)
+
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for wrongChainCandidate.Load() == nil {
+		select {
+		case <-tick.C:
+		case <-timeout.C:
+			t.Fatal("heal attempt did not dial the primary")
+		}
+	}
+	// The candidate reports a genesis hash that does not match this
+	// connection's chain reference; verification must reject it and abort
+	// it exactly once.
+	wrongChainCandidate.Load().awaitShutdown(t)
+
+	if connection.serverIndex != 1 || connection.client != fallback || fallback.IsShutdown() {
+		t.Fatal("a failed heal-time verification must leave the fallback connection untouched")
+	}
+}
+
+// TestHealPrimaryDiscardsOverlappingCandidateAfterFirstCommits verifies the
+// c.serverIndex == 0 discard guard: when two heal attempts overlap and one
+// has already restored the primary, the other discards its own
+// (otherwise-healthy) candidate instead of clobbering the already-restored
+// connection.
+func TestHealPrimaryDiscardsOverlappingCandidateAfterFirstCommits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	config := failoverTestConfig()
+	config.KeepAliveInterval = time.Hour // heal attempts are driven manually below
+	config.RequestTimeout = 5 * time.Second
+	firstAttemptFailed := &failoverTestClient{versionErr: errors.New("primary temporarily unavailable")}
+	fallback := new(failoverTestClient)
+
+	committed := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() { unblockOnce.Do(func() { close(committed) }) }
+	defer unblock()
+
+	candidateBlocked := new(failoverTestClient)
+	candidateBlocked.version = func(ctx context.Context) error {
+		select {
+		case <-committed:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	var candidateWinning atomic.Pointer[failoverTestClient]
+
+	var primaryDials atomic.Int32
+	connection, err := connect(ctx, config, func(_ context.Context, url string) (electrumClient, error) {
+		if url == "first" {
+			switch primaryDials.Add(1) {
+			case 1:
+				return firstAttemptFailed, nil
+			case 2:
+				return candidateBlocked, nil
+			default:
+				winning := new(failoverTestClient)
+				candidateWinning.Store(winning)
+				return winning, nil
+			}
+		}
+		return fallback, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.serverIndex != 1 || connection.client != fallback {
+		t.Fatal("setup did not start on the fallback server")
+	}
+	firstAttemptFailed.awaitShutdown(t)
+
+	blockedDone := make(chan struct{})
+	go func() {
+		connection.healPrimary()
+		close(blockedDone)
+	}()
+
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for primaryDials.Load() < 2 {
+		select {
+		case <-tick.C:
+		case <-timeout.C:
+			t.Fatal("the blocked heal attempt never dialed the primary")
+		}
+	}
+	// candidateBlocked is now dialed and stuck in verification; race the
+	// winning attempt in while it is still pending.
+	connection.healPrimary()
+	winning := candidateWinning.Load()
+	if winning == nil || connection.serverIndex != 0 || connection.client != winning {
+		t.Fatal("the winning heal attempt did not commit the primary connection")
+	}
+
+	unblock()
+	select {
+	case <-blockedDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the discarded heal attempt never returned")
+	}
+	candidateBlocked.awaitShutdown(t)
+	if connection.serverIndex != 0 || connection.client != winning {
+		t.Fatal("the discarded overlapping candidate must not replace the already-restored primary")
+	}
+}
+
+// TestKeepAliveConsecutiveSuccessesResetsOnFailure verifies a single failed
+// ping resets the consecutive-success streak: a success, a failure, and
+// then only two more consecutive successes trigger exactly one heal
+// attempt, firing only after the trailing pair - not after the lone
+// success that preceded the failure.
+func TestKeepAliveConsecutiveSuccessesResetsOnFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	config := failoverTestConfig()
+	config.FallbackURLs = []string{"second", "third"}
+	config.KeepAliveInterval = time.Millisecond
+	config.RequestTimeout = 5 * time.Second
+
+	pingResults := []error{nil, electrum.ErrTimeout, nil, nil}
+	var pingCalls atomic.Int32
+	block := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() { unblockOnce.Do(func() { close(block) }) }
+	defer unblock()
+	pingFn := func(ctx context.Context) error {
+		i := int(pingCalls.Add(1)) - 1
+		if i < len(pingResults) {
+			return pingResults[i]
+		}
+		<-block
+		return ctx.Err()
+	}
+
+	var primaryDials atomic.Int32
+	connection, err := connect(ctx, config, func(_ context.Context, url string) (electrumClient, error) {
+		if url == "first" {
+			primaryDials.Add(1)
+			return &failoverTestClient{versionErr: errors.New("primary unavailable")}, nil
+		}
+		return &failoverTestClient{ping: pingFn}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection.clientMutex.Lock()
+	startedOnFallback := connection.serverIndex != 0
+	connection.clientMutex.Unlock()
+	if !startedOnFallback {
+		t.Fatal("setup did not start on a fallback server")
+	}
+
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for pingCalls.Load() <= int32(len(pingResults)) {
+		select {
+		case <-tick.C:
+		case <-timeout.C:
+			t.Fatal("ping sequence did not complete")
+		}
+	}
+	// The next ping call is now blocked mid-flight; the sequence
+	// [success, failure, success, success] has fully resolved, and any heal
+	// attempt it triggers already ran synchronously within keepAlive before
+	// that next call could start.
+	unblock()
+
+	if primaryDials.Load() != 2 {
+		t.Fatalf(
+			"expected exactly one heal attempt after the trailing consecutive pair (2 primary dials total), got [%d]",
+			primaryDials.Load(),
+		)
+	}
+}
+
+// TestHealPrimaryConsistentUnderConcurrentRequestFailover verifies that a
+// concurrent request-driven failover moving serverIndex away from the
+// server a heal attempt observed at start does not corrupt connection
+// state: the heal attempt still commits cleanly and the client it displaces
+// is retired exactly once, never left running or leaked.
+func TestHealPrimaryConsistentUnderConcurrentRequestFailover(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	config := failoverTestConfig()
+	config.FallbackURLs = []string{"second", "third"}
+	config.KeepAliveInterval = time.Hour // heal is driven manually below
+	config.RequestTimeout = 5 * time.Second
+
+	firstAttemptFailed := &failoverTestClient{versionErr: errors.New("primary temporarily unavailable")}
+	second := &failoverTestClient{header: func(context.Context) (*electrum.SubscribeHeadersResult, error) {
+		return nil, electrum.ErrTimeout
+	}}
+	third := new(failoverTestClient)
+
+	committed := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() { unblockOnce.Do(func() { close(committed) }) }
+	defer unblock()
+	primaryHealed := new(failoverTestClient)
+	primaryHealed.version = func(ctx context.Context) error {
+		select {
+		case <-committed:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	var primaryDials atomic.Int32
+	connection, err := connect(ctx, config, func(_ context.Context, url string) (electrumClient, error) {
+		switch url {
+		case "first":
+			if primaryDials.Add(1) == 1 {
+				return firstAttemptFailed, nil
+			}
+			return primaryHealed, nil
+		case "second":
+			return second, nil
+		default:
+			return third, nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.serverIndex != 1 || connection.client != second {
+		t.Fatal("setup did not start on the first fallback server")
+	}
+	firstAttemptFailed.awaitShutdown(t)
+
+	healDone := make(chan struct{})
+	go func() {
+		connection.healPrimary()
+		close(healDone)
+	}()
+
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for primaryDials.Load() < 2 {
+		select {
+		case <-tick.C:
+		case <-timeout.C:
+			t.Fatal("the heal attempt never dialed the primary")
+		}
+	}
+
+	// A concurrent request against "second" fails and fails over to
+	// "third", moving serverIndex from 1 to 2 while the heal attempt above
+	// is still probing the primary.
+	if _, err := connection.GetLatestBlockHeight(); err != nil {
+		t.Fatalf("fallback rotation request failed: %v", err)
+	}
+	if connection.serverIndex != 2 || connection.client != third {
+		t.Fatal("request-driven failover did not move to the second fallback server")
+	}
+	second.awaitShutdown(t)
+
+	unblock()
+	select {
+	case <-healDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("heal attempt never returned")
+	}
+
+	// The serverIndex == 0 discard guard only fires when the connection has
+	// already been restored to the primary by someone else; a concurrent
+	// move to a different fallback index does not stop the heal attempt
+	// from completing, so it must now own the connection cleanly.
+	if connection.serverIndex != 0 || connection.client != primaryHealed {
+		t.Fatal("heal attempt did not consistently commit the primary despite concurrent request failover")
+	}
+	third.awaitShutdown(t)
 }
