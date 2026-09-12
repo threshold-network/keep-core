@@ -3,6 +3,8 @@ package electrum
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -43,7 +45,7 @@ func NewWebSocketTransport(
 
 	// Bound per-message allocation: without a limit, a hostile or buggy
 	// server can force unbounded reads via ReadMessage.
-	conn.SetReadLimit(1 << 20)
+	conn.SetReadLimit(32 << 20)
 
 	ws := &WebSocketTransport{
 		conn:      conn,
@@ -72,6 +74,9 @@ func (t *WebSocketTransport) listen() {
 			)
 		}
 		if err != nil {
+			if errors.Is(err, websocket.ErrReadLimit) {
+				err = fmt.Errorf("%w: %v", ErrMessageTooLarge, err)
+			}
 			select {
 			case t.errors <- err:
 			case <-t.done:

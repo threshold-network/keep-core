@@ -219,9 +219,7 @@ func (s *Client) listen() {
 			// loop running unless the client is shutting down anyway.
 			defer func() {
 				if r := recover(); r != nil {
-					if DebugMode {
-						log.Printf("recovered from panic while processing message: %v", r)
-					}
+					log.Printf("recovered from panic while processing message: %v", r)
 					exit = s.IsShutdown()
 				}
 			}()

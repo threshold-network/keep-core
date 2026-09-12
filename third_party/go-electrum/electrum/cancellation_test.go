@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -251,5 +252,80 @@ func TestAbortReleasesPendingResponseAndReaders(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("abort did not interrupt the pending response")
+	}
+}
+
+// syncReplyTransport is a Transport double that answers a request from
+// inside SendMessage, before SendMessage returns to its caller -- the way a
+// fast local server can. It exercises the handler-registration-before-send
+// ordering in Client.request: the reply must never be dropped for want of a
+// handler that hadn't been registered yet.
+type syncReplyTransport struct {
+	responses chan []byte
+	errors    chan error
+}
+
+func (t *syncReplyTransport) SendMessage(body []byte) error {
+	var msg request
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return err
+	}
+
+	reply, err := json.Marshal(struct {
+		ID     uint64    `json:"id"`
+		Result [2]string `json:"result"`
+	}{ID: msg.ID, Result: [2]string{"ElectrumX 1.0", ProtocolVersion}})
+	if err != nil {
+		return err
+	}
+
+	t.responses <- reply
+	return nil
+}
+
+func (t *syncReplyTransport) Responses() <-chan []byte { return t.responses }
+func (t *syncReplyTransport) Errors() <-chan error     { return t.errors }
+func (t *syncReplyTransport) Close() error             { return nil }
+
+// TestRequestHandlerRegisteredBeforeSend regression-tests the ordering fix in
+// Client.request: the pending handler must be registered in s.handlers
+// before SendMessage is called. syncReplyTransport answers from inside
+// SendMessage, so if registration ever moved back after the send, the reply
+// would arrive at listen() before any handler existed for it, get dropped,
+// and leave the request blocked on <-c forever.
+func TestRequestHandlerRegisteredBeforeSend(t *testing.T) {
+	transport := &syncReplyTransport{
+		responses: make(chan []byte),
+		errors:    make(chan error),
+	}
+	client := &Client{
+		transport: transport, quit: make(chan struct{}), Error: make(chan error, 1),
+		handlers: make(map[uint64]chan *container),
+	}
+
+	listenDone := make(chan struct{})
+	go func() { defer close(listenDone); client.listen() }()
+	t.Cleanup(func() {
+		client.Shutdown()
+		select {
+		case <-listenDone:
+		case <-time.After(time.Second):
+			t.Error("shutdown left the listen goroutine blocked")
+		}
+	})
+
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := client.ServerVersion(context.Background())
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Errorf("ServerVersion returned %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request never returned: the reply raced past an unregistered handler and was dropped")
 	}
 }
