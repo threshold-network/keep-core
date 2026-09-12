@@ -212,9 +212,6 @@ jobs:
           go test -race -timeout 3m -count=1
           ./pkg/bitcoin/electrum ./config
           github.com/checksum0/go-electrum/electrum
-      - name: Run vendored go-electrum test suite standalone
-        run: |
-          cd third_party/go-electrum && go test -race ./...
 
   client-build-test-publish:
     needs: client-detect-changes

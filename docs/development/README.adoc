@@ -285,6 +285,7 @@ pool:
 * dial failures and connection resets
 * server-initiated shutdowns
 * request timeouts
+* a failed server-version or server-features verification
 
 Authoritative JSON-RPC responses from a server -- a rejected or not-found
 transaction, a height out of range, a fee-oracle error such as `-32603` --
@@ -307,8 +308,7 @@ preferred server without operator intervention.
 
 === Chain identity
 
-The first server the client successfully verifies establishes the pool's
-chain identity from its `features.genesis_hash`. Every later candidate must
+The first successfully verified server that reports a non-empty features.genesis_hash establishes the pool's chain identity. Every later candidate must
 report a matching genesis hash or it is rejected as unsuitable for the
 pool; a candidate that omits the field is still accepted, but the client
 logs a warning since its chain identity cannot be confirmed.
