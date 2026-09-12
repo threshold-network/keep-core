@@ -37,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       path-filter: ${{ steps.filter.outputs.path-filter }}
+      bundled-beacon-export-filter: ${{ steps.filter.outputs.bundled-beacon-export-filter }}
     steps:
       - uses: actions/checkout@v3
         if: github.event_name == 'pull_request'
@@ -50,6 +51,12 @@ jobs:
               - './.github/workflows/contracts-random-beacon.yml'
               - './.github/actions/install-yarn-deps/**'
               - './.github/actions/docker-build-push/**'
+            bundled-beacon-export-filter:
+              - './solidity/random-beacon/deploy/**'
+              - './solidity/random-beacon/tasks/**'
+              - './solidity/random-beacon/utils/**'
+              - './solidity/ecdsa/external/random-beacon-export/**'
+              - './.github/workflows/contracts-random-beacon.yml'
 
   contracts-lint:
     needs: contracts-detect-changes
@@ -251,11 +258,71 @@ jobs:
           fi
           echo 'export byte-identity OK'
 
+  # ECDSA bundles the compiled Beacon deployment scripts, tasks and utilities
+  # under solidity/ecdsa/external/random-beacon-export/ so it can deploy
+  # against a v6 Beacon while the published Beacon package is still ethers v5.
+  # That bundle is generated from this package's TypeScript sources, so any
+  # change under deploy/, tasks/ or utils/ silently makes it stale - until now
+  # only the manual
+  # solidity/scripts/ethers-v6-compatibility/pack-and-capture.cjs script
+  # checked it, and that script never runs in CI. This job regenerates the
+  # exports and byte-compares them against the committed bundle, so drift
+  # fails here instead of shipping.
+  bundled-beacon-export-freshness:
+    needs: contracts-detect-changes
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.bundled-beacon-export-filter == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./solidity/random-beacon
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          # Pinned to match the Dockerfiles exactly so CI and the image cannot
+          # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
+          # download fails with HH502 (see PR description for details).
+          node-version: "24.11.1"
+
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/random-beacon
+
+      - name: Build solidity contracts
+        run: yarn build
+
+      - name: Generate packed export artifacts
+        run: yarn prepack
+
+      - name: Verify bundled Beacon export is up to date
+        run: |
+          set -e
+          bundle=../ecdsa/external/random-beacon-export
+          staging="$(mktemp -d)"
+          mkdir -p "$staging/deploy" "$staging/utils" "$staging/tasks/utils"
+          cp export/deploy/*.js "$staging/deploy/"
+          cp export/utils/wait-for-confirmations.js "$staging/utils/"
+          cp export/tasks/initialize.js export/tasks/unlock-eth-accounts.js "$staging/tasks/"
+          cp export/tasks/utils/*.js "$staging/tasks/utils/"
+          if ! diff -r --exclude=README.md "$staging" "$bundle"; then
+            echo '::error::solidity/ecdsa/external/random-beacon-export/ is stale - it no longer matches solidity/random-beacon/export/.'
+            echo '::error::Regenerate it with the commands documented in solidity/ecdsa/external/random-beacon-export/README.md and commit the result alongside this change.'
+            exit 1
+          fi
+          echo 'bundled Beacon export freshness OK'
+
   contracts-deployment-testnet:
     needs: [contracts-build-and-test]
-    if: |
-      github.event_name == 'workflow_dispatch'
-        && github.ref != 'refs/heads/dapp-development'
+    # The ethers v6 deployment exports break existing ethers v5 consumers.
+    # Block workflow_dispatch publication to the `<environment>` tag; this
+    # gate replaces the original dispatch condition, kept here so it can be
+    # restored:
+    #   github.event_name == 'workflow_dispatch'
+    #     && github.ref != 'refs/heads/dapp-development'
+    # Re-enable only after the consumer migration and release pins are ready;
+    # see solidity/docs/ethers-v6-compatibility.md#limits-and-release-gates.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -351,9 +418,15 @@ jobs:
   # `dapp-development`.
   contracts-dapp-development-deployment-testnet:
     needs: [contracts-build-and-test]
-    if: |
-      github.event_name == 'workflow_dispatch'
-        && github.ref == 'refs/heads/dapp-development'
+    # The ethers v6 deployment exports break existing ethers v5 consumers.
+    # Block workflow_dispatch publication to the
+    # `dapp-development-<environment>` tag; this gate replaces the original
+    # dispatch condition, kept here so it can be restored:
+    #   github.event_name == 'workflow_dispatch'
+    #     && github.ref == 'refs/heads/dapp-development'
+    # Re-enable only after the consumer migration and release pins are ready;
+    # see solidity/docs/ethers-v6-compatibility.md#limits-and-release-gates.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     defaults:
       run:
