@@ -37,7 +37,6 @@ export async function signOperatorInactivityClaim(
     signingMembersIndices.push(signerIndex)
 
     const ethersSigner = signers[i].signer
-
     const signature = await ethersSigner.signMessage(
       ethers.utils.arrayify(messageHash)
     )

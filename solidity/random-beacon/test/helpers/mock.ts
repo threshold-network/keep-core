@@ -499,7 +499,6 @@ export async function createMock<T>(
 
         for (let i = 0; i < Number(count); i++) {
           // Sequential on purpose: ordering is the point of this accessor.
-
           const [callData, value] = await Promise.all([
             mockContract.__mock__callForSelectorAt(selector, i),
             mockContract.__mock__callValueForSelectorAt(selector, i),
