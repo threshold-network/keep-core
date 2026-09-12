@@ -60,9 +60,6 @@ export default [
         {
           groups: ["builtin", "external", "parent", "sibling", "index", "type"],
           "newlines-between": "always",
-          distinctGroup: true,
-          sortTypesGroup: false,
-          named: false,
           warnOnUnassignedImports: false,
         },
       ],
@@ -101,7 +98,6 @@ export default [
         {
           commonjs: true,
           caseSensitive: true,
-          caseSensitiveStrict: false,
         },
       ],
       "import/namespace": ["error"],
@@ -148,7 +144,6 @@ export default [
         "error",
         {
           ignoreExternal: false,
-          allowUnsafeDynamicCyclicDependency: false,
         },
       ],
       "import/no-useless-path-segments": [
@@ -265,6 +260,14 @@ export default [
       "for-direction": ["error"],
       "no-async-promise-executor": ["error"],
       "no-await-in-loop": ["error"],
+      "no-new-func": ["error"],
+      "no-promise-executor-return": ["error"],
+      "no-unreachable-loop": ["error"],
+      "no-dupe-else-if": ["error"],
+      "no-unsafe-optional-chaining": ["error"],
+      "no-useless-backreference": ["error"],
+      "no-constructor-return": ["error"],
+      "grouped-accessor-pairs": ["error"],
       "no-compare-neg-zero": ["error"],
       "no-cond-assign": ["error", "always"],
       "no-console": ["warn"],
@@ -530,6 +533,7 @@ export default [
       ],
       "@typescript-eslint/no-unsafe-function-type": ["error"],
       "@typescript-eslint/no-wrapper-object-types": ["error"],
+      "@typescript-eslint/default-param-last": ["error"],
     },
   },
   { files: ["test/**/*.ts"], languageOptions: { globals: globals.mocha } },
