@@ -28,7 +28,6 @@
     // packages consume.
     "ignoreDeprecations": "6.0",
     "esModuleInterop": true,
-    "noImplicitAny": true,
     "downlevelIteration": true,
     "skipLibCheck": true
   }
