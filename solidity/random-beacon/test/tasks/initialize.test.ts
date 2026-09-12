@@ -23,6 +23,23 @@ async function initializedOperator() {
   }
 }
 
+async function operatorWithDefaultAuthorization() {
+  await deployments.fixture()
+  const [owner, provider, operator] = (await ethers.getSigners()).slice(10)
+  const args = {
+    owner: owner.address,
+    provider: provider.address,
+    operator: operator.address,
+    amount: 1_000_000,
+  }
+  await hre.run("initialize", args)
+  return {
+    args,
+    staking: await helpers.contracts.getContract<TokenStaking>("TokenStaking"),
+    beacon: await helpers.contracts.getContract<RandomBeacon>("RandomBeacon"),
+  }
+}
+
 describe("Initialization tasks", () => {
   it("mints, stakes, authorizes and registers an operator", async () => {
     const { args, staking, beacon, token } =
@@ -45,6 +62,8 @@ describe("Initialization tasks", () => {
     await hre.run("initialize:staking", args)
     await hre.run("authorize:beacon", args)
     await hre.run("register:beacon", args)
+    // Re-run the full initialize task, exercising add_beta_operator too.
+    await hre.run("initialize", args)
     expect(await ethers.provider.getBlockNumber()).to.equal(before)
   })
 
@@ -61,4 +80,14 @@ describe("Initialization tasks", () => {
     ).to.equal(ethers.parseEther("700000"))
     expect(await token.balanceOf(args.owner)).to.equal(0n)
   })
+
+  it("defaults authorization to the beacon's minimumAuthorization", async () => {
+    const { args, staking, beacon } = await loadFixture(
+      operatorWithDefaultAuthorization,
+    )
+    expect(
+      await staking.authorizedStake(args.provider, await beacon.getAddress()),
+    ).to.equal(await beacon.minimumAuthorization())
+  })
+
 })
