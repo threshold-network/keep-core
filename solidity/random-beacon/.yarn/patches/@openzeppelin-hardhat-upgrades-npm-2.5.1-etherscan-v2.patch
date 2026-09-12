@@ -1,7 +1,7 @@
 diff --git a/src/utils/etherscan-api.ts b/src/utils/etherscan-api.ts
 --- a/src/utils/etherscan-api.ts
 +++ b/src/utils/etherscan-api.ts
-@@ -2,36 +2,38 @@
+@@ -2,36 +2,39 @@
  import { HardhatRuntimeEnvironment } from 'hardhat/types';
  
  import { request } from 'undici';
@@ -17,17 +17,15 @@ diff --git a/src/utils/etherscan-api.ts b/src/utils/etherscan-api.ts
   * @returns The Etherscan API response
   */
  export async function callEtherscanApi(etherscan: Etherscan, params: any): Promise<EtherscanResponseBody> {
--  const parameters = new URLSearchParams({ ...params, apikey: etherscan.apiKey });
-+  const parameters = { ...params, apikey: etherscan.apiKey };
+   const parameters = new URLSearchParams({ ...params, apikey: etherscan.apiKey });
 +  if (etherscan.chainId !== undefined) {
-+    parameters.chainid = etherscan.chainId;
++    parameters.set('chainid', etherscan.chainId);
 +  }
  
    const response = await request(etherscan.apiUrl, {
      method: 'POST',
--    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
--    body: parameters.toString(),
-+    query: parameters,
+     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+     body: parameters.toString(),
    });
  
    if (!(response.statusCode >= 200 && response.statusCode <= 299)) {
@@ -46,7 +44,7 @@ diff --git a/src/utils/etherscan-api.ts b/src/utils/etherscan-api.ts
 diff --git a/dist/utils/etherscan-api.js b/dist/utils/etherscan-api.js
 --- a/dist/utils/etherscan-api.js
 +++ b/dist/utils/etherscan-api.js
-@@ -4,35 +4,37 @@
+@@ -4,35 +4,38 @@
  };
  Object.defineProperty(exports, "__esModule", { value: true });
  exports.verifyAndGetStatus = exports.RESPONSE_OK = exports.getEtherscanInstance = exports.callEtherscanApi = void 0;
@@ -62,16 +60,14 @@ diff --git a/dist/utils/etherscan-api.js b/dist/utils/etherscan-api.js
   * @returns The Etherscan API response
   */
  async function callEtherscanApi(etherscan, params) {
--    const parameters = new URLSearchParams({ ...params, apikey: etherscan.apiKey });
-+    const parameters = { ...params, apikey: etherscan.apiKey };
+     const parameters = new URLSearchParams({ ...params, apikey: etherscan.apiKey });
 +    if (etherscan.chainId !== undefined) {
-+        parameters.chainid = etherscan.chainId;
++        parameters.set('chainid', etherscan.chainId);
 +    }
      const response = await (0, undici_1.request)(etherscan.apiUrl, {
          method: 'POST',
--        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
--        body: parameters.toString(),
-+        query: parameters,
+         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+         body: parameters.toString(),
      });
      if (!(response.statusCode >= 200 && response.statusCode <= 299)) {
          const responseBodyText = await response.body.text();
