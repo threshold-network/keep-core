@@ -135,7 +135,10 @@ console.log(
         .update(fs.readFileSync(path.join(candidate, "export.json")))
         .digest("hex"),
       contracts: Object.keys(read(candidate, "deployments.json")).length,
-      blocksWithIdenticalState: before.length - 1,
+      transactionsWithIdenticalState: before.reduce(
+        (total, entry) => total + entry.block.transactions.length,
+        0,
+      ),
       deploymentRecordsByteIdentical: byteEqual("deployments.json"),
       reviewedGasLimitChanges: [...gasChanges.keys()],
       artifacts: files.length,

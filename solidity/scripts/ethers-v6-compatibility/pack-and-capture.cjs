@@ -1,4 +1,4 @@
-// Run from solidity/ecdsa after both packages' prepack steps:
+// Run from solidity/ecdsa; packing runs each package's prepack step:
 // node ../scripts/ethers-v6-compatibility/pack-and-capture.cjs NEW_DIRECTORY REFERENCE_CAPTURE
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -46,9 +46,11 @@ for (const name of fs.readdirSync(installed)) {
 const packages = {};
 for (const name of ["random-beacon", "ecdsa"]) {
   const source = path.resolve("..", name);
+  // Lifecycle scripts stay enabled so prepack regenerates export/ for the
+  // archive. npm runs prepare/prepack for `npm pack`, never prepublishOnly.
   const output = execFileSync(
     "npm",
-    ["pack", "--ignore-scripts", "--json", "--pack-destination", root],
+    ["pack", "--json", "--pack-destination", root],
     { cwd: source, encoding: "utf8" },
   );
   const [packed] = JSON.parse(output);
@@ -77,7 +79,14 @@ for (const name of ["random-beacon", "ecdsa"]) {
   const artifactCount = packed.files.filter((file) =>
     file.path.startsWith("export/artifacts/"),
   ).length;
-  assert.equal(artifactCount, name === "random-beacon" ? 51 : 52);
+  const expectedArtifacts = name === "random-beacon" ? 51 : 52;
+  assert.equal(
+    artifactCount,
+    expectedArtifacts,
+    `${name} packed ${artifactCount} export/artifacts entries, ` +
+      `expected ${expectedArtifacts}. Update it here and the artifact ` +
+      `inventory row in solidity/docs/ethers-v6-compatibility.md`,
+  );
   if (name === "random-beacon") {
     assert(
       packed.files.some(

@@ -62,7 +62,8 @@ if (ecdsaExport) {
   });
   const root = path.resolve(ecdsaExport);
   for (const subdir of ["deploy", "artifacts", "tasks"]) {
-    if (!fs.statSync(path.join(root, subdir)).isDirectory()) {
+    const directory = path.join(root, subdir);
+    if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
       throw new Error(`ECDSA ${subdir} export is missing: ${root}`);
     }
   }
