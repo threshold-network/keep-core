@@ -103,6 +103,10 @@ func (dsts *FindDepositsToSweepTestScenario) UnmarshalJSON(data []byte) error {
 		}
 		ageBlocks := uint64(blockCount)
 
+		if ageBlocks > currentBlock {
+			return fmt.Errorf("invalid block age: age exceeds current block")
+		}
+
 		revealedAt := now.Add(-age)
 		revealBlockNumber := currentBlock - ageBlocks
 
@@ -350,6 +354,10 @@ func (fprts *FindPendingRedemptionsTestScenario) UnmarshalJSON(data []byte) erro
 			return fmt.Errorf("invalid block age")
 		}
 		ageBlocks := uint64(blockCount)
+
+		if ageBlocks > currentBlock {
+			return fmt.Errorf("invalid block age: age exceeds current block")
+		}
 
 		requestedAt := now.Add(-age)
 		requestBlock := currentBlock - ageBlocks
