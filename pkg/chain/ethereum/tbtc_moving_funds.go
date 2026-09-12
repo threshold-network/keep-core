@@ -128,6 +128,10 @@ func (tc *TbtcChain) SubmitMovingFundsCommitment(
 	walletMemberIndex uint32,
 	targetWallets [][20]byte,
 ) error {
+	if walletMainUTXO.Value < 0 {
+		return fmt.Errorf("invalid main UTXO value: [%v]", walletMainUTXO.Value)
+	}
+
 	mainUtxo := tbtcabi.BitcoinTxUTXO{
 		TxHash:        walletMainUTXO.Outpoint.TransactionHash,
 		TxOutputIndex: walletMainUTXO.Outpoint.OutputIndex,
@@ -149,6 +153,10 @@ func (tc *TbtcChain) SubmitMovingFundsProofWithReimbursement(
 	mainUTXO bitcoin.UnspentTransactionOutput,
 	walletPublicKeyHash [20]byte,
 ) error {
+	if mainUTXO.Value < 0 {
+		return fmt.Errorf("invalid main UTXO value: [%v]", mainUTXO.Value)
+	}
+
 	bitcoinTxInfo := tbtcabi.BitcoinTxInfo3{
 		Version:      transaction.SerializeVersion(),
 		InputVector:  transaction.SerializeInputs(),
@@ -157,7 +165,7 @@ func (tc *TbtcChain) SubmitMovingFundsProofWithReimbursement(
 	}
 	movingFundsProof := tbtcabi.BitcoinTxProof2{
 		MerkleProof:      proof.MerkleProof,
-		TxIndexInBlock:   big.NewInt(int64(proof.TxIndexInBlock)),
+		TxIndexInBlock:   new(big.Int).SetUint64(uint64(proof.TxIndexInBlock)),
 		BitcoinHeaders:   proof.BitcoinHeaders,
 		CoinbasePreimage: proof.CoinbasePreimage,
 		CoinbaseProof:    proof.CoinbaseProof,
@@ -201,6 +209,10 @@ func (tc *TbtcChain) SubmitMovedFundsSweepProofWithReimbursement(
 	proof *bitcoin.SpvProof,
 	mainUTXO bitcoin.UnspentTransactionOutput,
 ) error {
+	if mainUTXO.Value < 0 {
+		return fmt.Errorf("invalid main UTXO value: [%v]", mainUTXO.Value)
+	}
+
 	bitcoinTxInfo := tbtcabi.BitcoinTxInfo3{
 		Version:      transaction.SerializeVersion(),
 		InputVector:  transaction.SerializeInputs(),
@@ -209,7 +221,7 @@ func (tc *TbtcChain) SubmitMovedFundsSweepProofWithReimbursement(
 	}
 	movedFundsSweepProof := tbtcabi.BitcoinTxProof2{
 		MerkleProof:      proof.MerkleProof,
-		TxIndexInBlock:   big.NewInt(int64(proof.TxIndexInBlock)),
+		TxIndexInBlock:   new(big.Int).SetUint64(uint64(proof.TxIndexInBlock)),
 		BitcoinHeaders:   proof.BitcoinHeaders,
 		CoinbasePreimage: proof.CoinbasePreimage,
 		CoinbaseProof:    proof.CoinbaseProof,
@@ -369,6 +381,10 @@ func (tc *TbtcChain) ValidateMovingFundsProposal(
 	mainUTXO *bitcoin.UnspentTransactionOutput,
 	proposal *tbtc.MovingFundsProposal,
 ) error {
+	if mainUTXO.Value < 0 {
+		return fmt.Errorf("invalid main UTXO value: [%v]", mainUTXO.Value)
+	}
+
 	abiProposal := tbtcabi.WalletProposalValidatorMovingFundsProposal{
 		WalletPubKeyHash: walletPublicKeyHash,
 		TargetWallets:    proposal.TargetWallets,

@@ -357,6 +357,11 @@ func (c *Connection) GetLatestBlockHeight() (uint, error) {
 func (c *Connection) GetBlockHeader(
 	blockHeight uint,
 ) (*bitcoin.BlockHeader, error) {
+	if blockHeight > math.MaxUint32 {
+		return nil, fmt.Errorf("block height exceeds Electrum range: [%v]", blockHeight)
+	}
+	height := uint32(blockHeight)
+
 	getBlockHeaderResult, err := requestWithRetry(
 		c.parentCtx,
 		c,
@@ -364,7 +369,7 @@ func (c *Connection) GetBlockHeader(
 			ctx context.Context,
 			client *electrum.Client,
 		) (*electrum.GetBlockHeaderResult, error) {
-			return client.GetBlockHeader(ctx, uint32(blockHeight), 0)
+			return client.GetBlockHeader(ctx, height, 0)
 		},
 		"GetBlockHeader",
 	)
@@ -387,6 +392,11 @@ func (c *Connection) GetTransactionMerkleProof(
 	transactionHash bitcoin.Hash,
 	blockHeight uint,
 ) (*bitcoin.TransactionMerkleProof, error) {
+	if blockHeight > math.MaxUint32 {
+		return nil, fmt.Errorf("block height exceeds Electrum range: [%v]", blockHeight)
+	}
+	height := uint32(blockHeight)
+
 	txID := transactionHash.Hex(bitcoin.ReversedByteOrder)
 
 	getMerkleProofResult, err := requestWithRetry(
@@ -399,7 +409,7 @@ func (c *Connection) GetTransactionMerkleProof(
 			return client.GetMerkleProof(
 				ctx,
 				txID,
-				uint32(blockHeight),
+				height,
 			)
 		},
 		"GetMerkleProof",
@@ -593,6 +603,11 @@ func (c *Connection) getConfirmedScriptHistory(
 // GetCoinbaseTxHash gets the hash of the coinbase transaction for the given
 // block height.
 func (c *Connection) GetCoinbaseTxHash(blockHeight uint) (bitcoin.Hash, error) {
+	if blockHeight > math.MaxUint32 {
+		return bitcoin.Hash{}, fmt.Errorf("block height exceeds Electrum range: [%v]", blockHeight)
+	}
+	height := uint32(blockHeight)
+
 	txHashString, err := requestWithRetry(
 		c.parentCtx,
 		c,
@@ -600,7 +615,7 @@ func (c *Connection) GetCoinbaseTxHash(blockHeight uint) (bitcoin.Hash, error) {
 			ctx context.Context,
 			client *electrum.Client,
 		) (string, error) {
-			return client.GetHashFromPosition(ctx, uint32(blockHeight), 0)
+			return client.GetHashFromPosition(ctx, height, 0)
 		},
 		"GetHashFromPosition",
 	)
@@ -798,18 +813,7 @@ func (c *Connection) GetUtxosForPublicKeyHash(
 		},
 	)
 
-	utxos := make([]*bitcoin.UnspentTransactionOutput, len(items))
-	for i, item := range items {
-		utxos[i] = &bitcoin.UnspentTransactionOutput{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: item.txHash,
-				OutputIndex:     item.outputIndex,
-			},
-			Value: int64(item.value),
-		}
-	}
-
-	return utxos, nil
+	return convertUtxoItems(items)
 }
 
 // GetMempoolUtxosForPublicKeyHash gets unspent outputs of unconfirmed transactions
@@ -859,8 +863,15 @@ func (c *Connection) GetMempoolUtxosForPublicKeyHash(
 
 	items := append(p2pkhItems, p2wpkhItems...)
 
+	return convertUtxoItems(items)
+}
+
+func convertUtxoItems(items []*scriptUtxoItem) ([]*bitcoin.UnspentTransactionOutput, error) {
 	utxos := make([]*bitcoin.UnspentTransactionOutput, len(items))
 	for i, item := range items {
+		if item.value > math.MaxInt64 {
+			return nil, fmt.Errorf("UTXO value exceeds int64 range: [%v]", item.value)
+		}
 		utxos[i] = &bitcoin.UnspentTransactionOutput{
 			Outpoint: &bitcoin.TransactionOutpoint{
 				TransactionHash: item.txHash,

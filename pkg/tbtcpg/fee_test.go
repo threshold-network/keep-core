@@ -32,6 +32,12 @@ func TestApplyWalletTxFeeFloor(t *testing.T) {
 		expectedFee         int64
 		expectErrorContains string
 	}{
+		"unsigned maximum cap preserves the normal fee": {
+			estimatedFee: 4000, txVsize: vsize, maxTotalFee: math.MaxUint64, expectedFee: 5000,
+		},
+		"signed maximum cap preserves the normal fee": {
+			estimatedFee: 4000, txVsize: vsize, maxTotalFee: math.MaxInt64, expectedFee: 5000,
+		},
 		"estimate above the floor is buffered by 25%": {
 			estimatedFee: 4000, // rate 20 sat/vByte
 			txVsize:      vsize,

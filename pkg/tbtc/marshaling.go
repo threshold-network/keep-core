@@ -61,6 +61,11 @@ func (s *signer) Unmarshal(bytes []byte) error {
 		return fmt.Errorf("cannot unmarshal signer: [%w]", err)
 	}
 
+	memberIndex, err := group.MemberIndexFromUint32NonZero(pbSigner.SigningGroupMemberIndex)
+	if err != nil {
+		return err
+	}
+
 	walletPublicKey, err := unmarshalPublicKey(pbSigner.Wallet.PublicKey)
 	if err != nil {
 		return fmt.Errorf("cannot unmarshal wallet public key: [%w]", err)
@@ -84,7 +89,7 @@ func (s *signer) Unmarshal(bytes []byte) error {
 		publicKey:             walletPublicKey,
 		signingGroupOperators: walletSigningGroupOperators,
 	}
-	s.signingGroupMemberIndex = group.MemberIndex(pbSigner.SigningGroupMemberIndex)
+	s.signingGroupMemberIndex = memberIndex
 	s.privateKeyShare = privateKeyShare
 
 	return nil
@@ -113,7 +118,8 @@ func (sdm *signingDoneMessage) Unmarshal(bytes []byte) error {
 		return fmt.Errorf("failed to unmarshal SigningDoneMessage: [%v]", err)
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
@@ -122,7 +128,7 @@ func (sdm *signingDoneMessage) Unmarshal(bytes []byte) error {
 		return fmt.Errorf("cannot unmarshal signature: [%v]", err)
 	}
 
-	sdm.senderID = group.MemberIndex(pbMsg.SenderID)
+	sdm.senderID = senderID
 	sdm.message = new(big.Int).SetBytes(pbMsg.Message)
 	sdm.attemptNumber = pbMsg.AttemptNumber
 	sdm.signature = signature
@@ -160,7 +166,8 @@ func (cm *coordinationMessage) Unmarshal(bytes []byte) error {
 		return fmt.Errorf("failed to unmarshal CoordinationMessage: [%v]", err)
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
@@ -183,7 +190,7 @@ func (cm *coordinationMessage) Unmarshal(bytes []byte) error {
 		return fmt.Errorf("failed to unmarshal proposal: [%v]", err)
 	}
 
-	cm.senderID = group.MemberIndex(pbMsg.SenderID)
+	cm.senderID = senderID
 	cm.coordinationBlock = pbMsg.CoordinationBlock
 	cm.walletPublicKeyHash = walletPublicKeyHash
 	cm.proposal = proposal
@@ -306,6 +313,9 @@ func (dsp *DepositSweepProposal) Marshal() ([]byte, error) {
 
 	depositsRevealBlocks := make([]uint64, len(dsp.DepositsRevealBlocks))
 	for i, block := range dsp.DepositsRevealBlocks {
+		if block == nil || !block.IsUint64() {
+			return nil, fmt.Errorf("invalid deposit reveal block: [%v]", block)
+		}
 		depositsRevealBlocks[i] = block.Uint64()
 	}
 
@@ -349,7 +359,7 @@ func (dsp *DepositSweepProposal) Unmarshal(bytes []byte) error {
 
 	depositsRevealBlocks := make([]*big.Int, len(pbMsg.DepositsRevealBlocks))
 	for i, block := range pbMsg.DepositsRevealBlocks {
-		depositsRevealBlocks[i] = big.NewInt(int64(block))
+		depositsRevealBlocks[i] = new(big.Int).SetUint64(block)
 	}
 
 	dsp.DepositsKeys = depositsKeys
@@ -474,13 +484,4 @@ func marshalPublicKey(publicKey *ecdsa.PublicKey) ([]byte, error) {
 // public key.
 func unmarshalPublicKey(bytes []byte) (*ecdsa.PublicKey, error) {
 	return secp256k1.Unmarshal(bytes)
-}
-
-func validateMemberIndex(protoIndex uint32) error {
-	// Protobuf does not have uint8 type, so we are using uint32. When
-	// unmarshalling message, we need to make sure we do not overflow.
-	if protoIndex > group.MaxMemberIndex {
-		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
-	}
-	return nil
 }

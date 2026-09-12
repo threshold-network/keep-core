@@ -159,6 +159,12 @@ func computeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte {
 	binary.BigEndian.PutUint32(outputIndexBytes, mainUtxo.Outpoint.OutputIndex)
 
 	valueBytes := make([]byte, 8)
+	// #nosec G115 -- Hash the exact 64-bit Bitcoin amount encoding. This
+	// value is set by ComputeMainUtxoHash's real callers - the wallet main
+	// UTXO lookup in pkg/tbtc/wallet.go and isInputCurrentWalletsMainUTXO in
+	// pkg/maintainer/spv/spv.go - directly from a parsed Bitcoin transaction
+	// output; neither caller currently guards against a negative Value
+	// before invoking this function.
 	binary.BigEndian.PutUint64(valueBytes, uint64(mainUtxo.Value))
 
 	mainUtxoHash := crypto.Keccak256Hash(

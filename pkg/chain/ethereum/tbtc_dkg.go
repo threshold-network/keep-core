@@ -122,7 +122,8 @@ func (tc *TbtcChain) OnDKGResultSubmitted(
 func convertDkgResultFromAbiType(
 	result ecdsaabi.EcdsaDkgResult,
 ) (*tbtc.DKGChainResult, error) {
-	if err := validateMemberIndex(result.SubmitterMemberIndex); err != nil {
+	submitterIndex, err := memberIndexFromChain(result.SubmitterMemberIndex)
+	if err != nil {
 		return nil, fmt.Errorf(
 			"unexpected submitter member index: [%v]",
 			err,
@@ -134,18 +135,19 @@ func convertDkgResultFromAbiType(
 		len(result.SigningMembersIndices),
 	)
 	for i, memberIndex := range result.SigningMembersIndices {
-		if err := validateMemberIndex(memberIndex); err != nil {
+		index, err := memberIndexFromChain(memberIndex)
+		if err != nil {
 			return nil, fmt.Errorf(
 				"unexpected signing member index: [%v]",
 				err,
 			)
 		}
 
-		signingMembersIndexes[i] = group.MemberIndex(memberIndex.Uint64())
+		signingMembersIndexes[i] = index
 	}
 
 	return &tbtc.DKGChainResult{
-		SubmitterMemberIndex:     group.MemberIndex(result.SubmitterMemberIndex.Uint64()),
+		SubmitterMemberIndex:     submitterIndex,
 		GroupPublicKey:           result.GroupPubKey,
 		MisbehavedMembersIndexes: result.MisbehavedMembersIndices,
 		Signatures:               result.Signatures,
@@ -176,20 +178,17 @@ func convertDkgResultToAbiType(
 	}
 }
 
-// validateMemberIndex guards a *big.Int member index against both an
-// upper bound and a non-positive value. The non-positive check
-// (`chainMemberIndex.Sign() <= 0`) is a behavior change introduced
-// during the #4191 file split (the upper-bound check predated the
-// split). On-chain indices are 1-based and uint64, so the new check
-// is unreachable for valid events; it exists to surface a malformed
-// event as an error instead of producing a zero `group.MemberIndex`.
-func validateMemberIndex(chainMemberIndex *big.Int) error {
-	maxMemberIndex := big.NewInt(group.MaxMemberIndex)
-	if chainMemberIndex.Sign() <= 0 || chainMemberIndex.Cmp(maxMemberIndex) > 0 {
-		return fmt.Errorf("invalid member index value: [%v]", chainMemberIndex)
+// memberIndexFromChain checks that a chain member index fits the 1-based
+// group index range before converting it.
+func memberIndexFromChain(value *big.Int) (group.MemberIndex, error) {
+	if value == nil || !value.IsUint64() {
+		return 0, fmt.Errorf("invalid member index value: [%v]", value)
 	}
-
-	return nil
+	index := value.Uint64()
+	if index == 0 || index > group.MaxMemberIndex {
+		return 0, fmt.Errorf("invalid member index value: [%v]", value)
+	}
+	return group.MemberIndex(index), nil
 }
 
 func (tc *TbtcChain) OnDKGResultChallenged(
@@ -415,7 +414,7 @@ func (tc *TbtcChain) CalculateDKGResultSignatureHash(
 		tc.chainID,
 		unprefixedGroupPublicKeyBytes,
 		misbehavedMembersIndexes,
-		big.NewInt(int64(startBlock)),
+		new(big.Int).SetUint64(startBlock),
 	)
 }
 

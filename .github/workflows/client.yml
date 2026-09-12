@@ -324,7 +324,7 @@ jobs:
       - uses: securego/gosec@master
         with:
           args: |
-            -exclude=G115,G118
+            -exclude=G118
             -exclude-dir=pkg/chain/ethereum/beacon/gen
             -exclude-dir=pkg/chain/ethereum/ecdsa/gen
             -exclude-dir=pkg/chain/ethereum/threshold/gen

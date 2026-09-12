@@ -488,11 +488,16 @@ func ValidateDepositSweepProposal(
 			)
 		}
 
+		deposit, err := matchingEvent.unpack(depositRequest.ExtraData)
+		if err != nil {
+			return nil, err
+		}
+
 		depositExtraInfo[i] = struct {
 			*Deposit
 			FundingTx *bitcoin.Transaction
 		}{
-			Deposit:   matchingEvent.unpack(depositRequest.ExtraData),
+			Deposit:   deposit,
 			FundingTx: fundingTx,
 		}
 	}

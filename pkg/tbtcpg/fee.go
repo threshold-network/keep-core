@@ -132,8 +132,12 @@ func applyWalletTxFeeFloor(
 			tbtc.MinWalletTxSatPerVByteFee, txVsize,
 		)
 	}
+	feeLimit := int64(math.MaxInt64)
+	if maxTotalFee <= math.MaxInt64 {
+		feeLimit = int64(maxTotalFee)
+	}
 	floorProduct := tbtc.MinWalletTxSatPerVByteFee * txVsize
-	if uint64(floorProduct) > maxTotalFee {
+	if floorProduct > feeLimit {
 		return 0, fmt.Errorf(
 			"%w: minimum fee [%d], maximum fee [%d]",
 			ErrMaxFeeTooLow,
@@ -191,8 +195,8 @@ func applyWalletTxFeeFloor(
 	// product is now guaranteed to fit in int64 by the rate*txVsize
 	// guard above.
 	totalFee := rate * txVsize
-	if uint64(totalFee) > maxTotalFee {
-		totalFee = int64(maxTotalFee)
+	if totalFee > feeLimit {
+		totalFee = feeLimit
 	}
 
 	return totalFee, nil
@@ -226,7 +230,7 @@ func estimateCappedFee(
 		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
 	}
 
-	if uint64(totalFee) > maxTotalFee {
+	if totalFee < 0 || uint64(totalFee) > maxTotalFee {
 		return 0, feeTooHighErr
 	}
 

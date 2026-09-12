@@ -346,7 +346,7 @@ func isInputCurrentWalletsMainUTXO(
 	if err != nil {
 		return false, fmt.Errorf("failed to get previous transaction: [%v]", err)
 	}
-	if fundingOutputIndex >= uint32(len(previousTransaction.Outputs)) {
+	if uint64(fundingOutputIndex) >= uint64(len(previousTransaction.Outputs)) {
 		return false, fmt.Errorf(
 			"funding output index [%d] out of range for transaction [%s] "+
 				"with [%d] outputs",

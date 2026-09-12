@@ -83,7 +83,7 @@ func (d *deduplicator) notifyDKGResultSubmitted(
 
 	cacheKey := newDKGResultSeed.Text(16) +
 		hex.EncodeToString(newDKGResultHash[:]) +
-		strconv.Itoa(int(newDKGResultBlock))
+		strconv.FormatUint(newDKGResultBlock, 10)
 
 	// If the key is not in the cache, that means the result was not handled
 	// yet and the client should proceed with the execution.
