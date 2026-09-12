@@ -42,7 +42,7 @@ describe("ReimbursementPool", () => {
 
         await thirdParty.sendTransaction({
           to: await reimbursementPool.getAddress(),
-          value: ethers.parseEther("1.0"), // Send 1.0 ETH
+          value: ethers.parseEther("1.0"),
         })
 
         reimbursementPoolBalance = await provider.getBalance(
@@ -62,7 +62,7 @@ describe("ReimbursementPool", () => {
 
         await owner.sendTransaction({
           to: await reimbursementPool.getAddress(),
-          value: ethers.parseEther("1.0"), // Send 1.0 ETH
+          value: ethers.parseEther("1.0"),
         })
 
         reimbursementPoolBalance = await provider.getBalance(
@@ -78,7 +78,7 @@ describe("ReimbursementPool", () => {
     beforeEach(async () => {
       await thirdParty.sendTransaction({
         to: await reimbursementPool.getAddress(),
-        value: ethers.parseEther("10.0"), // Send 10.0 ETH
+        value: ethers.parseEther("10.0"),
       })
     })
 
@@ -142,7 +142,7 @@ describe("ReimbursementPool", () => {
 
       await thirdParty.sendTransaction({
         to: await reimbursementPool.getAddress(),
-        value: ethers.parseEther("10.0"), // Send 10.0 ETH
+        value: ethers.parseEther("10.0"),
       })
     })
 
@@ -224,7 +224,7 @@ describe("ReimbursementPool", () => {
 
       await thirdParty.sendTransaction({
         to: await reimbursementPool.getAddress(),
-        value: ethers.parseEther("10.0"), // Send 10.0 ETH
+        value: ethers.parseEther("10.0"),
       })
     })
 

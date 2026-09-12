@@ -66,7 +66,6 @@ import type { MockContract } from "../../typechain"
  */
 async function withoutAdvancingTime<T>(write: () => Promise<T>): Promise<T> {
   const block = requireResult(await ethers.provider.getBlock("latest"))
-  if (!block) throw new Error("Latest block is unavailable")
   const { timestamp } = block
   await ethers.provider.send("evm_setNextBlockTimestamp", [timestamp])
   return write()
@@ -106,7 +105,7 @@ export interface MockedFunction {
 }
 
 export type Mock<T extends BaseContract> = {
-  [K in keyof T]: T[K] extends (...args: never[]) => unknown
+  [K in keyof Omit<T, keyof BaseContract>]: T[K] extends (...args: never[]) => unknown
     ? T[K] & MockedFunction
     : T[K]
 } & {

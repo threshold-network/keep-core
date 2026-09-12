@@ -93,7 +93,7 @@ export async function randomBeaconDeployment(): Promise<DeployedContracts> {
 
   await deployer.sendTransaction({
     to: await reimbursementPool.getAddress(),
-    value: ethers.parseEther("100.0"), // Send 100.0 ETH
+    value: ethers.parseEther("100.0"),
   })
 
   const randomBeacon: RandomBeaconStub =
@@ -134,10 +134,10 @@ async function updateTokenStakingParams(
     (...args: unknown[]) => Promise<unknown>
   >
 
-  if (typeof stakingAsRecord.pushNotificationReward === "function") {
+  if (staking.interface.getFunction("pushNotificationReward") !== null) {
     await stakingAsRecord.pushNotificationReward(initialNotifierTreasury)
   }
-  if (typeof stakingAsRecord.setNotificationReward === "function") {
+  if (staking.interface.getFunction("setNotificationReward") !== null) {
     await stakingAsRecord.setNotificationReward(
       constants.tokenStakingNotificationReward,
     )
