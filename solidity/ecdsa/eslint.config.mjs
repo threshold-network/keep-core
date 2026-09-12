@@ -264,7 +264,10 @@ export default [
       "no-promise-executor-return": ["error"],
       "no-unreachable-loop": ["error"],
       "no-dupe-else-if": ["error"],
-      "no-unsafe-optional-chaining": ["error"],
+      "no-unsafe-optional-chaining": [
+        "error",
+        { disallowArithmeticOperators: true },
+      ],
       "no-useless-backreference": ["error"],
       "no-constructor-return": ["error"],
       "grouped-accessor-pairs": ["error"],
