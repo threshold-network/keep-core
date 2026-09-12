@@ -8,9 +8,14 @@ on:
       - "solidity/ecdsa/contracts/**"
       - "solidity/ecdsa/deploy/**"
       - "solidity/ecdsa/tasks/**"
+      - "solidity/ecdsa/utils/**"
+      - "solidity/ecdsa/external/**"
       - "solidity/ecdsa/hardhat.config.ts"
       - "solidity/ecdsa/package.json"
       - "solidity/ecdsa/yarn.lock"
+      - "solidity/ecdsa/.nvmrc"
+      - "solidity/ecdsa/.yarnrc.yml"
+      - "solidity/ecdsa/.yarn/patches/**"
       - ".github/workflows/npm-ecdsa.yml"
   workflow_dispatch:
 
