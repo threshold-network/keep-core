@@ -115,7 +115,7 @@ func TestTransactionMonitor(t *testing.T) {
 	chain := newLocalBitcoinChain()
 	recorder := newCountingMetricsRecorder()
 
-	monitor := newTransactionMonitor(chain)
+	monitor := newTransactionMonitor(chain, nil)
 	monitor.setMetricsRecorder(recorder)
 
 	tx := &bitcoin.Transaction{}
@@ -166,7 +166,7 @@ func TestTransactionMonitor(t *testing.T) {
 // table.
 func TestTransactionMonitor_GivesUpOnNeverConfirming(t *testing.T) {
 	recorder := newCountingMetricsRecorder()
-	monitor := newTransactionMonitor(newLocalBitcoinChain())
+	monitor := newTransactionMonitor(newLocalBitcoinChain(), nil)
 	monitor.setMetricsRecorder(recorder)
 
 	tx := &bitcoin.Transaction{}
@@ -196,7 +196,7 @@ func TestTransactionMonitor_GivesUpOnNeverConfirming(t *testing.T) {
 func TestTransactionMonitor_CheckBudgetBoundsLookup(t *testing.T) {
 	blockedTxHash := bitcoin.Hash{1}
 	chain := newBlockingTransactionConfirmationsChain(blockedTxHash)
-	monitor := newTransactionMonitor(chain)
+	monitor := newTransactionMonitor(chain, nil)
 
 	monitor.track(blockedTxHash, [20]byte{})
 
@@ -255,7 +255,7 @@ func TestTransactionMonitor_BudgetExpiryStillAlertsOldest(t *testing.T) {
 	blockedTxHash := bitcoin.Hash{1} // oldest; its lookup hangs until the budget expires
 	chain := newBlockingTransactionConfirmationsChain(blockedTxHash)
 	recorder := newCountingMetricsRecorder()
-	monitor := newTransactionMonitor(chain)
+	monitor := newTransactionMonitor(chain, nil)
 	monitor.setMetricsRecorder(recorder)
 
 	newerTxHash := bitcoin.Hash{2}
@@ -319,7 +319,7 @@ func TestTransactionMonitor_BudgetExpiryStillAlertsOldest(t *testing.T) {
 // past its bound.
 func TestTransactionMonitor_CapacityBound(t *testing.T) {
 	recorder := newCountingMetricsRecorder()
-	monitor := newTransactionMonitor(newLocalBitcoinChain())
+	monitor := newTransactionMonitor(newLocalBitcoinChain(), nil)
 	monitor.setMetricsRecorder(recorder)
 
 	const excess = 10
@@ -355,7 +355,7 @@ func TestTransactionMonitor_CapacityBound(t *testing.T) {
 // transactions oldest-first, so an old transaction near the stuck threshold is
 // never starved when a pass hits its time budget (Go map order is randomized).
 func TestTransactionMonitor_SnapshotByAge(t *testing.T) {
-	monitor := newTransactionMonitor(newLocalBitcoinChain())
+	monitor := newTransactionMonitor(newLocalBitcoinChain(), nil)
 
 	var h1, h2, h3 bitcoin.Hash
 	h1[0], h2[0], h3[0] = 1, 2, 3

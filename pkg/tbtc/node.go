@@ -154,7 +154,7 @@ func newNode(
 		inactivityClaimExecutors: make(map[string]*inactivityClaimExecutor),
 		coordinationExecutors:    make(map[string]*coordinationExecutor),
 		proposalGenerator:        proposalGenerator,
-		transactionMonitor:       newTransactionMonitor(btcChain),
+		transactionMonitor:       newTransactionMonitor(btcChain, workPersistence),
 	}
 
 	// Archive any wallets that might have been closed or terminated while the
