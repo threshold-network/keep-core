@@ -7,9 +7,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-// MemberIndex is represented as uint8 in gjkr. Protobuf does not have uint8
-// type so we are using uint32. When unmarshalling message, we need to make
-// sure we do not overflow.
 // Type returns a string describing a SignatureShareMessage's type.
 func (*SignatureShareMessage) Type() string {
 	return "relay/signature/share"
