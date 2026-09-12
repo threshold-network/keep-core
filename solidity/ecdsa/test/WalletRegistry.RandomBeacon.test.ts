@@ -3,6 +3,7 @@ import { toBigInt } from "ethers"
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import { expectCalledWith } from "./helpers/mock"
 import { dkgState, walletRegistryFixture } from "./fixtures"
 import { upgradeRandomBeacon } from "./utils/governance"
@@ -149,7 +150,7 @@ describe("WalletRegistry - Random Beacon", async () => {
             (
               await walletRegistry.getDkgData()
             ).startBlock
-          ).to.be.equal((await tx.wait()).blockNumber)
+          ).to.be.equal(requireResult(await tx.wait()).blockNumber)
         })
 
         it("should not emit DkgStateLocked event", async () => {

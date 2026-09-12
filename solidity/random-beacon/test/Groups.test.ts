@@ -2,6 +2,7 @@ import { ethers } from "hardhat"
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import blsData from "./data/bls"
 import { constants } from "./fixtures"
 import { noMisbehaved, hashDKGMembers } from "./utils/dkg"
@@ -83,7 +84,7 @@ describe("Groups", () => {
 
           expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
           expect(storedGroup.registrationBlockNumber).to.be.equal(
-            (await tx.wait()).blockNumber
+            requireResult(await tx.wait()).blockNumber,
           )
           expect(storedGroup.membersHash).to.be.equal(hashUint32Array(members))
         })
@@ -216,7 +217,7 @@ describe("Groups", () => {
 
           expect(storedGroup.groupPubKey).to.be.equal(newGroupPublicKey)
           expect(storedGroup.registrationBlockNumber).to.be.equal(
-            (await tx.wait()).blockNumber
+            requireResult(await tx.wait()).blockNumber,
           )
           expect(storedGroup.membersHash).to.be.equal(
             hashUint32Array(newGroupMembers),

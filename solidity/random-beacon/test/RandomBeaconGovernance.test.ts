@@ -31,9 +31,6 @@ const fixture = async () => {
   return { governance, randomBeaconGovernance, randomBeacon }
 }
 
-const minedBlockTimestamp = async (tx: ContractTransaction): Promise<number> =>
-  (await ethers.provider.getBlock((await tx.wait()).blockNumber)).timestamp
-
 describe("RandomBeaconGovernance", () => {
   let governance: Signer
   let thirdParty: SignerWithAddress

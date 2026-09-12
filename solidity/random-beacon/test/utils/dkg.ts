@@ -27,6 +27,8 @@ export async function genesis(
 ): Promise<[ContractTransactionResponse, bigint]> {
   const tx = await randomBeacon.genesis()
 
+  const receipt = requireResult(await tx.wait())
+
   const expectedSeed = BigInt(
     ethers.keccak256(
       ethers.solidityPacked(
