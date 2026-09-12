@@ -2,8 +2,6 @@ name: Solidity ECDSA
 
 on:
   pull_request:
-    branches:
-      - main
   # We intend to use `workflow dispatch` in two different situations/paths
   # 1. If a workflow will be manually dispatched from branch named
   #    `dapp-development`, workflow will deploy the contracts on the selected
@@ -35,14 +33,24 @@ jobs:
   contracts-detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      path-filter: ${{ steps.set-output.outputs.path-filter }}
+      path-filter: ${{ steps.filter.outputs.path-filter }}
     steps:
-      - name: Set path-filter output
-        id: set-output
-        run: echo "path-filter=true" >> $GITHUB_OUTPUT
+      - uses: actions/checkout@v3
+        if: github.event_name == 'pull_request'
+      - uses: dorny/paths-filter@v2
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            path-filter:
+              - './solidity/ecdsa/**'
+              - './.github/workflows/contracts-ecdsa.yml'
 
   contracts-lint:
     needs: contracts-detect-changes
+    if: |
+      github.event_name != 'pull_request'
+        || needs.contracts-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -69,6 +77,9 @@ jobs:
 
   contracts-slither:
     needs: contracts-detect-changes
+    if: |
+      github.event_name != 'pull_request'
+        || needs.contracts-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -111,6 +122,9 @@ jobs:
 
   contracts-build-and-test:
     needs: contracts-detect-changes
+    if: |
+      github.event_name != 'pull_request'
+        || needs.contracts-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -138,6 +152,9 @@ jobs:
 
   contracts-deployment-dry-run:
     needs: contracts-detect-changes
+    if: |
+      github.event_name != 'pull_request'
+        || needs.contracts-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
