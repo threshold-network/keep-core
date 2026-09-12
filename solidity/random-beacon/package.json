@@ -30,6 +30,7 @@
     "lint:fix:sol": "solhint 'contracts/**/*.sol' --fix && prettier --write '**/*.sol'",
     "lint:config": "prettier --check '**/*.@(json|yaml)'",
     "lint:config:fix": "prettier --write '**/*.@(json|yaml)'",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepack": "tsc -p tsconfig.export.json && hardhat export-artifacts --including-no-public-functions export/artifacts",
     "prepublishOnly": "hardhat prepare-artifacts --network $npm_config_network"
   },
@@ -48,8 +49,8 @@
     "@openzeppelin/hardhat-upgrades": "^1.20.0",
     "@tenderly/hardhat-tenderly": "1.0.12",
     "@thesis-co/eslint-config": "https://codeload.github.com/thesis/eslint-config/tar.gz/e63608fab2a1ad5c8fe89873bf0d4d4f9ef4a081",
-    "@typechain/ethers-v5": "^9.0.0",
-    "@typechain/hardhat": "^4.0.0",
+    "@typechain/ethers-v5": "^11.1.2",
+    "@typechain/hardhat": "^7.0.0",
     "@types/chai": "^4.2.22",
     "@types/mocha": "^9.0.0",
     "@types/node": "^16.10.5",
@@ -69,7 +70,7 @@
     "solhint-config-keep": "https://codeload.github.com/keep-network/solhint-config-keep/tar.gz/5e1751e58c0f1c507305ffc8c7f6c58047657ada",
     "solidity-docgen": "^0.6.0-beta.35",
     "ts-node": "^10.2.1",
-    "typechain": "^7.0.0",
+    "typechain": "^8.3.2",
     "typescript": "^5.9.3"
   },
   "engines": {

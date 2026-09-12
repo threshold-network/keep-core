@@ -27,6 +27,7 @@
     "lint:fix:sol": "solhint 'contracts/**/*.sol' --fix && prettier --write '**/*.sol'",
     "lint:config": "prettier --check '**/*.@(json|yaml)'",
     "lint:config:fix": "prettier --write '**/*.@(json|yaml)'",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "clean": "hardhat clean && rm -rf cache/ export/ external/npm typechain/ export.json",
     "build": "hardhat compile",
     "test": "USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_ECDSA=true hardhat test",

@@ -16,7 +16,7 @@ import type {
   WalletRegistry,
   WalletRegistryStub,
 } from "../typechain"
-import type { BigNumber, ContractTransaction } from "ethers"
+import type { ContractTransaction } from "ethers"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
@@ -211,9 +211,12 @@ describe("WalletRegistry - Random Beacon", async () => {
         })
 
         it("should succeed", async () => {
-          const entry: BigNumber = ethers.BigNumber.from(
-            ethers.utils.randomBytes(32)
-          )
+          // `submitRelayEntry` takes `bytes`, and the stub only keccak-hashes
+          // it, so the random bytes go in directly. Wrapping them in a
+          // BigNumber first was not just redundant: ethers renders one via
+          // `toHexString()`, which drops leading zero bytes, so roughly one run
+          // in 256 submitted a short entry.
+          const entry = ethers.utils.randomBytes(32)
 
           const tx = await randomBeaconMock.submitRelayEntry(entry)
 

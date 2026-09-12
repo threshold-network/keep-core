@@ -8,13 +8,13 @@ import { constants, params, randomBeaconDeployment } from "./fixtures"
 import { createGroup } from "./utils/groups"
 import { registerOperators } from "./utils/operators"
 
-import type { RandomBeaconGovernance } from "../typechain/RandomBeaconGovernance"
 import type { DeployedContracts } from "./fixtures"
 import type {
   RandomBeaconStub,
   T,
   CallbackContractStub,
   RandomBeacon,
+  RandomBeaconGovernance,
 } from "../typechain"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 

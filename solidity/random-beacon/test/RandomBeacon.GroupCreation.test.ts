@@ -22,7 +22,7 @@ import { fakeTokenStaking } from "./mocks/staking"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { BigNumber, BytesLike, ContractTransaction } from "ethers"
 import type { Operator } from "./utils/operators"
-import type { BeaconDkg as DKG } from "../typechain/RandomBeaconStub"
+import type { BeaconDkg as DKG } from "../typechain/contracts/test/RandomBeaconStub"
 import type { Mock } from "./helpers/mock"
 import type { RandomBeacon, SortitionPool, T, TokenStaking } from "../typechain"
 

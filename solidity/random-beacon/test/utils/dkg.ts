@@ -12,7 +12,7 @@ import type { ContractTransaction } from "ethers"
 import type {
   BeaconDkg as DKG,
   DkgResultSubmittedEvent,
-} from "../../typechain/BeaconDkg"
+} from "../../typechain/contracts/libraries/BeaconDkg"
 
 const { provider } = waffle
 
