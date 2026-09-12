@@ -489,10 +489,9 @@ contract WalletRegistry is
     /// @dev Can be called only by the contract guvnor, which should be the
     ///      wallet registry governance contract.
     /// @param recipient Recipient of withdrawn rewards.
-    function withdrawIneligibleRewards(address recipient)
-        external
-        onlyGovernance
-    {
+    function withdrawIneligibleRewards(
+        address recipient
+    ) external onlyGovernance {
         sortitionPool.withdrawIneligible(recipient);
     }
 
@@ -649,10 +648,9 @@ contract WalletRegistry is
     ///      wallet registry governance contract. The caller is responsible for
     ///      validating parameters.
     /// @param _randomBeacon Random Beacon address.
-    function upgradeRandomBeacon(IRandomBeacon _randomBeacon)
-        external
-        onlyGovernance
-    {
+    function upgradeRandomBeacon(
+        IRandomBeacon _randomBeacon
+    ) external onlyGovernance {
         randomBeacon = _randomBeacon;
         emit RandomBeaconUpgraded(address(_randomBeacon));
     }
@@ -663,10 +661,9 @@ contract WalletRegistry is
     ///      validating parameters. The wallet owner has to implement `IWalletOwner`
     ///      interface.
     /// @param _walletOwner New wallet owner address.
-    function updateWalletOwner(IWalletOwner _walletOwner)
-        external
-        onlyGovernance
-    {
+    function updateWalletOwner(
+        IWalletOwner _walletOwner
+    ) external onlyGovernance {
         walletOwner = _walletOwner;
         emit WalletOwnerUpdated(address(_walletOwner));
     }
@@ -754,7 +751,8 @@ contract WalletRegistry is
         uint256 maliciousDkgResultNotificationRewardMultiplier,
         uint256 sortitionPoolRewardsBanDuration
     ) external onlyGovernance {
-        _maliciousDkgResultNotificationRewardMultiplier = maliciousDkgResultNotificationRewardMultiplier;
+        _maliciousDkgResultNotificationRewardMultiplier =
+            maliciousDkgResultNotificationRewardMultiplier;
         _sortitionPoolRewardsBanDuration = sortitionPoolRewardsBanDuration;
         emit RewardParametersUpdated(
             maliciousDkgResultNotificationRewardMultiplier,
@@ -768,10 +766,9 @@ contract WalletRegistry is
     ///      validating parameters.
     /// @param maliciousDkgResultSlashingAmount New malicious DKG result
     ///        slashing amount.
-    function updateSlashingParameters(uint96 maliciousDkgResultSlashingAmount)
-        external
-        onlyGovernance
-    {
+    function updateSlashingParameters(
+        uint96 maliciousDkgResultSlashingAmount
+    ) external onlyGovernance {
         _maliciousDkgResultSlashingAmount = maliciousDkgResultSlashingAmount;
         emit SlashingParametersUpdated(maliciousDkgResultSlashingAmount);
     }
@@ -1184,11 +1181,9 @@ contract WalletRegistry is
     /// @param result DKG result.
     /// @return True if the result is valid. If the result is invalid it returns
     ///         false and an error message.
-    function isDkgResultValid(DKG.Result calldata result)
-        external
-        view
-        returns (bool, string memory)
-    {
+    function isDkgResultValid(
+        DKG.Result calldata result
+    ) external view returns (bool, string memory) {
         return dkg.isResultValid(result);
     }
 
@@ -1252,11 +1247,9 @@ contract WalletRegistry is
         return dkg.hasDkgTimedOut();
     }
 
-    function getWallet(bytes32 walletID)
-        external
-        view
-        returns (Wallets.Wallet memory)
-    {
+    function getWallet(
+        bytes32 walletID
+    ) external view returns (Wallets.Wallet memory) {
         return wallets.registry[walletID];
     }
 
@@ -1265,11 +1258,9 @@ contract WalletRegistry is
     ///         concatenation of X and Y coordinates.
     /// @param walletID ID of the wallet.
     /// @return Uncompressed public key of the wallet.
-    function getWalletPublicKey(bytes32 walletID)
-        external
-        view
-        returns (bytes memory)
-    {
+    function getWalletPublicKey(
+        bytes32 walletID
+    ) external view returns (bytes memory) {
         return wallets.getWalletPublicKey(walletID);
     }
 
@@ -1292,11 +1283,9 @@ contract WalletRegistry is
     ///         is what is used for operator's weight in the sortition pool.
     ///         If the authorized stake minus the pending authorization decrease
     ///         is below the minimum authorization, eligible stake is 0.
-    function eligibleStake(address stakingProvider)
-        external
-        view
-        returns (uint96)
-    {
+    function eligibleStake(
+        address stakingProvider
+    ) external view returns (uint96) {
         return
             authorization.eligibleStake(
                 _currentAuthorizationSource(),
@@ -1307,11 +1296,9 @@ contract WalletRegistry is
     /// @notice Returns the amount of rewards available for withdrawal for the
     ///         given staking provider. Reverts if staking provider has not
     ///         registered the operator address.
-    function availableRewards(address stakingProvider)
-        external
-        view
-        returns (uint96)
-    {
+    function availableRewards(
+        address stakingProvider
+    ) external view returns (uint96) {
         address operator = stakingProviderToOperator(stakingProvider);
         if (operator == address(0)) revert UnknownOperator();
         return sortitionPool.getAvailableRewards(operator);
@@ -1320,11 +1307,9 @@ contract WalletRegistry is
     /// @notice Returns the amount of stake that is pending authorization
     ///         decrease for the given staking provider. If no authorization
     ///         decrease has been requested, returns zero.
-    function pendingAuthorizationDecrease(address stakingProvider)
-        external
-        view
-        returns (uint96)
-    {
+    function pendingAuthorizationDecrease(
+        address stakingProvider
+    ) external view returns (uint96) {
         return authorization.pendingAuthorizationDecrease(stakingProvider);
     }
 
@@ -1333,30 +1318,24 @@ contract WalletRegistry is
     ///         If the sortition pool state was not updated yet by the operator
     ///         after requesting the authorization decrease, returns
     ///         `type(uint64).max`.
-    function remainingAuthorizationDecreaseDelay(address stakingProvider)
-        external
-        view
-        returns (uint64)
-    {
+    function remainingAuthorizationDecreaseDelay(
+        address stakingProvider
+    ) external view returns (uint64) {
         return
             authorization.remainingAuthorizationDecreaseDelay(stakingProvider);
     }
 
     /// @notice Returns operator registered for the given staking provider.
-    function stakingProviderToOperator(address stakingProvider)
-        public
-        view
-        returns (address)
-    {
+    function stakingProviderToOperator(
+        address stakingProvider
+    ) public view returns (address) {
         return authorization.stakingProviderToOperator[stakingProvider];
     }
 
     /// @notice Returns staking provider of the given operator.
-    function operatorToStakingProvider(address operator)
-        public
-        view
-        returns (address)
-    {
+    function operatorToStakingProvider(
+        address operator
+    ) public view returns (address) {
         return authorization.operatorToStakingProvider[operator];
     }
 

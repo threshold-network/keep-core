@@ -19,9 +19,9 @@ contract RandomBeaconStub is IRandomBeacon {
 
     event CallbackFailed(uint256 entry, uint256 entrySubmittedBlock);
 
-    function requestRelayEntry(IRandomBeaconConsumer _callbackContract)
-        external
-    {
+    function requestRelayEntry(
+        IRandomBeaconConsumer _callbackContract
+    ) external {
         callback.setCallbackContract(_callbackContract);
     }
 

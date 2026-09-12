@@ -77,7 +77,7 @@ describe("Groups", () => {
           const selectedIndex = await runTerminationTest(8, 0, [7, 0, 4, 2], 3)
           expect(6).to.be.equal(selectedIndex)
         })
-      }
+      },
     )
 
     context("when not selecting terminated groups", async () => {
@@ -218,23 +218,23 @@ describe("Groups", () => {
           const selectedIndex = await runTerminationTest(10, 3, [3, 4, 6, 9], 5)
           expect(8).to.be.equal(selectedIndex)
         })
-      }
+      },
     )
 
     context("when there are no active groups", async () => {
       it("T", async () => {
         await expect(runTerminationTest(1, 0, [0], 0)).to.be.revertedWith(
-          "No active groups"
+          "No active groups",
         )
       })
       it("TT", async () => {
         await expect(runTerminationTest(2, 0, [0, 1], 0)).to.be.revertedWith(
-          "No active groups"
+          "No active groups",
         )
       })
       it("ET", async () => {
         await expect(runTerminationTest(2, 1, [1], 0)).to.be.revertedWith(
-          "No active groups"
+          "No active groups",
         )
       })
     })
@@ -243,7 +243,7 @@ describe("Groups", () => {
       for (let i = start; i <= numberOfGroups; i++) {
         await groups.addGroup(
           ethers.utils.hexlify(i),
-          hashDKGMembers(members, noMisbehaved)
+          hashDKGMembers(members, noMisbehaved),
         )
       }
     }
@@ -252,7 +252,7 @@ describe("Groups", () => {
       groupsCount: number,
       expiredCount: number,
       terminatedGroups: number[],
-      beaconValue: BigNumberish
+      beaconValue: BigNumberish,
     ) {
       await addGroups(1, expiredCount)
 

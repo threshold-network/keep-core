@@ -21,14 +21,14 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const BeaconAuthorization = await deployments.deploy(
     "BeaconAuthorization",
-    deployOptions
+    deployOptions,
   )
 
   const BeaconDkg = await deployments.deploy("BeaconDkg", deployOptions)
 
   const BeaconInactivity = await deployments.deploy(
     "BeaconInactivity",
-    deployOptions
+    deployOptions,
   )
 
   const RandomBeacon = await deployments.deploy("RandomBeacon", {
@@ -55,7 +55,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   await helpers.ownable.transferOwnership(
     "BeaconSortitionPool",
     RandomBeacon.address,
-    deployer
+    deployer,
   )
 
   if (hre.network.tags.etherscan) {
@@ -63,7 +63,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       await hre.ethers.provider.waitForTransaction(
         RandomBeacon.transactionHash,
         2,
-        300000
+        300000,
       )
     }
     await helpers.etherscan.verify(BLS)

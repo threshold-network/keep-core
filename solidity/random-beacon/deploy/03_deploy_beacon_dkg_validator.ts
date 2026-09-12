@@ -19,7 +19,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       await hre.ethers.provider.waitForTransaction(
         BeaconDkgValidator.transactionHash,
         2,
-        300000
+        300000,
       )
     }
     await helpers.etherscan.verify(BeaconDkgValidator)

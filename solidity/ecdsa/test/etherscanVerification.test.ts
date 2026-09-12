@@ -76,7 +76,7 @@ describe("etherscanVerification - verifyOnEtherscanOrContinue", () => {
     await expect(
       verifyOnEtherscanOrContinue(hre, async () => {
         throw boom
-      })
+      }),
     ).to.be.rejectedWith("bytecode mismatch")
     expect(logs).to.have.length(0)
   })

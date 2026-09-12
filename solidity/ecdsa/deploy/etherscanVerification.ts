@@ -17,7 +17,7 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
  */
 export default async function verifyOnEtherscanOrContinue(
   hre: HardhatRuntimeEnvironment,
-  verify: () => Promise<unknown>
+  verify: () => Promise<unknown>,
 ): Promise<void> {
   try {
     await verify()
@@ -26,7 +26,7 @@ export default async function verifyOnEtherscanOrContinue(
       throw err
     }
     hre.deployments.log(
-      `Etherscan verification skipped (deploy continues): ${err}`
+      `Etherscan verification skipped (deploy continues): ${err}`,
     )
   }
 }

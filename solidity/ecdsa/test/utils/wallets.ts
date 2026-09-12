@@ -19,7 +19,7 @@ export async function createNewWallet(
   walletRegistry: WalletRegistry,
   walletOwner: Signer,
   randomBeacon: Mock<IRandomBeacon>,
-  publicKey: BytesLike = ecdsaData.group1.publicKey
+  publicKey: BytesLike = ecdsaData.group1.publicKey,
 ): Promise<{
   members: Operator[]
   dkgResult: DkgResult
@@ -47,10 +47,8 @@ export async function createNewWallet(
     walletRegistry,
     publicKey,
     dkgSeed,
-    (
-      await requestNewWalletTx.wait()
-    ).blockNumber,
-    noMisbehaved
+    (await requestNewWalletTx.wait()).blockNumber,
+    noMisbehaved,
   )
 
   await mineBlocks(params.dkgResultChallengePeriodLength)

@@ -37,7 +37,7 @@ const fixture = async () => {
     contracts.randomBeacon as RandomBeacon,
     contracts.t as T,
     constants.groupSize,
-    1
+    1,
   )
 
   const randomBeacon = contracts.randomBeacon as RandomBeaconStub & RandomBeacon
@@ -106,39 +106,37 @@ describe("System -- e2e", () => {
 
     it("should create 3 new groups", async () => {
       expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-        dkgState.IDLE
+        dkgState.IDLE,
       )
 
       const [genesisTx, genesisSeed] = await genesis(randomBeacon)
 
       expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-        dkgState.KEY_GENERATION
+        dkgState.KEY_GENERATION,
       )
 
       // pass key generation state and transition to awaiting result state
       await mineBlocksTo(
-        (await genesisTx.wait()).blockNumber + constants.offchainDkgTime + 1
+        (await genesisTx.wait()).blockNumber + constants.offchainDkgTime + 1,
       )
 
       expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-        dkgState.AWAITING_RESULT
+        dkgState.AWAITING_RESULT,
       )
 
       let dkgResult = await signAndSubmitCorrectDkgResult(
         randomBeacon,
         groupPubKeys[groupPubKeyCounter],
         genesisSeed,
-        (
-          await genesisTx.wait()
-        ).blockNumber,
-        noMisbehaved
+        (await genesisTx.wait()).blockNumber,
+        noMisbehaved,
       )
       groupMembers.push(dkgResult.members)
 
       await mineBlocks(params.dkgResultChallengePeriodLength)
 
       expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-        dkgState.CHALLENGE
+        dkgState.CHALLENGE,
       )
 
       await randomBeacon
@@ -156,36 +154,34 @@ describe("System -- e2e", () => {
         if (i % groupCreationFrequency === 0) {
           groupPubKeyCounter += 1
           expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-            dkgState.KEY_GENERATION
+            dkgState.KEY_GENERATION,
           )
 
           await mineBlocksTo(
             (await txSubmitRelayEntry.wait()).blockNumber +
               constants.offchainDkgTime +
-              1
+              1,
           )
 
           expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-            dkgState.AWAITING_RESULT
+            dkgState.AWAITING_RESULT,
           )
 
           dkgResult = await signAndSubmitCorrectDkgResult(
             randomBeacon,
             groupPubKeys[groupPubKeyCounter],
             ethers.BigNumber.from(
-              ethers.utils.keccak256(blsData.groupSignatures[i - 1])
+              ethers.utils.keccak256(blsData.groupSignatures[i - 1]),
             ),
-            (
-              await txSubmitRelayEntry.wait()
-            ).blockNumber,
-            noMisbehaved
+            (await txSubmitRelayEntry.wait()).blockNumber,
+            noMisbehaved,
           )
           groupMembers.push(dkgResult.members)
 
           await mineBlocks(params.dkgResultChallengePeriodLength)
 
           expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-            dkgState.CHALLENGE
+            dkgState.CHALLENGE,
           )
 
           await randomBeacon
@@ -193,7 +189,7 @@ describe("System -- e2e", () => {
             .approveDkgResult(dkgResult.dkgResult)
 
           expect(await randomBeacon.getGroupCreationState()).to.be.equal(
-            dkgState.IDLE
+            dkgState.IDLE,
           )
         }
       }

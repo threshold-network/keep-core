@@ -15,7 +15,7 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
  */
 export default async function verifyOnTenderlyOrContinue(
   hre: HardhatRuntimeEnvironment,
-  verify: () => Promise<unknown>
+  verify: () => Promise<unknown>,
 ): Promise<void> {
   try {
     await verify()
@@ -24,7 +24,7 @@ export default async function verifyOnTenderlyOrContinue(
       throw err
     }
     hre.deployments.log(
-      `Tenderly verification skipped (deploy continues): ${err}`
+      `Tenderly verification skipped (deploy continues): ${err}`,
     )
   }
 }
