@@ -935,22 +935,7 @@ func (c *Connection) GetUtxosForPublicKeyHash(
 		},
 	)
 
-	utxos := make([]*bitcoin.UnspentTransactionOutput, len(items))
-	for i, item := range items {
-		value, err := utxoValue(item.value)
-		if err != nil {
-			return nil, err
-		}
-		utxos[i] = &bitcoin.UnspentTransactionOutput{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: item.txHash,
-				OutputIndex:     item.outputIndex,
-			},
-			Value: value,
-		}
-	}
-
-	return utxos, nil
+	return convertUtxoItems(items)
 }
 
 // GetMempoolUtxosForPublicKeyHash gets unspent outputs of unconfirmed transactions
