@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-extra-semi */
-
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 import { BigNumber } from "ethers"

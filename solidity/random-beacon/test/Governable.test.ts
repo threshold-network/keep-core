@@ -15,7 +15,6 @@ describe("Governable", () => {
   let thirdParty: SignerWithAddress
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ deployer, governance } = await helpers.signers.getNamedSigners())
     ;[thirdParty] = await helpers.signers.getUnnamedSigners()
 

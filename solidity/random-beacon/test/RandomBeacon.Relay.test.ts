@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-expressions, no-await-in-loop, @typescript-eslint/no-extra-semi */
+/* eslint-disable @typescript-eslint/no-unused-expressions */
 
 import { ethers, waffle, helpers } from "hardhat"
 import { expect } from "chai"

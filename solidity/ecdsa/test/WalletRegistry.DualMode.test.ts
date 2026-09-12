@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-expressions */
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 

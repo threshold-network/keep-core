@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-extra-semi */
 import { waffle, helpers } from "hardhat"
 import { expect } from "chai"
 
@@ -95,7 +94,6 @@ describe("RandomBeacon - Rewards", () => {
 
         operator = operators[0].signer.address
         stakingProvider = await randomBeacon.operatorToStakingProvider(operator)
-        // eslint-disable-next-line @typescript-eslint/no-extra-semi
         ;({ beneficiary } = await staking.rolesOf(stakingProvider))
 
         // Allocate sortition pool rewards
@@ -147,7 +145,6 @@ describe("RandomBeacon - Rewards", () => {
 
         operator = operators[0].signer.address
         stakingProvider = await randomBeacon.operatorToStakingProvider(operator)
-        // eslint-disable-next-line @typescript-eslint/no-extra-semi
         ;({ beneficiary } = await staking.rolesOf(stakingProvider))
 
         // Allocate sortition pool rewards

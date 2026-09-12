@@ -1,4 +1,6 @@
-/* eslint-disable import/no-extraneous-dependencies, no-restricted-syntax, no-await-in-loop, no-continue, no-plusplus, global-require, @typescript-eslint/no-var-requires */
+/* eslint-disable import/no-extraneous-dependencies, no-restricted-syntax, no-await-in-loop, no-continue, no-plusplus */
+import fs from "fs"
+
 import { ethers } from "hardhat"
 import { Command } from "commander"
 
@@ -251,7 +253,6 @@ program
     }
 
     // Save results
-    const fs = require("fs")
     const resultsFile = `consolidation-results-${Date.now()}.json`
     fs.writeFileSync(
       resultsFile,

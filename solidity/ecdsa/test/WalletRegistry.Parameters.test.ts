@@ -26,7 +26,6 @@ describe("WalletRegistry - Parameters", async () => {
   let thirdParty: SignerWithAddress
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({
       walletRegistry,
       walletRegistryGovernance,

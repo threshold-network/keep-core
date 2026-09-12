@@ -37,7 +37,6 @@ export async function signOperatorInactivityClaim(
     signingMembersIndices.push(signerIndex)
 
     const ethersSigner = signers[i].signer
-    // eslint-disable-next-line no-await-in-loop
     const signature = await ethersSigner.signMessage(
       ethers.utils.arrayify(messageHash)
     )
