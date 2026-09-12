@@ -1,0 +1,20 @@
+{
+  "name": "@keep-test/rocketh-producer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "deploy/",
+    "artifacts/",
+    "rocketh.js"
+  ],
+  "exports": {
+    "./deploy": "./deploy/99_probe.js",
+    "./rocketh": "./rocketh.js"
+  },
+  "peerDependencies": {
+    "rocketh": "0.21.0",
+    "@rocketh/deploy": "0.19.21",
+    "@rocketh/read-execute": "0.20.2"
+  }
+}

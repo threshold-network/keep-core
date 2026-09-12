@@ -1,0 +1,9 @@
+{
+  "name": "keep-core-rocketh-v1-baseline",
+  "version": "0.0.0",
+  "private": true,
+  "devDependencies": {
+    "hardhat": "2.26.3",
+    "hardhat-deploy": "1.0.4"
+  }
+}
