@@ -2,6 +2,22 @@
   "files": ["./hardhat.config.ts"],
   "include": ["./deploy", "./tasks", "./test", "./typechain", "./types"],
   "compilerOptions": {
+    // TypeScript 6 turns `strict` on by default. Pinned off so the bump stays
+    // behaviour-preserving; this package has not been through strict yet.
+    "strict": false,
+    // TypeScript 6 stopped including every `node_modules/@types` package
+    // automatically, which silently drops the mocha and chai globals. These
+    // are the four that contribute globals here.
+    "types": ["mocha", "chai", "chai-as-promised", "node"],
+    // Required by TypeScript 6 once a project spans several top-level
+    // directories. `--noEmit` does not need it, but ts-node's emit path does,
+    // so hardhat will not start without it.
+    "rootDir": ".",
+    // `target: es5` is deprecated in 6 and removed in 7. tsconfig.export.json
+    // builds the published `export/` bundle at that target, and `prepare` runs
+    // it on install, so silencing it here keeps both working. Raising the
+    // export target is required before TypeScript 7 and is its own change.
+    "ignoreDeprecations": "6.0",
     "esModuleInterop": true,
     "skipLibCheck": true
   }
