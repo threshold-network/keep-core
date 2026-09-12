@@ -1,5 +1,5 @@
-import verifyOnEtherscanOrContinue from "./etherscanVerification"
-import verifyOnTenderlyOrContinue from "./tenderlyVerification"
+import verifyOnEtherscanOrContinue from "../deploy-utils/etherscanVerification"
+import verifyOnTenderlyOrContinue from "../deploy-utils/tenderlyVerification"
 
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
@@ -8,7 +8,6 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const { getNamedAccounts, deployments, helpers } = hre
   const { deployer, chaosnetOwner } = await getNamedAccounts()
   const { execute } = deployments
-  const { to1e18 } = helpers.number
 
   // Skip if EcdsaSortitionPool already deployed (for existing mainnet/testnet deployments)
   const existingSortitionPool = await deployments.getOrNull(
@@ -21,7 +20,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     return true
   }
 
-  const POOL_WEIGHT_DIVISOR = to1e18(1)
+  const POOL_WEIGHT_DIVISOR = "1000000000000000000"
 
   const T = await deployments.get("T")
 

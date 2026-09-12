@@ -1,5 +1,5 @@
-import verifyOnEtherscanOrContinue from "./etherscanVerification"
-import verifyOnTenderlyOrContinue from "./tenderlyVerification"
+import verifyOnEtherscanOrContinue from "../deploy-utils/etherscanVerification"
+import verifyOnTenderlyOrContinue from "../deploy-utils/tenderlyVerification"
 
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"

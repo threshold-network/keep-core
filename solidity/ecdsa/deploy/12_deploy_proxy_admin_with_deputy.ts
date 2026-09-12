@@ -18,7 +18,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const WalletRegistry = await deployments.get("WalletRegistry")
 
-  const proxyAdmin = await upgrades.admin.getInstance()
+  const proxyAdmin = await ethers.getContractAt(
+    ["function changeProxyAdmin(address,address)"],
+    await upgrades.erc1967.getAdminAddress(WalletRegistry.address)
+  )
 
   await (
     await proxyAdmin

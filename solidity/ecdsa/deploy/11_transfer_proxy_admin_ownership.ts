@@ -2,7 +2,7 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
 
 const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
-  const { helpers, upgrades, deployments } = hre
+  const { helpers, upgrades, deployments, ethers } = hre
   const { esdm, deployer } = await helpers.signers.getNamedSigners()
   const { log } = deployments
 
@@ -11,7 +11,14 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   // use ESDM as the owner of ProxyAdmin contract.
   const newProxyAdminOwner = esdm.address
 
-  const proxyAdmin = await upgrades.admin.getInstance()
+  const WalletRegistry = await deployments.get("WalletRegistry")
+  const proxyAdmin = await ethers.getContractAt(
+    [
+      "function owner() view returns (address)",
+      "function transferOwnership(address)",
+    ],
+    await upgrades.erc1967.getAdminAddress(WalletRegistry.address)
+  )
 
   const currentOwner = await proxyAdmin.owner()
 

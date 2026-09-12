@@ -8,6 +8,13 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const RandomBeaconChaosnet = await deployments.get("RandomBeaconChaosnet")
 
+  const currentBeacon = await deployments.read("WalletRegistry", "randomBeacon")
+  if (
+    currentBeacon.toLowerCase() === RandomBeaconChaosnet.address.toLowerCase()
+  ) {
+    return
+  }
+
   // Upgrade the random beacon smart contract in `WalletRegistry` to
   // `RandomBeaconChaosnet`. This is a temporary solution to enable usage of
   // `WalletRegistry` before the random beacon functionalities in the client
