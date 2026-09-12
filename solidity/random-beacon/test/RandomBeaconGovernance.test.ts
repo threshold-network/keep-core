@@ -29,6 +29,9 @@ const fixture = async () => {
   return { governance, randomBeaconGovernance, randomBeacon }
 }
 
+const minedBlockTimestamp = async (tx: ContractTransaction): Promise<number> =>
+  (await ethers.provider.getBlock((await tx.wait()).blockNumber)).timestamp
+
 describe("RandomBeaconGovernance", () => {
   let governance: Signer
   let thirdParty: SignerWithAddress
@@ -108,9 +111,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit GovernanceDelayUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(randomBeaconGovernance, "GovernanceDelayUpdateStarted")
           .withArgs(1337, blockTimestamp)
@@ -262,9 +263,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit RandomBeaconGovernanceTransferStarted", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -440,9 +439,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntrySoftTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(randomBeaconGovernance, "RelayEntrySoftTimeoutUpdateStarted")
           .withArgs(1, blockTimestamp)
@@ -574,9 +571,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntryHardTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(randomBeaconGovernance, "RelayEntryHardTimeoutUpdateStarted")
           .withArgs(123, blockTimestamp)
@@ -758,9 +753,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the CallbackGasLimitUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(randomBeaconGovernance, "CallbackGasLimitUpdateStarted")
           .withArgs(123, blockTimestamp)
@@ -920,9 +913,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the GroupCreationFrequencyUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1066,9 +1057,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the GroupLifetimeUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(randomBeaconGovernance, "GroupLifetimeUpdateStarted")
           .withArgs(newGroupLifetime, blockTimestamp)
@@ -1230,9 +1219,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgResultChallengePeriodLengthUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1372,9 +1359,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgResultChallengeExtraGasUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1541,9 +1526,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgResultSubmissionTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1716,9 +1699,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgSubmitterPrecedencePeriodLengthUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1858,9 +1839,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntrySubmissionFailureSlashingAmountUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2000,9 +1979,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the UnauthorizedSigningSlashingAmountUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2142,9 +2119,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the MaliciousDkgResultSlashingAmountUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2284,9 +2259,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the SortitionPoolRewardsBanDurationUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2436,9 +2409,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the UnauthorizedSigningNotificationRewardMultiplierUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2590,9 +2561,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntryTimeoutNotificationRewardMultiplierUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2731,9 +2700,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the MinimumAuthorizationUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(randomBeaconGovernance, "MinimumAuthorizationUpdateStarted")
           .withArgs(123, blockTimestamp)
@@ -2865,9 +2832,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the AuthorizationDecreaseDelayUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3005,9 +2970,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the AuthorizationDecreaseChangePeriodUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3201,9 +3164,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgMaliciousResultNotificationRewardMultiplierUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3344,9 +3305,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit DkgResultSubmissionGasUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3482,9 +3441,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgResultApprovalGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3624,9 +3581,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the NotifyOperatorInactivityGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3766,9 +3721,7 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntrySubmissionGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
-        ).timestamp
+        const blockTimestamp = await minedBlockTimestamp(tx)
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
