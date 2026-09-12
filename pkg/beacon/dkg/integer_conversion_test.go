@@ -26,9 +26,10 @@ func TestThresholdSignerMemberIndexBounds(t *testing.T) {
 			}
 			decoded := new(ThresholdSigner)
 			err = decoded.Unmarshal(data)
-			if index > 255 {
+			rejected := index > 255 || (!inMap && index == 0)
+			if rejected {
 				if err == nil {
-					t.Fatalf("accepted index %d (map: %v)", index, inMap)
+					t.Fatalf("accepted invalid index %d (map: %v)", index, inMap)
 				}
 			} else if err != nil {
 				t.Fatalf("rejected valid index %d (map: %v): %v", index, inMap, err)

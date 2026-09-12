@@ -55,7 +55,7 @@ func (ts *ThresholdSigner) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	memberIndex, err := group.MemberIndexFromUint32(pbThresholdSigner.MemberIndex)
+	memberIndex, err := group.MemberIndexFromUint32NonZero(pbThresholdSigner.MemberIndex)
 	if err != nil {
 		return err
 	}

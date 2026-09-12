@@ -53,7 +53,8 @@ func TestSignerMarshalling_NonTECDSAKey(t *testing.T) {
 
 func TestSignerUnmarshalling_InvalidPublicKey(t *testing.T) {
 	marshaled, err := proto.Marshal(&pb.Signer{
-		Wallet: &pb.Wallet{PublicKey: []byte{0x04}},
+		Wallet:                  &pb.Wallet{PublicKey: []byte{0x04}},
+		SigningGroupMemberIndex: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

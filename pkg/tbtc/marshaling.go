@@ -61,7 +61,7 @@ func (s *signer) Unmarshal(bytes []byte) error {
 		return fmt.Errorf("cannot unmarshal signer: [%w]", err)
 	}
 
-	memberIndex, err := group.MemberIndexFromUint32(pbSigner.SigningGroupMemberIndex)
+	memberIndex, err := group.MemberIndexFromUint32NonZero(pbSigner.SigningGroupMemberIndex)
 	if err != nil {
 		return err
 	}

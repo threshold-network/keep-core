@@ -27,9 +27,9 @@ func TestSignerUnmarshalMemberIndexBounds(t *testing.T) {
 		}
 		decoded := new(signer)
 		err = decoded.Unmarshal(data)
-		if index > 255 {
+		if index == 0 || index > 255 {
 			if err == nil {
-				t.Fatalf("accepted out-of-range index %d", index)
+				t.Fatalf("accepted invalid index %d", index)
 			}
 		} else if err != nil || uint32(decoded.signingGroupMemberIndex) != index {
 			t.Fatalf("index %d: got %d, %v", index, decoded.signingGroupMemberIndex, err)
