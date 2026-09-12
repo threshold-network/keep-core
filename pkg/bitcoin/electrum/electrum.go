@@ -428,6 +428,9 @@ func (c *Connection) GetLatestBlockHeight() (uint, error) {
 				if c.pendingTipSanityCheck {
 					c.pendingTipSanityCheck = false
 					if c.lastTipHeight > 0 {
+						// #nosec G115 -- newTip and lastTipHeight are only
+						// ever set from a checked-positive int32 tip height
+						// (see below), so both are well within int64 range.
 						diff := int64(newTip) - int64(c.lastTipHeight)
 						if diff < 0 {
 							diff = -diff
