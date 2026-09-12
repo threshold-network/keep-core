@@ -560,29 +560,29 @@ type admissionFacts struct {
 	beaconOwner common.Address
 }
 
-// beaconRecognized is the beacon branch, unchanged by this work: a registered
+// legacyBeaconRecognized reports the historical beacon predicate: a registered
 // operator whose staking provider has, or ever had, a stake delegation.
-func (f admissionFacts) beaconRecognized() bool {
+func (f admissionFacts) legacyBeaconRecognized() bool {
 	return f.beaconStakingProvider != zeroAddress && f.beaconOwner != zeroAddress
 }
 
-// baselineTbtcRecognized is the tBTC branch as it stands on the merge base:
-// the same stake-delegation predicate the beacon uses, read through the wallet
+// legacyOwnershipTbtcRecognized is the historical tBTC predicate: the same
+// stake-delegation predicate the beacon used, read through the wallet
 // registry's own operator mapping.
-func (f admissionFacts) baselineTbtcRecognized() bool {
+func (f admissionFacts) legacyOwnershipTbtcRecognized() bool {
 	return f.tbtcStakingProvider != zeroAddress && f.tbtcOwner != zeroAddress
 }
 
-// originalHeadTbtcRecognized is the tBTC branch as first proposed: eligible
-// stake, or a pending authorization decrease standing in for it.
-func (f admissionFacts) originalHeadTbtcRecognized() bool {
+// pendingDecreaseTbtcRecognized is the historical tBTC predicate that treated
+// eligible stake or a pending authorization decrease as recognition.
+func (f admissionFacts) pendingDecreaseTbtcRecognized() bool {
 	return f.tbtcStakingProvider != zeroAddress &&
 		(f.eligibleStake.Sign() > 0 || f.pendingDecrease.Sign() > 0)
 }
 
-// proposedTbtcRecognized is the tBTC branch this change settles on: eligible
-// stake alone.
-func (f admissionFacts) proposedTbtcRecognized() bool {
+// currentTbtcRecognized is the active admission predicate: eligible stake
+// alone.
+func (f admissionFacts) currentTbtcRecognized() bool {
 	return f.tbtcStakingProvider != zeroAddress && f.eligibleStake.Sign() > 0
 }
 
@@ -649,7 +649,8 @@ func readAdmissionFacts(
 	return facts
 }
 
-// admissionSplit counts a population by which branch admits it.
+// admissionSplit counts a historical OR population by which branch recognizes
+// it.
 type admissionSplit struct {
 	beaconOnly int
 	both       int
@@ -664,7 +665,7 @@ func splitPopulation(
 	split := admissionSplit{admitted: make([]common.Address, 0)}
 
 	for _, entry := range facts {
-		beacon := entry.beaconRecognized()
+		beacon := entry.legacyBeaconRecognized()
 		tbtc := tbtcRecognized(entry)
 
 		switch {
@@ -686,6 +687,20 @@ func splitPopulation(
 
 func (s admissionSplit) combined() int {
 	return s.beaconOnly + s.both + s.tbtcOnly
+}
+
+func recognizedPopulation(
+	facts []admissionFacts,
+	recognized func(admissionFacts) bool,
+) []common.Address {
+	population := make([]common.Address, 0)
+	for _, entry := range facts {
+		if recognized(entry) {
+			population = append(population, entry.operator)
+		}
+	}
+
+	return population
 }
 
 func assertSplit(
@@ -755,10 +770,10 @@ func assertAddressSet(
 	}
 }
 
-// TestMainnetChainState_AdmissionCensus evaluates the three admission policies
-// this change moves between - the merge base, the originally proposed head and
-// the policy settled on - over every operator address either registry has ever
-// recorded a registration for, using the chain state at the anchor.
+// TestMainnetChainState_AdmissionCensus evaluates historical tBTC predicates
+// behind the legacy beacon OR and the active tBTC-only policy over every
+// operator address either registry has ever recorded, using the chain state at
+// the anchor.
 //
 // These are predicate results over registered addresses, not counts of peers
 // that were connected at the anchor. An address that registered once and has
@@ -793,67 +808,77 @@ func TestMainnetChainState_AdmissionCensus(t *testing.T) {
 
 	facts := readAdmissionFacts(t, callers, population)
 
-	baseline := splitPopulation(facts, admissionFacts.baselineTbtcRecognized)
-	originalHead := splitPopulation(
+	legacyOwnership := splitPopulation(
 		facts,
-		admissionFacts.originalHeadTbtcRecognized,
+		admissionFacts.legacyOwnershipTbtcRecognized,
 	)
-	proposed := splitPopulation(facts, admissionFacts.proposedTbtcRecognized)
+	pendingDecrease := splitPopulation(
+		facts,
+		admissionFacts.pendingDecreaseTbtcRecognized,
+	)
+	eligibleStakeWithBeacon := splitPopulation(
+		facts,
+		admissionFacts.currentTbtcRecognized,
+	)
+	current := recognizedPopulation(facts, admissionFacts.currentTbtcRecognized)
 
 	assertSplit(
 		t,
-		"original head",
+		"pending-decrease eligibility with legacy beacon",
 		admissionSplit{beaconOnly: 243, both: 38, tbtcOnly: 1},
-		originalHead,
+		pendingDecrease,
 	)
 	assertSplit(
 		t,
-		"proposed",
+		"eligible stake with legacy beacon",
 		admissionSplit{beaconOnly: 262, both: 19, tbtcOnly: 1},
-		proposed,
+		eligibleStakeWithBeacon,
+	)
+	testutils.AssertIntsEqual(t, "current tbtc-only admission", 20, len(current))
+	testutils.AssertIntsEqual(
+		t,
+		"operators retired with legacy beacon admission",
+		262,
+		len(difference(eligibleStakeWithBeacon.admitted, current)),
 	)
 
 	// Dropping the pending-decrease credential moves nineteen providers from
-	// being recognized by both branches to being carried by the beacon alone,
-	// which leaves the two policies admitting the same addresses as each
-	// other. Neither admits the same set as the merge base: both admit one
-	// address it does not, and both stop admitting one address it does. The
-	// combined totals match only because those two happen to cancel out.
+	// being recognized by both historical branches to being carried by the
+	// beacon alone. The two historical OR policies admit the same addresses;
+	// compared with the ownership predicate, each gains one and loses one.
 	gained := []string{"0xc1e20a88c2130472b25b3c382773ba85944230d2"}
 	lost := []string{"0xc19f2434236254fcbd2d329bbe048184bba21975"}
 
 	assertAddressSet(
 		t,
-		"addresses the original head admits over the merge base",
+		"addresses pending-decrease eligibility adds over legacy ownership",
 		gained,
-		difference(originalHead.admitted, baseline.admitted),
+		difference(pendingDecrease.admitted, legacyOwnership.admitted),
 	)
 	assertAddressSet(
 		t,
-		"addresses the original head stops admitting",
+		"addresses pending-decrease eligibility removes from legacy ownership",
 		lost,
-		difference(baseline.admitted, originalHead.admitted),
+		difference(legacyOwnership.admitted, pendingDecrease.admitted),
 	)
 	assertAddressSet(
 		t,
-		"addresses the proposed policy admits over the merge base",
+		"addresses eligible stake adds over legacy ownership",
 		gained,
-		difference(proposed.admitted, baseline.admitted),
+		difference(eligibleStakeWithBeacon.admitted, legacyOwnership.admitted),
 	)
 	assertAddressSet(
 		t,
-		"addresses the proposed policy stops admitting",
+		"addresses eligible stake removes from legacy ownership",
 		lost,
-		difference(baseline.admitted, proposed.admitted),
+		difference(legacyOwnership.admitted, eligibleStakeWithBeacon.admitted),
 	)
 }
 
-// TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission reads the
-// operators the ECDSA allowlist deliberately left out. The tBTC predicate
-// rejects every one of them, and every one of them stays admitted through the
-// beacon branch. That is why the beacon must keep its own predicate; who the
-// change admits and stops admitting overall is settled by the census above.
-func TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission(t *testing.T) {
+// TestMainnetChainState_DeprecatedOperatorsHaveNoEligibleStake reads the
+// operators the ECDSA allowlist deliberately left out. The active admission
+// predicate rejects each provider because its eligible stake is zero.
+func TestMainnetChainState_DeprecatedOperatorsHaveNoEligibleStake(t *testing.T) {
 	callers := newAdmissionCallers(t)
 	weights := readAllowlistWeights(t)
 
@@ -864,7 +889,6 @@ func TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission(t *testing.T) 
 	for _, deprecated := range weights.DeprecatedOperatorsNotAdded {
 		t.Run(deprecated.StakingProvider, func(t *testing.T) {
 			stakingProvider := common.HexToAddress(deprecated.StakingProvider)
-			operatorAddress := common.HexToAddress(deprecated.Operator)
 
 			eligibleStake := callOrFail(t, func() (*big.Int, error) {
 				return callers.walletRegistry.EligibleStake(
@@ -881,30 +905,14 @@ func TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission(t *testing.T) 
 				)
 			}
 
-			beaconStakingProvider := callOrFail(t, func() (common.Address, error) {
-				return callers.randomBeacon.OperatorToStakingProvider(
-					callers.callOpts,
-					operatorAddress,
-				)
-			})
-
-			if beaconStakingProvider == zeroAddress {
-				t.Error("expected the operator to be known to the beacon")
-			}
-
-			if callers.rolesOwner(t, beaconStakingProvider) == zeroAddress {
-				t.Error("expected the beacon branch to keep admitting")
-			}
 		})
 	}
 }
 
-// TestBeaconChain_EligibleStakeIsZeroForEveryRegisteredProvider is the reason
-// the beacon keeps the legacy delegation predicate. Token staking authorizes
-// no stake for the beacon, so beacon eligible stake is zero for every staking
-// provider that ever registered a beacon operator - the whole registered
-// population at the anchor, not a subset of it. Were the beacon given the
-// tBTC predicate, this branch would recognize nobody.
+// TestBeaconChain_EligibleStakeIsZeroForEveryRegisteredProvider records that
+// token staking authorizes no stake for the beacon. Beacon eligible stake is
+// zero for the whole registered provider population at the anchor and is not
+// an admission credential.
 func TestBeaconChain_EligibleStakeIsZeroForEveryRegisteredProvider(t *testing.T) {
 	callers := newAdmissionCallers(t)
 
@@ -988,12 +996,10 @@ func TestMainnetChainState_EligibleStakeAtMinimumAuthorization(t *testing.T) {
 	}
 }
 
-// TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze is the
-// case the change exists for. Legacy token staking can no longer record a
-// delegation for anyone, so a provider authorized after it froze reads a zero
-// owner forever while holding full eligible stake: the delegation predicate
-// rejects it permanently and the eligible stake predicate admits it. It has no
-// beacon backstop either, which is the cost the change carries.
+// TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze records a
+// provider authorized after legacy token staking froze. It holds full eligible
+// stake and has a zero legacy owner at the anchor, so a roles-based predicate
+// rejects it while the eligible-stake predicate admits it.
 func TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze(t *testing.T) {
 	callers := newAdmissionCallers(t)
 
@@ -1054,6 +1060,6 @@ func TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze(t *testing.
 	}
 
 	if callers.rolesOwner(t, beaconStakingProvider) != zeroAddress {
-		t.Error("expected the provider to have no beacon backstop")
+		t.Error("expected the beacon-side provider to have no legacy owner")
 	}
 }

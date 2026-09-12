@@ -331,36 +331,11 @@ func (tc *TbtcChain) Staking() (chain.Address, error) {
 // provider it is registered under currently holds eligible stake for the wallet
 // registry.
 //
-// Admission for the client as a whole is a disjunction over every registered
-// application, evaluated by firewall.AnyApplicationPolicy. Written out in full,
-// with Ob and Ot the beacon and tBTC operator-to-staking-provider lookups:
-//
-//	Admit(p) <=> FALSE
-//	             OR ( Ob(p) != 0 AND rolesOf(Ob(p)).owner != 0 )
-//	             OR ( Ot(p) != 0 AND eligibleStake(Ot(p)) > 0 )
-//
-// The leading FALSE is the static allow list, which production builds empty.
-// This method contributes the third disjunct only; BeaconChain.IsRecognized
-// contributes the second and deliberately keeps the rolesOf predicate.
-//
-// Two things the disjunction does are not visible in that formula. It is
-// evaluated left to right, and an application that fails ends it outright
-// instead of deferring to the next disjunct, so an identity only this branch
-// would admit is refused - with an error rather than a non-recognition -
-// whenever the beacon branch's own reads are failing. Beacon-side RPC health is
-// therefore a hard dependency of tBTC admission and not an independent branch.
-// And a genuine non-recognition is remembered for
-// firewall.NegativeIsRecognizedCachePeriod, so a provider authorized after
-// being turned away stays refused, with nothing re-read, until that entry
-// expires.
-//
 // Mapping an operator to a staking provider is not by itself a boundary, since
-// registering an operator is permissionless on both registries. The boundary is
-// the eligible stake: the wallet registry reports zero for a provider whose
-// authorization has fallen below the minimum authorization, and a requested
-// decrease is subtracted the moment it is requested rather than when it is
-// approved. Raising it again takes the authorizer of the authorization source
-// the registry reads.
+// registering an operator is permissionless. The boundary is the eligible
+// stake: the wallet registry reports zero for a provider whose authorization
+// has fallen below the minimum authorization, and a requested decrease is
+// subtracted the moment it is requested rather than when it is approved.
 //
 // Eligible stake therefore answers what the provider is currently authorized
 // for, not what it currently owes. A provider that is dropping its
