@@ -533,12 +533,10 @@ func (srl *signingRetryLoop) excludedMembersIndexes(
 	// Make sure we always use just the smallest required count of
 	// signing members for performance reasons
 	if len(includedMembersIndexes) > srl.groupParameters.HonestThreshold {
-		// #nosec G404 (insecure random number source (rand))
-		// Shuffling does not require secure randomness.
-		rng := rand.New(rand.NewSource(
-			// #nosec G115 -- Retry seed arithmetic intentionally wraps modulo 2^64 for compatibility.
-			srl.attemptSeed + int64(srl.attemptCounter),
-		))
+		// #nosec G115 -- Retry seed arithmetic intentionally wraps modulo 2^64 for compatibility.
+		seed := srl.attemptSeed + int64(srl.attemptCounter)
+		// #nosec G404 -- Shuffling does not require secure randomness.
+		rng := rand.New(rand.NewSource(seed))
 		// Sort in ascending order just in case.
 		sort.Slice(includedMembersIndexes, func(i, j int) bool {
 			return includedMembersIndexes[i] < includedMembersIndexes[j]
