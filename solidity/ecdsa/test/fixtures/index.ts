@@ -372,7 +372,7 @@ async function fundReimbursementPool(
 ) {
   await deployer.sendTransaction({
     to: await reimbursementPool.getAddress(),
-    value: ethers.parseEther("100.0"), // Send 100.0 ETH
+    value: ethers.parseEther("100.0"),
   })
 }
 

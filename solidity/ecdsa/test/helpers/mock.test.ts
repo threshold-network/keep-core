@@ -2,10 +2,14 @@ import { ethers } from "hardhat"
 import { expect } from "chai"
 
 import requireResult from "./chain"
-import { createMock, expectCalledWith } from "./mock"
+import { createMock, expectCalledOnceWith, expectCalledWith } from "./mock"
 
 import type { Mock } from "./mock"
-import type { IMockTarget, MockTargetConsumer } from "../../typechain"
+import type {
+  IMockTarget,
+  MockTargetConsumer,
+  WalletRegistry,
+} from "../../typechain"
 
 describe("MockContract", () => {
   let target: Mock<IMockTarget>
@@ -156,6 +160,32 @@ describe("MockContract", () => {
 
       expect(await target.doThing.callCount()).to.equal(1)
       expect(await target.noReturn.callCount()).to.equal(1)
+    })
+
+    it("matches a struct argument against plain-number expectations", async () => {
+      // `normalizeForComparison` walks into arrays and structs, a path
+      // `IMockTarget`'s flat arguments never reach. ethers decodes every
+      // integer nested in a DKG result as a bigint, so the plain JS numbers
+      // spelled out below match only because the walk happens.
+      const registry = await createMock<WalletRegistry>("WalletRegistry")
+      const registryCaller: WalletRegistry = await ethers.getContractAt(
+        "WalletRegistry",
+        registry.address,
+      )
+
+      await registryCaller.submitDkgResult({
+        submitterMemberIndex: 1,
+        groupPubKey: "0xaabb",
+        misbehavedMembersIndices: [3, 5],
+        signatures: "0xccdd",
+        signingMembersIndices: [7, 9],
+        members: [100, 200],
+        membersHash: ethers.ZeroHash,
+      })
+
+      await expectCalledOnceWith(registry.submitDkgResult, [
+        [1, "0xaabb", [3, 5], "0xccdd", [7, 9], [100, 200], ethers.ZeroHash],
+      ])
     })
   })
 

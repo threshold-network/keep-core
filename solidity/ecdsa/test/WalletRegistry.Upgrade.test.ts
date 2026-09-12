@@ -93,7 +93,7 @@ describe("WalletRegistry - Upgrade", async () => {
               constructorArgs: [AddressZero, AddressZero],
               call: {
                 fn: "initializeV2",
-                args: [await allowlist.getAddress()], // Valid allowlist address
+                args: [await allowlist.getAddress()],
               },
               unsafeAllow: ["external-library-linking"],
             },

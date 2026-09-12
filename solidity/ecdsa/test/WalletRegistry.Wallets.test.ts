@@ -492,7 +492,9 @@ describe("WalletRegistry - Wallets", async () => {
           "when the passed wallet members identifiers are invalid",
           () => {
             it("should revert", async () => {
-              const corruptedWalletMembersIDs = walletMembersIDs.reverse()
+              const corruptedWalletMembersIDs = walletMembersIDs
+                .slice()
+                .reverse()
 
               await expect(
                 walletRegistry.isWalletMember(
