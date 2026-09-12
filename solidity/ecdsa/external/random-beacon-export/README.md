@@ -85,6 +85,11 @@ When syncing from upstream:
 3. Verify by running deploys against both a network that exposes
    `approveApplication` (legacy Keep TokenStaking) and one that does not
    (Threshold TokenStaking).
+4. **Also re-check `../types/random-beacon.d.ts`** against
+   `solidity/random-beacon/tasks/{initialize.ts,utils/*.ts}` — that file is a
+   second, hand-maintained mirror of this same upstream package's task-export
+   surface (declarations the published package doesn't yet ship), and nothing
+   automatically detects drift between it and the upstream sources it tracks.
 
 ## Why we don't just `ts-node` the upstream
 
