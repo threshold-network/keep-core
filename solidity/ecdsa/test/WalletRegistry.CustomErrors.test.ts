@@ -16,11 +16,11 @@ import type {
   WalletRegistryGovernance,
 } from "../typechain"
 import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 
 const { to1e18 } = helpers.number
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
-const ZERO_ADDRESS = ethers.constants.AddressZero
+const ZERO_ADDRESS = ethers.ZeroAddress
 
 describe("WalletRegistry - Custom Errors", () => {
   let walletRegistry: WalletRegistry & WalletRegistryStub
@@ -33,7 +33,7 @@ describe("WalletRegistry - Custom Errors", () => {
   let walletOwner: Mock<IWalletOwner>
   let membersIDs: number[]
   const walletPublicKey = ecdsaData.group1.publicKey
-  const walletID = ethers.utils.keccak256(walletPublicKey)
+  const walletID = ethers.keccak256(walletPublicKey)
 
   before("load Allowlist fixture and register a wallet", async () => {
     const fixture = await walletRegistryFixture({ useAllowlist: true })
@@ -45,12 +45,12 @@ describe("WalletRegistry - Custom Errors", () => {
       walletOwner,
       thirdParty: unauthorized,
     } = fixture)
-    operator = fixture.operators[0].signer
-    stakingProvider = fixture.operators[0].stakingProvider
+    operator = fixture.operators[0]!.signer
+    stakingProvider = fixture.operators[0]!.stakingProvider!
     membersIDs = fixture.operators.slice(0, 3).map(({ id }) => id)
     await walletRegistry.forceAddWallet(
       walletPublicKey,
-      hashUint32Array(membersIDs)
+      hashUint32Array(membersIDs),
     )
   })
 
@@ -73,10 +73,10 @@ describe("WalletRegistry - Custom Errors", () => {
         await expect(
           walletRegistry
             .connect(unauthorized)
-            [method](stakingProvider.address, to1e18(50000), to1e18(40000))
+            [method](stakingProvider.address, to1e18(50000), to1e18(40000)),
         ).to.be.revertedWithCustomError(
           walletRegistry,
-          "CallerNotStakingContract"
+          "CallerNotStakingContract",
         )
       })
     })
@@ -85,13 +85,13 @@ describe("WalletRegistry - Custom Errors", () => {
   describe("CallerNotWalletOwner", () => {
     it("should reject requesting a wallet", async () => {
       await expect(
-        walletRegistry.connect(unauthorized).requestNewWallet()
+        walletRegistry.connect(unauthorized).requestNewWallet(),
       ).to.be.revertedWithCustomError(walletRegistry, "CallerNotWalletOwner")
     })
 
     it("should reject closing a wallet", async () => {
       await expect(
-        walletRegistry.connect(unauthorized).closeWallet(walletID)
+        walletRegistry.connect(unauthorized).closeWallet(walletID),
       ).to.be.revertedWithCustomError(walletRegistry, "CallerNotWalletOwner")
     })
 
@@ -99,7 +99,7 @@ describe("WalletRegistry - Custom Errors", () => {
       await expect(
         walletRegistry
           .connect(unauthorized)
-          .seize(to1e18(1000), 100, unauthorized.address, walletID, membersIDs)
+          .seize(to1e18(1000), 100, unauthorized.address, walletID, membersIDs),
       ).to.be.revertedWithCustomError(walletRegistry, "CallerNotWalletOwner")
     })
   })
@@ -109,7 +109,7 @@ describe("WalletRegistry - Custom Errors", () => {
       await expect(
         walletRegistry
           .connect(unauthorized)
-          .updateDkgParameters(100, 100, 50000, 100, 10)
+          .updateDkgParameters(100, 100, 50000, 100, 10),
       ).to.be.revertedWith("Caller is not the governance")
     })
 
@@ -117,7 +117,7 @@ describe("WalletRegistry - Custom Errors", () => {
       await expect(
         walletRegistry
           .connect(unauthorized)
-          .updateAuthorizationParameters(to1e18(40000), 3888000, 3888000)
+          .updateAuthorizationParameters(to1e18(40000), 3888000, 3888000),
       ).to.be.revertedWith("Caller is not the governance")
     })
 
@@ -125,7 +125,7 @@ describe("WalletRegistry - Custom Errors", () => {
       await expect(
         walletRegistry
           .connect(unauthorized)
-          .updateReimbursementPool(await walletRegistry.reimbursementPool())
+          .updateReimbursementPool(await walletRegistry.reimbursementPool()),
       ).to.be.revertedWithCustomError(walletRegistry, "CallerNotGovernance")
     })
   })
@@ -133,48 +133,50 @@ describe("WalletRegistry - Custom Errors", () => {
   it("should reject a callback from anyone other than the random beacon", async () => {
     await expect(
       // eslint-disable-next-line no-underscore-dangle
-      walletRegistry.connect(unauthorized).__beaconCallback(12345, 0)
+      walletRegistry.connect(unauthorized).__beaconCallback(12345, 0),
     ).to.be.revertedWithCustomError(walletRegistry, "CallerNotRandomBeacon")
   })
 
   it("should reject initializing an Allowlist with the zero address", async () => {
     // Initializers are disabled on implementations, so exercise the validation
     // through a fresh proxy instead of accepting an unrelated initializer error.
+    const EcdsaInactivity =
+      await helpers.contracts.getContract("EcdsaInactivity")
     const implementation = await ethers.getContractFactory("WalletRegistry", {
       libraries: {
-        EcdsaInactivity: (
-          await helpers.contracts.getContract("EcdsaInactivity")
-        ).address,
+        EcdsaInactivity: await EcdsaInactivity.getAddress(),
       },
     })
     const deployed = await implementation.deploy(
       await walletRegistry.sortitionPool(),
-      await walletRegistry.staking()
+      await walletRegistry.staking(),
     )
     const proxyFactory = await ethers.getContractFactory(
-      "TransparentUpgradeableProxy"
+      "TransparentUpgradeableProxy",
     )
     const proxy = await proxyFactory.deploy(
-      deployed.address,
+      await deployed.getAddress(),
       deployer.address,
-      "0x"
+      "0x",
     )
-    const registry = implementation.attach(proxy.address).connect(unauthorized)
+    const registry = implementation
+      .attach(await proxy.getAddress())
+      .connect(unauthorized) as WalletRegistry
     await expect(
-      registry.initializeV2(ZERO_ADDRESS)
+      registry.initializeV2(ZERO_ADDRESS),
     ).to.be.revertedWithCustomError(registry, "AllowlistAddressZero")
   })
 
   describe("UnknownOperator", () => {
     it("should reject withdrawing rewards for an unregistered provider", async () => {
       await expect(
-        walletRegistry.withdrawRewards(unauthorized.address)
+        walletRegistry.withdrawRewards(unauthorized.address),
       ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
     })
 
     it("should reject querying rewards for an unregistered provider", async () => {
       await expect(
-        walletRegistry.availableRewards(unauthorized.address)
+        walletRegistry.availableRewards(unauthorized.address),
       ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
     })
   })
@@ -192,7 +194,7 @@ describe("WalletRegistry - Custom Errors", () => {
       await expect(
         walletRegistry
           .connect(unauthorized)
-          .notifyOperatorInactivity(claim, 999, membersIDs)
+          .notifyOperatorInactivity(claim, 999, membersIDs),
       ).to.be.revertedWithCustomError(walletRegistry, "InvalidNonce")
     })
 
@@ -200,7 +202,7 @@ describe("WalletRegistry - Custom Errors", () => {
       await expect(
         walletRegistry
           .connect(unauthorized)
-          .notifyOperatorInactivity(claim, 0, [...membersIDs].reverse())
+          .notifyOperatorInactivity(claim, 0, [...membersIDs].reverse()),
       ).to.be.revertedWithCustomError(walletRegistry, "InvalidGroupMembers")
     })
   })
@@ -215,11 +217,11 @@ describe("WalletRegistry - Custom Errors", () => {
             100,
             unauthorized.address,
             walletID,
-            [...membersIDs].reverse()
-          )
+            [...membersIDs].reverse(),
+          ),
       ).to.be.revertedWithCustomError(
         walletRegistry,
-        "InvalidWalletMembersIdentifiers"
+        "InvalidWalletMembersIdentifiers",
       )
     })
 
@@ -229,11 +231,11 @@ describe("WalletRegistry - Custom Errors", () => {
           walletID,
           [...membersIDs].reverse(),
           operator.address,
-          1
-        )
+          1,
+        ),
       ).to.be.revertedWithCustomError(
         walletRegistry,
-        "InvalidWalletMembersIdentifiers"
+        "InvalidWalletMembersIdentifiers",
       )
     })
 
@@ -243,11 +245,11 @@ describe("WalletRegistry - Custom Errors", () => {
           walletID,
           membersIDs,
           unauthorized.address,
-          1
-        )
+          1,
+        ),
       ).to.be.revertedWithCustomError(
         walletRegistry,
-        "NotSortitionPoolOperator"
+        "NotSortitionPoolOperator",
       )
     })
 
@@ -259,11 +261,11 @@ describe("WalletRegistry - Custom Errors", () => {
             walletID,
             membersIDs,
             operator.address,
-            index
-          )
+            index,
+          ),
         ).to.be.revertedWithCustomError(
           walletRegistry,
-          "WalletMemberIndexOutOfRange"
+          "WalletMemberIndexOutOfRange",
         )
       })
     })
@@ -278,7 +280,7 @@ describe("WalletRegistry - Custom Errors", () => {
     await expect(
       walletRegistryGovernance
         .connect(governance)
-        .finalizeDkgSeedTimeoutUpdate()
+        .finalizeDkgSeedTimeoutUpdate(),
     ).to.be.revertedWithCustomError(walletRegistry, "CurrentStateNotIdle")
   })
 
@@ -292,20 +294,19 @@ describe("WalletRegistry - Custom Errors", () => {
       .finalizeDkgResultChallengeExtraGasUpdate()
     await walletRegistry.connect(walletOwner.wallet).requestNewWallet()
     const { startBlock, dkgSeed } = await submitRelayEntry(walletRegistry)
-    const sortitionPool: SortitionPool = await helpers.contracts.getContract(
-      "EcdsaSortitionPool"
-    )
+    const sortitionPool: SortitionPool =
+      await helpers.contracts.getContract("EcdsaSortitionPool")
     const { dkgResult } = await signAndSubmitUnrecoverableDkgResult(
       walletRegistry,
       ecdsaData.group2.publicKey,
       await selectGroup(sortitionPool, dkgSeed),
       startBlock,
-      noMisbehaved
+      noMisbehaved,
     )
     await expect(
       walletRegistry
         .connect(unauthorized)
-        .challengeDkgResult(dkgResult, { gasLimit: 2000000 })
+        .challengeDkgResult(dkgResult, { gasLimit: 2000000 }),
     ).to.be.revertedWithCustomError(walletRegistry, "NotEnoughExtraGasLeft")
   })
 })

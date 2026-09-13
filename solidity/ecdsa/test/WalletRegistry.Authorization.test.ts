@@ -9,8 +9,8 @@ import {
   walletRegistryFixture,
 } from "./fixtures"
 
-import type { ContractTransaction, Signer } from "ethers"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { ContractTransactionResponse, Signer } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type {
   Allowlist,
   WalletRegistry,
@@ -20,8 +20,8 @@ import type {
 
 const { to1e18 } = helpers.number
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
-const ZERO_ADDRESS = ethers.constants.AddressZero
-const MAX_UINT64 = ethers.BigNumber.from("18446744073709551615")
+const ZERO_ADDRESS = ethers.ZeroAddress
+const MAX_UINT64 = BigInt("18446744073709551615")
 
 describe("WalletRegistry - Allowlist Authorization", () => {
   let walletRegistry: WalletRegistry
@@ -53,7 +53,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       governance,
       thirdParty,
     } = fixture)
-    allowlist = fixture.allowlist
+    allowlist = fixture.allowlist!
     walletOwnerSigner = fixture.walletOwner.wallet
     // Named accounts are separate from the 100 operators registered by the fixture.
     const signers = await helpers.signers.getNamedSigners()
@@ -65,7 +65,9 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     context("when called with zero-address operator", () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.connect(stakingProvider).registerOperator(ZERO_ADDRESS)
+          walletRegistry
+            .connect(stakingProvider)
+            .registerOperator(ZERO_ADDRESS),
         ).to.be.revertedWith("Operator can not be zero address")
       })
     })
@@ -87,15 +89,15 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           await expect(
             walletRegistry
               .connect(stakingProvider)
-              .registerOperator(operator.address)
+              .registerOperator(operator.address),
           ).to.be.revertedWith("Operator already set for the staking provider")
           await expect(
             walletRegistry
               .connect(stakingProvider)
-              .registerOperator(thirdParty.address)
+              .registerOperator(thirdParty.address),
           ).to.be.revertedWith("Operator already set for the staking provider")
         })
-      }
+      },
     )
     context("when the operator is already in use", () => {
       before(async () => {
@@ -113,12 +115,12 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         await expect(
           walletRegistry
             .connect(stakingProvider)
-            .registerOperator(operator.address)
+            .registerOperator(operator.address),
         ).to.be.revertedWith("Operator address already in use")
       })
     })
     context("when staking provider is registering new operator", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -134,14 +136,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       it("should set staking provider -> operator mapping", async () => {
         expect(
           await walletRegistry.stakingProviderToOperator(
-            stakingProvider.address
-          )
+            stakingProvider.address,
+          ),
         ).to.equal(operator.address)
       })
 
       it("should set operator -> staking provider mapping", async () => {
         expect(
-          await walletRegistry.operatorToStakingProvider(operator.address)
+          await walletRegistry.operatorToStakingProvider(operator.address),
         ).to.equal(stakingProvider.address)
       })
 
@@ -170,7 +172,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           .connect(deployer)
           .requestWeightDecrease(
             stakingProvider.address,
-            providerWeight.sub(deauthorizingBy)
+            providerWeight - deauthorizingBy,
           )
       })
 
@@ -182,14 +184,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         await expect(
           walletRegistry
             .connect(stakingProvider)
-            .registerOperator(operator.address)
+            .registerOperator(operator.address),
         ).to.be.revertedWith(
-          "There is a pending authorization decrease request"
+          "There is a pending authorization decrease request",
         )
       })
     })
     context("when authorization decrease request was approved", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -204,11 +206,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           .connect(deployer)
           .requestWeightDecrease(
             stakingProvider.address,
-            providerWeight.sub(deauthorizingBy)
+            providerWeight - deauthorizingBy,
           )
 
         await walletRegistry.approveAuthorizationDecrease(
-          stakingProvider.address
+          stakingProvider.address,
         )
 
         tx = await walletRegistry
@@ -223,14 +225,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       it("should set staking provider -> operator mapping", async () => {
         expect(
           await walletRegistry.stakingProviderToOperator(
-            stakingProvider.address
-          )
+            stakingProvider.address,
+          ),
         ).to.equal(operator.address)
       })
 
       it("should set operator -> staking provider mapping", async () => {
         expect(
-          await walletRegistry.operatorToStakingProvider(operator.address)
+          await walletRegistry.operatorToStakingProvider(operator.address),
         ).to.equal(stakingProvider.address)
       })
 
@@ -248,10 +250,10 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         await expect(
           walletRegistry
             .connect(thirdParty)
-            .authorizationIncreased(stakingProvider.address, 0, providerWeight)
+            .authorizationIncreased(stakingProvider.address, 0, providerWeight),
         ).to.be.revertedWithCustomError(
           walletRegistry,
-          "CallerNotStakingContract"
+          "CallerNotStakingContract",
         )
       })
     })
@@ -263,14 +265,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             .connect(deployer)
             .addStakingProvider(
               stakingProvider.address,
-              minimumAuthorization.sub(1)
-            )
+              minimumAuthorization - 1n,
+            ),
         ).to.be.revertedWith("Authorization below the minimum")
       })
     })
     context("when the operator is unknown", () => {
       context("when increasing to the minimum possible value", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -290,12 +292,12 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               stakingProvider.address,
               ZERO_ADDRESS,
               0,
-              minimumAuthorization
+              minimumAuthorization,
             )
         })
       })
       context("when increasing to a weight above the minimum", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -328,7 +330,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         await restoreSnapshot()
       })
       context("when increasing to the minimum possible value", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -349,12 +351,12 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               stakingProvider.address,
               operator.address,
               0,
-              minimumAuthorization
+              minimumAuthorization,
             )
         })
       })
       context("when increasing to a weight above the minimum", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -375,7 +377,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               stakingProvider.address,
               operator.address,
               0,
-              providerWeight
+              providerWeight,
             )
         })
       })
@@ -388,10 +390,10 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         await expect(
           walletRegistry
             .connect(thirdParty)
-            .authorizationDecreaseRequested(stakingProvider.address, 100, 99)
+            .authorizationDecreaseRequested(stakingProvider.address, 100, 99),
         ).to.be.revertedWithCustomError(
           walletRegistry,
-          "CallerNotStakingContract"
+          "CallerNotStakingContract",
         )
       })
     })
@@ -408,26 +410,26 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       })
       context("when decreasing to a non-zero value below the minimum", () => {
         it("should revert", async () => {
-          const deauthorizingTo = minimumAuthorization.sub(1)
+          const deauthorizingTo = minimumAuthorization - 1n
 
           await expect(
             allowlist
               .connect(deployer)
-              .requestWeightDecrease(stakingProvider.address, deauthorizingTo)
+              .requestWeightDecrease(stakingProvider.address, deauthorizingTo),
           ).to.be.revertedWith(
-            "Authorization amount should be 0 or above the minimum"
+            "Authorization amount should be 0 or above the minimum",
           )
         })
       })
       context("when decreasing to zero", () => {
-        let tx: ContractTransaction
-        const decreasingTo = 0
-        let decreasingBy
+        let tx: ContractTransactionResponse
+        const decreasingTo = 0n
+        let decreasingBy: bigint
 
         before(async () => {
           await createSnapshot()
 
-          decreasingBy = providerWeight.sub(decreasingTo)
+          decreasingBy = providerWeight - decreasingTo
           tx = await allowlist
             .connect(deployer)
             .requestWeightDecrease(stakingProvider.address, decreasingTo)
@@ -440,8 +442,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         it("should require no time delay before approving", async () => {
           expect(
             await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(0)
         })
 
@@ -454,29 +456,29 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               ZERO_ADDRESS,
               providerWeight,
               decreasingTo,
-              now
+              now,
             )
         })
 
         it("should capture deauthorizing amount", async () => {
           expect(
             await walletRegistry.pendingAuthorizationDecrease(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(decreasingBy)
         })
       })
 
       context("when decreasing to the minimum", () => {
-        let tx: ContractTransaction
-        let decreasingTo
-        let decreasingBy
+        let tx: ContractTransactionResponse
+        let decreasingTo: bigint
+        let decreasingBy: bigint
 
         before(async () => {
           await createSnapshot()
 
           decreasingTo = minimumAuthorization
-          decreasingBy = providerWeight.sub(decreasingTo)
+          decreasingBy = providerWeight - decreasingTo
           tx = await allowlist
             .connect(deployer)
             .requestWeightDecrease(stakingProvider.address, decreasingTo)
@@ -489,8 +491,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         it("should require no time delay before approving", async () => {
           expect(
             await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(0)
         })
 
@@ -503,29 +505,29 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               ZERO_ADDRESS,
               providerWeight,
               decreasingTo,
-              now
+              now,
             )
         })
 
         it("should capture deauthorizing amount", async () => {
           expect(
             await walletRegistry.pendingAuthorizationDecrease(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(decreasingBy)
         })
       })
 
       context("when decreasing to a value above the minimum", () => {
-        let tx: ContractTransaction
-        let decreasingTo
-        let decreasingBy
+        let tx: ContractTransactionResponse
+        let decreasingTo: bigint
+        let decreasingBy: bigint
 
         before(async () => {
           await createSnapshot()
 
-          decreasingTo = minimumAuthorization.add(1)
-          decreasingBy = providerWeight.sub(decreasingTo)
+          decreasingTo = minimumAuthorization + 1n
+          decreasingBy = providerWeight - decreasingTo
           tx = await allowlist
             .connect(deployer)
             .requestWeightDecrease(stakingProvider.address, decreasingTo)
@@ -538,8 +540,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         it("should require no time delay before approving", async () => {
           expect(
             await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(0)
         })
 
@@ -552,15 +554,15 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               ZERO_ADDRESS,
               providerWeight,
               decreasingTo,
-              now
+              now,
             )
         })
 
         it("should capture deauthorizing amount", async () => {
           expect(
             await walletRegistry.pendingAuthorizationDecrease(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(decreasingBy)
         })
       })
@@ -576,7 +578,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             .connect(deployer)
             .requestWeightDecrease(
               stakingProvider.address,
-              providerWeight.sub(deauthorizingFirst)
+              providerWeight - deauthorizingFirst,
             )
         })
 
@@ -591,7 +593,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               authorizationDecreaseChangePeriod,
             } = await walletRegistry.authorizationParameters()
             expect(authorizationDecreaseDelay).to.equal(
-              authorizationDecreaseChangePeriod
+              authorizationDecreaseChangePeriod,
             )
           })
 
@@ -604,7 +606,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 .connect(deployer)
                 .requestWeightDecrease(
                   stakingProvider.address,
-                  providerWeight.sub(deauthorizingSecond)
+                  providerWeight - deauthorizingSecond,
                 )
             })
 
@@ -615,8 +617,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             it("should overwrite the previous request", async () => {
               expect(
                 await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.be.equal(deauthorizingSecond)
             })
           })
@@ -625,14 +627,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             before(async () => {
               await createSnapshot()
               await helpers.time.increaseTime(
-                params.authorizationDecreaseDelay - 60 // -1min
+                params.authorizationDecreaseDelay - 60, // -1min
               )
 
               await allowlist
                 .connect(deployer)
                 .requestWeightDecrease(
                   stakingProvider.address,
-                  providerWeight.sub(deauthorizingSecond)
+                  providerWeight - deauthorizingSecond,
                 )
             })
 
@@ -643,8 +645,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             it("should overwrite the previous request", async () => {
               expect(
                 await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.be.equal(deauthorizingSecond)
             })
           })
@@ -666,7 +668,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               .connect(deployer)
               .requestWeightDecrease(
                 stakingProvider.address,
-                providerWeight.sub(deauthorizingSecond)
+                providerWeight - deauthorizingSecond,
               )
           })
 
@@ -677,8 +679,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           it("should overwrite the previous request", async () => {
             expect(
               await walletRegistry.pendingAuthorizationDecrease(
-                stakingProvider.address
-              )
+                stakingProvider.address,
+              ),
             ).to.be.equal(deauthorizingSecond)
           })
         })
@@ -711,7 +713,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 .connect(deployer)
                 .requestWeightDecrease(
                   stakingProvider.address,
-                  providerWeight.sub(deauthorizingSecond)
+                  providerWeight - deauthorizingSecond,
                 )
             })
 
@@ -722,8 +724,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             it("should overwrite the previous request", async () => {
               expect(
                 await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.be.equal(deauthorizingSecond)
             })
           })
@@ -732,14 +734,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             before(async () => {
               await createSnapshot()
               await helpers.time.increaseTime(
-                params.authorizationDecreaseDelay - newChangePeriod + 60
+                params.authorizationDecreaseDelay - newChangePeriod + 60,
               ) // +1min
 
               await allowlist
                 .connect(deployer)
                 .requestWeightDecrease(
                   stakingProvider.address,
-                  providerWeight.sub(deauthorizingSecond)
+                  providerWeight - deauthorizingSecond,
                 )
             })
 
@@ -750,8 +752,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             it("should overwrite the previous request", async () => {
               expect(
                 await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.be.equal(deauthorizingSecond)
             })
           })
@@ -760,14 +762,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             before(async () => {
               await createSnapshot()
               await helpers.time.increaseTime(
-                params.authorizationDecreaseDelay - newChangePeriod - 60 // -1min
+                params.authorizationDecreaseDelay - newChangePeriod - 60, // -1min
               )
 
               await allowlist
                 .connect(deployer)
                 .requestWeightDecrease(
                   stakingProvider.address,
-                  providerWeight.sub(deauthorizingSecond)
+                  providerWeight - deauthorizingSecond,
                 )
             })
 
@@ -778,8 +780,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             it("should overwrite the previous request", async () => {
               expect(
                 await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.be.equal(deauthorizingSecond)
             })
           })
@@ -803,27 +805,27 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
       context("when decreasing to a non-zero value below the minimum", () => {
         it("should revert", async () => {
-          const deauthorizingTo = minimumAuthorization.sub(1)
+          const deauthorizingTo = minimumAuthorization - 1n
 
           await expect(
             allowlist
               .connect(deployer)
-              .requestWeightDecrease(stakingProvider.address, deauthorizingTo)
+              .requestWeightDecrease(stakingProvider.address, deauthorizingTo),
           ).to.be.revertedWith(
-            "Authorization amount should be 0 or above the minimum"
+            "Authorization amount should be 0 or above the minimum",
           )
         })
       })
 
       context("when decreasing to zero", () => {
-        let tx: ContractTransaction
-        const decreasingTo = 0
-        let decreasingBy
+        let tx: ContractTransactionResponse
+        const decreasingTo = 0n
+        let decreasingBy: bigint
 
         before(async () => {
           await createSnapshot()
 
-          decreasingBy = providerWeight.sub(decreasingTo)
+          decreasingBy = providerWeight - decreasingTo
           tx = await allowlist
             .connect(deployer)
             .requestWeightDecrease(stakingProvider.address, decreasingTo)
@@ -836,8 +838,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         it("should require updating the pool before approving", async () => {
           expect(
             await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(MAX_UINT64)
         })
 
@@ -849,29 +851,29 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               operator.address,
               providerWeight,
               decreasingTo,
-              MAX_UINT64
+              MAX_UINT64,
             )
         })
 
         it("should capture deauthorizing amount", async () => {
           expect(
             await walletRegistry.pendingAuthorizationDecrease(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(decreasingBy)
         })
       })
 
       context("when decreasing to the minimum", () => {
-        let tx: ContractTransaction
-        let decreasingTo
-        let decreasingBy
+        let tx: ContractTransactionResponse
+        let decreasingTo: bigint
+        let decreasingBy: bigint
 
         before(async () => {
           await createSnapshot()
 
           decreasingTo = minimumAuthorization
-          decreasingBy = providerWeight.sub(decreasingTo)
+          decreasingBy = providerWeight - decreasingTo
           tx = await allowlist
             .connect(deployer)
             .requestWeightDecrease(stakingProvider.address, decreasingTo)
@@ -884,8 +886,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         it("should require updating the pool before approving", async () => {
           expect(
             await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(MAX_UINT64)
         })
 
@@ -897,29 +899,29 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               operator.address,
               providerWeight,
               decreasingTo,
-              MAX_UINT64
+              MAX_UINT64,
             )
         })
 
         it("should capture deauthorizing amount", async () => {
           expect(
             await walletRegistry.pendingAuthorizationDecrease(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(decreasingBy)
         })
       })
 
       context("when decreasing to a value above the minimum", () => {
-        let tx: ContractTransaction
-        let decreasingTo
-        let decreasingBy
+        let tx: ContractTransactionResponse
+        let decreasingTo: bigint
+        let decreasingBy: bigint
 
         before(async () => {
           await createSnapshot()
 
-          decreasingTo = minimumAuthorization.add(1)
-          decreasingBy = providerWeight.sub(decreasingTo)
+          decreasingTo = minimumAuthorization + 1n
+          decreasingBy = providerWeight - decreasingTo
           tx = await allowlist
             .connect(deployer)
             .requestWeightDecrease(stakingProvider.address, decreasingTo)
@@ -932,8 +934,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         it("should require updating the pool before approving", async () => {
           expect(
             await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(MAX_UINT64)
         })
 
@@ -945,15 +947,15 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               operator.address,
               providerWeight,
               decreasingTo,
-              MAX_UINT64
+              MAX_UINT64,
             )
         })
 
         it("should capture deauthorizing amount", async () => {
           expect(
             await walletRegistry.pendingAuthorizationDecrease(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(decreasingBy)
         })
       })
@@ -971,7 +973,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             .connect(deployer)
             .requestWeightDecrease(
               stakingProvider.address,
-              providerWeight.sub(deauthorizingFirst)
+              providerWeight - deauthorizingFirst,
             )
         })
 
@@ -986,7 +988,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               authorizationDecreaseChangePeriod,
             } = await walletRegistry.authorizationParameters()
             expect(authorizationDecreaseDelay).to.equal(
-              authorizationDecreaseChangePeriod
+              authorizationDecreaseChangePeriod,
             )
           })
 
@@ -998,7 +1000,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 .connect(deployer)
                 .requestWeightDecrease(
                   stakingProvider.address,
-                  providerWeight.sub(deauthorizingSecond)
+                  providerWeight - deauthorizingSecond,
                 )
             })
 
@@ -1009,16 +1011,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             it("should overwrite the previous request", async () => {
               expect(
                 await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.be.equal(deauthorizingSecond)
             })
 
             it("should require updating the pool before approving", async () => {
               expect(
                 await walletRegistry.remainingAuthorizationDecreaseDelay(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.equal(MAX_UINT64)
             })
           })
@@ -1037,7 +1039,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               before(async () => {
                 await createSnapshot()
                 await helpers.time.increaseTime(
-                  params.authorizationDecreaseDelay
+                  params.authorizationDecreaseDelay,
                 )
               })
 
@@ -1052,7 +1054,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                   .connect(deployer)
                   .requestWeightDecrease(
                     stakingProvider.address,
-                    providerWeight.sub(deauthorizingSecond)
+                    providerWeight - deauthorizingSecond,
                   )
               })
 
@@ -1063,16 +1065,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               it("should overwrite the previous request", async () => {
                 expect(
                   await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.be.equal(deauthorizingSecond)
               })
 
               it("should require updating the pool before approving", async () => {
                 expect(
                   await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.equal(MAX_UINT64)
               })
             })
@@ -1082,14 +1084,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 await createSnapshot()
 
                 await helpers.time.increaseTime(
-                  params.authorizationDecreaseDelay - 60 // -1min
+                  params.authorizationDecreaseDelay - 60, // -1min
                 )
 
                 await allowlist
                   .connect(deployer)
                   .requestWeightDecrease(
                     stakingProvider.address,
-                    providerWeight.sub(deauthorizingSecond)
+                    providerWeight - deauthorizingSecond,
                   )
               })
 
@@ -1100,16 +1102,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               it("should overwrite the previous request", async () => {
                 expect(
                   await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.be.equal(deauthorizingSecond)
               })
 
               it("should require updating the pool before approving", async () => {
                 expect(
                   await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.equal(MAX_UINT64)
               })
             })
@@ -1141,7 +1143,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 .connect(deployer)
                 .requestWeightDecrease(
                   stakingProvider.address,
-                  providerWeight.sub(deauthorizingSecond)
+                  providerWeight - deauthorizingSecond,
                 )
             })
 
@@ -1152,16 +1154,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             it("should overwrite the previous request", async () => {
               expect(
                 await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.be.equal(deauthorizingSecond)
             })
 
             it("should require updating the pool before approving", async () => {
               expect(
                 await walletRegistry.remainingAuthorizationDecreaseDelay(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.equal(MAX_UINT64)
             })
           })
@@ -1184,10 +1186,10 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                     .connect(deployer)
                     .requestWeightDecrease(
                       stakingProvider.address,
-                      providerWeight.sub(deauthorizingSecond)
-                    )
+                      providerWeight - deauthorizingSecond,
+                    ),
                 ).to.be.revertedWith(
-                  "Not enough time passed since the original request"
+                  "Not enough time passed since the original request",
                 )
               })
             })
@@ -1196,14 +1198,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               before(async () => {
                 await createSnapshot()
                 await helpers.time.increaseTime(
-                  params.authorizationDecreaseDelay
+                  params.authorizationDecreaseDelay,
                 )
 
                 await allowlist
                   .connect(deployer)
                   .requestWeightDecrease(
                     stakingProvider.address,
-                    providerWeight.sub(deauthorizingSecond)
+                    providerWeight - deauthorizingSecond,
                   )
               })
 
@@ -1214,16 +1216,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               it("should overwrite the previous request", async () => {
                 expect(
                   await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.be.equal(deauthorizingSecond)
               })
 
               it("should require updating the pool before approving", async () => {
                 expect(
                   await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.equal(MAX_UINT64)
               })
             })
@@ -1257,7 +1259,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 .connect(deployer)
                 .requestWeightDecrease(
                   stakingProvider.address,
-                  providerWeight.sub(deauthorizingSecond)
+                  providerWeight - deauthorizingSecond,
                 )
             })
 
@@ -1268,16 +1270,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             it("should overwrite the previous request", async () => {
               expect(
                 await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.be.equal(deauthorizingSecond)
             })
 
             it("should require updating the pool before approving", async () => {
               expect(
                 await walletRegistry.remainingAuthorizationDecreaseDelay(
-                  stakingProvider.address
-                )
+                  stakingProvider.address,
+                ),
               ).to.equal(MAX_UINT64)
             })
           })
@@ -1297,7 +1299,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               before(async () => {
                 await createSnapshot()
                 await helpers.time.increaseTime(
-                  params.authorizationDecreaseDelay - newChangePeriod - 60 // -1min
+                  params.authorizationDecreaseDelay - newChangePeriod - 60, // -1min
                 )
               })
 
@@ -1311,10 +1313,10 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                     .connect(deployer)
                     .requestWeightDecrease(
                       stakingProvider.address,
-                      providerWeight.sub(deauthorizingSecond)
-                    )
+                      providerWeight - deauthorizingSecond,
+                    ),
                 ).to.be.revertedWith(
-                  "Not enough time passed since the original request"
+                  "Not enough time passed since the original request",
                 )
               })
             })
@@ -1323,14 +1325,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               before(async () => {
                 await createSnapshot()
                 await helpers.time.increaseTime(
-                  params.authorizationDecreaseDelay - newChangePeriod + 60 // +1min
+                  params.authorizationDecreaseDelay - newChangePeriod + 60, // +1min
                 )
 
                 await allowlist
                   .connect(deployer)
                   .requestWeightDecrease(
                     stakingProvider.address,
-                    providerWeight.sub(deauthorizingSecond)
+                    providerWeight - deauthorizingSecond,
                   )
               })
 
@@ -1341,16 +1343,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               it("should overwrite the previous request", async () => {
                 expect(
                   await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.be.equal(deauthorizingSecond)
               })
 
               it("should require updating the pool before approving", async () => {
                 expect(
                   await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.equal(MAX_UINT64)
               })
             })
@@ -1359,14 +1361,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               before(async () => {
                 await createSnapshot()
                 await helpers.time.increaseTime(
-                  params.authorizationDecreaseDelay
+                  params.authorizationDecreaseDelay,
                 )
 
                 await allowlist
                   .connect(deployer)
                   .requestWeightDecrease(
                     stakingProvider.address,
-                    providerWeight.sub(deauthorizingSecond)
+                    providerWeight - deauthorizingSecond,
                   )
               })
 
@@ -1377,16 +1379,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               it("should overwrite the previous request", async () => {
                 expect(
                   await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.be.equal(deauthorizingSecond)
               })
 
               it("should require updating the pool before approving", async () => {
                 expect(
                   await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address
-                  )
+                    stakingProvider.address,
+                  ),
                 ).to.equal(MAX_UINT64)
               })
             })
@@ -1411,7 +1413,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     context("when decrease was not requested", () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.approveAuthorizationDecrease(stakingProvider.address)
+          walletRegistry.approveAuthorizationDecrease(stakingProvider.address),
         ).to.be.revertedWith("Authorization decrease not requested")
       })
     })
@@ -1427,7 +1429,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             .connect(deployer)
             .requestWeightDecrease(
               stakingProvider.address,
-              providerWeight.sub(deauthorizingBy)
+              providerWeight - deauthorizingBy,
             )
         })
 
@@ -1437,7 +1439,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
         it("should let to approve immediately", async () => {
           const tx = await walletRegistry.approveAuthorizationDecrease(
-            stakingProvider.address
+            stakingProvider.address,
           )
           await expect(tx)
             .to.emit(walletRegistry, "AuthorizationDecreaseApproved")
@@ -1459,7 +1461,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           .connect(deployer)
           .requestWeightDecrease(
             stakingProvider.address,
-            providerWeight.sub(deauthorizingBy)
+            providerWeight - deauthorizingBy,
           )
       })
 
@@ -1479,7 +1481,9 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
         it("should revert", async () => {
           await expect(
-            walletRegistry.approveAuthorizationDecrease(stakingProvider.address)
+            walletRegistry.approveAuthorizationDecrease(
+              stakingProvider.address,
+            ),
           ).to.be.revertedWith("Authorization decrease request not activated")
         })
       })
@@ -1490,7 +1494,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
           await walletRegistry.updateOperatorStatus(operator.address)
           await helpers.time.increaseTime(
-            params.authorizationDecreaseDelay - 60 // -1min
+            params.authorizationDecreaseDelay - 60, // -1min
           )
         })
 
@@ -1500,13 +1504,15 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
         it("should revert", async () => {
           await expect(
-            walletRegistry.approveAuthorizationDecrease(stakingProvider.address)
+            walletRegistry.approveAuthorizationDecrease(
+              stakingProvider.address,
+            ),
           ).to.be.revertedWith("Authorization decrease delay not passed")
         })
       })
 
       context("when the pool was updated and the delay passed", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1515,7 +1521,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           await helpers.time.increaseTime(params.authorizationDecreaseDelay)
 
           tx = await walletRegistry.approveAuthorizationDecrease(
-            stakingProvider.address
+            stakingProvider.address,
           )
         })
 
@@ -1527,11 +1533,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           expect(
             await allowlist.authorizedStake(
               stakingProvider.address,
-              walletRegistry.address
-            )
+              await walletRegistry.getAddress(),
+            ),
           ).to.equal(0)
           expect(
-            await walletRegistry.eligibleStake(stakingProvider.address)
+            await walletRegistry.eligibleStake(stakingProvider.address),
           ).to.equal(0)
         })
 
@@ -1544,8 +1550,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         it("should clear pending authorization decrease", async () => {
           expect(
             await walletRegistry.pendingAuthorizationDecrease(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(0)
         })
       })
@@ -1556,7 +1562,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     context("when the operator is unknown", () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.connect(thirdParty).joinSortitionPool()
+          walletRegistry.connect(thirdParty).joinSortitionPool(),
         ).to.be.revertedWith("Unknown operator")
       })
     })
@@ -1576,13 +1582,13 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
       it("should revert", async () => {
         await expect(
-          walletRegistry.connect(operator).joinSortitionPool()
+          walletRegistry.connect(operator).joinSortitionPool(),
         ).to.be.revertedWith("Authorization below the minimum")
       })
     })
 
     context("when the operator has the minimum stake authorized", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1609,7 +1615,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
       it("should use a correct stake weight", async () => {
         expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
-          minimumAuthorization.div(constants.poolWeightDivisor)
+          minimumAuthorization / BigInt(constants.poolWeightDivisor),
         )
       })
 
@@ -1623,7 +1629,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     context(
       "when the operator has more than the minimum stake authorized",
       () => {
-        let authorizedStake
+        let authorizedStake: bigint
 
         before(async () => {
           await createSnapshot()
@@ -1632,7 +1638,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             .connect(stakingProvider)
             .registerOperator(operator.address)
 
-          authorizedStake = minimumAuthorization.mul(2)
+          authorizedStake = minimumAuthorization * 2n
 
           await allowlist
             .connect(deployer)
@@ -1652,14 +1658,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
         it("should use a correct stake weight", async () => {
           expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
-            authorizedStake.div(constants.poolWeightDivisor)
+            authorizedStake / BigInt(constants.poolWeightDivisor),
           )
         })
-      }
+      },
     )
 
     context("when operator is in the process of deauthorizing", () => {
-      let deauthorizingTo
+      let deauthorizingTo: bigint
 
       before(async () => {
         await createSnapshot()
@@ -1674,7 +1680,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           .connect(deployer)
           .addStakingProvider(stakingProvider.address, authorizedStake)
 
-        deauthorizingTo = minimumAuthorization.add(to1e18(1337))
+        deauthorizingTo = minimumAuthorization + to1e18(1337)
 
         await allowlist
           .connect(deployer)
@@ -1694,15 +1700,15 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
       it("should use a correct stake weight", async () => {
         expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
-          deauthorizingTo.div(constants.poolWeightDivisor)
+          deauthorizingTo / BigInt(constants.poolWeightDivisor),
         )
       })
 
       it("should activate authorization decrease delay", async () => {
         expect(
           await walletRegistry.remainingAuthorizationDecreaseDelay(
-            stakingProvider.address
-          )
+            stakingProvider.address,
+          ),
         ).to.equal(params.authorizationDecreaseDelay)
       })
     })
@@ -1712,7 +1718,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     context("when the operator is unknown", () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.updateOperatorStatus(thirdParty.address)
+          walletRegistry.updateOperatorStatus(thirdParty.address),
         ).to.be.revertedWith("Unknown operator")
       })
     })
@@ -1731,7 +1737,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       })
 
       context("when the authorization increased", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1762,7 +1768,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       })
 
       context("when there was an authorization decrease request", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1776,7 +1782,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             .connect(deployer)
             .requestWeightDecrease(
               stakingProvider.address,
-              providerWeight.sub(deauthorizingBy)
+              providerWeight - deauthorizingBy,
             )
 
           tx = await walletRegistry
@@ -1796,8 +1802,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         it("should activate authorization decrease delay", async () => {
           expect(
             await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address
-            )
+              stakingProvider.address,
+            ),
           ).to.equal(params.authorizationDecreaseDelay)
         })
 
@@ -1821,7 +1827,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           .connect(deployer)
           .addStakingProvider(
             stakingProvider.address,
-            minimumAuthorization.mul(2)
+            minimumAuthorization * 2n,
           )
 
         await walletRegistry.connect(operator).joinSortitionPool()
@@ -1834,13 +1840,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       context(
         "when there was an authorization decrease request to non-zero",
         () => {
-          let tx: ContractTransaction
-          let expectedWeight
+          let tx: ContractTransactionResponse
+          let expectedWeight: bigint
 
           before(async () => {
             await createSnapshot()
-            const deauthorizingTo = minimumAuthorization.add(to1e18(1337))
-            expectedWeight = deauthorizingTo.div(constants.poolWeightDivisor)
+            const deauthorizingTo = minimumAuthorization + to1e18(1337)
+            expectedWeight =
+              deauthorizingTo / BigInt(constants.poolWeightDivisor)
 
             await allowlist
               .connect(deployer)
@@ -1857,15 +1864,15 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
           it("should update the pool", async () => {
             expect(
-              await sortitionPool.getPoolWeight(operator.address)
+              await sortitionPool.getPoolWeight(operator.address),
             ).to.equal(expectedWeight)
           })
 
           it("should activate authorization decrease delay", async () => {
             expect(
               await walletRegistry.remainingAuthorizationDecreaseDelay(
-                stakingProvider.address
-              )
+                stakingProvider.address,
+              ),
             ).to.equal(params.authorizationDecreaseDelay)
           })
 
@@ -1874,13 +1881,13 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               .to.emit(walletRegistry, "OperatorStatusUpdated")
               .withArgs(stakingProvider.address, operator.address)
           })
-        }
+        },
       )
 
       context(
         "when there was an authorization decrease request to zero",
         () => {
-          let tx: ContractTransaction
+          let tx: ContractTransactionResponse
 
           before(async () => {
             await createSnapshot()
@@ -1906,8 +1913,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           it("should activate authorization decrease delay", async () => {
             expect(
               await walletRegistry.remainingAuthorizationDecreaseDelay(
-                stakingProvider.address
-              )
+                stakingProvider.address,
+              ),
             ).to.equal(params.authorizationDecreaseDelay)
           })
 
@@ -1916,7 +1923,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               .to.emit(walletRegistry, "OperatorStatusUpdated")
               .withArgs(stakingProvider.address, operator.address)
           })
-        }
+        },
       )
     })
   })
@@ -1925,13 +1932,13 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     context("when staking provider has no stake authorized", () => {
       it("should return zero", async () => {
         expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
+          await walletRegistry.eligibleStake(stakingProvider.address),
         ).to.equal(0)
       })
     })
 
     context("when staking provider has stake authorized", () => {
-      let authorizedAmount
+      let authorizedAmount: bigint
 
       before(async () => {
         await createSnapshot()
@@ -1948,7 +1955,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
       it("should return authorized amount", async () => {
         expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
+          await walletRegistry.eligibleStake(stakingProvider.address),
         ).to.equal(authorizedAmount)
       })
     })
@@ -1956,13 +1963,13 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     context(
       "when staking provider has some part of the stake deauthorizing",
       () => {
-        let authorizedAmount
-        let deauthorizingAmount
+        let authorizedAmount: bigint
+        let deauthorizingAmount: bigint
 
         before(async () => {
           await createSnapshot()
 
-          authorizedAmount = minimumAuthorization.add(to1e18(2000))
+          authorizedAmount = minimumAuthorization + to1e18(2000)
 
           await allowlist
             .connect(deployer)
@@ -1973,7 +1980,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             .connect(deployer)
             .requestWeightDecrease(
               stakingProvider.address,
-              authorizedAmount.sub(deauthorizingAmount)
+              authorizedAmount - deauthorizingAmount,
             )
         })
 
@@ -1983,10 +1990,10 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
         it("should return authorized amount minus deauthorizing amount", async () => {
           expect(
-            await walletRegistry.eligibleStake(stakingProvider.address)
-          ).to.equal(authorizedAmount.sub(deauthorizingAmount))
+            await walletRegistry.eligibleStake(stakingProvider.address),
+          ).to.equal(authorizedAmount - deauthorizingAmount)
         })
-      }
+      },
     )
 
     context("when staking provider has all of the stake deauthorizing", () => {
@@ -2009,7 +2016,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
       it("should return zero", async () => {
         expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
+          await walletRegistry.eligibleStake(stakingProvider.address),
         ).to.equal(0)
       })
     })
@@ -2018,7 +2025,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       before(async () => {
         await createSnapshot()
 
-        const authorizedAmount = minimumAuthorization.add(1200)
+        const authorizedAmount = minimumAuthorization + 1200n
         await allowlist
           .connect(deployer)
           .addStakingProvider(stakingProvider.address, authorizedAmount)
@@ -2028,7 +2035,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           .requestWeightDecrease(stakingProvider.address, 0)
 
         await walletRegistry.approveAuthorizationDecrease(
-          stakingProvider.address
+          stakingProvider.address,
         )
       })
 
@@ -2038,7 +2045,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
 
       it("should return zero", async () => {
         expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
+          await walletRegistry.eligibleStake(stakingProvider.address),
         ).to.equal(0)
       })
     })
@@ -2048,7 +2055,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     before(async () => {
       await createSnapshot()
 
-      const authorizedAmount = minimumAuthorization.add(1200)
+      const authorizedAmount = minimumAuthorization + 1200n
       await allowlist
         .connect(deployer)
         .addStakingProvider(stakingProvider.address, authorizedAmount)
@@ -2070,8 +2077,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     it("should not activate before sortition pool is updated", async () => {
       expect(
         await walletRegistry.remainingAuthorizationDecreaseDelay(
-          stakingProvider.address
-        )
+          stakingProvider.address,
+        ),
       ).to.equal(MAX_UINT64)
     })
 
@@ -2079,8 +2086,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       await walletRegistry.updateOperatorStatus(operator.address)
       expect(
         await walletRegistry.remainingAuthorizationDecreaseDelay(
-          stakingProvider.address
-        )
+          stakingProvider.address,
+        ),
       ).to.equal(params.authorizationDecreaseDelay)
     })
 
@@ -2089,11 +2096,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       await helpers.time.increaseTime(params.authorizationDecreaseDelay / 2)
       expect(
         await walletRegistry.remainingAuthorizationDecreaseDelay(
-          stakingProvider.address
-        )
+          stakingProvider.address,
+        ),
       ).to.be.closeTo(
-        ethers.BigNumber.from(params.authorizationDecreaseDelay / 2),
-        5 // +- 5sec
+        BigInt(params.authorizationDecreaseDelay / 2),
+        5, // +- 5sec
       )
     })
 
@@ -2102,14 +2109,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       await helpers.time.increaseTime(params.authorizationDecreaseDelay)
       expect(
         await walletRegistry.remainingAuthorizationDecreaseDelay(
-          stakingProvider.address
-        )
+          stakingProvider.address,
+        ),
       ).to.equal(0)
       await helpers.time.increaseTime(3600) // +1h
       expect(
         await walletRegistry.remainingAuthorizationDecreaseDelay(
-          stakingProvider.address
-        )
+          stakingProvider.address,
+        ),
       ).to.equal(0)
     })
   })
@@ -2118,7 +2125,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
     context("when the operator is unknown", () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.isOperatorUpToDate(thirdParty.address)
+          walletRegistry.isOperatorUpToDate(thirdParty.address),
         ).to.be.revertedWith("Unknown operator")
       })
     })
@@ -2175,7 +2182,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           .connect(deployer)
           .addStakingProvider(
             stakingProvider.address,
-            minimumAuthorization.mul(2)
+            minimumAuthorization * 2n,
           )
 
         await walletRegistry.connect(operator).joinSortitionPool()
@@ -2201,7 +2208,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             .connect(deployer)
             .requestWeightDecrease(
               stakingProvider.address,
-              minimumAuthorization.mul(2).sub(deauthorizingBy)
+              minimumAuthorization * 2n - deauthorizingBy,
             )
         })
 
@@ -2240,7 +2247,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       await expect(
         allowlist
           .connect(thirdParty)
-          .addStakingProvider(stakingProvider.address, providerWeight)
+          .addStakingProvider(stakingProvider.address, providerWeight),
       ).to.be.revertedWith("Ownable: caller is not the owner")
       await allowlist
         .connect(deployer)
@@ -2248,7 +2255,7 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       await expect(
         allowlist
           .connect(thirdParty)
-          .requestWeightDecrease(stakingProvider.address, minimumAuthorization)
+          .requestWeightDecrease(stakingProvider.address, minimumAuthorization),
       ).to.be.revertedWith("Ownable: caller is not the owner")
     })
 
@@ -2259,14 +2266,14 @@ describe("WalletRegistry - Allowlist Authorization", () => {
       await expect(
         allowlist
           .connect(deployer)
-          .addStakingProvider(stakingProvider.address, providerWeight)
+          .addStakingProvider(stakingProvider.address, providerWeight),
       ).to.be.revertedWithCustomError(allowlist, "StakingProviderAlreadyAdded")
       expect(
-        await walletRegistry.eligibleStake(stakingProvider.address)
+        await walletRegistry.eligibleStake(stakingProvider.address),
       ).to.equal(providerWeight)
     })
 
-    const targetWeights = [params.minimumAuthorization, ethers.constants.Zero]
+    const targetWeights = [params.minimumAuthorization, 0n]
     targetWeights.forEach((targetWeight) => {
       it(`should finalize a decrease to ${targetWeight} after synchronizing the pool and waiting`, async () => {
         await allowlist
@@ -2282,11 +2289,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         expect(
           await allowlist.authorizedStake(
             stakingProvider.address,
-            walletRegistry.address
-          )
+            await walletRegistry.getAddress(),
+          ),
         ).to.equal(providerWeight)
         expect(
-          await walletRegistry.eligibleStake(stakingProvider.address)
+          await walletRegistry.eligibleStake(stakingProvider.address),
         ).to.equal(targetWeight)
         await walletRegistry
           .connect(thirdParty)
@@ -2304,8 +2311,8 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         expect(info.decreasePending).to.be.false
         expect(
           await walletRegistry.pendingAuthorizationDecrease(
-            stakingProvider.address
-          )
+            stakingProvider.address,
+          ),
         ).to.equal(0)
         expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
           .true
@@ -2333,10 +2340,10 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         .addStakingProvider(stakingProvider.address, minimumAuthorization)
       await walletRegistry.connect(operator).joinSortitionPool()
       expect(
-        await walletRegistry.stakingProviderToOperator(stakingProvider.address)
+        await walletRegistry.stakingProviderToOperator(stakingProvider.address),
       ).to.equal(operator.address)
       expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
-        minimumAuthorization.div(constants.poolWeightDivisor)
+        minimumAuthorization / BigInt(constants.poolWeightDivisor),
       )
       expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be
         .true
@@ -2355,23 +2362,23 @@ describe("WalletRegistry - Allowlist Authorization", () => {
         .connect(deployer)
         .requestWeightDecrease(stakingProvider.address, minimumAuthorization)
       await expect(
-        walletRegistry.updateOperatorStatus(operator.address)
+        walletRegistry.updateOperatorStatus(operator.address),
       ).to.be.revertedWith("Sortition pool locked")
       expect(
         await walletRegistry.remainingAuthorizationDecreaseDelay(
-          stakingProvider.address
-        )
+          stakingProvider.address,
+        ),
       ).to.equal(MAX_UINT64)
       await helpers.time.mineBlocks(params.dkgSeedTimeout)
       await walletRegistry.notifySeedTimeout()
       await walletRegistry.updateOperatorStatus(operator.address)
       expect(
         await walletRegistry.remainingAuthorizationDecreaseDelay(
-          stakingProvider.address
-        )
+          stakingProvider.address,
+        ),
       ).to.equal(params.authorizationDecreaseDelay)
       expect(await sortitionPool.getPoolWeight(operator.address)).to.equal(
-        minimumAuthorization.div(constants.poolWeightDivisor)
+        minimumAuthorization / BigInt(constants.poolWeightDivisor),
       )
     })
 
@@ -2398,11 +2405,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               [method](
                 stakingProvider.address,
                 providerWeight,
-                minimumAuthorization
-              )
+                minimumAuthorization,
+              ),
           ).to.be.revertedWithCustomError(
             walletRegistry,
-            "CallerNotStakingContract"
+            "CallerNotStakingContract",
           )
         } finally {
           await ethers.provider.send("hardhat_stopImpersonatingAccount", [
@@ -2427,9 +2434,8 @@ describe("WalletRegistry - Allowlist migration", () => {
     deployer = signers.deployer
     stakingProvider = signers.esdm
     operator = signers.chaosnetOwner
-    const sortitionPool: SortitionPool = await helpers.contracts.getContract(
-      "EcdsaSortitionPool"
-    )
+    const sortitionPool: SortitionPool =
+      await helpers.contracts.getContract("EcdsaSortitionPool")
     await sortitionPool.connect(signers.chaosnetOwner).deactivateChaosnet()
   })
 
@@ -2439,18 +2445,20 @@ describe("WalletRegistry - Allowlist migration", () => {
       .registerOperator(operator.address)
     expect(await walletRegistry.allowlist()).to.equal(ZERO_ADDRESS)
     expect(
-      await walletRegistry.eligibleStake(stakingProvider.address)
+      await walletRegistry.eligibleStake(stakingProvider.address),
     ).to.equal(0)
     const allowlist = await setupAllowlist(walletRegistry, deployer)
     await allowlist
       .connect(deployer)
       .addStakingProvider(stakingProvider.address, params.minimumAuthorization)
-    expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
+    expect(await walletRegistry.allowlist()).to.equal(
+      await allowlist.getAddress(),
+    )
     expect(
-      await walletRegistry.stakingProviderToOperator(stakingProvider.address)
+      await walletRegistry.stakingProviderToOperator(stakingProvider.address),
     ).to.equal(operator.address)
     expect(
-      await walletRegistry.eligibleStake(stakingProvider.address)
+      await walletRegistry.eligibleStake(stakingProvider.address),
     ).to.equal(params.minimumAuthorization)
     await walletRegistry.connect(operator).joinSortitionPool()
     expect(await walletRegistry.isOperatorUpToDate(operator.address)).to.be.true
@@ -2458,15 +2466,17 @@ describe("WalletRegistry - Allowlist migration", () => {
 
   it("should reject a zero Allowlist address", async () => {
     await expect(
-      walletRegistry.initializeV2(ZERO_ADDRESS)
+      walletRegistry.initializeV2(ZERO_ADDRESS),
     ).to.be.revertedWithCustomError(walletRegistry, "AllowlistAddressZero")
   })
 
   it("should keep the Allowlist address after a rejected reinitialization", async () => {
     const allowlist = await setupAllowlist(walletRegistry, deployer)
     await expect(
-      walletRegistry.initializeV2(operator.address)
+      walletRegistry.initializeV2(operator.address),
     ).to.be.revertedWith("Initializable: contract is already initialized")
-    expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
+    expect(await walletRegistry.allowlist()).to.equal(
+      await allowlist.getAddress(),
+    )
   })
 })

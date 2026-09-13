@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 )
 
 // To run the tests execute:

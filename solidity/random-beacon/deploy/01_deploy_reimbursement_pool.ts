@@ -1,3 +1,5 @@
+import waitForConfirmations from "../utils/wait-for-confirmations"
+
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
 
@@ -16,11 +18,14 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   })
 
   if (hre.network.tags.etherscan) {
-    await hre.ethers.provider.waitForTransaction(
-      ReimbursementPool.transactionHash,
-      2,
-      300000
-    )
+    if (ReimbursementPool.transactionHash) {
+      await waitForConfirmations(
+        hre.ethers.provider,
+        ReimbursementPool.transactionHash,
+        2,
+        300000,
+      )
+    }
     await helpers.etherscan.verify(ReimbursementPool)
   }
 

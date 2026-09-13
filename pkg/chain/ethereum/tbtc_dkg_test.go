@@ -125,7 +125,7 @@ func TestConvertSignaturesToChainFormat(t *testing.T) {
 	}
 }
 
-func TestValidateMemberIndex(t *testing.T) {
+func TestMemberIndexFromChain(t *testing.T) {
 	one := big.NewInt(1)
 	maxMemberIndex := big.NewInt(255)
 
@@ -149,7 +149,7 @@ func TestValidateMemberIndex(t *testing.T) {
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
-			err := validateMemberIndex(test.chainMemberIndex)
+			_, err := memberIndexFromChain(test.chainMemberIndex)
 
 			if !reflect.DeepEqual(err, test.expectedError) {
 				t.Errorf(

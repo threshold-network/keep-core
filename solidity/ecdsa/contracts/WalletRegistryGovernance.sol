@@ -280,10 +280,9 @@ contract WalletRegistryGovernance is Ownable {
     /// @notice Begins the governance delay update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newGovernanceDelay New governance delay
-    function beginGovernanceDelayUpdate(uint256 _newGovernanceDelay)
-        external
-        onlyOwner
-    {
+    function beginGovernanceDelayUpdate(
+        uint256 _newGovernanceDelay
+    ) external onlyOwner {
         newGovernanceDelay = _newGovernanceDelay;
         /* solhint-disable not-rely-on-time */
         governanceDelayChangeInitiated = block.timestamp;
@@ -342,10 +341,9 @@ contract WalletRegistryGovernance is Ownable {
     /// @notice Begins the wallet owner update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newWalletOwner New wallet owner address
-    function beginWalletOwnerUpdate(address _newWalletOwner)
-        external
-        onlyOwner
-    {
+    function beginWalletOwnerUpdate(
+        address _newWalletOwner
+    ) external onlyOwner {
         require(
             address(_newWalletOwner) != address(0),
             "New wallet owner address cannot be zero"
@@ -375,10 +373,9 @@ contract WalletRegistryGovernance is Ownable {
     /// @notice Begins the minimum authorization amount update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newMinimumAuthorization New minimum authorization amount.
-    function beginMinimumAuthorizationUpdate(uint96 _newMinimumAuthorization)
-        external
-        onlyOwner
-    {
+    function beginMinimumAuthorizationUpdate(
+        uint96 _newMinimumAuthorization
+    ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
         newMinimumAuthorization = _newMinimumAuthorization;
         minimumAuthorizationChangeInitiated = block.timestamp;
@@ -460,7 +457,8 @@ contract WalletRegistryGovernance is Ownable {
         uint64 _newAuthorizationDecreaseChangePeriod
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newAuthorizationDecreaseChangePeriod = _newAuthorizationDecreaseChangePeriod;
+        newAuthorizationDecreaseChangePeriod =
+            _newAuthorizationDecreaseChangePeriod;
         authorizationDecreaseChangePeriodChangeInitiated = block.timestamp;
         emit AuthorizationDecreaseChangePeriodUpdateStarted(
             _newAuthorizationDecreaseChangePeriod,
@@ -505,7 +503,8 @@ contract WalletRegistryGovernance is Ownable {
         uint96 _newMaliciousDkgResultSlashingAmount
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newMaliciousDkgResultSlashingAmount = _newMaliciousDkgResultSlashingAmount;
+        newMaliciousDkgResultSlashingAmount =
+            _newMaliciousDkgResultSlashingAmount;
         maliciousDkgResultSlashingAmountChangeInitiated = block.timestamp;
         emit MaliciousDkgResultSlashingAmountUpdateStarted(
             _newMaliciousDkgResultSlashingAmount,
@@ -550,7 +549,8 @@ contract WalletRegistryGovernance is Ownable {
             "Maximum value is 100"
         );
 
-        newMaliciousDkgResultNotificationRewardMultiplier = _newMaliciousDkgResultNotificationRewardMultiplier;
+        newMaliciousDkgResultNotificationRewardMultiplier =
+            _newMaliciousDkgResultNotificationRewardMultiplier;
         maliciousDkgResultNotificationRewardMultiplierChangeInitiated = block
             .timestamp;
         emit MaliciousDkgResultNotificationRewardMultiplierUpdateStarted(
@@ -681,7 +681,8 @@ contract WalletRegistryGovernance is Ownable {
         uint256 _newNotifyOperatorInactivityGasOffset
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newNotifyOperatorInactivityGasOffset = _newNotifyOperatorInactivityGasOffset;
+        newNotifyOperatorInactivityGasOffset =
+            _newNotifyOperatorInactivityGasOffset;
         notifyOperatorInactivityGasOffsetChangeInitiated = block.timestamp;
         emit NotifyOperatorInactivityGasOffsetUpdateStarted(
             _newNotifyOperatorInactivityGasOffset,
@@ -777,7 +778,8 @@ contract WalletRegistryGovernance is Ownable {
         uint256 _newNotifyDkgTimeoutNegativeGasOffset
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newNotifyDkgTimeoutNegativeGasOffset = _newNotifyDkgTimeoutNegativeGasOffset;
+        newNotifyDkgTimeoutNegativeGasOffset =
+            _newNotifyDkgTimeoutNegativeGasOffset;
         notifyDkgTimeoutNegativeGasOffsetChangeInitiated = block.timestamp;
         emit NotifyDkgTimeoutNegativeGasOffsetUpdateStarted(
             _newNotifyDkgTimeoutNegativeGasOffset,
@@ -821,10 +823,9 @@ contract WalletRegistryGovernance is Ownable {
     /// @notice Begins the reimbursement pool update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newReimbursementPool New reimbursement pool.
-    function beginReimbursementPoolUpdate(address payable _newReimbursementPool)
-        external
-        onlyOwner
-    {
+    function beginReimbursementPoolUpdate(
+        address payable _newReimbursementPool
+    ) external onlyOwner {
         require(
             address(_newReimbursementPool) != address(0),
             "New reimbursement pool address cannot be zero"
@@ -864,7 +865,8 @@ contract WalletRegistryGovernance is Ownable {
         uint256 _newSortitionPoolRewardsBanDuration
     ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
-        newSortitionPoolRewardsBanDuration = _newSortitionPoolRewardsBanDuration;
+        newSortitionPoolRewardsBanDuration =
+            _newSortitionPoolRewardsBanDuration;
         sortitionPoolRewardsBanDurationChangeInitiated = block.timestamp;
         emit SortitionPoolRewardsBanDurationUpdateStarted(
             _newSortitionPoolRewardsBanDuration,
@@ -900,10 +902,9 @@ contract WalletRegistryGovernance is Ownable {
     /// @notice Begins the DKG seed timeout update process.
     /// @dev Can be called only by the contract owner.
     /// @param _newDkgSeedTimeout New DKG seed timeout in blocks
-    function beginDkgSeedTimeoutUpdate(uint256 _newDkgSeedTimeout)
-        external
-        onlyOwner
-    {
+    function beginDkgSeedTimeoutUpdate(
+        uint256 _newDkgSeedTimeout
+    ) external onlyOwner {
         /* solhint-disable not-rely-on-time */
         require(_newDkgSeedTimeout > 0, "DKG seed timeout must be > 0");
         newDkgSeedTimeout = _newDkgSeedTimeout;
@@ -1071,7 +1072,8 @@ contract WalletRegistryGovernance is Ownable {
             _newSubmitterPrecedencePeriodLength > 0,
             "DKG submitter precedence period length must be > 0"
         );
-        newSubmitterPrecedencePeriodLength = _newSubmitterPrecedencePeriodLength;
+        newSubmitterPrecedencePeriodLength =
+            _newSubmitterPrecedencePeriodLength;
         dkgSubmitterPrecedencePeriodLengthChangeInitiated = block.timestamp;
         emit DkgSubmitterPrecedencePeriodLengthUpdateStarted(
             _newSubmitterPrecedencePeriodLength,
@@ -1360,11 +1362,9 @@ contract WalletRegistryGovernance is Ownable {
     ///         can be committed.
     /// @param changeTimestamp Timestamp indicating the beginning of the change.
     /// @return Remaining time in seconds.
-    function getRemainingChangeTime(uint256 changeTimestamp)
-        internal
-        view
-        returns (uint256)
-    {
+    function getRemainingChangeTime(
+        uint256 changeTimestamp
+    ) internal view returns (uint256) {
         require(changeTimestamp > 0, "Change not initiated");
         /* solhint-disable-next-line not-rely-on-time */
         uint256 elapsed = block.timestamp - changeTimestamp;

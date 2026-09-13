@@ -14,9 +14,9 @@ import type {
   T,
   IRandomBeacon,
 } from "../typechain"
-import type { BigNumber, ContractTransaction } from "ethers"
+import type { ContractTransactionResponse } from "ethers"
 import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { Operator, OperatorID } from "./utils/operators"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
@@ -41,21 +41,21 @@ describe("WalletRegistry - Slashing", () => {
   const rewardMultiplier = 30
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
+    const fixture = await walletRegistryFixture({ useAllowlist: true })
     ;({
       walletRegistry,
       randomBeacon,
       walletOwner,
       thirdParty,
       staking,
-      allowlist,
       tToken,
-    } = await walletRegistryFixture({ useAllowlist: true }))
+    } = fixture)
+    allowlist = fixture.allowlist!
     ;({ walletID, members } = await createNewWallet(
       walletRegistry,
       walletOwner.wallet,
       randomBeacon,
-      walletPublicKey
+      walletPublicKey,
     ))
 
     membersIDs = members.map((member) => member.id)
@@ -73,8 +73,8 @@ describe("WalletRegistry - Slashing", () => {
               rewardMultiplier,
               thirdParty.address,
               walletID,
-              membersIDs
-            )
+              membersIDs,
+            ),
         ).to.be.revertedWithCustomError(walletRegistry, "CallerNotWalletOwner")
       })
     })
@@ -91,19 +91,19 @@ describe("WalletRegistry - Slashing", () => {
                 rewardMultiplier,
                 thirdParty.address,
                 walletID,
-                corruptedMembersIDs
-              )
+                corruptedMembersIDs,
+              ),
           ).to.be.revertedWithCustomError(
             walletRegistry,
-            "InvalidWalletMembersIdentifiers"
+            "InvalidWalletMembersIdentifiers",
           )
         })
       })
 
       context("when the passed wallet members identifiers are valid", () => {
-        let tx: ContractTransaction
-        let notifierBalanceBefore: BigNumber
-        let notifierBalanceAfter: BigNumber
+        let tx: ContractTransactionResponse
+        let notifierBalanceBefore: bigint
+        let notifierBalanceAfter: bigint
 
         before(async () => {
           await createSnapshot()
@@ -115,7 +115,7 @@ describe("WalletRegistry - Slashing", () => {
               rewardMultiplier,
               thirdParty.address,
               walletID,
-              membersIDs
+              membersIDs,
             )
           notifierBalanceAfter = await tToken.balanceOf(thirdParty.address)
         })
@@ -136,11 +136,11 @@ describe("WalletRegistry - Slashing", () => {
             expect(
               await allowlist.authorizedStake(
                 stakingProvider,
-                walletRegistry.address
-              )
+                await walletRegistry.getAddress(),
+              ),
             ).to.equal(params.minimumAuthorization)
             expect(
-              await walletRegistry.eligibleStake(stakingProvider)
+              await walletRegistry.eligibleStake(stakingProvider),
             ).to.equal(params.minimumAuthorization)
           }
         })
@@ -149,7 +149,7 @@ describe("WalletRegistry - Slashing", () => {
           await expect(tx)
             .to.emit(staking, "NotifierRewarded")
             .withArgs(thirdParty.address, 0)
-          expect(notifierBalanceAfter.sub(notifierBalanceBefore)).to.equal(0)
+          expect(notifierBalanceAfter - notifierBalanceBefore).to.equal(0)
         })
       })
 

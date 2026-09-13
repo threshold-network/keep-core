@@ -55,8 +55,13 @@ func (ts *ThresholdSigner) Unmarshal(bytes []byte) error {
 		return err
 	}
 
+	memberIndex, err := group.MemberIndexFromUint32NonZero(pbThresholdSigner.MemberIndex)
+	if err != nil {
+		return err
+	}
+
 	groupPublicKey := new(bn256.G2)
-	_, err := groupPublicKey.Unmarshal(pbThresholdSigner.GroupPublicKey)
+	_, err = groupPublicKey.Unmarshal(pbThresholdSigner.GroupPublicKey)
 	if err != nil {
 		return err
 	}
@@ -74,7 +79,7 @@ func (ts *ThresholdSigner) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	ts.memberIndex = group.MemberIndex(pbThresholdSigner.MemberIndex)
+	ts.memberIndex = memberIndex
 	ts.groupPublicKey = groupPublicKey
 	ts.groupPrivateKeyShare = privateKeyShare
 	ts.groupPublicKeyShares = groupPublicKeyShares
@@ -89,13 +94,17 @@ func unmarshalGroupPublicKeyShares(
 	var unmarshalled = make(map[group.MemberIndex]*bn256.G2, len(shares))
 
 	for memberID, shareBytes := range shares {
+		memberIndex, err := group.MemberIndexFromUint32(memberID)
+		if err != nil {
+			return nil, err
+		}
 		share := new(bn256.G2)
-		_, err := share.Unmarshal(shareBytes)
+		_, err = share.Unmarshal(shareBytes)
 		if err != nil {
 			return nil, fmt.Errorf("could not unmarshal share [%v]", err)
 		}
 
-		unmarshalled[group.MemberIndex(memberID)] = share
+		unmarshalled[memberIndex] = share
 	}
 
 	return unmarshalled, nil

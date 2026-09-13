@@ -61,10 +61,9 @@ interface IWalletRegistry {
     ///         concatenation of X and Y coordinates.
     /// @param walletID ID of the wallet.
     /// @return Uncompressed public key of the wallet.
-    function getWalletPublicKey(bytes32 walletID)
-        external
-        view
-        returns (bytes memory);
+    function getWalletPublicKey(
+        bytes32 walletID
+    ) external view returns (bytes memory);
 
     /// @notice Check current wallet creation state.
     function getWalletCreationState() external view returns (EcdsaDkg.State);

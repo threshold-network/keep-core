@@ -5,6 +5,7 @@
 import fs from "fs"
 import path from "path"
 
+import "@nomicfoundation/hardhat-ethers"
 import "@nomicfoundation/hardhat-chai-matchers"
 import "@nomicfoundation/hardhat-verify"
 import "@keep-network/hardhat-helpers"
@@ -12,7 +13,7 @@ import "@keep-network/hardhat-local-networks-config"
 import "@openzeppelin/hardhat-upgrades"
 import "@typechain/hardhat"
 import "hardhat-deploy"
-import "@tenderly/hardhat-tenderly"
+import { setup as setupTenderly } from "@tenderly/hardhat-tenderly"
 import "hardhat-contract-sizer"
 import "hardhat-dependency-compiler"
 import "hardhat-gas-reporter"
@@ -22,37 +23,15 @@ import "./tasks"
 import { task } from "hardhat/config"
 import { TASK_TEST } from "hardhat/builtin-tasks/task-names"
 
+import resolveRandomBeaconExport from "./utils/random-beacon-export"
+
 import type { HardhatUserConfig } from "hardhat/config"
 
 const TASK_CHECK_ACCOUNTS_COUNT = "check-accounts-count"
 
 const hardhatVerifyEnabled = process.env.DISABLE_HARDHAT_VERIFY !== "true"
 
-/**
- * Random-beacon `export/` is gitignored in the random-beacon package, so CI never
- * has ../random-beacon/export. Prefer committed `external/random-beacon-export/deploy`
- * (mirrors npm export scripts with a fixed 05_approve_*) before falling back to node_modules.
- */
-function resolveRandomBeaconExport(subdir: "deploy" | "artifacts"): string {
-  const local = path.join(__dirname, "../random-beacon/export", subdir)
-  if (fs.existsSync(local)) {
-    return local
-  }
-  if (subdir === "deploy") {
-    const bundledDeploy = path.join(
-      __dirname,
-      "external/random-beacon-export/deploy"
-    )
-    if (fs.existsSync(bundledDeploy)) {
-      return bundledDeploy
-    }
-  }
-  return path.join(
-    __dirname,
-    "node_modules/@keep-network/random-beacon/export",
-    subdir
-  )
-}
+setupTenderly({ automaticVerifications: false })
 
 const thresholdSolidityCompilerConfig = {
   version: "0.8.9",
@@ -237,7 +216,7 @@ const config: HardhatUserConfig = {
       development: [
         "node_modules/@threshold-network/solidity-contracts/deployments/development",
         fs.existsSync(
-          path.join(__dirname, "../random-beacon/deployments/development")
+          path.join(__dirname, "../random-beacon/deployments/development"),
         )
           ? path.join(__dirname, "../random-beacon/deployments/development")
           : "node_modules/@keep-network/random-beacon/deployments/development",
@@ -273,6 +252,7 @@ const config: HardhatUserConfig = {
     timeout: 60000,
   },
   typechain: {
+    target: "ethers-v6",
     outDir: "typechain",
   },
   docgen: {
@@ -290,14 +270,14 @@ task(TASK_TEST, "Runs mocha tests").setAction(async (args, hre, runSuper) => {
 })
 
 task(TASK_CHECK_ACCOUNTS_COUNT, "Checks accounts count").setAction(async () => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires,global-require
+  // eslint-disable-next-line @typescript-eslint/no-require-imports,global-require
   const { constants } = require("./test/fixtures")
 
   if (testConfig.operatorsCount < constants.groupSize) {
     throw new Error(
       "not enough accounts predefined for configured group size: " +
         `expected group size: ${constants.groupSize} ` +
-        `number of predefined accounts: ${testConfig.operatorsCount}`
+        `number of predefined accounts: ${testConfig.operatorsCount}`,
     )
   }
 })

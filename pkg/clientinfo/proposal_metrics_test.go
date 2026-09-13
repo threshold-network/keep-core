@@ -3,8 +3,6 @@ package clientinfo
 import (
 	"context"
 	"testing"
-
-	keepclientinfo "github.com/keep-network/keep-common/pkg/clientinfo"
 )
 
 // TestRedemptionProposalCountersRegistered tests that the redemption
@@ -14,7 +12,7 @@ func TestRedemptionProposalCountersRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 	defer pm.Stop()
 

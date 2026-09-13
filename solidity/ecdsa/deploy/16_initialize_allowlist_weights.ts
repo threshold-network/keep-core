@@ -50,11 +50,11 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   // Use network-specific file if available
   const networkSpecificPath = path.join(
     __dirname,
-    `../deploy-data/allowlist-weights-${hre.network.name}.json`
+    `../deploy-data/allowlist-weights-${hre.network.name}.json`,
   )
   const defaultPath = path.join(
     __dirname,
-    "../deploy-data/allowlist-weights.json"
+    "../deploy-data/allowlist-weights.json",
   )
   const weightsPath = fs.existsSync(networkSpecificPath)
     ? networkSpecificPath
@@ -63,12 +63,12 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   if (!fs.existsSync(weightsPath)) {
     throw new Error(
       `Weights file not found at ${weightsPath}. ` +
-        "Please ensure allowlist-weights.json exists in deploy-data/"
+        "Please ensure allowlist-weights.json exists in deploy-data/",
     )
   }
 
   const weightsData: WeightsData = JSON.parse(
-    fs.readFileSync(weightsPath, "utf8")
+    fs.readFileSync(weightsPath, "utf8"),
   )
 
   console.log("=== ALLOWLIST INITIALIZATION ===")
@@ -83,11 +83,11 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const allowlist = await ethers.getContractAt(
     "Allowlist",
-    allowlistDeployment.address
+    allowlistDeployment.address,
   )
   const walletRegistry = await ethers.getContractAt(
     "WalletRegistry",
-    walletRegistryDeployment.address
+    walletRegistryDeployment.address,
   )
 
   // Get the actual owner of Allowlist (should be deployer at this point)
@@ -97,8 +97,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const currentOwner = await allowlist.owner()
   const ownerSigner = await ethers.getSigner(currentOwner)
 
-  console.log(`Allowlist address: ${allowlist.address}`)
-  console.log(`WalletRegistry address: ${walletRegistry.address}`)
+  console.log(`Allowlist address: ${await allowlist.getAddress()}`)
+  console.log(`WalletRegistry address: ${await walletRegistry.getAddress()}`)
   console.log(`Allowlist owner: ${currentOwner}`)
   console.log(`Owner signer: ${await ownerSigner.getAddress()}`)
   console.log()
@@ -110,7 +110,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     console.log(
       `${consolidation.providerGroup}: ` +
         `${consolidation.consolidatedOperators} operators -> 1 ` +
-        `(accumulated: ${consolidation.accumulatedStake.toLocaleString()} T)`
+        `(accumulated: ${consolidation.accumulatedStake.toLocaleString()} T)`,
     )
   }
   console.log()
@@ -136,15 +136,15 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       // eslint-disable-next-line no-await-in-loop
       const existingWeight = await allowlist.authorizedStake(
         op.stakingProvider,
-        ethers.constants.AddressZero
+        ethers.ZeroAddress,
       )
 
-      if (existingWeight.gt(0)) {
+      if (existingWeight > 0n) {
         console.log(
           `Skipping ${op.identification} (${op.stakingProvider.slice(
             0,
-            10
-          )}...) - already in Allowlist`
+            10,
+          )}...) - already in Allowlist`,
         )
         migrationResults.push({
           stakingProvider: op.stakingProvider,
@@ -168,7 +168,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       // eslint-disable-next-line no-await-in-loop
       const tx = await allowlist
         .connect(ownerSigner)
-        .addStakingProvider(op.stakingProvider, op.weight)
+        .getFunction("addStakingProvider")(op.stakingProvider, op.weight)
 
       // eslint-disable-next-line no-await-in-loop
       const receipt = await tx.wait()
@@ -204,31 +204,34 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const currentAllowlist = await walletRegistry.allowlist()
 
-  if (currentAllowlist === ethers.constants.AddressZero) {
+  if (currentAllowlist === ethers.ZeroAddress) {
     console.error("ERROR: WalletRegistry V2 is not initialized!")
     console.error()
     console.error("Please run the upgrade script first:")
     console.error(
-      "  UPGRADE_WALLET_REGISTRY_V2=true npx hardhat deploy --tags UpgradeWalletRegistryV2"
+      "  UPGRADE_WALLET_REGISTRY_V2=true npx hardhat deploy --tags UpgradeWalletRegistryV2",
     )
     console.error()
     console.error(
-      "The upgrade script atomically upgrades WalletRegistry and calls initializeV2."
+      "The upgrade script atomically upgrades WalletRegistry and calls initializeV2.",
     )
     return false
   }
 
-  if (currentAllowlist.toLowerCase() !== allowlist.address.toLowerCase()) {
+  if (
+    currentAllowlist.toLowerCase() !==
+    (await allowlist.getAddress()).toLowerCase()
+  ) {
     console.error(
-      "ERROR: WalletRegistry is initialized with a different Allowlist!"
+      "ERROR: WalletRegistry is initialized with a different Allowlist!",
     )
     console.error(`  Current: ${currentAllowlist}`)
-    console.error(`  Expected: ${allowlist.address}`)
+    console.error(`  Expected: ${await allowlist.getAddress()}`)
     return false
   }
 
   console.log(
-    `WalletRegistry V2 initialized with Allowlist: ${currentAllowlist}`
+    `WalletRegistry V2 initialized with Allowlist: ${currentAllowlist}`,
   )
   console.log("Verification: PASSED")
 
@@ -237,13 +240,13 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   console.log("=== MIGRATION SUMMARY ===")
 
   const successful = migrationResults.filter(
-    (r) => r.status === "success"
+    (r) => r.status === "success",
   ).length
   const failed = migrationResults.filter((r) =>
-    r.status.startsWith("failed")
+    r.status.startsWith("failed"),
   ).length
   const skipped = migrationResults.filter((r) =>
-    r.status.startsWith("skipped")
+    r.status.startsWith("skipped"),
   ).length
 
   console.log(`Total operators processed: ${migrationResults.length}`)
@@ -252,10 +255,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   console.log(`Failed: ${failed}`)
   console.log()
   console.log(
-    `Total accumulated stake: ${weightsData.summary.totalAccumulatedTStake.toLocaleString()} T`
+    `Total accumulated stake: ${weightsData.summary.totalAccumulatedTStake.toLocaleString()} T`,
   )
   console.log(
-    `Stake increase from consolidation: +${weightsData.summary.stakeIncreaseFromConsolidation.toLocaleString()} T`
+    `Stake increase from consolidation: +${weightsData.summary.stakeIncreaseFromConsolidation.toLocaleString()} T`,
   )
 
   // Save migration results
@@ -266,8 +269,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       {
         timestamp: new Date().toISOString(),
         network: hre.network.name,
-        allowlistAddress: allowlist.address,
-        walletRegistryAddress: walletRegistry.address,
+        allowlistAddress: await allowlist.getAddress(),
+        walletRegistryAddress: await walletRegistry.getAddress(),
         weightsSource: weightsData.metadata.source,
         weightsGeneratedAt: weightsData.metadata.generatedAt,
         summary: {
@@ -283,8 +286,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
         results: migrationResults,
       },
       null,
-      2
-    )
+      2,
+    ),
   )
 
   console.log()
@@ -307,18 +310,18 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     console.log("Allowlist uses Ownable2StepUpgradeable (two-step transfer):")
     console.log("  Step 1: transferOwnership(governance) - sets pendingOwner")
     console.log(
-      "  Step 2: governance calls acceptOwnership() - completes transfer"
+      "  Step 2: governance calls acceptOwnership() - completes transfer",
     )
     console.log()
 
     try {
       console.log(
-        `Initiating transfer from ${currentOwner} to ${governance}...`
+        `Initiating transfer from ${currentOwner} to ${governance}...`,
       )
 
       const tx = await allowlist
         .connect(ownerSigner)
-        .transferOwnership(governance)
+        .getFunction("transferOwnership")(governance)
 
       await tx.wait()
 
@@ -330,27 +333,27 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       console.log(`Pending owner set to: ${pendingOwner}`)
       console.log()
       console.log(
-        "IMPORTANT: Governance must call Allowlist.acceptOwnership() to complete the transfer!"
+        "IMPORTANT: Governance must call Allowlist.acceptOwnership() to complete the transfer!",
       )
       console.log(
-        `Until then, the current owner remains: ${await allowlist.owner()}`
+        `Until then, the current owner remains: ${await allowlist.owner()}`,
       )
     } catch (error: any) {
       console.error(`  FAILED: ${error.message}`)
       console.log()
       console.warn(
-        "WARNING: Ownership transfer failed. Manual intervention required."
+        "WARNING: Ownership transfer failed. Manual intervention required.",
       )
       throw new Error(
         `Ownership transfer failed; manual intervention required: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
       )
     }
   } else {
     console.log()
     console.log(
-      "Ownership transfer not needed (owner is already governance or same account)."
+      "Ownership transfer not needed (owner is already governance or same account).",
     )
   }
 

@@ -19,15 +19,15 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/keep-network/keep-common/pkg/cache"
+	"github.com/keep-network/keep-core/pkg/cache"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	ecdsacontract "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/contract"
 	tbtccontract "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/internal/byteutils"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )

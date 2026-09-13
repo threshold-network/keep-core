@@ -52,6 +52,12 @@ KeyFile = "/Users/someuser/ethereum/data/keystore/UTC--2018-03-11T01-37-33.20276
 # one of the default embedded servers is selected randomly at startup.
 # URL = "tcp://electrumx.server.io:50001"
 
+# List of alternate Electrum server URLs used for automatic failover. When
+# URL is omitted, these are appended behind the auto-selected embedded
+# primary; when URL is explicit, it remains the preferred primary and these
+# are tried on failure.
+# FallbackURLs = ["ssl://backup1.example:50002", "ssl://backup2.example:50002"]
+
 # Timeout for a single attempt of Electrum connection establishment.
 # ConnectTimeout = "10s"
 

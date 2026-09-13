@@ -21,7 +21,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       proxyOpts: {
         kind: "transparent",
       },
-    }
+    },
   )
 
   // IMPORTANT: Do NOT transfer ownership here!
@@ -37,14 +37,12 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   // Ownership transfer is handled at the END of script 16 after weights are set.
 
   // Log deployment information
-  console.log(`Allowlist deployed at: ${allowlist.address}`)
-  console.log(
-    `Allowlist proxy admin: ${proxyDeployment.receipt.contractAddress}`
-  )
+  console.log(`Allowlist deployed at: ${await allowlist.getAddress()}`)
+  console.log(`Allowlist proxy deployed at: ${proxyDeployment.address}`)
   console.log(`Allowlist owner: ${await allowlist.owner()} (deployer)`)
   if (governance && governance !== deployer) {
     console.log(
-      `Ownership will be transferred to governance (${governance}) after weights initialization`
+      `Ownership will be transferred to governance (${governance}) after weights initialization`,
     )
   }
 
@@ -63,7 +61,7 @@ func.skip = async (hre: HardhatRuntimeEnvironment) => {
   const existingAllowlist = await deployments.getOrNull("Allowlist")
   if (existingAllowlist) {
     console.log(
-      `Skipping Allowlist deployment - already deployed at ${existingAllowlist.address}`
+      `Skipping Allowlist deployment - already deployed at ${existingAllowlist.address}`,
     )
     return true
   }
