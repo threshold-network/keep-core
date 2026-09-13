@@ -1,3 +1,4 @@
+import { getNumber } from "ethers"
 import { task, types } from "hardhat/config"
 
 import {
@@ -65,8 +66,8 @@ task(TASK_INITIALIZE_STAKING, "Initializes staking for a service provider")
       args.amount,
     )
 
-    if (!tokensToMint.isZero()) {
-      await hre.run(TASK_MINT, { ...args, amount: tokensToMint.toNumber() })
+    if (tokensToMint !== 0n) {
+      await hre.run(TASK_MINT, { ...args, amount: getNumber(tokensToMint) })
     }
 
     await hre.run(TASK_STAKE, args)

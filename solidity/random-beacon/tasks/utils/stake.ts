@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-import type { BigNumberish, BigNumber } from "ethers"
+import type { BigNumberish } from "ethers"
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 
 export async function stake(
@@ -12,32 +12,32 @@ export async function stake(
 ): Promise<void> {
   const { ethers, helpers } = hre
   const { to1e18, from1e18 } = helpers.number
-  const ownerAddress = ethers.utils.getAddress(owner)
-  const providerAddress = ethers.utils.getAddress(provider)
+  const ownerAddress = ethers.getAddress(owner)
+  const providerAddress = ethers.getAddress(provider)
   const stakeAmount = to1e18(amount)
 
   // Beneficiary can equal to the owner if not set otherwise. This simplification
   // is used for development purposes.
   const beneficiaryAddress = beneficiary
-    ? ethers.utils.getAddress(beneficiary)
+    ? ethers.getAddress(beneficiary)
     : ownerAddress
 
   // Authorizer can equal to the owner if not set otherwise. This simplification
   // is used for development purposes.
   const authorizerAddress = authorizer
-    ? ethers.utils.getAddress(authorizer)
+    ? ethers.getAddress(authorizer)
     : ownerAddress
 
   const staking = await helpers.contracts.getContract("TokenStaking")
 
-  const { tStake: currentStake } =
-    await staking.callStatic.stakes(providerAddress)
+  const { tStake: currentStake }: { tStake: bigint } =
+    await staking.stakes.staticCall(providerAddress)
 
   console.log(
     `Current stake for ${providerAddress} is ${from1e18(currentStake)} T`,
   )
 
-  if (currentStake.eq(0)) {
+  if (currentStake === 0n) {
     console.log(
       `Staking ${from1e18(
         stakeAmount,
@@ -47,15 +47,15 @@ export async function stake(
     await (
       await staking
         .connect(await ethers.getSigner(ownerAddress))
-        .stake(
-          providerAddress,
-          beneficiaryAddress,
-          authorizerAddress,
-          stakeAmount,
-        )
+        .getFunction("stake")(
+        providerAddress,
+        beneficiaryAddress,
+        authorizerAddress,
+        stakeAmount,
+      )
     ).wait()
-  } else if (currentStake.lt(stakeAmount)) {
-    const topUpAmount = stakeAmount.sub(currentStake)
+  } else if (currentStake < stakeAmount) {
+    const topUpAmount = stakeAmount - currentStake
 
     console.log(
       `Topping up ${from1e18(
@@ -66,7 +66,7 @@ export async function stake(
     await (
       await staking
         .connect(await ethers.getSigner(ownerAddress))
-        .topUp(providerAddress, topUpAmount)
+        .getFunction("topUp")(providerAddress, topUpAmount)
     ).wait()
   }
 }
@@ -75,7 +75,7 @@ export async function calculateTokensNeededForStake(
   hre: HardhatRuntimeEnvironment,
   provider: string,
   amount: BigNumberish,
-): Promise<BigNumber> {
+): Promise<bigint> {
   const { ethers, helpers } = hre
   const { to1e18, from1e18 } = helpers.number
 
@@ -83,11 +83,12 @@ export async function calculateTokensNeededForStake(
 
   const staking = await helpers.contracts.getContract("TokenStaking")
 
-  const { tStake: currentStake } = await staking.callStatic.stakes(provider)
+  const { tStake: currentStake }: { tStake: bigint } =
+    await staking.stakes.staticCall(provider)
 
-  if (currentStake.lt(stakeAmount)) {
-    return ethers.BigNumber.from(from1e18(stakeAmount.sub(currentStake)))
+  if (currentStake < stakeAmount) {
+    return BigInt(from1e18(stakeAmount - currentStake))
   }
 
-  return ethers.constants.Zero
+  return 0n
 }

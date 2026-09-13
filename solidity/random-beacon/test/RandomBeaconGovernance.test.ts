@@ -2,10 +2,11 @@ import { ethers, helpers } from "hardhat"
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import { randomBeaconDeployment, params } from "./fixtures"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { ContractTransaction, Signer } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
+import type { ContractTransactionResponse, Signer } from "ethers"
 import type {
   RandomBeacon,
   RandomBeaconGovernance,
@@ -16,7 +17,7 @@ const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 const governanceDelay = 604800 // 1 week
 
-const ZERO_ADDRESS = ethers.constants.AddressZero
+const ZERO_ADDRESS = ethers.ZeroAddress
 
 const fixture = async () => {
   const { governance } = await helpers.signers.getNamedSigners()
@@ -29,9 +30,6 @@ const fixture = async () => {
 
   return { governance, randomBeaconGovernance, randomBeacon }
 }
-
-const minedBlockTimestamp = async (tx: ContractTransaction): Promise<number> =>
-  (await ethers.provider.getBlock((await tx.wait()).blockNumber)).timestamp
 
 describe("RandomBeaconGovernance", () => {
   let governance: Signer
@@ -67,7 +65,7 @@ describe("RandomBeaconGovernance", () => {
     context("when governance delay is 0", () => {
       it("should revert", async () => {
         await expect(
-          RandomBeaconGovernance.deploy(randomBeacon.address, 0),
+          RandomBeaconGovernance.deploy(await randomBeacon.getAddress(), 0),
         ).to.be.revertedWith("No governance delay")
       })
     })
@@ -85,7 +83,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -112,7 +110,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit GovernanceDelayUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(randomBeaconGovernance, "GovernanceDelayUpdateStarted")
           .withArgs(1337, blockTimestamp)
@@ -168,7 +170,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -223,7 +225,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -244,9 +246,7 @@ describe("RandomBeaconGovernance", () => {
           await expect(
             randomBeaconGovernance
               .connect(governance)
-              .beginRandomBeaconGovernanceTransfer(
-                ethers.constants.AddressZero,
-              ),
+              .beginRandomBeaconGovernanceTransfer(ethers.ZeroAddress),
           ).to.be.revertedWith(
             "New random beacon governance address cannot be zero",
           )
@@ -255,7 +255,7 @@ describe("RandomBeaconGovernance", () => {
 
       it("should not transfer the governance", async () => {
         expect(await randomBeacon.governance()).to.be.equal(
-          randomBeaconGovernance.address,
+          await randomBeaconGovernance.getAddress(),
         )
       })
 
@@ -266,7 +266,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit RandomBeaconGovernanceTransferStarted", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -330,7 +334,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -415,7 +419,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -442,7 +446,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntrySoftTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(randomBeaconGovernance, "RelayEntrySoftTimeoutUpdateStarted")
           .withArgs(1, blockTimestamp)
@@ -494,7 +502,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -547,7 +555,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -574,7 +582,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntryHardTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(randomBeaconGovernance, "RelayEntryHardTimeoutUpdateStarted")
           .withArgs(123, blockTimestamp)
@@ -626,7 +638,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -730,7 +742,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -756,7 +768,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the CallbackGasLimitUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(randomBeaconGovernance, "CallbackGasLimitUpdateStarted")
           .withArgs(123, blockTimestamp)
@@ -808,7 +824,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -887,7 +903,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -916,7 +932,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the GroupCreationFrequencyUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -971,7 +991,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1036,7 +1056,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1062,7 +1082,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the GroupLifetimeUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(randomBeaconGovernance, "GroupLifetimeUpdateStarted")
           .withArgs(newGroupLifetime, blockTimestamp)
@@ -1116,7 +1140,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1195,7 +1219,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1224,7 +1248,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgResultChallengePeriodLengthUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1279,7 +1307,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1335,7 +1363,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1364,7 +1392,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgResultChallengeExtraGasUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1419,7 +1451,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1502,7 +1534,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1531,7 +1563,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgResultSubmissionTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1587,7 +1623,7 @@ describe("RandomBeaconGovernance", () => {
       "when the update process is initialized and governance delay passed",
       () => {
         const newValue = 234
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1675,7 +1711,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1704,7 +1740,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgSubmitterPrecedencePeriodLengthUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1759,7 +1799,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1815,7 +1855,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1844,7 +1884,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntrySubmissionFailureSlashingAmountUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -1899,7 +1943,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1955,7 +1999,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1984,7 +2028,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the UnauthorizedSigningSlashingAmountUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2039,7 +2087,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2095,7 +2143,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2124,7 +2172,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the MaliciousDkgResultSlashingAmountUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2179,7 +2231,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2235,7 +2287,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2264,7 +2316,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the SortitionPoolRewardsBanDurationUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2319,7 +2375,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2385,7 +2441,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner and value is correct", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2414,7 +2470,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the UnauthorizedSigningNotificationRewardMultiplierUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2469,7 +2529,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2537,7 +2597,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner and value is correct", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2566,7 +2626,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntryTimeoutNotificationRewardMultiplierUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2621,7 +2685,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2678,7 +2742,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2705,7 +2769,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the MinimumAuthorizationUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(randomBeaconGovernance, "MinimumAuthorizationUpdateStarted")
           .withArgs(123, blockTimestamp)
@@ -2757,7 +2825,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2808,7 +2876,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2837,7 +2905,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the AuthorizationDecreaseDelayUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -2890,7 +2962,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2946,7 +3018,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2975,7 +3047,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the AuthorizationDecreaseChangePeriodUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3028,7 +3104,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -3139,7 +3215,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner and value is correct", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -3169,7 +3245,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgMaliciousResultNotificationRewardMultiplierUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3224,7 +3304,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -3282,7 +3362,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -3310,7 +3390,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit DkgResultSubmissionGasUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3365,7 +3449,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -3417,7 +3501,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -3446,7 +3530,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the DkgResultApprovalGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3501,7 +3589,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -3557,7 +3645,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -3586,7 +3674,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the NotifyOperatorInactivityGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3641,7 +3733,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -3697,7 +3789,7 @@ describe("RandomBeaconGovernance", () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -3726,7 +3818,11 @@ describe("RandomBeaconGovernance", () => {
       })
 
       it("should emit the RelayEntrySubmissionGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = await minedBlockTimestamp(tx)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
+        ).timestamp
         await expect(tx)
           .to.emit(
             randomBeaconGovernance,
@@ -3781,7 +3877,7 @@ describe("RandomBeaconGovernance", () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()

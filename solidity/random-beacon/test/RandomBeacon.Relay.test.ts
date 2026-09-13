@@ -3,7 +3,6 @@
 import { ethers, helpers } from "hardhat"
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
-import { BigNumber } from "ethers"
 
 import blsData from "./data/bls"
 import {
@@ -32,19 +31,19 @@ import type {
   RandomBeaconGovernance,
 } from "../typechain"
 import type { Address } from "hardhat-deploy/types"
-import type { ContractTransaction, BigNumberish } from "ethers"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { ContractTransactionResponse, BigNumberish } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 
 const { mineBlocks, mineBlocksTo } = helpers.time
 const { to1e18 } = helpers.number
-const ZERO_ADDRESS = ethers.constants.AddressZero
+const ZERO_ADDRESS = ethers.ZeroAddress
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 const { provider } = ethers
 
 // FIXME: As a workaround for a bug https://github.com/dethcrypto/TypeChain/issues/601
 // we declare a new type instead of using `RandomBeaconStub & RandomBeacon` intersection.
 type RandomBeaconTest = RandomBeacon & {
-  dkgLockState: () => Promise<ContractTransaction>
+  dkgLockState: () => Promise<ContractTransactionResponse>
 }
 
 async function fixture() {
@@ -140,7 +139,7 @@ describe("RandomBeacon - Relay", () => {
         })
 
         context("when there is no other relay entry in progress", () => {
-          let tx: ContractTransaction
+          let tx: ContractTransactionResponse
 
           before(async () => {
             await createSnapshot()
@@ -280,8 +279,8 @@ describe("RandomBeacon - Relay", () => {
       context("when relay entry has not timed out", () => {
         context("when entry is valid", () => {
           context("when result is submitted before the soft timeout", () => {
-            let tx: ContractTransaction
-            let initialSubmitterBalance: BigNumber
+            let tx: ContractTransactionResponse
+            let initialSubmitterBalance: bigint
 
             before(async () => {
               await createSnapshot()
@@ -322,10 +321,10 @@ describe("RandomBeacon - Relay", () => {
               const postNotifierBalance = await provider.getBalance(
                 submitter.address,
               )
-              const diff = postNotifierBalance.sub(initialSubmitterBalance)
+              const diff = postNotifierBalance - initialSubmitterBalance
               expect(diff).to.be.gt(0)
               expect(diff).to.be.lt(
-                ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
+                ethers.parseUnits("2000000", "gwei"), // 0,002 ETH
               )
             })
           })
@@ -350,7 +349,7 @@ describe("RandomBeacon - Relay", () => {
           })
 
           context("when DKG is awaiting a seed", () => {
-            let tx: ContractTransaction
+            let tx: ContractTransactionResponse
 
             before(async () => {
               await createSnapshot()
@@ -412,8 +411,8 @@ describe("RandomBeacon - Relay", () => {
 
       context("when the input params are valid", () => {
         context("when result is submitted before the soft timeout", () => {
-          let tx: ContractTransaction
-          let initialSubmitterBalance: BigNumber
+          let tx: ContractTransactionResponse
+          let initialSubmitterBalance: bigint
 
           before(async () => {
             await createSnapshot()
@@ -459,24 +458,24 @@ describe("RandomBeacon - Relay", () => {
             const postNotifierBalance = await provider.getBalance(
               submitter.address,
             )
-            const diff = postNotifierBalance.sub(initialSubmitterBalance)
+            const diff = postNotifierBalance - initialSubmitterBalance
 
             expect(diff).to.be.gt(0)
             expect(diff).to.be.lt(
-              ethers.utils.parseUnits("1000000", "gwei"), // 0,001 ETH
+              ethers.parseUnits("1000000", "gwei"), // 0,001 ETH
             )
           })
         })
 
         context("when result is submitted after the soft timeout", () => {
-          let initialSubmitterBalance: BigNumber
+          let initialSubmitterBalance: bigint
           // `relayEntrySubmissionFailureSlashingAmount = 1000e18`.
           // 75% of the soft timeout period elapsed so we expect
           // `750e18` to be slashed.
           const slashingAmount = to1e18(750)
 
-          let submissionTx: ContractTransaction
-          let slashingTx: ContractTransaction
+          let submissionTx: ContractTransactionResponse
+          let slashingTx: ContractTransactionResponse
 
           before(async () => {
             await createSnapshot()
@@ -550,10 +549,10 @@ describe("RandomBeacon - Relay", () => {
             const postNotifierBalance = await provider.getBalance(
               submitter.address,
             )
-            const diff = postNotifierBalance.sub(initialSubmitterBalance)
+            const diff = postNotifierBalance - initialSubmitterBalance
             expect(diff).to.be.gt(0)
             expect(diff).to.be.lt(
-              ethers.utils.parseUnits("1000000", "gwei"), // 0,001 ETH
+              ethers.parseUnits("1000000", "gwei"), // 0,001 ETH
             )
           })
         })
@@ -644,8 +643,8 @@ describe("RandomBeacon - Relay", () => {
       context(
         "when other active groups exist after timeout is reported",
         () => {
-          let reportTx: ContractTransaction
-          let slashingTx: ContractTransaction
+          let reportTx: ContractTransactionResponse
+          let slashingTx: ContractTransactionResponse
 
           before(async () => {
             await createSnapshot()
@@ -671,10 +670,12 @@ describe("RandomBeacon - Relay", () => {
               .to.emit(staking, "NotifierRewarded")
               .withArgs(
                 notifier.address,
-                constants.tokenStakingNotificationReward
-                  .mul(params.relayEntryTimeoutNotificationRewardMultiplier)
-                  .div(100)
-                  .mul(membersIDs.length),
+                ((constants.tokenStakingNotificationReward *
+                  BigInt(
+                    params.relayEntryTimeoutNotificationRewardMultiplier,
+                  )) /
+                  100n) *
+                  BigInt(membersIDs.length),
               )
           })
 
@@ -738,7 +739,7 @@ describe("RandomBeacon - Relay", () => {
       context(
         "when a group that was supposed to submit a relay request is terminated and another group expires",
         () => {
-          let tx: ContractTransaction
+          let tx: ContractTransactionResponse
 
           before(async () => {
             await createSnapshot()
@@ -768,7 +769,7 @@ describe("RandomBeacon - Relay", () => {
             const secondGroupLifetime = await groupLifetimeOf(1)
 
             // Expire second group
-            await mineBlocksTo(secondGroupLifetime.toNumber() + 1)
+            await mineBlocksTo(Number(secondGroupLifetime) + 1)
 
             tx = await randomBeacon.reportRelayEntryTimeout(membersIDs)
           })
@@ -792,8 +793,8 @@ describe("RandomBeacon - Relay", () => {
       )
 
       context("when no active groups exist after timeout is reported", () => {
-        let reportTx: ContractTransaction
-        let slashingTx: ContractTransaction
+        let reportTx: ContractTransactionResponse
+        let slashingTx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -814,10 +815,10 @@ describe("RandomBeacon - Relay", () => {
             .to.emit(staking, "NotifierRewarded")
             .withArgs(
               notifier.address,
-              constants.tokenStakingNotificationReward
-                .mul(params.relayEntryTimeoutNotificationRewardMultiplier)
-                .div(100)
-                .mul(membersIDs.length),
+              ((constants.tokenStakingNotificationReward *
+                BigInt(params.relayEntryTimeoutNotificationRewardMultiplier)) /
+                100n) *
+                BigInt(membersIDs.length),
             )
         })
 
@@ -875,7 +876,7 @@ describe("RandomBeacon - Relay", () => {
       context(
         "when no active groups exist after timeout is reported and DKG is awaiting seed",
         () => {
-          let tx: ContractTransaction
+          let tx: ContractTransactionResponse
 
           before(async () => {
             await createSnapshot()
@@ -907,7 +908,7 @@ describe("RandomBeacon - Relay", () => {
 
       context("when token staking seize call fails", async () => {
         let tokenStakingFake: Mock<TokenStaking>
-        let tx: Promise<ContractTransaction>
+        let tx: Promise<ContractTransactionResponse>
 
         before(async () => {
           await createSnapshot()
@@ -970,8 +971,8 @@ describe("RandomBeacon - Relay", () => {
 
     context("when a group is active", () => {
       context("when provided signature is valid", () => {
-        let reportTx: ContractTransaction
-        let slashingTx: ContractTransaction
+        let reportTx: ContractTransactionResponse
+        let slashingTx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1000,10 +1001,12 @@ describe("RandomBeacon - Relay", () => {
             .to.emit(staking, "NotifierRewarded")
             .withArgs(
               notifier.address,
-              constants.tokenStakingNotificationReward
-                .mul(params.unauthorizedSigningNotificationRewardMultiplier)
-                .div(100)
-                .mul(membersIDs.length),
+              ((constants.tokenStakingNotificationReward *
+                BigInt(
+                  params.unauthorizedSigningNotificationRewardMultiplier,
+                )) /
+                100n) *
+                BigInt(membersIDs.length),
             )
         })
 
@@ -1042,7 +1045,7 @@ describe("RandomBeacon - Relay", () => {
 
       context("when token staking seize call fails", async () => {
         let tokenStakingFake: Mock<TokenStaking>
-        let tx: Promise<ContractTransaction>
+        let tx: Promise<ContractTransactionResponse>
 
         before(async () => {
           await createSnapshot()
@@ -1158,8 +1161,8 @@ describe("RandomBeacon - Relay", () => {
         // We exceeded the soft timeout by `1`
         // slashing amount: 1 * 1000e18 / 100 = 10e18
         expect(
-          await relayStub.callStatic.calculateSlashingAmount(),
-        ).to.be.equal(BigNumber.from("10000000000000000000"))
+          await relayStub.calculateSlashingAmount.staticCall(),
+        ).to.be.equal(BigInt("10000000000000000000"))
       })
     })
 
@@ -1174,8 +1177,8 @@ describe("RandomBeacon - Relay", () => {
           // We exceeded the soft timeout by `100`
           // slashing amount: 100 * 1000e18 / 100 = 1000e18
           expect(
-            await relayStub.callStatic.calculateSlashingAmount(),
-          ).to.be.equal(BigNumber.from("1000000000000000000000"))
+            await relayStub.calculateSlashingAmount.staticCall(),
+          ).to.be.equal(BigInt("1000000000000000000000"))
         })
       },
     )
@@ -1192,8 +1195,8 @@ describe("RandomBeacon - Relay", () => {
           // hard timeout. In that case the maximum value (100%) of the slashing
           // amount should be returned.
           expect(
-            await relayStub.callStatic.calculateSlashingAmount(),
-          ).to.be.equal(BigNumber.from("1000000000000000000000"))
+            await relayStub.calculateSlashingAmount.staticCall(),
+          ).to.be.equal(BigInt("1000000000000000000000"))
         })
       },
     )
@@ -1242,9 +1245,9 @@ describe("RandomBeacon - Relay", () => {
                       signingMemberIndices: number[],
                     ) => number[],
                   ) => {
-                    let tx: ContractTransaction
-                    let initialNonce: BigNumber
-                    let initialNotifierBalance: BigNumber
+                    let tx: ContractTransactionResponse
+                    let initialNonce: bigint
+                    let initialNotifierBalance: bigint
                     let claimSender: SignerWithAddress
 
                     before(async () => {
@@ -1292,7 +1295,7 @@ describe("RandomBeacon - Relay", () => {
                     it("should increment inactivity claim nonce for the group", async () => {
                       expect(
                         await randomBeacon.inactivityClaimNonce(groupId),
-                      ).to.be.equal(initialNonce.add(1))
+                      ).to.be.equal(initialNonce + 1n)
                     })
 
                     it("should emit InactivityClaimed event", async () => {
@@ -1300,7 +1303,7 @@ describe("RandomBeacon - Relay", () => {
                         .to.emit(randomBeacon, "InactivityClaimed")
                         .withArgs(
                           groupId,
-                          initialNonce.toNumber(),
+                          Number(initialNonce),
                           claimSender.address,
                         )
                     })
@@ -1322,12 +1325,10 @@ describe("RandomBeacon - Relay", () => {
                       const postNotifierBalance = await provider.getBalance(
                         await claimSender.getAddress(),
                       )
-                      const diff = postNotifierBalance.sub(
-                        initialNotifierBalance,
-                      )
+                      const diff = postNotifierBalance - initialNotifierBalance
                       expect(diff).to.be.gt(0)
                       expect(diff).to.be.lt(
-                        ethers.utils.parseUnits("1000000", "gwei"), // 0,001 ETH
+                        ethers.parseUnits("1000000", "gwei"), // 0,001 ETH
                       )
                     })
                   }
@@ -2024,16 +2025,16 @@ describe("RandomBeacon - Relay", () => {
     })
   })
 
-  async function groupLifetimeOf(groupID: BigNumberish): Promise<BigNumber> {
-    const groupData = await randomBeacon.callStatic["getGroup(uint64)"](groupID)
+  async function groupLifetimeOf(groupID: BigNumberish): Promise<bigint> {
+    const groupData = await randomBeacon["getGroup(uint64)"].staticCall(groupID)
 
     const { groupLifetime } = await randomBeacon.groupCreationParameters()
 
-    return groupData.registrationBlockNumber.add(groupLifetime)
+    return groupData.registrationBlockNumber + groupLifetime
   }
 
   async function isGroupTerminated(groupID: BigNumberish): Promise<boolean> {
-    const groupData = await randomBeacon.callStatic["getGroup(uint64)"](groupID)
+    const groupData = await randomBeacon["getGroup(uint64)"].staticCall(groupID)
 
     return groupData.terminated === true
   }

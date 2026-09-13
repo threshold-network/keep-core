@@ -6,6 +6,7 @@
     "./test",
     "./typechain",
     "./types",
+    "./utils",
     "./scripts"
   ],
   "compilerOptions": {

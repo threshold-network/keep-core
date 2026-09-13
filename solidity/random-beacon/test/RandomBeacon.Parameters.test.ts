@@ -5,9 +5,9 @@ import { expect } from "chai"
 
 import { randomBeaconDeployment, params } from "./fixtures"
 
-import type { ContractTransaction, Signer } from "ethers"
+import type { ContractTransactionResponse, Signer } from "ethers"
 import type { RandomBeaconStub, RandomBeaconGovernance } from "../typechain"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
@@ -62,7 +62,7 @@ describe("RandomBeacon - Parameters", () => {
     })
 
     context("when the caller is the governance", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -129,7 +129,7 @@ describe("RandomBeacon - Parameters", () => {
     })
 
     context("when the caller is the governance", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -207,7 +207,7 @@ describe("RandomBeacon - Parameters", () => {
     })
 
     context("when the caller is the governance", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -360,7 +360,7 @@ describe("RandomBeacon - Parameters", () => {
     })
 
     context("when the caller is the governance", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -444,7 +444,7 @@ describe("RandomBeacon - Parameters", () => {
     })
 
     context("when the caller is the governance", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -520,7 +520,7 @@ describe("RandomBeacon - Parameters", () => {
 
     context("when the caller is the governance", () => {
       context("when authorizing a contract", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -549,7 +549,7 @@ describe("RandomBeacon - Parameters", () => {
       })
 
       context("when deauthorizing the contract", async () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()

@@ -1,9 +1,9 @@
 import "@nomicfoundation/hardhat-verify"
 import "@keep-network/hardhat-local-networks-config"
 import "@keep-network/hardhat-helpers"
-import "@nomiclabs/hardhat-ethers"
+import "@nomicfoundation/hardhat-ethers"
 import "hardhat-deploy"
-import "@tenderly/hardhat-tenderly"
+import { setup as setupTenderly } from "@tenderly/hardhat-tenderly"
 import "@nomicfoundation/hardhat-chai-matchers"
 import "hardhat-gas-reporter"
 import "hardhat-contract-sizer"
@@ -15,6 +15,8 @@ import "solidity-docgen"
 import { task } from "hardhat/config"
 
 import type { HardhatUserConfig } from "hardhat/config"
+
+setupTenderly({ automaticVerifications: false })
 
 const thresholdSolidityCompilerConfig = {
   version: "0.8.9",
