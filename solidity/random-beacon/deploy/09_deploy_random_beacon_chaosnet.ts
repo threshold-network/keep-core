@@ -15,7 +15,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "RandomBeaconChaosnet",
     {
       ...deployOptions,
-    }
+    },
   )
 
   if (hre.network.tags.etherscan) {
@@ -23,7 +23,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       await hre.ethers.provider.waitForTransaction(
         RandomBeaconChaosnet.transactionHash,
         2,
-        300000
+        300000,
       )
     }
     await helpers.etherscan.verify(RandomBeaconChaosnet)

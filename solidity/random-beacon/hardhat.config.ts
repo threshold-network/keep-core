@@ -52,7 +52,7 @@ if (
   (!Number.isInteger(gasPriceGwei) || gasPriceGwei <= 0)
 ) {
   throw new Error(
-    `Invalid GAS_PRICE_GWEI "${process.env.GAS_PRICE_GWEI}": expected a positive integer (gwei)`
+    `Invalid GAS_PRICE_GWEI "${process.env.GAS_PRICE_GWEI}": expected a positive integer (gwei)`,
   )
 }
 
@@ -237,7 +237,7 @@ task("check-accounts-count", "Checks accounts count").setAction(async () => {
     throw new Error(
       "not enough accounts predefined for configured group size: " +
         `expected group size: ${constants.groupSize} ` +
-        `number of predefined accounts: ${testConfig.operatorsCount}`
+        `number of predefined accounts: ${testConfig.operatorsCount}`,
     )
   }
 })

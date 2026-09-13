@@ -35,9 +35,8 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       signers
 
     // Deploy EcdsaInactivity library
-    const EcdsaInactivityFactory = await ethers.getContractFactory(
-      "EcdsaInactivity"
-    )
+    const EcdsaInactivityFactory =
+      await ethers.getContractFactory("EcdsaInactivity")
     const ecdsaInactivity = await EcdsaInactivityFactory.deploy()
     await ecdsaInactivity.deployed()
 
@@ -67,18 +66,18 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
         libraries: {
           EcdsaInactivity: ecdsaInactivity.address,
         },
-      }
+      },
     )
 
     const impl = await WalletRegistryFactory.deploy(
       sortitionPool.address,
-      stakingContract.address
+      stakingContract.address,
     )
     await impl.deployed()
 
     const initData = WalletRegistryFactory.interface.encodeFunctionData(
       "initialize",
-      [dkgValidator.address, randomBeacon.address, reimbursementPool.address]
+      [dkgValidator.address, randomBeacon.address, reimbursementPool.address],
     )
 
     const ERC1967ProxyFactory = await ethers.getContractFactory("ERC1967Proxy")
@@ -86,7 +85,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
     await proxy.deployed()
 
     walletRegistry = WalletRegistryFactory.attach(
-      proxy.address
+      proxy.address,
     ) as WalletRegistry
   })
 
@@ -105,13 +104,13 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
 
       // Second call should fail
       await expect(
-        walletRegistry.initializeV2(allowlist.address)
+        walletRegistry.initializeV2(allowlist.address),
       ).to.be.revertedWith("Initializable: contract is already initialized")
     })
 
     it("should revert when allowlist address is zero", async () => {
       await expect(
-        walletRegistry.initializeV2(ZERO_ADDRESS)
+        walletRegistry.initializeV2(ZERO_ADDRESS),
       ).to.be.revertedWithCustomError(walletRegistry, "AllowlistAddressZero")
     })
   })
@@ -140,7 +139,11 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(allowlistSigner)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.not.be.reverted
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [
@@ -166,10 +169,14 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(stakingSigner)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.be.revertedWithCustomError(
         walletRegistry,
-        "CallerNotStakingContract"
+        "CallerNotStakingContract",
       )
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [
@@ -184,10 +191,14 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(unauthorizedCaller)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.be.revertedWithCustomError(
         walletRegistry,
-        "CallerNotStakingContract"
+        "CallerNotStakingContract",
       )
     })
 
@@ -212,7 +223,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
         .authorizationIncreased(
           stakingProvider.address,
           initialAmount,
-          fromAmount
+          fromAmount,
         )
 
       // Then request decrease
@@ -224,13 +235,13 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           .authorizationDecreaseRequested(
             stakingProvider.address,
             fromAmount,
-            toAmount
+            toAmount,
           )
       } catch (error: any) {
         // If it fails, it should NOT be due to the onlyStakingContract modifier
         // (which would say "Caller is not the staking contract")
         expect(error.message).to.not.include(
-          "Caller is not the staking contract"
+          "Caller is not the staking contract",
         )
       }
 
@@ -261,7 +272,11 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(stakingSigner)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.not.be.reverted
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [
@@ -287,10 +302,14 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(allowlistSigner)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.be.revertedWithCustomError(
         walletRegistry,
-        "CallerNotStakingContract"
+        "CallerNotStakingContract",
       )
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [
@@ -305,10 +324,14 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(unauthorizedCaller)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.be.revertedWithCustomError(
         walletRegistry,
-        "CallerNotStakingContract"
+        "CallerNotStakingContract",
       )
     })
   })
@@ -344,7 +367,11 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(allowlistSigner)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.not.be.reverted
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [
@@ -369,7 +396,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
 
       await expect(tx).to.be.revertedWithCustomError(
         walletRegistry,
-        "CallerNotStakingContract"
+        "CallerNotStakingContract",
       )
 
       // Gas measurement would be done here in actual implementation
@@ -450,7 +477,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
         .authorizationDecreaseRequested(
           stakingProvider.address,
           toAmount,
-          fromAmount
+          fromAmount,
         )
       const receipt2 = await tx2.wait()
 
@@ -475,7 +502,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       const newAllowlist = await createMock<Allowlist>("Allowlist")
 
       await expect(
-        walletRegistry.initializeV2(newAllowlist.address)
+        walletRegistry.initializeV2(newAllowlist.address),
       ).to.be.revertedWith("Initializable: contract is already initialized")
     })
 
@@ -502,7 +529,11 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(allowlistSigner)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.not.be.reverted
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [
@@ -523,10 +554,14 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(stakingSigner)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.be.revertedWithCustomError(
         walletRegistry,
-        "CallerNotStakingContract"
+        "CallerNotStakingContract",
       )
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [
@@ -550,7 +585,11 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       await expect(
         walletRegistry
           .connect(stakingContract.wallet)
-          .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
+          .authorizationIncreased(
+            stakingProvider.address,
+            fromAmount,
+            toAmount,
+          ),
       ).to.not.be.reverted
 
       // This validates that existing deployments are unaffected until initializeV2 is called
@@ -582,8 +621,8 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           .authorizationIncreased(
             stakingProvider.address,
             initialAmount,
-            increasedAmount
-          )
+            increasedAmount,
+          ),
       ).to.not.be.reverted
 
       // 2. Authorization decrease request from allowlist
@@ -595,13 +634,13 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           .authorizationDecreaseRequested(
             stakingProvider.address,
             increasedAmount,
-            decreasedAmount
+            decreasedAmount,
           )
       } catch (error: any) {
         // If it fails, it should NOT be due to the onlyStakingContract modifier
         // (which would say "Caller is not the staking contract")
         expect(error.message).to.not.include(
-          "Caller is not the staking contract"
+          "Caller is not the staking contract",
         )
       }
 
@@ -654,11 +693,11 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           .authorizationDecreaseRequested(
             stakingProvider.address,
             toAmount,
-            fromAmount
-          )
+            fromAmount,
+          ),
       ).to.be.revertedWithCustomError(
         walletRegistry,
-        "CallerNotStakingContract"
+        "CallerNotStakingContract",
       )
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [

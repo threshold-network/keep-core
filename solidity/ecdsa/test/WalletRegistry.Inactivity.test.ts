@@ -45,7 +45,7 @@ describe("WalletRegistry - Inactivity", () => {
   // during a single `notifyOperatorInactivity` call.
   const subsequentInactiveMembersIndices = Array.from(
     Array(49),
-    (_, i) => i + 1
+    (_, i) => i + 1,
   )
   const nonSubsequentInactiveMembersIndices = [2, 5, 7, 23, 56]
   const emptyMembersIndices: number[] = []
@@ -62,7 +62,7 @@ describe("WalletRegistry - Inactivity", () => {
       walletRegistry,
       walletOwner.wallet,
       randomBeacon,
-      walletPublicKey
+      walletPublicKey,
     ))
 
     membersIDs = members.map((member) => member.id)
@@ -81,9 +81,9 @@ describe("WalletRegistry - Inactivity", () => {
                     signaturesCount: number,
                     modifySignatures: (signatures: string) => string,
                     modifySigningMemberIndices: (
-                      signingMemberIndices: number[]
+                      signingMemberIndices: number[],
                     ) => number[],
-                    expectedGasUsed: number
+                    expectedGasUsed: number,
                   ) => {
                     let tx: ContractTransaction
                     let initialNonce: BigNumber
@@ -96,12 +96,11 @@ describe("WalletRegistry - Inactivity", () => {
                       // Assume claim sender is the first signing member.
                       claimSender = members[0].signer
 
-                      initialNonce = await walletRegistry.inactivityClaimNonce(
-                        walletID
-                      )
+                      initialNonce =
+                        await walletRegistry.inactivityClaimNonce(walletID)
 
                       initClaimSenderBalance = await provider.getBalance(
-                        claimSender.address
+                        claimSender.address,
                       )
 
                       const { signatures, signingMembersIndices } =
@@ -111,7 +110,7 @@ describe("WalletRegistry - Inactivity", () => {
                           walletPublicKey,
                           noHeartbeatFailure,
                           inactiveMembersIndices,
-                          signaturesCount
+                          signaturesCount,
                         )
 
                       tx = await walletRegistry
@@ -123,11 +122,11 @@ describe("WalletRegistry - Inactivity", () => {
                             heartbeatFailed: noHeartbeatFailure,
                             signatures: modifySignatures(signatures),
                             signingMembersIndices: modifySigningMemberIndices(
-                              signingMembersIndices
+                              signingMembersIndices,
                             ),
                           },
                           0,
-                          membersIDs
+                          membersIDs,
                         )
                     })
 
@@ -139,12 +138,12 @@ describe("WalletRegistry - Inactivity", () => {
                       const postNotifyThirdPartyBalance =
                         await provider.getBalance(claimSender.address)
                       const diff = postNotifyThirdPartyBalance.sub(
-                        initClaimSenderBalance
+                        initClaimSenderBalance,
                       )
 
                       expect(diff).to.be.gt(0)
                       expect(diff).to.be.lt(
-                        ethers.utils.parseUnits("2000000", "gwei") // 0,002 ETH
+                        ethers.utils.parseUnits("2000000", "gwei"), // 0,002 ETH
                       )
                     })
 
@@ -155,13 +154,13 @@ describe("WalletRegistry - Inactivity", () => {
                         ethers.BigNumber.from(expectedGasUsed)
                           .mul(5) // 5% delta
                           .div(100)
-                          .toNumber()
+                          .toNumber(),
                       )
                     })
 
                     it("should increment inactivity claim nonce for the group", async () => {
                       expect(
-                        await walletRegistry.inactivityClaimNonce(walletID)
+                        await walletRegistry.inactivityClaimNonce(walletID),
                       ).to.be.equal(initialNonce.add(1))
                     })
 
@@ -171,7 +170,7 @@ describe("WalletRegistry - Inactivity", () => {
                         .withArgs(
                           walletID,
                           initialNonce.toNumber(),
-                          claimSender.address
+                          claimSender.address,
                         )
                     })
 
@@ -197,9 +196,9 @@ describe("WalletRegistry - Inactivity", () => {
                         groupThreshold,
                         (signatures) => signatures,
                         (signingMembersIndices) => signingMembersIndices,
-                        1_210_000
+                        1_210_000,
                       )
-                    }
+                    },
                   )
 
                   context(
@@ -210,9 +209,9 @@ describe("WalletRegistry - Inactivity", () => {
                         groupThreshold,
                         (signatures) => signatures,
                         (signingMembersIndices) => signingMembersIndices,
-                        840_000
+                        840_000,
                       )
-                    }
+                    },
                   )
 
                   context(
@@ -223,9 +222,9 @@ describe("WalletRegistry - Inactivity", () => {
                         groupThreshold,
                         (signatures) => signatures,
                         (signingMembersIndices) => signingMembersIndices,
-                        880_000
+                        880_000,
                       )
-                    }
+                    },
                   )
 
                   context(
@@ -243,7 +242,7 @@ describe("WalletRegistry - Inactivity", () => {
                       // signature has 65 bytes so 130 characters
                       const getSignature = (
                         signatures: string,
-                        index: number
+                        index: number,
                       ) =>
                         signatures
                           .slice(2)
@@ -261,7 +260,7 @@ describe("WalletRegistry - Inactivity", () => {
                             newSigningMembersIndices[i]
                           newSignatures += getSignature(
                             signatures,
-                            newSigningMemberIndex - 1
+                            newSigningMemberIndex - 1,
                           )
                         }
 
@@ -275,9 +274,9 @@ describe("WalletRegistry - Inactivity", () => {
                         100,
                         modifySignatures,
                         () => newSigningMembersIndices,
-                        1_240_000
+                        1_240_000,
                       )
-                    }
+                    },
                   )
 
                   context("when heartbeat failed", () => {
@@ -293,7 +292,7 @@ describe("WalletRegistry - Inactivity", () => {
                           walletPublicKey,
                           heartbeatFailed,
                           subsequentInactiveMembersIndices,
-                          groupThreshold
+                          groupThreshold,
                         )
                       await walletRegistry
                         .connect(claimSender)
@@ -307,7 +306,7 @@ describe("WalletRegistry - Inactivity", () => {
                             signingMembersIndices,
                           },
                           0,
-                          membersIDs
+                          membersIDs,
                         )
                     })
 
@@ -318,7 +317,7 @@ describe("WalletRegistry - Inactivity", () => {
                     it("should notify the wallet owner", async () => {
                       await expectCalledWith(
                         walletOwner.__ecdsaWalletHeartbeatFailedCallback,
-                        [walletID, walletPublicKeyX, walletPublicKeyY]
+                        [walletID, walletPublicKeyX, walletPublicKeyY],
                       )
                     })
                   })
@@ -336,7 +335,7 @@ describe("WalletRegistry - Inactivity", () => {
                           walletPublicKey,
                           noHeartbeatFailure,
                           subsequentInactiveMembersIndices,
-                          groupThreshold
+                          groupThreshold,
                         )
                       await walletRegistry
                         .connect(claimSender)
@@ -350,7 +349,7 @@ describe("WalletRegistry - Inactivity", () => {
                             signingMembersIndices,
                           },
                           0,
-                          membersIDs
+                          membersIDs,
                         )
                     })
 
@@ -360,7 +359,7 @@ describe("WalletRegistry - Inactivity", () => {
 
                     it("should not notify the wallet owner", async () => {
                       await expectNotCalled(
-                        walletOwner.__ecdsaWalletHeartbeatFailedCallback
+                        walletOwner.__ecdsaWalletHeartbeatFailedCallback,
                       )
                     })
                   })
@@ -377,7 +376,7 @@ describe("WalletRegistry - Inactivity", () => {
                           walletPublicKey,
                           noHeartbeatFailure,
                           subsequentInactiveMembersIndices,
-                          groupThreshold
+                          groupThreshold,
                         )
 
                       const claimSender = thirdParty
@@ -395,17 +394,17 @@ describe("WalletRegistry - Inactivity", () => {
                               signingMembersIndices,
                             },
                             0,
-                            membersIDs
-                          )
+                            membersIDs,
+                          ),
                       ).to.be.revertedWith("Sender must be claim signer")
                     })
-                  }
+                  },
                 )
               })
 
               context("when one of the signatures is incorrect", () => {
                 const assertInvalidSignature = async (
-                  invalidSignature: string
+                  invalidSignature: string,
                 ) => {
                   // The 50 signers sign correct parameters. Invalid signature
                   // is expected to be provided by signer 51.
@@ -416,7 +415,7 @@ describe("WalletRegistry - Inactivity", () => {
                       walletPublicKey,
                       noHeartbeatFailure,
                       subsequentInactiveMembersIndices,
-                      groupThreshold - 1
+                      groupThreshold - 1,
                     )
 
                   await expect(
@@ -431,8 +430,8 @@ describe("WalletRegistry - Inactivity", () => {
                         signingMembersIndices: [...signingMembersIndices, 51],
                       },
                       0,
-                      membersIDs
-                    )
+                      membersIDs,
+                    ),
                   ).to.be.revertedWith("Invalid signature")
                 }
 
@@ -448,13 +447,13 @@ describe("WalletRegistry - Inactivity", () => {
                           walletPublicKey,
                           noHeartbeatFailure,
                           subsequentInactiveMembersIndices,
-                          1
+                          1,
                         )
                       ).signatures
 
                       await assertInvalidSignature(invalidSignature)
                     })
-                  }
+                  },
                 )
 
                 context(
@@ -469,13 +468,13 @@ describe("WalletRegistry - Inactivity", () => {
                           "0x010203",
                           noHeartbeatFailure,
                           subsequentInactiveMembersIndices,
-                          1
+                          1,
                         )
                       ).signatures
 
                       await assertInvalidSignature(invalidSignature)
                     })
-                  }
+                  },
                 )
 
                 context(
@@ -490,13 +489,13 @@ describe("WalletRegistry - Inactivity", () => {
                           walletPublicKey,
                           heartbeatFailed,
                           subsequentInactiveMembersIndices,
-                          1
+                          1,
                         )
                       ).signatures
 
                       await assertInvalidSignature(invalidSignature)
                     })
-                  }
+                  },
                 )
 
                 context(
@@ -511,13 +510,13 @@ describe("WalletRegistry - Inactivity", () => {
                           walletPublicKey,
                           noHeartbeatFailure,
                           [1, 2, 3, 4, 5, 6, 7, 8],
-                          1
+                          1,
                         )
                       ).signatures
 
                       await assertInvalidSignature(invalidSignature)
                     })
-                  }
+                  },
                 )
               })
             })
@@ -534,7 +533,7 @@ describe("WalletRegistry - Inactivity", () => {
                         walletPublicKey,
                         noHeartbeatFailure,
                         subsequentInactiveMembersIndices,
-                        groupThreshold
+                        groupThreshold,
                       )
 
                     await expect(
@@ -549,11 +548,11 @@ describe("WalletRegistry - Inactivity", () => {
                           signingMembersIndices: signingMembersIndices.slice(1),
                         },
                         0,
-                        membersIDs
-                      )
+                        membersIDs,
+                      ),
                     ).to.be.revertedWith("Unexpected signatures count")
                   })
-                }
+                },
               )
 
               context("when first signing member index is zero", () => {
@@ -565,7 +564,7 @@ describe("WalletRegistry - Inactivity", () => {
                       walletPublicKey,
                       noHeartbeatFailure,
                       subsequentInactiveMembersIndices,
-                      groupThreshold
+                      groupThreshold,
                     )
 
                   signingMembersIndices[0] = 0
@@ -581,8 +580,8 @@ describe("WalletRegistry - Inactivity", () => {
                         signingMembersIndices,
                       },
                       0,
-                      membersIDs
-                    )
+                      membersIDs,
+                    ),
                   ).to.be.revertedWith("Corrupted members indices")
                 })
               })
@@ -598,12 +597,11 @@ describe("WalletRegistry - Inactivity", () => {
                         walletPublicKey,
                         noHeartbeatFailure,
                         subsequentInactiveMembersIndices,
-                        groupThreshold
+                        groupThreshold,
                       )
 
-                    signingMembersIndices[
-                      signingMembersIndices.length - 1
-                    ] = 101
+                    signingMembersIndices[signingMembersIndices.length - 1] =
+                      101
 
                     await expect(
                       walletRegistry.notifyOperatorInactivity(
@@ -616,11 +614,11 @@ describe("WalletRegistry - Inactivity", () => {
                           signingMembersIndices,
                         },
                         0,
-                        membersIDs
-                      )
+                        membersIDs,
+                      ),
                     ).to.be.revertedWith("Corrupted members indices")
                   })
-                }
+                },
               )
 
               context(
@@ -634,7 +632,7 @@ describe("WalletRegistry - Inactivity", () => {
                         walletPublicKey,
                         noHeartbeatFailure,
                         subsequentInactiveMembersIndices,
-                        groupThreshold
+                        groupThreshold,
                       )
 
                     // eslint-disable-next-line prefer-destructuring
@@ -651,11 +649,11 @@ describe("WalletRegistry - Inactivity", () => {
                           signingMembersIndices,
                         },
                         0,
-                        membersIDs
-                      )
+                        membersIDs,
+                      ),
                     ).to.be.revertedWith("Corrupted members indices")
                   })
-                }
+                },
               )
             })
           })
@@ -675,8 +673,8 @@ describe("WalletRegistry - Inactivity", () => {
                       signingMembersIndices: emptyMembersIndices,
                     },
                     0,
-                    membersIDs
-                  )
+                    membersIDs,
+                  ),
                 ).to.be.revertedWith("No signatures provided")
               })
             })
@@ -698,11 +696,11 @@ describe("WalletRegistry - Inactivity", () => {
                         signingMembersIndices: emptyMembersIndices,
                       },
                       0,
-                      membersIDs
-                    )
+                      membersIDs,
+                    ),
                   ).to.be.revertedWith("Malformed signatures array")
                 })
-              }
+              },
             )
 
             context(
@@ -716,7 +714,7 @@ describe("WalletRegistry - Inactivity", () => {
                       walletPublicKey,
                       noHeartbeatFailure,
                       subsequentInactiveMembersIndices,
-                      groupThreshold
+                      groupThreshold,
                     )
 
                   await expect(
@@ -732,11 +730,11 @@ describe("WalletRegistry - Inactivity", () => {
                         signingMembersIndices,
                       },
                       0,
-                      membersIDs
-                    )
+                      membersIDs,
+                    ),
                   ).to.be.revertedWith("Unexpected signatures count")
                 })
-              }
+              },
             )
 
             context(
@@ -751,7 +749,7 @@ describe("WalletRegistry - Inactivity", () => {
                       noHeartbeatFailure,
                       subsequentInactiveMembersIndices,
                       // Provide one few signature
-                      groupThreshold - 1
+                      groupThreshold - 1,
                     )
 
                   await expect(
@@ -765,11 +763,11 @@ describe("WalletRegistry - Inactivity", () => {
                         signingMembersIndices,
                       },
                       0,
-                      membersIDs
-                    )
+                      membersIDs,
+                    ),
                   ).to.be.revertedWith("Too few signatures")
                 })
-              }
+              },
             )
 
             context("when signatures count is bigger than group size", () => {
@@ -782,7 +780,7 @@ describe("WalletRegistry - Inactivity", () => {
                     noHeartbeatFailure,
                     subsequentInactiveMembersIndices,
                     // All group signs.
-                    members.length
+                    members.length,
                   )
 
                 await expect(
@@ -801,8 +799,8 @@ describe("WalletRegistry - Inactivity", () => {
                       ],
                     },
                     0,
-                    membersIDs
-                  )
+                    membersIDs,
+                  ),
                 ).to.be.revertedWith("Too many signatures")
               })
             })
@@ -811,7 +809,7 @@ describe("WalletRegistry - Inactivity", () => {
 
         context("when inactive members indices are incorrect", () => {
           const assertInactiveMembersIndicesCorrupted = async (
-            inactiveMembersIndices: number[]
+            inactiveMembersIndices: number[],
           ) => {
             const { signatures, signingMembersIndices } =
               await signOperatorInactivityClaim(
@@ -820,7 +818,7 @@ describe("WalletRegistry - Inactivity", () => {
                 walletPublicKey,
                 noHeartbeatFailure,
                 inactiveMembersIndices,
-                groupThreshold
+                groupThreshold,
               )
 
             await expect(
@@ -833,8 +831,8 @@ describe("WalletRegistry - Inactivity", () => {
                   signingMembersIndices,
                 },
                 0,
-                membersIDs
-              )
+                membersIDs,
+              ),
             ).to.be.revertedWith("Corrupted members indices")
           }
 
@@ -843,7 +841,7 @@ describe("WalletRegistry - Inactivity", () => {
               const inactiveMembersIndices: number[] = []
 
               await assertInactiveMembersIndicesCorrupted(
-                inactiveMembersIndices
+                inactiveMembersIndices,
               )
             })
           })
@@ -854,26 +852,26 @@ describe("WalletRegistry - Inactivity", () => {
               it("should revert", async () => {
                 const inactiveMembersIndices = Array.from(
                   Array(101),
-                  (_, i) => i + 1
+                  (_, i) => i + 1,
                 )
 
                 await assertInactiveMembersIndicesCorrupted(
-                  inactiveMembersIndices
+                  inactiveMembersIndices,
                 )
               })
-            }
+            },
           )
 
           context("when first inactive member index is zero", () => {
             it("should revert", async () => {
               const inactiveMembersIndices = Array.from(
                 Array(100),
-                (_, i) => i + 1
+                (_, i) => i + 1,
               )
               inactiveMembersIndices[0] = 0
 
               await assertInactiveMembersIndicesCorrupted(
-                inactiveMembersIndices
+                inactiveMembersIndices,
               )
             })
           })
@@ -884,15 +882,15 @@ describe("WalletRegistry - Inactivity", () => {
               it("should revert", async () => {
                 const inactiveMembersIndices = Array.from(
                   Array(100),
-                  (_, i) => i + 1
+                  (_, i) => i + 1,
                 )
                 inactiveMembersIndices[inactiveMembersIndices.length - 1] = 101
 
                 await assertInactiveMembersIndicesCorrupted(
-                  inactiveMembersIndices
+                  inactiveMembersIndices,
                 )
               })
-            }
+            },
           )
 
           context(
@@ -901,16 +899,16 @@ describe("WalletRegistry - Inactivity", () => {
               it("should revert", async () => {
                 const inactiveMembersIndices = Array.from(
                   Array(100),
-                  (_, i) => i + 1
+                  (_, i) => i + 1,
                 )
                 // eslint-disable-next-line prefer-destructuring
                 inactiveMembersIndices[10] = inactiveMembersIndices[11]
 
                 await assertInactiveMembersIndicesCorrupted(
-                  inactiveMembersIndices
+                  inactiveMembersIndices,
                 )
               })
-            }
+            },
           )
         })
       })
@@ -926,7 +924,7 @@ describe("WalletRegistry - Inactivity", () => {
               unknownWalletPublicKey,
               noHeartbeatFailure,
               subsequentInactiveMembersIndices,
-              groupThreshold
+              groupThreshold,
             )
 
           await expect(
@@ -939,8 +937,8 @@ describe("WalletRegistry - Inactivity", () => {
                 signingMembersIndices,
               },
               0,
-              membersIDs
-            )
+              membersIDs,
+            ),
           ).to.be.revertedWith("Invalid signature")
         })
       })
@@ -956,7 +954,7 @@ describe("WalletRegistry - Inactivity", () => {
               walletPublicKey,
               noHeartbeatFailure,
               subsequentInactiveMembersIndices,
-              groupThreshold
+              groupThreshold,
             )
 
           await expect(
@@ -969,10 +967,10 @@ describe("WalletRegistry - Inactivity", () => {
                 signingMembersIndices,
               },
               0,
-              membersIDs
-            )
+              membersIDs,
+            ),
           ).to.be.revertedWith(
-            "Wallet with the given ID has not been registered"
+            "Wallet with the given ID has not been registered",
           )
         })
       })
@@ -995,7 +993,7 @@ describe("WalletRegistry - Inactivity", () => {
               walletPublicKey,
               noHeartbeatFailure,
               subsequentInactiveMembersIndices,
-              groupThreshold
+              groupThreshold,
             )
 
           await expect(
@@ -1008,10 +1006,10 @@ describe("WalletRegistry - Inactivity", () => {
                 signingMembersIndices,
               },
               0,
-              membersIDs
-            )
+              membersIDs,
+            ),
           ).to.be.revertedWith(
-            "Wallet with the given ID has not been registered"
+            "Wallet with the given ID has not been registered",
           )
         })
       })
@@ -1029,8 +1027,8 @@ describe("WalletRegistry - Inactivity", () => {
               signingMembersIndices: emptyMembersIndices,
             },
             1,
-            membersIDs
-          ) // Initial nonce is `0`.
+            membersIDs,
+          ), // Initial nonce is `0`.
         ).to.be.revertedWithCustomError(walletRegistry, "InvalidNonce")
       })
     })
@@ -1048,8 +1046,8 @@ describe("WalletRegistry - Inactivity", () => {
               signingMembersIndices: emptyMembersIndices,
             },
             0,
-            invalidMembersId
-          )
+            invalidMembersId,
+          ),
         ).to.be.revertedWithCustomError(walletRegistry, "InvalidGroupMembers")
       })
     })
@@ -1078,7 +1076,7 @@ describe("WalletRegistry - Inactivity", () => {
             walletPublicKey,
             noHeartbeatFailure,
             subsequentInactiveMembersIndices,
-            groupThreshold
+            groupThreshold,
           )
         await walletRegistry.connect(claimSender).notifyOperatorInactivity(
           {
@@ -1089,11 +1087,11 @@ describe("WalletRegistry - Inactivity", () => {
             signingMembersIndices,
           },
           0,
-          membersIDs
+          membersIDs,
         )
 
         expect(await walletRegistry.inactivityClaimNonce(walletID)).to.be.equal(
-          1
+          1,
         )
 
         // Sign the second inactivity claim for the group, make sure the nonce
@@ -1105,7 +1103,7 @@ describe("WalletRegistry - Inactivity", () => {
             walletPublicKey,
             noHeartbeatFailure,
             subsequentInactiveMembersIndices,
-            groupThreshold
+            groupThreshold,
           ))
         await walletRegistry.connect(claimSender).notifyOperatorInactivity(
           {
@@ -1116,11 +1114,11 @@ describe("WalletRegistry - Inactivity", () => {
             signingMembersIndices,
           },
           1,
-          membersIDs
+          membersIDs,
         )
 
         expect(await walletRegistry.inactivityClaimNonce(walletID)).to.be.equal(
-          2
+          2,
         )
       })
 
@@ -1137,7 +1135,7 @@ describe("WalletRegistry - Inactivity", () => {
 
         it("should remain unchanged", async () => {
           expect(
-            await walletRegistry.inactivityClaimNonce(walletID)
+            await walletRegistry.inactivityClaimNonce(walletID),
           ).to.be.equal(2)
         })
       })

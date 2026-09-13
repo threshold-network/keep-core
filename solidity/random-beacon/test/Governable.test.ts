@@ -26,7 +26,7 @@ describe("Governable", () => {
   describe("constructor", () => {
     it("should set governance to default zero address", async () => {
       expect(await governable.governance()).to.be.equal(
-        ethers.constants.AddressZero
+        ethers.constants.AddressZero,
       )
     })
   })
@@ -38,7 +38,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(deployer)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
@@ -48,7 +48,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(governance)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
@@ -58,7 +58,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(thirdParty)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
@@ -74,7 +74,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(deployer)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
@@ -111,7 +111,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(thirdParty)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
@@ -121,7 +121,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(governance)
-              .transferGovernance(ethers.constants.AddressZero)
+              .transferGovernance(ethers.constants.AddressZero),
           ).to.be.revertedWith("New governance is the zero address")
         })
       })
@@ -148,7 +148,7 @@ describe("Governable", () => {
     it("should not be exposed directly", async () => {
       expect(
         governable.functions,
-        "_transferGovernance function is exposed on the contract"
+        "_transferGovernance function is exposed on the contract",
       ).to.not.haveOwnProperty("_transferGovernance")
     })
   })

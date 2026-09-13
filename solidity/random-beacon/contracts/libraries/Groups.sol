@@ -57,10 +57,10 @@ library Groups {
     ///         must be called first for a public key of a group added with
     ///         `addGroup` function.
     /// @param groupPubKey Candidate group public key
-    function validatePublicKey(Data storage self, bytes calldata groupPubKey)
-        internal
-        view
-    {
+    function validatePublicKey(
+        Data storage self,
+        bytes calldata groupPubKey
+    ) internal view {
         require(groupPubKey.length == 128, "Invalid length of the public key");
 
         bytes32 groupPubKeyHash = keccak256(groupPubKey);
@@ -117,7 +117,7 @@ library Groups {
                 self,
                 self.groupsRegistry[self.expiredGroupOffset]
             ) <
-            block.number
+                block.number
         ) {
             self.expiredGroupOffset++;
         }
@@ -185,10 +185,10 @@ library Groups {
     ///         is updated. At least one active group needs to be present for this
     ///         function to succeed.
     /// @param seed Random number used as a group selection seed.
-    function selectGroup(Data storage self, uint256 seed)
-        internal
-        returns (uint64)
-    {
+    function selectGroup(
+        Data storage self,
+        uint256 seed
+    ) internal returns (uint64) {
         expireOldGroups(self);
 
         require(numberOfActiveGroups(self) > 0, "No active groups");
@@ -208,89 +208,81 @@ library Groups {
     }
 
     /// @notice Checks if group with the given index is terminated.
-    function isGroupTerminated(Data storage self, uint64 groupId)
-        internal
-        view
-        returns (bool)
-    {
+    function isGroupTerminated(
+        Data storage self,
+        uint64 groupId
+    ) internal view returns (bool) {
         return self.groupsData[self.groupsRegistry[groupId]].terminated;
     }
 
     /// @notice Gets the cutoff time until which the given group is considered
     ///         to be active assuming it hasn't been terminated before.
-    function groupLifetimeOf(Data storage self, bytes32 groupPubKeyHash)
-        internal
-        view
-        returns (uint256)
-    {
+    function groupLifetimeOf(
+        Data storage self,
+        bytes32 groupPubKeyHash
+    ) internal view returns (uint256) {
         return
             self.groupsData[groupPubKeyHash].registrationBlockNumber +
             self.groupLifetime;
     }
 
     /// @notice Checks if group with the given index is active and non-terminated.
-    function isGroupActive(Data storage self, uint64 groupId)
-        internal
-        view
-        returns (bool)
-    {
+    function isGroupActive(
+        Data storage self,
+        uint64 groupId
+    ) internal view returns (bool) {
         return
             groupLifetimeOf(self, self.groupsRegistry[groupId]) >=
-            block.number &&
+                block.number &&
             !isGroupTerminated(self, groupId);
     }
 
-    function getGroup(Data storage self, uint64 groupId)
-        internal
-        view
-        returns (Group storage)
-    {
+    function getGroup(
+        Data storage self,
+        uint64 groupId
+    ) internal view returns (Group storage) {
         return self.groupsData[self.groupsRegistry[groupId]];
     }
 
-    function getGroup(Data storage self, bytes memory groupPubKey)
-        internal
-        view
-        returns (Group storage)
-    {
+    function getGroup(
+        Data storage self,
+        bytes memory groupPubKey
+    ) internal view returns (Group storage) {
         return self.groupsData[keccak256(groupPubKey)];
     }
 
     /// @notice Gets the number of active groups. Expired and terminated
     ///         groups are not counted as active.
-    function numberOfActiveGroups(Data storage self)
-        internal
-        view
-        returns (uint64)
-    {
+    function numberOfActiveGroups(
+        Data storage self
+    ) internal view returns (uint64) {
         if (self.groupsRegistry.length == 0) {
             return 0;
         }
 
-        uint256 activeGroups = self.groupsRegistry.length -
-            self.expiredGroupOffset -
-            self.activeTerminatedGroups.length;
+        uint256 activeGroups =
+            self.groupsRegistry.length -
+                self.expiredGroupOffset -
+                self.activeTerminatedGroups.length;
 
         return uint64(activeGroups);
     }
 
     /// @notice Evaluates the shift of a selected group index based on the number
     ///         of expired groups.
-    function shiftByExpiredGroups(Data storage self, uint64 selectedIndex)
-        internal
-        view
-        returns (uint64)
-    {
+    function shiftByExpiredGroups(
+        Data storage self,
+        uint64 selectedIndex
+    ) internal view returns (uint64) {
         return self.expiredGroupOffset + selectedIndex;
     }
 
     /// @notice Evaluates the shift of a selected group index based on the number
     ///         of non-expired but terminated groups.
-    function shiftByTerminatedGroups(Data storage self, uint64 selectedIndex)
-        internal
-        view
-        returns (uint64)
-    {
+    function shiftByTerminatedGroups(
+        Data storage self,
+        uint64 selectedIndex
+    ) internal view returns (uint64) {
         uint64 shiftedIndex = selectedIndex;
         for (uint64 i = 0; i < self.activeTerminatedGroups.length; i++) {
             if (self.activeTerminatedGroups[i] <= shiftedIndex) {

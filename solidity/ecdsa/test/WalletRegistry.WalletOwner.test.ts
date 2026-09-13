@@ -24,13 +24,13 @@ const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 describe("WalletRegistry - Wallet Owner", async () => {
   const groupPublicKey: string = ethers.utils.hexValue(
-    ecdsaData.group1.publicKey
+    ecdsaData.group1.publicKey,
   )
   const groupPublicKeyX: string = ethers.utils.hexValue(
-    ecdsaData.group1.publicKeyX
+    ecdsaData.group1.publicKeyX,
   )
   const groupPublicKeyY: string = ethers.utils.hexValue(
-    ecdsaData.group1.publicKeyY
+    ecdsaData.group1.publicKeyY,
   )
   const walletID: string = ethers.utils.keccak256(groupPublicKey)
 
@@ -57,7 +57,7 @@ describe("WalletRegistry - Wallet Owner", async () => {
         walletRegistry,
         groupPublicKey,
         dkgSeed,
-        startBlock
+        startBlock,
       ))
 
       await mineBlocks(params.dkgResultChallengePeriodLength)
@@ -76,7 +76,7 @@ describe("WalletRegistry - Wallet Owner", async () => {
         await createSnapshot()
 
         await walletOwner.__ecdsaWalletCreatedCallback.reverts(
-          "wallet owner internal error"
+          "wallet owner internal error",
         )
 
         tx = walletRegistry.connect(submitter).approveDkgResult(dkgResult)

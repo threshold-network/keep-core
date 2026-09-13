@@ -48,7 +48,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const walletRegistryDeployment = await deployments.get("WalletRegistry")
   const walletRegistryBefore = await ethers.getContractAt(
     "WalletRegistry",
-    walletRegistryDeployment.address
+    walletRegistryDeployment.address,
   )
 
   console.log("Current WalletRegistry state:")
@@ -83,10 +83,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103"
   const proxyAdminSlot = await ethers.provider.getStorageAt(
     walletRegistryDeployment.address,
-    ADMIN_SLOT
+    ADMIN_SLOT,
   )
   const proxyAdminAddress = ethers.utils.getAddress(
-    `0x${proxyAdminSlot.slice(-40)}`
+    `0x${proxyAdminSlot.slice(-40)}`,
   )
   console.log(`  ProxyAdmin: ${proxyAdminAddress}`)
 
@@ -95,7 +95,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
   const implSlot = await ethers.provider.getStorageAt(
     walletRegistryDeployment.address,
-    IMPL_SLOT
+    IMPL_SLOT,
   )
   const currentImpl = ethers.utils.getAddress(`0x${implSlot.slice(-40)}`)
   console.log(`  Current Implementation: ${currentImpl}`)
@@ -116,13 +116,13 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       libraries: {
         EcdsaInactivity: EcdsaInactivity.address,
       },
-    }
+    },
   )
 
   // Deploy implementation with constructor args (immutable variables)
   const newImplementation = await WalletRegistryFactory.deploy(
     EcdsaSortitionPool.address,
-    TokenStaking.address
+    TokenStaking.address,
   )
   await newImplementation.deployed()
 
@@ -140,7 +140,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   // Encode initializeV2 call
   const initializeV2Data = WalletRegistryFactory.interface.encodeFunctionData(
     "initializeV2",
-    [Allowlist.address]
+    [Allowlist.address],
   )
 
   // Encode upgradeAndCall for ProxyAdmin
@@ -155,13 +155,13 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       walletRegistryDeployment.address,
       newImplementation.address,
       initializeV2Data,
-    ]
+    ],
   )
 
   // Get ProxyAdmin owner
   const proxyAdmin = await ethers.getContractAt(
     ["function owner() view returns (address)"],
-    proxyAdminAddress
+    proxyAdminAddress,
   )
   const proxyAdminOwner = await proxyAdmin.owner()
   console.log(`ProxyAdmin owner: ${proxyAdminOwner}`)
@@ -172,7 +172,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     console.log("=== MAINNET GOVERNANCE PROPOSAL ===")
     console.log()
     console.log(
-      "The upgrade must be executed through the Timelock (24h delay)."
+      "The upgrade must be executed through the Timelock (24h delay).",
     )
     console.log()
     console.log("Step 1: Schedule the upgrade via Timelock")
@@ -233,7 +233,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
     const proposalPath = path.join(
       __dirname,
-      "../upgrade-proposal-mainnet.json"
+      "../upgrade-proposal-mainnet.json",
     )
     fs.writeFileSync(proposalPath, JSON.stringify(proposalData, null, 2))
     console.log(`Proposal data saved to: ${proposalPath}`)
@@ -270,14 +270,14 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
         "function upgradeAndCall(address proxy, address implementation, bytes calldata data) external payable",
       ],
       proxyAdminAddress,
-      esdm
+      esdm,
     )
 
     console.log("Calling ProxyAdmin.upgradeAndCall()...")
     const tx = await proxyAdminContract.upgradeAndCall(
       walletRegistryDeployment.address,
       newImplementation.address,
-      initializeV2Data
+      initializeV2Data,
     )
 
     console.log(`TX: ${tx.hash}`)
@@ -291,7 +291,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
     const walletRegistryV2 = await ethers.getContractAt(
       "WalletRegistry",
-      walletRegistryDeployment.address
+      walletRegistryDeployment.address,
     )
 
     const newAllowlist = await walletRegistryV2.allowlist()

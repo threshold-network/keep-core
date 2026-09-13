@@ -13,7 +13,7 @@ describe("hashDKGMembers", () => {
 
       const actualHash = hashDKGMembers(members, misbehavedMembers)
       const expectedHash = ethers.utils.keccak256(
-        ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers])
+        ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers]),
       )
 
       expect(expectedHash).to.be.equal(actualHash)
@@ -29,7 +29,7 @@ describe("hashDKGMembers", () => {
 
       const actualHash = hashDKGMembers(members, misbehavedMembers)
       const expectedHash = ethers.utils.keccak256(
-        ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers])
+        ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers]),
       )
 
       expect(expectedHash).to.be.equal(actualHash)
@@ -45,7 +45,7 @@ describe("hashDKGMembers", () => {
 
       const actualHash = hashDKGMembers(members, misbehavedMembers)
       const expectedHash = ethers.utils.keccak256(
-        ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers])
+        ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers]),
       )
 
       expect(expectedHash).to.be.equal(actualHash)
@@ -61,7 +61,7 @@ describe("hashDKGMembers", () => {
 
       const actualHash = hashDKGMembers(members, misbehavedMembers)
       const expectedHash = ethers.utils.keccak256(
-        ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers])
+        ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers]),
       )
 
       expect(expectedHash).to.be.equal(actualHash)
@@ -77,11 +77,11 @@ describe("hashDKGMembers", () => {
 
         const actualHash = hashDKGMembers(members, misbehavedMembers)
         const expectedHash = ethers.utils.keccak256(
-          ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers])
+          ethers.utils.defaultAbiCoder.encode(["uint32[]"], [expectedMembers]),
         )
 
         expect(expectedHash).to.be.equal(actualHash)
       })
-    }
+    },
   )
 })

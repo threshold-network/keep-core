@@ -80,7 +80,7 @@ describe("WalletRegistry - Slashing", () => {
       walletRegistry,
       walletOwner.wallet,
       randomBeacon,
-      walletPublicKey
+      walletPublicKey,
     ))
 
     membersIDs = members.map((member) => member.id)
@@ -98,8 +98,8 @@ describe("WalletRegistry - Slashing", () => {
               rewardMultiplier,
               thirdParty.address,
               walletID,
-              membersIDs
-            )
+              membersIDs,
+            ),
         ).to.be.revertedWithCustomError(walletRegistry, "CallerNotWalletOwner")
       })
     })
@@ -116,11 +116,11 @@ describe("WalletRegistry - Slashing", () => {
                 rewardMultiplier,
                 thirdParty.address,
                 walletID,
-                corruptedMembersIDs
-              )
+                corruptedMembersIDs,
+              ),
           ).to.be.revertedWithCustomError(
             walletRegistry,
-            "InvalidWalletMembersIdentifiers"
+            "InvalidWalletMembersIdentifiers",
           )
         })
       })
@@ -142,7 +142,7 @@ describe("WalletRegistry - Slashing", () => {
                 rewardMultiplier,
                 thirdParty.address,
                 walletID,
-                membersIDs
+                membersIDs,
               )
             notifierBalanceAfter = await tToken.balanceOf(thirdParty.address)
           })
@@ -153,7 +153,7 @@ describe("WalletRegistry - Slashing", () => {
 
           it("should slash all group members", async () => {
             expect(await staking.getSlashingQueueLength()).to.equal(
-              constants.groupSize
+              constants.groupSize,
             )
           })
 
@@ -169,7 +169,7 @@ describe("WalletRegistry - Slashing", () => {
               const slashing = await staking.slashingQueue(i)
               const expectedStakingProvider =
                 await walletRegistry.operatorToStakingProvider(
-                  membersAddresses[i]
+                  membersAddresses[i],
                 )
 
               expect(slashing.stakingProvider).to.equal(expectedStakingProvider)
@@ -181,12 +181,12 @@ describe("WalletRegistry - Slashing", () => {
             // (pushNotificationReward/setNotificationReward methods removed).
             // The notifier receives 0 reward.
             const receivedReward = notifierBalanceAfter.sub(
-              notifierBalanceBefore
+              notifierBalanceBefore,
             )
 
             expect(receivedReward).to.equal(0)
           })
-        }
+        },
       )
 
       // TODO: Add a unit test ensuring `seize` call reverts if the staking

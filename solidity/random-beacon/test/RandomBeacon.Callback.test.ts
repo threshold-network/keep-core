@@ -40,7 +40,7 @@ const fixture = async () => {
     contracts.randomBeacon as RandomBeacon,
     contracts.t as T,
     constants.groupSize,
-    2
+    2,
   )
 
   await createGroup(contracts.randomBeacon as RandomBeacon, signers)
@@ -95,7 +95,7 @@ describe("RandomBeacon - Callback", () => {
           .requestRelayEntry(callbackContract.address)
 
         await expect(await randomBeacon.getCallbackContract()).to.equal(
-          callbackContract.address
+          callbackContract.address,
         )
 
         await restoreSnapshot()
@@ -115,7 +115,7 @@ describe("RandomBeacon - Callback", () => {
         await randomBeacon.connect(requester).requestRelayEntry(ZERO_ADDRESS)
 
         await expect(await randomBeacon.getCallbackContract()).to.equal(
-          ZERO_ADDRESS
+          ZERO_ADDRESS,
         )
 
         await restoreSnapshot()
@@ -137,7 +137,7 @@ describe("RandomBeacon - Callback", () => {
           .requestRelayEntry(callbackContract1.address)
 
         await expect(await randomBeacon.getCallbackContract()).to.equal(
-          callbackContract1.address
+          callbackContract1.address,
         )
 
         await restoreSnapshot()

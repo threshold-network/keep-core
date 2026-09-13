@@ -13,7 +13,7 @@ task("initialize-wallet-owner", "Initializes Wallet Owner for Wallet Registry")
 
 async function initializeWalletOwner(
   hre: HardhatRuntimeEnvironment,
-  walletOwnerAddress: string
+  walletOwnerAddress: string,
 ): Promise<void> {
   const { getNamedAccounts, ethers, deployments, helpers } = hre
   const { read, execute } = deployments
@@ -31,24 +31,24 @@ async function initializeWalletOwner(
   if (!helpers.address.equal(wr.address, wrLinked)) {
     throw new Error(
       `WalletRegistryGovernance (${wrg.address}) is wired to WalletRegistry ${wrLinked} but deployments WalletRegistry is ${wr.address}. ` +
-        "Align keep-core Phase F artifacts with tbtc-v2 Phase G copies before initializeWalletOwner."
+        "Align keep-core Phase F artifacts with tbtc-v2 Phase G copies before initializeWalletOwner.",
     )
   }
 
   if (!helpers.address.equal(wrg.address, wrGovernance)) {
     console.log(
       "WalletRegistry governance is not this WalletRegistryGovernance deployment; skipping initializeWalletOwner " +
-        "(use the on-chain governance contract from keep-core Phase F, or governance-delay updates)."
+        "(use the on-chain governance contract from keep-core Phase F, or governance-delay updates).",
     )
     return
   }
 
   const woRaw = String(
-    await read("WalletRegistry", {}, "walletOwner")
+    await read("WalletRegistry", {}, "walletOwner"),
   ).toLowerCase()
   if (woRaw !== ZERO.toLowerCase()) {
     console.log(
-      "WalletRegistry wallet owner already initialized; skipping initializeWalletOwner"
+      "WalletRegistry wallet owner already initialized; skipping initializeWalletOwner",
     )
     return
   }
@@ -59,7 +59,7 @@ async function initializeWalletOwner(
   const wrGovernanceNow = await read("WalletRegistry", {}, "governance")
   if (!helpers.address.equal(wrg.address, wrGovernanceNow)) {
     throw new Error(
-      `WalletRegistry.governance() drifted before initializeWalletOwner (now ${wrGovernanceNow}, expected WRG ${wrg.address}).`
+      `WalletRegistry.governance() drifted before initializeWalletOwner (now ${wrGovernanceNow}, expected WRG ${wrg.address}).`,
     )
   }
 
@@ -76,7 +76,7 @@ async function initializeWalletOwner(
   } else {
     throw new Error(
       `WalletRegistryGovernance owner is ${wrgOwner}; expected deployer (${deployer}) or governance (${governance}). ` +
-        "Ownable.transferOwnership must leave the deploy key as owner for this step, or call initializeWalletOwner with the current owner key."
+        "Ownable.transferOwnership must leave the deploy key as owner for this step, or call initializeWalletOwner with the current owner key.",
     )
   }
 
@@ -84,11 +84,11 @@ async function initializeWalletOwner(
     "WalletRegistryGovernance",
     { from, log: true, waitConfirmations: 1 },
     "initializeWalletOwner",
-    walletOwnerAddress
+    walletOwnerAddress,
   )
 
   console.log(
-    `Initialized Wallet Owner address: ${walletOwnerAddress} in transaction: ${tx.transactionHash}`
+    `Initialized Wallet Owner address: ${walletOwnerAddress} in transaction: ${tx.transactionHash}`,
   )
 }
 

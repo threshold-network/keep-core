@@ -75,7 +75,7 @@ describe("WalletRegistry - Wallets", async () => {
               walletRegistry,
               walletOwner.wallet,
               randomBeacon,
-              test.publicKey
+              test.publicKey,
             ))
           })
 
@@ -88,20 +88,20 @@ describe("WalletRegistry - Wallets", async () => {
 
             expect(
               wallet.membersIdsHash,
-              "unexpected members ids hash"
+              "unexpected members ids hash",
             ).to.be.equal(hashUint32Array(dkgResult.members))
 
             expect(wallet.publicKeyX, "unexpected public key X").to.be.equal(
-              ethers.utils.hexDataSlice(test.publicKey, 0, 32)
+              ethers.utils.hexDataSlice(test.publicKey, 0, 32),
             )
             expect(wallet.publicKeyY, "unexpected public key Y").to.be.equal(
-              ethers.utils.hexDataSlice(test.publicKey, 32)
+              ethers.utils.hexDataSlice(test.publicKey, 32),
             )
           })
 
           it("should calculate wallet id", async () => {
             expect(walletID, "unexpected walletID").to.be.equal(
-              test.expectedWalletID
+              test.expectedWalletID,
             )
           })
         })
@@ -137,8 +137,8 @@ describe("WalletRegistry - Wallets", async () => {
                   walletRegistry,
                   walletOwner.wallet,
                   randomBeacon,
-                  test.publicKey
-                )
+                  test.publicKey,
+                ),
               ).to.be.revertedWith(test.expectedError)
             })
           })
@@ -156,7 +156,7 @@ describe("WalletRegistry - Wallets", async () => {
           walletRegistry,
           walletOwner.wallet,
           randomBeacon,
-          walletPublicKey
+          walletPublicKey,
         )
       })
 
@@ -179,10 +179,10 @@ describe("WalletRegistry - Wallets", async () => {
               walletRegistry,
               walletOwner.wallet,
               randomBeacon,
-              walletPublicKey
-            )
+              walletPublicKey,
+            ),
           ).to.be.revertedWith(
-            "Wallet with the given public key already exists"
+            "Wallet with the given public key already exists",
           )
         })
       })
@@ -202,8 +202,8 @@ describe("WalletRegistry - Wallets", async () => {
               walletRegistry,
               walletOwner.wallet,
               randomBeacon,
-              ecdsaData.group2.publicKey
-            )
+              ecdsaData.group2.publicKey,
+            ),
           ).to.not.be.reverted
         })
       })
@@ -215,8 +215,8 @@ describe("WalletRegistry - Wallets", async () => {
       it("should return false", async () => {
         await expect(
           await walletRegistry.isWalletRegistered(
-            formatBytes32String("NON EXISTING")
-          )
+            formatBytes32String("NON EXISTING"),
+          ),
         ).to.be.false
       })
     })
@@ -229,7 +229,7 @@ describe("WalletRegistry - Wallets", async () => {
         ;({ walletID } = await createNewWallet(
           walletRegistry,
           walletOwner.wallet,
-          randomBeacon
+          randomBeacon,
         ))
       })
 
@@ -248,7 +248,9 @@ describe("WalletRegistry - Wallets", async () => {
     context("with wallet not registered", async () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.getWalletPublicKey(formatBytes32String("NON EXISTING"))
+          walletRegistry.getWalletPublicKey(
+            formatBytes32String("NON EXISTING"),
+          ),
         ).to.be.revertedWith("Wallet with the given ID has not been registered")
       })
     })
@@ -264,7 +266,7 @@ describe("WalletRegistry - Wallets", async () => {
             walletRegistry,
             walletOwner.wallet,
             randomBeacon,
-            walletPublicKey
+            walletPublicKey,
           ))
         })
 
@@ -273,17 +275,16 @@ describe("WalletRegistry - Wallets", async () => {
         })
 
         it("should return uncompressed public key", async () => {
-          const actualPublicKey = await walletRegistry.getWalletPublicKey(
-            walletID
-          )
+          const actualPublicKey =
+            await walletRegistry.getWalletPublicKey(walletID)
           await expect(
             actualPublicKey,
-            "returned public key doesn't match expected"
+            "returned public key doesn't match expected",
           ).to.be.equal(walletPublicKey)
 
           await expect(
             ethers.utils.arrayify(actualPublicKey),
-            "returned public key is not 64-byte long"
+            "returned public key is not 64-byte long",
           ).to.have.lengthOf(64)
         })
       })
@@ -298,7 +299,7 @@ describe("WalletRegistry - Wallets", async () => {
       ;({ walletID } = await createNewWallet(
         walletRegistry,
         walletOwner.wallet,
-        randomBeacon
+        randomBeacon,
       ))
     })
 
@@ -309,7 +310,7 @@ describe("WalletRegistry - Wallets", async () => {
     context("when called by a third party", () => {
       it("should revert", async () => {
         await expect(
-          walletRegistry.connect(thirdParty).closeWallet(walletID)
+          walletRegistry.connect(thirdParty).closeWallet(walletID),
         ).to.be.revertedWithCustomError(walletRegistry, "CallerNotWalletOwner")
       })
     })
@@ -321,9 +322,9 @@ describe("WalletRegistry - Wallets", async () => {
           await expect(
             walletRegistry
               .connect(walletOwner.wallet)
-              .closeWallet(unknownWalletID)
+              .closeWallet(unknownWalletID),
           ).to.be.revertedWith(
-            "Wallet with the given ID has not been registered"
+            "Wallet with the given ID has not been registered",
           )
         })
       })
@@ -371,12 +372,12 @@ describe("WalletRegistry - Wallets", async () => {
 
           it("should revert", async () => {
             await expect(
-              walletRegistry.connect(walletOwner.wallet).closeWallet(walletID)
+              walletRegistry.connect(walletOwner.wallet).closeWallet(walletID),
             ).to.be.revertedWith(
-              "Wallet with the given ID has not been registered"
+              "Wallet with the given ID has not been registered",
             )
           })
-        }
+        },
       )
     })
   })
@@ -393,7 +394,7 @@ describe("WalletRegistry - Wallets", async () => {
       ;({ walletID, members } = await createNewWallet(
         walletRegistry,
         walletOwner.wallet,
-        randomBeacon
+        randomBeacon,
       ))
 
       walletMembersIDs = members.map((member) => member.id)
@@ -419,11 +420,11 @@ describe("WalletRegistry - Wallets", async () => {
                       walletID,
                       walletMembersIDs,
                       walletMembersAddresses[5],
-                      6
-                    )
+                      6,
+                    ),
                   ).to.be.true
                 })
-              }
+              },
             )
 
             context(
@@ -436,11 +437,11 @@ describe("WalletRegistry - Wallets", async () => {
                       walletID,
                       walletMembersIDs,
                       walletMembersAddresses[5],
-                      7
-                    )
+                      7,
+                    ),
                   ).to.be.false
                 })
-              }
+              },
             )
           })
 
@@ -455,14 +456,14 @@ describe("WalletRegistry - Wallets", async () => {
                       walletID,
                       walletMembersIDs,
                       walletMembersAddresses[0],
-                      0
-                    )
+                      0,
+                    ),
                   ).to.be.revertedWithCustomError(
                     walletRegistry,
-                    "WalletMemberIndexOutOfRange"
+                    "WalletMemberIndexOutOfRange",
                   )
                 })
-              }
+              },
             )
 
             context(
@@ -475,14 +476,14 @@ describe("WalletRegistry - Wallets", async () => {
                       walletID,
                       walletMembersIDs,
                       walletMembersAddresses[0],
-                      walletMembersIDs.length + 1
-                    )
+                      walletMembersIDs.length + 1,
+                    ),
                   ).to.be.revertedWithCustomError(
                     walletRegistry,
-                    "WalletMemberIndexOutOfRange"
+                    "WalletMemberIndexOutOfRange",
                   )
                 })
-              }
+              },
             )
           })
         })
@@ -498,16 +499,16 @@ describe("WalletRegistry - Wallets", async () => {
                   walletID,
                   corruptedWalletMembersIDs,
                   walletMembersAddresses[0],
-                  0
-                )
+                  0,
+                ),
               ).to.be.revertedWithCustomError(
                 walletRegistry,
-                "InvalidWalletMembersIdentifiers"
+                "InvalidWalletMembersIdentifiers",
               )
             })
-          }
+          },
         )
-      }
+      },
     )
 
     context(
@@ -524,14 +525,14 @@ describe("WalletRegistry - Wallets", async () => {
               walletID,
               walletMembersIDs,
               operator,
-              0
-            )
+              0,
+            ),
           ).to.be.revertedWithCustomError(
             walletRegistry,
-            "NotSortitionPoolOperator"
+            "NotSortitionPoolOperator",
           )
         })
-      }
+      },
     )
   })
 })

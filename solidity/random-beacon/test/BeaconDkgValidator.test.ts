@@ -39,14 +39,14 @@ const fixture = async () => {
   const SortitionPool = await ethers.getContractFactory("SortitionPool")
   const sortitionPool = (await SortitionPool.deploy(
     t.address,
-    constants.poolWeightDivisor
+    constants.poolWeightDivisor,
   )) as SortitionPool
 
   await sortitionPool.deactivateChaosnet()
 
   const DKGValidator = await ethers.getContractFactory("BeaconDkgValidator")
   const dkgValidator = (await DKGValidator.deploy(
-    sortitionPool.address
+    sortitionPool.address,
   )) as DKGValidator
   await dkgValidator.deployed()
 
@@ -58,7 +58,7 @@ const fixture = async () => {
 
 describe("BeaconDkgValidator", () => {
   const dkgSeed: BigNumber = BigNumber.from(
-    "31415926535897932384626433832795028841971693993751058209749445923078164062862"
+    "31415926535897932384626433832795028841971693993751058209749445923078164062862",
   )
   const dkgStartBlock = 1337
   const groupPublicKey: string = ethers.utils.hexValue(blsData.groupPubKey)
@@ -72,7 +72,7 @@ describe("BeaconDkgValidator", () => {
     _misbehaved: number[],
     _startBlock: number,
     _numberOfSignatures?: number,
-    _submitterIndex?: number
+    _submitterIndex?: number,
   ) => Promise<DKG.ResultStruct>
 
   let validator: DKGValidator
@@ -98,14 +98,14 @@ describe("BeaconDkgValidator", () => {
       _misbehaved: number[],
       _startBlock: number,
       _numberOfSignatures = 33,
-      _submitterIndex = 1
+      _submitterIndex = 1,
     ): Promise<DKG.ResultStruct> => {
       const { signingMembersIndices, signaturesBytes } = await signDkgResult(
         _signers,
         _groupPublicKey,
         _misbehaved,
         _startBlock,
-        _numberOfSignatures
+        _numberOfSignatures,
       )
 
       const dkgResult: DKG.ResultStruct = {
@@ -117,7 +117,7 @@ describe("BeaconDkgValidator", () => {
         members: _groupMembers.map((m) => m.id),
         membersHash: hashDKGMembers(
           _groupMembers.map((m) => m.id),
-          _misbehaved
+          _misbehaved,
         ),
       }
 
@@ -131,14 +131,14 @@ describe("BeaconDkgValidator", () => {
       _signers: Operator[],
       _groupPublicKey: string,
       _misbehaved: number[],
-      _membersHash?: string
+      _membersHash?: string,
     ) => {
       const dkgResult = await prepareDkgResult(
         _groupMembers,
         _signers,
         _groupPublicKey,
         _misbehaved,
-        dkgStartBlock
+        dkgStartBlock,
       )
 
       if (_membersHash) {
@@ -176,7 +176,7 @@ describe("BeaconDkgValidator", () => {
               selectedOperators,
               selectedOperators,
               groupPublicKey,
-              misbehavedMemberIds
+              misbehavedMemberIds,
             )
 
             expect(result.isValid).to.be.true
@@ -196,7 +196,7 @@ describe("BeaconDkgValidator", () => {
               selectedOperators,
               selectedOperators,
               groupPublicKey,
-              misbehavedMemberIds
+              misbehavedMemberIds,
             )
 
             expect(result.isValid).to.be.true
@@ -214,7 +214,7 @@ describe("BeaconDkgValidator", () => {
               selectedOperators,
               selectedOperators,
               groupPublicKey,
-              misbehavedMemberIds
+              misbehavedMemberIds,
             )
 
             expect(result.isValid).to.be.true
@@ -234,7 +234,7 @@ describe("BeaconDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             misbehavedMemberIds,
-            hashUint32Array(expectedMembersIds)
+            hashUint32Array(expectedMembersIds),
           )
 
           expect(result.isValid).to.be.false
@@ -249,7 +249,7 @@ describe("BeaconDkgValidator", () => {
           selectedOperators,
           selectedOperators,
           groupPublicKey,
-          noMisbehaved
+          noMisbehaved,
         )
 
         expect(result.isValid).to.be.true
@@ -268,7 +268,7 @@ describe("BeaconDkgValidator", () => {
           shuffledOperators,
           shuffledOperators,
           groupPublicKey,
-          noMisbehaved
+          noMisbehaved,
         )
 
         expect(result.isValid).to.be.false
@@ -287,7 +287,7 @@ describe("BeaconDkgValidator", () => {
           selectedOperators,
           shuffledOperators,
           groupPublicKey,
-          noMisbehaved
+          noMisbehaved,
         )
 
         expect(result.isValid).to.be.false
@@ -301,7 +301,7 @@ describe("BeaconDkgValidator", () => {
       _groupMembers: Operator[],
       _groupPublicKey: string,
       _misbehaved: number[],
-      _numberOfSignatures = 33
+      _numberOfSignatures = 33,
     ) => {
       const dkgResult = await prepareDkgResult(
         _groupMembers,
@@ -309,7 +309,7 @@ describe("BeaconDkgValidator", () => {
         _groupPublicKey,
         _misbehaved,
         dkgStartBlock,
-        _numberOfSignatures
+        _numberOfSignatures,
       )
 
       const result = await validator.validateFields(dkgResult)
@@ -325,7 +325,7 @@ describe("BeaconDkgValidator", () => {
         const result = await testValidateFields(
           selectedOperators,
           groupPublicKey,
-          noMisbehaved
+          noMisbehaved,
         )
 
         expect(result.isValid).to.be.true
@@ -340,7 +340,7 @@ describe("BeaconDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             empty,
-            noMisbehaved
+            noMisbehaved,
           )
 
           expect(result.isValid).to.be.false
@@ -352,12 +352,12 @@ describe("BeaconDkgValidator", () => {
         it("should return validation error", async () => {
           const tooShort = groupPublicKey.substring(
             0,
-            groupPublicKey.length - 2
+            groupPublicKey.length - 2,
           )
           const result = await testValidateFields(
             selectedOperators,
             tooShort,
-            noMisbehaved
+            noMisbehaved,
           )
 
           expect(result.isValid).to.be.false
@@ -371,7 +371,7 @@ describe("BeaconDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             tooLong,
-            noMisbehaved
+            noMisbehaved,
           )
 
           expect(result.isValid).to.be.false
@@ -387,12 +387,12 @@ describe("BeaconDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             groupPublicKey,
-            lessThanOne
+            lessThanOne,
           )
 
           expect(result.isValid).to.be.false
           expect(result.errorMsg).to.equal(
-            "Corrupted misbehaved members indices"
+            "Corrupted misbehaved members indices",
           )
         })
       })
@@ -403,12 +403,12 @@ describe("BeaconDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             groupPublicKey,
-            higherThanGroupSize
+            higherThanGroupSize,
           )
 
           expect(result.isValid).to.be.false
           expect(result.errorMsg).to.equal(
-            "Corrupted misbehaved members indices"
+            "Corrupted misbehaved members indices",
           )
         })
       })
@@ -419,12 +419,12 @@ describe("BeaconDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             groupPublicKey,
-            unsorted
+            unsorted,
           )
 
           expect(result.isValid).to.be.false
           expect(result.errorMsg).to.equal(
-            "Corrupted misbehaved members indices"
+            "Corrupted misbehaved members indices",
           )
         })
       })
@@ -435,12 +435,12 @@ describe("BeaconDkgValidator", () => {
           const result = await testValidateFields(
             selectedOperators,
             groupPublicKey,
-            tooMany
+            tooMany,
           )
 
           expect(result.isValid).to.be.false
           expect(result.errorMsg).to.equal(
-            "Too many members misbehaving during DKG"
+            "Too many members misbehaving during DKG",
           )
         })
       })
@@ -454,7 +454,7 @@ describe("BeaconDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             noMisbehaved,
-            noSignatures
+            noSignatures,
           )
 
           expect(result.isValid).to.be.false
@@ -469,7 +469,7 @@ describe("BeaconDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             noMisbehaved,
-            dkgStartBlock
+            dkgStartBlock,
           )
           dkgResult.signatures += "ff"
           const result = await validator.validateFields(dkgResult)
@@ -487,7 +487,7 @@ describe("BeaconDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             noMisbehaved,
-            dkgStartBlock
+            dkgStartBlock,
           )
           dkgResult.signatures += "f".repeat(signatureHexStrLength)
           const result = await validator.validateFields(dkgResult)
@@ -504,7 +504,7 @@ describe("BeaconDkgValidator", () => {
             selectedOperators,
             groupPublicKey,
             noMisbehaved,
-            tooFewSignatures
+            tooFewSignatures,
           )
 
           expect(result.isValid).to.be.false
@@ -522,7 +522,7 @@ describe("BeaconDkgValidator", () => {
             groupPublicKey,
             noMisbehaved,
             dkgStartBlock,
-            maxSignatures
+            maxSignatures,
           )
           dkgResult.signatures += "f".repeat(signatureHexStrLength)
           dkgResult.signingMembersIndices.push(65)
@@ -536,14 +536,14 @@ describe("BeaconDkgValidator", () => {
 
     context("when signing members indices array is malformed", async () => {
       const testSigningMembers = async (
-        _signingMembersIndices: BigNumberish[]
+        _signingMembersIndices: BigNumberish[],
       ) => {
         const dkgResult = await prepareDkgResult(
           selectedOperators,
           selectedOperators,
           groupPublicKey,
           noMisbehaved,
-          dkgStartBlock
+          dkgStartBlock,
         )
 
         dkgResult.signingMembersIndices = _signingMembersIndices
@@ -603,7 +603,7 @@ describe("BeaconDkgValidator", () => {
         _groupMembers,
         groupPublicKey,
         noMisbehaved,
-        dkgStartBlock
+        dkgStartBlock,
       )
 
       return validator.validateGroupMembers(dkgResult, dkgSeed)
@@ -619,7 +619,7 @@ describe("BeaconDkgValidator", () => {
     context("when there are operators other then selected", () => {
       it("should fail the validation", async () => {
         const isValid = await testValidateGroupMembers(
-          shuffle(selectedOperators)
+          shuffle(selectedOperators),
         )
         expect(isValid).to.be.false
       })
@@ -629,14 +629,14 @@ describe("BeaconDkgValidator", () => {
   describe("validateSignatures", () => {
     const testValidateSignatures = async (
       _groupMembers: Operator[],
-      _signers: Operator[]
+      _signers: Operator[],
     ) => {
       const dkgResult = await prepareDkgResult(
         _groupMembers,
         _signers,
         groupPublicKey,
         noMisbehaved,
-        dkgStartBlock
+        dkgStartBlock,
       )
 
       return validator.validateSignatures(dkgResult, dkgStartBlock)
@@ -646,7 +646,7 @@ describe("BeaconDkgValidator", () => {
       it("should pass", async () => {
         const isValid = await testValidateSignatures(
           selectedOperators,
-          selectedOperators
+          selectedOperators,
         )
 
         expect(isValid).to.be.true
@@ -658,16 +658,16 @@ describe("BeaconDkgValidator", () => {
       () => {
         it("should fail the validation", async () => {
           const maliciousSigners = Array(constants.groupSize).fill(
-            selectedOperators[0]
+            selectedOperators[0],
           )
           const isValid = await testValidateSignatures(
             selectedOperators,
-            maliciousSigners
+            maliciousSigners,
           )
 
           expect(isValid).to.be.false
         })
-      }
+      },
     )
 
     context("when signatures do not matching signers", () => {
@@ -677,7 +677,7 @@ describe("BeaconDkgValidator", () => {
           selectedOperators,
           groupPublicKey,
           noMisbehaved,
-          dkgStartBlock
+          dkgStartBlock,
         )
         // reverse order of signers
         ;[
@@ -689,7 +689,7 @@ describe("BeaconDkgValidator", () => {
         ]
         const isValid = await validator.validateSignatures(
           dkgResult,
-          dkgStartBlock
+          dkgStartBlock,
         )
 
         expect(isValid).to.be.false
@@ -706,14 +706,14 @@ describe("BeaconDkgValidator", () => {
               groupPublicKey,
               noMisbehaved,
               dkgStartBlock + 12345,
-            ]
-          )
+            ],
+          ),
         )
         const signatures = []
         for (let i = 0; i < signingOperators.length; i++) {
           const { signer: ethersSigner } = signingOperators[i]
           const signature = await ethersSigner.signMessage(
-            ethers.utils.arrayify(wrongResultHash)
+            ethers.utils.arrayify(wrongResultHash),
           )
           signatures.push(signature)
         }
@@ -729,14 +729,14 @@ describe("BeaconDkgValidator", () => {
           groupPublicKey,
           noMisbehaved,
           dkgStartBlock,
-          numberOfSignatures
+          numberOfSignatures,
         )
         dkgResult.signatures = await signWithWrongResultHash(
-          selectedOperators.slice(numberOfSignatures - 1)
+          selectedOperators.slice(numberOfSignatures - 1),
         )
         const isValid = await validator.validateSignatures(
           dkgResult,
-          dkgStartBlock
+          dkgStartBlock,
         )
 
         expect(isValid).to.be.false
@@ -753,15 +753,15 @@ describe("BeaconDkgValidator", () => {
           groupPublicKey,
           noMisbehaved,
           dkgStartBlock,
-          numberOfSignatures
+          numberOfSignatures,
         )
         const wrongSignatures = `0x${"a".repeat(
-          signatureHexStrLength * numberOfSignatures
+          signatureHexStrLength * numberOfSignatures,
         )}`
         dkgResult.signatures = wrongSignatures
 
         await expect(
-          validator.validateSignatures(dkgResult, dkgStartBlock)
+          validator.validateSignatures(dkgResult, dkgStartBlock),
         ).to.be.revertedWith("ECDSA: invalid signature 's' value")
       })
     })
