@@ -14,7 +14,7 @@ import type {
   IRandomBeacon,
 } from "../typechain"
 import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { Operator, OperatorID } from "./utils/operators"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
@@ -67,7 +67,6 @@ describe("WalletRegistry - Slashing", () => {
   const rewardMultiplier = 30
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({
       walletRegistry,
       randomBeacon,
@@ -80,7 +79,7 @@ describe("WalletRegistry - Slashing", () => {
       walletRegistry,
       walletOwner.wallet,
       randomBeacon,
-      walletPublicKey
+      walletPublicKey,
     ))
 
     membersIDs = members.map((member) => member.id)
@@ -98,8 +97,8 @@ describe("WalletRegistry - Slashing", () => {
               rewardMultiplier,
               thirdParty.address,
               walletID,
-              membersIDs
-            )
+              membersIDs,
+            ),
         ).to.be.revertedWithCustomError(walletRegistry, "CallerNotWalletOwner")
       })
     })
@@ -116,11 +115,11 @@ describe("WalletRegistry - Slashing", () => {
                 rewardMultiplier,
                 thirdParty.address,
                 walletID,
-                corruptedMembersIDs
-              )
+                corruptedMembersIDs,
+              ),
           ).to.be.revertedWithCustomError(
             walletRegistry,
-            "InvalidWalletMembersIdentifiers"
+            "InvalidWalletMembersIdentifiers",
           )
         })
       })
@@ -128,8 +127,8 @@ describe("WalletRegistry - Slashing", () => {
       context.skip(
         "when the passed wallet members identifiers are valid (skipped: TokenStaking slashing queue API differs from legacy tests)",
         () => {
-          let notifierBalanceBefore
-          let notifierBalanceAfter
+          let notifierBalanceBefore: bigint
+          let notifierBalanceAfter: bigint
 
           before(async () => {
             await createSnapshot()
@@ -142,7 +141,7 @@ describe("WalletRegistry - Slashing", () => {
                 rewardMultiplier,
                 thirdParty.address,
                 walletID,
-                membersIDs
+                membersIDs,
               )
             notifierBalanceAfter = await tToken.balanceOf(thirdParty.address)
           })
@@ -153,7 +152,7 @@ describe("WalletRegistry - Slashing", () => {
 
           it("should slash all group members", async () => {
             expect(await staking.getSlashingQueueLength()).to.equal(
-              constants.groupSize
+              constants.groupSize,
             )
           })
 
@@ -169,7 +168,7 @@ describe("WalletRegistry - Slashing", () => {
               const slashing = await staking.slashingQueue(i)
               const expectedStakingProvider =
                 await walletRegistry.operatorToStakingProvider(
-                  membersAddresses[i]
+                  membersAddresses[i],
                 )
 
               expect(slashing.stakingProvider).to.equal(expectedStakingProvider)
@@ -180,13 +179,11 @@ describe("WalletRegistry - Slashing", () => {
             // Notification rewards are no longer configured in TokenStaking
             // (pushNotificationReward/setNotificationReward methods removed).
             // The notifier receives 0 reward.
-            const receivedReward = notifierBalanceAfter.sub(
-              notifierBalanceBefore
-            )
+            const receivedReward = notifierBalanceAfter - notifierBalanceBefore
 
             expect(receivedReward).to.equal(0)
           })
-        }
+        },
       )
 
       // TODO: Add a unit test ensuring `seize` call reverts if the staking

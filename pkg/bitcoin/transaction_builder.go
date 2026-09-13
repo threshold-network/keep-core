@@ -164,7 +164,7 @@ func (tb *TransactionBuilder) getScript(
 	}
 
 	outputIndex := utxo.Outpoint.OutputIndex
-	if outputIndex >= uint32(len(transaction.Outputs)) {
+	if uint64(outputIndex) >= uint64(len(transaction.Outputs)) {
 		return nil, fmt.Errorf(
 			"output index [%d] out of range for transaction [%s] "+
 				"with [%d] outputs",

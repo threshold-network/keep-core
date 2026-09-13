@@ -39,6 +39,7 @@ func (bh *BlockHeader) Serialize() [BlockHeaderByteLength]byte {
 	offset := 0
 
 	// Version
+	// #nosec G115 -- Bitcoin version fields encode the exact signed 32-bit bit pattern.
 	binary.LittleEndian.PutUint32(result[offset:], uint32(bh.Version))
 	offset += 4
 
@@ -71,6 +72,7 @@ func (bh *BlockHeader) Deserialize(rawBlockHeader [BlockHeaderByteLength]byte) {
 	offset := 0
 
 	// Version
+	// #nosec G115 -- Decode the exact signed 32-bit Bitcoin version bit pattern.
 	bh.Version = int32(binary.LittleEndian.Uint32(rawBlockHeader[offset:]))
 	offset += 4
 

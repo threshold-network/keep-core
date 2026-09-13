@@ -12,22 +12,22 @@ import {
   setupAllowlist,
 } from "./fixtures"
 
-import type { IWalletOwner } from "../typechain/IWalletOwner"
-import type { IRandomBeacon } from "../typechain/IRandomBeacon"
-import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
+  IWalletOwner,
+  IRandomBeacon,
   WalletRegistry,
   SortitionPool,
   TokenStaking,
   T,
   WalletRegistryGovernance,
 } from "../typechain"
+import type { Mock } from "./helpers/mock"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 
 const { to1e18 } = helpers.number
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
-const ZERO_ADDRESS = ethers.constants.AddressZero
+const ZERO_ADDRESS = ethers.ZeroAddress
 
 describe.skip("TokenStaking Integration (DEPRECATED TIP-092)", () => {
   /**
@@ -86,7 +86,7 @@ describe("WalletRegistry - Custom Errors", () => {
     t = await helpers.contracts.getContract("T")
     walletRegistry = await helpers.contracts.getContract("WalletRegistry")
     walletRegistryGovernance = await helpers.contracts.getContract(
-      "WalletRegistryGovernance"
+      "WalletRegistryGovernance",
     )
     sortitionPool = await helpers.contracts.getContract("EcdsaSortitionPool")
     staking = await helpers.contracts.getContract("TokenStaking")
@@ -105,7 +105,7 @@ describe("WalletRegistry - Custom Errors", () => {
 
     walletOwner = await initializeWalletOwner(
       walletRegistryGovernance,
-      governance
+      governance,
     )
 
     await updateWalletRegistryParams(walletRegistryGovernance, governance)
@@ -135,8 +135,8 @@ describe("WalletRegistry - Custom Errors", () => {
             .authorizationIncreased(
               stakingProvider.address,
               to1e18(40000),
-              to1e18(50000)
-            )
+              to1e18(50000),
+            ),
         ).to.be.reverted
       })
 
@@ -147,8 +147,8 @@ describe("WalletRegistry - Custom Errors", () => {
             .authorizationDecreaseRequested(
               stakingProvider.address,
               to1e18(50000),
-              to1e18(40000)
-            )
+              to1e18(40000),
+            ),
         ).to.be.reverted
       })
 
@@ -159,8 +159,8 @@ describe("WalletRegistry - Custom Errors", () => {
             .involuntaryAuthorizationDecrease(
               stakingProvider.address,
               to1e18(50000),
-              to1e18(40000)
-            )
+              to1e18(40000),
+            ),
         ).to.be.reverted
       })
     })
@@ -172,13 +172,13 @@ describe("WalletRegistry - Custom Errors", () => {
       })
 
       it("should revert with custom error when unauthorized caller attempts closeWallet", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         await expect(walletRegistry.connect(unauthorized).closeWallet(walletID))
           .to.be.reverted
       })
 
       it("should revert with custom error when unauthorized caller attempts seize", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const walletMembersIDs = [1, 2, 3]
         await expect(
           walletRegistry
@@ -188,8 +188,8 @@ describe("WalletRegistry - Custom Errors", () => {
               100,
               unauthorized.address,
               walletID,
-              walletMembersIDs
-            )
+              walletMembersIDs,
+            ),
         ).to.be.reverted
       })
     })
@@ -199,7 +199,7 @@ describe("WalletRegistry - Custom Errors", () => {
         await expect(
           walletRegistry
             .connect(unauthorized)
-            .updateDkgParameters(100, 100, 50000, 100, 10)
+            .updateDkgParameters(100, 100, 50000, 100, 10),
         ).to.be.reverted
       })
 
@@ -207,7 +207,7 @@ describe("WalletRegistry - Custom Errors", () => {
         await expect(
           walletRegistry
             .connect(unauthorized)
-            .updateAuthorizationParameters(to1e18(40000), 3888000, 3888000)
+            .updateAuthorizationParameters(to1e18(40000), 3888000, 3888000),
         ).to.be.reverted
       })
     })
@@ -216,7 +216,7 @@ describe("WalletRegistry - Custom Errors", () => {
       it("should revert with custom error when unauthorized caller attempts __beaconCallback", async () => {
         await expect(
           // eslint-disable-next-line no-underscore-dangle
-          walletRegistry.connect(unauthorized).__beaconCallback(12345, 0)
+          walletRegistry.connect(unauthorized).__beaconCallback(12345, 0),
         ).to.be.reverted
       })
     })
@@ -227,22 +227,21 @@ describe("WalletRegistry - Custom Errors", () => {
       it("should revert with custom error when initializeV2 called with zero address", async () => {
         // Create new proxy for this test to allow re-initialization
         // Need to link libraries for WalletRegistry
-        const EcdsaInactivity = await helpers.contracts.getContract(
-          "EcdsaInactivity"
-        )
+        const EcdsaInactivity =
+          await helpers.contracts.getContract("EcdsaInactivity")
         const WalletRegistryFactory = await ethers.getContractFactory(
           "WalletRegistry",
           {
             libraries: {
-              EcdsaInactivity: EcdsaInactivity.address,
+              EcdsaInactivity: await EcdsaInactivity.getAddress(),
             },
-          }
+          },
         )
         const newImplementation = await WalletRegistryFactory.deploy(
-          sortitionPool.address,
-          staking.address
+          await sortitionPool.getAddress(),
+          await staking.getAddress(),
         )
-        await newImplementation.deployed()
+        await newImplementation.waitForDeployment()
 
         await expect(newImplementation.initializeV2(ZERO_ADDRESS)).to.be
           .reverted
@@ -277,7 +276,7 @@ describe("WalletRegistry - Custom Errors", () => {
       it("should revert with custom error when notifyOperatorInactivity called with wrong nonce", async () => {
         // This test requires a wallet to be created first
         // For simplicity, we test the nonce check with a mock claim
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const wrongNonce = 999 // Expected nonce is 0 initially
 
         const claim = {
@@ -293,7 +292,7 @@ describe("WalletRegistry - Custom Errors", () => {
         await expect(
           walletRegistry
             .connect(unauthorized)
-            .notifyOperatorInactivity(claim, wrongNonce, groupMembers)
+            .notifyOperatorInactivity(claim, wrongNonce, groupMembers),
         ).to.be.reverted
       })
     })
@@ -312,7 +311,7 @@ describe("WalletRegistry - Custom Errors", () => {
       it("should revert with custom error when notifyOperatorInactivity called with invalid group members", async () => {
         // This test requires a wallet with stored members hash
         // We'll test with a mock scenario where hash doesn't match
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const nonce = 0
 
         const claim = {
@@ -329,14 +328,14 @@ describe("WalletRegistry - Custom Errors", () => {
         await expect(
           walletRegistry
             .connect(unauthorized)
-            .notifyOperatorInactivity(claim, nonce, invalidGroupMembers)
+            .notifyOperatorInactivity(claim, nonce, invalidGroupMembers),
         ).to.be.reverted
       })
     })
 
     describe("InvalidWalletMembersIdentifiers", () => {
       it("should revert with custom error when seize called with invalid wallet members hash", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const invalidWalletMembersIDs = [1, 2, 3]
 
         await expect(
@@ -347,13 +346,13 @@ describe("WalletRegistry - Custom Errors", () => {
               100,
               unauthorized.address,
               walletID,
-              invalidWalletMembersIDs
-            )
+              invalidWalletMembersIDs,
+            ),
         ).to.be.reverted
       })
 
       it("should revert with custom error when isWalletMember called with invalid wallet members hash", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const invalidWalletMembersIDs = [1, 2, 3]
 
         await expect(
@@ -361,15 +360,15 @@ describe("WalletRegistry - Custom Errors", () => {
             walletID,
             invalidWalletMembersIDs,
             operator.address,
-            1
-          )
+            1,
+          ),
         ).to.be.reverted
       })
     })
 
     describe("NotSortitionPoolOperator", () => {
       it("should revert with custom error when isWalletMember called with non-sortition pool operator", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const walletMembersIDs = [1, 2, 3]
         const nonOperator = unauthorized.address
 
@@ -378,8 +377,8 @@ describe("WalletRegistry - Custom Errors", () => {
             walletID,
             walletMembersIDs,
             nonOperator,
-            1
-          )
+            1,
+          ),
         ).to.be.reverted
       })
     })
@@ -398,7 +397,7 @@ describe("WalletRegistry - Custom Errors", () => {
       })
 
       it("should revert with custom error when isWalletMember called with index zero", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const walletMembersIDs = [1, 2, 3]
 
         await expect(
@@ -406,13 +405,13 @@ describe("WalletRegistry - Custom Errors", () => {
             walletID,
             walletMembersIDs,
             operator.address,
-            0 // Invalid: index must be >= 1
-          )
+            0, // Invalid: index must be >= 1
+          ),
         ).to.be.reverted
       })
 
       it("should revert with custom error when isWalletMember called with index exceeding array length", async () => {
-        const walletID = ethers.utils.formatBytes32String("test-wallet")
+        const walletID = ethers.encodeBytes32String("test-wallet")
         const walletMembersIDs = [1, 2, 3]
 
         await expect(
@@ -420,8 +419,8 @@ describe("WalletRegistry - Custom Errors", () => {
             walletID,
             walletMembersIDs,
             operator.address,
-            4 // Invalid: exceeds length of 3
-          )
+            4, // Invalid: exceeds length of 3
+          ),
         ).to.be.reverted
       })
     })
@@ -477,15 +476,15 @@ describe("WalletRegistry - Custom Errors", () => {
         // Creating a mock DKG result for testing
         const dkgResult = {
           submitterMemberIndex: 1,
-          groupPubKey: ethers.utils.hexZeroPad("0x01", 64),
+          groupPubKey: ethers.zeroPadValue("0x01", 64),
           misbehavedMembersIndices: [],
-          signatures: ethers.utils.hexZeroPad("0x", 65 * constants.groupSize),
+          signatures: ethers.zeroPadValue("0x", 65 * constants.groupSize),
           signingMembersIndices: Array.from(
             { length: constants.groupSize },
-            (_, i) => i + 1
+            (_, i) => i + 1,
           ),
           members: Array.from({ length: constants.groupSize }, (_, i) => i + 1),
-          membersHash: ethers.constants.HashZero,
+          membersHash: ethers.ZeroHash,
         }
 
         // Attempting to challenge with very low gas limit should trigger the error
@@ -496,7 +495,7 @@ describe("WalletRegistry - Custom Errors", () => {
             // Above EIP-7623's intrinsic calldata floor, which hardhat 2.29
             // enforces before execution, and far below what the call needs.
             gasLimit: 170000,
-          })
+          }),
         ).to.be.reverted // May revert with out-of-gas or NotEnoughExtraGasLeft
       })
     })

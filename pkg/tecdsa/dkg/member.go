@@ -326,7 +326,13 @@ func (ic *identityConverter) TssPartyIDToMemberIndex(
 		return group.MemberIndex(0)
 	}
 
-	return group.MemberIndex(
-		new(big.Int).Sub(partyID.KeyInt(), ic.seed).Int64(),
-	)
+	index := new(big.Int).Sub(partyID.KeyInt(), ic.seed)
+	if !index.IsUint64() {
+		return 0
+	}
+	value := index.Uint64()
+	if value > group.MaxMemberIndex {
+		return 0
+	}
+	return group.MemberIndex(value)
 }

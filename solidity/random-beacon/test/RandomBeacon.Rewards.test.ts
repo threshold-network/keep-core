@@ -1,5 +1,5 @@
-/* eslint-disable @typescript-eslint/no-extra-semi */
-import { waffle, helpers } from "hardhat"
+import { helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import { constants, randomBeaconDeployment } from "./fixtures"
@@ -7,7 +7,7 @@ import { registerOperators } from "./utils/operators"
 import { createGroup } from "./utils/groups"
 import { signOperatorInactivityClaim } from "./utils/inactivity"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { Operator } from "./utils/operators"
 import type {
   RandomBeacon,
@@ -29,7 +29,7 @@ const fixture = async () => {
     contracts.randomBeacon as RandomBeacon,
     contracts.t as T,
     constants.groupSize,
-    1
+    1,
   )
 
   const randomBeacon = contracts.randomBeacon as RandomBeacon
@@ -71,7 +71,7 @@ describe("RandomBeacon - Rewards", () => {
       sortitionPool,
       t,
       operators,
-    } = await waffle.loadFixture(fixture))
+    } = await loadFixture(fixture))
     ;[thirdParty] = await helpers.signers.getUnnamedSigners()
     ;({ deployer, governance } = await helpers.signers.getNamedSigners())
   })
@@ -80,7 +80,7 @@ describe("RandomBeacon - Rewards", () => {
     context("when called for an unknown operator", () => {
       it("should revert", async () => {
         await expect(
-          randomBeacon.withdrawRewards(thirdParty.address)
+          randomBeacon.withdrawRewards(thirdParty.address),
         ).to.be.revertedWith("Unknown operator")
       })
     })
@@ -95,14 +95,13 @@ describe("RandomBeacon - Rewards", () => {
 
         operator = operators[0].signer.address
         stakingProvider = await randomBeacon.operatorToStakingProvider(operator)
-        // eslint-disable-next-line @typescript-eslint/no-extra-semi
         ;({ beneficiary } = await staking.rolesOf(stakingProvider))
 
         // Allocate sortition pool rewards
         await t.connect(deployer).mint(deployer.address, rewardAmount)
         await t
           .connect(deployer)
-          .approveAndCall(sortitionPool.address, rewardAmount, [])
+          .approveAndCall(await sortitionPool.getAddress(), rewardAmount, "0x")
       })
 
       after(async () => {
@@ -119,7 +118,7 @@ describe("RandomBeacon - Rewards", () => {
         const balanceBefore = await t.balanceOf(beneficiary)
         const tx = await randomBeacon.withdrawRewards(stakingProvider)
         const balanceAfter = await t.balanceOf(beneficiary)
-        const received = balanceAfter.sub(balanceBefore)
+        const received = balanceAfter - balanceBefore
 
         await expect(tx)
           .to.emit(randomBeacon, "RewardsWithdrawn")
@@ -132,7 +131,7 @@ describe("RandomBeacon - Rewards", () => {
     context("when called for an unknown operator", () => {
       it("should revert", async () => {
         await expect(
-          randomBeacon.availableRewards(thirdParty.address)
+          randomBeacon.availableRewards(thirdParty.address),
         ).to.be.revertedWith("Unknown operator")
       })
     })
@@ -147,14 +146,13 @@ describe("RandomBeacon - Rewards", () => {
 
         operator = operators[0].signer.address
         stakingProvider = await randomBeacon.operatorToStakingProvider(operator)
-        // eslint-disable-next-line @typescript-eslint/no-extra-semi
         ;({ beneficiary } = await staking.rolesOf(stakingProvider))
 
         // Allocate sortition pool rewards
         await t.connect(deployer).mint(deployer.address, rewardAmount)
         await t
           .connect(deployer)
-          .approveAndCall(sortitionPool.address, rewardAmount, [])
+          .approveAndCall(await sortitionPool.getAddress(), rewardAmount, "0x")
       })
 
       after(async () => {
@@ -162,15 +160,14 @@ describe("RandomBeacon - Rewards", () => {
       })
 
       it("should return the amount of available rewards", async () => {
-        let availableAmount = await randomBeacon.availableRewards(
-          stakingProvider
-        )
+        let availableAmount =
+          await randomBeacon.availableRewards(stakingProvider)
 
         const balanceBefore = await t.balanceOf(beneficiary)
         await randomBeacon.withdrawRewards(stakingProvider)
         const balanceAfter = await t.balanceOf(beneficiary)
 
-        expect(availableAmount).to.equal(balanceAfter.sub(balanceBefore))
+        expect(availableAmount).to.equal(balanceAfter - balanceBefore)
 
         availableAmount = await randomBeacon.availableRewards(stakingProvider)
         expect(availableAmount).to.equal(0)
@@ -184,7 +181,7 @@ describe("RandomBeacon - Rewards", () => {
         await expect(
           randomBeacon
             .connect(thirdParty)
-            .withdrawIneligibleRewards(thirdParty.address)
+            .withdrawIneligibleRewards(thirdParty.address),
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
@@ -205,7 +202,7 @@ describe("RandomBeacon - Rewards", () => {
             0,
             group.groupPubKey,
             inactiveMembersIndices,
-            33
+            33,
           )
 
         const claimSender = operators[0].signer
@@ -217,14 +214,14 @@ describe("RandomBeacon - Rewards", () => {
             signingMembersIndices,
           },
           0,
-          operators.map((operator) => operator.id)
+          operators.map((operator) => operator.id),
         )
 
         // Allocate sortition pool rewards
         await t.connect(deployer).mint(deployer.address, rewardAmount)
         await t
           .connect(deployer)
-          .approveAndCall(sortitionPool.address, rewardAmount, [])
+          .approveAndCall(await sortitionPool.getAddress(), rewardAmount, "0x")
       })
 
       after(async () => {
@@ -236,9 +233,8 @@ describe("RandomBeacon - Rewards", () => {
         // the balance of "ineligible rewards" available for withdrawal from
         // the Sortition Pool
         const operator = operators[0].signer.address
-        const stakingProvider = await randomBeacon.operatorToStakingProvider(
-          operator
-        )
+        const stakingProvider =
+          await randomBeacon.operatorToStakingProvider(operator)
         await randomBeacon.withdrawRewards(stakingProvider)
 
         expect(await t.balanceOf(thirdParty.address)).to.equal(0)

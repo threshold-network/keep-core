@@ -16,7 +16,10 @@ ENV COREPACK_DEFAULT_TO_LATEST=0
 # node: it writes Corepack's per-user cache under $HOME. `chown` targets only
 # $WORK_DIR here because `yarn install` creates node_modules inside it;
 # dependency/source ownership is set later via `COPY --chown`.
-RUN corepack enable && mkdir -p $WORK_DIR && chown node:node $WORK_DIR
+# Native dependencies need a compiler while Yarn packs Git dependencies; the
+# build tools are installed/removed as root since `apk` requires root.
+RUN apk add --no-cache --virtual .build-deps python3 make g++ && \
+    corepack enable && mkdir -p $WORK_DIR && chown node:node $WORK_DIR
 WORKDIR $WORK_DIR
 USER node
 
@@ -24,7 +27,12 @@ USER node
 RUN git config --global url."https://".insteadOf git://
 
 COPY --chown=node:node package*.json yarn.lock .yarnrc.yml ./
+COPY --chown=node:node .yarn/patches/ ./.yarn/patches/
 RUN corepack prepare yarn@4.12.0 --activate && yarn install --immutable
+
+USER root
+RUN apk del .build-deps
+USER node
 
 COPY --chown=node:node . ./
 

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	keepclientinfo "github.com/keep-network/keep-common/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/operator"
 )
@@ -62,7 +61,7 @@ func TestObserveConnectedWellknownPeersCount_Callable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 
 	provider := &mockProvider{
 		connectionManager: &mockConnectionManager{

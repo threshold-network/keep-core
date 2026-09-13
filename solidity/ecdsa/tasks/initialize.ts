@@ -1,14 +1,15 @@
 import { task, types } from "hardhat/config"
+
 import {
   TASK_INITIALIZE,
   TASK_AUTHORIZE,
   TASK_REGISTER,
   TASK_INITIALIZE_STAKING,
   TASK_ADD_BETA_OPERATOR,
-} from "./legacy-random-beacon/initialize"
-import { authorize } from "./legacy-random-beacon/utils/authorize"
-import { register } from "./legacy-random-beacon/utils/register"
-import { addBetaOperator } from "./legacy-random-beacon/utils/add_beta_operator"
+  authorize,
+  register,
+  addBetaOperator,
+} from "./random-beacon"
 
 // Tasks for the ECDSA application.
 const TASK_INITIALIZE_ECDSA = `${TASK_INITIALIZE}:ecdsa`
@@ -18,7 +19,7 @@ const TASK_ADD_BETA_OPERATOR_ECDSA = `${TASK_ADD_BETA_OPERATOR}:ecdsa`
 
 task(
   TASK_INITIALIZE,
-  "Initializes staking and the ECDSA application for a staking provider and an operator"
+  "Initializes staking and the ECDSA application for a staking provider and an operator",
 ).setAction(async (args, hre) => {
   // Initialize staking
   await hre.run(TASK_INITIALIZE_STAKING, args)
@@ -35,7 +36,7 @@ task(TASK_INITIALIZE_ECDSA, "Initializes operator for ECDSA")
     "authorization",
     "Authorization amount (default: minimumAuthorization)",
     undefined,
-    types.int
+    types.int,
   )
   .setAction(async (args, hre) => {
     await hre.run(TASK_AUTHORIZE_ECDSA, args)
@@ -51,7 +52,7 @@ task(TASK_AUTHORIZE_ECDSA, "Sets authorization for ECDSA")
     "authorization",
     "Authorization amount (default: minimumAuthorization)",
     undefined,
-    types.int
+    types.int,
   )
   .setAction(async (args, hre) => {
     await authorize(
@@ -60,13 +61,13 @@ task(TASK_AUTHORIZE_ECDSA, "Sets authorization for ECDSA")
       args.owner,
       args.provider,
       args.authorizer,
-      args.authorization
+      args.authorization,
     )
   })
 
 task(
   TASK_REGISTER_ECDSA,
-  "Registers an operator for a staking provider in ECDSA"
+  "Registers an operator for a staking provider in ECDSA",
 )
   .addParam("provider", "Staking Provider", undefined, types.string)
   .addParam("operator", "Staking Operator", undefined, types.string)
@@ -76,7 +77,7 @@ task(
 
 task(
   TASK_ADD_BETA_OPERATOR_ECDSA,
-  "Adds an operator to the set of beta operators in ECDSA"
+  "Adds an operator to the set of beta operators in ECDSA",
 )
   .addParam("operator", "Operator Address", undefined, types.string)
   .setAction(async (args, hre) => {

@@ -1,4 +1,5 @@
-import { ethers, waffle } from "hardhat"
+import { ethers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 
 import type { TestModUtils } from "../typechain"
 
@@ -8,13 +9,13 @@ describe("ModUtils", () => {
   const fixture = async () => {
     const TestModUtils = await ethers.getContractFactory("TestModUtils")
     testModUtils = await TestModUtils.deploy()
-    await testModUtils.deployed()
+    await testModUtils.waitForDeployment()
 
     return testModUtils
   }
 
   beforeEach("load test fixture", async () => {
-    testModUtils = await waffle.loadFixture(fixture)
+    testModUtils = await loadFixture(fixture)
   })
 
   it("runModExponentTest()", async () => {

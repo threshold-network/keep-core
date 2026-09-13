@@ -39,10 +39,9 @@ abstract contract Reimbursable {
         _;
     }
 
-    function updateReimbursementPool(ReimbursementPool _reimbursementPool)
-        external
-        onlyReimbursableAdmin
-    {
+    function updateReimbursementPool(
+        ReimbursementPool _reimbursementPool
+    ) external onlyReimbursableAdmin {
         emit ReimbursementPoolUpdated(address(_reimbursementPool));
 
         reimbursementPool = _reimbursementPool;

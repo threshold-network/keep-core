@@ -81,6 +81,9 @@ jobs:
       - name: Lint
         run: yarn lint
 
+      - name: Typecheck
+        run: yarn typecheck
+
   contracts-slither:
     needs: contracts-detect-changes
     if: |
@@ -277,9 +280,15 @@ jobs:
           echo 'committed artifact byte-identity OK'
   contracts-deployment-testnet:
     needs: [contracts-build-and-test]
-    if: |
-      github.event_name == 'workflow_dispatch'
-        && github.ref != 'refs/heads/dapp-development'
+    # The ethers v6 deployment exports break existing ethers v5 consumers.
+    # Block workflow_dispatch publication to the `<environment>` tag; this
+    # gate replaces the original dispatch condition, kept here so it can be
+    # restored:
+    #   github.event_name == 'workflow_dispatch'
+    #     && github.ref != 'refs/heads/dapp-development'
+    # Re-enable only after the consumer migration and release pins are ready;
+    # see solidity/docs/ethers-v6-compatibility.md#limits-and-release-gates.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -366,9 +375,15 @@ jobs:
   # `dapp-development`.
   contracts-dapp-development-deployment-testnet:
     needs: [contracts-build-and-test]
-    if: |
-      github.event_name == 'workflow_dispatch'
-        && github.ref == 'refs/heads/dapp-development'
+    # The ethers v6 deployment exports break existing ethers v5 consumers.
+    # Block workflow_dispatch publication to the
+    # `dapp-development-<environment>` tag; this gate replaces the original
+    # dispatch condition, kept here so it can be restored:
+    #   github.event_name == 'workflow_dispatch'
+    #     && github.ref == 'refs/heads/dapp-development'
+    # Re-enable only after the consumer migration and release pins are ready;
+    # see solidity/docs/ethers-v6-compatibility.md#limits-and-release-gates.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     defaults:
       run:

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keep-network/keep-common/pkg/cache"
+	"github.com/keep-network/keep-core/pkg/cache"
 )
 
 const (

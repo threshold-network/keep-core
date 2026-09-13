@@ -3,6 +3,7 @@ package tbtc
 import (
 	"crypto/ecdsa"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -541,7 +542,14 @@ func assembleRedemptionTransaction(
 		// The redeemable amount for a redemption request is the difference
 		// between the requested amount and treasury fee computed upon
 		// request creation.
-		redeemableAmount := int64(request.RequestedAmount - request.TreasuryFee)
+		if request.TreasuryFee > request.RequestedAmount {
+			return nil, fmt.Errorf("treasury fee exceeds requested amount")
+		}
+		amount := request.RequestedAmount - request.TreasuryFee
+		if amount > math.MaxInt64 {
+			return nil, fmt.Errorf("redeemable amount exceeds int64 range: [%v]", amount)
+		}
+		redeemableAmount := int64(amount)
 		// The actual value of the redemption output is the difference between
 		// the request's redeemable amount and share of the transaction fee
 		// incurred by the given request.

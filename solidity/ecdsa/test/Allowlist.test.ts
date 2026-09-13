@@ -1,16 +1,16 @@
-/* eslint-disable @typescript-eslint/no-unused-expressions, no-restricted-syntax, no-await-in-loop */
+/* eslint-disable no-restricted-syntax, no-await-in-loop */
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
 import { createMock, expectCalledWith } from "./helpers/mock"
 
 import type { Mock } from "./helpers/mock"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { Allowlist, WalletRegistry } from "../typechain"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
-const ZERO_ADDRESS = ethers.constants.AddressZero
+const ZERO_ADDRESS = ethers.ZeroAddress
 
 describe("Allowlist", () => {
   let allowlist: Allowlist
@@ -44,7 +44,7 @@ describe("Allowlist", () => {
     // approveAuthorizationDecrease which checks msg.sender == walletRegistry).
     await governance.sendTransaction({
       to: walletRegistry.address,
-      value: ethers.utils.parseEther("10"),
+      value: ethers.parseEther("10"),
     })
 
     // Deploy Allowlist proxy using ERC1967Proxy directly instead of
@@ -58,15 +58,18 @@ describe("Allowlist", () => {
     // call deployments.fixture().
     const AllowlistFactory = await ethers.getContractFactory("Allowlist")
     const impl = await AllowlistFactory.deploy()
-    await impl.deployed()
+    await impl.waitForDeployment()
     const initData = AllowlistFactory.interface.encodeFunctionData(
       "initialize",
-      [walletRegistry.address]
+      [walletRegistry.address],
     )
     const ERC1967ProxyFactory = await ethers.getContractFactory("ERC1967Proxy")
-    const proxy = await ERC1967ProxyFactory.deploy(impl.address, initData)
-    await proxy.deployed()
-    allowlist = AllowlistFactory.attach(proxy.address) as Allowlist
+    const proxy = await ERC1967ProxyFactory.deploy(
+      await impl.getAddress(),
+      initData,
+    )
+    await proxy.waitForDeployment()
+    allowlist = AllowlistFactory.attach(await proxy.getAddress()) as Allowlist
   })
 
   describe("initialization", () => {
@@ -80,48 +83,48 @@ describe("Allowlist", () => {
 
     it("should not allow re-initialization", async () => {
       await expect(
-        allowlist.initialize(walletRegistry.address)
+        allowlist.initialize(walletRegistry.address),
       ).to.be.revertedWith("Initializable: contract is already initialized")
     })
 
     it("should revert if initialized with zero address", async () => {
       const AllowlistFactory = await ethers.getContractFactory("Allowlist")
       const impl = await AllowlistFactory.deploy()
-      await impl.deployed()
+      await impl.waitForDeployment()
       const initData = AllowlistFactory.interface.encodeFunctionData(
         "initialize",
-        [ZERO_ADDRESS]
+        [ZERO_ADDRESS],
       )
-      const ERC1967ProxyFactory = await ethers.getContractFactory(
-        "ERC1967Proxy"
-      )
-      await expect(ERC1967ProxyFactory.deploy(impl.address, initData)).to.be
-        .reverted
+      const ERC1967ProxyFactory =
+        await ethers.getContractFactory("ERC1967Proxy")
+      await expect(
+        ERC1967ProxyFactory.deploy(await impl.getAddress(), initData),
+      ).to.be.reverted
     })
   })
 
   describe("addStakingProvider", () => {
     context("when called by the owner", () => {
       it("should add a new staking provider with the specified weight", async () => {
-        const weight = ethers.utils.parseEther("40000") // 40k T equivalent
+        const weight = ethers.parseEther("40000") // 40k T equivalent
 
         await expect(
           allowlist
             .connect(governance)
-            .addStakingProvider(stakingProvider1.address, weight)
+            .addStakingProvider(stakingProvider1.address, weight),
         )
           .to.emit(allowlist, "StakingProviderAdded")
           .withArgs(stakingProvider1.address, weight)
 
         const providerInfo = await allowlist.stakingProviders(
-          stakingProvider1.address
+          stakingProvider1.address,
         )
         expect(providerInfo.weight).to.equal(weight)
         expect(providerInfo.pendingNewWeight).to.equal(0)
       })
 
       it("should call authorizationIncreased on WalletRegistry", async () => {
-        const weight = ethers.utils.parseEther("50000")
+        const weight = ethers.parseEther("50000")
 
         await allowlist
           .connect(governance)
@@ -135,7 +138,7 @@ describe("Allowlist", () => {
       })
 
       it("should revert if staking provider already exists", async () => {
-        const weight = ethers.utils.parseEther("40000")
+        const weight = ethers.parseEther("40000")
 
         await allowlist
           .connect(governance)
@@ -144,15 +147,17 @@ describe("Allowlist", () => {
         await expect(
           allowlist
             .connect(governance)
-            .addStakingProvider(stakingProvider1.address, weight)
+            .addStakingProvider(stakingProvider1.address, weight),
         ).to.be.reverted
       })
 
       it("should revert if staking provider is zero address", async () => {
-        const weight = ethers.utils.parseEther("40000")
+        const weight = ethers.parseEther("40000")
 
         await expect(
-          allowlist.connect(governance).addStakingProvider(ZERO_ADDRESS, weight)
+          allowlist
+            .connect(governance)
+            .addStakingProvider(ZERO_ADDRESS, weight),
         ).to.be.revertedWithCustomError(allowlist, "ZeroAddress")
       })
 
@@ -160,26 +165,26 @@ describe("Allowlist", () => {
         await expect(
           allowlist
             .connect(governance)
-            .addStakingProvider(stakingProvider1.address, 0)
+            .addStakingProvider(stakingProvider1.address, 0),
         ).to.be.revertedWithCustomError(allowlist, "ZeroWeight")
       })
     })
 
     context("when called by non-owner", () => {
       it("should revert", async () => {
-        const weight = ethers.utils.parseEther("40000")
+        const weight = ethers.parseEther("40000")
 
         await expect(
           allowlist
             .connect(thirdParty)
-            .addStakingProvider(stakingProvider1.address, weight)
+            .addStakingProvider(stakingProvider1.address, weight),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
   })
 
   describe("requestWeightDecrease", () => {
-    const initialWeight = ethers.utils.parseEther("50000")
+    const initialWeight = ethers.parseEther("50000")
 
     beforeEach(async () => {
       // Add a staking provider first
@@ -190,25 +195,25 @@ describe("Allowlist", () => {
 
     context("when called by the owner", () => {
       it("should request weight decrease for existing provider", async () => {
-        const newWeight = ethers.utils.parseEther("30000")
+        const newWeight = ethers.parseEther("30000")
 
         await expect(
           allowlist
             .connect(governance)
-            .requestWeightDecrease(stakingProvider1.address, newWeight)
+            .requestWeightDecrease(stakingProvider1.address, newWeight),
         )
           .to.emit(allowlist, "WeightDecreaseRequested")
           .withArgs(stakingProvider1.address, initialWeight, newWeight)
 
         const providerInfo = await allowlist.stakingProviders(
-          stakingProvider1.address
+          stakingProvider1.address,
         )
         expect(providerInfo.weight).to.equal(initialWeight) // unchanged
         expect(providerInfo.pendingNewWeight).to.equal(newWeight)
       })
 
       it("should call authorizationDecreaseRequested on WalletRegistry", async () => {
-        const newWeight = ethers.utils.parseEther("30000")
+        const newWeight = ethers.parseEther("30000")
 
         await allowlist
           .connect(governance)
@@ -227,20 +232,20 @@ describe("Allowlist", () => {
         await expect(
           allowlist
             .connect(governance)
-            .requestWeightDecrease(stakingProvider1.address, newWeight)
+            .requestWeightDecrease(stakingProvider1.address, newWeight),
         )
           .to.emit(allowlist, "WeightDecreaseRequested")
           .withArgs(stakingProvider1.address, initialWeight, newWeight)
 
         const providerInfo = await allowlist.stakingProviders(
-          stakingProvider1.address
+          stakingProvider1.address,
         )
         expect(providerInfo.pendingNewWeight).to.equal(newWeight)
       })
 
       it("should overwrite pending weight decrease request", async () => {
-        const firstNewWeight = ethers.utils.parseEther("30000")
-        const secondNewWeight = ethers.utils.parseEther("20000")
+        const firstNewWeight = ethers.parseEther("30000")
+        const secondNewWeight = ethers.parseEther("20000")
 
         await allowlist
           .connect(governance)
@@ -250,18 +255,18 @@ describe("Allowlist", () => {
           .requestWeightDecrease(stakingProvider1.address, secondNewWeight)
 
         const providerInfo = await allowlist.stakingProviders(
-          stakingProvider1.address
+          stakingProvider1.address,
         )
         expect(providerInfo.pendingNewWeight).to.equal(secondNewWeight)
       })
 
       it("should revert if staking provider is unknown", async () => {
-        const newWeight = ethers.utils.parseEther("30000")
+        const newWeight = ethers.parseEther("30000")
 
         await expect(
           allowlist
             .connect(governance)
-            .requestWeightDecrease(stakingProvider2.address, newWeight)
+            .requestWeightDecrease(stakingProvider2.address, newWeight),
         ).to.be.reverted
       })
 
@@ -269,34 +274,34 @@ describe("Allowlist", () => {
         await expect(
           allowlist
             .connect(governance)
-            .requestWeightDecrease(stakingProvider1.address, initialWeight)
+            .requestWeightDecrease(stakingProvider1.address, initialWeight),
         ).to.be.reverted
 
-        const higherWeight = ethers.utils.parseEther("60000")
+        const higherWeight = ethers.parseEther("60000")
         await expect(
           allowlist
             .connect(governance)
-            .requestWeightDecrease(stakingProvider1.address, higherWeight)
+            .requestWeightDecrease(stakingProvider1.address, higherWeight),
         ).to.be.reverted
       })
     })
 
     context("when called by non-owner", () => {
       it("should revert", async () => {
-        const newWeight = ethers.utils.parseEther("30000")
+        const newWeight = ethers.parseEther("30000")
 
         await expect(
           allowlist
             .connect(thirdParty)
-            .requestWeightDecrease(stakingProvider1.address, newWeight)
+            .requestWeightDecrease(stakingProvider1.address, newWeight),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
   })
 
   describe("approveAuthorizationDecrease", () => {
-    const initialWeight = ethers.utils.parseEther("50000")
-    const newWeight = ethers.utils.parseEther("30000")
+    const initialWeight = ethers.parseEther("50000")
+    const newWeight = ethers.parseEther("30000")
 
     beforeEach(async () => {
       // Add a staking provider and request weight decrease
@@ -313,13 +318,13 @@ describe("Allowlist", () => {
         await expect(
           allowlist
             .connect(walletRegistry.wallet)
-            .approveAuthorizationDecrease(stakingProvider1.address)
+            .approveAuthorizationDecrease(stakingProvider1.address),
         )
           .to.emit(allowlist, "WeightDecreaseFinalized")
           .withArgs(stakingProvider1.address, initialWeight, newWeight)
 
         const providerInfo = await allowlist.stakingProviders(
-          stakingProvider1.address
+          stakingProvider1.address,
         )
         expect(providerInfo.weight).to.equal(newWeight)
         expect(providerInfo.pendingNewWeight).to.equal(0)
@@ -328,7 +333,7 @@ describe("Allowlist", () => {
       it("should return the new weight", async () => {
         const result = await allowlist
           .connect(walletRegistry.wallet)
-          .callStatic.approveAuthorizationDecrease(stakingProvider1.address)
+          .approveAuthorizationDecrease.staticCall(stakingProvider1.address)
         expect(result).to.equal(newWeight)
       })
 
@@ -336,7 +341,7 @@ describe("Allowlist", () => {
         await expect(
           allowlist
             .connect(walletRegistry.wallet)
-            .approveAuthorizationDecrease(stakingProvider2.address)
+            .approveAuthorizationDecrease(stakingProvider2.address),
         ).to.be.reverted
       })
 
@@ -350,7 +355,7 @@ describe("Allowlist", () => {
         await expect(
           allowlist
             .connect(walletRegistry.wallet)
-            .approveAuthorizationDecrease(stakingProvider2.address)
+            .approveAuthorizationDecrease(stakingProvider2.address),
         ).to.be.revertedWithCustomError(allowlist, "NoDecreasePending")
       })
     })
@@ -360,14 +365,14 @@ describe("Allowlist", () => {
         await expect(
           allowlist
             .connect(thirdParty)
-            .approveAuthorizationDecrease(stakingProvider1.address)
+            .approveAuthorizationDecrease(stakingProvider1.address),
         ).to.be.reverted
       })
     })
   })
 
   describe("authorizedStake", () => {
-    const weight = ethers.utils.parseEther("40000")
+    const weight = ethers.parseEther("40000")
 
     beforeEach(async () => {
       await allowlist
@@ -378,7 +383,7 @@ describe("Allowlist", () => {
     it("should return the current weight for existing provider", async () => {
       const result = await allowlist.authorizedStake(
         stakingProvider1.address,
-        ZERO_ADDRESS
+        ZERO_ADDRESS,
       )
       expect(result).to.equal(weight)
     })
@@ -386,7 +391,7 @@ describe("Allowlist", () => {
     it("should return zero for non-existing provider", async () => {
       const result = await allowlist.authorizedStake(
         stakingProvider2.address,
-        ZERO_ADDRESS
+        ZERO_ADDRESS,
       )
       expect(result).to.equal(0)
     })
@@ -394,11 +399,11 @@ describe("Allowlist", () => {
     it("should ignore the second parameter (application address)", async () => {
       const result1 = await allowlist.authorizedStake(
         stakingProvider1.address,
-        ZERO_ADDRESS
+        ZERO_ADDRESS,
       )
       const result2 = await allowlist.authorizedStake(
         stakingProvider1.address,
-        thirdParty.address
+        thirdParty.address,
       )
       expect(result1).to.equal(result2)
     })
@@ -413,11 +418,11 @@ describe("Allowlist", () => {
 
       await expect(
         allowlist.seize(
-          ethers.utils.parseEther("1000"), // amount (ignored)
+          ethers.parseEther("1000"), // amount (ignored)
           100, // rewardMultiplier (ignored)
           thirdParty.address, // notifier
-          stakingProviders
-        )
+          stakingProviders,
+        ),
       )
         .to.emit(allowlist, "MaliciousBehaviorIdentified")
         .withArgs(thirdParty.address, stakingProviders)
@@ -430,11 +435,11 @@ describe("Allowlist", () => {
         allowlist
           .connect(thirdParty)
           .seize(
-            ethers.utils.parseEther("500"),
+            ethers.parseEther("500"),
             50,
             governance.address,
-            stakingProviders
-          )
+            stakingProviders,
+          ),
       ).to.not.be.reverted
     })
   })
@@ -442,7 +447,7 @@ describe("Allowlist", () => {
   describe("rolesOf", () => {
     it("should return owner as stakeOwner, stakingProvider as beneficiary, and zero address as authorizer", async () => {
       const [stakeOwner, beneficiary, authorizer] = await allowlist.rolesOf(
-        stakingProvider1.address
+        stakingProvider1.address,
       )
 
       expect(stakeOwner).to.equal(governance.address) // owner of allowlist
@@ -452,7 +457,7 @@ describe("Allowlist", () => {
 
     it("should work for any address", async () => {
       const [stakeOwner, beneficiary, authorizer] = await allowlist.rolesOf(
-        thirdParty.address
+        thirdParty.address,
       )
 
       expect(stakeOwner).to.equal(governance.address)
@@ -465,7 +470,7 @@ describe("Allowlist", () => {
     it("should support beta staker consolidation workflow", async () => {
       // Add multiple staking providers (simulating existing beta stakers)
       const providers = [stakingProvider1.address, stakingProvider2.address]
-      const initialWeight = ethers.utils.parseEther("40000")
+      const initialWeight = ethers.parseEther("40000")
 
       for (const provider of providers) {
         await allowlist
@@ -492,11 +497,11 @@ describe("Allowlist", () => {
       // Verify consolidation result
       const consolidatedStake = await allowlist.authorizedStake(
         stakingProvider1.address,
-        ZERO_ADDRESS
+        ZERO_ADDRESS,
       )
       const activeStake = await allowlist.authorizedStake(
         stakingProvider2.address,
-        ZERO_ADDRESS
+        ZERO_ADDRESS,
       )
 
       expect(consolidatedStake).to.equal(0) // Consolidated provider has no weight

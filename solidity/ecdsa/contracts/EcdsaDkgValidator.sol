@@ -107,11 +107,9 @@ contract EcdsaDkgValidator {
     ///         ranges, and order of arrays.
     /// @return isValid true if the result is valid, false otherwise
     /// @return errorMsg validation error message; empty for a valid result
-    function validateFields(EcdsaDkg.Result calldata result)
-        public
-        pure
-        returns (bool isValid, string memory errorMsg)
-    {
+    function validateFields(
+        EcdsaDkg.Result calldata result
+    ) public pure returns (bool isValid, string memory errorMsg) {
         if (result.groupPubKey.length != publicKeyByteSize) {
             return (false, "Malformed group public key");
         }
@@ -128,7 +126,7 @@ contract EcdsaDkgValidator {
             if (
                 misbehavedMembersIndices[0] < 1 ||
                 misbehavedMembersIndices[misbehavedMembersIndices.length - 1] >
-                groupSize
+                    groupSize
             ) {
                 return (false, "Corrupted misbehaved members indices");
             }
@@ -186,11 +184,10 @@ contract EcdsaDkgValidator {
     ///         result against group members selected by the sortition pool.
     /// @param seed seed used to start the DKG and select group members
     /// @return true if group members matches; false otherwise
-    function validateGroupMembers(EcdsaDkg.Result calldata result, uint256 seed)
-        public
-        view
-        returns (bool)
-    {
+    function validateGroupMembers(
+        EcdsaDkg.Result calldata result,
+        uint256 seed
+    ) public view returns (bool) {
         uint32[] calldata resultMembers = result.members;
         uint32[] memory actualGroupMembers = sortitionPool.selectGroup(
             groupSize,
@@ -262,11 +259,9 @@ contract EcdsaDkgValidator {
     /// @param result DKG result
     /// @return true if calculated result's group members hash matches with the
     /// one that is challenged.
-    function validateMembersHash(EcdsaDkg.Result calldata result)
-        public
-        pure
-        returns (bool)
-    {
+    function validateMembersHash(
+        EcdsaDkg.Result calldata result
+    ) public pure returns (bool) {
         if (result.misbehavedMembersIndices.length > 0) {
             // members that generated a group signing key
             uint32[] memory groupMembers = new uint32[](

@@ -122,6 +122,7 @@ func (t *Transaction) Serialize(
 // 4-byte array.
 func (t *Transaction) SerializeVersion() [4]byte {
 	result := [4]byte{}
+	// #nosec G115 -- Bitcoin version fields encode the exact signed 32-bit bit pattern.
 	binary.LittleEndian.PutUint32(result[:], uint32(t.Version))
 	return result
 }
