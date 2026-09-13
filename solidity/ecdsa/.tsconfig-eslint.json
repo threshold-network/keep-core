@@ -1,5 +1,12 @@
 {
   "extends": "./tsconfig.json",
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "build", "cache", "export", "external"]
+  "exclude": [
+    "node_modules",
+    "build",
+    "cache",
+    "export",
+    "external",
+    "typechain"
+  ]
 }
