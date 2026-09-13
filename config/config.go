@@ -18,8 +18,8 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
-	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
+	commonEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/maintainer"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
@@ -226,6 +226,10 @@ func validateConfig(config *Config, categories ...Category) error {
 				result = multierror.Append(result, fmt.Errorf(
 					"missing value for storage.dir; see storage section in configuration",
 				))
+			}
+		case Tbtc:
+			if err := config.Tbtc.TransactionMonitor.Validate(); err != nil {
+				result = multierror.Append(result, err)
 			}
 		}
 	}

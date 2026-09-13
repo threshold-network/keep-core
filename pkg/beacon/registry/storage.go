@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/keep-network/keep-common/pkg/persistence"
+	"github.com/keep-network/keep-core/pkg/persistence"
 
 	"encoding/hex"
 )

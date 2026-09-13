@@ -51,11 +51,11 @@ try {
   // Fixture (a): it.only in a test file should trigger no-only-tests
   const onlyMessages = await lintFixture(
     sharedTestFixture,
-    'it.only("x", () => {})\n'
+    'it.only("x", () => {})\n',
   )
   assert(
     onlyMessages.some((m) => m.ruleId === "no-only-tests/no-only-tests"),
-    "it.only() in test/**/*.ts triggers no-only-tests/no-only-tests"
+    "it.only() in test/**/*.ts triggers no-only-tests/no-only-tests",
   )
 
   // Fixture (c): an ordinary test file should be linted (at least one rule evaluated).
@@ -63,17 +63,17 @@ try {
   const lintedMessages = await lintFixture(sharedTestFixture, "var y = 1\n")
   assert(
     lintedMessages.length > 0,
-    "ordinary test/**/*.ts fixture is actually linted (not silently skipped)"
+    "ordinary test/**/*.ts fixture is actually linted (not silently skipped)",
   )
 
   // Fixture (b): file matching an ignores glob (typechain/**) should have zero messages
   const ignoredMessages = await lintFixture(
     ignoredFixture,
-    "const x: any = 1\n"
+    "const x: any = 1\n",
   )
   assert(
     ignoredMessages.length === 0,
-    "typechain/**/*.ts fixture produces zero lint messages (ignored)"
+    "typechain/**/*.ts fixture produces zero lint messages (ignored)",
   )
 } finally {
   rmSync(join(pkgRoot, sharedTestFixture), { force: true })

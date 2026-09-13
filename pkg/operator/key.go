@@ -134,7 +134,7 @@ func MarshalCompressed(publicKey *PublicKey) []byte {
 
 	byteLength := (curveBitSize + 7) / 8
 	compressed := make([]byte, 1+byteLength)
-	compressed[0] = byte(publicKey.Y.Bit(0)) | 2
+	compressed[0] = byte(publicKey.Y.Bit(0)&1) | 2
 	publicKey.X.FillBytes(compressed[1:])
 
 	return compressed

@@ -1,10 +1,9 @@
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
-import { BigNumber } from "ethers"
 
-import type { ContractTransaction } from "ethers"
+import type { ContractTransactionResponse } from "ethers"
 import type { RandomBeaconChaosnet, CallbackContractStub } from "../typechain"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
@@ -46,7 +45,7 @@ describe("RandomBeaconChaosnet", () => {
 
     context("when called by the owner", () => {
       context("when requester authorization set to true", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -74,7 +73,7 @@ describe("RandomBeaconChaosnet", () => {
       })
 
       context("when requester authorization set to false", () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -114,7 +113,7 @@ describe("RandomBeaconChaosnet", () => {
         await expect(
           randomBeaconChaosnet
             .connect(thirdParty)
-            .requestRelayEntry(callbackContract.address),
+            .requestRelayEntry(await callbackContract.getAddress()),
         ).to.be.revertedWith("Requester must be authorized")
       })
     })
@@ -130,7 +129,7 @@ describe("RandomBeaconChaosnet", () => {
 
           await randomBeaconChaosnet
             .connect(requester)
-            .requestRelayEntry(callbackContract.address)
+            .requestRelayEntry(await callbackContract.getAddress())
         })
 
         after(async () => {
@@ -141,7 +140,7 @@ describe("RandomBeaconChaosnet", () => {
           expect(await callbackContract.lastEntry()).to.equal(
             // The entry is keccak-256 of the initial value stored in
             // the RandomBeaconChaosnet contract
-            BigNumber.from(
+            BigInt(
               "86322480231844907215266847458792959757192550318770676212332984" +
                 "332154459033029",
             ),
@@ -161,11 +160,11 @@ describe("RandomBeaconChaosnet", () => {
           // by requesting a relay entry twice.
           await randomBeaconChaosnet
             .connect(requester)
-            .requestRelayEntry(callbackContract.address)
+            .requestRelayEntry(await callbackContract.getAddress())
 
           await randomBeaconChaosnet
             .connect(requester)
-            .requestRelayEntry(callbackContract.address)
+            .requestRelayEntry(await callbackContract.getAddress())
         })
 
         after(async () => {
@@ -176,7 +175,7 @@ describe("RandomBeaconChaosnet", () => {
           // The entry is keccak-256 calculated twice on the initial value
           // stored in the RandomBeaconChaosnet contract
           expect(await callbackContract.lastEntry()).to.equal(
-            BigNumber.from(
+            BigInt(
               "45055825411044151981109535788320043556123542984485670123474642" +
                 "322436340913380",
             ),

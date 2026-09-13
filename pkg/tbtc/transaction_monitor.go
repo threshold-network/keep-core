@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -10,37 +11,9 @@ import (
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
-const (
-	// defaultStuckTransactionThreshold is how long a broadcast wallet
-	// transaction may remain unconfirmed before it is considered stuck and an
-	// alert is raised (~6 hours).
-	defaultStuckTransactionThreshold = 6 * time.Hour
-
-	// transactionMonitorCheckInterval is how often the monitor polls the
-	// confirmation status of the tracked transactions.
-	transactionMonitorCheckInterval = 5 * time.Minute
-
-	// transactionMonitorMinConfirmations is the number of confirmations at
-	// which a tracked transaction is considered mined and stops being tracked.
-	transactionMonitorMinConfirmations = uint(1)
-
-	// transactionMonitorMaxTracked bounds the number of tracked transactions to
-	// prevent unbounded memory growth.
-	transactionMonitorMaxTracked = 1000
-
-	// transactionMonitorMaxTrackingAge is how long a still-unconfirmed
-	// transaction is tracked before the monitor gives up on it - e.g. it was
-	// dropped from the mempool and will never confirm. Bounding the tracking
-	// duration prevents never-confirming transactions from filling up the
-	// tracking table and starving monitoring of new transactions (~24 hours).
-	transactionMonitorMaxTrackingAge = 24 * time.Hour
-
-	// transactionMonitorCheckBudget bounds the wall-clock time of a single check
-	// pass so that a slow chain call cannot stall monitoring of every remaining
-	// transaction; transactions not reached within the budget are handled on the
-	// next pass.
-	transactionMonitorCheckBudget = 2 * time.Minute
-)
+// transactionMonitorMinConfirmations is the number of confirmations at which
+// a tracked transaction is considered mined and stops being tracked.
+const transactionMonitorMinConfirmations = uint(1)
 
 // trackedTransaction holds the monitoring state of a single broadcast wallet
 // transaction.
@@ -103,17 +76,23 @@ type transactionMonitor struct {
 	mu      sync.Mutex
 	tracked map[bitcoin.Hash]*trackedTransaction
 
-	threshold time.Duration
+	config TransactionMonitorConfig
 
 	metricsRecorder clientinfo.PerformanceMetricsRecorder
 }
 
-func newTransactionMonitor(btcChain bitcoin.Chain) *transactionMonitor {
-	return &transactionMonitor{
-		btcChain:  btcChain,
-		tracked:   make(map[bitcoin.Hash]*trackedTransaction),
-		threshold: defaultStuckTransactionThreshold,
+func newTransactionMonitor(
+	btcChain bitcoin.Chain,
+	config TransactionMonitorConfig,
+) (*transactionMonitor, error) {
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid transaction monitor configuration: %w", err)
 	}
+	return &transactionMonitor{
+		btcChain: btcChain,
+		tracked:  make(map[bitcoin.Hash]*trackedTransaction),
+		config:   config.withDefaults(),
+	}, nil
 }
 
 // setMetricsRecorder wires the performance metrics recorder used to expose the
@@ -141,7 +120,7 @@ func (tm *transactionMonitor) track(
 		return
 	}
 
-	if len(tm.tracked) >= transactionMonitorMaxTracked {
+	if len(tm.tracked) >= tm.config.MaxTracked {
 		// A full table means a real broadcast transaction goes unmonitored;
 		// surface it as a metric (emitted outside the lock) as well as a log.
 		recorder := tm.metricsRecorder
@@ -150,7 +129,7 @@ func (tm *transactionMonitor) track(
 		logger.Warnf(
 			"transaction monitor tracking table is full ([%d]); transaction "+
 				"[%s] will not be monitored",
-			transactionMonitorMaxTracked,
+			tm.config.MaxTracked,
 			txHash.Hex(bitcoin.ReversedByteOrder),
 		)
 		if recorder != nil {
@@ -170,7 +149,7 @@ func (tm *transactionMonitor) track(
 
 // run starts the monitor's polling loop. It blocks until the context is done.
 func (tm *transactionMonitor) run(ctx context.Context) {
-	ticker := time.NewTicker(transactionMonitorCheckInterval)
+	ticker := time.NewTicker(tm.config.CheckInterval)
 	defer ticker.Stop()
 
 	for {
@@ -192,7 +171,7 @@ func (tm *transactionMonitor) run(ctx context.Context) {
 // concurrently but only inserts new entries, so the per-entry alerted flag is
 // only ever mutated here, under the mutex.
 func (tm *transactionMonitor) check(ctx context.Context) {
-	tm.checkWithBudget(ctx, transactionMonitorCheckBudget)
+	tm.checkWithBudget(ctx, tm.config.CheckBudget)
 }
 
 func (tm *transactionMonitor) checkWithBudget(
@@ -251,7 +230,7 @@ func (tm *transactionMonitor) checkWithBudget(
 		// threshold. This runs before the give-up eviction below so that a
 		// transaction first observed after the maximum tracking age still fires
 		// exactly one alert instead of being silently evicted.
-		if outstanding > tm.threshold && !t.alerted {
+		if outstanding > tm.config.StuckThreshold && !t.alerted {
 			logger.Warnf(
 				"wallet transaction [%s] for wallet [0x%x] has been unconfirmed "+
 					"for [%s] (threshold [%s]); it may be stuck in the mempool "+
@@ -260,7 +239,7 @@ func (tm *transactionMonitor) checkWithBudget(
 				txHash.Hex(bitcoin.ReversedByteOrder),
 				t.walletPublicKeyHash,
 				outstanding.Round(time.Minute),
-				tm.threshold,
+				tm.config.StuckThreshold,
 			)
 
 			// Mark as alerted under the lock, but emit the metric outside the
@@ -281,7 +260,7 @@ func (tm *transactionMonitor) checkWithBudget(
 
 		// Give up on transactions that have been unconfirmed for too long (e.g.
 		// dropped from the mempool) so they cannot fill the tracking table.
-		if outstanding > transactionMonitorMaxTrackingAge {
+		if outstanding > tm.config.MaxTrackingAge {
 			logger.Warnf(
 				"giving up monitoring wallet transaction [%s] for wallet "+
 					"[0x%x]; it has been unconfirmed for [%s]",

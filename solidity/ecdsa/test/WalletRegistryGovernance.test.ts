@@ -1,10 +1,11 @@
 import { deployments, ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import { constants, params, updateWalletRegistryParams } from "./fixtures"
 
-import type { ContractTransaction } from "ethers"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { ContractTransactionResponse } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type {
   WalletRegistry,
   WalletRegistryStub,
@@ -72,14 +73,14 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       context("when new address is zero", () => {
         it("should revert when a new random beacon address is zero", async () => {
           await expect(
             walletRegistryGovernance
               .connect(governance)
-              .upgradeRandomBeacon(ethers.constants.AddressZero),
+              .upgradeRandomBeacon(ethers.ZeroAddress),
           ).to.be.revertedWith("New random beacon address cannot be zero")
         })
       })
@@ -124,14 +125,14 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       context("when new address is zero", () => {
         it("should revert when a new address is zero", async () => {
           await expect(
             walletRegistryGovernance
               .connect(governance)
-              .initializeWalletOwner(ethers.constants.AddressZero),
+              .initializeWalletOwner(ethers.ZeroAddress),
           ).to.be.revertedWith("Wallet Owner address cannot be zero")
         })
       })
@@ -184,7 +185,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -211,8 +212,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit GovernanceDelayUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(walletRegistryGovernance, "GovernanceDelayUpdateStarted")
@@ -269,7 +272,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -324,7 +327,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -345,9 +348,7 @@ describe("WalletRegistryGovernance", async () => {
           await expect(
             walletRegistryGovernance
               .connect(governance)
-              .beginWalletRegistryGovernanceTransfer(
-                ethers.constants.AddressZero,
-              ),
+              .beginWalletRegistryGovernanceTransfer(ethers.ZeroAddress),
           ).to.be.revertedWith(
             "New wallet registry governance address cannot be zero",
           )
@@ -356,7 +357,7 @@ describe("WalletRegistryGovernance", async () => {
 
       it("should not transfer the governance", async () => {
         expect(await walletRegistry.governance()).to.be.equal(
-          walletRegistryGovernance.address,
+          await walletRegistryGovernance.getAddress(),
         )
       })
 
@@ -367,8 +368,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit WalletRegistryGovernanceTransferStarted", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -433,7 +436,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -491,7 +494,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -510,14 +513,14 @@ describe("WalletRegistryGovernance", async () => {
           await expect(
             walletRegistryGovernance
               .connect(governance)
-              .beginWalletOwnerUpdate(ethers.constants.AddressZero),
+              .beginWalletOwnerUpdate(ethers.ZeroAddress),
           ).to.be.revertedWith("New wallet owner address cannot be zero")
         })
       })
 
       it("should not update the wallet owner", async () => {
         expect(await walletRegistry.walletOwner()).to.be.equal(
-          ethers.constants.AddressZero,
+          ethers.ZeroAddress,
         )
       })
 
@@ -528,8 +531,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the WalletOwnerUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(walletRegistryGovernance, "WalletOwnerUpdateStarted")
@@ -582,7 +587,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -635,7 +640,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -662,8 +667,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the MinimumAuthorizationUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -719,7 +726,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -770,7 +777,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -799,8 +806,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the AuthorizationDecreaseDelayUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -854,7 +863,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -910,7 +919,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -939,8 +948,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the AuthorizationDecreaseChangePeriodUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -994,7 +1005,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1050,7 +1061,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1079,8 +1090,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the MaliciousDkgResultSlashingAmountUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -1136,7 +1149,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1192,7 +1205,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1220,8 +1233,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgResultSubmissionGasUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -1277,7 +1292,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1330,7 +1345,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1359,8 +1374,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgResultApprovalGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -1416,7 +1433,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1482,7 +1499,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner and value is correct", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1511,8 +1528,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the MaliciousDkgResultNotificationRewardMultiplierUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -1568,7 +1587,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1626,7 +1645,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1655,8 +1674,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the SortitionPoolRewardsBanDurationUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -1712,7 +1733,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1805,7 +1826,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner and the value is correct", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1832,8 +1853,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgSeedTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(walletRegistryGovernance, "DkgSeedTimeoutUpdateStarted")
@@ -1886,7 +1909,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -1969,7 +1992,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner and the value is correct", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -1996,8 +2019,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgResultChallengePeriodLengthUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -2053,7 +2078,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2109,7 +2134,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2130,8 +2155,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit DkgResultChallengeExtraGasUpdateStarted", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -2187,7 +2214,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2272,7 +2299,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2299,8 +2326,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgResultSubmissionTimeoutUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -2356,7 +2385,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2443,7 +2472,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner and the value is correct", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2471,8 +2500,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the DkgSubmitterPrecedencePeriodLengthUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -2528,7 +2559,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2585,7 +2616,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
       let reimbursementPoolAddress: string
 
       before(async () => {
@@ -2607,7 +2638,7 @@ describe("WalletRegistryGovernance", async () => {
           await expect(
             walletRegistryGovernance
               .connect(governance)
-              .beginReimbursementPoolUpdate(ethers.constants.AddressZero),
+              .beginReimbursementPoolUpdate(ethers.ZeroAddress),
           ).to.be.revertedWith("New reimbursement pool address cannot be zero")
         })
       })
@@ -2625,8 +2656,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the ReimbursementPoolUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(walletRegistryGovernance, "ReimbursementPoolUpdateStarted")
@@ -2679,7 +2712,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2732,7 +2765,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2761,8 +2794,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the NotifyOperatorInactivityGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -2818,7 +2853,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -2874,7 +2909,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -2903,8 +2938,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the NotifySeedTimeoutGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -2960,7 +2997,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -3016,7 +3053,7 @@ describe("WalletRegistryGovernance", async () => {
     })
 
     context("when the caller is the owner", () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       before(async () => {
         await createSnapshot()
@@ -3045,8 +3082,10 @@ describe("WalletRegistryGovernance", async () => {
       })
 
       it("should emit the NotifyDkgTimeoutNegativeGasOffsetUpdateStarted event", async () => {
-        const blockTimestamp = (
-          await ethers.provider.getBlock((await tx.wait()).blockNumber)
+        const blockTimestamp = requireResult(
+          await ethers.provider.getBlock(
+            requireResult(await tx.wait()).blockNumber,
+          ),
         ).timestamp
         await expect(tx)
           .to.emit(
@@ -3102,7 +3141,7 @@ describe("WalletRegistryGovernance", async () => {
     context(
       "when the update process is initialized and governance delay passed",
       () => {
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()

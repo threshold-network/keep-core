@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 )
 
 // To run the tests execute:
@@ -30,7 +30,7 @@ import (
 func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 	ethereumURL := os.Getenv("ETHEREUM_MAINNET_RPC_URL")
 	if ethereumURL == "" {
-		t.Skip("ETHEREUM_MAINNET_RPC_URL not set; skipping integration test")
+		t.Skip("ETHEREUM_MAINNET_RPC_URL not set; skipping mainnet integration test")
 	}
 
 	client, err := ethclient.Dial(ethereumURL)

@@ -1,8 +1,17 @@
 /* eslint-disable import/no-extraneous-dependencies, no-restricted-syntax, no-await-in-loop, no-continue, no-plusplus */
 import fs from "fs"
 
-import { ethers } from "hardhat"
+import { ethers, helpers } from "hardhat"
 import { Command } from "commander"
+
+interface StatusOptions {
+  allowlist: string
+}
+
+interface ExecuteOptions extends StatusOptions {
+  signer: string
+  dryRun?: boolean
+}
 
 const program = new Command()
 
@@ -81,7 +90,7 @@ program
   .requiredOption("-a, --allowlist <address>", "Allowlist contract address")
   .option("-s, --signer <name>", "Named signer to use", "governance")
   .option("--dry-run", "Show what would be done without executing")
-  .action(async (options) => {
+  .action(async (options: ExecuteOptions) => {
     console.log("🚀 BETA STAKER CONSOLIDATION")
     console.log("=".repeat(50))
     console.log(`Allowlist: ${options.allowlist}`)
@@ -90,7 +99,10 @@ program
     console.log()
 
     const allowlist = await ethers.getContractAt("Allowlist", options.allowlist)
-    const signer = await ethers.getNamedSigner(options.signer)
+    const { [options.signer]: signer } = await helpers.signers.getNamedSigners()
+    if (!signer) {
+      throw new Error(`Unknown named signer: ${options.signer}`)
+    }
 
     // Step 1: Check current state
     console.log("📋 STEP 1: Checking current operator state...")
@@ -103,12 +115,12 @@ program
       try {
         const weight = await allowlist.authorizedStake(
           operator,
-          ethers.constants.AddressZero,
+          ethers.ZeroAddress,
         )
         const entity = ENTITY_MAPPINGS[operator.toLowerCase()] || "UNKNOWN"
 
         currentStates[operator] = {
-          weight: ethers.utils.formatEther(weight),
+          weight: ethers.formatEther(weight),
           entity,
         }
 
@@ -116,9 +128,7 @@ program
           ? "→ CONSOLIDATE"
           : "✅ KEEP"
         console.log(
-          `${operator} (${entity}): ${ethers.utils.formatEther(
-            weight,
-          )} T ${status}`,
+          `${operator} (${entity}): ${ethers.formatEther(weight)} T ${status}`,
         )
       } catch (error: any) {
         console.error(`❌ Error checking ${operator}: ${error.message}`)
@@ -210,7 +220,7 @@ program
           const providerInfo = await allowlist.stakingProviders(operator)
           const pendingWeight = providerInfo.pendingNewWeight
 
-          if (pendingWeight.eq(0)) {
+          if (pendingWeight === 0n) {
             console.log(`✅ ${operator}: Pending decrease to 0`)
           } else {
             console.log(`⚠️  ${operator}: No pending decrease found`)
@@ -287,7 +297,7 @@ program
   .command("status")
   .description("Check current status of all operators")
   .requiredOption("-a, --allowlist <address>", "Allowlist contract address")
-  .action(async (options) => {
+  .action(async (options: StatusOptions) => {
     const allowlist = await ethers.getContractAt("Allowlist", options.allowlist)
 
     console.log("CURRENT OPERATOR STATUS")
@@ -299,7 +309,7 @@ program
       const entity = ENTITY_MAPPINGS[operator.toLowerCase()] || "UNKNOWN"
       const weight = await allowlist.authorizedStake(
         operator,
-        ethers.constants.AddressZero,
+        ethers.ZeroAddress,
       )
       const providerInfo = await allowlist.stakingProviders(operator)
       const pendingWeight = providerInfo.pendingNewWeight
@@ -307,16 +317,20 @@ program
       const status = OPERATORS_TO_CONSOLIDATE.includes(operator)
         ? "CONSOLIDATE"
         : "KEEP"
-      const pending = pendingWeight.gt(0)
-        ? ` (pending: ${ethers.utils.formatEther(pendingWeight)})`
-        : ""
+      const pending =
+        pendingWeight > 0n
+          ? ` (pending: ${ethers.formatEther(pendingWeight)})`
+          : ""
 
       console.log(`${operator} (${entity})`)
-      console.log(`  Weight: ${ethers.utils.formatEther(weight)} T${pending}`)
+      console.log(`  Weight: ${ethers.formatEther(weight)} T${pending}`)
       console.log(`  Plan: ${status}`)
     }
   })
 
-program.parse()
+program.parseAsync(process.argv).catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error))
+  process.exitCode = 1
+})
 
 export { OPERATORS_TO_CONSOLIDATE, OPERATORS_TO_KEEP }

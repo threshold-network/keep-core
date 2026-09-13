@@ -1,13 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 
-import { BigNumber } from "ethers"
-import {
-  ethers,
-  helpers,
-  getUnnamedAccounts,
-  waffle,
-  deployments,
-} from "hardhat"
+import { ethers, helpers, getUnnamedAccounts, deployments } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import blsData from "./data/bls"
@@ -38,7 +32,7 @@ const fixture = async () => {
 
   const SortitionPool = await ethers.getContractFactory("SortitionPool")
   const sortitionPool = (await SortitionPool.deploy(
-    t.address,
+    await t.getAddress(),
     constants.poolWeightDivisor,
   )) as SortitionPool
 
@@ -46,9 +40,9 @@ const fixture = async () => {
 
   const DKGValidator = await ethers.getContractFactory("BeaconDkgValidator")
   const dkgValidator = (await DKGValidator.deploy(
-    sortitionPool.address,
+    await sortitionPool.getAddress(),
   )) as DKGValidator
-  await dkgValidator.deployed()
+  await dkgValidator.waitForDeployment()
 
   return {
     sortitionPool,
@@ -57,11 +51,11 @@ const fixture = async () => {
 }
 
 describe("BeaconDkgValidator", () => {
-  const dkgSeed: BigNumber = BigNumber.from(
+  const dkgSeed = BigInt(
     "31415926535897932384626433832795028841971693993751058209749445923078164062862",
   )
   const dkgStartBlock = 1337
-  const groupPublicKey: string = ethers.utils.hexValue(blsData.groupPubKey)
+  const groupPublicKey: string = ethers.toQuantity(blsData.groupPubKey)
 
   let selectedOperators: Operator[]
 
@@ -78,7 +72,7 @@ describe("BeaconDkgValidator", () => {
   let validator: DKGValidator
 
   before("load test fixture", async () => {
-    const contracts = await waffle.loadFixture(fixture)
+    const contracts = await loadFixture(fixture)
     const { sortitionPool } = contracts
     validator = contracts.dkgValidator
 
@@ -698,8 +692,8 @@ describe("BeaconDkgValidator", () => {
 
     context("when signatures contain wrong result hash", () => {
       const signWithWrongResultHash = async (signingOperators: Operator[]) => {
-        const wrongResultHash = ethers.utils.keccak256(
-          ethers.utils.defaultAbiCoder.encode(
+        const wrongResultHash = ethers.keccak256(
+          ethers.AbiCoder.defaultAbiCoder().encode(
             ["uint256", "bytes", "uint8[]", "uint256"],
             [
               hardhatNetworkId,
@@ -713,11 +707,11 @@ describe("BeaconDkgValidator", () => {
         for (let i = 0; i < signingOperators.length; i++) {
           const { signer: ethersSigner } = signingOperators[i]
           const signature = await ethersSigner.signMessage(
-            ethers.utils.arrayify(wrongResultHash),
+            ethers.getBytes(wrongResultHash),
           )
           signatures.push(signature)
         }
-        const signaturesBytes = ethers.utils.hexConcat(signatures)
+        const signaturesBytes = ethers.concat(signatures)
         return signaturesBytes
       }
 

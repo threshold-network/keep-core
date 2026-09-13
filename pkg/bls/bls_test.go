@@ -2,6 +2,7 @@ package bls
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -184,4 +185,96 @@ func TestThresholdBLS(t *testing.T) {
 		})
 	}
 
+}
+
+// --- Benchmarks ---
+
+func BenchmarkSign(b *testing.B) {
+	pi, _ := new(big.Int).SetString(
+		"31415926535897932384626433832795028841971693993751058209749445923078164062862", 10)
+	message := pi.Bytes()
+	secretKey := big.NewInt(123)
+	b.ResetTimer()
+	for range b.N {
+		Sign(secretKey, message)
+	}
+}
+
+func BenchmarkVerify(b *testing.B) {
+	pi, _ := new(big.Int).SetString(
+		"31415926535897932384626433832795028841971693993751058209749445923078164062862", 10)
+	message := pi.Bytes()
+	secretKey := big.NewInt(123)
+	publicKey := new(bn256.G2).ScalarBaseMult(secretKey)
+	signature := Sign(secretKey, message)
+	b.ResetTimer()
+	for range b.N {
+		Verify(publicKey, message, signature)
+	}
+}
+
+// BenchmarkAggregateBLS benchmarks aggregate signature verification for group
+// sizes representative of small committees (10), medium (50), and production
+// random beacon groups (100).
+func BenchmarkAggregateBLS(b *testing.B) {
+	pi, _ := new(big.Int).SetString(
+		"31415926535897932384626433832795028841971693993751058209749445923078164062862", 10)
+	message := new(bn256.G1).ScalarBaseMult(pi)
+
+	for _, n := range []int{10, 50, 100} {
+		n := n
+		var signatures []*bn256.G1
+		var publicKeys []*bn256.G2
+		for i := 0; i < n; i++ {
+			k, _, err := bn256.RandomG1(rand.Reader)
+			if err != nil {
+				b.Fatal(err)
+			}
+			pub := new(bn256.G2).ScalarBaseMult(k)
+			publicKeys = append(publicKeys, pub)
+			signatures = append(signatures, SignG1(k, message))
+		}
+		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
+			b.ResetTimer()
+			for range b.N {
+				aggSig := AggregateG1Points(signatures)
+				aggPub := AggregateG2Points(publicKeys)
+				VerifyG1(aggPub, message, aggSig)
+			}
+		})
+	}
+}
+
+// BenchmarkThresholdVerify benchmarks threshold signature recovery with a
+// 51-of-100 configuration representative of production beacon groups.
+func BenchmarkThresholdVerify(b *testing.B) {
+	pi, _ := new(big.Int).SetString(
+		"31415926535897932384626433832795028841971693993751058209749445923078164062862", 10)
+	message := new(bn256.G1).ScalarBaseMult(pi)
+
+	const numPlayers = 100
+	const threshold = 51
+
+	var masterSecretKey []*big.Int
+	var signatureShares []*SignatureShare
+
+	for i := 0; i < threshold; i++ {
+		sk, _, err := bn256.RandomG2(rand.Reader)
+		if err != nil {
+			b.Fatal(err)
+		}
+		masterSecretKey = append(masterSecretKey, sk)
+	}
+	for i := 1; i <= numPlayers; i++ {
+		share := GetSecretKeyShare(masterSecretKey, i)
+		signatureShares = append(signatureShares, &SignatureShare{
+			I: i,
+			V: SignG1(share.V, message),
+		})
+	}
+
+	b.ResetTimer()
+	for range b.N {
+		_, _ = RecoverSignature(signatureShares[:threshold], threshold)
+	}
 }

@@ -485,8 +485,8 @@ presented below.
 
 Please make sure you have the following prerequisites installed on your machine:
 
-- https://nodejs.org[Node.js] >=14.18.2
-- https://yarnpkg.com[Yarn] >=1.22.17
+- https://nodejs.org[Node.js] >=24.0.0
+- https://yarnpkg.com[Yarn] >=4.12.0 (via Corepack)
 
 === Build contracts
 

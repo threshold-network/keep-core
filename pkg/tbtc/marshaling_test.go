@@ -53,7 +53,8 @@ func TestSignerMarshalling_NonTECDSAKey(t *testing.T) {
 
 func TestSignerUnmarshalling_InvalidPublicKey(t *testing.T) {
 	marshaled, err := proto.Marshal(&pb.Signer{
-		Wallet: &pb.Wallet{PublicKey: []byte{0x04}},
+		Wallet:                  &pb.Wallet{PublicKey: []byte{0x04}},
+		SigningGroupMemberIndex: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -186,10 +187,7 @@ func TestCoordinationMessage_MarshalingRoundtrip(t *testing.T) {
 		},
 		"with deposit sweep proposal": {
 			proposal: &DepositSweepProposal{
-				DepositsKeys: []struct {
-					FundingTxHash      bitcoin.Hash
-					FundingOutputIndex uint32
-				}{
+				DepositsKeys: []DepositKey{
 					{
 						FundingTxHash:      parseHash("709b55bd3da0f5a838125bd0ee20c5bfdd7caba173912d4281cae816b79a201b"),
 						FundingOutputIndex: 0,

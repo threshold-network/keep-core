@@ -84,11 +84,7 @@ type channel struct {
 	retransmissionTicker *retransmission.Ticker
 
 	// metricsRecorder is optional and used for recording performance metrics
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-		SetGauge(name string, value float64)
-		RecordDuration(name string, duration time.Duration)
-	}
+	metricsRecorder fullMetricsRecorder
 
 	// monitorQueueSizesOnce ensures the monitoring goroutine is started only once
 	monitorQueueSizesOnce sync.Once
@@ -453,11 +449,7 @@ func extractPublicKey(peer peer.ID) (*operator.PublicKey, error) {
 
 // setMetricsRecorder sets the metrics recorder for the channel and starts
 // periodic queue size monitoring.
-func (c *channel) setMetricsRecorder(recorder interface {
-	IncrementCounter(name string, value float64)
-	SetGauge(name string, value float64)
-	RecordDuration(name string, duration time.Duration)
-}) {
+func (c *channel) setMetricsRecorder(recorder fullMetricsRecorder) {
 	c.metricsRecorder = recorder
 	// Start periodic queue size monitoring (only once)
 	if recorder != nil {

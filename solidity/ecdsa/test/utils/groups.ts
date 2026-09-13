@@ -1,27 +1,32 @@
+import { toBeHex } from "ethers"
 import { ethers } from "hardhat"
 
 import { constants } from "../fixtures"
 
-import type { BigNumber, BigNumberish } from "ethers"
+import type { BigNumberish } from "ethers"
 import type { Operator } from "./operators"
 import type { SortitionPool } from "../../typechain"
 
-const { keccak256, defaultAbiCoder } = ethers.utils
+const { keccak256 } = ethers
+const defaultAbiCoder = ethers.AbiCoder.defaultAbiCoder()
 
 export async function selectGroup(
   sortitionPool: SortitionPool,
-  seed: BigNumber,
+  seed: bigint,
 ): Promise<Operator[]> {
-  const identifiers = await sortitionPool.selectGroup(
-    constants.groupSize,
-    ethers.utils.hexZeroPad(seed.toHexString(), 32),
+  // Copy the immutable ethers Result before passing these IDs to another call.
+  const identifiers = Array.from(
+    await sortitionPool.selectGroup(
+      constants.groupSize,
+      ethers.zeroPadValue(toBeHex(seed), 32),
+    ),
   )
 
   const addresses = await sortitionPool.getIDOperators(identifiers)
 
   return Promise.all(
     identifiers.map(async (identifier, i): Promise<Operator> => ({
-      id: identifier,
+      id: Number(identifier),
       signer: await ethers.getSigner(addresses[i]),
     })),
   )

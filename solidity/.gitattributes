@@ -1,0 +1,2 @@
+# Unified patch context lines intentionally preserve source whitespace.
+*/.yarn/patches/*.patch -whitespace

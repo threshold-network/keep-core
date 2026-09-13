@@ -1,5 +1,6 @@
 import { helpers, ethers } from "hardhat"
 
+import requireResult from "../helpers/chain"
 import { params } from "../fixtures"
 import ecdsaData from "../data/ecdsa"
 
@@ -9,10 +10,10 @@ import type { Mock } from "../helpers/mock"
 import type { DkgResult } from "./dkg"
 import type { IRandomBeacon, WalletRegistry } from "../../typechain"
 import type { Operator } from "./operators"
-import type { BytesLike, ContractTransaction, Signer } from "ethers"
+import type { BytesLike, ContractTransactionResponse, Signer } from "ethers"
 
 const { mineBlocks } = helpers.time
-const { keccak256 } = ethers.utils
+const { keccak256 } = ethers
 
 // eslint-disable-next-line import/prefer-default-export
 export async function createNewWallet(
@@ -24,20 +25,20 @@ export async function createNewWallet(
   members: Operator[]
   dkgResult: DkgResult
   walletID: string
-  tx: ContractTransaction
+  tx: ContractTransactionResponse
 }> {
   const requestNewWalletTx = await walletRegistry
     .connect(walletOwner)
     .requestNewWallet()
 
-  const relayEntry = ethers.utils.randomBytes(32)
+  const relayEntry = ethers.randomBytes(32)
 
-  const dkgSeed = ethers.BigNumber.from(keccak256(relayEntry))
+  const dkgSeed = BigInt(keccak256(relayEntry))
 
   // eslint-disable-next-line no-underscore-dangle
   await walletRegistry
     .connect(randomBeacon.wallet)
-    .__beaconCallback(relayEntry, 0)
+    .__beaconCallback(ethers.toBigInt(relayEntry), 0)
 
   const {
     dkgResult,
@@ -47,7 +48,7 @@ export async function createNewWallet(
     walletRegistry,
     publicKey,
     dkgSeed,
-    (await requestNewWalletTx.wait()).blockNumber,
+    requireResult(await requestNewWalletTx.wait()).blockNumber,
     noMisbehaved,
   )
 

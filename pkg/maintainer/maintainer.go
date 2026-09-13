@@ -17,6 +17,7 @@ func Initialize(
 	btcChain bitcoin.Chain,
 	btcDiffChain btcdiff.Chain,
 	spvChain spv.Chain,
+	metricsRecorder spv.MetricsRecorder,
 ) {
 	// If none of the maintainers was specified in the config (i.e. no option was
 	// provided to the `maintainer` command), all maintainers should be launched.
@@ -43,6 +44,7 @@ func Initialize(
 			spvChain,
 			btcDiffChain,
 			btcChain,
+			metricsRecorder,
 		)
 	}
 

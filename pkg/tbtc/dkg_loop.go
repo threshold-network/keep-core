@@ -5,8 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"github.com/keep-network/keep-core/pkg/protocol/announcer"
 	"math/big"
+
+	"github.com/keep-network/keep-core/pkg/protocol/announcer"
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -92,6 +93,7 @@ func newDkgRetryLoop(
 	// care in this piece of the code about the length of the seed and how this
 	// seed is proposed.
 	seedSha256 := sha256.Sum256(seed.Bytes())
+	// #nosec G115 -- Preserve all 64 seed bits, including the sign bit, for deterministic retries.
 	attemptSeed := int64(binary.BigEndian.Uint64(seedSha256[:8]))
 
 	return &dkgRetryLoop{

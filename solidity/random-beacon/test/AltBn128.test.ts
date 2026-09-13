@@ -1,4 +1,5 @@
-import { ethers, waffle } from "hardhat"
+import { ethers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import type { TestAltBn128 } from "../typechain"
@@ -16,13 +17,13 @@ describe("AltBn128", () => {
   const fixture = async () => {
     const TestAltBn128 = await ethers.getContractFactory("TestAltBn128")
     testAltBn128 = await TestAltBn128.deploy()
-    await testAltBn128.deployed()
+    await testAltBn128.waitForDeployment()
 
     return testAltBn128
   }
 
   beforeEach("load test fixture", async () => {
-    testAltBn128 = await waffle.loadFixture(fixture)
+    testAltBn128 = await loadFixture(fixture)
   })
 
   describe("g1Unmarshal", async () => {
