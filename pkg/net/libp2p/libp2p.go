@@ -394,6 +394,12 @@ func Connect(
 
 // SetMetricsRecorder sets the metrics recorder for the provider and wires it
 // into network components.
+//
+// The parameter is an anonymous interface rather than the named
+// fullMetricsRecorder on purpose: callers (e.g. cmd.start) wire metrics via a
+// structural type assertion against this exact signature to avoid importing the
+// unexported provider type. Changing it to a named type would silently break
+// that assertion.
 func (p *provider) SetMetricsRecorder(recorder interface {
 	IncrementCounter(name string, value float64)
 	SetGauge(name string, value float64)
@@ -583,18 +589,10 @@ func buildNotifiee(libp2pHost host.Host, p *provider) libp2pnet.Notifiee {
 
 		logger.Infof("established connection to [%v]", peerMultiaddress)
 
-		var recorder interface {
-			IncrementCounter(name string, value float64)
-			SetGauge(name string, value float64)
-			RecordDuration(name string, duration time.Duration)
-		}
+		var recorder fullMetricsRecorder
 		if p.metricsRecorder != nil {
 			if metricsRecorderValue := p.metricsRecorder.Load(); metricsRecorderValue != nil {
-				recorder = metricsRecorderValue.(interface {
-					IncrementCounter(name string, value float64)
-					SetGauge(name string, value float64)
-					RecordDuration(name string, duration time.Duration)
-				})
+				recorder = metricsRecorderValue.(fullMetricsRecorder)
 				recorder.IncrementCounter(clientinfo.MetricPeerConnectionsTotal, 1)
 			}
 		}
@@ -625,11 +623,7 @@ func buildNotifiee(libp2pHost host.Host, p *provider) libp2pnet.Notifiee {
 
 		if p.metricsRecorder != nil {
 			if metricsRecorderValue := p.metricsRecorder.Load(); metricsRecorderValue != nil {
-				recorder := metricsRecorderValue.(interface {
-					IncrementCounter(name string, value float64)
-					SetGauge(name string, value float64)
-					RecordDuration(name string, duration time.Duration)
-				})
+				recorder := metricsRecorderValue.(fullMetricsRecorder)
 				recorder.IncrementCounter(clientinfo.MetricPeerDisconnectionsTotal, 1)
 			}
 		}
@@ -650,11 +644,7 @@ func executePingTest(
 	libp2pHost host.Host,
 	peerID peer.ID,
 	peerMultiaddress string,
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-		SetGauge(name string, value float64)
-		RecordDuration(name string, duration time.Duration)
-	},
+	metricsRecorder fullMetricsRecorder,
 ) {
 	logger.Infof("starting ping test for [%v]", peerMultiaddress)
 

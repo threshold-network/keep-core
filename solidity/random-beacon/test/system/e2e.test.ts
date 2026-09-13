@@ -2,6 +2,7 @@ import { ethers, helpers } from "hardhat"
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
+import requireResult from "../helpers/chain"
 import {
   constants,
   dkgState,
@@ -16,7 +17,7 @@ import {
 import blsData from "../data/bls"
 import { registerOperators } from "../utils/operators"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type {
   RandomBeacon,
   RandomBeaconStub,
@@ -24,10 +25,10 @@ import type {
   RandomBeaconGovernance,
 } from "../../typechain"
 
-const ZERO_ADDRESS = ethers.constants.AddressZero
+const ZERO_ADDRESS = ethers.ZeroAddress
 
 const { mineBlocks, mineBlocksTo } = helpers.time
-const { keccak256 } = ethers.utils
+const { keccak256 } = ethers
 
 const fixture = async () => {
   const contracts = await randomBeaconDeployment()
@@ -118,7 +119,9 @@ describe("System -- e2e", () => {
 
       // pass key generation state and transition to awaiting result state
       await mineBlocksTo(
-        (await genesisTx.wait()).blockNumber + constants.offchainDkgTime + 1,
+        requireResult(await genesisTx.wait()).blockNumber +
+          constants.offchainDkgTime +
+          1,
       )
 
       expect(await randomBeacon.getGroupCreationState()).to.be.equal(
@@ -129,7 +132,7 @@ describe("System -- e2e", () => {
         randomBeacon,
         groupPubKeys[groupPubKeyCounter],
         genesisSeed,
-        (await genesisTx.wait()).blockNumber,
+        requireResult(await genesisTx.wait()).blockNumber,
         noMisbehaved,
       )
       groupMembers.push(dkgResult.members)
@@ -159,7 +162,7 @@ describe("System -- e2e", () => {
           )
 
           await mineBlocksTo(
-            (await txSubmitRelayEntry.wait()).blockNumber +
+            requireResult(await txSubmitRelayEntry.wait()).blockNumber +
               constants.offchainDkgTime +
               1,
           )
@@ -171,10 +174,8 @@ describe("System -- e2e", () => {
           dkgResult = await signAndSubmitCorrectDkgResult(
             randomBeacon,
             groupPubKeys[groupPubKeyCounter],
-            ethers.BigNumber.from(
-              ethers.utils.keccak256(blsData.groupSignatures[i - 1]),
-            ),
-            (await txSubmitRelayEntry.wait()).blockNumber,
+            BigInt(ethers.keccak256(blsData.groupSignatures[i - 1])),
+            requireResult(await txSubmitRelayEntry.wait()).blockNumber,
             noMisbehaved,
           )
           groupMembers.push(dkgResult.members)

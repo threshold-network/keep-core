@@ -2,6 +2,7 @@ import { ethers, helpers } from "hardhat"
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import { noMisbehaved, hashDKGMembers } from "./utils/dkg"
 
 import type { BigNumberish } from "ethers"
@@ -139,7 +140,9 @@ describe("Groups", () => {
       it("should revert group selection", async () => {
         await addGroups(1, 5)
 
-        const currentBlock = await ethers.provider.getBlock("latest")
+        const currentBlock = requireResult(
+          await ethers.provider.getBlock("latest"),
+        )
         await mineBlocksTo(currentBlock.number + groupLifetime)
 
         await expect(groups.selectGroup(0)).to.be.revertedWith(
@@ -149,15 +152,17 @@ describe("Groups", () => {
 
       it("should allow to add and select new group", async () => {
         await addGroups(1, 5)
-        const currentBlock = await ethers.provider.getBlock("latest")
+        const currentBlock = requireResult(
+          await ethers.provider.getBlock("latest"),
+        )
         await mineBlocksTo(currentBlock.number + groupLifetime)
 
         await groups.addGroup(
-          ethers.utils.hexlify(6),
+          ethers.toBeHex(6),
           hashDKGMembers(members, noMisbehaved),
         )
 
-        const selected = await groups.callStatic.selectGroup(0)
+        const selected = await groups.selectGroup.staticCall(0)
         await groups.selectGroup(0)
         const numberOfGroups = await groups.numberOfActiveGroups()
 
@@ -181,7 +186,9 @@ describe("Groups", () => {
         await addTerminatedGroups(3, 2) // terminating [0x4, 0x5]
 
         // move blocks so terminated blocks qualify for expiration
-        const currentBlock = await ethers.provider.getBlock("latest")
+        const currentBlock = requireResult(
+          await ethers.provider.getBlock("latest"),
+        )
         await mineBlocksTo(currentBlock.number + groupLifetime)
 
         // [0x1, 0x2, 0x3, 0x4, 0x5]
@@ -189,7 +196,7 @@ describe("Groups", () => {
         await addGroups(6, 5)
 
         // First active index group that qualifies for selection
-        const selectedGroupId = await groups.callStatic.selectGroup(5)
+        const selectedGroupId = await groups.selectGroup.staticCall(5)
         expect(selectedGroupId).to.be.equal(5)
       })
 
@@ -203,7 +210,7 @@ describe("Groups", () => {
         await addGroups(4, 7) // [0x4,0x5,0x6,0x7,0x8,0x9,0xa]
 
         // First active index group that qualifies for selection
-        const selectedGroupId = await groups.callStatic.selectGroup(1)
+        const selectedGroupId = await groups.selectGroup.staticCall(1)
         // 1 expired + 2 terminated + selected index (1)
         expect(selectedGroupId).to.be.equal(4)
       })
@@ -213,7 +220,9 @@ describe("Groups", () => {
         await groups.terminateGroup(1) // [0x2]
 
         // move blocks so terminated blocks qualify for expiration
-        const currentBlock = await ethers.provider.getBlock("latest")
+        const currentBlock = requireResult(
+          await ethers.provider.getBlock("latest"),
+        )
         await mineBlocksTo(currentBlock.number + groupLifetime)
 
         let activeTerminatedGroups = await groups.activeTerminatedGroups()
@@ -239,7 +248,7 @@ describe("Groups", () => {
         expect(numberOfGroups).to.be.equal(5)
 
         // Second active index group that qualifies for selection
-        const selectedIndex = await groups.callStatic.selectGroup(2)
+        const selectedIndex = await groups.selectGroup.staticCall(2)
 
         // expired ids: [0, 1, 2]
         // terminated ids: [4, 6]
@@ -269,7 +278,9 @@ describe("Groups", () => {
         await groups.terminateGroup(30)
 
         // move blocks so terminated blocks qualify for expiration
-        const currentBlock = await ethers.provider.getBlock("latest")
+        const currentBlock = requireResult(
+          await ethers.provider.getBlock("latest"),
+        )
         await mineBlocksTo(currentBlock.number + groupLifetime)
 
         await groups.expireOldGroups()
@@ -291,7 +302,7 @@ describe("Groups", () => {
   async function addGroups(firstGroup: number, numberOfGroups: number) {
     for (let i = firstGroup; i < firstGroup + numberOfGroups; i++) {
       await groups.addGroup(
-        ethers.utils.hexlify(i),
+        ethers.toBeHex(i),
         hashDKGMembers(members, noMisbehaved),
       )
     }
@@ -300,12 +311,12 @@ describe("Groups", () => {
   async function expireGroup(groupId: BigNumberish) {
     const group = await groups.getGroupById(groupId)
     const registrationBlock = group.registrationBlockNumber
-    const currentBlock = await ethers.provider.getBlock("latest")
+    const currentBlock = requireResult(await ethers.provider.getBlock("latest"))
 
-    if (currentBlock.number - registrationBlock.toNumber() <= groupLifetime) {
+    if (currentBlock.number - Number(registrationBlock) <= groupLifetime) {
       const minedBlocksToExpireGroup =
         currentBlock.number +
-        (groupLifetime - (currentBlock.number - registrationBlock.toNumber())) +
+        (groupLifetime - (currentBlock.number - Number(registrationBlock))) +
         1
       await mineBlocksTo(minedBlocksToExpireGroup)
     }
@@ -335,6 +346,6 @@ describe("Groups", () => {
       // count since we index from 0.
       await expireGroup(expiredCount - 1)
     }
-    return groups.callStatic.selectGroup(beaconValue)
+    return groups.selectGroup.staticCall(beaconValue)
   }
 })

@@ -100,10 +100,9 @@ type CommitmentsVerifyingMember struct {
 	// Shares calculated for the current member by peer group members which passed
 	// the validation.
 	//
-	// receivedQualifiedSharesS are defined as `s_ji` and receivedQualifiedSharesT are
-	// defined as `t_ji` across the protocol specification.
-	// TODO remove receivedQualifiedSharesT - exists only for unit tests purpose
-	receivedQualifiedSharesS, receivedQualifiedSharesT map[group.MemberIndex]*big.Int
+	// receivedQualifiedSharesS are defined as `s_ji` across the protocol
+	// specification.
+	receivedQualifiedSharesS map[group.MemberIndex]*big.Int
 	// Commitments to secret shares polynomial coefficients received from
 	// other group members.
 	receivedPeerCommitments map[group.MemberIndex][]*bn256.G1
@@ -285,7 +284,6 @@ func (cm *CommittingMember) InitializeCommitmentsVerification() *CommitmentsVeri
 	return &CommitmentsVerifyingMember{
 		CommittingMember:         cm,
 		receivedQualifiedSharesS: make(map[group.MemberIndex]*big.Int),
-		receivedQualifiedSharesT: make(map[group.MemberIndex]*big.Int),
 		receivedPeerCommitments:  make(map[group.MemberIndex][]*bn256.G1),
 	}
 }

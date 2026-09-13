@@ -2,8 +2,9 @@ package entry
 
 import (
 	"fmt"
-	"github.com/ipfs/go-log/v2"
 	"math/big"
+
+	"github.com/ipfs/go-log/v2"
 
 	beaconchain "github.com/keep-network/keep-core/pkg/beacon/chain"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -129,6 +130,10 @@ func (res *relayEntrySubmitter) waitForSubmissionEligibility(
 	groupSize int,
 	blockStep uint64,
 ) (<-chan uint64, error) {
+	if groupSize <= 0 {
+		return nil, fmt.Errorf("invalid group size: [%v]", groupSize)
+	}
+
 	// First submitter index is calculated as entry % groupSize and gives
 	// an index from range [0, groupSize-1].
 	firstSubmitterMemberIndex := new(big.Int).Mod(

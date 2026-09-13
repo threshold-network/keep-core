@@ -8,7 +8,7 @@ import { submitRelayEntry } from "./utils/randomBeacon"
 import { signAndSubmitCorrectDkgResult } from "./utils/dkg"
 import ecdsaData from "./data/ecdsa"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { DkgResult } from "./utils/dkg"
 import type { Mock } from "./helpers/mock"
 import type {
@@ -16,23 +16,17 @@ import type {
   WalletRegistry,
   WalletRegistryStub,
 } from "../typechain"
-import type { ContractTransaction } from "ethers"
+import type { ContractTransactionResponse } from "ethers"
 
 const { mineBlocks } = helpers.time
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 describe("WalletRegistry - Wallet Owner", async () => {
-  const groupPublicKey: string = ethers.utils.hexValue(
-    ecdsaData.group1.publicKey,
-  )
-  const groupPublicKeyX: string = ethers.utils.hexValue(
-    ecdsaData.group1.publicKeyX,
-  )
-  const groupPublicKeyY: string = ethers.utils.hexValue(
-    ecdsaData.group1.publicKeyY,
-  )
-  const walletID: string = ethers.utils.keccak256(groupPublicKey)
+  const groupPublicKey: string = ethers.toQuantity(ecdsaData.group1.publicKey)
+  const groupPublicKeyX: string = ethers.toQuantity(ecdsaData.group1.publicKeyX)
+  const groupPublicKeyY: string = ethers.toQuantity(ecdsaData.group1.publicKeyY)
+  const walletID: string = ethers.keccak256(groupPublicKey)
 
   let walletRegistry: WalletRegistryStub & WalletRegistry
   let walletOwner: Mock<IWalletOwner>
@@ -70,7 +64,7 @@ describe("WalletRegistry - Wallet Owner", async () => {
     })
 
     context("when __ecdsaWalletCreatedCallback reverts", async () => {
-      let tx: Promise<ContractTransaction>
+      let tx: Promise<ContractTransactionResponse>
 
       before(async () => {
         await createSnapshot()
@@ -96,7 +90,7 @@ describe("WalletRegistry - Wallet Owner", async () => {
     })
 
     context("when __ecdsaWalletCreatedCallback succeeds", async () => {
-      let tx: Promise<ContractTransaction>
+      let tx: Promise<ContractTransactionResponse>
 
       before(async () => {
         await createSnapshot()

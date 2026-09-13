@@ -10,17 +10,17 @@ export async function register(
 ): Promise<void> {
   const { ethers, helpers } = hre
 
-  const providerAddress = ethers.utils.getAddress(provider)
-  const operatorAddress = ethers.utils.getAddress(operator)
+  const providerAddress = ethers.getAddress(provider)
+  const operatorAddress = ethers.getAddress(operator)
 
   const application = await helpers.contracts.getContract(deploymentName)
 
   console.log(
-    `Registering operator ${operatorAddress} in ${deploymentName} application (${application.address})`,
+    `Registering operator ${operatorAddress} in ${deploymentName} application (${await application.getAddress()})`,
   )
 
-  const currentProvider = ethers.utils.getAddress(
-    await application.callStatic.operatorToStakingProvider(operatorAddress),
+  const currentProvider = ethers.getAddress(
+    await application.operatorToStakingProvider.staticCall(operatorAddress),
   )
 
   switch (currentProvider) {
@@ -30,7 +30,7 @@ export async function register(
       )
       return
     }
-    case ethers.constants.AddressZero: {
+    case ethers.ZeroAddress: {
       console.log(
         `Registering operator ${operatorAddress} for a staking provider ${providerAddress}...`,
       )
@@ -38,7 +38,7 @@ export async function register(
       await (
         await application
           .connect(await ethers.getSigner(providerAddress))
-          .registerOperator(operatorAddress)
+          .getFunction("registerOperator")(operatorAddress)
       ).wait()
 
       break

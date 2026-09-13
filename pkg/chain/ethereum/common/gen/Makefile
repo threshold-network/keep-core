@@ -3,6 +3,8 @@ override environment = development
 endif
 
 root_dir := $(realpath ../../../../..)
+module_path := $(shell go list -m)
+gen_package := ${module_path}/$(patsubst ${root_dir}/%,%,$(CURDIR))
 artifacts_dir := ${root_dir}/tmp/contracts/${environment}/${npm_package_name}/artifacts
 
 $(info Package              ${npm_package_name})
@@ -56,7 +58,7 @@ endif
 
 contract/%.go cmd/%.go: abi/%.abi abi/%.go _address/% ${artifacts_dir}/%.json
 	$(info $* - generating Keep bindings)
-	@go run github.com/keep-network/keep-common/tools/generators/ethereum $< contract/$*.go cmd/$*.go
+	@go run github.com/keep-network/keep-core/tools/generators/ethereum -gen-package=${gen_package} $< contract/$*.go cmd/$*.go
 	$(call after_contract_hook,$*)
 
 # Don't remove intermediate files that got generated.

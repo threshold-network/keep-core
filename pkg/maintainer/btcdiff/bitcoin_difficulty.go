@@ -42,9 +42,11 @@ var (
 	)
 )
 
-// lightRelayMinDifficultyTarget matches LightRelay.MIN_DIFFICULTY_TARGET /
-// BTCUtils.DIFF1_TARGET (compact bits 0x1d00ffff).
-var lightRelayMinDifficultyTarget = blockchain.CompactToBig(0x1d00ffff)
+// LightRelayMinDifficultyTarget matches LightRelay.MIN_DIFFICULTY_TARGET /
+// BTCUtils.DIFF1_TARGET (compact bits 0x1d00ffff). Exported so other packages
+// (e.g. pkg/maintainer/spv) can share the same decoded value rather than
+// duplicating the compact-bits decode.
+var LightRelayMinDifficultyTarget = blockchain.CompactToBig(0x1d00ffff)
 
 func Initialize(
 	ctx context.Context,
@@ -397,7 +399,7 @@ func relayAllowsPreRetargetHeaderTarget(oldEpochTarget, headerTarget *big.Int) b
 	if oldEpochTarget.Cmp(headerTarget) == 0 {
 		return true
 	}
-	return lightRelayMinDifficultyTarget.Cmp(headerTarget) == 0
+	return LightRelayMinDifficultyTarget.Cmp(headerTarget) == 0
 }
 
 // getBlockHeaders returns block headers from the given range.

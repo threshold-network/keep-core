@@ -17,7 +17,7 @@ func (ekpgm *ephemeralKeyPairGeneratingMember) generateEphemeralKeyPair() (
 	*ephemeralPublicKeyMessage,
 	error,
 ) {
-	ephemeralKeys := make(map[group.MemberIndex]*ephemeral.PublicKey)
+	ephemeralKeys := make(map[group.MemberIndex][]byte)
 
 	// Calculate ephemeral key pair for every other group member
 	for _, member := range ekpgm.group.MemberIndexes() {
@@ -34,8 +34,8 @@ func (ekpgm *ephemeralKeyPairGeneratingMember) generateEphemeralKeyPair() (
 		// save the generated ephemeral key to our state
 		ekpgm.ephemeralKeyPairs[member] = ephemeralKeyPair
 
-		// store the public key to the map for the message
-		ephemeralKeys[member] = ephemeralKeyPair.PublicKey
+		// store the serialized public key to the map for the message
+		ephemeralKeys[member] = ephemeralKeyPair.PublicKey.Marshal()
 	}
 
 	return &ephemeralPublicKeyMessage{
@@ -78,9 +78,30 @@ func (skgm *symmetricKeyGeneratingMember) generateSymmetricKeys(
 		thisMemberEphemeralPrivateKey := ephemeralKeyPair.PrivateKey
 
 		// Get the ephemeral public key broadcasted by the other group member,
-		// which was intended for this group member.
-		otherMemberEphemeralPublicKey :=
-			ephemeralPubKeyMessage.ephemeralPublicKeys[skgm.id]
+		// which was intended for this group member, and parse it. Only this
+		// one key per message is needed for ECDH; the rest are validated for
+		// presence in isValidEphemeralPublicKeyMessage but never parsed.
+		otherMemberEphemeralPublicKey, err := ephemeral.UnmarshalPublicKey(
+			ephemeralPubKeyMessage.ephemeralPublicKeys[skgm.id],
+		)
+		if err != nil {
+			// A single member's malformed key must not abort this member's
+			// entire round. Before the deferred-parse optimization, an
+			// unparseable key failed message unmarshaling at the network
+			// layer, so the whole message was dropped and the sender was
+			// simply treated as absent. Preserve that behavior here: skip
+			// the sender and mark it inactive instead of returning a fatal
+			// error that aborts this member's async state.
+			skgm.logger.Warnf(
+				"[member:%v] could not unmarshal ephemeral public key "+
+					"from member [%v]: [%v]; marking member as inactive",
+				skgm.id,
+				otherMember,
+				err,
+			)
+			skgm.group.MarkMemberAsInactive(otherMember)
+			continue
+		}
 
 		// Create symmetric key for the current group member and the other
 		// group member by ECDH'ing the public and private key.

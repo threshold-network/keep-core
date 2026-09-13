@@ -4,5 +4,6 @@
 
 * xref:./registration.adoc[Registration]
 * xref:./run-keep-node.adoc[Run Keep Client Node]
+* xref:./profiling.md[Profiling & pprof runbook]
 * xref:./development/README.adoc[Developers]
 * xref:./dev-ops.adoc[DevOps]

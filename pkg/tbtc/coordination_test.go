@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -1245,6 +1246,14 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine(t *testing.T) {
 		localChain.Signing(),
 	)
 
+	// Wrap the follower's channel so the sender can wait until the follower
+	// routine has registered its message handler, rather than guessing with a
+	// fixed sleep.
+	followerChannel := &recvSignalingChannel{
+		BroadcastChannel: follower1.channel,
+		recvRegistered:   make(chan struct{}),
+	}
+
 	// Set up the executor for follower 1.
 	executor := &coordinationExecutor{
 		// Set only relevant fields.
@@ -1252,7 +1261,7 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine(t *testing.T) {
 		coordinatedWallet:   coordinatedWallet,
 		membersIndexes:      coordinatedWallet.membersByOperator(follower1.address),
 		operatorAddress:     follower1.address,
-		broadcastChannel:    follower1.channel,
+		broadcastChannel:    followerChannel,
 		membershipValidator: membershipValidator,
 	}
 
@@ -1260,9 +1269,13 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine(t *testing.T) {
 	defer cancelCtx()
 
 	go func() {
-		// Give the follower routine some time to start and set up the
-		// broadcast channel handler.
-		time.Sleep(1 * time.Second)
+		// Wait until the follower routine has registered its broadcast channel
+		// handler; otherwise messages sent before registration are dropped.
+		select {
+		case <-followerChannel.recvRegistered:
+		case <-ctx.Done():
+			return
+		}
 
 		// Send message of wrong type.
 		err := leader.channel.Send(ctx, &signingDoneMessage{
@@ -1556,4 +1569,18 @@ func (mcpg *mockCoordinationProposalGenerator) Generate(
 		request.ActionsChecklist,
 		mcpg.calls,
 	)
+}
+
+// recvSignalingChannel wraps a broadcast channel and closes recvRegistered the
+// first time a handler is installed via Recv. It lets a test deterministically
+// wait for the receiver to be ready instead of relying on a fixed sleep.
+type recvSignalingChannel struct {
+	net.BroadcastChannel
+	recvRegistered chan struct{}
+	once           sync.Once
+}
+
+func (c *recvSignalingChannel) Recv(ctx context.Context, handler func(m net.Message)) {
+	c.BroadcastChannel.Recv(ctx, handler)
+	c.once.Do(func() { close(c.recvRegistered) })
 }

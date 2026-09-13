@@ -1,16 +1,15 @@
 import { task, types } from "hardhat/config"
+
 import {
   TASK_INITIALIZE,
   TASK_AUTHORIZE,
   TASK_REGISTER,
   TASK_INITIALIZE_STAKING,
   TASK_ADD_BETA_OPERATOR,
-} from "@keep-network/random-beacon/export/tasks/initialize"
-import {
   authorize,
   register,
   addBetaOperator,
-} from "@keep-network/random-beacon/export/tasks/utils"
+} from "./random-beacon"
 
 // Tasks for the ECDSA application.
 const TASK_INITIALIZE_ECDSA = `${TASK_INITIALIZE}:ecdsa`

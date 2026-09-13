@@ -62,7 +62,7 @@ import type {
   IRandomBeacon,
   Allowlist,
 } from "../../typechain"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { Operator } from "../utils/operators"
 import type { Mock } from "../helpers/mock"
 
@@ -252,12 +252,11 @@ async function updateTokenStakingParams(
   staking: TokenStaking,
   deployer: SignerWithAddress,
 ) {
-  const initialNotifierTreasury = constants.tokenStakingNotificationReward.mul(
-    constants.groupSize,
-  )
+  const initialNotifierTreasury =
+    constants.tokenStakingNotificationReward * BigInt(constants.groupSize)
   await tToken
     .connect(deployer)
-    .approve(staking.address, initialNotifierTreasury)
+    .approve(await staking.getAddress(), initialNotifierTreasury)
   // NOTE: These methods no longer exist in TokenStaking interface
   // await staking
   //   .connect(deployer)
@@ -357,7 +356,7 @@ export async function initializeWalletOwner(
 
   await deployer.sendTransaction({
     to: walletOwner.address,
-    value: ethers.utils.parseEther("1000"),
+    value: ethers.parseEther("1000"),
   })
 
   await walletRegistryGovernance
@@ -372,8 +371,8 @@ async function fundReimbursementPool(
   reimbursementPool: ReimbursementPool,
 ) {
   await deployer.sendTransaction({
-    to: reimbursementPool.address,
-    value: ethers.utils.parseEther("100.0"), // Send 100.0 ETH
+    to: await reimbursementPool.getAddress(),
+    value: ethers.parseEther("100.0"),
   })
 }
 
@@ -408,7 +407,7 @@ export async function setupAllowlist(
   // This assumes the Allowlist deployment script has already run.
   const allowlist: Allowlist = await helpers.contracts.getContract("Allowlist")
 
-  if (!allowlist.address) {
+  if (!(await allowlist.getAddress())) {
     throw new Error(
       "Allowlist contract not found. Ensure Allowlist deployment script has executed.",
     )
@@ -421,7 +420,7 @@ export async function setupAllowlist(
   // Initialize WalletRegistry with Allowlist address to enable dual-mode authorization.
   // This sets the allowlist address in WalletRegistry storage, which the authorization
   // routing logic uses to determine whether to accept calls from the Allowlist contract.
-  await walletRegistry.initializeV2(allowlist.address)
+  await walletRegistry.initializeV2(await allowlist.getAddress())
 
   return allowlist
 }

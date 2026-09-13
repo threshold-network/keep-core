@@ -8,7 +8,7 @@ export async function fakeTokenStaking(
   randomBeacon: RandomBeacon,
 ): Promise<Mock<TokenStaking>> {
   const tokenStaking = await createMock<TokenStaking>("TokenStaking", {
-    address: await randomBeacon.callStatic.staking(),
+    address: await randomBeacon.staking.staticCall(),
   })
 
   return tokenStaking

@@ -13,11 +13,11 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ipfs/go-log/v2"
-	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
+	"github.com/keep-network/keep-core/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa/dkg"
@@ -506,7 +506,7 @@ func (de *dkgExecutor) registerSigner(
 			de.groupParameters,
 		)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve final signing group members")
+		return nil, fmt.Errorf("failed to resolve final signing group members: [%w]", err)
 	}
 
 	// Just like the final and original group may differ, the

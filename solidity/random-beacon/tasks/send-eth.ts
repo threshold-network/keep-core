@@ -2,9 +2,8 @@ import { task, types } from "hardhat/config"
 
 import { parseValue } from "./utils"
 
-import type { BigNumber } from "ethers"
-import type { TransactionResponse } from "@ethersproject/abstract-provider"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { TransactionResponse } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 
 // eslint-disable-next-line import/prefer-default-export
 export const TASK_SEND_ETH = "send-eth"
@@ -28,7 +27,7 @@ task(TASK_SEND_ETH, "Send ether to an address")
       ? await hre.ethers.getSigner(args.from)
       : (await hre.ethers.getSigners())[0]
 
-    const amount: BigNumber = parseValue(args.amount, hre)
+    const amount: bigint = parseValue(args.amount, hre)
 
     // FIXME: `validate` will fail for badly checksummed addresses
     // see: https://github.com/ethers-io/ethers.js/discussions/3261

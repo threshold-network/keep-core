@@ -56,10 +56,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   // Check if already upgraded (allowlist is set)
   // Note: V1 doesn't have allowlist() function, so we need to handle that case
-  let currentAllowlist = ethers.constants.AddressZero
+  let currentAllowlist = ethers.ZeroAddress
   try {
     currentAllowlist = await walletRegistryBefore.allowlist()
-    if (currentAllowlist !== ethers.constants.AddressZero) {
+    if (currentAllowlist !== ethers.ZeroAddress) {
       console.log(`  Allowlist: ${currentAllowlist}`)
       console.log()
       console.log("WalletRegistry is already upgraded to V2!")
@@ -81,23 +81,21 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   // Get ProxyAdmin address from EIP-1967 slot
   const ADMIN_SLOT =
     "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103"
-  const proxyAdminSlot = await ethers.provider.getStorageAt(
+  const proxyAdminSlot = await ethers.provider.getStorage(
     walletRegistryDeployment.address,
     ADMIN_SLOT,
   )
-  const proxyAdminAddress = ethers.utils.getAddress(
-    `0x${proxyAdminSlot.slice(-40)}`,
-  )
+  const proxyAdminAddress = ethers.getAddress(`0x${proxyAdminSlot.slice(-40)}`)
   console.log(`  ProxyAdmin: ${proxyAdminAddress}`)
 
   // Get current implementation
   const IMPL_SLOT =
     "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
-  const implSlot = await ethers.provider.getStorageAt(
+  const implSlot = await ethers.provider.getStorage(
     walletRegistryDeployment.address,
     IMPL_SLOT,
   )
-  const currentImpl = ethers.utils.getAddress(`0x${implSlot.slice(-40)}`)
+  const currentImpl = ethers.getAddress(`0x${implSlot.slice(-40)}`)
   console.log(`  Current Implementation: ${currentImpl}`)
 
   // Verify governance state is preserved
@@ -124,17 +122,26 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     EcdsaSortitionPool.address,
     TokenStaking.address,
   )
-  await newImplementation.deployed()
+  await newImplementation.waitForDeployment()
 
-  console.log(`New implementation deployed: ${newImplementation.address}`)
-  console.log(`  TX: ${newImplementation.deployTransaction.hash}`)
+  const deploymentTransaction = newImplementation.deploymentTransaction()
+  if (!deploymentTransaction) {
+    throw new Error(
+      "WalletRegistry implementation deployment has no transaction",
+    )
+  }
+
+  console.log(
+    `New implementation deployed: ${await newImplementation.getAddress()}`,
+  )
+  console.log(`  TX: ${deploymentTransaction.hash}`)
   console.log()
 
   // Save deployment artifact
   await deployments.save("WalletRegistryV2Implementation", {
-    address: newImplementation.address,
-    abi: WalletRegistryFactory.interface.format("json") as any,
-    transactionHash: newImplementation.deployTransaction.hash,
+    address: await newImplementation.getAddress(),
+    abi: JSON.parse(WalletRegistryFactory.interface.formatJson()),
+    transactionHash: deploymentTransaction.hash,
   })
 
   // Encode initializeV2 call
@@ -144,7 +151,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   )
 
   // Encode upgradeAndCall for ProxyAdmin
-  const proxyAdminInterface = new ethers.utils.Interface([
+  const proxyAdminInterface = new ethers.Interface([
     "function upgradeAndCall(address proxy, address implementation, bytes calldata data) external payable",
     "function owner() external view returns (address)",
   ])
@@ -153,7 +160,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "upgradeAndCall",
     [
       walletRegistryDeployment.address,
-      newImplementation.address,
+      await newImplementation.getAddress(),
       initializeV2Data,
     ],
   )
@@ -189,7 +196,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     // prettier-ignore
     console.log("  \"upgradeAndCall(address,address,bytes)\" \\")
     console.log(`  ${walletRegistryDeployment.address} \\`)
-    console.log(`  ${newImplementation.address} \\`)
+    console.log(`  ${await newImplementation.getAddress()} \\`)
     console.log(`  ${initializeV2Data} \\`)
     console.log("  --rpc-url $CHAIN_API_URL \\")
     console.log("  --private-key <TIMELOCK_EXECUTOR_KEY>")
@@ -210,7 +217,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       network: network.name,
       timestamp: new Date().toISOString(),
       description: "Upgrade WalletRegistry to V2 with Allowlist integration",
-      newImplementation: newImplementation.address,
+      newImplementation: await newImplementation.getAddress(),
       proxy: walletRegistryDeployment.address,
       proxyAdmin: proxyAdminAddress,
       proxyAdminOwner,
@@ -256,7 +263,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       // prettier-ignore
       console.log("  \"upgradeAndCall(address,address,bytes)\" \\")
       console.log(`  ${walletRegistryDeployment.address} \\`)
-      console.log(`  ${newImplementation.address} \\`)
+      console.log(`  ${await newImplementation.getAddress()} \\`)
       console.log(`  "${initializeV2Data}" \\`)
       console.log("  --rpc-url $CHAIN_API_URL \\")
       console.log("  --private-key <OWNER_KEY>")
@@ -276,7 +283,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     console.log("Calling ProxyAdmin.upgradeAndCall()...")
     const tx = await proxyAdminContract.upgradeAndCall(
       walletRegistryDeployment.address,
-      newImplementation.address,
+      await newImplementation.getAddress(),
       initializeV2Data,
     )
 
@@ -317,7 +324,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     // prettier-ignore
     console.log("  \"upgradeAndCall(address,address,bytes)\" \\")
     console.log(`  ${walletRegistryDeployment.address} \\`)
-    console.log(`  ${newImplementation.address} \\`)
+    console.log(`  ${await newImplementation.getAddress()} \\`)
     console.log(`  "${initializeV2Data}" \\`)
     console.log("  --rpc-url $CHAIN_API_URL \\")
     console.log("  --private-key <OWNER_KEY>")

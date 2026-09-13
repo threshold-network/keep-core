@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
 // SubmitDepositSweepProof prepares deposit sweep proof for the given
@@ -19,6 +20,7 @@ func SubmitDepositSweepProof(
 	requiredConfirmations uint,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
+	metricsRecorder MetricsRecorder,
 ) error {
 	return submitDepositSweepProof(
 		transactionHash,
@@ -26,7 +28,7 @@ func SubmitDepositSweepProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		getGlobalMetricsRecorder(),
+		metricsRecorder,
 	)
 }
 
@@ -36,18 +38,16 @@ func submitDepositSweepProof(
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	spvProofAssembler spvProofAssembler,
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-	},
+	metricsRecorder MetricsRecorder,
 ) error {
 	// Record proof submission attempt
 	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_total", 1)
+		metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsTotal, 1)
 	}
 
 	if requiredConfirmations == 0 {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"provided required confirmations count must be greater than 0",
@@ -61,7 +61,7 @@ func submitDepositSweepProof(
 	)
 	if err != nil {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"failed to assemble transaction spv proof: [%v]",
@@ -76,7 +76,7 @@ func submitDepositSweepProof(
 	)
 	if err != nil {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"error while parsing transaction inputs: [%v]",
@@ -91,7 +91,7 @@ func submitDepositSweepProof(
 		vault,
 	); err != nil {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"failed to submit deposit sweep proof with reimbursement: [%v]",
@@ -101,7 +101,7 @@ func submitDepositSweepProof(
 
 	// Record successful proof submission
 	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter("deposit_sweep_proof_submissions_success_total", 1)
+		metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal, 1)
 	}
 
 	return nil
@@ -118,17 +118,12 @@ func parseDepositSweepTransactionInputs(
 	common.Address,
 	error,
 ) {
-	// Represents the main UTXO of the deposit sweep transaction. Nil if there
-	// was no main UTXO.
 	var mainUTXO *bitcoin.UnspentTransactionOutput = nil
 
-	// Stores the vault address of the deposits. Each deposit should have the
-	// same value of vault. The zero-filled value indicates there was no vault
-	// value set for the deposits.
+	// Each deposit must have the same vault value. The zero-filled value
+	// indicates there was no vault set for the deposits.
 	var vault = common.Address{}
 
-	// This flag checks if at least one deposit input has been found during
-	// deposit processing.
 	var depositAlreadyProcessed = false
 
 	// Perform a sanity check: a deposit sweep transaction must have exactly one
@@ -256,19 +251,10 @@ func getUnprovenDepositSweepTransactions(
 	[]*bitcoin.Transaction,
 	error,
 ) {
-	blockCounter, err := spvChain.BlockCounter()
+	startBlock, err := unprovenSearchStartBlock(historyDepth, spvChain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block counter: [%v]", err)
+		return nil, err
 	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	// Calculate the starting block of the range in which the events will be
-	// searched for.
-	startBlock := currentBlock - historyDepth
 
 	events, err :=
 		spvChain.PastDepositRevealedEvents(
@@ -310,40 +296,28 @@ func getUnprovenDepositSweepTransactions(
 			continue
 		}
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		unproven, err := collectUnprovenWalletTransactions(
 			walletPublicKeyHash,
 			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenDepositSweepTransaction(
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenDepositSweepTransaction(
 					transaction,
 					walletPublicKeyHash,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven deposit sweep "+
-						"transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenDepositSweepTransactions = append(
-					unprovenDepositSweepTransactions,
-					transaction,
-				)
-			}
+			},
+			false,
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenDepositSweepTransactions = append(
+			unprovenDepositSweepTransactions,
+			unproven...,
+		)
 	}
 
 	return unprovenDepositSweepTransactions, nil

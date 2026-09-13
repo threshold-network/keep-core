@@ -23,9 +23,10 @@ func TestEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	publicKeys := make(map[group.MemberIndex]*ephemeral.PublicKey)
-	publicKeys[group.MemberIndex(211)] = keyPair1.PublicKey
-	publicKeys[group.MemberIndex(19)] = keyPair2.PublicKey
+	publicKeys := map[group.MemberIndex][]byte{
+		group.MemberIndex(211): keyPair1.PublicKey.Marshal(),
+		group.MemberIndex(19):  keyPair2.PublicKey.Marshal(),
+	}
 
 	msg := &ephemeralPublicKeyMessage{
 		senderID:            group.MemberIndex(38),
@@ -48,7 +49,7 @@ func TestFuzzEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		var (
 			senderID            group.MemberIndex
-			ephemeralPublicKeys map[group.MemberIndex]*ephemeral.PublicKey
+			ephemeralPublicKeys map[group.MemberIndex][]byte
 			sessionID           string
 		)
 
@@ -349,5 +350,121 @@ func TestPreParamsMarshalling(t *testing.T) {
 	// Check if PreParams Data pass the tss-lib validation.
 	if !unmarshaled.data.ValidateWithProof() {
 		t.Errorf("unmarshaled pre params data are invalid")
+	}
+}
+
+// --- Benchmarks ---
+
+func BenchmarkMarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &ephemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex][]byte{
+			group.MemberIndex(211): kp1.PublicKey.Marshal(),
+			group.MemberIndex(19):  kp2.PublicKey.Marshal(),
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &ephemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex][]byte{
+			group.MemberIndex(211): kp1.PublicKey.Marshal(),
+			group.MemberIndex(19):  kp2.PublicKey.Marshal(),
+		},
+		sessionID: "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(ephemeralPublicKeyMessage).Unmarshal(data)
+	}
+}
+
+// buildEphemeralKeyMap generates n key pairs and returns the serialized public
+// key map as it would appear in a real EphemeralPublicKeyMessage (one entry per peer).
+func buildEphemeralKeyMap(b *testing.B, n int) map[group.MemberIndex][]byte {
+	b.Helper()
+	m := make(map[group.MemberIndex][]byte, n)
+	for i := 0; i < n; i++ {
+		kp, err := ephemeral.GenerateKeyPair()
+		if err != nil {
+			b.Fatal(err)
+		}
+		m[group.MemberIndex(i+1)] = kp.PublicKey.Marshal()
+	}
+	return m
+}
+
+// BenchmarkMarshalEphemeralPublicKeyMessage_100Keys benchmarks marshaling with
+// a realistic group size (100 members = 99 peer keys per message).
+func BenchmarkMarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
+	msg := &ephemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 99),
+		sessionID:           "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+// Benchmarks unmarshaling the wire-format bytes. EC point parsing is
+// deferred to use-time in generateSymmetricKeys (protocol.go).
+func BenchmarkUnmarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
+	msg := &ephemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 99),
+		sessionID:           "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(ephemeralPublicKeyMessage).Unmarshal(data)
+	}
+}
+
+func BenchmarkRoundTripDKGMessage(b *testing.B) {
+	msg := &tssRoundTwoMessage{
+		senderID:         group.MemberIndex(50),
+		broadcastPayload: []byte{1, 2, 3, 4, 5},
+		peersPayload: map[group.MemberIndex][]byte{
+			1: {6, 7, 8, 9, 10},
+			2: {11, 12, 13, 14, 15},
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		data, _ := msg.Marshal()
+		_ = new(tssRoundTwoMessage).Unmarshal(data)
 	}
 }
