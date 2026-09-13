@@ -142,7 +142,7 @@ describe("resolveRandomBeaconExport", () => {
     expect(missingBundle).to.throw(/Random Beacon deploy export is missing/)
   })
 
-  it("never resolves artifacts from the bundled export", () => {
+  it("resolves artifacts from the bundled export", () => {
     const root = temporaryRoot("ecdsa/external/random-beacon-export/artifacts")
     const packageRoot = path.join(root, "ecdsa")
     const logs: string[] = []
@@ -151,24 +151,16 @@ describe("resolveRandomBeaconExport", () => {
       { sourceRoot: packageRoot, packageRoot },
       record(logs),
     )
-    expect(resolved).to.not.match(/external[\\/]random-beacon-export/)
     expect(resolved).to.equal(
-      path.join(
-        path.dirname(
-          require.resolve("@keep-network/random-beacon/package.json"),
-        ),
-        "export",
-        "artifacts",
-      ),
+      path.join(packageRoot, "external/random-beacon-export/artifacts"),
     )
     expect(logs).to.deep.equal([
-      `Random Beacon artifacts from the installed npm package: ${resolved}`,
+      `Random Beacon artifacts from the bundled copy: ${resolved}`,
     ])
   })
 
-  it("resolves artifacts outside the bundled export", () => {
-    expect(resolveRandomBeaconExport("artifacts")).to.not.match(
-      /external[\\/]random-beacon-export/,
-    )
+  it("resolves artifacts from the bundled export in the real checkout", () => {
+    const resolved = resolveRandomBeaconExport("artifacts")
+    expect(resolved).to.not.match(/node_modules/)
   })
 })

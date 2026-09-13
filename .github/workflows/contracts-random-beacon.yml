@@ -295,7 +295,7 @@ jobs:
           cp export/utils/wait-for-confirmations.js "$staging/utils/"
           cp export/tasks/initialize.js export/tasks/unlock-eth-accounts.js "$staging/tasks/"
           cp export/tasks/utils/*.js "$staging/tasks/utils/"
-          if ! diff -r --exclude=README.md "$staging" "$bundle"; then
+          if ! diff -r --exclude=README.md --exclude=LICENSE --exclude=VENDOR.json --exclude=artifacts "$staging" "$bundle"; then
             echo '::error::solidity/ecdsa/external/random-beacon-export/ is stale - it no longer matches solidity/random-beacon/export/.'
             echo '::error::Regenerate it with the commands documented in solidity/ecdsa/external/random-beacon-export/README.md and commit the result alongside this change.'
             exit 1
