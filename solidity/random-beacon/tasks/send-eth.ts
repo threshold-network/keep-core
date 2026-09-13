@@ -14,13 +14,13 @@ task(TASK_SEND_ETH, "Send ether to an address")
     "from",
     "Address to send value from",
     undefined,
-    types.string
+    types.string,
   )
   .addParam(
     "amount",
     'Amount to transfer with unit, e.g. "0.5 ether", "100 gwei"',
     undefined,
-    types.string
+    types.string,
   )
   .addParam("to", "Transfer receiver address", undefined, types.string)
   .setAction(async (args, hre) => {
@@ -42,7 +42,7 @@ task(TASK_SEND_ETH, "Send ether to an address")
     console.log(
       `sending ${amount} wei from ${await from.getAddress()} to ${to} in tx ${
         tx.hash
-      }...`
+      }...`,
     )
 
     await tx.wait()

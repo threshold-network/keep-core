@@ -11,12 +11,11 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const { to1e18 } = helpers.number
 
   // Skip if EcdsaSortitionPool already deployed (for existing mainnet/testnet deployments)
-  const existingSortitionPool = await deployments.getOrNull(
-    "EcdsaSortitionPool"
-  )
+  const existingSortitionPool =
+    await deployments.getOrNull("EcdsaSortitionPool")
   if (existingSortitionPool) {
     console.log(
-      `using existing EcdsaSortitionPool at ${existingSortitionPool.address}`
+      `using existing EcdsaSortitionPool at ${existingSortitionPool.address}`,
     )
     return true
   }
@@ -37,7 +36,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "EcdsaSortitionPool",
     { from: deployer, log: true, waitConfirmations: 1 },
     "transferChaosnetOwnerRole",
-    chaosnetOwner
+    chaosnetOwner,
   )
 
   if (
@@ -45,7 +44,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     process.env.DISABLE_HARDHAT_VERIFY !== "true"
   ) {
     await verifyOnEtherscanOrContinue(hre, () =>
-      helpers.etherscan.verify(EcdsaSortitionPool)
+      helpers.etherscan.verify(EcdsaSortitionPool),
     )
   }
 
@@ -54,7 +53,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       hre.tenderly.verify({
         name: "EcdsaSortitionPool",
         address: EcdsaSortitionPool.address,
-      })
+      }),
     )
   }
 

@@ -96,7 +96,7 @@ async function setupRealStaking(
   deployer: SignerWithAddress,
   stakingProvider: SignerWithAddress,
   beneficiary: SignerWithAddress,
-  amount: any
+  amount: any,
 ): Promise<void> {
   await t.connect(deployer).mint(stakingProvider.address, amount)
   await t.connect(stakingProvider).approve(staking.address, amount)
@@ -104,12 +104,12 @@ async function setupRealStaking(
     stakingProvider.address,
     beneficiary.address,
     stakingProvider.address,
-    amount
+    amount,
   )
   await legacyTokenStakingAt(staking, stakingProvider).increaseAuthorization(
     stakingProvider.address,
     walletRegistry.address,
-    amount
+    amount,
   )
 }
 
@@ -120,7 +120,7 @@ async function setupRealStaking(
  * @param sortitionPool - The SortitionPool contract instance
  */
 async function deactivateChaosnetMode(
-  sortitionPool: SortitionPool
+  sortitionPool: SortitionPool,
 ): Promise<void> {
   const { chaosnetOwner } = await helpers.signers.getNamedSigners()
   await sortitionPool.connect(chaosnetOwner).deactivateChaosnet()
@@ -142,7 +142,7 @@ async function triggerAuthorizationCallback(
   contractAddress: string,
   stakingProvider: string,
   fromAmount: any,
-  toAmount: any
+  toAmount: any,
 ): Promise<void> {
   await ethers.provider.send("hardhat_impersonateAccount", [contractAddress])
   await ethers.provider.send("hardhat_setBalance", [
@@ -169,7 +169,7 @@ async function triggerAuthorizationCallback(
  */
 async function joinPoolIfNotMember(
   walletRegistry: WalletRegistry,
-  operator: SignerWithAddress
+  operator: SignerWithAddress,
 ): Promise<void> {
   const isInPool = await walletRegistry.isOperatorInPool(operator.address)
   if (!isInPool) {
@@ -3760,7 +3760,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
 
     await updateWalletRegistryParams(
       await helpers.contracts.getContract("WalletRegistryGovernance"),
-      governance
+      governance,
     )
   })
 
@@ -3790,7 +3790,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
         deployer,
         stakingProvider,
         beneficiary,
-        minimumAuthorization
+        minimumAuthorization,
       )
 
       // Setup: Deactivate chaosnet to allow operators to join sortition pool
@@ -3817,7 +3817,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
      */
     it("should query TokenStaking for eligible stake via eligibleStake()", async () => {
       const eligibleStake = await walletRegistry.eligibleStake(
-        stakingProvider.address
+        stakingProvider.address,
       )
       expect(eligibleStake).to.equal(minimumAuthorization)
     })
@@ -3910,7 +3910,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
      */
     it("should query Allowlist for eligible stake via eligibleStake()", async () => {
       const eligibleStake = await walletRegistry.eligibleStake(
-        stakingProvider.address
+        stakingProvider.address,
       )
       expect(eligibleStake).to.equal(minimumAuthorization)
       // The assertion above already proves the allowlist branch ran: the value
@@ -3978,8 +3978,8 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
           allowlist.address,
           stakingProvider.address,
           ethers.BigNumber.from(0),
-          minimumAuthorization
-        )
+          minimumAuthorization,
+        ),
       ).to.not.be.reverted
     })
   })
@@ -4008,7 +4008,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
         deployer,
         stakingProvider,
         beneficiary,
-        minimumAuthorization
+        minimumAuthorization,
       )
 
       // Setup: Create allowlist fake and upgrade (but beneficiary still in TokenStaking)
@@ -4022,7 +4022,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
         allowlist.address,
         stakingProvider.address,
         ethers.BigNumber.from(0),
-        minimumAuthorization
+        minimumAuthorization,
       )
 
       // Setup: Register operator with allowlist authorization
@@ -4074,7 +4074,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
         deployer,
         stakingProvider,
         beneficiary,
-        minimumAuthorization
+        minimumAuthorization,
       )
 
       // Setup: Deactivate chaosnet to allow operators to join sortition pool
@@ -4101,7 +4101,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
       // Verify pre-upgrade state
       expect(await walletRegistry.allowlist()).to.equal(ZERO_ADDRESS)
       const preUpgradeStake = await walletRegistry.eligibleStake(
-        stakingProvider.address
+        stakingProvider.address,
       )
       expect(preUpgradeStake).to.equal(minimumAuthorization)
 
@@ -4115,7 +4115,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
       // Verify post-upgrade state
       expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
       const postUpgradeStake = await walletRegistry.eligibleStake(
-        stakingProvider.address
+        stakingProvider.address,
       )
       expect(postUpgradeStake).to.equal(upgradedAmount)
 
@@ -4195,7 +4195,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
      */
     it("should revert initializeV2 with zero address", async () => {
       await expect(
-        walletRegistry.initializeV2(ZERO_ADDRESS)
+        walletRegistry.initializeV2(ZERO_ADDRESS),
       ).to.be.revertedWithCustomError(walletRegistry, "AllowlistAddressZero")
     })
 
@@ -4214,7 +4214,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
       // Second call fails
       const allowlist2 = await createMock<IStaking>("IStaking")
       await expect(
-        walletRegistry.initializeV2(allowlist2.address)
+        walletRegistry.initializeV2(allowlist2.address),
       ).to.be.revertedWith("Initializable: contract is already initialized")
 
       // Allowlist unchanged
@@ -4260,7 +4260,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
       // Branch 1: allowlist = address(0) → returns staking
       expect(await walletRegistry.allowlist()).to.equal(ZERO_ADDRESS)
       const stakeBefore = await walletRegistry.eligibleStake(
-        stakingProvider.address
+        stakingProvider.address,
       )
       expect(stakeBefore).to.be.gte(0) // Validates staking branch executed
 
@@ -4271,7 +4271,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
 
       expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
       const stakeAfter = await walletRegistry.eligibleStake(
-        stakingProvider.address
+        stakingProvider.address,
       )
       // `stakeAfter` being the allowlist's configured value *is* the proof that
       // the allowlist branch executed -- the staking branch would not return it.

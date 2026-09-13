@@ -149,9 +149,8 @@ library EcdsaAuthorization {
         Data storage self,
         uint64 _authorizationDecreaseDelay
     ) internal {
-        self
-            .parameters
-            .authorizationDecreaseDelay = _authorizationDecreaseDelay;
+        self.parameters.authorizationDecreaseDelay =
+            _authorizationDecreaseDelay;
     }
 
     /// @notice Sets the authorization decrease change period. It is the time
@@ -162,9 +161,8 @@ library EcdsaAuthorization {
         Data storage self,
         uint64 _authorizationDecreaseChangePeriod
     ) internal {
-        self
-            .parameters
-            .authorizationDecreaseChangePeriod = _authorizationDecreaseChangePeriod;
+        self.parameters.authorizationDecreaseChangePeriod =
+            _authorizationDecreaseChangePeriod;
     }
 
     /// @notice Used by staking provider to set operator address that will
@@ -622,9 +620,8 @@ library EcdsaAuthorization {
             address(this)
         );
 
-        uint96 _eligibleStake = authorizedStake > decreasingBy
-            ? authorizedStake - decreasingBy
-            : 0;
+        uint96 _eligibleStake =
+            authorizedStake > decreasingBy ? authorizedStake - decreasingBy : 0;
 
         if (_eligibleStake < self.parameters.minimumAuthorization) {
             return 0;

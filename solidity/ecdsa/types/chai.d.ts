@@ -6,7 +6,7 @@ declare namespace Chai {
   interface Assertion {
     revertedWithCustomError(
       contract: unknown,
-      errorName: string
+      errorName: string,
     ): RevertedWithCustomErrorAssertion
   }
 

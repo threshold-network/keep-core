@@ -7,7 +7,7 @@ import type { WalletRegistry, IRandomBeacon } from "../../typechain"
 import type { Mock } from "../helpers/mock"
 
 export async function fakeRandomBeacon(
-  walletRegistry: WalletRegistry
+  walletRegistry: WalletRegistry,
 ): Promise<Mock<IRandomBeacon>> {
   const randomBeacon = await createMock<IRandomBeacon>("IRandomBeacon", {
     address: await walletRegistry.callStatic.randomBeacon(),
@@ -25,7 +25,7 @@ export async function fakeRandomBeacon(
 
 export async function submitRelayEntry(
   walletRegistry: WalletRegistry,
-  randomBeacon?: Mock<IRandomBeacon>
+  randomBeacon?: Mock<IRandomBeacon>,
 ): Promise<{
   startBlock: number
   dkgSeed: BigNumber
@@ -36,7 +36,7 @@ export async function submitRelayEntry(
   }
 
   const relayEntry: BigNumber = ethers.BigNumber.from(
-    ethers.utils.randomBytes(32)
+    ethers.utils.randomBytes(32),
   )
 
   // eslint-disable-next-line no-underscore-dangle

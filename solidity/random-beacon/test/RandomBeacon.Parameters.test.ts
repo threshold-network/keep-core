@@ -18,7 +18,6 @@ describe("RandomBeacon - Parameters", () => {
   let randomBeaconGovernance: RandomBeaconGovernance
 
   before("load test fixture", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;[impersonatedGovernance, thirdParty, thirdPartyContract] =
       await ethers.getSigners()
 
@@ -55,8 +54,8 @@ describe("RandomBeacon - Parameters", () => {
             .updateRelayEntryParameters(
               newRelayEntrySoftTimeout,
               newRelayEntryHardTimeout,
-              newCallbackGasLimit
-            )
+              newCallbackGasLimit,
+            ),
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
@@ -72,7 +71,7 @@ describe("RandomBeacon - Parameters", () => {
           .updateRelayEntryParameters(
             newRelayEntrySoftTimeout,
             newRelayEntryHardTimeout,
-            newCallbackGasLimit
+            newCallbackGasLimit,
           )
       })
 
@@ -103,7 +102,7 @@ describe("RandomBeacon - Parameters", () => {
           .withArgs(
             newRelayEntrySoftTimeout,
             newRelayEntryHardTimeout,
-            newCallbackGasLimit
+            newCallbackGasLimit,
           )
       })
     })
@@ -122,8 +121,8 @@ describe("RandomBeacon - Parameters", () => {
             .updateAuthorizationParameters(
               newMinimumAuthorization,
               newAuthorizationDecreaseDelay,
-              newAuthorizationDecreaseChangePeriod
-            )
+              newAuthorizationDecreaseChangePeriod,
+            ),
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
@@ -139,7 +138,7 @@ describe("RandomBeacon - Parameters", () => {
           .updateAuthorizationParameters(
             newMinimumAuthorization,
             newAuthorizationDecreaseDelay,
-            newAuthorizationDecreaseChangePeriod
+            newAuthorizationDecreaseChangePeriod,
           )
       })
 
@@ -149,7 +148,7 @@ describe("RandomBeacon - Parameters", () => {
 
       it("should update the group creation frequency", async () => {
         expect(await randomBeacon.minimumAuthorization()).to.be.equal(
-          newMinimumAuthorization
+          newMinimumAuthorization,
         )
       })
 
@@ -157,7 +156,7 @@ describe("RandomBeacon - Parameters", () => {
         const { authorizationDecreaseDelay } =
           await randomBeacon.authorizationParameters()
         expect(authorizationDecreaseDelay).to.be.equal(
-          authorizationDecreaseDelay
+          authorizationDecreaseDelay,
         )
       })
 
@@ -165,7 +164,7 @@ describe("RandomBeacon - Parameters", () => {
         const { authorizationDecreaseChangePeriod } =
           await randomBeacon.authorizationParameters()
         expect(authorizationDecreaseChangePeriod).to.be.equal(
-          authorizationDecreaseChangePeriod
+          authorizationDecreaseChangePeriod,
         )
       })
 
@@ -175,7 +174,7 @@ describe("RandomBeacon - Parameters", () => {
           .withArgs(
             newMinimumAuthorization,
             newAuthorizationDecreaseDelay,
-            newAuthorizationDecreaseChangePeriod
+            newAuthorizationDecreaseChangePeriod,
           )
       })
     })
@@ -200,8 +199,8 @@ describe("RandomBeacon - Parameters", () => {
               newDkgResultChallengePeriodLength,
               newDkgResultChallengeExtraGas,
               newDkgResultSubmissionTimeout,
-              newDkgSubmitterPrecedencePeriodLength
-            )
+              newDkgSubmitterPrecedencePeriodLength,
+            ),
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
@@ -220,7 +219,7 @@ describe("RandomBeacon - Parameters", () => {
             newDkgResultChallengePeriodLength,
             newDkgResultChallengeExtraGas,
             newDkgResultSubmissionTimeout,
-            newDkgSubmitterPrecedencePeriodLength
+            newDkgSubmitterPrecedencePeriodLength,
           )
       })
 
@@ -243,7 +242,7 @@ describe("RandomBeacon - Parameters", () => {
         const { dkgResultChallengePeriodLength } =
           await randomBeacon.groupCreationParameters()
         expect(dkgResultChallengePeriodLength).to.be.equal(
-          newDkgResultChallengePeriodLength
+          newDkgResultChallengePeriodLength,
         )
       })
 
@@ -251,7 +250,7 @@ describe("RandomBeacon - Parameters", () => {
         const { dkgResultChallengeExtraGas } =
           await randomBeacon.groupCreationParameters()
         expect(dkgResultChallengeExtraGas).to.be.equal(
-          newDkgResultChallengeExtraGas
+          newDkgResultChallengeExtraGas,
         )
       })
 
@@ -259,7 +258,7 @@ describe("RandomBeacon - Parameters", () => {
         const { dkgResultSubmissionTimeout } =
           await randomBeacon.groupCreationParameters()
         expect(dkgResultSubmissionTimeout).to.be.equal(
-          newDkgResultSubmissionTimeout
+          newDkgResultSubmissionTimeout,
         )
       })
 
@@ -267,7 +266,7 @@ describe("RandomBeacon - Parameters", () => {
         const { dkgSubmitterPrecedencePeriodLength } =
           await randomBeacon.groupCreationParameters()
         expect(dkgSubmitterPrecedencePeriodLength).to.be.equal(
-          newDkgSubmitterPrecedencePeriodLength
+          newDkgSubmitterPrecedencePeriodLength,
         )
       })
 
@@ -280,7 +279,7 @@ describe("RandomBeacon - Parameters", () => {
             newDkgResultChallengePeriodLength,
             newDkgResultChallengeExtraGas,
             newDkgResultSubmissionTimeout,
-            newDkgSubmitterPrecedencePeriodLength
+            newDkgSubmitterPrecedencePeriodLength,
           )
       })
 
@@ -301,13 +300,13 @@ describe("RandomBeacon - Parameters", () => {
                     newDkgResultChallengePeriodLength,
                     newDkgResultChallengeExtraGas,
                     newDkgResultSubmissionTimeout,
-                    invalidDkgSubmitterPrecedencePeriodLength
-                  )
+                    invalidDkgSubmitterPrecedencePeriodLength,
+                  ),
               ).to.be.revertedWith(
-                "Submitter precedence period length should be less than the result submission timeout"
+                "Submitter precedence period length should be less than the result submission timeout",
               )
             })
-          }
+          },
         )
 
         context(
@@ -326,13 +325,13 @@ describe("RandomBeacon - Parameters", () => {
                     newDkgResultChallengePeriodLength,
                     newDkgResultChallengeExtraGas,
                     newDkgResultSubmissionTimeout,
-                    invalidDkgSubmitterPrecedencePeriodLength
-                  )
+                    invalidDkgSubmitterPrecedencePeriodLength,
+                  ),
               ).to.be.revertedWith(
-                "Submitter precedence period length should be less than the result submission timeout"
+                "Submitter precedence period length should be less than the result submission timeout",
               )
             })
-          }
+          },
         )
       })
     })
@@ -353,8 +352,8 @@ describe("RandomBeacon - Parameters", () => {
               newSortitionPoolRewardsBanDuration,
               newRelayEntryTimeoutNotificationRewardMultiplier,
               newUnauthorizedSigningNotificationRewardMultiplier,
-              newDkgMaliciousResultNotificationRewardMultiplier
-            )
+              newDkgMaliciousResultNotificationRewardMultiplier,
+            ),
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
@@ -371,7 +370,7 @@ describe("RandomBeacon - Parameters", () => {
             newSortitionPoolRewardsBanDuration,
             newRelayEntryTimeoutNotificationRewardMultiplier,
             newUnauthorizedSigningNotificationRewardMultiplier,
-            newDkgMaliciousResultNotificationRewardMultiplier
+            newDkgMaliciousResultNotificationRewardMultiplier,
           )
       })
 
@@ -383,7 +382,7 @@ describe("RandomBeacon - Parameters", () => {
         const { sortitionPoolRewardsBanDuration } =
           await randomBeacon.rewardParameters()
         expect(sortitionPoolRewardsBanDuration).to.be.equal(
-          newSortitionPoolRewardsBanDuration
+          newSortitionPoolRewardsBanDuration,
         )
       })
 
@@ -391,7 +390,7 @@ describe("RandomBeacon - Parameters", () => {
         const { relayEntryTimeoutNotificationRewardMultiplier } =
           await randomBeacon.rewardParameters()
         expect(relayEntryTimeoutNotificationRewardMultiplier).to.be.equal(
-          newRelayEntryTimeoutNotificationRewardMultiplier
+          newRelayEntryTimeoutNotificationRewardMultiplier,
         )
       })
 
@@ -399,7 +398,7 @@ describe("RandomBeacon - Parameters", () => {
         const { unauthorizedSigningNotificationRewardMultiplier } =
           await randomBeacon.rewardParameters()
         expect(unauthorizedSigningNotificationRewardMultiplier).to.be.equal(
-          newUnauthorizedSigningNotificationRewardMultiplier
+          newUnauthorizedSigningNotificationRewardMultiplier,
         )
       })
 
@@ -407,7 +406,7 @@ describe("RandomBeacon - Parameters", () => {
         const { dkgMaliciousResultNotificationRewardMultiplier } =
           await randomBeacon.rewardParameters()
         expect(dkgMaliciousResultNotificationRewardMultiplier).to.be.equal(
-          newDkgMaliciousResultNotificationRewardMultiplier
+          newDkgMaliciousResultNotificationRewardMultiplier,
         )
       })
 
@@ -418,7 +417,7 @@ describe("RandomBeacon - Parameters", () => {
             newSortitionPoolRewardsBanDuration,
             newRelayEntryTimeoutNotificationRewardMultiplier,
             newUnauthorizedSigningNotificationRewardMultiplier,
-            newDkgMaliciousResultNotificationRewardMultiplier
+            newDkgMaliciousResultNotificationRewardMultiplier,
           )
       })
     })
@@ -437,8 +436,8 @@ describe("RandomBeacon - Parameters", () => {
             .updateSlashingParameters(
               newRelayEntrySubmissionFailureSlashingAmount,
               newMaliciousDkgResultSlashingAmount,
-              newUnauthorizedSigningSlashingAmount
-            )
+              newUnauthorizedSigningSlashingAmount,
+            ),
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
@@ -454,7 +453,7 @@ describe("RandomBeacon - Parameters", () => {
           .updateSlashingParameters(
             newRelayEntrySubmissionFailureSlashingAmount,
             newMaliciousDkgResultSlashingAmount,
-            newUnauthorizedSigningSlashingAmount
+            newUnauthorizedSigningSlashingAmount,
           )
       })
 
@@ -466,7 +465,7 @@ describe("RandomBeacon - Parameters", () => {
         const { relayEntrySubmissionFailureSlashingAmount } =
           await randomBeacon.slashingParameters()
         expect(relayEntrySubmissionFailureSlashingAmount).to.be.equal(
-          newRelayEntrySubmissionFailureSlashingAmount
+          newRelayEntrySubmissionFailureSlashingAmount,
         )
       })
 
@@ -474,7 +473,7 @@ describe("RandomBeacon - Parameters", () => {
         const { maliciousDkgResultSlashingAmount } =
           await randomBeacon.slashingParameters()
         expect(maliciousDkgResultSlashingAmount).to.be.equal(
-          newMaliciousDkgResultSlashingAmount
+          newMaliciousDkgResultSlashingAmount,
         )
       })
 
@@ -482,7 +481,7 @@ describe("RandomBeacon - Parameters", () => {
         const { unauthorizedSigningSlashingAmount } =
           await randomBeacon.slashingParameters()
         expect(unauthorizedSigningSlashingAmount).to.be.equal(
-          newUnauthorizedSigningSlashingAmount
+          newUnauthorizedSigningSlashingAmount,
         )
       })
 
@@ -492,7 +491,7 @@ describe("RandomBeacon - Parameters", () => {
           .withArgs(
             newRelayEntrySubmissionFailureSlashingAmount,
             newMaliciousDkgResultSlashingAmount,
-            newUnauthorizedSigningSlashingAmount
+            newUnauthorizedSigningSlashingAmount,
           )
       })
     })
@@ -501,7 +500,7 @@ describe("RandomBeacon - Parameters", () => {
   describe("authorizedRequesters", () => {
     it("should be false by default", async () => {
       const isAuthorized = await randomBeacon.authorizedRequesters(
-        thirdPartyContract.address
+        thirdPartyContract.address,
       )
       await expect(isAuthorized).to.be.false
     })
@@ -513,7 +512,7 @@ describe("RandomBeacon - Parameters", () => {
         await expect(
           randomBeacon
             .connect(thirdParty)
-            .setRequesterAuthorization(thirdPartyContract.address, true)
+            .setRequesterAuthorization(thirdPartyContract.address, true),
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
@@ -536,7 +535,7 @@ describe("RandomBeacon - Parameters", () => {
 
         it("should set contract as authorized", async () => {
           const isAuthorized = await randomBeacon.authorizedRequesters(
-            thirdPartyContract.address
+            thirdPartyContract.address,
           )
           expect(isAuthorized).to.be.true
         })
@@ -569,7 +568,7 @@ describe("RandomBeacon - Parameters", () => {
 
         it("should set contract as not authorized", async () => {
           const isAuthorized = await randomBeacon.authorizedRequesters(
-            thirdPartyContract.address
+            thirdPartyContract.address,
           )
           expect(isAuthorized).to.be.false
         })

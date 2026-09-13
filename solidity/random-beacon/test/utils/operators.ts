@@ -24,7 +24,7 @@ const legacyTokenStakingIface = new ethers.utils.Interface([
 
 export function legacyTokenStakingAt(
   staking: Pick<TokenStaking, "address">,
-  signer: SignerWithAddress
+  signer: SignerWithAddress,
 ): Contract {
   return new ethers.Contract(staking.address, legacyTokenStakingIface, signer)
 }
@@ -37,28 +37,28 @@ export async function registerOperators(
   t: T,
   numberOfOperators = testConfig.operatorsCount,
   unnamedSignersOffset = testConfig.nonStakingAccountsCount,
-  stakeAmount: BigNumber = params.minimumAuthorization
+  stakeAmount: BigNumber = params.minimumAuthorization,
 ): Promise<Operator[]> {
   const operators: Operator[] = []
 
   const sortitionPool: SortitionPool = await ethers.getContractAt(
     "SortitionPool",
-    await randomBeacon.sortitionPool()
+    await randomBeacon.sortitionPool(),
   )
 
   const staking: TokenStaking = await ethers.getContractAt(
     "TokenStaking",
-    await randomBeacon.staking()
+    await randomBeacon.staking(),
   )
 
   const signers = (await helpers.signers.getUnnamedSigners()).slice(
-    unnamedSignersOffset
+    unnamedSignersOffset,
   )
 
   // We use unique accounts for each staking role for each operator.
   if (signers.length < numberOfOperators * 5) {
     throw new Error(
-      "not enough unnamed signers; update hardhat network's configuration account count"
+      "not enough unnamed signers; update hardhat network's configuration account count",
     )
   }
 
@@ -78,7 +78,7 @@ export async function registerOperators(
       stakingProvider,
       stakeAmount,
       beneficiary,
-      authorizer
+      authorizer,
     )
 
     await randomBeacon
@@ -103,7 +103,7 @@ export async function stake(
   stakingProvider: SignerWithAddress,
   stakeAmount: BigNumberish,
   beneficiary = stakingProvider,
-  authorizer = stakingProvider
+  authorizer = stakingProvider,
 ): Promise<void> {
   const { deployer } = await helpers.signers.getNamedSigners()
 
@@ -114,12 +114,12 @@ export async function stake(
     stakingProvider.address,
     beneficiary.address,
     authorizer.address,
-    stakeAmount
+    stakeAmount,
   )
 
   await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
     stakingProvider.address,
     randomBeacon.address,
-    stakeAmount
+    stakeAmount,
   )
 }

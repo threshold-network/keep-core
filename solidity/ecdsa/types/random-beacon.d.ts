@@ -19,19 +19,19 @@ declare module "@keep-network/random-beacon/export/tasks/utils" {
     owner: string,
     provider: string,
     authorizer?: string,
-    authorization?: BigNumberish
+    authorization?: BigNumberish,
   ): Promise<void>
 
   export function register(
     hre: HardhatRuntimeEnvironment,
     deploymentName: string,
     provider: string,
-    operator: string
+    operator: string,
   ): Promise<void>
 
   export function addBetaOperator(
     hre: HardhatRuntimeEnvironment,
     sortitionPoolDeploymentName: string,
-    operator: string
+    operator: string,
   ): Promise<void>
 }
