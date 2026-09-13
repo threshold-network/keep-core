@@ -49,9 +49,10 @@ For more information, please refer to <https://unlicense.org>
 /** @author https://github.com/GNSPS **/
 
 library BytesLib {
-    function concatStorage(bytes storage _preBytes, bytes memory _postBytes)
-        internal
-    {
+    function concatStorage(
+        bytes storage _preBytes,
+        bytes memory _postBytes
+    ) internal {
         assembly {
             // Read the first 32 bytes of _preBytes storage, which is the length
             // of the array. (We don't need to use the offset into the slot
@@ -190,11 +191,10 @@ library BytesLib {
         }
     }
 
-    function equalStorage(bytes storage _preBytes, bytes memory _postBytes)
-        internal
-        view
-        returns (bool)
-    {
+    function equalStorage(
+        bytes storage _preBytes,
+        bytes memory _postBytes
+    ) internal view returns (bool) {
         bool success = true;
 
         assembly {
@@ -240,9 +240,7 @@ library BytesLib {
 
                         // the next line is the loop condition:
                         // while(uint(mc < end) + cb == 2)
-                        for {
-
-                        } eq(add(lt(mc, end), cb), 2) {
+                        for {} eq(add(lt(mc, end), cb), 2) {
                             sc := add(sc, 1)
                             mc := add(mc, 0x20)
                         } {
@@ -264,11 +262,10 @@ library BytesLib {
         return success;
     }
 
-    function concat(bytes memory _preBytes, bytes memory _postBytes)
-        internal
-        pure
-        returns (bytes memory)
-    {
+    function concat(
+        bytes memory _preBytes,
+        bytes memory _postBytes
+    ) internal pure returns (bytes memory) {
         bytes memory tempBytes;
 
         assembly {
@@ -370,11 +367,10 @@ library BytesLib {
         }
     }
 
-    function toAddress(bytes memory _bytes, uint256 _start)
-        internal
-        pure
-        returns (address)
-    {
+    function toAddress(
+        bytes memory _bytes,
+        uint256 _start
+    ) internal pure returns (address) {
         uint256 _totalLen = _start + 20;
         require(
             _totalLen > _start && _bytes.length >= _totalLen,
@@ -392,11 +388,10 @@ library BytesLib {
         return tempAddress;
     }
 
-    function toUint8(bytes memory _bytes, uint256 _start)
-        internal
-        pure
-        returns (uint8)
-    {
+    function toUint8(
+        bytes memory _bytes,
+        uint256 _start
+    ) internal pure returns (uint8) {
         require(
             _bytes.length >= (_start + 1),
             "Uint8 conversion out of bounds."
@@ -410,11 +405,10 @@ library BytesLib {
         return tempUint;
     }
 
-    function toUint(bytes memory _bytes, uint256 _start)
-        internal
-        pure
-        returns (uint256)
-    {
+    function toUint(
+        bytes memory _bytes,
+        uint256 _start
+    ) internal pure returns (uint256) {
         uint256 _totalLen = _start + 32;
         require(
             _totalLen > _start && _bytes.length >= _totalLen,
@@ -429,11 +423,10 @@ library BytesLib {
         return tempUint;
     }
 
-    function equal(bytes memory _preBytes, bytes memory _postBytes)
-        internal
-        pure
-        returns (bool)
-    {
+    function equal(
+        bytes memory _preBytes,
+        bytes memory _postBytes
+    ) internal pure returns (bool) {
         bool success = true;
 
         assembly {
@@ -453,9 +446,9 @@ library BytesLib {
 
                 for {
                     let cc := add(_postBytes, 0x20)
+                } eq(add(lt(mc, end), cb), 2) {
                     // the next line is the loop condition:
                     // while(uint(mc < end) + cb == 2)
-                } eq(add(lt(mc, end), cb), 2) {
                     mc := add(mc, 0x20)
                     cc := add(cc, 0x20)
                 } {
@@ -476,11 +469,9 @@ library BytesLib {
         return success;
     }
 
-    function toBytes32(bytes memory _source)
-        internal
-        pure
-        returns (bytes32 result)
-    {
+    function toBytes32(
+        bytes memory _source
+    ) internal pure returns (bytes32 result) {
         if (_source.length == 0) {
             return 0x0;
         }

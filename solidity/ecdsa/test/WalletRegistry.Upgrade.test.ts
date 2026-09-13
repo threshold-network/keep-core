@@ -24,7 +24,6 @@ describe("WalletRegistry - Upgrade", async () => {
   let EcdsaInactivity: Contract
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ esdm: proxyAdminOwner } = await helpers.signers.getNamedSigners())
     await deployments.fixture()
     EcdsaInactivity = await helpers.contracts.getContract("EcdsaInactivity")
@@ -49,7 +48,7 @@ describe("WalletRegistry - Upgrade", async () => {
               },
               unsafeAllow: ["external-library-linking"],
             },
-          })
+          }),
         ).to.be.rejectedWith(Error, "AllowlistAddressZero")
       })
     })
@@ -71,9 +70,8 @@ describe("WalletRegistry - Upgrade", async () => {
         // Expected to FAIL in RED phase because onlyGovernance modifier is still present
         // Expected to PASS in GREEN phase after modifier is removed
 
-        const walletRegistry = await helpers.contracts.getContract(
-          "WalletRegistry"
-        )
+        const walletRegistry =
+          await helpers.contracts.getContract("WalletRegistry")
 
         const newWalletRegistry = await upgradeProxy(
           "WalletRegistry",
@@ -91,7 +89,7 @@ describe("WalletRegistry - Upgrade", async () => {
               },
               unsafeAllow: ["external-library-linking"],
             },
-          }
+          },
         )
 
         // Verify upgrade succeeded
@@ -116,9 +114,8 @@ describe("WalletRegistry - Upgrade", async () => {
           },
         })
 
-        const walletRegistry = await helpers.contracts.getContract(
-          "WalletRegistry"
-        )
+        const walletRegistry =
+          await helpers.contracts.getContract("WalletRegistry")
 
         // Deploy another allowlist for re-initialization attempt
         const AllowlistFactory = await ethers.getContractFactory("Allowlist")
@@ -127,7 +124,7 @@ describe("WalletRegistry - Upgrade", async () => {
 
         // Attempt to call initializeV2 again should fail
         await expect(
-          walletRegistry.initializeV2(newAllowlist.address)
+          walletRegistry.initializeV2(newAllowlist.address),
         ).to.be.revertedWith("Initializable: contract is already initialized")
       })
 
@@ -149,7 +146,7 @@ describe("WalletRegistry - Upgrade", async () => {
               },
               unsafeAllow: ["external-library-linking"],
             },
-          })
+          }),
         ).to.be.rejectedWith(Error, "AllowlistAddressZero")
       })
     })
@@ -171,7 +168,7 @@ describe("WalletRegistry - Upgrade", async () => {
                 constructorArgs: [AddressZero, AddressZero],
                 unsafeAllow: ["external-library-linking"],
               },
-            })
+            }),
           ).to.be.rejectedWith(Error, "New storage layout is incompatible")
         })
       })
@@ -190,10 +187,10 @@ describe("WalletRegistry - Upgrade", async () => {
                 constructorArgs: [AddressZero, AddressZero],
                 unsafeAllow: ["external-library-linking"],
               },
-            })
+            }),
           ).to.be.rejectedWith(
             Error,
-            "Deleted `_maliciousDkgResultNotificationRewardMultiplier`"
+            "Deleted `_maliciousDkgResultNotificationRewardMultiplier`",
           )
         })
       })
@@ -216,18 +213,17 @@ describe("WalletRegistry - Upgrade", async () => {
         await deployments.fixture()
 
         tokenStaking = await helpers.contracts.getContract("TokenStaking")
-        reimbursementPool = await helpers.contracts.getContract(
-          "ReimbursementPool"
-        )
+        reimbursementPool =
+          await helpers.contracts.getContract("ReimbursementPool")
         walletRegistryGovernance = await helpers.contracts.getContract(
-          "WalletRegistryGovernance"
+          "WalletRegistryGovernance",
         )
         walletRegistry = (await helpers.contracts.getContract(
-          "WalletRegistry"
+          "WalletRegistry",
         )) as WalletRegistry & WalletRegistryV2
 
         expect(await walletRegistry.governance()).equal(
-          walletRegistryGovernance.address
+          walletRegistryGovernance.address,
         )
 
         newWalletRegistry = (await upgradeProxy(
@@ -246,7 +242,7 @@ describe("WalletRegistry - Upgrade", async () => {
               },
               unsafeAllow: ["external-library-linking"],
             },
-          }
+          },
         )) as WalletRegistryV2
       })
 
@@ -256,19 +252,19 @@ describe("WalletRegistry - Upgrade", async () => {
 
       it("should not update governance", async () => {
         expect(await walletRegistry.governance()).equal(
-          walletRegistryGovernance.address
+          walletRegistryGovernance.address,
         )
       })
 
       it("should use the new value of the immutable variable", async () => {
         expect(await walletRegistry.sortitionPool()).to.be.equal(
-          newSortitionPoolAddress
+          newSortitionPoolAddress,
         )
       })
 
       it("should reinitialize existing variable", async () => {
         expect(await walletRegistry.randomBeacon()).to.be.equal(
-          newRandomBeaconAddress
+          newRandomBeaconAddress,
         )
       })
 
@@ -278,36 +274,36 @@ describe("WalletRegistry - Upgrade", async () => {
 
       it("should not update already set variable", async () => {
         expect(await walletRegistry.reimbursementPool()).to.be.equal(
-          reimbursementPool.address
+          reimbursementPool.address,
         )
       })
 
       it("should not update parameters from library", async () => {
         expect((await walletRegistry.dkgParameters()).seedTimeout).to.be.equal(
-          11_520
+          11_520,
         )
 
         expect(await walletRegistry.minimumAuthorization()).to.be.equal(
-          "40000000000000000000000"
+          "40000000000000000000000",
         )
       })
 
       it("should revert when V1's initializer is called", async () => {
         await expect(
-          newWalletRegistry.initialize(AddressZero, AddressZero, AddressZero)
+          newWalletRegistry.initialize(AddressZero, AddressZero, AddressZero),
         ).to.be.revertedWith("Initializable: contract is already initialized")
       })
 
       it("should revert for removed function", async () => {
         await expect(walletRegistry.notifySeedTimeout()).to.be.rejectedWith(
           Error,
-          "Transaction reverted: function selector was not recognized and there's no fallback function"
+          "Transaction reverted: function selector was not recognized and there's no fallback function",
         )
       })
 
       it("should execute updated function logic", async () => {
         await expect(walletRegistry.notifyDkgTimeout()).to.be.revertedWith(
-          "nice try, but no"
+          "nice try, but no",
         )
       })
     })
@@ -343,7 +339,7 @@ describe("WalletRegistry - Upgrade", async () => {
             walletRegistryV1,
             walletOwner.wallet,
             randomBeacon,
-            expectedExistingWalletData.publicKey
+            expectedExistingWalletData.publicKey,
           )
           existingWalletID = existingWallet.walletID
           existingWalletMembersHash = existingWallet.dkgResult.membersHash
@@ -370,10 +366,8 @@ describe("WalletRegistry - Upgrade", async () => {
             walletRegistryV1,
             expectedNewWalletData.publicKey,
             dkgSeed,
-            (
-              await requestNewWalletTx.wait()
-            ).blockNumber,
-            noMisbehaved
+            (await requestNewWalletTx.wait()).blockNumber,
+            noMisbehaved,
           )
 
           newWalletMembersHash = dkgResult.membersHash
@@ -395,13 +389,13 @@ describe("WalletRegistry - Upgrade", async () => {
                 },
                 unsafeAllow: ["external-library-linking"],
               },
-            }
+            },
           )) as WalletRegistryV2
 
           // Approve DKG result on Wallet Registry V2
           await mineBlocksTo(
             (await submitDkgResultTx.wait()).blockNumber +
-              params.dkgResultChallengePeriodLength
+              params.dkgResultChallengePeriodLength,
           )
 
           await walletRegistryV1.connect(submitter).approveDkgResult(dkgResult)
@@ -442,7 +436,7 @@ describe("WalletRegistry - Upgrade", async () => {
             constructorArgs: [AddressZero, AddressZero],
             unsafeAllow: ["external-library-linking"],
           },
-        })
+        }),
       ).to.be.rejectedWith(Error, "Ownable: caller is not the owner")
     })
   })
@@ -460,18 +454,18 @@ export interface UpgradesUpgradeOptions {
 async function upgradeProxy(
   currentContractName: string,
   newContractName: string,
-  opts?: UpgradesUpgradeOptions
+  opts?: UpgradesUpgradeOptions,
 ): Promise<Contract> {
   const currentContract = await deployments.get(currentContractName)
 
   const newContract = await ethers.getContractFactory(
     opts?.contractName || newContractName,
-    opts?.factoryOpts
+    opts?.factoryOpts,
   )
 
   return upgrades.upgradeProxy(
     currentContract.address,
     newContract,
-    opts?.proxyOpts
+    opts?.proxyOpts,
   )
 }

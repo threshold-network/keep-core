@@ -33,27 +33,21 @@ contract MockTargetConsumer {
     }
 
     /// @dev STATICCALL: `readValue` is `view` on the interface.
-    function readValueThroughStaticCall(uint256 key)
-        external
-        view
-        returns (uint256)
-    {
+    function readValueThroughStaticCall(
+        uint256 key
+    ) external view returns (uint256) {
         return target.readValue(key);
     }
 
-    function readInfoThroughStaticCall(uint256 key)
-        external
-        view
-        returns (IMockTarget.Info memory)
-    {
+    function readInfoThroughStaticCall(
+        uint256 key
+    ) external view returns (IMockTarget.Info memory) {
         return target.readInfo(key);
     }
 
-    function readPairThroughStaticCall(uint256 key)
-        external
-        view
-        returns (uint32, uint32)
-    {
+    function readPairThroughStaticCall(
+        uint256 key
+    ) external view returns (uint32, uint32) {
         return target.readPair(key);
     }
 }

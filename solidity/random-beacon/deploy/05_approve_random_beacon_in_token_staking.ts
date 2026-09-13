@@ -25,7 +25,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const iface = new ethers.utils.Interface(TokenStaking.abi)
   if (!ifaceHasFunction(iface, "approveApplication")) {
     hre.deployments.log(
-      "TokenStaking does not have approveApplication (Threshold TokenStaking); skipping"
+      "TokenStaking does not have approveApplication (Threshold TokenStaking); skipping",
     )
     return
   }
@@ -34,22 +34,22 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   try {
     const tokenStakingContract = await ethers.getContractAt(
       TokenStaking.abi,
-      TokenStaking.address
+      TokenStaking.address,
     )
     if (ifaceHasFunction(iface, "applicationInfo")) {
       const appInfo = await tokenStakingContract.applicationInfo(
-        RandomBeacon.address
+        RandomBeacon.address,
       )
       if (appInfo.status === APPLICATION_STATUS_APPROVED) {
         hre.deployments.log(
-          "RandomBeacon already approved in TokenStaking; skipping"
+          "RandomBeacon already approved in TokenStaking; skipping",
         )
         return
       }
     }
   } catch (e) {
     hre.deployments.log(
-      `Could not read TokenStaking application status (continuing): ${e}`
+      `Could not read TokenStaking application status (continuing): ${e}`,
     )
   }
 
@@ -57,7 +57,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "TokenStaking",
     { from: deployer, log: true, waitConfirmations: 1 },
     "approveApplication",
-    RandomBeacon.address
+    RandomBeacon.address,
   )
 }
 

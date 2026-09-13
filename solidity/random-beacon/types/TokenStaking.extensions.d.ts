@@ -12,37 +12,37 @@ declare module "../typechain/TokenStaking" {
       beneficiary: string,
       authorizer: string,
       amount: BigNumberish,
-      overrides?: CallOverrides
+      overrides?: CallOverrides,
     ): Promise<ContractTransaction>
 
     approveApplication(
       application: string,
-      overrides?: CallOverrides
+      overrides?: CallOverrides,
     ): Promise<ContractTransaction>
 
     increaseAuthorization(
       stakingProvider: string,
       application: string,
       amount: BigNumberish,
-      overrides?: CallOverrides
+      overrides?: CallOverrides,
     ): Promise<ContractTransaction>
 
     topUp(
       stakingProvider: string,
       amount: BigNumberish,
-      overrides?: CallOverrides
+      overrides?: CallOverrides,
     ): Promise<ContractTransaction>
 
     processSlashing(
       count: BigNumberish,
-      overrides?: CallOverrides
+      overrides?: CallOverrides,
     ): Promise<ContractTransaction>
 
     getSlashingQueueLength(overrides?: CallOverrides): Promise<BigNumber>
 
     slashingQueue(
       index: BigNumberish,
-      overrides?: CallOverrides
+      overrides?: CallOverrides,
     ): Promise<
       [string, BigNumber] & { stakingProvider: string; amount: BigNumber }
     >
@@ -51,7 +51,7 @@ declare module "../typechain/TokenStaking" {
       stakingProvider: string,
       application: string,
       amount: BigNumberish,
-      overrides?: CallOverrides
+      overrides?: CallOverrides,
     ): Promise<ContractTransaction>
   }
 }

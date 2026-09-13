@@ -38,11 +38,9 @@ abstract contract Governable {
     }
 
     /// @notice Transfers governance of the contract to `newGovernance`.
-    function transferGovernance(address newGovernance)
-        external
-        virtual
-        onlyGovernance
-    {
+    function transferGovernance(
+        address newGovernance
+    ) external virtual onlyGovernance {
         require(
             newGovernance != address(0),
             "New governance is the zero address"

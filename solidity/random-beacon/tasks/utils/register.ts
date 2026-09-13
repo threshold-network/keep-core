@@ -6,7 +6,7 @@ export async function register(
   hre: HardhatRuntimeEnvironment,
   deploymentName: string,
   provider: string,
-  operator: string
+  operator: string,
 ): Promise<void> {
   const { ethers, helpers } = hre
 
@@ -16,23 +16,23 @@ export async function register(
   const application = await helpers.contracts.getContract(deploymentName)
 
   console.log(
-    `Registering operator ${operatorAddress} in ${deploymentName} application (${application.address})`
+    `Registering operator ${operatorAddress} in ${deploymentName} application (${application.address})`,
   )
 
   const currentProvider = ethers.utils.getAddress(
-    await application.callStatic.operatorToStakingProvider(operatorAddress)
+    await application.callStatic.operatorToStakingProvider(operatorAddress),
   )
 
   switch (currentProvider) {
     case providerAddress: {
       console.log(
-        `Current staking provider for operator ${operatorAddress} is ${currentProvider}`
+        `Current staking provider for operator ${operatorAddress} is ${currentProvider}`,
       )
       return
     }
     case ethers.constants.AddressZero: {
       console.log(
-        `Registering operator ${operatorAddress} for a staking provider ${providerAddress}...`
+        `Registering operator ${operatorAddress} for a staking provider ${providerAddress}...`,
       )
 
       await (
@@ -45,7 +45,7 @@ export async function register(
     }
     default: {
       throw new Error(
-        `Operator [${operatorAddress}] has already been registered for another staking provider [${currentProvider}]`
+        `Operator [${operatorAddress}] has already been registered for another staking provider [${currentProvider}]`,
       )
     }
   }

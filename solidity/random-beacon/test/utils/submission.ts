@@ -4,10 +4,9 @@ import { constants } from "../fixtures"
 
 import type { BigNumberish } from "ethers"
 
-/* eslint-disable import/prefer-default-export */
 export function firstEligibleIndex(
   seed: BigNumberish,
-  groupSize?: number
+  groupSize?: number,
 ): number {
   // eslint-disable-next-line no-param-reassign
   if (!groupSize) groupSize = constants.groupSize
@@ -19,7 +18,7 @@ export function shiftEligibleIndex(
   // eslint-disable-next-line @typescript-eslint/no-shadow
   firstEligibleIndex: number,
   shift: number,
-  groupSize?: number
+  groupSize?: number,
 ): number {
   // eslint-disable-next-line no-param-reassign
   if (!groupSize) groupSize = constants.groupSize

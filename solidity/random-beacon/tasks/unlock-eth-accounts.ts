@@ -10,7 +10,7 @@ task("unlock-accounts", "Unlock ethereum accounts").setAction(
       const password = process.env.KEEP_ETHEREUM_PASSWORD || "password"
 
       const provider = new ethers.providers.JsonRpcProvider(
-        (hre.network.config as HttpNetworkConfig).url
+        (hre.network.config as HttpNetworkConfig).url,
       )
       const accounts = await provider.listAccounts()
 
@@ -36,5 +36,5 @@ task("unlock-accounts", "Unlock ethereum accounts").setAction(
         console.log("\n---------------------------------")
       }
     }
-  }
+  },
 )

@@ -93,7 +93,7 @@ describe("MockContract", () => {
       await target.doThing.reverts("nope")
 
       await expect(
-        consumer.doThing(ethers.constants.AddressZero, 1)
+        consumer.doThing(ethers.constants.AddressZero, 1),
       ).to.be.revertedWith("nope")
     })
 
@@ -227,7 +227,7 @@ describe("MockContract", () => {
   describe("address option", () => {
     it("deploys at a requested address", async () => {
       const address = ethers.utils.getAddress(
-        `0x${"ab".repeat(20)}`.toLowerCase()
+        `0x${"ab".repeat(20)}`.toLowerCase(),
       )
 
       const pinned = await createMock<IMockTarget>("IMockTarget", { address })
@@ -260,8 +260,8 @@ describe("MockContract", () => {
             address,
             ethers.utils.hexValue(slot),
             garbage,
-          ])
-        )
+          ]),
+        ),
       )
 
       const pinned = await createMock<IMockTarget>("IMockTarget", { address })

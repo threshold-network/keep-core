@@ -84,10 +84,10 @@ contract Allowlist is Ownable2StepUpgradeable {
     ///         a non-zero weight, the function reverts.
     /// @param stakingProvider The staking provider's address
     /// @param weight The weight of the new staking provider
-    function addStakingProvider(address stakingProvider, uint96 weight)
-        external
-        onlyOwner
-    {
+    function addStakingProvider(
+        address stakingProvider,
+        uint96 weight
+    ) external onlyOwner {
         if (stakingProvider == address(0)) {
             revert ZeroAddress();
         }
@@ -122,10 +122,10 @@ contract Allowlist is Ownable2StepUpgradeable {
     ///
     /// @param stakingProvider The staking provider's address
     /// @param newWeight The new requested weight of this staking provider
-    function requestWeightDecrease(address stakingProvider, uint96 newWeight)
-        external
-        onlyOwner
-    {
+    function requestWeightDecrease(
+        address stakingProvider,
+        uint96 newWeight
+    ) external onlyOwner {
         StakingProviderInfo storage info = stakingProviders[stakingProvider];
         uint96 currentWeight = info.weight;
 
@@ -152,10 +152,9 @@ contract Allowlist is Ownable2StepUpgradeable {
     ///         requested weight decrease for the given staking provider.
     /// @param stakingProvider The staking provider's address
     /// @return The new weight of the staking provider
-    function approveAuthorizationDecrease(address stakingProvider)
-        external
-        returns (uint96)
-    {
+    function approveAuthorizationDecrease(
+        address stakingProvider
+    ) external returns (uint96) {
         if (msg.sender != address(walletRegistry)) {
             revert NotWalletRegistry();
         }
@@ -184,11 +183,10 @@ contract Allowlist is Ownable2StepUpgradeable {
     /// @dev The function signature maintains compatibility with Threshold
     ///      TokenStaking contract to minimize the TIP-092 impact on the
     ///      WalletRegistry contract.
-    function authorizedStake(address stakingProvider, address)
-        external
-        view
-        returns (uint96)
-    {
+    function authorizedStake(
+        address stakingProvider,
+        address
+    ) external view returns (uint96) {
         return stakingProviders[stakingProvider].weight;
     }
 
@@ -214,7 +212,9 @@ contract Allowlist is Ownable2StepUpgradeable {
     /// @dev The function signature maintains compatibility with Threshold
     ///      TokenStaking contract to minimize the TIP-092 impact on the
     ///      WalletRegistry contract.
-    function rolesOf(address stakingProvider)
+    function rolesOf(
+        address stakingProvider
+    )
         external
         view
         returns (
