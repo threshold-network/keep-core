@@ -22,7 +22,6 @@
     // so hardhat will not start without it.
     "rootDir": ".",
     "esModuleInterop": true,
-    "downlevelIteration": true,
     "noImplicitAny": true,
     "skipLibCheck": true
   }
