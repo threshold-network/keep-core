@@ -4,7 +4,7 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
 // eslint-disable-next-line import/prefer-default-export
 export function parseValue(
   value: string,
-  hre: HardhatRuntimeEnvironment
+  hre: HardhatRuntimeEnvironment,
 ): BigNumber {
   const parsed = String(value).trim().split(" ")
 

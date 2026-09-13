@@ -284,33 +284,29 @@ contract TestAltBn128 {
     function runVerifySignatureTest() public view {
         // "hello!" message hashed to G1 point using G1HashToPoint from keep-core/pkg/bls/altbn128.go
         AltBn128.G1Point memory message;
-        message
-            .x = 5634139805531803244211629196316241342481813136353842610045004964364565232495;
-        message
-            .y = 12935759374343796368049060881302766596646163398265176009268480404372697203641;
+        message.x =
+            5634139805531803244211629196316241342481813136353842610045004964364565232495;
+        message.y =
+            12935759374343796368049060881302766596646163398265176009268480404372697203641;
 
         // G1 point hashed message above signed with private key = 123 using ScalarMult
         // from go-ethereum/crypto/bn256/cloudflare library
         AltBn128.G1Point memory signature;
-        signature
-            .x = 656647519899395589093611455851658769732922739162315270379466002146796568126;
-        signature
-            .y = 5296675831567268847773497112983742440203412208935796410329912816023128374551;
+        signature.x =
+            656647519899395589093611455851658769732922739162315270379466002146796568126;
+        signature.y =
+            5296675831567268847773497112983742440203412208935796410329912816023128374551;
 
         // G2 point representing public key for private key = 123
         AltBn128.G2Point memory publicKey;
-        publicKey
-            .x
-            .x = 14066454060412929535985836631817650877381034334390275410072431082437297539867;
-        publicKey
-            .x
-            .y = 19276105129625393659655050515259006463014579919681138299520812914148935621072;
-        publicKey
-            .y
-            .x = 10109651107942685361120988628892759706059655669161016107907096760613704453218;
-        publicKey
-            .y
-            .y = 12642665914920339463975152321804664028480770144655934937445922690262428344269;
+        publicKey.x.x =
+            14066454060412929535985836631817650877381034334390275410072431082437297539867;
+        publicKey.x.y =
+            19276105129625393659655050515259006463014579919681138299520812914148935621072;
+        publicKey.y.x =
+            10109651107942685361120988628892759706059655669161016107907096760613704453218;
+        publicKey.y.y =
+            12642665914920339463975152321804664028480770144655934937445922690262428344269;
 
         bool result = AltBn128.pairing(
             signature,
@@ -402,36 +398,30 @@ contract TestAltBn128 {
         }
     }
 
-    function publicG1Unmarshal(bytes memory m)
-        public
-        pure
-        returns (AltBn128.G1Point memory)
-    {
+    function publicG1Unmarshal(
+        bytes memory m
+    ) public pure returns (AltBn128.G1Point memory) {
         return AltBn128.g1Unmarshal(m);
     }
 
-    function publicG2Unmarshal(bytes memory m)
-        public
-        pure
-        returns (AltBn128.G2Point memory)
-    {
+    function publicG2Unmarshal(
+        bytes memory m
+    ) public pure returns (AltBn128.G2Point memory) {
         return AltBn128.g2Unmarshal(m);
     }
 
-    function publicG2Decompress(bytes memory m)
-        public
-        pure
-        returns (AltBn128.G2Point memory)
-    {
+    function publicG2Decompress(
+        bytes memory m
+    ) public pure returns (AltBn128.G2Point memory) {
         return AltBn128.g2Decompress(m);
     }
 
     function runG1PointMarshalingTest() public pure {
         AltBn128.G1Point memory point;
-        point
-            .x = 656647519899395589093611455851658769732922739162315270379466002146796568126;
-        point
-            .y = 5296675831567268847773497112983742440203412208935796410329912816023128374551;
+        point.x =
+            656647519899395589093611455851658769732922739162315270379466002146796568126;
+        point.y =
+            5296675831567268847773497112983742440203412208935796410329912816023128374551;
 
         bytes memory marshaledPoint = AltBn128.g1Marshal(point);
         AltBn128.G1Point memory actual = AltBn128.g1Unmarshal(marshaledPoint);

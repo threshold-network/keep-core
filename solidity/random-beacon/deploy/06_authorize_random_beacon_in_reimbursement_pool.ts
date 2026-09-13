@@ -12,7 +12,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "ReimbursementPool",
     { from: deployer, log: true, waitConfirmations: 1 },
     "authorize",
-    RandomBeacon.address
+    RandomBeacon.address,
   )
 }
 

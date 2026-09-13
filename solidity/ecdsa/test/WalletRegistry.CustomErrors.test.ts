@@ -86,7 +86,7 @@ describe("WalletRegistry - Custom Errors", () => {
     t = await helpers.contracts.getContract("T")
     walletRegistry = await helpers.contracts.getContract("WalletRegistry")
     walletRegistryGovernance = await helpers.contracts.getContract(
-      "WalletRegistryGovernance"
+      "WalletRegistryGovernance",
     )
     sortitionPool = await helpers.contracts.getContract("EcdsaSortitionPool")
     staking = await helpers.contracts.getContract("TokenStaking")
@@ -105,7 +105,7 @@ describe("WalletRegistry - Custom Errors", () => {
 
     walletOwner = await initializeWalletOwner(
       walletRegistryGovernance,
-      governance
+      governance,
     )
 
     await updateWalletRegistryParams(walletRegistryGovernance, governance)
@@ -135,8 +135,8 @@ describe("WalletRegistry - Custom Errors", () => {
             .authorizationIncreased(
               stakingProvider.address,
               to1e18(40000),
-              to1e18(50000)
-            )
+              to1e18(50000),
+            ),
         ).to.be.reverted
       })
 
@@ -147,8 +147,8 @@ describe("WalletRegistry - Custom Errors", () => {
             .authorizationDecreaseRequested(
               stakingProvider.address,
               to1e18(50000),
-              to1e18(40000)
-            )
+              to1e18(40000),
+            ),
         ).to.be.reverted
       })
 
@@ -159,8 +159,8 @@ describe("WalletRegistry - Custom Errors", () => {
             .involuntaryAuthorizationDecrease(
               stakingProvider.address,
               to1e18(50000),
-              to1e18(40000)
-            )
+              to1e18(40000),
+            ),
         ).to.be.reverted
       })
     })
@@ -188,8 +188,8 @@ describe("WalletRegistry - Custom Errors", () => {
               100,
               unauthorized.address,
               walletID,
-              walletMembersIDs
-            )
+              walletMembersIDs,
+            ),
         ).to.be.reverted
       })
     })
@@ -199,7 +199,7 @@ describe("WalletRegistry - Custom Errors", () => {
         await expect(
           walletRegistry
             .connect(unauthorized)
-            .updateDkgParameters(100, 100, 50000, 100, 10)
+            .updateDkgParameters(100, 100, 50000, 100, 10),
         ).to.be.reverted
       })
 
@@ -207,7 +207,7 @@ describe("WalletRegistry - Custom Errors", () => {
         await expect(
           walletRegistry
             .connect(unauthorized)
-            .updateAuthorizationParameters(to1e18(40000), 3888000, 3888000)
+            .updateAuthorizationParameters(to1e18(40000), 3888000, 3888000),
         ).to.be.reverted
       })
     })
@@ -216,7 +216,7 @@ describe("WalletRegistry - Custom Errors", () => {
       it("should revert with custom error when unauthorized caller attempts __beaconCallback", async () => {
         await expect(
           // eslint-disable-next-line no-underscore-dangle
-          walletRegistry.connect(unauthorized).__beaconCallback(12345, 0)
+          walletRegistry.connect(unauthorized).__beaconCallback(12345, 0),
         ).to.be.reverted
       })
     })
@@ -227,20 +227,19 @@ describe("WalletRegistry - Custom Errors", () => {
       it("should revert with custom error when initializeV2 called with zero address", async () => {
         // Create new proxy for this test to allow re-initialization
         // Need to link libraries for WalletRegistry
-        const EcdsaInactivity = await helpers.contracts.getContract(
-          "EcdsaInactivity"
-        )
+        const EcdsaInactivity =
+          await helpers.contracts.getContract("EcdsaInactivity")
         const WalletRegistryFactory = await ethers.getContractFactory(
           "WalletRegistry",
           {
             libraries: {
               EcdsaInactivity: EcdsaInactivity.address,
             },
-          }
+          },
         )
         const newImplementation = await WalletRegistryFactory.deploy(
           sortitionPool.address,
-          staking.address
+          staking.address,
         )
         await newImplementation.deployed()
 
@@ -293,7 +292,7 @@ describe("WalletRegistry - Custom Errors", () => {
         await expect(
           walletRegistry
             .connect(unauthorized)
-            .notifyOperatorInactivity(claim, wrongNonce, groupMembers)
+            .notifyOperatorInactivity(claim, wrongNonce, groupMembers),
         ).to.be.reverted
       })
     })
@@ -329,7 +328,7 @@ describe("WalletRegistry - Custom Errors", () => {
         await expect(
           walletRegistry
             .connect(unauthorized)
-            .notifyOperatorInactivity(claim, nonce, invalidGroupMembers)
+            .notifyOperatorInactivity(claim, nonce, invalidGroupMembers),
         ).to.be.reverted
       })
     })
@@ -347,8 +346,8 @@ describe("WalletRegistry - Custom Errors", () => {
               100,
               unauthorized.address,
               walletID,
-              invalidWalletMembersIDs
-            )
+              invalidWalletMembersIDs,
+            ),
         ).to.be.reverted
       })
 
@@ -361,8 +360,8 @@ describe("WalletRegistry - Custom Errors", () => {
             walletID,
             invalidWalletMembersIDs,
             operator.address,
-            1
-          )
+            1,
+          ),
         ).to.be.reverted
       })
     })
@@ -378,8 +377,8 @@ describe("WalletRegistry - Custom Errors", () => {
             walletID,
             walletMembersIDs,
             nonOperator,
-            1
-          )
+            1,
+          ),
         ).to.be.reverted
       })
     })
@@ -406,8 +405,8 @@ describe("WalletRegistry - Custom Errors", () => {
             walletID,
             walletMembersIDs,
             operator.address,
-            0 // Invalid: index must be >= 1
-          )
+            0, // Invalid: index must be >= 1
+          ),
         ).to.be.reverted
       })
 
@@ -420,8 +419,8 @@ describe("WalletRegistry - Custom Errors", () => {
             walletID,
             walletMembersIDs,
             operator.address,
-            4 // Invalid: exceeds length of 3
-          )
+            4, // Invalid: exceeds length of 3
+          ),
         ).to.be.reverted
       })
     })
@@ -482,7 +481,7 @@ describe("WalletRegistry - Custom Errors", () => {
           signatures: ethers.utils.hexZeroPad("0x", 65 * constants.groupSize),
           signingMembersIndices: Array.from(
             { length: constants.groupSize },
-            (_, i) => i + 1
+            (_, i) => i + 1,
           ),
           members: Array.from({ length: constants.groupSize }, (_, i) => i + 1),
           membersHash: ethers.constants.HashZero,
@@ -496,7 +495,7 @@ describe("WalletRegistry - Custom Errors", () => {
             // Above EIP-7623's intrinsic calldata floor, which hardhat 2.29
             // enforces before execution, and far below what the call needs.
             gasLimit: 170000,
-          })
+          }),
         ).to.be.reverted // May revert with out-of-gas or NotEnoughExtraGasLeft
       })
     })

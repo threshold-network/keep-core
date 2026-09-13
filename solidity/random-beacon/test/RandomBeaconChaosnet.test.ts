@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-extra-semi */
-
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 import { BigNumber } from "ethers"
@@ -41,7 +39,7 @@ describe("RandomBeaconChaosnet", () => {
         await expect(
           randomBeaconChaosnet
             .connect(thirdParty)
-            .setRequesterAuthorization(requester.address, true)
+            .setRequesterAuthorization(requester.address, true),
         ).to.be.revertedWith("Ownable: caller is not the owner")
       })
     })
@@ -64,7 +62,7 @@ describe("RandomBeaconChaosnet", () => {
 
         it("should mark the address as authorized", async () => {
           expect(
-            await randomBeaconChaosnet.authorizedRequesters(requester.address)
+            await randomBeaconChaosnet.authorizedRequesters(requester.address),
           ).to.equal(true)
         })
 
@@ -97,7 +95,7 @@ describe("RandomBeaconChaosnet", () => {
 
         it("should mark the requester as deauthorized", async () => {
           expect(
-            await randomBeaconChaosnet.authorizedRequesters(requester.address)
+            await randomBeaconChaosnet.authorizedRequesters(requester.address),
           ).to.equal(false)
         })
 
@@ -116,7 +114,7 @@ describe("RandomBeaconChaosnet", () => {
         await expect(
           randomBeaconChaosnet
             .connect(thirdParty)
-            .requestRelayEntry(callbackContract.address)
+            .requestRelayEntry(callbackContract.address),
         ).to.be.revertedWith("Requester must be authorized")
       })
     })
@@ -145,8 +143,8 @@ describe("RandomBeaconChaosnet", () => {
             // the RandomBeaconChaosnet contract
             BigNumber.from(
               "86322480231844907215266847458792959757192550318770676212332984" +
-                "332154459033029"
-            )
+                "332154459033029",
+            ),
           )
         })
       })
@@ -180,8 +178,8 @@ describe("RandomBeaconChaosnet", () => {
           expect(await callbackContract.lastEntry()).to.equal(
             BigNumber.from(
               "45055825411044151981109535788320043556123542984485670123474642" +
-                "322436340913380"
-            )
+                "322436340913380",
+            ),
           )
         })
       })

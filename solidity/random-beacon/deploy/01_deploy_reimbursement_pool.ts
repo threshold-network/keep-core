@@ -20,7 +20,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       await hre.ethers.provider.waitForTransaction(
         ReimbursementPool.transactionHash,
         2,
-        300000
+        300000,
       )
     }
     await helpers.etherscan.verify(ReimbursementPool)

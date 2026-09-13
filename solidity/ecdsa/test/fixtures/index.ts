@@ -137,20 +137,17 @@ const createWalletRegistryFixture = (options: { useAllowlist: boolean }) => {
         await helpers.contracts.getContract("WalletRegistry")
       const walletRegistryGovernance: WalletRegistryGovernance =
         await helpers.contracts.getContract("WalletRegistryGovernance")
-      const sortitionPool: SortitionPool = await helpers.contracts.getContract(
-        "EcdsaSortitionPool"
-      )
+      const sortitionPool: SortitionPool =
+        await helpers.contracts.getContract("EcdsaSortitionPool")
       const tToken: T = await helpers.contracts.getContract("T")
-      const staking: TokenStaking = await helpers.contracts.getContract(
-        "TokenStaking"
-      )
+      const staking: TokenStaking =
+        await helpers.contracts.getContract("TokenStaking")
 
       const reimbursementPool: ReimbursementPool =
         await helpers.contracts.getContract("ReimbursementPool")
 
-      const randomBeacon: Mock<IRandomBeacon> = await fakeRandomBeacon(
-        walletRegistry
-      )
+      const randomBeacon: Mock<IRandomBeacon> =
+        await fakeRandomBeacon(walletRegistry)
 
       const { deployer, governance, chaosnetOwner } =
         await helpers.signers.getNamedSigners()
@@ -177,7 +174,7 @@ const createWalletRegistryFixture = (options: { useAllowlist: boolean }) => {
         constants.groupSize,
         unnamedAccountsOffset,
         params.minimumAuthorization,
-        allowlist
+        allowlist,
       )
 
       // Set up TokenStaking parameters (skip in Allowlist mode).
@@ -196,7 +193,7 @@ const createWalletRegistryFixture = (options: { useAllowlist: boolean }) => {
       // Mock Wallet Owner contract.
       const walletOwner: Mock<IWalletOwner> = await initializeWalletOwner(
         walletRegistryGovernance,
-        governance
+        governance,
       )
 
       return {
@@ -214,7 +211,7 @@ const createWalletRegistryFixture = (options: { useAllowlist: boolean }) => {
         walletRegistryGovernance,
         allowlist,
       }
-    }
+    },
   )
 }
 
@@ -253,10 +250,10 @@ export async function walletRegistryFixture(options: {
 async function updateTokenStakingParams(
   tToken: T,
   staking: TokenStaking,
-  deployer: SignerWithAddress
+  deployer: SignerWithAddress,
 ) {
   const initialNotifierTreasury = constants.tokenStakingNotificationReward.mul(
-    constants.groupSize
+    constants.groupSize,
   )
   await tToken
     .connect(deployer)
@@ -272,7 +269,7 @@ async function updateTokenStakingParams(
 
 export async function updateWalletRegistryParams(
   walletRegistryGovernance: WalletRegistryGovernance,
-  governance: SignerWithAddress
+  governance: SignerWithAddress,
 ): Promise<void> {
   await walletRegistryGovernance
     .connect(governance)
@@ -285,7 +282,7 @@ export async function updateWalletRegistryParams(
   await walletRegistryGovernance
     .connect(governance)
     .beginAuthorizationDecreaseChangePeriodUpdate(
-      params.authorizationDecreaseChangePeriod
+      params.authorizationDecreaseChangePeriod,
     )
 
   await walletRegistryGovernance
@@ -295,7 +292,7 @@ export async function updateWalletRegistryParams(
   await walletRegistryGovernance
     .connect(governance)
     .beginDkgResultChallengePeriodLengthUpdate(
-      params.dkgResultChallengePeriodLength
+      params.dkgResultChallengePeriodLength,
     )
 
   await walletRegistryGovernance
@@ -305,13 +302,13 @@ export async function updateWalletRegistryParams(
   await walletRegistryGovernance
     .connect(governance)
     .beginDkgSubmitterPrecedencePeriodLengthUpdate(
-      params.dkgSubmitterPrecedencePeriodLength
+      params.dkgSubmitterPrecedencePeriodLength,
     )
 
   await walletRegistryGovernance
     .connect(governance)
     .beginSortitionPoolRewardsBanDurationUpdate(
-      params.sortitionPoolRewardsBanDuration
+      params.sortitionPoolRewardsBanDuration,
     )
 
   await helpers.time.increaseTime(constants.governanceDelay)
@@ -351,13 +348,12 @@ export async function updateWalletRegistryParams(
 
 export async function initializeWalletOwner(
   walletRegistryGovernance: WalletRegistryGovernance,
-  governance: SignerWithAddress
+  governance: SignerWithAddress,
 ): Promise<Mock<IWalletOwner>> {
   const { deployer } = await helpers.signers.getNamedSigners()
 
-  const walletOwner: Mock<IWalletOwner> = await createMock<IWalletOwner>(
-    "IWalletOwner"
-  )
+  const walletOwner: Mock<IWalletOwner> =
+    await createMock<IWalletOwner>("IWalletOwner")
 
   await deployer.sendTransaction({
     to: walletOwner.address,
@@ -373,7 +369,7 @@ export async function initializeWalletOwner(
 
 async function fundReimbursementPool(
   deployer: SignerWithAddress,
-  reimbursementPool: ReimbursementPool
+  reimbursementPool: ReimbursementPool,
 ) {
   await deployer.sendTransaction({
     to: reimbursementPool.address,
@@ -406,7 +402,7 @@ async function fundReimbursementPool(
  */
 export async function setupAllowlist(
   walletRegistry: WalletRegistry,
-  deployer: SignerWithAddress
+  deployer: SignerWithAddress,
 ): Promise<Allowlist> {
   // Retrieve the deployed Allowlist contract via hardhat-deploy.
   // This assumes the Allowlist deployment script has already run.
@@ -414,7 +410,7 @@ export async function setupAllowlist(
 
   if (!allowlist.address) {
     throw new Error(
-      "Allowlist contract not found. Ensure Allowlist deployment script has executed."
+      "Allowlist contract not found. Ensure Allowlist deployment script has executed.",
     )
   }
 

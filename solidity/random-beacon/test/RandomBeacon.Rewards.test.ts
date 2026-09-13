@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-extra-semi */
 import { waffle, helpers } from "hardhat"
 import { expect } from "chai"
 
@@ -29,7 +28,7 @@ const fixture = async () => {
     contracts.randomBeacon as RandomBeacon,
     contracts.t as T,
     constants.groupSize,
-    1
+    1,
   )
 
   const randomBeacon = contracts.randomBeacon as RandomBeacon
@@ -80,7 +79,7 @@ describe("RandomBeacon - Rewards", () => {
     context("when called for an unknown operator", () => {
       it("should revert", async () => {
         await expect(
-          randomBeacon.withdrawRewards(thirdParty.address)
+          randomBeacon.withdrawRewards(thirdParty.address),
         ).to.be.revertedWith("Unknown operator")
       })
     })
@@ -95,7 +94,6 @@ describe("RandomBeacon - Rewards", () => {
 
         operator = operators[0].signer.address
         stakingProvider = await randomBeacon.operatorToStakingProvider(operator)
-        // eslint-disable-next-line @typescript-eslint/no-extra-semi
         ;({ beneficiary } = await staking.rolesOf(stakingProvider))
 
         // Allocate sortition pool rewards
@@ -132,7 +130,7 @@ describe("RandomBeacon - Rewards", () => {
     context("when called for an unknown operator", () => {
       it("should revert", async () => {
         await expect(
-          randomBeacon.availableRewards(thirdParty.address)
+          randomBeacon.availableRewards(thirdParty.address),
         ).to.be.revertedWith("Unknown operator")
       })
     })
@@ -147,7 +145,6 @@ describe("RandomBeacon - Rewards", () => {
 
         operator = operators[0].signer.address
         stakingProvider = await randomBeacon.operatorToStakingProvider(operator)
-        // eslint-disable-next-line @typescript-eslint/no-extra-semi
         ;({ beneficiary } = await staking.rolesOf(stakingProvider))
 
         // Allocate sortition pool rewards
@@ -162,9 +159,8 @@ describe("RandomBeacon - Rewards", () => {
       })
 
       it("should return the amount of available rewards", async () => {
-        let availableAmount = await randomBeacon.availableRewards(
-          stakingProvider
-        )
+        let availableAmount =
+          await randomBeacon.availableRewards(stakingProvider)
 
         const balanceBefore = await t.balanceOf(beneficiary)
         await randomBeacon.withdrawRewards(stakingProvider)
@@ -184,7 +180,7 @@ describe("RandomBeacon - Rewards", () => {
         await expect(
           randomBeacon
             .connect(thirdParty)
-            .withdrawIneligibleRewards(thirdParty.address)
+            .withdrawIneligibleRewards(thirdParty.address),
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
@@ -205,7 +201,7 @@ describe("RandomBeacon - Rewards", () => {
             0,
             group.groupPubKey,
             inactiveMembersIndices,
-            33
+            33,
           )
 
         const claimSender = operators[0].signer
@@ -217,7 +213,7 @@ describe("RandomBeacon - Rewards", () => {
             signingMembersIndices,
           },
           0,
-          operators.map((operator) => operator.id)
+          operators.map((operator) => operator.id),
         )
 
         // Allocate sortition pool rewards
@@ -236,9 +232,8 @@ describe("RandomBeacon - Rewards", () => {
         // the balance of "ineligible rewards" available for withdrawal from
         // the Sortition Pool
         const operator = operators[0].signer.address
-        const stakingProvider = await randomBeacon.operatorToStakingProvider(
-          operator
-        )
+        const stakingProvider =
+          await randomBeacon.operatorToStakingProvider(operator)
         await randomBeacon.withdrawRewards(stakingProvider)
 
         expect(await t.balanceOf(thirdParty.address)).to.equal(0)

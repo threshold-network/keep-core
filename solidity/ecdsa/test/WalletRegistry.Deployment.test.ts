@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-expressions */
 import { deployments, ethers, helpers, upgrades } from "hardhat"
 import chai, { expect } from "chai"
 import chaiAsPromised from "chai-as-promised"
@@ -30,9 +29,8 @@ describe("WalletRegistry - Deployment", async () => {
     await deployments.fixture()
     ;({ deployer, governance, esdm } = await helpers.signers.getNamedSigners())
 
-    walletRegistry = await helpers.contracts.getContract<WalletRegistry>(
-      "WalletRegistry"
-    )
+    walletRegistry =
+      await helpers.contracts.getContract<WalletRegistry>("WalletRegistry")
 
     const { implementation } = await deployments.get("WalletRegistry")
     if (!implementation) {
@@ -42,71 +40,71 @@ describe("WalletRegistry - Deployment", async () => {
 
     walletRegistryGovernance =
       await helpers.contracts.getContract<WalletRegistryGovernance>(
-        "WalletRegistryGovernance"
+        "WalletRegistryGovernance",
       )
 
     walletRegistryProxy = await ethers.getContractAt(
       "TransparentUpgradeableProxy",
-      walletRegistry.address
+      walletRegistry.address,
     )
 
     proxyAdmin = await upgrades.admin.getInstance()
 
     expect(deployer.address, "deployer is the same as governance").not.equal(
-      governance.address
+      governance.address,
     )
   })
 
   it("should set WalletRegistry proxy admin", async () => {
     expect(
       await upgrades.erc1967.getAdminAddress(walletRegistry.address),
-      "invalid WalletRegistry proxy admin"
+      "invalid WalletRegistry proxy admin",
     ).to.be.equal(proxyAdmin.address)
   })
 
   it("should set ProxyAdmin owner", async () => {
     expect(await proxyAdmin.owner(), "invalid ProxyAdmin owner").to.be.equal(
-      esdm.address
+      esdm.address,
     )
   })
 
   it("should set WalletRegistry implementation", async () => {
     expect(
       await upgrades.erc1967.getImplementationAddress(walletRegistry.address),
-      "invalid WalletRegistry implementation"
+      "invalid WalletRegistry implementation",
     ).to.be.equal(walletRegistryImplementationAddress)
   })
 
   it("should set WalletRegistry implementation in ProxyAdmin", async () => {
     expect(
       await proxyAdmin.getProxyImplementation(walletRegistryProxy.address),
-      "invalid proxy implementation"
+      "invalid proxy implementation",
     ).to.be.equal(walletRegistryImplementationAddress)
   })
 
   it("should set WalletRegistry governance", async () => {
     expect(
       await walletRegistry.governance(),
-      "invalid WalletRegistry governance"
+      "invalid WalletRegistry governance",
     ).equal(walletRegistryGovernance.address)
   })
 
   it("should set WalletRegistryGovernance owner", async () => {
     expect(
       await walletRegistryGovernance.owner(),
-      "invalid WalletRegistryGovernance owner"
+      "invalid WalletRegistryGovernance owner",
     ).equal(governance.address)
   })
 
   it("should set WalletRegistry address in artifact to the proxy address", async () => {
     expect(walletRegistry.address, "invalid WalletRegistry address").equal(
-      walletRegistryProxy.address
+      walletRegistryProxy.address,
     )
   })
 
   it("should revert when initialize called again", async () => {
     await expect(
-      walletRegistry.initialize(AddressZero, AddressZero, AddressZero)
+      walletRegistry.initialize(AddressZero, AddressZero, AddressZero),
     ).to.be.revertedWith("Initializable: contract is already initialized")
   })
 })

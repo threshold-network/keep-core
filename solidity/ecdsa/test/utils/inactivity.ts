@@ -12,7 +12,7 @@ export async function signOperatorInactivityClaim(
   groupPubKey: string,
   failedHeartbeat: boolean,
   inactiveMembersIndices: number[],
-  numberOfSignatures: number
+  numberOfSignatures: number,
 ): Promise<{
   signatures: string
   signingMembersIndices: number[]
@@ -26,8 +26,8 @@ export async function signOperatorInactivityClaim(
         groupPubKey,
         inactiveMembersIndices,
         failedHeartbeat,
-      ]
-    )
+      ],
+    ),
   )
 
   const signingMembersIndices: number[] = []
@@ -45,7 +45,7 @@ export async function signOperatorInactivityClaim(
 
     // eslint-disable-next-line no-await-in-loop
     const signature = await signers[i].signer.signMessage(
-      ethers.utils.arrayify(messageHash)
+      ethers.utils.arrayify(messageHash),
     )
 
     signatures.push(signature)

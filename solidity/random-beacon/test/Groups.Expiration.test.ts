@@ -142,7 +142,7 @@ describe("Groups", () => {
         await mineBlocksTo(currentBlock.number + groupLifetime)
 
         await expect(groups.selectGroup(0)).to.be.revertedWith(
-          "No active groups"
+          "No active groups",
         )
       })
 
@@ -153,7 +153,7 @@ describe("Groups", () => {
 
         await groups.addGroup(
           ethers.utils.hexlify(6),
-          hashDKGMembers(members, noMisbehaved)
+          hashDKGMembers(members, noMisbehaved),
         )
 
         const selected = await groups.callStatic.selectGroup(0)
@@ -254,7 +254,7 @@ describe("Groups", () => {
         await groups.terminateGroup(9) // terminating [0xa]
 
         await expect(groups.selectGroup(2)).to.be.revertedWith(
-          "No active groups"
+          "No active groups",
         )
       })
 
@@ -291,7 +291,7 @@ describe("Groups", () => {
     for (let i = firstGroup; i < firstGroup + numberOfGroups; i++) {
       await groups.addGroup(
         ethers.utils.hexlify(i),
-        hashDKGMembers(members, noMisbehaved)
+        hashDKGMembers(members, noMisbehaved),
       )
     }
   }
@@ -312,7 +312,7 @@ describe("Groups", () => {
 
   async function addTerminatedGroups(
     firstGroupIdToTerminate: number,
-    numberOfTerminatedGroups: number
+    numberOfTerminatedGroups: number,
   ) {
     for (
       let i = firstGroupIdToTerminate;
@@ -326,7 +326,7 @@ describe("Groups", () => {
   async function runExpirationTest(
     numberOfGroups: number,
     expiredCount: number,
-    beaconValue: BigNumberish
+    beaconValue: BigNumberish,
   ) {
     await addGroups(1, numberOfGroups)
     if (expiredCount > 0) {

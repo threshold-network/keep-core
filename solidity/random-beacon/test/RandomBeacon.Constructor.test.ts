@@ -17,7 +17,6 @@ describe("RandomBeacon - Constructor", () => {
   let RandomBeacon: RandomBeacon__factory
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;[tToken, staking, dkgValidator, reimbursementPool] =
       await getUnnamedAccounts()
 
@@ -27,7 +26,7 @@ describe("RandomBeacon - Constructor", () => {
     const SortitionPool = await ethers.getContractFactory("SortitionPool")
     sortitionPool = (await SortitionPool.deploy(
       tToken,
-      to1e18(1)
+      to1e18(1),
     )) as SortitionPool
 
     const BLS = await ethers.getContractFactory("BLS")
@@ -65,8 +64,8 @@ describe("RandomBeacon - Constructor", () => {
             tToken,
             staking,
             dkgValidator,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).not.to.be.reverted
       })
     })
@@ -79,8 +78,8 @@ describe("RandomBeacon - Constructor", () => {
             tToken,
             staking,
             dkgValidator,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })
@@ -93,8 +92,8 @@ describe("RandomBeacon - Constructor", () => {
             ZERO_ADDRESS,
             staking,
             dkgValidator,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })
@@ -107,8 +106,8 @@ describe("RandomBeacon - Constructor", () => {
             tToken,
             ZERO_ADDRESS,
             dkgValidator,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })
@@ -121,8 +120,8 @@ describe("RandomBeacon - Constructor", () => {
             tToken,
             staking,
             ZERO_ADDRESS,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })
@@ -135,8 +134,8 @@ describe("RandomBeacon - Constructor", () => {
             tToken,
             staking,
             dkgValidator,
-            ZERO_ADDRESS
-          )
+            ZERO_ADDRESS,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })

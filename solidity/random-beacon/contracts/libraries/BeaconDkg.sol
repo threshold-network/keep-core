@@ -172,11 +172,9 @@ library BeaconDkg {
     /// @notice Determines the current state of group creation. It doesn't take
     ///         timeouts into consideration. The timeouts should be tracked and
     ///         notified separately.
-    function currentState(Data storage self)
-        internal
-        view
-        returns (State state)
-    {
+    function currentState(
+        Data storage self
+    ) internal view returns (State state) {
         state = State.IDLE;
 
         if (self.sortitionPool.isLocked()) {
@@ -264,10 +262,10 @@ library BeaconDkg {
         return
             currentState(self) == State.AWAITING_RESULT &&
             block.number >
-            (self.startBlock +
-                offchainDkgTime +
-                self.resultSubmissionStartBlockOffset +
-                self.parameters.resultSubmissionTimeout);
+                (self.startBlock +
+                    offchainDkgTime +
+                    self.resultSubmissionStartBlockOffset +
+                    self.parameters.resultSubmissionTimeout);
     }
 
     /// @notice Notifies about DKG timeout.
@@ -302,17 +300,18 @@ library BeaconDkg {
     /// @param result Result to approve. Must match the submitted result stored
     ///        during `submitResult`.
     /// @return misbehavedMembers Identifiers of members who misbehaved during DKG.
-    function approveResult(Data storage self, Result calldata result)
-        external
-        returns (uint32[] memory misbehavedMembers)
-    {
+    function approveResult(
+        Data storage self,
+        Result calldata result
+    ) external returns (uint32[] memory misbehavedMembers) {
         require(
             currentState(self) == State.CHALLENGE,
             "Current state is not CHALLENGE"
         );
 
-        uint256 challengePeriodEnd = self.submittedResultBlock +
-            self.parameters.resultChallengePeriodLength;
+        uint256 challengePeriodEnd =
+            self.submittedResultBlock +
+                self.parameters.resultChallengePeriodLength;
 
         require(
             block.number > challengePeriodEnd,
@@ -334,8 +333,8 @@ library BeaconDkg {
         require(
             msg.sender == submitterMember ||
                 block.number >
-                challengePeriodEnd +
-                    self.parameters.submitterPrecedencePeriodLength,
+                    challengePeriodEnd +
+                        self.parameters.submitterPrecedencePeriodLength,
             "Only the DKG result submitter can approve the result at this moment"
         );
 
@@ -363,7 +362,10 @@ library BeaconDkg {
     ///        stored during `submitResult`.
     /// @return maliciousResultHash Hash of the malicious result.
     /// @return maliciousSubmitter Identifier of the malicious submitter.
-    function challengeResult(Data storage self, Result calldata result)
+    function challengeResult(
+        Data storage self,
+        Result calldata result
+    )
         external
         returns (bytes32 maliciousResultHash, uint32 maliciousSubmitter)
     {
@@ -481,14 +483,12 @@ library BeaconDkg {
             "Submitter precedence period length should be less than the result submission timeout"
         );
 
-        self
-            .parameters
-            .resultChallengePeriodLength = _resultChallengePeriodLength;
+        self.parameters.resultChallengePeriodLength =
+            _resultChallengePeriodLength;
         self.parameters.resultChallengeExtraGas = _resultChallengeExtraGas;
         self.parameters.resultSubmissionTimeout = _resultSubmissionTimeout;
-        self
-            .parameters
-            .submitterPrecedencePeriodLength = _submitterPrecedencePeriodLength;
+        self.parameters.submitterPrecedencePeriodLength =
+            _submitterPrecedencePeriodLength;
     }
 
     /// @notice Completes DKG by cleaning up state.
