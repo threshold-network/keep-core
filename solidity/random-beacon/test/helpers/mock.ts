@@ -105,7 +105,9 @@ export interface MockedFunction {
 }
 
 export type Mock<T extends BaseContract> = {
-  [K in keyof Omit<T, keyof BaseContract>]: T[K] extends (...args: never[]) => unknown
+  [K in keyof Omit<T, keyof BaseContract>]: T[K] extends (
+    ...args: never[]
+  ) => unknown
     ? T[K] & MockedFunction
     : T[K]
 } & {

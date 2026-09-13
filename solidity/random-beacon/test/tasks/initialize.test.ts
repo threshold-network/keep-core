@@ -89,5 +89,4 @@ describe("Initialization tasks", () => {
       await staking.authorizedStake(args.provider, await beacon.getAddress()),
     ).to.equal(await beacon.minimumAuthorization())
   })
-
 })
