@@ -145,9 +145,7 @@ describe("WalletRegistry - Random Beacon", async () => {
 
         it("should set start block for wallet creation", async () => {
           await expect(
-            (
-              await walletRegistry.getDkgData()
-            ).startBlock
+            (await walletRegistry.getDkgData()).startBlock,
           ).to.be.equal((await tx.wait()).blockNumber)
         })
 

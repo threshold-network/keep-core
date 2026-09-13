@@ -37,8 +37,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   console.log(`Allowlist deployed at: ${allowlist.address}`)
   console.log(
     `Allowlist proxy admin: ${await hre.upgrades.erc1967.getAdminAddress(
-      allowlist.address
-    )}`
+      allowlist.address,
+    )}`,
   )
   console.log(`Allowlist owner: ${await allowlist.owner()} (deployer)`)
   if (governance && governance !== deployer) {

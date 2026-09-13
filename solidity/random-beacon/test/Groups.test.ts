@@ -83,7 +83,7 @@ describe("Groups", () => {
 
           expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
           expect(storedGroup.registrationBlockNumber).to.be.equal(
-            (await tx.wait()).blockNumber
+            (await tx.wait()).blockNumber,
           )
           expect(storedGroup.membersHash).to.be.equal(hashUint32Array(members))
         })
@@ -216,7 +216,7 @@ describe("Groups", () => {
 
           expect(storedGroup.groupPubKey).to.be.equal(newGroupPublicKey)
           expect(storedGroup.registrationBlockNumber).to.be.equal(
-            (await tx.wait()).blockNumber
+            (await tx.wait()).blockNumber,
           )
           expect(storedGroup.membersHash).to.be.equal(
             hashUint32Array(newGroupMembers),

@@ -204,9 +204,7 @@ describe("RandomBeacon - Callback", () => {
             .to.emit(randomBeacon, "CallbackFailed")
             .withArgs(
               blsData.groupSignatureUint256,
-              (
-                await tx.wait()
-              ).blockNumber
+              (await tx.wait()).blockNumber,
             )
 
           await restoreSnapshot()
@@ -229,9 +227,7 @@ describe("RandomBeacon - Callback", () => {
             .to.emit(randomBeacon, "CallbackFailed")
             .withArgs(
               blsData.groupSignatureUint256,
-              (
-                await tx.wait()
-              ).blockNumber
+              (await tx.wait()).blockNumber,
             )
 
           await restoreSnapshot()
