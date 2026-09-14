@@ -215,11 +215,11 @@ const config: HardhatUserConfig = {
       // with `yarn link` command.
       development: [
         "node_modules/@threshold-network/solidity-contracts/deployments/development",
-        fs.existsSync(
+        ...(fs.existsSync(
           path.join(__dirname, "../random-beacon/deployments/development"),
         )
-          ? path.join(__dirname, "../random-beacon/deployments/development")
-          : "node_modules/@keep-network/random-beacon/deployments/development",
+          ? [path.join(__dirname, "../random-beacon/deployments/development")]
+          : []),
       ],
       // Use local deployments/sepolia only - npm artifacts have transactionHash
       // that causes "cannot get the transaction" errors with some RPC nodes.
@@ -236,7 +236,6 @@ const config: HardhatUserConfig = {
           paths: [
             "@threshold-network/solidity-contracts/contracts/token/T.sol",
             "@threshold-network/solidity-contracts/contracts/staking/TokenStaking.sol",
-            "@keep-network/random-beacon/contracts/api/IRandomBeacon.sol",
             "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol",
           ],
           keep: true,

@@ -1,7 +1,7 @@
 pragma solidity ^0.8.6;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
+import "../legacy/sortition/SortitionPool.sol";
 import "../RandomBeacon.sol";
 import "../libraries/Callback.sol";
 import "../libraries/Groups.sol";

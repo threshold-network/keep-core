@@ -23,12 +23,12 @@ import {EcdsaDkg as DKG} from "./libraries/EcdsaDkg.sol";
 import {EcdsaInactivity as Inactivity} from "./libraries/EcdsaInactivity.sol";
 import {EcdsaDkgValidator as DKGValidator} from "./EcdsaDkgValidator.sol";
 
-import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
-import "@keep-network/random-beacon/contracts/api/IRandomBeacon.sol";
-import "@keep-network/random-beacon/contracts/api/IRandomBeaconConsumer.sol";
-import "@keep-network/random-beacon/contracts/Reimbursable.sol";
-import "@keep-network/random-beacon/contracts/ReimbursementPool.sol";
-import "@keep-network/random-beacon/contracts/Governable.sol";
+import "./legacy/sortition/SortitionPool.sol";
+import "./legacy/random-beacon/api/IRandomBeacon.sol";
+import "./legacy/random-beacon/api/IRandomBeaconConsumer.sol";
+import "./legacy/random-beacon/Reimbursable.sol";
+import "./legacy/random-beacon/ReimbursementPool.sol";
+import "./legacy/random-beacon/Governable.sol";
 
 import "@threshold-network/solidity-contracts/contracts/staking/IApplication.sol";
 import "@threshold-network/solidity-contracts/contracts/staking/IStaking.sol";

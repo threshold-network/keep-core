@@ -1234,7 +1234,6 @@ __metadata:
   dependencies:
     "@keep-network/hardhat-helpers": "patch:@keep-network/hardhat-helpers@npm%3A0.7.2#~/.yarn/patches/@keep-network-hardhat-helpers-npm-0.7.2-086cf3da54.patch"
     "@keep-network/hardhat-local-networks-config": "github:threshold-network/hardhat-local-networks-config#6dff5bc8648127ca5d8696c321076bddb6d4142a"
-    "@keep-network/sortition-pools": "npm:^2.0.0-pre.16"
     "@nomicfoundation/hardhat-chai-matchers": "npm:^2.1.2"
     "@nomicfoundation/hardhat-ethers": "npm:^3.1.3"
     "@nomicfoundation/hardhat-network-helpers": "npm:^1.1.2"
@@ -1243,7 +1242,6 @@ __metadata:
     "@openzeppelin/hardhat-upgrades": "patch:@openzeppelin/hardhat-upgrades@npm%3A2.5.1#~/.yarn/patches/@openzeppelin-hardhat-upgrades-npm-2.5.1-etherscan-v2.patch"
     "@stylistic/eslint-plugin": "npm:^5.10.0"
     "@tenderly/hardhat-tenderly": "npm:2.1.1"
-    "@thesis/solidity-contracts": "github:thesis/solidity-contracts#4985bcf"
     "@threshold-network/solidity-contracts": "npm:1.3.0-dev.14"
     "@typechain/ethers-v6": "patch:@typechain/ethers-v6@npm%3A0.5.1#~/.yarn/patches/@typechain-ethers-v6-npm-0.5.1-e825560376.patch"
     "@typechain/hardhat": "npm:^9.1.0"
@@ -1273,16 +1271,6 @@ __metadata:
     typescript-eslint: "npm:^8.70.0"
   languageName: unknown
   linkType: soft
-
-"@keep-network/sortition-pools@npm:^2.0.0-pre.16":
-  version: 2.0.0-pre.16
-  resolution: "@keep-network/sortition-pools@npm:2.0.0-pre.16"
-  dependencies:
-    "@openzeppelin/contracts": "npm:^4.3.2"
-    "@thesis/solidity-contracts": "github:thesis/solidity-contracts#4985bcf"
-  checksum: 10c0/eb101f0de70db7f02d94e4e1cf5cbf4547f04f53c52f23c1c6081c09f1ee1efa03214f9694e094ed745502e3a9115405bafeb4da95349d6d1cdecee29ac90837
-  languageName: node
-  linkType: hard
 
 "@keyv/bigmap@npm:^1.3.1":
   version: 1.3.1
@@ -1673,7 +1661,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@openzeppelin/contracts@npm:^4.1.0, @openzeppelin/contracts@npm:^4.3.2":
+"@openzeppelin/contracts@npm:^4.1.0":
   version: 4.9.1
   resolution: "@openzeppelin/contracts@npm:4.9.1"
   checksum: 10c0/bdf5626424c8f1efaf5ee9e4e042ec20ec0d86d1aceaa1c79e909f57c1811c85f2164064a795737dbc84dfb3eae1c5365fe87cd331eafd2798cd6c49cd1ad8d3

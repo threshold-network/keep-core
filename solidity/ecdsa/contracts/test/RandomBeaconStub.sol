@@ -3,9 +3,9 @@
 
 pragma solidity 0.8.17;
 
-import "@keep-network/random-beacon/contracts/api/IRandomBeacon.sol";
-import "@keep-network/random-beacon/contracts/api/IRandomBeaconConsumer.sol";
-import "@keep-network/random-beacon/contracts/libraries/Callback.sol";
+import "../legacy/random-beacon/api/IRandomBeacon.sol";
+import "../legacy/random-beacon/api/IRandomBeaconConsumer.sol";
+import "../legacy/random-beacon/libraries/Callback.sol";
 
 // TODO: get rid of this contract; use RandomBeacon implementation instead.
 // This implementation is used to test callback's gas limit only. In most tests

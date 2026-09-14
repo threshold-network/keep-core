@@ -82,8 +82,6 @@
     "typescript-eslint": "^8.70.0"
   },
   "dependencies": {
-    "@keep-network/random-beacon": "2.1.0-dev.18",
-    "@keep-network/sortition-pools": "^2.0.0-pre.16",
     "@openzeppelin/contracts": "^4.9.6",
     "@openzeppelin/contracts-upgradeable": "^4.9.6",
     "@threshold-network/solidity-contracts": "1.3.0-dev.14"

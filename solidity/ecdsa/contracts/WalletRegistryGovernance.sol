@@ -16,10 +16,10 @@ pragma solidity 0.8.17;
 
 import "./WalletRegistry.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@keep-network/random-beacon/contracts/ReimbursementPool.sol";
+import "./legacy/random-beacon/ReimbursementPool.sol";
 
 import {IWalletOwner} from "./api/IWalletOwner.sol";
-import {IRandomBeacon} from "@keep-network/random-beacon/contracts/api/IRandomBeacon.sol";
+import {IRandomBeacon} from "./legacy/random-beacon/api/IRandomBeacon.sol";
 
 /// @title Wallet Registry Governance
 /// @notice Owns the `WalletRegistry` contract and is responsible for updating

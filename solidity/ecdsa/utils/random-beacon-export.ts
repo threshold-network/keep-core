@@ -58,19 +58,8 @@ export function resolveRandomBeaconExportIn(
     return sibling
   }
 
-  // ECDSA never bundles Beacon artifacts, so only they may come from the
-  // installed package. Deploy scripts and tasks ship with this package and
-  // must never be paired with a possibly v5 dependency.
-  if (subdir === "artifacts") {
-    const installed = path.join(
-      path.dirname(require.resolve("@keep-network/random-beacon/package.json")),
-      "export",
-      subdir,
-    )
-    log(`Random Beacon ${subdir} from the installed npm package: ${installed}`)
-    return installed
-  }
-
+  // The published Random Beacon npm package was removed; the committed
+  // snapshot in external/random-beacon-export is the only fallback.
   const bundled = path.join(
     roots.packageRoot,
     "external/random-beacon-export",

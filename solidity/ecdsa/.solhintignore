@@ -1,2 +1,3 @@
 hardhat-dependency-compiler/
 node_modules/
+contracts/legacy/

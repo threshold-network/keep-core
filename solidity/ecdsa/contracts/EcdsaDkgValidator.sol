@@ -23,8 +23,8 @@
 pragma solidity 0.8.17;
 
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@keep-network/random-beacon/contracts/libraries/BytesLib.sol";
-import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
+import "./legacy/random-beacon/libraries/BytesLib.sol";
+import "./legacy/sortition/SortitionPool.sol";
 import "./libraries/EcdsaDkg.sol";
 
 /// @title DKG result validator

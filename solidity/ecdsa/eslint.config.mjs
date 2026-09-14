@@ -17,6 +17,7 @@ export default [
       "**/export/**",
       "**/external/**",
       "**/hardhat-dependency-compiler/**",
+      "**/tasks/legacy-random-beacon/**",
       "**/typechain/**",
       "**/export.json",
     ],

@@ -8,5 +8,6 @@ typechain/
 docgen-templates/
 export.json
 gasReporterOutput.json
+contracts/legacy/
 export/
 .hardhat/

@@ -26,7 +26,7 @@ import {BeaconAuthorization as Authorization} from "./libraries/BeaconAuthorizat
 import {BeaconDkg as DKG} from "./libraries/BeaconDkg.sol";
 import {BeaconDkgValidator as DKGValidator} from "./BeaconDkgValidator.sol";
 
-import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
+import "./legacy/sortition/SortitionPool.sol";
 import "@threshold-network/solidity-contracts/contracts/staking/IApplication.sol";
 import "@threshold-network/solidity-contracts/contracts/staking/IStaking.sol";
 

@@ -9,4 +9,6 @@ typechain/
 docgen-templates/
 export.json
 gasReporterOutput.json
+contracts/legacy/
+tasks/legacy-random-beacon/
 .hardhat/
