@@ -21,14 +21,16 @@ import { assertGasUsed } from "./helpers/gas"
 
 import type { Operator } from "./utils/operators"
 import type { ContractTransactionResponse, Signer } from "ethers"
-import type { IWalletOwner,
+import type {
+  IWalletOwner,
   SortitionPool,
   WalletRegistry,
   WalletRegistryStub,
   TokenStaking,
   Allowlist,
   IRandomBeacon,
-  DkgChallenger } from "../typechain"
+  DkgChallenger,
+} from "../typechain"
 import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { DkgResult, DkgResultSubmittedEventArgs } from "./utils/dkg"
 import type { Mock } from "./helpers/mock"
@@ -70,7 +72,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
 
   before("load test fixture", async () => {
     const fixture = await walletRegistryFixture({ useAllowlist: true })
-    
+
     ;({
       walletRegistry,
       sortitionPool,
