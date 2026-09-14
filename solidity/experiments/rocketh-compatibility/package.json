@@ -1,0 +1,30 @@
+{
+  "name": "keep-core-rocketh-compatibility",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "test": "node scripts/run.mjs"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "4.0.15",
+    "@nomicfoundation/hardhat-mocha": "3.1.0",
+    "@nomicfoundation/hardhat-network-helpers": "3.0.11",
+    "@openzeppelin/contracts-v4": "npm:@openzeppelin/contracts@4.9.6",
+    "@openzeppelin/hardhat-upgrades": "4.1.0",
+    "@rocketh/deploy": "0.19.21",
+    "@rocketh/export": "0.19.26",
+    "@rocketh/node": "0.21.0",
+    "@rocketh/read-execute": "0.20.2",
+    "chai": "5.3.3",
+    "ethers": "6.17.0",
+    "hardhat": "3.15.0",
+    "hardhat-deploy": "2.0.26",
+    "mocha": "11.8.0",
+    "rocketh": "0.21.0",
+    "solc": "0.8.17"
+  }
+}
