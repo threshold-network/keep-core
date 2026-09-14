@@ -1,6 +1,6 @@
-import { toBeHex } from "ethers"
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
+import { toBeHex } from "ethers"
 
 import requireResult from "./helpers/chain"
 import { constants, dkgState, params, walletRegistryFixture } from "./fixtures"
@@ -18,7 +18,6 @@ import { selectGroup, hashUint32Array } from "./utils/groups"
 import { createNewWallet } from "./utils/wallets"
 import { submitRelayEntry } from "./utils/randomBeacon"
 import { assertGasUsed } from "./helpers/gas"
-import { legacyTokenStakingAt } from "./utils/operators"
 
 import type { Operator } from "./utils/operators"
 import type { ContractTransactionResponse, Signer } from "ethers"
@@ -28,6 +27,7 @@ import type {
   WalletRegistry,
   WalletRegistryStub,
   TokenStaking,
+  Allowlist,
   IRandomBeacon,
   DkgChallenger,
 } from "../typechain"
@@ -41,35 +41,6 @@ const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 const { keccak256 } = ethers
 const { provider } = ethers
-
-describe.skip("TokenStaking Integration (DEPRECATED TIP-092)", () => {
-  /**
-   * DEPRECATED: These tests validate TokenStaking.approveApplication()
-   * which does not exist in production TokenStaking v1.3.0-dev.16.
-   *
-   * Production State:
-   * - RandomBeacon/ECDSA applications are FROZEN (skipApplication = true)
-   * - approveApplication() method removed from production contract
-   * - Only TACo application remains functional in TokenStaking
-   *
-   * Migration:
-   * - Issue: #3839 "Migrate ECDSA tests to Allowlist mode"
-   * - New approach: walletRegistryFixture({ useAllowlist: true })
-   *
-   * References:
-   * - TIP-092: Beta Staker Consolidation
-   * - TIP-100: TokenStaking sunset timeline
-   * - Allowlist.sol: Replacement authorization contract
-   *
-   * Implementation Status:
-   * - Dual-mode fixtures implemented and working
-   * - TypeScript compilation successful
-   * - Full test validation deferred pending Allowlist migration
-   * - Strategic migration tracked in issue #3839
-   */
-  // Original tests preserved for reference during migration
-  // Will be rewritten for Allowlist mode or archived
-})
 
 describe("WalletRegistry - Wallet Creation", async () => {
   const dkgTimeout: number = params.dkgResultSubmissionTimeout
@@ -90,6 +61,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
   let walletRegistry: WalletRegistryStub & WalletRegistry
   let sortitionPool: SortitionPool
   let staking: TokenStaking
+  let allowlist: Allowlist
   let randomBeacon: Mock<IRandomBeacon>
   let walletOwner: Mock<IWalletOwner>
 
@@ -99,6 +71,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
   let operators: Operator[]
 
   before("load test fixture", async () => {
+    const fixture = await walletRegistryFixture({ useAllowlist: true })
+
     ;({
       walletRegistry,
       sortitionPool,
@@ -108,7 +82,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
       thirdParty,
       operators,
       staking,
-    } = await walletRegistryFixture({ useAllowlist: true }))
+    } = fixture)
+    allowlist = fixture.allowlist!
 
     // This suite asserts on the gas `approveDkgResult` costs, and that path
     // calls into the wallet owner. Recording a call SSTOREs its calldata --
@@ -117,6 +92,21 @@ describe("WalletRegistry - Wallet Creation", async () => {
     // inspects the wallet owner's calls.
     await walletOwner.setRecording(false)
   })
+
+  // Helper to assert that the submitter's Allowlist weight remains unchanged
+  async function expectAllowlistWeightUnchanged(operatorAddress: string) {
+    const stakingProvider =
+      await walletRegistry.operatorToStakingProvider(operatorAddress)
+    expect(
+      await allowlist.authorizedStake(
+        stakingProvider,
+        await walletRegistry.getAddress(),
+      ),
+    ).to.equal(params.minimumAuthorization)
+    expect(await walletRegistry.eligibleStake(stakingProvider)).to.equal(
+      params.minimumAuthorization,
+    )
+  }
 
   describe("requestNewWallet", async () => {
     context("when called by the deployer", async () => {
@@ -1794,8 +1784,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                     const { dkgResultSubmissionGas } =
                       await walletRegistry.gasParameters()
                     const feeForDkgSubmission =
-                      dkgResultSubmissionGas *
-                      requireResult(await tx.wait()).gasPrice
+                      dkgResultSubmissionGas * tx.gasPrice
                     // submission part was done by someone else and this is why
                     // we add submission dkg fee to the initial balance
                     const diff =
@@ -1938,9 +1927,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   await provider.getBalance(await anotherSubmitter.getAddress())
                 const { dkgResultSubmissionGas } =
                   await walletRegistry.gasParameters()
-                const feeForDkgSubmission =
-                  dkgResultSubmissionGas *
-                  requireResult(await tx.wait()).gasPrice
+                const feeForDkgSubmission = dkgResultSubmissionGas * tx.gasPrice
                 // submission part was done by someone else and this is why
                 // we add submission dkg fee to the initial balance
                 const diff =
@@ -2076,7 +2063,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
             })
 
             it("should use close to 330 000 gas", async () => {
-              await assertGasUsed(tx, 330_000, 20_000)
+              await assertGasUsed(tx, 330_000, 15_000)
             })
           })
 
@@ -2118,7 +2105,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
               })
 
               it("should use close to 330 000 gas", async () => {
-                await assertGasUsed(await tx, 330_000, 20_000)
+                await assertGasUsed(await tx, 330_000, 15_000)
               })
             },
           )
@@ -2425,70 +2412,55 @@ describe("WalletRegistry - Wallet Creation", async () => {
               })
 
               context("at the beginning of challenge period", async () => {
-                context.skip(
-                  "called by a third party (skipped: no processSlashing on dev TokenStaking)",
-                  async () => {
-                    let challengeTx: ContractTransactionResponse
-                    let slashingTx: ContractTransactionResponse
+                context("called by a third party", async () => {
+                  let challengeTx: ContractTransactionResponse
 
-                    before(async () => {
-                      await createSnapshot()
+                  before(async () => {
+                    await createSnapshot()
 
-                      challengeTx = await walletRegistry
-                        .connect(thirdParty)
-                        .challengeDkgResult(dkgResult)
+                    challengeTx = await walletRegistry
+                      .connect(thirdParty)
+                      .challengeDkgResult(dkgResult)
+                  })
 
-                      slashingTx = await legacyTokenStakingAt(
-                        staking,
-                        thirdParty,
-                      ).processSlashing(1)
-                    })
+                  after(async () => {
+                    await restoreSnapshot()
+                  })
 
-                    after(async () => {
-                      await restoreSnapshot()
-                    })
+                  it("should emit DkgResultChallenged event", async () => {
+                    await expect(challengeTx)
+                      .to.emit(walletRegistry, "DkgResultChallenged")
+                      .withArgs(
+                        dkgResultHash,
+                        await thirdParty.getAddress(),
+                        "Invalid group members",
+                      )
+                  })
 
-                    it("should emit DkgResultChallenged event", async () => {
-                      await expect(challengeTx)
-                        .to.emit(walletRegistry, "DkgResultChallenged")
-                        .withArgs(
-                          dkgResultHash,
-                          await thirdParty.getAddress(),
-                          "Invalid group members",
-                        )
-                    })
+                  it("should not unlock the sortition pool", async () => {
+                    await expect(await sortitionPool.isLocked()).to.be.true
+                  })
 
-                    it("should not unlock the sortition pool", async () => {
-                      await expect(await sortitionPool.isLocked()).to.be.true
-                    })
+                  it("should emit DkgMaliciousResultSlashed event", async () => {
+                    await expect(challengeTx)
+                      .to.emit(walletRegistry, "DkgMaliciousResultSlashed")
+                      .withArgs(dkgResultHash, to1e18(400), submitter.address)
+                  })
 
-                    it("should emit DkgMaliciousResultSlashed event", async () => {
-                      await expect(challengeTx)
-                        .to.emit(walletRegistry, "DkgMaliciousResultSlashed")
-                        .withArgs(dkgResultHash, to1e18(400), submitter.address)
-                    })
+                  it("should emit a zero notifier reward", async () => {
+                    await expect(challengeTx)
+                      .to.emit(staking, "NotifierRewarded")
+                      .withArgs(thirdParty.address, 0)
+                  })
 
-                    it("should reward the notifier", async () => {
-                      await expect(challengeTx)
-                        .to.emit(staking, "NotifierRewarded")
-                        .withArgs(thirdParty.address, 0)
-                    })
+                  it("should preserve the submitter's Allowlist weight", async () => {
+                    await expectAllowlistWeightUnchanged(submitter.address)
+                  })
 
-                    it("should slash malicious result submitter", async () => {
-                      const stakingProvider =
-                        await walletRegistry.operatorToStakingProvider(
-                          submitter.address,
-                        )
-                      await expect(slashingTx)
-                        .to.emit(staking, "TokensSeized")
-                        .withArgs(stakingProvider, to1e18(400), false)
-                    })
-
-                    it("should use close to 1 720 000 gas", async () => {
-                      await assertGasUsed(challengeTx, 1_720_000, 80_000)
-                    })
-                  },
-                )
+                  it("should use close to 1 720 000 gas", async () => {
+                    await assertGasUsed(challengeTx, 1_720_000, 80_000)
+                  })
+                })
               })
 
               context("at the end of challenge period", async () => {
@@ -2506,66 +2478,51 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   await restoreSnapshot()
                 })
 
-                context.skip(
-                  "called by a third party (skipped: no processSlashing on dev TokenStaking)",
-                  async () => {
-                    let challengeTx: ContractTransactionResponse
-                    let slashingTx: ContractTransactionResponse
+                context("called by a third party", async () => {
+                  let challengeTx: ContractTransactionResponse
 
-                    before(async () => {
-                      await createSnapshot()
+                  before(async () => {
+                    await createSnapshot()
 
-                      challengeTx = await walletRegistry
-                        .connect(thirdParty)
-                        .challengeDkgResult(dkgResult)
+                    challengeTx = await walletRegistry
+                      .connect(thirdParty)
+                      .challengeDkgResult(dkgResult)
+                  })
 
-                      slashingTx = await legacyTokenStakingAt(
-                        staking,
-                        thirdParty,
-                      ).processSlashing(1)
-                    })
+                  after(async () => {
+                    await restoreSnapshot()
+                  })
 
-                    after(async () => {
-                      await restoreSnapshot()
-                    })
+                  it("should emit DkgResultChallenged event", async () => {
+                    await expect(challengeTx)
+                      .to.emit(walletRegistry, "DkgResultChallenged")
+                      .withArgs(
+                        dkgResultHash,
+                        await thirdParty.getAddress(),
+                        "Invalid group members",
+                      )
+                  })
 
-                    it("should emit DkgResultChallenged event", async () => {
-                      await expect(challengeTx)
-                        .to.emit(walletRegistry, "DkgResultChallenged")
-                        .withArgs(
-                          dkgResultHash,
-                          await thirdParty.getAddress(),
-                          "Invalid group members",
-                        )
-                    })
+                  it("should not unlock the sortition pool", async () => {
+                    await expect(await sortitionPool.isLocked()).to.be.true
+                  })
 
-                    it("should not unlock the sortition pool", async () => {
-                      await expect(await sortitionPool.isLocked()).to.be.true
-                    })
+                  it("should emit DkgMaliciousResultSlashed event", async () => {
+                    await expect(challengeTx)
+                      .to.emit(walletRegistry, "DkgMaliciousResultSlashed")
+                      .withArgs(dkgResultHash, to1e18(400), submitter.address)
+                  })
 
-                    it("should emit DkgMaliciousResultSlashed event", async () => {
-                      await expect(challengeTx)
-                        .to.emit(walletRegistry, "DkgMaliciousResultSlashed")
-                        .withArgs(dkgResultHash, to1e18(400), submitter.address)
-                    })
+                  it("should emit a zero notifier reward", async () => {
+                    await expect(challengeTx)
+                      .to.emit(staking, "NotifierRewarded")
+                      .withArgs(thirdParty.address, 0)
+                  })
 
-                    it("should reward the notifier", async () => {
-                      await expect(challengeTx)
-                        .to.emit(staking, "NotifierRewarded")
-                        .withArgs(thirdParty.address, 0)
-                    })
-
-                    it("should slash malicious result submitter", async () => {
-                      const stakingProvider =
-                        await walletRegistry.operatorToStakingProvider(
-                          submitter.address,
-                        )
-                      await expect(slashingTx)
-                        .to.emit(staking, "TokensSeized")
-                        .withArgs(stakingProvider, to1e18(400), false)
-                    })
-                  },
-                )
+                  it("should preserve the submitter's Allowlist weight", async () => {
+                    await expectAllowlistWeightUnchanged(submitter.address)
+                  })
+                })
               })
 
               context("with challenge period passed", async () => {
@@ -2609,15 +2566,14 @@ describe("WalletRegistry - Wallet Creation", async () => {
               )
             })
 
-            context.skip(
-              "with dkg result submitted with unrecoverable signatures (skipped: no processSlashing on dev TokenStaking)",
+            context(
+              "with dkg result submitted with unrecoverable signatures",
               async () => {
                 let dkgResultHash: string
                 let dkgResult: DkgResult
                 let submitter: SignerWithAddress
 
                 let challengeTx: ContractTransactionResponse
-                let slashingTx: ContractTransactionResponse
 
                 before(async () => {
                   await createSnapshot()
@@ -2633,11 +2589,6 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   challengeTx = await walletRegistry
                     .connect(thirdParty)
                     .challengeDkgResult(dkgResult)
-
-                  slashingTx = await legacyTokenStakingAt(
-                    staking,
-                    thirdParty,
-                  ).processSlashing(1)
                 })
 
                 after(async () => {
@@ -2664,24 +2615,18 @@ describe("WalletRegistry - Wallet Creation", async () => {
                     .withArgs(dkgResultHash, to1e18(400), submitter.address)
                 })
 
-                it("should reward the notifier", async () => {
+                it("should emit a zero notifier reward", async () => {
                   await expect(challengeTx)
                     .to.emit(staking, "NotifierRewarded")
                     .withArgs(thirdParty.address, 0)
                 })
 
-                it("should slash malicious result submitter", async () => {
-                  const stakingProvider =
-                    await walletRegistry.operatorToStakingProvider(
-                      submitter.address,
-                    )
-                  await expect(slashingTx)
-                    .to.emit(staking, "TokensSeized")
-                    .withArgs(stakingProvider, to1e18(400), false)
+                it("should preserve the submitter's Allowlist weight", async () => {
+                  await expectAllowlistWeightUnchanged(submitter.address)
                 })
 
-                it("should use close to 462 000 gas", async () => {
-                  await assertGasUsed(challengeTx, 462_000, 30_000)
+                it("should use close to 420 000 gas", async () => {
+                  await assertGasUsed(challengeTx, 420_000, 30_000)
                 })
               },
             )
@@ -2875,8 +2820,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
                     })
 
                     it("should use less gas than current implementation (bytecode optimization)", async () => {
-                      const receipt = requireResult(await challengeTx.wait())
-                      const gasUsed = Number(receipt.gasUsed)
+                      const receipt = await challengeTx.wait()
+                      const gasUsed = Number(requireResult(receipt).gasUsed)
                       expect(gasUsed).to.be.lessThan(1_850_000)
                     })
                   },
@@ -2968,60 +2913,51 @@ describe("WalletRegistry - Wallet Creation", async () => {
           })
 
           context("at the beginning of challenge period", async () => {
-            context.skip(
-              "called by a third party (skipped: no processSlashing on dev TokenStaking)",
-              async () => {
-                let challengeTx: ContractTransactionResponse
-                let slashingTx: ContractTransactionResponse
+            context("called by a third party", async () => {
+              let challengeTx: ContractTransactionResponse
 
-                before(async () => {
-                  await createSnapshot()
+              before(async () => {
+                await createSnapshot()
 
-                  challengeTx = await walletRegistry
-                    .connect(thirdParty)
-                    .challengeDkgResult(dkgResult)
+                challengeTx = await walletRegistry
+                  .connect(thirdParty)
+                  .challengeDkgResult(dkgResult)
+              })
 
-                  slashingTx = await legacyTokenStakingAt(
-                    staking,
-                    thirdParty,
-                  ).processSlashing(1)
-                })
+              after(async () => {
+                await restoreSnapshot()
+              })
 
-                after(async () => {
-                  await restoreSnapshot()
-                })
+              it("should emit DkgResultChallenged event", async () => {
+                await expect(challengeTx)
+                  .to.emit(walletRegistry, "DkgResultChallenged")
+                  .withArgs(
+                    dkgResultHash,
+                    await thirdParty.getAddress(),
+                    "Invalid group members",
+                  )
+              })
 
-                it("should emit DkgResultChallenged event", async () => {
-                  await expect(challengeTx)
-                    .to.emit(walletRegistry, "DkgResultChallenged")
-                    .withArgs(
-                      dkgResultHash,
-                      await thirdParty.getAddress(),
-                      "Invalid group members",
-                    )
-                })
+              it("should not unlock the sortition pool", async () => {
+                await expect(await sortitionPool.isLocked()).to.be.true
+              })
 
-                it("should not unlock the sortition pool", async () => {
-                  await expect(await sortitionPool.isLocked()).to.be.true
-                })
+              it("should emit DkgMaliciousResultSlashed event", async () => {
+                await expect(challengeTx)
+                  .to.emit(walletRegistry, "DkgMaliciousResultSlashed")
+                  .withArgs(dkgResultHash, to1e18(400), submitter.address)
+              })
 
-                it("should emit DkgMaliciousResultSlashed event", async () => {
-                  await expect(challengeTx)
-                    .to.emit(walletRegistry, "DkgMaliciousResultSlashed")
-                    .withArgs(dkgResultHash, to1e18(400), submitter.address)
-                })
+              it("should emit a zero notifier reward", async () => {
+                await expect(challengeTx)
+                  .to.emit(staking, "NotifierRewarded")
+                  .withArgs(thirdParty.address, 0)
+              })
 
-                it("should slash malicious result submitter", async () => {
-                  const stakingProvider =
-                    await walletRegistry.operatorToStakingProvider(
-                      submitter.address,
-                    )
-                  await expect(slashingTx)
-                    .to.emit(staking, "TokensSeized")
-                    .withArgs(stakingProvider, to1e18(400), false)
-                })
-              },
-            )
+              it("should preserve the submitter's Allowlist weight", async () => {
+                await expectAllowlistWeightUnchanged(submitter.address)
+              })
+            })
 
             context("with insufficient gas provided", async () => {
               it("should revert when gas check fails", async () => {
@@ -3055,60 +2991,51 @@ describe("WalletRegistry - Wallet Creation", async () => {
               await restoreSnapshot()
             })
 
-            context.skip(
-              "called by a third party (skipped: no processSlashing on dev TokenStaking)",
-              async () => {
-                let challengeTx: ContractTransactionResponse
-                let slashingTx: ContractTransactionResponse
+            context("called by a third party", async () => {
+              let challengeTx: ContractTransactionResponse
 
-                before(async () => {
-                  await createSnapshot()
+              before(async () => {
+                await createSnapshot()
 
-                  challengeTx = await walletRegistry
-                    .connect(thirdParty)
-                    .challengeDkgResult(dkgResult)
+                challengeTx = await walletRegistry
+                  .connect(thirdParty)
+                  .challengeDkgResult(dkgResult)
+              })
 
-                  slashingTx = await legacyTokenStakingAt(
-                    staking,
-                    thirdParty,
-                  ).processSlashing(1)
-                })
+              after(async () => {
+                await restoreSnapshot()
+              })
 
-                after(async () => {
-                  await restoreSnapshot()
-                })
+              it("should emit DkgResultChallenged event", async () => {
+                await expect(challengeTx)
+                  .to.emit(walletRegistry, "DkgResultChallenged")
+                  .withArgs(
+                    dkgResultHash,
+                    await thirdParty.getAddress(),
+                    "Invalid group members",
+                  )
+              })
 
-                it("should emit DkgResultChallenged event", async () => {
-                  await expect(challengeTx)
-                    .to.emit(walletRegistry, "DkgResultChallenged")
-                    .withArgs(
-                      dkgResultHash,
-                      await thirdParty.getAddress(),
-                      "Invalid group members",
-                    )
-                })
+              it("should not unlock the sortition pool", async () => {
+                await expect(await sortitionPool.isLocked()).to.be.true
+              })
 
-                it("should not unlock the sortition pool", async () => {
-                  await expect(await sortitionPool.isLocked()).to.be.true
-                })
+              it("should emit DkgMaliciousResultSlashed event", async () => {
+                await expect(challengeTx)
+                  .to.emit(walletRegistry, "DkgMaliciousResultSlashed")
+                  .withArgs(dkgResultHash, to1e18(400), submitter.address)
+              })
 
-                it("should emit DkgMaliciousResultSlashed event", async () => {
-                  await expect(challengeTx)
-                    .to.emit(walletRegistry, "DkgMaliciousResultSlashed")
-                    .withArgs(dkgResultHash, to1e18(400), submitter.address)
-                })
+              it("should emit a zero notifier reward", async () => {
+                await expect(challengeTx)
+                  .to.emit(staking, "NotifierRewarded")
+                  .withArgs(thirdParty.address, 0)
+              })
 
-                it("should slash malicious result submitter", async () => {
-                  const stakingProvider =
-                    await walletRegistry.operatorToStakingProvider(
-                      submitter.address,
-                    )
-                  await expect(slashingTx)
-                    .to.emit(staking, "TokensSeized")
-                    .withArgs(stakingProvider, to1e18(400), false)
-                })
-              },
-            )
+              it("should preserve the submitter's Allowlist weight", async () => {
+                await expectAllowlistWeightUnchanged(submitter.address)
+              })
+            })
           })
 
           context("with challenge period passed", async () => {
@@ -3149,15 +3076,14 @@ describe("WalletRegistry - Wallet Creation", async () => {
           )
         })
 
-        context.skip(
-          "with dkg result submitted with unrecoverable signatures (skipped: no processSlashing on dev TokenStaking)",
+        context(
+          "with dkg result submitted with unrecoverable signatures",
           async () => {
             let dkgResultHash: string
             let dkgResult: DkgResult
             let submitter: SignerWithAddress
 
             let challengeTx: ContractTransactionResponse
-            let slashingTx: ContractTransactionResponse
 
             before(async () => {
               await createSnapshot()
@@ -3173,11 +3099,6 @@ describe("WalletRegistry - Wallet Creation", async () => {
               challengeTx = await walletRegistry
                 .connect(thirdParty)
                 .challengeDkgResult(dkgResult)
-
-              slashingTx = await legacyTokenStakingAt(
-                staking,
-                thirdParty,
-              ).processSlashing(1)
             })
 
             after(async () => {
@@ -3204,14 +3125,14 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 .withArgs(dkgResultHash, to1e18(400), submitter.address)
             })
 
-            it("should slash malicious result submitter", async () => {
-              const stakingProvider =
-                await walletRegistry.operatorToStakingProvider(
-                  submitter.address,
-                )
-              await expect(slashingTx)
-                .to.emit(staking, "TokensSeized")
-                .withArgs(stakingProvider, to1e18(400), false)
+            it("should emit a zero notifier reward", async () => {
+              await expect(challengeTx)
+                .to.emit(staking, "NotifierRewarded")
+                .withArgs(thirdParty.address, 0)
+            })
+
+            it("should preserve the submitter's Allowlist weight", async () => {
+              await expectAllowlistWeightUnchanged(submitter.address)
             })
           },
         )

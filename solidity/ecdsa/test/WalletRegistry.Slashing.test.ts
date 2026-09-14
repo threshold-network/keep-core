@@ -3,16 +3,18 @@ import { helpers } from "hardhat"
 import { expect } from "chai"
 
 import ecdsaData from "./data/ecdsa"
-import { constants, walletRegistryFixture } from "./fixtures"
+import { params, walletRegistryFixture } from "./fixtures"
 import { createNewWallet } from "./utils/wallets"
 
 import type {
   WalletRegistry,
   IWalletOwner,
   TokenStaking,
+  Allowlist,
   T,
   IRandomBeacon,
 } from "../typechain"
+import type { ContractTransactionResponse } from "ethers"
 import type { Mock } from "./helpers/mock"
 import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { Operator, OperatorID } from "./utils/operators"
@@ -20,41 +22,13 @@ import type { Operator, OperatorID } from "./utils/operators"
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 const { to1e18 } = helpers.number
 
-describe.skip("TokenStaking Integration (DEPRECATED TIP-092)", () => {
-  /**
-   * DEPRECATED: These tests validate TokenStaking.approveApplication()
-   * which does not exist in production TokenStaking v1.3.0-dev.16.
-   *
-   * Production State:
-   * - RandomBeacon/ECDSA applications are FROZEN (skipApplication = true)
-   * - approveApplication() method removed from production contract
-   * - Only TACo application remains functional in TokenStaking
-   *
-   * Migration:
-   * - Issue: #3839 "Migrate ECDSA tests to Allowlist mode"
-   * - New approach: walletRegistryFixture({ useAllowlist: true })
-   *
-   * References:
-   * - TIP-092: Beta Staker Consolidation
-   * - TIP-100: TokenStaking sunset timeline
-   * - Allowlist.sol: Replacement authorization contract
-   *
-   * Implementation Status:
-   * - Dual-mode fixtures implemented and working
-   * - TypeScript compilation successful
-   * - Full test validation deferred pending Allowlist migration
-   * - Strategic migration tracked in issue #3839
-   */
-  // Original tests preserved for reference during migration
-  // Will be rewritten for Allowlist mode or archived
-})
-
 describe("WalletRegistry - Slashing", () => {
   let walletRegistry: WalletRegistry
   let randomBeacon: Mock<IRandomBeacon>
   let walletOwner: Mock<IWalletOwner>
   let thirdParty: SignerWithAddress
   let staking: TokenStaking
+  let allowlist: Allowlist
   let tToken: T
 
   let members: Operator[]
@@ -67,6 +41,7 @@ describe("WalletRegistry - Slashing", () => {
   const rewardMultiplier = 30
 
   before(async () => {
+    const fixture = await walletRegistryFixture({ useAllowlist: true })
     ;({
       walletRegistry,
       randomBeacon,
@@ -74,7 +49,8 @@ describe("WalletRegistry - Slashing", () => {
       thirdParty,
       staking,
       tToken,
-    } = await walletRegistryFixture({ useAllowlist: true }))
+    } = fixture)
+    allowlist = fixture.allowlist!
     ;({ walletID, members } = await createNewWallet(
       walletRegistry,
       walletOwner.wallet,
@@ -124,67 +100,58 @@ describe("WalletRegistry - Slashing", () => {
         })
       })
 
-      context.skip(
-        "when the passed wallet members identifiers are valid (skipped: TokenStaking slashing queue API differs from legacy tests)",
-        () => {
-          let notifierBalanceBefore: bigint
-          let notifierBalanceAfter: bigint
+      context("when the passed wallet members identifiers are valid", () => {
+        let tx: ContractTransactionResponse
+        let notifierBalanceBefore: bigint
+        let notifierBalanceAfter: bigint
 
-          before(async () => {
-            await createSnapshot()
-
-            notifierBalanceBefore = await tToken.balanceOf(thirdParty.address)
-            await walletRegistry
-              .connect(walletOwner.wallet)
-              .seize(
-                amountToSlash,
-                rewardMultiplier,
-                thirdParty.address,
-                walletID,
-                membersIDs,
-              )
-            notifierBalanceAfter = await tToken.balanceOf(thirdParty.address)
-          })
-
-          after(async () => {
-            await restoreSnapshot()
-          })
-
-          it("should slash all group members", async () => {
-            expect(await staking.getSlashingQueueLength()).to.equal(
-              constants.groupSize,
+        before(async () => {
+          await createSnapshot()
+          notifierBalanceBefore = await tToken.balanceOf(thirdParty.address)
+          tx = await walletRegistry
+            .connect(walletOwner.wallet)
+            .seize(
+              amountToSlash,
+              rewardMultiplier,
+              thirdParty.address,
+              walletID,
+              membersIDs,
             )
-          })
+          notifierBalanceAfter = await tToken.balanceOf(thirdParty.address)
+        })
 
-          it("should slash with correct amounts", async () => {
-            for (let i = 0; i < constants.groupSize; i++) {
-              const slashing = await staking.slashingQueue(i)
-              expect(slashing.amount).to.equal(amountToSlash)
-            }
-          })
+        after(async () => {
+          await restoreSnapshot()
+        })
 
-          it("should slash correct staking providers", async () => {
-            for (let i = 0; i < constants.groupSize; i++) {
-              const slashing = await staking.slashingQueue(i)
-              const expectedStakingProvider =
-                await walletRegistry.operatorToStakingProvider(
-                  membersAddresses[i],
-                )
+        it("should not queue any staking provider for slashing (Allowlist-only providers carry no TokenStaking authorization)", async () => {
+          expect(await staking.getSlashingQueueLength()).to.equal(0)
+        })
 
-              expect(slashing.stakingProvider).to.equal(expectedStakingProvider)
-            }
-          })
+        it("should leave every member's Allowlist weight unchanged", async () => {
+          for (let i = 0; i < membersAddresses.length; i++) {
+            const memberAddress = membersAddresses[i]
+            const stakingProvider =
+              await walletRegistry.operatorToStakingProvider(memberAddress)
+            expect(
+              await allowlist.authorizedStake(
+                stakingProvider,
+                await walletRegistry.getAddress(),
+              ),
+            ).to.equal(params.minimumAuthorization)
+            expect(
+              await walletRegistry.eligibleStake(stakingProvider),
+            ).to.equal(params.minimumAuthorization)
+          }
+        })
 
-          it("should send correct reward to notifier", async () => {
-            // Notification rewards are no longer configured in TokenStaking
-            // (pushNotificationReward/setNotificationReward methods removed).
-            // The notifier receives 0 reward.
-            const receivedReward = notifierBalanceAfter - notifierBalanceBefore
-
-            expect(receivedReward).to.equal(0)
-          })
-        },
-      )
+        it("should emit a zero notifier reward from the staking contract", async () => {
+          await expect(tx)
+            .to.emit(staking, "NotifierRewarded")
+            .withArgs(thirdParty.address, 0)
+          expect(notifierBalanceAfter - notifierBalanceBefore).to.equal(0)
+        })
+      })
 
       // TODO: Add a unit test ensuring `seize` call reverts if the staking
       // contract `seize` call reverts.
