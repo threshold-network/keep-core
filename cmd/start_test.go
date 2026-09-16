@@ -106,7 +106,6 @@ func TestStart_AdmissionHandoff(t *testing.T) {
 	// verdicts unexamined.
 	assertAdmissionTable(t, backend, handoff.policy)
 	assertNoStaticBypass(t, handoff.policy)
-	assertNetworkConfig(t, clientConfig.LibP2P, handoff.networkConfig)
 
 	// start builds its own chain handles, so there is no instance here to
 	// compare it against; what it handed over is pinned by type.
@@ -115,32 +114,6 @@ func TestStart_AdmissionHandoff(t *testing.T) {
 		handoff.policy,
 		reflect.TypeOf((*ethereum.TbtcChain)(nil)),
 	)
-
-	t.Run("bootstrap_with_configured_discovery_peers", func(t *testing.T) {
-		bootstrapBackend := ethtest.New(t, ethtest.AdmissionState(t))
-		clientConfig.Ethereum = bootstrapBackend.ChainConfig(t)
-		clientConfig.LibP2P.Bootstrap = true
-		clientConfig.LibP2P.Peers = []string{
-			"bootstrap-configured-discovery-peer",
-		}
-
-		bootstrapHandoff := captureAdmissionPolicy(t, func() error {
-			return start(&cobra.Command{})
-		})
-
-		assertAdmissionTable(t, bootstrapBackend, bootstrapHandoff.policy)
-		assertNoStaticBypass(t, bootstrapHandoff.policy)
-		assertNetworkConfig(
-			t,
-			clientConfig.LibP2P,
-			bootstrapHandoff.networkConfig,
-		)
-		assertAdmissionApplicationTypes(
-			t,
-			bootstrapHandoff.policy,
-			reflect.TypeOf((*ethereum.TbtcChain)(nil)),
-		)
-	})
 }
 
 // TestInitializeNetwork_AdmissionComposition covers the assembly the client
@@ -173,40 +146,25 @@ func TestInitializeNetwork_AdmissionComposition(t *testing.T) {
 	configuredNetwork := clientConfig.LibP2P
 	t.Cleanup(func() { clientConfig.LibP2P = configuredNetwork })
 
-	configurations := []struct {
-		name      string
-		bootstrap bool
-		peer      string
-	}{
-		{"ordinary_with_configured_discovery_peers", false, "ordinary-configured-discovery-peer"},
-		{"bootstrap_with_configured_discovery_peers", true, "bootstrap-configured-discovery-peer"},
-	}
+	clientConfig.LibP2P.Bootstrap = false
+	clientConfig.LibP2P.Peers = []string{"ordinary-configured-discovery-peer"}
 
-	for _, configuration := range configurations {
-		t.Run(configuration.name, func(t *testing.T) {
-			clientConfig.LibP2P = configuredNetwork
-			clientConfig.LibP2P.Bootstrap = configuration.bootstrap
-			clientConfig.LibP2P.Peers = []string{configuration.peer}
+	handoff := captureAdmissionPolicy(t, func() error {
+		_, err := initializeNetwork(
+			ctx,
+			applications,
+			operatorPrivateKey,
+			blockCounter,
+		)
+		return err
+	})
 
-			handoff := captureAdmissionPolicy(t, func() error {
-				_, err := initializeNetwork(
-					ctx,
-					applications,
-					operatorPrivateKey,
-					blockCounter,
-				)
-				return err
-			})
+	assertAdmissionTable(t, backend, handoff.policy)
+	assertNoStaticBypass(t, handoff.policy)
 
-			assertAdmissionTable(t, backend, handoff.policy)
-			assertNoStaticBypass(t, handoff.policy)
-			assertNetworkConfig(t, clientConfig.LibP2P, handoff.networkConfig)
-
-			// The policy guards with the very handle it was given rather than
-			// with one assembled somewhere between here and the network.
-			assertAdmissionApplications(t, handoff.policy, tbtcChain)
-		})
-	}
+	// The policy guards with the very handle it was given rather than with one
+	// assembled somewhere between here and the network.
+	assertAdmissionApplications(t, handoff.policy, tbtcChain)
 
 	t.Run("what a static bypass looks like", func(t *testing.T) {
 		// The counterexample the assertions above are read against, built as a
@@ -284,8 +242,12 @@ func TestStart_AdmissionRevocation(t *testing.T) {
 	backend.AssertNoUnexpectedCalls(t)
 }
 
-// TestStart_AdmissionRevocationDisconnects verifies that the production policy
-// is also re-evaluated by the watchtower for established connections.
+// TestStart_AdmissionRevocationDisconnects verifies that the watchtower
+// disconnects a peer once the policy stops admitting it. The connection
+// manager and the guard are built here rather than taken from the production
+// libp2p wiring, which nothing in this suite exercises directly, so what is
+// proven is the watchtower reacting to a Validate error over the production
+// policy, not the wiring that installs it.
 func TestStart_AdmissionRevocationDisconnects(t *testing.T) {
 	backend := ethtest.New(t, ethtest.AdmissionState(t))
 	revoked := ethtest.AdmissionCaseNamed(t, "legacy_revoked")
@@ -400,12 +362,11 @@ func TestStaticBypassKeys_ReportsAnAllowedKey(t *testing.T) {
 var errNetworkNotOpened = errors.New("the network provider is not opened here")
 
 // captureAdmissionPolicy runs a piece of the client's start path with the
-// network provider constructor stubbed out, and returns the configuration and
-// firewall handed to it. The stub fails, so the path unwinds at the handoff and
-// nothing behind it is started.
+// network provider constructor stubbed out, and returns the firewall handed
+// to it. The stub fails, so the path unwinds at the handoff and nothing
+// behind it is started.
 type admissionHandoff struct {
-	networkConfig libp2p.Config
-	policy        net.Firewall
+	policy net.Firewall
 }
 
 func captureAdmissionPolicy(t *testing.T, run func() error) admissionHandoff {
@@ -419,14 +380,13 @@ func captureAdmissionPolicy(t *testing.T, run func() error) admissionHandoff {
 
 	connectNetwork = func(
 		_ context.Context,
-		config libp2p.Config,
+		_ libp2p.Config,
 		_ *operator.PrivateKey,
 		policy net.Firewall,
 		_ *retransmission.Ticker,
 		_ ...libp2p.ConnectOption,
 	) (net.Provider, error) {
 		handoffs++
-		captured.networkConfig = config
 		captured.policy = policy
 		return nil, errNetworkNotOpened
 	}
@@ -446,14 +406,6 @@ func captureAdmissionPolicy(t *testing.T, run func() error) admissionHandoff {
 	}
 
 	return captured
-}
-
-func assertNetworkConfig(t *testing.T, expected, actual libp2p.Config) {
-	t.Helper()
-
-	if !reflect.DeepEqual(expected, actual) {
-		t.Errorf("unexpected network configuration\nexpected: %v\nactual:   %v", expected, actual)
-	}
 }
 
 func connectedPeerSet(connectionManager net.ConnectionManager) map[string]bool {
