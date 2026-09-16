@@ -20,6 +20,7 @@ func TestResolvePeers(t *testing.T) {
 				"/dns4/threshold.nodus.systems/tcp/3919/ipfs/16Uiu2HAm4ZKNenwo6osQ9uWGovuA4XQWgFbjM7LLgHkhDk17bVsH",
 				"/dns4/tbtc.delightlabs.sh/tcp/3919/ipfs/16Uiu2HAmCnzWWJdyfH2yY1d6BqLY8yBijcc2Gm2T3t5Hv7zCf2mv",
 				"/dns4/tbtc.globalstake.io/tcp/3919/ipfs/16Uiu2HAm5ouZoUsG9s8NHpYXecEHLv7pog3nLbEHFM2QAcuquEPV",
+				"/dns4/keep.republiccrypto-source.info/tcp/3919/ipfs/16Uiu2HAmNX7aR9PWJpwqhrUv7FSL8FNKvwkYUvbyDX7khy6USuuz",
 				"/dns4/keep.ponkila.com/tcp/3919/ipfs/16Uiu2HAmSKJDirLDh6zyahVFHFf7QEYktQFztC6vAT7rJi7B3jNm",
 				"/dns4/tbtc.liquify.com/tcp/3919/ipfs/16Uiu2HAmL8L2LFTYuZHxjTNmGzpjhfftBpGJrFomVg1yU82rXzy4",
 				"/dns4/threshold-sentry.vol-069756b811be95253.prod.stake.capital/tcp/3919/ipfs/16Uiu2HAkzY9Y8ETqYNKKcnJ63bH26X6AgbrSZxCByJzLVgnGvHt4",
