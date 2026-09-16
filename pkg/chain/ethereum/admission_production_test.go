@@ -254,10 +254,13 @@ func TestAdmission_ProductionConstruction(t *testing.T) {
 	}
 }
 
-// TestBaseChain_RolesOf_ProductionBinding pins the TokenStaking read retained
-// for callers outside admission. The allowlist is a separate deployment
-// holding its own role mapping, and reading roles from it would silently answer
-// a different question.
+// TestBaseChain_RolesOf_ProductionBinding pins the TokenStaking read behind
+// the exported RolesOf accessor. No production code path calls it after the
+// beacon admission predicate was removed; it is retained as a guard against a
+// real misrouting bug rather than for any current caller -- pointing this
+// read at the Allowlist instead, a separate deployment holding its own role
+// mapping, would silently answer a different question. See the misrouting
+// check later in this test.
 func TestBaseChain_RolesOf_ProductionBinding(t *testing.T) {
 	backend, beaconChain, _ := connectAdmissionFixture(t)
 

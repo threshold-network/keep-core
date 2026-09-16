@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -24,6 +25,10 @@ import (
 	beaconabi "github.com/keep-network/keep-core/pkg/chain/ethereum/beacon/gen/abi"
 	ecdsaabi "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/abi"
 	thresholdabi "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen/abi"
+	"github.com/keep-network/keep-core/pkg/operator"
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
+	ma "github.com/multiformats/go-multiaddr"
 )
 
 // To run the tests execute:
@@ -755,10 +760,118 @@ func assertAddressSet(
 	}
 }
 
-// TestMainnetChainState_AdmissionCensus evaluates historical tBTC predicates
-// behind the legacy beacon OR and the active tBTC-only policy over every
-// operator address either registry has ever recorded, using the chain state at
-// the anchor.
+// networkPublicKeyToOperatorPublicKey mirrors the conversion pkg/net/libp2p
+// applies to a peer's libp2p public key. It is duplicated here because the
+// production helper is unexported and this test resolves peer IDs through
+// the same path the client uses to derive an operator chain address from a
+// peer ID. The libp2p Secp256k1PublicKey is an alias for btcec.PublicKey,
+// so the conversion is the same memory view the production code uses.
+func networkPublicKeyToOperatorPublicKey(
+	networkPublicKey libp2pcrypto.PubKey,
+) (*operator.PublicKey, error) {
+	secp256k1PublicKey, ok := networkPublicKey.(*libp2pcrypto.Secp256k1PublicKey)
+	if !ok {
+		return nil, fmt.Errorf(
+			"unrecognized libp2p public key type for peer ID",
+		)
+	}
+	btcecPublicKey := (*btcec.PublicKey)(secp256k1PublicKey)
+	return &operator.PublicKey{
+		Curve: operator.Secp256k1,
+		X:     btcecPublicKey.X(),
+		Y:     btcecPublicKey.Y(),
+	}, nil
+}
+
+// peerAddressFromMultiaddr takes a single /ipfs/... multiaddr line from the
+// config/_peers file and converts it to the chain address the production
+// client would derive from it. The conversion walks peer.Decode through
+// peerID.ExtractPublicKey, networkPublicKeyToOperatorPublicKey, and
+// operatorPublicKeyToChainAddress: the same path the client applies to a
+// peer ID it has dialed.
+func peerAddressFromMultiaddr(t *testing.T, multiaddrLine string) common.Address {
+	t.Helper()
+
+	parsed, err := ma.NewMultiaddr(multiaddrLine)
+	if err != nil {
+		t.Fatalf("could not parse peer multiaddr [%s]: %v", multiaddrLine, err)
+	}
+
+	peerIDString, err := parsed.ValueForProtocol(ma.P_IPFS)
+	if err != nil {
+		t.Fatalf(
+			"could not extract peer ID from multiaddr [%s]: %v",
+			multiaddrLine,
+			err,
+		)
+	}
+
+	peerID, err := peer.Decode(peerIDString)
+	if err != nil {
+		t.Fatalf("could not decode peer ID [%s]: %v", peerIDString, err)
+	}
+
+	networkPublicKey, err := peerID.ExtractPublicKey()
+	if err != nil {
+		t.Fatalf(
+			"could not extract public key from peer ID [%s]: %v",
+			peerIDString,
+			err,
+		)
+	}
+
+	operatorPublicKey, err := networkPublicKeyToOperatorPublicKey(networkPublicKey)
+	if err != nil {
+		t.Fatalf(
+			"could not convert peer [%s] public key to operator key: %v",
+			peerIDString,
+			err,
+		)
+	}
+
+	chainAddress, err := operatorPublicKeyToChainAddress(operatorPublicKey)
+	if err != nil {
+		t.Fatalf(
+			"could not convert peer [%s] operator key to chain address: %v",
+			peerIDString,
+			err,
+		)
+	}
+
+	return chainAddress
+}
+
+// mainnetPeerChainAddresses reads the embedded bootstrap peer addresses from
+// config/_peers/mainnet and converts each to a chain address using the same
+// peer-ID-to-address path the production client applies. The list is the
+// set of addresses a node bootstrapping against this config would dial.
+func mainnetPeerChainAddresses(t *testing.T) []common.Address {
+	t.Helper()
+
+	content, err := os.ReadFile(filepath.Join(
+		"..", "..", "..",
+		"config", "_peers", "mainnet",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var addresses []common.Address
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		addresses = append(addresses, peerAddressFromMultiaddr(t, line))
+	}
+
+	return addresses
+}
+
+// TestMainnetChainState_AdmissionCensus evaluates the historical beacon OR
+// combined with the legacy-ownership and active eligible-stake tBTC predicates
+// over every operator address either registry has ever recorded, using the
+// chain state at the anchor.
 //
 // These are predicate results over registered addresses, not counts of peers
 // that were connected at the anchor. An address that registered once and has
@@ -835,6 +948,46 @@ func TestMainnetChainState_AdmissionCensus(t *testing.T) {
 		lost,
 		difference(legacyOwnership.admitted, eligibleStakeWithBeacon.admitted),
 	)
+	// Tie the admitted set to the embedded bootstrap peers: every chain
+	// address the production client would derive from a config/_peers/mainnet
+	// seed must be in the current admitted set. This pins identity, not just
+	// cardinality.
+	currentHeld := make(map[common.Address]bool, len(current))
+	for _, address := range current {
+		currentHeld[address] = true
+	}
+	peerChainAddresses := mainnetPeerChainAddresses(t)
+	for _, address := range peerChainAddresses {
+		if !currentHeld[address] {
+			t.Errorf(
+				"peer chain address [%s] from config/_peers/mainnet is not in the current tbtc-only admitted set",
+				address.Hex(),
+			)
+		}
+	}
+
+	// The retired operators were admitted by the legacy beacon OR but not
+	// by the current tBTC-only policy. Their sortition-pool membership has
+	// lapsed, so each one reads false at the pinned block; the wallet
+	// registry's IsOperatorInPool binding is the same callers/callOpts shape
+	// every other pinned-block read in this file uses.
+	for _, operatorAddress := range eligibleStakeWithBeacon.admitted {
+		if currentHeld[operatorAddress] {
+			continue
+		}
+		inPool := callOrFail(t, func() (bool, error) {
+			return callers.walletRegistry.IsOperatorInPool(
+				callers.callOpts,
+				operatorAddress,
+			)
+		})
+		if inPool {
+			t.Errorf(
+				"retired operator [%s] still reads as a sortition-pool member at the pinned block",
+				operatorAddress.Hex(),
+			)
+		}
+	}
 }
 
 // TestMainnetChainState_DeprecatedOperatorsHaveNoEligibleStake reads the
