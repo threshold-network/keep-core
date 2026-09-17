@@ -73,7 +73,7 @@ func start(cmd *cobra.Command) error {
 
 	netProvider, err := initializeNetwork(
 		ctx,
-		admissionApplications(beaconChain, tbtcChain),
+		admissionApplications(tbtcChain),
 		operatorPrivateKey,
 		blockCounter,
 	)
@@ -199,14 +199,15 @@ func isBootstrap() bool {
 	return clientConfig.LibP2P.Bootstrap
 }
 
-// admissionApplications lists the chain handles a peer can be recognized by,
-// in the order the firewall policy evaluates them. The beacon comes first
-// because its predicate is the one that still sees legacy stake delegations.
+// admissionApplications lists the chain handles that can authorize a peer.
+// Network admission follows the wallet registry's current eligible stake so
+// legacy beacon registrations do not bypass authorization changes.
+// Random Beacon initialization still requires its operator registration, but
+// that startup prerequisite is not a network admission authority.
 func admissionApplications(
-	beaconChain *ethereum.BeaconChain,
 	tbtcChain *ethereum.TbtcChain,
 ) []firewall.Application {
-	return []firewall.Application{beaconChain, tbtcChain}
+	return []firewall.Application{tbtcChain}
 }
 
 // admissionPolicy builds the firewall policy guarding peer connections. The
