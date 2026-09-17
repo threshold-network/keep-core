@@ -33,8 +33,8 @@ type AdmissionCase struct {
 	Admitted         bool
 }
 
-// StakingProvider is the address both registries map the identity's operator
-// to, whether or not the identity is registered with them.
+// StakingProvider is the single staking-provider address this identity uses on
+// whichever registries it is registered with.
 func (c AdmissionCase) StakingProvider(t *testing.T) common.Address {
 	t.Helper()
 
@@ -148,6 +148,7 @@ func AdmissionCases() []AdmissionCase {
 		{
 			// Authorization is gone and nothing is pending, but the legacy
 			// delegation the beacon reads is permanent.
+			// See https://github.com/threshold-network/keep-core/issues/4335
 			Name:                 "legacy_revoked",
 			OperatorKey:          13,
 			StakingProviderKey:   23,

@@ -197,6 +197,7 @@ func (b *Backend) ResetCalls() {
 	defer b.mutex.Unlock()
 
 	b.calls = nil
+	b.unexpected = nil
 }
 
 // AssertNoUnexpectedCalls fails the test if the fixture was asked for anything
@@ -409,6 +410,27 @@ func (b *Backend) call(params []json.RawMessage) (interface{}, error) {
 
 	if arguments.To == nil {
 		return nil, errors.New("eth_call was sent without a target address")
+	}
+
+	if len(params) > 1 {
+		var block string
+		if err := json.Unmarshal(params[1], &block); err != nil {
+			return nil, fmt.Errorf("malformed eth_call block parameter: %v", err)
+		}
+
+		b.mutex.Lock()
+		currentBlockNumber := b.state.BlockNumber
+		b.mutex.Unlock()
+
+		if block != "latest" {
+			blockNumber, err := hexutil.DecodeUint64(block)
+			if err != nil || blockNumber != currentBlockNumber {
+				return nil, fmt.Errorf(
+					"eth_call requested unsupported block [%s]",
+					block,
+				)
+			}
+		}
 	}
 
 	b.mutex.Lock()
