@@ -422,6 +422,10 @@ func (bc *BeaconChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool
 	// this predicate through the node's own RPC endpoint, the per-peer checks
 	// run asynchronously, and closing the connection is a further step behind
 	// them.
+	//
+	// The legacy-delegation admission gap (the security half of the incident,
+	// where revoked providers retain beacon admission) is tracked in
+	// https://github.com/threshold-network/keep-core/issues/4335.
 	hasStakeDelegation, err := bc.admission.HasStakeDelegation(
 		stakingProvider,
 	)

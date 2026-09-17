@@ -16,9 +16,8 @@ import (
 // mockAdmissionReader stands in for the wallet registry reads the tBTC
 // admission predicate performs.
 type mockAdmissionReader struct {
-	stakingProviders              map[common.Address]common.Address
-	eligibleStakes                map[common.Address]*big.Int
-	pendingAuthorizationDecreases map[common.Address]*big.Int
+	stakingProviders map[common.Address]common.Address
+	eligibleStakes   map[common.Address]*big.Int
 
 	stakingProviderErr error
 	eligibleStakeErr   error
@@ -49,16 +48,6 @@ func (mar *mockAdmissionReader) EligibleStake(
 	}
 
 	return mar.eligibleStakes[stakingProvider], nil
-}
-
-// PendingAuthorizationDecrease answers the pending decreases seeded into the
-// reader. A pending decrease is not an admission credential, so the predicate
-// under test has no way to reach this read: tbtcAdmissionReader does not
-// declare it.
-func (mar *mockAdmissionReader) PendingAuthorizationDecrease(
-	stakingProvider common.Address,
-) (*big.Int, error) {
-	return mar.pendingAuthorizationDecreases[stakingProvider], nil
 }
 
 // tTokens returns the given whole number of T in the 18-decimal base unit
@@ -143,68 +132,6 @@ func TestTbtcChain_IsRecognized(t *testing.T) {
 				test.expectedRecognized,
 				isRecognized,
 			)
-		})
-	}
-}
-
-// TestTbtcChain_IsRecognized_PendingOnlyRejected covers the two shapes a
-// staking provider can carry a positive pending authorization decrease in
-// while holding no eligible stake. A requested decrease is subtracted from
-// eligible stake when it is requested rather than when it is approved, so both
-// shapes are ordinary chain states rather than corner cases. Neither of them
-// is an admission credential: the provider is not currently authorized for the
-// wallet registry, and only the authorizer can change that.
-func TestTbtcChain_IsRecognized_PendingOnlyRejected(t *testing.T) {
-	stakingProvider := common.HexToAddress("0x1")
-
-	var tests = map[string]struct {
-		pendingAuthorizationDecrease *big.Int
-	}{
-		// The whole authorization was requested for decrease, taking eligible
-		// stake to zero while the request waits.
-		"full_decrease": {
-			pendingAuthorizationDecrease: tTokens(40_000),
-		},
-		// A decrease record outliving the authorization it was requested
-		// against, so nothing remains for it to be subtracted from.
-		"orphan": {
-			pendingAuthorizationDecrease: tTokens(30_000),
-		},
-	}
-
-	for testName, test := range tests {
-		t.Run(testName, func(t *testing.T) {
-			operatorPublicKey, operatorAddress := newTestOperator(t)
-
-			admission := &mockAdmissionReader{
-				stakingProviders: map[common.Address]common.Address{
-					operatorAddress: stakingProvider,
-				},
-				eligibleStakes: map[common.Address]*big.Int{
-					stakingProvider: big.NewInt(0),
-				},
-				pendingAuthorizationDecreases: map[common.Address]*big.Int{
-					stakingProvider: test.pendingAuthorizationDecrease,
-				},
-			}
-
-			// The fixture is only meaningful if the pending amount it seeds is
-			// actually positive; a reader answering nil would make the case
-			// indistinguishable from having no pending record at all.
-			testutils.AssertBigIntNonZero(
-				t,
-				"seeded pending authorization decrease",
-				admission.pendingAuthorizationDecreases[stakingProvider],
-			)
-
-			chain := &TbtcChain{admission: admission}
-
-			isRecognized, err := chain.IsRecognized(operatorPublicKey)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			testutils.AssertBoolsEqual(t, "recognition", false, isRecognized)
 		})
 	}
 }

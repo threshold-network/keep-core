@@ -553,8 +553,7 @@ type admissionFacts struct {
 	tbtcStakingProvider   common.Address
 	beaconStakingProvider common.Address
 
-	eligibleStake   *big.Int
-	pendingDecrease *big.Int
+	eligibleStake *big.Int
 
 	tbtcOwner   common.Address
 	beaconOwner common.Address
@@ -571,13 +570,6 @@ func (f admissionFacts) beaconRecognized() bool {
 // registry's own operator mapping.
 func (f admissionFacts) baselineTbtcRecognized() bool {
 	return f.tbtcStakingProvider != zeroAddress && f.tbtcOwner != zeroAddress
-}
-
-// originalHeadTbtcRecognized is the tBTC branch as first proposed: eligible
-// stake, or a pending authorization decrease standing in for it.
-func (f admissionFacts) originalHeadTbtcRecognized() bool {
-	return f.tbtcStakingProvider != zeroAddress &&
-		(f.eligibleStake.Sign() > 0 || f.pendingDecrease.Sign() > 0)
 }
 
 // proposedTbtcRecognized is the tBTC branch this change settles on: eligible
@@ -599,9 +591,8 @@ func readAdmissionFacts(
 
 	for _, operator := range population {
 		entry := admissionFacts{
-			operator:        operator,
-			eligibleStake:   big.NewInt(0),
-			pendingDecrease: big.NewInt(0),
+			operator:      operator,
+			eligibleStake: big.NewInt(0),
 		}
 
 		entry.tbtcStakingProvider = callOrFail(t, func() (common.Address, error) {
@@ -621,12 +612,6 @@ func readAdmissionFacts(
 		if entry.tbtcStakingProvider != zeroAddress {
 			entry.eligibleStake = callOrFail(t, func() (*big.Int, error) {
 				return callers.walletRegistry.EligibleStake(
-					callers.callOpts,
-					entry.tbtcStakingProvider,
-				)
-			})
-			entry.pendingDecrease = callOrFail(t, func() (*big.Int, error) {
-				return callers.walletRegistry.PendingAuthorizationDecrease(
 					callers.callOpts,
 					entry.tbtcStakingProvider,
 				)
@@ -794,18 +779,8 @@ func TestMainnetChainState_AdmissionCensus(t *testing.T) {
 	facts := readAdmissionFacts(t, callers, population)
 
 	baseline := splitPopulation(facts, admissionFacts.baselineTbtcRecognized)
-	originalHead := splitPopulation(
-		facts,
-		admissionFacts.originalHeadTbtcRecognized,
-	)
 	proposed := splitPopulation(facts, admissionFacts.proposedTbtcRecognized)
 
-	assertSplit(
-		t,
-		"original head",
-		admissionSplit{beaconOnly: 243, both: 38, tbtcOnly: 1},
-		originalHead,
-	)
 	assertSplit(
 		t,
 		"proposed",
@@ -813,27 +788,12 @@ func TestMainnetChainState_AdmissionCensus(t *testing.T) {
 		proposed,
 	)
 
-	// Dropping the pending-decrease credential moves nineteen providers from
-	// being recognized by both branches to being carried by the beacon alone,
-	// which leaves the two policies admitting the same addresses as each
-	// other. Neither admits the same set as the merge base: both admit one
-	// address it does not, and both stop admitting one address it does. The
-	// combined totals match only because those two happen to cancel out.
+	// The proposed policy does not admit the exact same set of addresses as the
+	// merge base: it admits one address the merge base does not, and stops
+	// admitting one address the merge base does. The combined totals match
+	// because those two happen to cancel out.
 	gained := []string{"0xc1e20a88c2130472b25b3c382773ba85944230d2"}
 	lost := []string{"0xc19f2434236254fcbd2d329bbe048184bba21975"}
-
-	assertAddressSet(
-		t,
-		"addresses the original head admits over the merge base",
-		gained,
-		difference(originalHead.admitted, baseline.admitted),
-	)
-	assertAddressSet(
-		t,
-		"addresses the original head stops admitting",
-		lost,
-		difference(baseline.admitted, originalHead.admitted),
-	)
 	assertAddressSet(
 		t,
 		"addresses the proposed policy admits over the merge base",

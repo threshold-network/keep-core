@@ -177,15 +177,15 @@ func TestTbtcChain_IsRecognized_ProductionAdapter(t *testing.T) {
 	}
 }
 
-// TestTbtcChain_IsRecognized_AtMinimumAuthorization is the floor case, driven
-// through the production read path. An authorization cannot be lowered past
-// the registry's minimum without going to zero outright, so the smallest
-// positive eligible stake a provider can hold is exactly that minimum, and a
-// provider sitting on it has to stay recognized.
+// TestTbtcChain_IsRecognized_AtMinimumAuthorization verifies the plumbing
+// (seed-write-read roundtrip) through the production adapter when seeding
+// eligible stake at the minimum authorization level read from the registry.
 //
-// The floor is read from the registry rather than written into the test, and
-// the state it is seeded into is read back through the same binding the
-// predicate decides on, so neither the input nor the boundary is a copy.
+// Note: This test only verifies adapter plumbing, not actual contract-level
+// floor enforcement. Actual floor enforcement (authorized minus pending less
+// than minimum implies zero) is verified by the mainnet-pinned integration test
+// TestMainnetChainState_EligibleStakeAtMinimumAuthorization in
+// ethereum_integration_test.go.
 func TestTbtcChain_IsRecognized_AtMinimumAuthorization(t *testing.T) {
 	backend, _, tbtcChain := connectAdmissionFixture(t)
 
