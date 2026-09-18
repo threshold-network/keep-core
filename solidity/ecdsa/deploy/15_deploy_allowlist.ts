@@ -2,7 +2,7 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
 
 const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
-  const { getNamedAccounts, deployments, ethers, helpers } = hre
+  const { getNamedAccounts, deployments, ethers, helpers, upgrades } = hre
 
   const { deployer, governance } = await getNamedAccounts()
 
@@ -11,18 +11,15 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const WalletRegistry = await deployments.get("WalletRegistry")
 
   // Deploy the Allowlist contract using upgradeable proxy pattern
-  const [allowlist, proxyDeployment] = await helpers.upgrades.deployProxy(
-    "Allowlist",
-    {
-      initializerArgs: [WalletRegistry.address],
-      factoryOpts: {
-        signer: await ethers.getSigner(deployer),
-      },
-      proxyOpts: {
-        kind: "transparent",
-      },
-    }
-  )
+  const [, proxyDeployment] = await helpers.upgrades.deployProxy("Allowlist", {
+    initializerArgs: [WalletRegistry.address],
+    factoryOpts: {
+      signer: await ethers.getSigner(deployer),
+    },
+    proxyOpts: {
+      kind: "transparent",
+    },
+  })
 
   // IMPORTANT: Do NOT transfer ownership here!
   // Allowlist uses Ownable2StepUpgradeable which requires two steps:
@@ -37,11 +34,18 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   // Ownership transfer is handled at the END of script 16 after weights are set.
 
   // Log deployment information
-  console.log(`Allowlist deployed at: ${allowlist.address}`)
+  console.log(`Allowlist deployed at: ${proxyDeployment.address}`)
   console.log(
-    `Allowlist proxy admin: ${proxyDeployment.receipt.contractAddress}`
+    `Allowlist proxy admin: ${await upgrades.erc1967.getAdminAddress(
+      proxyDeployment.address
+    )}`
   )
-  console.log(`Allowlist owner: ${await allowlist.owner()} (deployer)`)
+  console.log(
+    `Allowlist owner: ${await deployments.read(
+      "Allowlist",
+      "owner"
+    )} (deployer)`
+  )
   if (governance && governance !== deployer) {
     console.log(
       `Ownership will be transferred to governance (${governance}) after weights initialization`

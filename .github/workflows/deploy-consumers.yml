@@ -1,0 +1,41 @@
+name: Published Solidity deploy consumers
+
+on:
+  pull_request:
+    paths:
+      - "solidity/**"
+      - ".github/workflows/deploy-consumers.yml"
+      - ".github/actions/install-yarn-deps/**"
+      - ".github/actions/setup-git-for-yarn/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-and-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        ethers: [5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.1"
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: solidity/random-beacon
+      - name: Build and prepack random-beacon
+        working-directory: solidity/random-beacon
+        run: yarn build && yarn prepack
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: solidity/ecdsa
+      - name: Build and prepack ECDSA
+        working-directory: solidity/ecdsa
+        run: yarn build && yarn prepack
+      - name: Deploy packed exports and replay on ethers ${{ matrix.ethers }}
+        run: node solidity/deploy-consumer/prepare.js ${{ matrix.ethers }}

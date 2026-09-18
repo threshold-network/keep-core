@@ -9,11 +9,25 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "WalletRegistryGovernance"
   )
 
-  await helpers.ownable.transferOwnership(
-    "WalletRegistryGovernance",
-    governance,
-    deployer
+  const owner = await deployments.read("WalletRegistryGovernance", "owner")
+  if (helpers.address.equal(owner, deployer)) {
+    await helpers.ownable.transferOwnership(
+      "WalletRegistryGovernance",
+      governance,
+      deployer
+    )
+  }
+
+  const currentGovernance = await deployments.read(
+    "WalletRegistry",
+    "governance"
   )
+  if (!helpers.address.equal(currentGovernance, deployer)) {
+    deployments.log(
+      `WalletRegistry governance is already ${currentGovernance}; skipping transfer`
+    )
+    return
+  }
 
   await deployments.execute(
     "WalletRegistry",

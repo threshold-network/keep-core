@@ -8,6 +8,16 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const WalletRegistry = await deployments.get("WalletRegistry")
 
+  if (
+    await deployments.read(
+      "RandomBeaconChaosnet",
+      "authorizedRequesters",
+      WalletRegistry.address
+    )
+  ) {
+    return
+  }
+
   await execute(
     "RandomBeaconChaosnet",
     { from: deployer, log: true, waitConfirmations: 1 },
