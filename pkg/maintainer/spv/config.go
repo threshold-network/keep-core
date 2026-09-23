@@ -1,6 +1,7 @@
 package spv
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -80,4 +81,25 @@ type Config struct {
 	// BIP94 minimum-difficulty runs) where the default 144 headers is
 	// insufficient.
 	MaxProofHeaders uint
+}
+
+// Validate checks that the configuration is usable, returning an error
+// describing the first problem found.
+//
+// A zero MaxProofHeaders is rejected rather than normalized to the default.
+// getProofInfo compares the running header count against this bound at loop
+// entry, so zero causes every transaction to be skipped as
+// proofSkipExceededMaxHeaders on the first iteration, disabling SPV proving
+// entirely while the logs report each transaction as possibly permanently
+// unprovable. Silently substituting the default would hide an operator's
+// explicit, if mistaken, instruction; failing at startup surfaces it.
+func (c *Config) Validate() error {
+	if c.MaxProofHeaders == 0 {
+		return fmt.Errorf(
+			"maxProofHeaders must be greater than zero; " +
+				"a zero bound skips every transaction and disables SPV proving",
+		)
+	}
+
+	return nil
 }
