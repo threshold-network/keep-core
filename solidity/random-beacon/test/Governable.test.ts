@@ -23,6 +23,8 @@ describe("Governable", () => {
     governable = await GovernableFactory.deploy()
   })
 
+  // Initializer wiring: governance is unset until transferGovernance runs; the behavioural
+  // arms live in the groups below.
   describe("constructor", () => {
     it("should set governance to default zero address", async () => {
       expect(await governable.governance()).to.be.equal(ethers.ZeroAddress)

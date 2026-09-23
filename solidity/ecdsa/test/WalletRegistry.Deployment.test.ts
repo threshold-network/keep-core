@@ -14,6 +14,10 @@ chai.use(chaiAsPromised)
 
 const { ZeroAddress: AddressZero } = ethers
 
+// Deployment verification: these cases assert that the deploy scripts wired the proxy,
+// its admin, and governance to the addresses they were given. They check deployment
+// configuration rather than contract behaviour, which is why they read values back that
+// the fixture supplied. The behavioural arms live in the contract test suites.
 describe("WalletRegistry - Deployment", async () => {
   let deployer: SignerWithAddress
   let governance: SignerWithAddress

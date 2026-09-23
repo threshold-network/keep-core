@@ -8,6 +8,10 @@ import {
   setupAllowlist,
   walletRegistryFixture,
 } from "./fixtures"
+import {
+  shouldOverwritePreviousRequest,
+  shouldRequireUpdatingPoolBeforeApproving,
+} from "./behaviors/authorization"
 
 import type { ContractTransactionResponse, Signer } from "ethers"
 import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
@@ -614,13 +618,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              walletRegistry,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
 
           context("when delay did not pass", () => {
@@ -642,13 +644,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              walletRegistry,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
         })
 
@@ -676,13 +676,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
             await restoreSnapshot()
           })
 
-          it("should overwrite the previous request", async () => {
-            expect(
-              await walletRegistry.pendingAuthorizationDecrease(
-                stakingProvider.address,
-              ),
-            ).to.be.equal(deauthorizingSecond)
-          })
+          shouldOverwritePreviousRequest(() => ({
+            walletRegistry,
+            stakingProvider,
+            deauthorizingSecond,
+          }))
         })
 
         context("when change period is not equal delay and is non-zero", () => {
@@ -721,13 +719,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              walletRegistry,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
 
           context("when change period activated", () => {
@@ -749,13 +745,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              walletRegistry,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
 
           context("when change period did not activate", () => {
@@ -777,13 +771,11 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              walletRegistry,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
         })
       })
@@ -835,13 +827,10 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           await restoreSnapshot()
         })
 
-        it("should require updating the pool before approving", async () => {
-          expect(
-            await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address,
-            ),
-          ).to.equal(MAX_UINT64)
-        })
+        shouldRequireUpdatingPoolBeforeApproving(() => ({
+          walletRegistry,
+          stakingProvider,
+        }))
 
         it("should emit AuthorizationDecreaseRequested event", async () => {
           await expect(tx)
@@ -883,13 +872,10 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           await restoreSnapshot()
         })
 
-        it("should require updating the pool before approving", async () => {
-          expect(
-            await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address,
-            ),
-          ).to.equal(MAX_UINT64)
-        })
+        shouldRequireUpdatingPoolBeforeApproving(() => ({
+          walletRegistry,
+          stakingProvider,
+        }))
 
         it("should emit AuthorizationDecreaseRequested event", async () => {
           await expect(tx)
@@ -931,13 +917,10 @@ describe("WalletRegistry - Allowlist Authorization", () => {
           await restoreSnapshot()
         })
 
-        it("should require updating the pool before approving", async () => {
-          expect(
-            await walletRegistry.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address,
-            ),
-          ).to.equal(MAX_UINT64)
-        })
+        shouldRequireUpdatingPoolBeforeApproving(() => ({
+          walletRegistry,
+          stakingProvider,
+        }))
 
         it("should emit AuthorizationDecreaseRequested event", async () => {
           await expect(tx)
@@ -1008,21 +991,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              walletRegistry,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
 
-            it("should require updating the pool before approving", async () => {
-              expect(
-                await walletRegistry.remainingAuthorizationDecreaseDelay(
-                  stakingProvider.address,
-                ),
-              ).to.equal(MAX_UINT64)
-            })
+            shouldRequireUpdatingPoolBeforeApproving(() => ({
+              walletRegistry,
+              stakingProvider,
+            }))
           })
 
           context("when called after sortition pool was updated", () => {
@@ -1062,21 +1040,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                walletRegistry,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                walletRegistry,
+                stakingProvider,
+              }))
             })
 
             context("when delay did not pass", () => {
@@ -1099,21 +1072,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                walletRegistry,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                walletRegistry,
+                stakingProvider,
+              }))
             })
           })
         })
@@ -1151,21 +1119,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              walletRegistry,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
 
-            it("should require updating the pool before approving", async () => {
-              expect(
-                await walletRegistry.remainingAuthorizationDecreaseDelay(
-                  stakingProvider.address,
-                ),
-              ).to.equal(MAX_UINT64)
-            })
+            shouldRequireUpdatingPoolBeforeApproving(() => ({
+              walletRegistry,
+              stakingProvider,
+            }))
           })
 
           context("when called after sortition pool was updated", () => {
@@ -1213,21 +1176,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                walletRegistry,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                walletRegistry,
+                stakingProvider,
+              }))
             })
           })
         })
@@ -1267,21 +1225,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await walletRegistry.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              walletRegistry,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
 
-            it("should require updating the pool before approving", async () => {
-              expect(
-                await walletRegistry.remainingAuthorizationDecreaseDelay(
-                  stakingProvider.address,
-                ),
-              ).to.equal(MAX_UINT64)
-            })
+            shouldRequireUpdatingPoolBeforeApproving(() => ({
+              walletRegistry,
+              stakingProvider,
+            }))
           })
 
           context("when called after sortition pool was updated", () => {
@@ -1340,21 +1293,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                walletRegistry,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                walletRegistry,
+                stakingProvider,
+              }))
             })
 
             context("when delay passed", () => {
@@ -1376,21 +1324,16 @@ describe("WalletRegistry - Allowlist Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await walletRegistry.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                walletRegistry,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await walletRegistry.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                walletRegistry,
+                stakingProvider,
+              }))
             })
           })
         })
