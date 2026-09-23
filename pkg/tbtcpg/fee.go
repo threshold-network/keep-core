@@ -164,14 +164,13 @@ func applyWalletTxFeeFloor(
 	bufferedFloorRate := (tbtc.MinWalletTxSatPerVByteFee*bufferNumerator +
 		bufferDenominator - 1) / bufferDenominator
 
-	// Checked-arithmetic guard: bufferedFloorRate * txVsize must fit in int64 to
-	// display correctly in the error message below and to keep the int64
-	// product in range. Both operands are positive int64.
+	// Checked-arithmetic guard: bufferedFloorRate * txVsize must fit in int64
+	// to keep the int64 product in range. Both operands are positive int64.
 	if bufferedFloorRate > math.MaxInt64/txVsize {
 		return 0, fmt.Errorf(
-			"implausible minimum fee rate [%d] for vsize [%d]; "+
+			"implausible buffered minimum fee rate [%d] for vsize [%d]; "+
 				"product would overflow",
-			tbtc.MinWalletTxSatPerVByteFee, txVsize,
+			bufferedFloorRate, txVsize,
 		)
 	}
 

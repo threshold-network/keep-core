@@ -130,7 +130,7 @@ func validateServerURL(rawURL string) error {
 		)
 	}
 
-	if u.Opaque != "" || !strings.Contains(rawURL, "://") {
+	if u.Opaque != "" {
 		return fmt.Errorf(
 			"missing protocol scheme in electrum server URL [%s]; expected tcp, ssl, ws, or wss",
 			sanitizeServerURL(rawURL),
