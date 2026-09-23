@@ -27,7 +27,7 @@ var ErrMaxFeeTooLow = errors.New(
 // bounds is guaranteed (modulo the explicit checks) to keep the internal
 // int64 multiplications in range.
 const (
-	maxWalletTxVsize        int64 = 10_000_000    // 10M vbytes; ~2x Bitcoin block weight.
+	maxWalletTxVsize        int64 = 10_000_000    // 10M vbytes; ~10x the 1M vbyte maximum Bitcoin block size.
 	maxWalletTxEstimatedFee int64 = 1_000_000_000 // 1e9 satoshis = 10 BTC.
 )
 
