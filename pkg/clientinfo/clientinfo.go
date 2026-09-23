@@ -75,52 +75,72 @@ func Initialize(
 
 	registry := newRegistry(ctx)
 
-	if cfg.EnablePprof {
-		// Register the pprof handlers on http.DefaultServeMux, which is the
-		// mux that EnableServer hands to the http.Server. Registering them
-		// explicitly here avoids the side-effecting blank import of
-		// net/http/pprof, which would otherwise register /debug/pprof/*
-		// unconditionally on DefaultServeMux regardless of this flag.
-		registerPprofHandlers()
-		logger.Infof("pprof profiling endpoints enabled at /debug/pprof/")
-	}
-
-	registry.EnableServer(cfg.Port)
+	registry.enableServer(cfg.Port, cfg.EnablePprof)
 
 	return registry, true
 }
 
-// registerPprofHandlers registers the standard net/http/pprof handlers on
-// http.DefaultServeMux. It is invoked explicitly from Initialize when
-// EnablePprof is true, in place of the blank import of net/http/pprof that
-// would otherwise register the endpoints at init time.
-func registerPprofHandlers() {
-	http.HandleFunc("/debug/pprof/", pprof.Index)
-	http.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	http.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	http.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	http.HandleFunc("/debug/pprof/trace", pprof.Trace)
+// registerPprofHandlers registers the standard net/http/pprof handlers on the
+// supplied mux. Registering them on a caller-owned mux, rather than relying on
+// the handlers net/http/pprof installs on http.DefaultServeMux at init time,
+// is what makes Config.EnablePprof authoritative: the server below never
+// serves DefaultServeMux, so the init-time registrations are unreachable.
+func registerPprofHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }
 
-// EnableServer enables the client info server on the given port. Data will
-// be exposed on `/metrics` and `/diagnostics` paths.
-func (r *Registry) EnableServer(port int) {
-	server := &http.Server{
-		Addr:              ":" + strconv.Itoa(port),
-		ReadHeaderTimeout: readHeaderTimeout,
-	}
+// serverHandler builds the HTTP handler served on the client info port.
+//
+// The mux is created per call and never shared with http.DefaultServeMux.
+// That isolation is load-bearing for two reasons: importing net/http/pprof
+// registers /debug/pprof/* on DefaultServeMux from that package's init
+// regardless of how it is imported, so serving DefaultServeMux would expose
+// profiling endpoints even when disabled; and registering this registry's own
+// routes on a process-global mux makes a second registry panic on duplicate
+// patterns.
+func (r *Registry) serverHandler(enablePprof bool) http.Handler {
+	mux := http.NewServeMux()
 
-	http.HandleFunc("/metrics", func(response http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/metrics", func(response http.ResponseWriter, _ *http.Request) {
 		if _, err := io.WriteString(response, r.exposeMetrics()); err != nil {
 			logger.Errorf("could not write response: [%v]", err)
 		}
 	})
 
-	http.HandleFunc("/diagnostics", func(response http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/diagnostics", func(response http.ResponseWriter, _ *http.Request) {
 		if _, err := io.WriteString(response, r.exposeDiagnostics()); err != nil {
 			logger.Errorf("could not write response: [%v]", err)
 		}
 	})
+
+	if enablePprof {
+		registerPprofHandlers(mux)
+		logger.Infof("pprof profiling endpoints enabled at /debug/pprof/")
+	}
+
+	return mux
+}
+
+// EnableServer enables the client info server on the given port. Data will
+// be exposed on `/metrics` and `/diagnostics` paths. Profiling endpoints are
+// never exposed through this entry point; use Config.EnablePprof with
+// Initialize to opt into them.
+func (r *Registry) EnableServer(port int) {
+	r.enableServer(port, false)
+}
+
+// enableServer starts the client info HTTP server, exposing the profiling
+// endpoints only when enablePprof is true.
+func (r *Registry) enableServer(port int, enablePprof bool) {
+	server := &http.Server{
+		Addr:              ":" + strconv.Itoa(port),
+		Handler:           r.serverHandler(enablePprof),
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
 
 	go func() {
 		if err := server.ListenAndServe(); err != http.ErrServerClosed {
