@@ -3,6 +3,7 @@ package generator
 import (
 	"context"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,132 @@ import (
 
 var one = big.NewInt(1)
 
+type testWorker struct {
+	mu       sync.Mutex
+	number   *big.Int
+	iterated chan struct{}
+	lastCtx  context.Context
+}
+
+func newTestWorker() *testWorker {
+	return &testWorker{
+		number:   big.NewInt(0),
+		iterated: make(chan struct{}, 1),
+	}
+}
+
+func (tw *testWorker) workerFunc() func(context.Context) {
+	return func(ctx context.Context) {
+		tw.mu.Lock()
+		tw.lastCtx = ctx
+		if ctx.Err() != nil {
+			tw.mu.Unlock()
+			return
+		}
+
+		tw.number.Add(tw.number, one)
+		tw.mu.Unlock()
+
+		select {
+		case tw.iterated <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (tw *testWorker) value() *big.Int {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	return new(big.Int).Set(tw.number)
+}
+
+func (tw *testWorker) waitForStop(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	tw.mu.Lock()
+	ctx := tw.lastCtx
+	tw.mu.Unlock()
+
+	if ctx == nil {
+		t.Fatal("worker has not started yet")
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for worker to stop")
+	}
+
+	// Lock and unlock to ensure any in-flight execution of workerFunc has finished.
+	tw.mu.Lock()
+	tw.mu.Unlock()
+}
+
+func (tw *testWorker) waitForValueChange(t *testing.T, initial *big.Int, timeout time.Duration) *big.Int {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		current := tw.value()
+		if current.Cmp(initial) != 0 {
+			return current
+		}
+		select {
+		case <-tw.iterated:
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	current := tw.value()
+	if current.Cmp(initial) != 0 {
+		return current
+	}
+	t.Fatalf("timed out waiting for worker value to change from %v", initial)
+	return nil
+}
+
+func (tw *testWorker) waitForNonZero(t *testing.T, timeout time.Duration) *big.Int {
+	t.Helper()
+	return tw.waitForValueChange(t, big.NewInt(0), timeout)
+}
+func (tw *testWorker) assertNoValueChange(t *testing.T, window time.Duration) {
+	t.Helper()
+
+	initial := tw.value()
+
+	// Drain any already-buffered signal from the tw.iterated channel so a stale
+	// send from before the stop cannot cause a false failure.
+	select {
+	case <-tw.iterated:
+	default:
+	}
+
+	select {
+	case <-tw.iterated:
+		current := tw.value()
+		t.Fatalf(
+			"worker executed after stop: initial value %v, current value %v",
+			initial,
+			current,
+		)
+	case <-time.After(window):
+	}
+
+	current := tw.value()
+	testutils.AssertBigIntsEqual(
+		t,
+		"computation result after stop signal",
+		initial,
+		current,
+	)
+}
+
+func waitForSignal(t *testing.T, ch <-chan struct{}, timeout time.Duration, msg string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for %s", msg)
+	}
+}
+
 // TestComputeStop tests the situation when two new worker functions are added
 // to a scheduler in a working state. The test ensures the worker functions
 // starts doing their work. Then, the scheduler is stopped and the test ensures
@@ -18,46 +145,26 @@ var one = big.NewInt(1)
 func TestComputeStop(t *testing.T) {
 	scheduler := new(Scheduler)
 
-	number1 := big.NewInt(0)
-	number2 := big.NewInt(0)
+	tw1 := newTestWorker()
+	tw2 := newTestWorker()
 
-	scheduler.compute(func(context.Context) {
-		number1.Add(number1, one)
-	})
-	scheduler.compute(func(context.Context) {
-		number2.Add(number2, one)
-	})
-
-	// give some time to perform computations
-	time.Sleep(10 * time.Millisecond)
+	scheduler.compute(tw1.workerFunc())
+	scheduler.compute(tw2.workerFunc())
 
 	// ensure computations started
-	testutils.AssertBigIntNonZero(t, "computation result", number1)
-	testutils.AssertBigIntNonZero(t, "computation result", number2)
+	val1 := tw1.waitForNonZero(t, 1*time.Second)
+	val2 := tw2.waitForNonZero(t, 1*time.Second)
+	testutils.AssertBigIntNonZero(t, "computation result", val1)
+	testutils.AssertBigIntNonZero(t, "computation result", val2)
 
-	// send the stop signal and give some time to stop computations
+	// send the stop signal and wait for computations to stop
 	scheduler.stop()
-	time.Sleep(100 * time.Millisecond)
+	tw1.waitForStop(t, 1*time.Second)
+	tw2.waitForStop(t, 1*time.Second)
 
-	// at this point, all computations should be stopped, capture the current
-	// result
-	result1 := new(big.Int).Set(number1)
-	result2 := new(big.Int).Set(number2)
-
-	// wait some time and ensure computations stopped
-	time.Sleep(20 * time.Millisecond)
-	testutils.AssertBigIntsEqual(
-		t,
-		"computation result after stop signal",
-		result1,
-		number1,
-	)
-	testutils.AssertBigIntsEqual(
-		t,
-		"computation result after stop signal",
-		result2,
-		number2,
-	)
+	// ensure computations stopped
+	tw1.assertNoValueChange(t, 100*time.Millisecond)
+	tw2.assertNoValueChange(t, 100*time.Millisecond)
 }
 
 // TestComputeStopContext covers the same situation as TestComputeStop except
@@ -66,34 +173,45 @@ func TestComputeStop(t *testing.T) {
 func TestComputeStopContext(t *testing.T) {
 	scheduler := new(Scheduler)
 
-	cancelled1 := false
-	cancelled2 := false
+	started1 := make(chan struct{})
+	started2 := make(chan struct{})
+	cancelled1 := make(chan struct{})
+	cancelled2 := make(chan struct{})
+
+	var onceStarted1, onceStarted2 sync.Once
+	var onceCancelled1, onceCancelled2 sync.Once
 
 	scheduler.compute(func(ctx context.Context) {
 		// this simulates a long-running task
+		onceStarted1.Do(func() {
+			close(started1)
+		})
 		<-ctx.Done()
-		cancelled1 = true
+		onceCancelled1.Do(func() {
+			close(cancelled1)
+		})
 	})
 	scheduler.compute(func(ctx context.Context) {
 		// this simulates a long-running task
+		onceStarted2.Do(func() {
+			close(started2)
+		})
 		<-ctx.Done()
-		cancelled2 = true
+		onceCancelled2.Do(func() {
+			close(cancelled2)
+		})
 	})
 
-	// give some time to perform computations
-	time.Sleep(10 * time.Millisecond)
+	// wait for workers to start and reach the long-running task
+	waitForSignal(t, started1, 1*time.Second, "worker 1 start")
+	waitForSignal(t, started2, 1*time.Second, "worker 2 start")
 
-	// send the stop signal and give some time to stop computations
+	// send the stop signal
 	scheduler.stop()
-	time.Sleep(100 * time.Millisecond)
 
 	// ensure context got cancelled
-	if !cancelled1 {
-		t.Errorf("expected context to be cancelled")
-	}
-	if !cancelled2 {
-		t.Errorf("expected context to be cancelled")
-	}
+	waitForSignal(t, cancelled1, 1*time.Second, "worker 1 context cancellation")
+	waitForSignal(t, cancelled2, 1*time.Second, "worker 2 context cancellation")
 }
 
 // TestComputeStopResume tests the situation when two new worker functions are
@@ -104,41 +222,42 @@ func TestComputeStopResume(t *testing.T) {
 	scheduler := new(Scheduler)
 	defer scheduler.stop()
 
-	number1 := big.NewInt(0)
-	number2 := big.NewInt(0)
+	tw1 := newTestWorker()
+	tw2 := newTestWorker()
 
-	scheduler.compute(func(context.Context) {
-		number1.Add(number1, one)
-	})
-	scheduler.compute(func(context.Context) {
-		number2.Add(number2, one)
-	})
+	scheduler.compute(tw1.workerFunc())
+	scheduler.compute(tw2.workerFunc())
 
-	// send the stop signal and give some time to stop computations
+	// ensure computations started
+	tw1.waitForNonZero(t, 1*time.Second)
+	tw2.waitForNonZero(t, 1*time.Second)
+
+	// send the stop signal and wait for computations to stop
 	scheduler.stop()
-	time.Sleep(100 * time.Millisecond)
+	tw1.waitForStop(t, 1*time.Second)
+	tw2.waitForStop(t, 1*time.Second)
 
 	// at this point, all computations should be stopped, capture the current
 	// result
-	intermediateResult1 := new(big.Int).Set(number1)
-	intermediateResult2 := new(big.Int).Set(number2)
+	intermediateResult1 := tw1.value()
+	intermediateResult2 := tw2.value()
 
-	// send the resume signal and give some time to resume computations
+	// send the resume signal and ensure computations have been resumed
 	scheduler.resume()
-	time.Sleep(100 * time.Millisecond)
+	tw1.waitForValueChange(t, intermediateResult1, 1*time.Second)
+	tw2.waitForValueChange(t, intermediateResult2, 1*time.Second)
 
-	// ensure computations have been resumed
 	testutils.AssertBigIntsNotEqual(
 		t,
 		"computation results after resume signal",
 		intermediateResult1,
-		number1,
+		tw1.value(),
 	)
 	testutils.AssertBigIntsNotEqual(
 		t,
 		"computation results after resume signal",
 		intermediateResult2,
-		number2,
+		tw2.value(),
 	)
 }
 
@@ -149,39 +268,31 @@ func TestComputeStopResume(t *testing.T) {
 func TestComputeStopResumeStop(t *testing.T) {
 	scheduler := new(Scheduler)
 
-	number1 := big.NewInt(0)
-	number2 := big.NewInt(0)
+	tw1 := newTestWorker()
+	tw2 := newTestWorker()
 
-	scheduler.compute(func(context.Context) {
-		number1.Add(number1, one)
-	})
-	scheduler.compute(func(context.Context) {
-		number2.Add(number2, one)
-	})
+	scheduler.compute(tw1.workerFunc())
+	scheduler.compute(tw2.workerFunc())
+
+	// ensure computations started
+	tw1.waitForNonZero(t, 1*time.Second)
+	tw2.waitForNonZero(t, 1*time.Second)
 
 	scheduler.stop()
+	tw1.waitForStop(t, 1*time.Second)
+	tw2.waitForStop(t, 1*time.Second)
+
 	scheduler.resume()
+	tw1.waitForValueChange(t, tw1.value(), 1*time.Second)
+	tw2.waitForValueChange(t, tw2.value(), 1*time.Second)
+
 	scheduler.stop()
+	tw1.waitForStop(t, 1*time.Second)
+	tw2.waitForStop(t, 1*time.Second)
 
-	// at this point, all computations should be stopped, capture the current
-	// result
-	result1 := new(big.Int).Set(number1)
-	result2 := new(big.Int).Set(number2)
-
-	// wait some time and ensure computations stopped
-	time.Sleep(20 * time.Millisecond)
-	testutils.AssertBigIntsEqual(
-		t,
-		"computation result after stop signal",
-		result1,
-		number1,
-	)
-	testutils.AssertBigIntsEqual(
-		t,
-		"computation result after stop signal",
-		result2,
-		number2,
-	)
+	// ensure computations stopped
+	tw1.assertNoValueChange(t, 100*time.Millisecond)
+	tw2.assertNoValueChange(t, 100*time.Millisecond)
 }
 
 // TestStopComputeResume tests the situation when two new worker functions are
@@ -194,29 +305,23 @@ func TestStopComputeResume(t *testing.T) {
 
 	scheduler.stop()
 
-	number1 := big.NewInt(0)
-	number2 := big.NewInt(0)
+	tw1 := newTestWorker()
+	tw2 := newTestWorker()
 
-	scheduler.compute(func(context.Context) {
-		number1.Add(number1, one)
-	})
-	scheduler.compute(func(context.Context) {
-		number2.Add(number2, one)
-	})
+	scheduler.compute(tw1.workerFunc())
+	scheduler.compute(tw2.workerFunc())
 
 	// assert computations have not started - the scheduler is stopped
-	testutils.AssertBigIntsEqual(t, "computation result", big.NewInt(0), number1)
-	testutils.AssertBigIntsEqual(t, "computation result", big.NewInt(0), number2)
+	testutils.AssertBigIntsEqual(t, "computation result", big.NewInt(0), tw1.value())
+	testutils.AssertBigIntsEqual(t, "computation result", big.NewInt(0), tw2.value())
 
 	scheduler.resume()
-	// give some time to perform computations;
-	// given the goroutines are started after Resume call, we are giving this
-	// test a bit more time than others
-	time.Sleep(250 * time.Millisecond)
 
 	// ensure computations started
-	testutils.AssertBigIntNonZero(t, "computation result", number1)
-	testutils.AssertBigIntNonZero(t, "computation result", number2)
+	val1 := tw1.waitForNonZero(t, 1*time.Second)
+	val2 := tw2.waitForNonZero(t, 1*time.Second)
+	testutils.AssertBigIntNonZero(t, "computation result", val1)
+	testutils.AssertBigIntNonZero(t, "computation result", val2)
 }
 
 // TestCheckProtocols_NoProtocols ensures the execution of checkProtocols
@@ -225,41 +330,37 @@ func TestCheckProtocols_NoProtocols(t *testing.T) {
 	scheduler := new(Scheduler)
 	defer scheduler.stop()
 
-	number1 := big.NewInt(0)
-	number2 := big.NewInt(0)
+	tw1 := newTestWorker()
+	tw2 := newTestWorker()
 
-	scheduler.compute(func(context.Context) {
-		number1.Add(number1, one)
-	})
-	scheduler.compute(func(context.Context) {
-		number2.Add(number2, one)
-	})
+	scheduler.compute(tw1.workerFunc())
+	scheduler.compute(tw2.workerFunc())
 
-	// give some time to perform computations
-	time.Sleep(10 * time.Millisecond)
+	// ensure computations started
+	tw1.waitForNonZero(t, 1*time.Second)
+	tw2.waitForNonZero(t, 1*time.Second)
 
 	scheduler.checkProtocols()
 
-	// give some time to potentially stop computations (shouldn't happen)
-	time.Sleep(100 * time.Millisecond)
-
 	// there are no protocols executed, nothing can stop the scheduler;
 	// ensure the computations are performed
-	intermediateResult1 := new(big.Int).Set(number1)
-	intermediateResult2 := new(big.Int).Set(number2)
+	intermediateResult1 := tw1.value()
+	intermediateResult2 := tw2.value()
 
-	time.Sleep(20 * time.Millisecond)
+	tw1.waitForValueChange(t, intermediateResult1, 1*time.Second)
+	tw2.waitForValueChange(t, intermediateResult2, 1*time.Second)
+
 	testutils.AssertBigIntsNotEqual(
 		t,
 		"computation result after stop signal",
 		intermediateResult1,
-		number1,
+		tw1.value(),
 	)
 	testutils.AssertBigIntsNotEqual(
 		t,
 		"computation result after stop signal",
 		intermediateResult2,
-		number2,
+		tw2.value(),
 	)
 }
 
@@ -270,46 +371,42 @@ func TestCheckProtocols_ProtocolNotExecuting(t *testing.T) {
 	scheduler := new(Scheduler)
 	defer scheduler.stop()
 
-	number1 := big.NewInt(0)
-	number2 := big.NewInt(0)
+	tw1 := newTestWorker()
+	tw2 := newTestWorker()
 
-	scheduler.compute(func(context.Context) {
-		number1.Add(number1, one)
-	})
-	scheduler.compute(func(context.Context) {
-		number2.Add(number2, one)
-	})
+	scheduler.compute(tw1.workerFunc())
+	scheduler.compute(tw2.workerFunc())
 
 	protocol1 := &mockProtocol{}
 	protocol2 := &mockProtocol{}
 	scheduler.RegisterProtocol(protocol1)
 	scheduler.RegisterProtocol(protocol2)
 
-	// give some time to perform computations
-	time.Sleep(10 * time.Millisecond)
+	// ensure computations started
+	tw1.waitForNonZero(t, 1*time.Second)
+	tw2.waitForNonZero(t, 1*time.Second)
 
 	scheduler.checkProtocols()
 
-	// give some time to potentially stop computations (shouldn't happen)
-	time.Sleep(100 * time.Millisecond)
-
 	// there are two protocols but they are not executing;
 	// ensure the computations are performed
-	intermediateResult1 := new(big.Int).Set(number1)
-	intermediateResult2 := new(big.Int).Set(number2)
+	intermediateResult1 := tw1.value()
+	intermediateResult2 := tw2.value()
 
-	time.Sleep(20 * time.Millisecond)
+	tw1.waitForValueChange(t, intermediateResult1, 1*time.Second)
+	tw2.waitForValueChange(t, intermediateResult2, 1*time.Second)
+
 	testutils.AssertBigIntsNotEqual(
 		t,
 		"computation result after stop signal",
 		intermediateResult1,
-		number1,
+		tw1.value(),
 	)
 	testutils.AssertBigIntsNotEqual(
 		t,
 		"computation result after stop signal",
 		intermediateResult2,
-		number2,
+		tw2.value(),
 	)
 }
 
@@ -319,48 +416,32 @@ func TestCheckProtocols_ProtocolExecuting(t *testing.T) {
 	scheduler := new(Scheduler)
 	defer scheduler.stop()
 
-	number1 := big.NewInt(0)
-	number2 := big.NewInt(0)
+	tw1 := newTestWorker()
+	tw2 := newTestWorker()
 
-	scheduler.compute(func(context.Context) {
-		number1.Add(number1, one)
-	})
-	scheduler.compute(func(context.Context) {
-		number2.Add(number2, one)
-	})
+	scheduler.compute(tw1.workerFunc())
+	scheduler.compute(tw2.workerFunc())
 
 	protocol1 := &mockProtocol{}
 	protocol2 := &mockProtocol{}
 	scheduler.RegisterProtocol(protocol1)
 	scheduler.RegisterProtocol(protocol2)
 
-	// give some time to perform computations
-	time.Sleep(10 * time.Millisecond)
+	// ensure computations started
+	tw1.waitForNonZero(t, 1*time.Second)
+	tw2.waitForNonZero(t, 1*time.Second)
 
 	protocol2.isExecuting = true
 	scheduler.checkProtocols()
 
-	// give some time to stop computations
-	time.Sleep(100 * time.Millisecond)
+	// wait for computations to stop
+	tw1.waitForStop(t, 1*time.Second)
+	tw2.waitForStop(t, 1*time.Second)
 
-	// there are two protocols and the second one is executing
+	// there are two protocols and the second one is executing;
 	// ensure the computations are stopped
-	intermediateResult1 := new(big.Int).Set(number1)
-	intermediateResult2 := new(big.Int).Set(number2)
-
-	time.Sleep(20 * time.Millisecond)
-	testutils.AssertBigIntsEqual(
-		t,
-		"computation result after stop signal",
-		intermediateResult1,
-		number1,
-	)
-	testutils.AssertBigIntsEqual(
-		t,
-		"computation result after stop signal",
-		intermediateResult2,
-		number2,
-	)
+	tw1.assertNoValueChange(t, 100*time.Millisecond)
+	tw2.assertNoValueChange(t, 100*time.Millisecond)
 }
 
 // TestCheckProtocols_ProtocolFinishedExecution ensures the execution of
@@ -370,53 +451,50 @@ func TestCheckProtocols_ProtocolFinishedExecution(t *testing.T) {
 	scheduler := new(Scheduler)
 	defer scheduler.stop()
 
-	number1 := big.NewInt(0)
-	number2 := big.NewInt(0)
+	tw1 := newTestWorker()
+	tw2 := newTestWorker()
 
-	scheduler.compute(func(context.Context) {
-		number1.Add(number1, one)
-	})
-	scheduler.compute(func(context.Context) {
-		number2.Add(number2, one)
-	})
+	scheduler.compute(tw1.workerFunc())
+	scheduler.compute(tw2.workerFunc())
 
 	protocol1 := &mockProtocol{}
 	protocol2 := &mockProtocol{}
 	scheduler.RegisterProtocol(protocol1)
 	scheduler.RegisterProtocol(protocol2)
 
-	// give some time to perform computations
-	time.Sleep(10 * time.Millisecond)
+	// ensure computations started
+	tw1.waitForNonZero(t, 1*time.Second)
+	tw2.waitForNonZero(t, 1*time.Second)
 
 	protocol2.isExecuting = true
 	scheduler.checkProtocols()
 
-	// give some time to stop computations
-	time.Sleep(100 * time.Millisecond)
+	// wait for computations to stop
+	tw1.waitForStop(t, 1*time.Second)
+	tw2.waitForStop(t, 1*time.Second)
 
 	protocol2.isExecuting = false
 	scheduler.checkProtocols()
 
-	// give some time to resume computations
-	time.Sleep(100 * time.Millisecond)
-
 	// there are two protocols, the second one was executing, but it has
 	// finished; ensure the computations are resumed
-	intermediateResult1 := new(big.Int).Set(number1)
-	intermediateResult2 := new(big.Int).Set(number2)
+	intermediateResult1 := tw1.value()
+	intermediateResult2 := tw2.value()
 
-	time.Sleep(20 * time.Millisecond)
+	tw1.waitForValueChange(t, intermediateResult1, 1*time.Second)
+	tw2.waitForValueChange(t, intermediateResult2, 1*time.Second)
+
 	testutils.AssertBigIntsNotEqual(
 		t,
 		"computation result after stop signal",
 		intermediateResult1,
-		number1,
+		tw1.value(),
 	)
 	testutils.AssertBigIntsNotEqual(
 		t,
 		"computation result after stop signal",
 		intermediateResult2,
-		number2,
+		tw2.value(),
 	)
 }
 
