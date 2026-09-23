@@ -511,13 +511,13 @@ jobs:
           docker load --input /tmp/go-build-env-image.tar
 
       # Baseline lookup: the most recent successful `go-bench` artifact from a
-      # `BENCHMARK_BASELINE_EVENT` run of client.yml on
-      # `BENCHMARK_BASELINE_BRANCH`. `search_artifacts: true` is required
-      # because the newest matching run is not guaranteed to be the newest run
-      # overall, and it may not carry a `go-bench` artifact at all. A genuine
-      # absence of any matching artifact is reported (`if_no_artifact_found:
-      # warn`) rather than failing the job; any other download/API error
-      # surfaces as a normal step failure.
+      # `BENCHMARK_BASELINE_EVENT` run of client.yml. Branch refs use
+      # `BENCHMARK_BASELINE_BRANCH`; manually selected tags use their commit.
+      # `search_artifacts: true` is required because the newest matching run is
+      # not guaranteed to be the newest run overall, and it may not carry a
+      # `go-bench` artifact at all. A genuine absence of any matching artifact
+      # is reported (`if_no_artifact_found: warn`) rather than failing the job;
+      # any other download/API error surfaces as a normal step failure.
       - name: Download previous benchmark results
         id: download-prev
         uses: dawidd6/action-download-artifact@bf251b5aa9c2f7eeb574a96ee720e24f801b7c11 # v6
@@ -525,7 +525,8 @@ jobs:
           name: go-bench
           path: bench-prev
           workflow: client.yml
-          branch: ${{ env.BENCHMARK_BASELINE_BRANCH }}
+          branch: ${{ github.ref_type != 'tag' && env.BENCHMARK_BASELINE_BRANCH || '' }}
+          commit: ${{ github.ref_type == 'tag' && github.sha || '' }}
           event: ${{ env.BENCHMARK_BASELINE_EVENT }}
           search_artifacts: true
           if_no_artifact_found: warn
@@ -533,7 +534,7 @@ jobs:
       - name: Report missing benchmark baseline
         if: steps.download-prev.outputs.found_artifact != 'true'
         run: |
-          echo "::notice::No go-bench artifact found for a successful ${{ env.BENCHMARK_BASELINE_EVENT }} run of client.yml on ${{ env.BENCHMARK_BASELINE_BRANCH }}; comparison skipped. Pull requests require a successful push run on the target branch; other events require a successful matching branch/event run."
+          echo "::notice::No go-bench artifact found for a successful ${{ env.BENCHMARK_BASELINE_EVENT }} run of client.yml on ${{ env.BENCHMARK_BASELINE_BRANCH }}; comparison skipped. Pull requests require a successful push run on the target branch; other events require a successful matching ref/event run."
 
       - name: Run benchmarks
         run: |
