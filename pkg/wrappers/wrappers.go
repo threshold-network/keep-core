@@ -2,8 +2,9 @@ package wrappers
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"time"
 )
 
@@ -11,6 +12,13 @@ import (
 // a timeout is hit. It applies exponential backoff wait of backoffTime * 2^n
 // before nth retry of doFn. In case the calculated backoff is longer than
 // backoffMax, the backoffMax wait is applied.
+//
+// If the configured timeout elapses before doFn succeeds, DoWithRetry returns an
+// error that matches ErrRetryTimeout via errors.Is. This signals that the retry
+// budget was exhausted after repeated attempts, as opposed to a single attempt
+// failing and returning immediately. Callers may use errors.Is(err, ErrRetryTimeout)
+// to detect retry exhaustion, and errors.Unwrap to inspect the most recent error
+// returned by doFn.
 func DoWithRetry(
 	parentCtx context.Context,
 	backoffTime time.Duration,
@@ -25,11 +33,7 @@ func DoWithRetry(
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf(
-				"retry timeout [%v] exceeded; most recent error: [%w]",
-				timeout,
-				err,
-			)
+			return &retryTimeoutError{timeout: timeout, cause: err}
 		default:
 			err = doFn(ctx)
 			if err == nil {
@@ -38,11 +42,7 @@ func DoWithRetry(
 
 			timedOut := backoffWait(ctx, backoffTime)
 			if timedOut {
-				return fmt.Errorf(
-					"retry timeout [%v] exceeded; most recent error: [%w]",
-					timeout,
-					err,
-				)
+				return &retryTimeoutError{timeout: timeout, cause: err}
 			}
 
 			backoffTime = calculateBackoff(
@@ -51,6 +51,37 @@ func DoWithRetry(
 			)
 		}
 	}
+}
+
+// ErrRetryTimeout is the sentinel error matched via errors.Is when a retry loop
+// (DoWithRetry or DoWithDefaultRetry) exceeds its configured timeout without
+// doFn ever succeeding. It indicates that the entire retry budget was exhausted,
+// as opposed to an individual execution of doFn failing once and returning.
+var ErrRetryTimeout = errors.New("retry timeout")
+
+// retryTimeoutError renders the historical "retry timeout [%v] exceeded;
+// most recent error: [%v]" message verbatim while matching
+// errors.Is(err, ErrRetryTimeout) and unwrapping to the most recent
+// underlying error from doFn.
+type retryTimeoutError struct {
+	timeout time.Duration
+	cause   error
+}
+
+func (e *retryTimeoutError) Error() string {
+	return fmt.Sprintf(
+		"retry timeout [%v] exceeded; most recent error: [%v]",
+		e.timeout,
+		e.cause,
+	)
+}
+
+func (e *retryTimeoutError) Unwrap() error {
+	return e.cause
+}
+
+func (e *retryTimeoutError) Is(target error) bool {
+	return target == ErrRetryTimeout
 }
 
 const (
@@ -68,6 +99,9 @@ const (
 // DefaultBackoffTime * 2^n before nth retry of doFn. In case the calculated
 // backoff is longer than DefaultMaxBackoffTime, the DefaultMaxBackoffTime is
 // applied.
+//
+// Like DoWithRetry, if the timeout is reached before doFn succeeds, it returns an
+// error matching ErrRetryTimeout via errors.Is.
 func DoWithDefaultRetry(
 	parentCtx context.Context,
 	timeout time.Duration,
@@ -169,10 +203,9 @@ func calculateBackoff(
 
 	backoff *= 2
 
-	// #nosec G404
 	// we are fine with not using cryptographically secure random integer,
 	// it is just exponential backoff jitter
-	r := rand.Int63n(backoff.Nanoseconds()/10 + 1)
+	r := rand.Int64N(backoff.Nanoseconds()/10 + 1)
 	jitter := time.Duration(r) * time.Nanosecond
 	backoff += jitter
 
