@@ -8,14 +8,19 @@ import (
 	"testing"
 )
 
-// FuzzDepositSweepProposalRoundTrip tests the round-trip marshaling and unmarshaling
-// of DepositSweepProposal structs with clamped, valid fields.
+// FuzzDepositSweepProposalRoundTrip exercises marshal and unmarshal of
+// DepositSweepProposal across the accepted field domain, including reveal blocks
+// at the top of the uint64 range that a fixed-count generator loop rarely reaches.
 //
-// This target would have caught the tbtc DepositSweepProposal generator bug where
-// DepositsRevealBlocks contained unbounded *big.Int values (up to 512 big.Words)
-// produced by the default fuzzBigInt generator. DepositSweepProposal.Marshal
-// strictly requires each reveal block to satisfy block.IsUint64() (fitting into
-// [0, 2^64)), causing unmarshaled proposals to fail with "invalid deposit reveal block".
+// Scope, stated precisely because it is easy to overstate: this target builds its
+// proposals directly and clamps the fields itself, so it does NOT exercise
+// fuzzDepositSweepProposal and would NOT fail if that generator were regressed to
+// emitting unbounded reveal blocks again. The guard against that is
+// TestFuzzDepositSweepProposalGeneratorContract in marshaling_test.go.
+//
+// What this target does guard is Marshal and Unmarshal themselves: that every
+// value the marshaler claims to accept, notably a reveal block at 2^64-1, really
+// does survive the round trip unchanged.
 func FuzzDepositSweepProposalRoundTrip(f *testing.F) {
 	// Seed 1: Empty and all-zero inputs (zero fee, zero keys, zero reveal blocks).
 	f.Add([]byte{})

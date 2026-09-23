@@ -9,18 +9,20 @@ import (
 	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
 )
 
-// FuzzEphemeralKeyRoundTrip tests the round-trip serialization and internal
-// consistency of ephemeral public and private keys derived from fuzzed scalars.
+// FuzzEphemeralKeyRoundTrip exercises marshal and unmarshal of ephemeral public
+// and private keys across the whole scalar domain, including the boundaries at 1
+// and N-1 that a fixed-count generator loop is unlikely to reach.
 //
-// This target catches two generator bugs that previously broke round trips:
-//  1. fuzzEphemeralPublicKey used to fuzz X and Y coordinates independently as
-//     arbitrary big.Ints, producing points not on the secp256k1 curve that failed
-//     UnmarshalPublicKey (ParsePubKey). Deriving (X, Y) via ScalarBaseMult from
-//     a scalar reduced into [1, N-1] ensures valid curve points that round-trip.
-//  2. fuzzEphemeralPrivateKey used to fuzz the public key and scalar D independently,
-//     yielding inconsistent keypairs where D did not generate the public point.
-//     Deriving both halves from the same normalized scalar via PrivKeyFromBytes
-//     ensures consistency verified by IsKeyMatching and ECDH compatibility.
+// Scope, stated precisely because it is easy to overstate: this target builds its
+// keys directly from a scalar, so it does NOT exercise fuzzEphemeralPublicKey or
+// fuzzEphemeralPrivateKey, and it would NOT fail if either were regressed to
+// fuzzing coordinates independently again. The guards against that are
+// TestFuzzedEphemeralPublicKeyIsSerializable and
+// TestFuzzedEphemeralPrivateKeyIsConsistent, which do call FuzzFuncs.
+//
+// What this target does guard is the shared normalizeScalar helper, which the
+// production generators also use, and the marshaling itself against any scalar
+// the engine can reach.
 func FuzzEphemeralKeyRoundTrip(f *testing.F) {
 	curve := btcec.S256()
 

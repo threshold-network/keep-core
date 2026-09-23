@@ -97,36 +97,46 @@ func (tw *testWorker) waitForNonZero(t *testing.T, timeout time.Duration) *big.I
 	t.Helper()
 	return tw.waitForValueChange(t, big.NewInt(0), timeout)
 }
+
+// assertNoValueChange fails if the worker performs any further computation
+// within the given window.
+//
+// Proving that nothing happens needs an observation window; there is no event to
+// wait for. The window is short because a running worker increments on every
+// scheduler iteration, so it is caught almost immediately.
+//
+// The value, not the tw.iterated signal, is the source of truth. workerFunc
+// increments the counter and sends on the channel as two separate steps, so a
+// worker that incremented before the stop can still deliver its signal after it.
+// Treating that late signal as evidence of execution made this check fail
+// spuriously at -count=20, reporting an unchanged value on both sides. The signal
+// is now only used to re-check early.
 func (tw *testWorker) assertNoValueChange(t *testing.T, window time.Duration) {
 	t.Helper()
 
 	initial := tw.value()
+	deadline := time.After(window)
 
-	// Drain any already-buffered signal from the tw.iterated channel so a stale
-	// send from before the stop cannot cause a false failure.
-	select {
-	case <-tw.iterated:
-	default:
+	for {
+		select {
+		case <-tw.iterated:
+			if current := tw.value(); current.Cmp(initial) != 0 {
+				t.Fatalf(
+					"worker executed after stop: initial value %v, current value %v",
+					initial,
+					current,
+				)
+			}
+		case <-deadline:
+			testutils.AssertBigIntsEqual(
+				t,
+				"computation result after stop signal",
+				initial,
+				tw.value(),
+			)
+			return
+		}
 	}
-
-	select {
-	case <-tw.iterated:
-		current := tw.value()
-		t.Fatalf(
-			"worker executed after stop: initial value %v, current value %v",
-			initial,
-			current,
-		)
-	case <-time.After(window):
-	}
-
-	current := tw.value()
-	testutils.AssertBigIntsEqual(
-		t,
-		"computation result after stop signal",
-		initial,
-		current,
-	)
 }
 
 func waitForSignal(t *testing.T, ch <-chan struct{}, timeout time.Duration, msg string) {
