@@ -132,12 +132,14 @@ func TestFuzzSigningDoneMessage_MarshalingRoundtrip(t *testing.T) {
 			endBlock:      endBlock,
 		}
 
-		_ = pbutils.RoundTrip(doneMessage, &signingDoneMessage{})
+		if err := pbutils.RoundTrip(doneMessage, &signingDoneMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzSigningDoneMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&signingDoneMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&signingDoneMessage{})
 }
 
 func TestCoordinationMessage_MarshalingRoundtrip(t *testing.T) {
@@ -280,7 +282,81 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithHeartbeatProposal(t *te
 			proposal:            &proposal,
 		}
 
-		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
+		if err := pbutils.RoundTrip(coordinationMsg, &coordinationMessage{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// fuzzDepositSweepProposal generates a DepositSweepProposal that survives
+// DepositSweepProposal.Marshal. Marshal rejects a reveal block that is nil or
+// does not fit a uint64 ("invalid deposit reveal block", pkg/tbtc/marshaling.go),
+// so every block must land in [0, 2^64).
+//
+// The default *big.Int generator in pbutils.FuzzFuncs() fills up to 512
+// big.Words, so a raw fuzzed block essentially never fits a uint64 and the
+// round trip could never succeed - which the discarded error used to hide.
+// Fuzz with the default field generators (FuzzNoCustom, so this function does
+// not recurse), then clamp each block into the accepted range.
+//
+// The nil branch is defensive only: gofuzz allocates a pointer before invoking
+// a custom func registered for that pointer type, so *big.Int fields are never
+// nil while fuzzBigInt is registered. It matters if that registration is ever
+// dropped, because Marshal dereferences SweepTxFee unconditionally and
+// (*big.Int)(nil).Bytes() panics.
+func fuzzDepositSweepProposal() func(*DepositSweepProposal, fuzz.Continue) {
+	mod := new(big.Int).Lsh(big.NewInt(1), 64)
+
+	return func(proposal *DepositSweepProposal, c fuzz.Continue) {
+		c.FuzzNoCustom(proposal)
+
+		for i, block := range proposal.DepositsRevealBlocks {
+			if block == nil {
+				block = new(big.Int)
+				proposal.DepositsRevealBlocks[i] = block
+			}
+			block.Mod(block, mod)
+		}
+	}
+}
+
+// TestFuzzDepositSweepProposalGeneratorContract pins the contract the
+// round-trip test above depends on: every proposal fuzzDepositSweepProposal
+// emits must be marshalable. Dropping the clamp makes the round-trip test fail
+// with "invalid deposit reveal block" only when a fuzzed block happens to
+// exceed a uint64, so assert the contract directly instead of relying on the
+// round-trip test's ten samples to notice.
+func TestFuzzDepositSweepProposalGeneratorContract(t *testing.T) {
+	f := fuzz.New().NilChance(0.1).
+		NumElements(0, 512).
+		Funcs(append(pbutils.FuzzFuncs(), fuzzDepositSweepProposal())...)
+
+	for i := 0; i < 200; i++ {
+		var proposal DepositSweepProposal
+
+		f.Fuzz(&proposal)
+
+		if proposal.SweepTxFee == nil {
+			t.Fatal("generated a nil SweepTxFee; Marshal would panic on it")
+		}
+
+		for j, block := range proposal.DepositsRevealBlocks {
+			if block == nil {
+				t.Fatalf("generated a nil reveal block at index [%d]", j)
+			}
+			if !block.IsUint64() {
+				t.Fatalf(
+					"generated reveal block at index [%d] does not fit a "+
+						"uint64: [%v]",
+					j,
+					block,
+				)
+			}
+		}
+
+		if _, err := proposal.Marshal(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -295,7 +371,7 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithDepositSweepProposal(t 
 
 		f := fuzz.New().NilChance(0.1).
 			NumElements(0, 512).
-			Funcs(pbutils.FuzzFuncs()...)
+			Funcs(append(pbutils.FuzzFuncs(), fuzzDepositSweepProposal())...)
 
 		f.Fuzz(&senderID)
 		f.Fuzz(&coordinationBlock)
@@ -309,7 +385,9 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithDepositSweepProposal(t 
 			proposal:            &proposal,
 		}
 
-		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
+		if err := pbutils.RoundTrip(coordinationMsg, &coordinationMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -338,7 +416,9 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithRedemptionProposal(t *t
 			proposal:            &proposal,
 		}
 
-		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
+		if err := pbutils.RoundTrip(coordinationMsg, &coordinationMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -367,7 +447,9 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithMovingFundsProposal(t *
 			proposal:            &proposal,
 		}
 
-		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
+		if err := pbutils.RoundTrip(coordinationMsg, &coordinationMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -396,7 +478,9 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithMovedFundsSweepProposal
 			proposal:            &proposal,
 		}
 
-		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
+		if err := pbutils.RoundTrip(coordinationMsg, &coordinationMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -425,10 +509,12 @@ func TestFuzzCoordinationMessage_MarshalingRoundtrip_WithNoopProposal(t *testing
 			proposal:            &proposal,
 		}
 
-		_ = pbutils.RoundTrip(coordinationMsg, &coordinationMessage{})
+		if err := pbutils.RoundTrip(coordinationMsg, &coordinationMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzCoordinationMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&coordinationMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&coordinationMessage{})
 }
