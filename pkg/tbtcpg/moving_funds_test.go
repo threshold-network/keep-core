@@ -667,9 +667,9 @@ func TestEstimateMovingFundsFee(t *testing.T) {
 		"low estimate is raised to the minimum floor": {
 			estimateSatPerVByte: 1,
 			txMaxTotalFee:       6000,
-			// raw 203 (203 vByte * 1 sat/vByte), buffered ceil(1*1.25)=2 is
-			// below the 5 sat/vByte floor, so clamped to 5 * 203 = 1015.
-			expectedFee:   1015,
+			// raw 203 (203 vByte * 1 sat/vByte), clamped to 5 sat/vByte floor
+			// and buffered to ceil(5*1.25)=7 sat/vByte * 203 = 1421.
+			expectedFee:   1421,
 			expectedError: nil,
 		},
 		"estimated fee too high": {
@@ -681,8 +681,8 @@ func TestEstimateMovingFundsFee(t *testing.T) {
 		"minimum floor exceeds the max total fee": {
 			estimateSatPerVByte: 1,
 			// raw 203 (203 vByte * 1 sat/vByte) is below the cap, so it passes
-			// the raw-estimate guard, but the 5 sat/vByte floor total (1015)
-			// exceeds the cap, so a safe transaction cannot be built.
+			// the raw-estimate guard, but the 7 sat/vByte buffered floor total
+			// (1421) exceeds the cap, so a safe transaction cannot be built.
 			txMaxTotalFee: 500,
 			expectedFee:   0,
 			expectedError: tbtcpg.ErrMaxFeeTooLow,

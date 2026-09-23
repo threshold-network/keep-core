@@ -48,7 +48,6 @@ func init() {
 // maintainer command.
 func maintainers(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
-
 	btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Electrum)
 	if err != nil {
 		return fmt.Errorf("could not connect to Electrum chain: [%v]", err)
@@ -79,7 +78,7 @@ func maintainers(cmd *cobra.Command, args []string) error {
 
 	metricsRecorder := initializeMaintainerMetrics(ctx, blockCounter, tbtcChain, btcChain)
 
-	maintainer.Initialize(
+	err = maintainer.Initialize(
 		ctx,
 		clientConfig.Maintainer,
 		btcChain,
@@ -87,6 +86,9 @@ func maintainers(cmd *cobra.Command, args []string) error {
 		tbtcChain,
 		metricsRecorder,
 	)
+	if err != nil {
+		return fmt.Errorf("could not initialize maintainer tasks: [%v]", err)
+	}
 
 	<-ctx.Done()
 	return fmt.Errorf("unexpected context cancellation")

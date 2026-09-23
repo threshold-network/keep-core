@@ -15,6 +15,7 @@
 
 /* eslint-disable import/no-extraneous-dependencies -- eslint is a legitimate devDependency used
    here to smoke-test this package's own lint config; it is not a runtime dependency. */
+import { randomUUID } from "node:crypto"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { ESLint } from "eslint"
@@ -48,9 +49,23 @@ async function lintFixture(relativePath, code) {
   return messages.filter((m) => m.ruleId !== null)
 }
 
-const sharedTestFixture = "test/policy-fixture.ts"
-const ignoredFixture = "typechain/policy-fixture-ignored.ts"
+const nonce = randomUUID()
+const sharedTestFixture = `test/policy-fixture-${nonce}.ts`
+const ignoredFixture = `typechain/policy-fixture-ignored-${nonce}.ts`
 
+function cleanup() {
+  rmSync(join(projectRoot, sharedTestFixture), { force: true })
+  rmSync(join(projectRoot, ignoredFixture), { force: true })
+}
+
+process.once("SIGINT", () => {
+  cleanup()
+  process.kill(process.pid, "SIGINT")
+})
+process.once("SIGTERM", () => {
+  cleanup()
+  process.kill(process.pid, "SIGTERM")
+})
 try {
   // Fixture (a): it.only in a test file should trigger no-only-tests
   const onlyMessages = await lintFixture(
@@ -80,8 +95,7 @@ try {
     "typechain/**/*.ts fixture produces zero lint messages (ignored)",
   )
 } finally {
-  rmSync(join(projectRoot, sharedTestFixture), { force: true })
-  rmSync(join(projectRoot, ignoredFixture), { force: true })
+  cleanup()
 }
 
 if (failures > 0) {

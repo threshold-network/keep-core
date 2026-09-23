@@ -453,9 +453,9 @@ func TestEstimateMovedFundsSweepFee(t *testing.T) {
 			estimateSatPerVByte: 1,
 			sweepTxMaxTotalFee:  3000,
 			hasMainUtxo:         false,
-			// raw 110 (110 vByte * 1 sat/vByte), buffered ceil(1*1.25)=2 is
-			// below the 5 sat/vByte floor, so clamped to 5 * 110 = 550.
-			expectedFee:   550,
+			// raw 110 (110 vByte * 1 sat/vByte), clamped to 5 sat/vByte floor
+			// and buffered to ceil(5*1.25)=7 sat/vByte * 110 = 770.
+			expectedFee:   770,
 			expectedError: nil,
 		},
 		"estimated fee too high": {
@@ -468,8 +468,8 @@ func TestEstimateMovedFundsSweepFee(t *testing.T) {
 		"minimum floor exceeds the max total fee": {
 			estimateSatPerVByte: 1,
 			// raw 110 (110 vByte * 1 sat/vByte) is below the cap, so it passes
-			// the raw-estimate guard, but the 5 sat/vByte floor total (550)
-			// exceeds the cap, so a safe sweep cannot be built.
+			// the raw-estimate guard, but the 7 sat/vByte buffered floor total
+			// (770) exceeds the cap, so a safe sweep cannot be built.
 			sweepTxMaxTotalFee: 400,
 			hasMainUtxo:        false,
 			expectedFee:        0,
