@@ -44,8 +44,7 @@ func RoundTrip(
 // valid message, so requiring a nil error would fail constantly. That makes
 // this a crash check, not a correctness check. It cannot detect an unmarshaler
 // that silently accepts a malformed message, so a caller needing that guarantee
-// must assert it separately. The name says so, because the previous name
-// implied an assertion this function does not make.
+// must assert it separately.
 func AssertUnmarshalDoesNotPanic(unmarshaler pb.Unmarshaler) {
 	for i := 0; i < 100; i++ {
 		var messageBytes []byte

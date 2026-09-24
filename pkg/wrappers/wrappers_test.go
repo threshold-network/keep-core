@@ -101,11 +101,9 @@ func TestDoWithRetryExceedTimeout(t *testing.T) {
 // is already done when DoWithRetry starts, so doFn never runs and there is no
 // most-recent error to report.
 //
-// This path previously rendered its nil cause through a %w verb, which fmt
-// reports as the literal "%!w(<nil>)". It now renders "<nil>". The text is
-// deliberately not preserved: reproducing a fmt formatting artifact is not
-// worth pinning, and nothing in the repo matches on it. The behavior is pinned
-// here instead, since it was previously untested in either form.
+// The nil cause renders as "<nil>" in the message: passing a nil error to a
+// %w verb would print the literal "%!w(<nil>)". The exact message is asserted
+// below, so any change to the rendering is a conscious decision.
 func TestDoWithRetryTimeoutBeforeFirstAttempt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -17,10 +17,10 @@ import (
 // used by the integration suite to decide whether a failure is the public
 // Electrum service misbehaving (skip) or a real defect (fail).
 //
-// The classifier previously matched substrings of err.Error(), so rewording an
-// upstream message silently widened or narrowed what counts as transient. It
-// now matches sentinels, and these cases fail if the wrapping chain loses %w
-// anywhere, or if the classifier starts swallowing unrelated errors.
+// Matching is by typed sentinel, so these cases fail if the wrapping chain
+// loses %w anywhere, or if the classifier starts swallowing unrelated errors;
+// a reworded upstream error message cannot silently change what counts as
+// transient.
 func TestShouldSkipElectrumIntegrationError(t *testing.T) {
 	tests := map[string]struct {
 		err          error

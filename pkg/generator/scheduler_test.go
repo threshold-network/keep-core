@@ -67,7 +67,9 @@ func (tw *testWorker) waitForStop(t *testing.T, timeout time.Duration) {
 		t.Fatal("timed out waiting for worker to stop")
 	}
 
-	// Lock and unlock to ensure any in-flight execution of workerFunc has finished.
+	// Take the lock so no in-flight execution of workerFunc is inside its
+	// increment critical section when the value is read next; its channel
+	// send may still be pending.
 	tw.mu.Lock()
 	tw.mu.Unlock()
 }
@@ -105,12 +107,11 @@ func (tw *testWorker) waitForNonZero(t *testing.T, timeout time.Duration) *big.I
 // wait for. The window is short because a running worker increments on every
 // scheduler iteration, so it is caught almost immediately.
 //
-// The value, not the tw.iterated signal, is the source of truth. workerFunc
+// The value, not the tw.iterated signal, is the source of truth: workerFunc
 // increments the counter and sends on the channel as two separate steps, so a
-// worker that incremented before the stop can still deliver its signal after it.
-// Treating that late signal as evidence of execution made this check fail
-// spuriously at -count=20, reporting an unchanged value on both sides. The signal
-// is now only used to re-check early.
+// worker that incremented before the stop can still deliver its signal after
+// it. The signal is only used to re-check early; a late delivery from a
+// completed increment must not count as execution.
 func (tw *testWorker) assertNoValueChange(t *testing.T, window time.Duration) {
 	t.Helper()
 

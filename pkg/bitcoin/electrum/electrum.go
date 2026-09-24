@@ -29,15 +29,16 @@ var (
 	logger                    = log.Logger("keep-electrum")
 )
 
-// ErrFeeEstimateUnavailable is returned by EstimateSatPerVByteFee when a queried
-// Electrum server daemon reports that it does not have enough information to
-// produce a fee estimate for the requested confirmation target (blockchain.estimatefee
-// returning -1, per the Electrum protocol docs) and no usable estimate could be
-// obtained across fallback targets.
+// ErrFeeEstimateUnavailable is set as the last error of
+// EstimateSatPerVByteFee when a queried Electrum server daemon reports that it
+// does not have enough information to produce a fee estimate for a confirmation
+// target (blockchain.estimatefee returning -1, per the Electrum protocol docs).
 //
-// Callers may use errors.Is(err, ErrFeeEstimateUnavailable) to detect that the daemon
-// lacked fee estimation data, as opposed to a network failure, timeout, or
-// transport error.
+// Callers may use errors.Is(err, ErrFeeEstimateUnavailable) to detect that the
+// daemon lacked fee estimation data, as opposed to a network failure, timeout,
+// or transport error. EstimateSatPerVByteFee wraps the error of the last
+// confirmation target tried, so on a mixed failure the sentinel matches only
+// when the last target failed with -1.
 var ErrFeeEstimateUnavailable = errors.New("daemon does not have enough information to make an estimate")
 
 // watchAbort arranges to call client.Abort if ctx becomes Done and the
@@ -1223,15 +1224,19 @@ func (c *Connection) getFeeBtcPerKbOnce(budgetCtx context.Context, blocks uint32
 // transaction to be confirmed within the given number of blocks.
 //
 // If the queried Electrum server daemon does not have enough information to
-// produce a fee estimate for the requested target or any of the fallback targets
-// (the daemon returns -1 / negative fee per Electrum protocol docs), and a
-// network-appropriate low-fee fallback cannot be applied (such as on mainnet or
-// unrecognized networks), EstimateSatPerVByteFee returns an error wrapping
-// ErrFeeEstimateUnavailable.
+// produce a fee estimate for the requested target or any of the fallback
+// targets (the daemon returns -1 / negative fee per Electrum protocol docs),
+// and a network-appropriate low-fee fallback cannot be applied (such as on
+// mainnet or unrecognized networks), EstimateSatPerVByteFee returns an error
+// wrapping the error of the last confirmation target tried. That error wraps
+// ErrFeeEstimateUnavailable only when the last failure was an oracle -1
+// response; when a non-oracle failure (transport, timeout) was tried last, the
+// wrapped error is that failure.
 //
-// Callers may use errors.Is(err, ErrFeeEstimateUnavailable) to detect that the daemon
-// lacked fee estimation data, distinguishing an oracle lack of data from a network,
-// timeout, or transport failure.
+// Callers may use errors.Is(err, ErrFeeEstimateUnavailable) to detect that the
+// daemon lacked fee estimation data, distinguishing an oracle lack of data from
+// a network, timeout, or transport failure - keeping in mind that a mixed
+// failure reports whichever class was observed last.
 func (c *Connection) EstimateSatPerVByteFee(blocks uint32) (int64, error) {
 	targets := feeEstimateWithFallbackTargets(blocks)
 	var lastErr error

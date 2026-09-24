@@ -28,9 +28,9 @@ var (
 
 	// RequiredTransactions lists the networks Transactions must have a
 	// non-empty entry for. TestGetTransaction_Integration and
-	// TestGetTransactionConfirmations_Integration range over this map without
-	// a presence check, so a missing entry makes both run zero subtests and
-	// pass vacuously rather than fail.
+	// TestGetTransactionConfirmations_Integration skip when a network's entry
+	// is missing, so a missing entry makes both pass vacuously as skips
+	// rather than fail.
 	RequiredTransactions = []bitcoin.Network{bitcoin.Testnet}
 
 	// RequiredTxMerkleProofs lists the networks TxMerkleProofs must have an
