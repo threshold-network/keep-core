@@ -484,6 +484,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      pull-requests: write
     env:
       # PRs and the nightly schedule compare against the target/current
       # branch's own history; workflow_dispatch runs compare against prior
@@ -612,6 +613,50 @@ jobs:
                   print(' ', r)
               sys.exit(1)
           EOF
+
+      # Publish the same comparison that already gates the job into the PR
+      # conversation so reviewers see it without leaving the PR. The body is
+      # identified by an HTML marker; re-runs update the same comment instead
+      # of stacking one per push. `continue-on-error` defends against an org
+      # policy that strips comment-write permissions from GITHUB_TOKEN — the
+      # diff in the job log and the go-bench artifact remain authoritative.
+      - name: Post benchmark results to PR
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          HAS_BASELINE: ${{ steps.download-prev.outputs.found_artifact == 'true' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- client-bench -->';
+            const header = '### `client-bench` results';
+            const baselineNote = process.env.HAS_BASELINE === 'true'
+              ? 'Baseline: latest successful push on the target branch.'
+              : 'No baseline yet — the next push on the target branch will seed it.';
+            let benchSection;
+            try {
+              const benchstat = fs.readFileSync('benchstat-results.txt', 'utf-8').trim();
+              benchSection = `\n\n<details><summary>benchstat vs baseline</summary>\n\n\`\`\`\n${benchstat}\n\`\`\`\n</details>\n`;
+            } catch (err) {
+              benchSection = '';
+            }
+            const body = `${marker}\n${header}\n\n${baselineNote}${benchSection}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body,
+              });
+            }
 
       - name: Upload benchmark results
         if: always()
