@@ -56,6 +56,11 @@ argument that was weighed plus the risk register the choice carries.
 |---|---|
 | `frost-reservations-interaction.md` | Interaction with the separate FROST/Schnorr migration: no forced sequencing, re-anchor as the migration path, one pending settlement-side patch, storage-merge parity risk. |
 
+### Public docs
+| File | Role |
+|---|---|
+| `vba-technical-diagram.md` | **Publishable GitBook page** replacing docs.threshold.network "Verifiable Bitcoin Accounts > Technical Diagram", whose covenant/PSBT design never shipped. Describes milestone 1 only, with a v2 disclaimer; written for institutional readers, so it carries no internal IDs, file paths or placeholder numbers. Claims checked against tbtc-v2 `reservations-upgrade` @ `9f8f5ef1` and keep-core `reservations-epic` @ `4390a7998`; re-check if either moves. |
+
 ---
 
 ## Reading order
