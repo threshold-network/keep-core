@@ -32,6 +32,9 @@ on:
         required: false
         default: "main"
 
+permissions:
+  contents: read
+
 jobs:
   contracts-detect-changes:
     runs-on: ubuntu-latest

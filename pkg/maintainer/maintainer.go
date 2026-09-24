@@ -2,7 +2,6 @@ package maintainer
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ipfs/go-log/v2"
 
@@ -21,11 +20,9 @@ func Initialize(
 	spvChain spv.Chain,
 	metricsRecorder spv.MetricsRecorder,
 ) error {
-	if err := config.Validate(); err != nil {
-		return err
-	}
-	// If none of the maintainers was specified in the config (i.e. no option was
-	// provided to the `maintainer` command), all maintainers should be launched.
+	// Configuration is validated at config-load time and again inside
+	// spv.Initialize (the only module that requires pre-launch validation),
+	// so we don't re-validate here to avoid a redundant pass.
 	launchAll := !config.BitcoinDifficulty.Enabled &&
 		!config.Spv.Enabled
 
@@ -52,7 +49,7 @@ func Initialize(
 			metricsRecorder,
 		)
 		if err != nil {
-			return fmt.Errorf("cannot initialize spv maintainer: [%w]", err)
+			return err
 		}
 	}
 

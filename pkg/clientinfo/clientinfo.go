@@ -8,6 +8,15 @@
 // Following specifications were used as reference:
 // - https://prometheus.io/docs/instrumenting/writing_clientlibs/
 // - https://prometheus.io/docs/instrumenting/exposition_formats/
+//
+// pprof handlers are intentionally served from a private ServeMux built
+// per-Registry so the EnablePprof flag fully controls their reachability.
+// Importing net/http/pprof also registers those handlers on
+// http.DefaultServeMux at init time as a side effect; nothing in this
+// package serves DefaultServeMux, so the registration is currently
+// dormant. Do not add http.ListenAndServe(":port", nil) (or any other
+// nil-handler Listen call) to this package or its consumers: that would
+// expose pprof on the new listener regardless of the EnablePprof flag.
 package clientinfo
 
 import (
@@ -81,7 +90,8 @@ func Initialize(
 }
 
 // registerPprofHandlers registers the standard net/http/pprof handlers on
-// the provided ServeMux when EnablePprof is true.
+// the provided ServeMux when EnablePprof is true. See the package doc for
+// the dormant DefaultServeMux side-effect warning.
 func registerPprofHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -132,7 +142,14 @@ func (r *Registry) enableServer(port int, enablePprof bool) {
 }
 
 // EnableServer enables the client info server on the given port. Data will
-// be exposed on `/metrics` and `/diagnostics` paths.
+// be exposed on `/metrics` and `/diagnostics` paths. pprof profiling
+// endpoints are NOT enabled by this method; prefer Initialize, which
+// threads the EnablePprof flag from the caller-supplied Config and never
+// exposes pprof unless explicitly requested.
+//
+// Deprecated: prefer Initialize; this method exists for backwards
+// compatibility but always disables pprof. The previous behavior of
+// implicitly exposing pprof via http.DefaultServeMux is no longer relied on.
 func (r *Registry) EnableServer(port int) {
 	r.enableServer(port, false)
 }

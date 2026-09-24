@@ -258,7 +258,7 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 				RedemptionTxFee: big.NewInt(5000),
 			},
 		},
-		"fee estimated, huge per-request cap does not wrap to zero": {
+		"fee estimated, huge per-request cap falls back to txMaxTotalFee": {
 			fee:           0, // trigger fee estimation
 			txMaxFee:      (math.MaxUint64 / 2) + 1,
 			txMaxTotalFee: 6000,

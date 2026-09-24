@@ -13,8 +13,9 @@ type Config struct {
 	Spv               spv.Config
 }
 
-// Validate checks whether the maintainer configuration is valid for all
-// modules that will be launched.
+// Validate checks whether the maintainer configuration is valid for the
+// modules that will be launched. Currently only Spv requires pre-launch
+// validation; BitcoinDifficulty does not.
 func (c Config) Validate() error {
 	launchAll := !c.BitcoinDifficulty.Enabled &&
 		!c.Spv.Enabled
