@@ -72,6 +72,9 @@ describe("Allowlist", () => {
     allowlist = AllowlistFactory.attach(await proxy.getAddress()) as Allowlist
   })
 
+  // The first two cases verify initializer wiring (values read back as the proxy was
+  // constructed with); the two reverting cases in this group are the behavioural arms,
+  // and the behavioural coverage for the other operations lives in the groups below.
   describe("initialization", () => {
     it("should set the wallet registry address", async () => {
       expect(await allowlist.walletRegistry()).to.equal(walletRegistry.address)

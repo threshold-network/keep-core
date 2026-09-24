@@ -16,15 +16,29 @@ import (
 	"github.com/keep-network/keep-core/pkg/tecdsa/signing"
 )
 
-func TestSigningRetryLoop(t *testing.T) {
-	message := big.NewInt(100)
+type signingRetryLoopTestCase struct {
+	signingGroupMemberIndex     group.MemberIndex
+	ctxFn                       func() (context.Context, context.CancelFunc)
+	currentBlockFn              getCurrentBlockFn
+	incomingAnnouncementsFn     func(sessionID string) ([]group.MemberIndex, error)
+	signingAttemptFn            signingAttemptFn
+	waitUntilAllDoneOutcomeFn   func(attemptNumber uint64) (*signing.Result, uint64, error)
+	expectedOutgoingDoneChecks  []*signingDoneMessage
+	expectedErr                 error
+	expectedResult              *signingRetryLoopResult
+	expectedLastExecutedAttempt *signingAttemptParams
+	outgoingAnnouncementsCount  uint
+}
 
-	groupParameters := &GroupParameters{
+var (
+	signingRetryLoopMessage = big.NewInt(100)
+
+	signingRetryLoopGroupParameters = &GroupParameters{
 		GroupSize:       10,
 		HonestThreshold: 6,
 	}
 
-	signingGroupOperators := chain.Addresses{
+	signingRetryLoopGroupOperators = chain.Addresses{
 		"address-1",
 		"address-2",
 		"address-8",
@@ -37,561 +51,24 @@ func TestSigningRetryLoop(t *testing.T) {
 		"address-8",
 	}
 
-	signingGroupMembersIndexes := make([]group.MemberIndex, 0)
-	for i := range signingGroupOperators {
-		signingGroupMembersIndexes = append(
-			signingGroupMembersIndexes,
-			group.MemberIndex(i+1),
-		)
+	signingRetryLoopMembersIndexes = []group.MemberIndex{
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
 	}
 
-	testResult := &signing.Result{
+	signingRetryLoopTestResult = &signing.Result{
 		Signature: &tecdsa.Signature{
 			R:          big.NewInt(300),
 			S:          big.NewInt(400),
 			RecoveryID: 2,
 		},
 	}
+)
 
-	var tests = map[string]struct {
-		signingGroupMemberIndex     group.MemberIndex
-		ctxFn                       func() (context.Context, context.CancelFunc)
-		currentBlockFn              getCurrentBlockFn
-		incomingAnnouncementsFn     func(sessionID string) ([]group.MemberIndex, error)
-		signingAttemptFn            signingAttemptFn
-		waitUntilAllDoneOutcomeFn   func(attemptNumber uint64) (*signing.Result, uint64, error)
-		expectedOutgoingDoneChecks  []*signingDoneMessage
-		expectedErr                 error
-		expectedResult              *signingRetryLoopResult
-		expectedLastExecutedAttempt *signingAttemptParams
-		outgoingAnnouncementsCount  uint
-	}{
-		"success on initial attempt": {
-			signingGroupMemberIndex: 1,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 10*time.Second)
-			},
-			currentBlockFn: func() (uint64, error) {
-				return 200, nil // same as the initial start block
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				return signingGroupMembersIndexes, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				return testResult, 215, nil // an arbitrary end block
-			},
-			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
-				// Simulate that the done check phase determines the same
-				// end block as the executing signer.
-				return testResult, 215, nil
-			},
-			expectedOutgoingDoneChecks: []*signingDoneMessage{
-				{
-					senderID:      1,
-					message:       message,
-					attemptNumber: 1,
-					signature:     testResult.Signature,
-					endBlock:      215,
-				},
-			},
-			expectedErr: nil,
-			expectedResult: &signingRetryLoopResult{
-				result: testResult,
-				activityReport: &signingActivityReport{
-					activeMembers:   signingGroupMembersIndexes,
-					inactiveMembers: []group.MemberIndex{},
-				},
-				latestEndBlock:      215, // the end block resolved by the done check phase
-				attemptTimeoutBlock: 236, // start block of the first attempt + 30
-			},
-			// The signing random retry algorithm invoked with the test seed
-			// excludes 4 members (6 is the honest threshold) from the first
-			// attempt: 3, 7, 8 and 10.
-			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 1,
-				startBlock:             206,
-				timeoutBlock:           236, // start block of the first attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
-			},
-			outgoingAnnouncementsCount: 1,
-		},
-		"success on initial attempt with missing announcements and honest majority": {
-			signingGroupMemberIndex: 1,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 10*time.Second)
-			},
-			currentBlockFn: func() (uint64, error) {
-				return 200, nil // same as the initial start block
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				// Honest majority of members announced their readiness.
-				return []group.MemberIndex{1, 2, 3, 6, 7, 9}, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				return testResult, 215, nil // an arbitrary end block
-			},
-			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
-				// Simulate that the done check phase determines the same
-				// end block as the executing signer.
-				return testResult, 215, nil
-			},
-			expectedOutgoingDoneChecks: []*signingDoneMessage{
-				{
-					senderID:      1,
-					message:       message,
-					attemptNumber: 1,
-					signature:     testResult.Signature,
-					endBlock:      215,
-				},
-			},
-			expectedErr: nil,
-			expectedResult: &signingRetryLoopResult{
-				result: testResult,
-				activityReport: &signingActivityReport{
-					activeMembers:   []group.MemberIndex{1, 2, 3, 6, 7, 9},
-					inactiveMembers: []group.MemberIndex{4, 5, 8, 10},
-				},
-				latestEndBlock:      215, // the end block resolved by the done check phase
-				attemptTimeoutBlock: 236, // start block of the first attempt + 30
-			},
-			// As only 6 members (honest threshold) announced their readiness,
-			// we don't have any other option than select them for the attempt.
-			// Not ready members are excluded.
-			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 1,
-				startBlock:             206,
-				timeoutBlock:           236, // start block of the first attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{4, 5, 8, 10},
-			},
-			outgoingAnnouncementsCount: 1,
-		},
-		"missing announcements without honest majority on initial attempt": {
-			signingGroupMemberIndex: 3,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 10*time.Second)
-			},
-			currentBlockFn: func() (uint64, error) {
-				return 200, nil // same as the initial start block
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				if sessionID == fmt.Sprintf("%v-%v", message, 1) {
-					// Minority of members announced their readiness.
-					return []group.MemberIndex{1, 2, 3, 6, 7}, nil
-				}
-
-				return signingGroupMembersIndexes, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				return testResult, 260, nil // an arbitrary end block
-			},
-			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
-				// Simulate that the done check phase determines the same
-				// end block as the executing signer.
-				return testResult, 260, nil
-			},
-			expectedOutgoingDoneChecks: []*signingDoneMessage{
-				{
-					senderID:      3,
-					message:       message,
-					attemptNumber: 2,
-					signature:     testResult.Signature,
-					endBlock:      260,
-				},
-			},
-			expectedErr: nil,
-			expectedResult: &signingRetryLoopResult{
-				result: testResult,
-				activityReport: &signingActivityReport{
-					activeMembers:   signingGroupMembersIndexes,
-					inactiveMembers: []group.MemberIndex{},
-				},
-				latestEndBlock:      260, // the end block resolved by the done check phase
-				attemptTimeoutBlock: 277, // start block of the second attempt + 30
-			},
-			// Member 3 is the executing one. The first attempt's announcement
-			// fails and the signing random retry algorithm invoked with the
-			// test seed excludes 3 members (6 is the honest threshold) from the
-			// second attempt: 1, 2 and 5. The additional exclusion round that
-			// trims the included members list to the honest threshold size
-			// adds member 9 to the final excluded members list.
-			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 2,
-				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
-				timeoutBlock:           277, // start block of the second attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
-			},
-			outgoingAnnouncementsCount: 2,
-		},
-		"announcement error on initial attempt": {
-			signingGroupMemberIndex: 4,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 10*time.Second)
-			},
-			currentBlockFn: func() (uint64, error) {
-				return 200, nil // same as the initial start block
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				if sessionID == fmt.Sprintf("%v-%v", message, 1) {
-					return nil, fmt.Errorf("unexpected error")
-				}
-
-				return signingGroupMembersIndexes, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				return testResult, 260, nil // an arbitrary end block
-			},
-			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
-				// Simulate that the done check phase determines the same
-				// end block as the executing signer.
-				return testResult, 260, nil
-			},
-			expectedOutgoingDoneChecks: []*signingDoneMessage{
-				{
-					senderID:      4,
-					message:       message,
-					attemptNumber: 2,
-					signature:     testResult.Signature,
-					endBlock:      260,
-				},
-			},
-			expectedErr: nil,
-			expectedResult: &signingRetryLoopResult{
-				result: testResult,
-				activityReport: &signingActivityReport{
-					activeMembers:   signingGroupMembersIndexes,
-					inactiveMembers: []group.MemberIndex{},
-				},
-				latestEndBlock:      260, // the end block resolved by the done check phase
-				attemptTimeoutBlock: 277, // start block of the second attempt + 30
-			},
-			// Member 4 is the executing one. The first attempt fails and
-			// the signing random retry algorithm invoked with the test seed
-			// excludes 3 members (6 is the honest threshold) from the second
-			// attempt: 1, 2 and 5. The additional exclusion round that trims
-			// the included members list to the honest threshold size adds
-			// member 9 to the final excluded members list.
-			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 2,
-				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
-				timeoutBlock:           277, // start block of the second attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
-			},
-			outgoingAnnouncementsCount: 2,
-		},
-		"signing error on initial attempt": {
-			signingGroupMemberIndex: 4,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 10*time.Second)
-			},
-			currentBlockFn: func() (uint64, error) {
-				return 200, nil // same as the initial start block
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				return signingGroupMembersIndexes, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				if attempt.number <= 1 {
-					return nil, 0, fmt.Errorf("invalid data")
-				}
-
-				return testResult, 260, nil // an arbitrary end block
-			},
-			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
-				// Simulate that the done check phase determines the same
-				// end block as the executing signer.
-				return testResult, 260, nil
-			},
-			expectedOutgoingDoneChecks: []*signingDoneMessage{
-				{
-					senderID:      4,
-					message:       message,
-					attemptNumber: 2,
-					signature:     testResult.Signature,
-					endBlock:      260,
-				},
-			},
-			expectedErr: nil,
-			expectedResult: &signingRetryLoopResult{
-				result: testResult,
-				activityReport: &signingActivityReport{
-					activeMembers:   signingGroupMembersIndexes,
-					inactiveMembers: []group.MemberIndex{},
-				},
-				latestEndBlock:      260, // the end block resolved by the done check phase
-				attemptTimeoutBlock: 277, // start block of the second attempt + 30
-			},
-			// Member 4 is the executing one. The first attempt fails and
-			// the signing random retry algorithm invoked with the test seed
-			// excludes 3 members (6 is the honest threshold) from the second
-			// attempt: 1, 2 and 5. The additional exclusion round that trims
-			// the included members list to the honest threshold size adds
-			// member 9 to the final excluded members list.
-			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 2,
-				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
-				timeoutBlock:           277, // start block of the second attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
-			},
-			outgoingAnnouncementsCount: 2,
-		},
-		"executing member excluded": {
-			signingGroupMemberIndex: 2,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 10*time.Second)
-			},
-			currentBlockFn: func() (uint64, error) {
-				return 200, nil // same as the initial start block
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				return signingGroupMembersIndexes, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				return nil, 0, fmt.Errorf("invalid data")
-			},
-			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
-				// Simulate the result and the end block have been determined
-				// by listening for signing done checks.
-				if attemptNumber == 2 {
-					return testResult, 260, nil
-				}
-
-				panic("undefined behavior")
-			},
-			expectedOutgoingDoneChecks: nil,
-			expectedErr:                nil,
-			expectedResult: &signingRetryLoopResult{
-				result: testResult,
-				activityReport: &signingActivityReport{
-					activeMembers:   signingGroupMembersIndexes,
-					inactiveMembers: []group.MemberIndex{},
-				},
-				latestEndBlock:      260, // the end block resolved by the done check phase
-				attemptTimeoutBlock: 277, // start block of the second attempt + 30
-			},
-			// Member 2 is the executing one. The first attempt fails
-			// and is the last attempt executed by this member because member
-			// 2 is excluded from the second attempt that produced the signature.
-			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 1,
-				startBlock:             206,
-				timeoutBlock:           236, // start block of the first attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
-			},
-			// The second announcement is done at the beginning of the
-			// second attempt for which member 2 is eventually excluded.
-			outgoingAnnouncementsCount: 2,
-		},
-		"done checks wait error": {
-			signingGroupMemberIndex: 4,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 10*time.Second)
-			},
-			currentBlockFn: func() (uint64, error) {
-				return 200, nil // same as the initial start block
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				return signingGroupMembersIndexes, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				if attempt.number == 1 {
-					return testResult, 215, nil // an arbitrary end block
-				}
-
-				if attempt.number == 2 {
-					return testResult, 260, nil // an arbitrary end block
-				}
-
-				panic("undefined behavior")
-			},
-			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
-				// Fail the done check for the first attempt.
-				if attemptNumber == 1 {
-					return nil, 0, fmt.Errorf("network error")
-				}
-
-				// Simulate that the done check phase determines the same
-				// end block as the executing signer.
-				return testResult, 260, nil
-			},
-			expectedOutgoingDoneChecks: []*signingDoneMessage{
-				{
-					senderID:      4,
-					message:       message,
-					attemptNumber: 1,
-					signature:     testResult.Signature,
-					endBlock:      215,
-				},
-				{
-					senderID:      4,
-					message:       message,
-					attemptNumber: 2,
-					signature:     testResult.Signature,
-					endBlock:      260,
-				},
-			},
-			expectedErr: nil,
-			expectedResult: &signingRetryLoopResult{
-				result: testResult,
-				activityReport: &signingActivityReport{
-					activeMembers:   signingGroupMembersIndexes,
-					inactiveMembers: []group.MemberIndex{},
-				},
-				latestEndBlock:      260, // the end block resolved by the done check phase
-				attemptTimeoutBlock: 277, // start block of the second attempt + 30
-			},
-			// Member 4 is the executing one. The first attempt done check
-			// exchange fails and the signing random retry algorithm invoked
-			// with the test seed excludes 3 members (6 is the honest threshold)
-			// from the second attempt: 1, 2 and 5. The additional exclusion
-			// round that trims the included members list to the honest
-			// threshold size adds member 9 to the final excluded members list.
-			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 2,
-				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
-				timeoutBlock:           277, // start block of the second attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
-			},
-			outgoingAnnouncementsCount: 2,
-		},
-		"loop context done": {
-			signingGroupMemberIndex: 1,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				ctx, cancelCtx := context.WithCancel(context.Background())
-				// Cancel the context deliberately.
-				cancelCtx()
-				return ctx, cancelCtx
-			},
-			currentBlockFn: func() (uint64, error) {
-				return 200, nil // same as the initial start block
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				return signingGroupMembersIndexes, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				return nil, 0, fmt.Errorf("invalid data")
-			},
-			expectedErr:                 context.Canceled,
-			expectedResult:              nil,
-			expectedLastExecutedAttempt: nil,
-		},
-		"signing in the past": {
-			signingGroupMemberIndex: 1,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 50*time.Millisecond)
-			},
-			currentBlockFn: func() (uint64, error) {
-				return math.MaxUint64, nil // all attempts should be skipped
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				return signingGroupMembersIndexes, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				return nil, 0, fmt.Errorf("invalid data")
-			},
-			// The retry loop keeps skipping all attempts because they are all
-			// ending announcement phase in the past block. It keeps retrying
-			// until the context deadline is exceeded.
-			expectedErr:                 context.DeadlineExceeded,
-			expectedResult:              nil,
-			expectedLastExecutedAttempt: nil,
-		},
-		"first attempt in the past": {
-			signingGroupMemberIndex: 3,
-			ctxFn: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 1*time.Second)
-			},
-			currentBlockFn: func() (uint64, error) {
-				// The initial start block is 200 and the announcement takes 6
-				// blocks; we are at the end of the announcement phase so the
-				// first attempt should be skipped.
-				return 206, nil
-			},
-			incomingAnnouncementsFn: func(
-				sessionID string,
-			) ([]group.MemberIndex, error) {
-				return signingGroupMembersIndexes, nil
-			},
-			signingAttemptFn: func(
-				attempt *signingAttemptParams,
-			) (*signing.Result, uint64, error) {
-				return testResult, 260, nil // an arbitrary end block
-			},
-			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
-				// Simulate that the done check phase determines the same
-				// end block as the executing signer.
-				return testResult, 260, nil
-			},
-			expectedOutgoingDoneChecks: []*signingDoneMessage{
-				{
-					senderID:      3,
-					message:       message,
-					attemptNumber: 2,
-					signature:     testResult.Signature,
-					endBlock:      260,
-				},
-			},
-			expectedErr: nil,
-			expectedResult: &signingRetryLoopResult{
-				result: testResult,
-				activityReport: &signingActivityReport{
-					activeMembers:   signingGroupMembersIndexes,
-					inactiveMembers: []group.MemberIndex{},
-				},
-				latestEndBlock:      260, // the end block resolved by the done check phase
-				attemptTimeoutBlock: 277, // start block of the second attempt + 30
-			},
-			// Member 3 is the executing one. The first attempt's announcement
-			// is skipped and the signing random retry algorithm invoked with the
-			// test seed excludes 3 members (6 is the honest threshold) from the
-			// second attempt: 1, 2 and 5. The additional exclusion round that
-			// trims the included members list to the honest threshold size
-			// adds member 9 to the final excluded members list.
-			expectedLastExecutedAttempt: &signingAttemptParams{
-				number:                 2,
-				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
-				timeoutBlock:           277, // start block of the second attempt + 30
-				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
-			},
-			// just the second announcement, the first one was skipped
-			outgoingAnnouncementsCount: 1,
-		},
-	}
+func runSigningRetryLoopTests(
+	t *testing.T,
+	tests map[string]signingRetryLoopTestCase,
+) {
+	t.Helper()
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
@@ -606,11 +83,11 @@ func TestSigningRetryLoop(t *testing.T) {
 
 			retryLoop := newSigningRetryLoop(
 				&testutils.MockLogger{},
-				message,
+				signingRetryLoopMessage,
 				200,
 				test.signingGroupMemberIndex,
-				signingGroupOperators,
-				groupParameters,
+				signingRetryLoopGroupOperators,
+				signingRetryLoopGroupParameters,
 				announcer,
 				doneCheck,
 			)
@@ -698,6 +175,566 @@ func TestSigningRetryLoop(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSigningRetryLoop_SuccessOnInitialAttempt(t *testing.T) {
+	tests := map[string]signingRetryLoopTestCase{
+		"success on initial attempt": {
+			signingGroupMemberIndex: 1,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 10*time.Second)
+			},
+			currentBlockFn: func() (uint64, error) {
+				return 200, nil // same as the initial start block
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				return signingRetryLoopMembersIndexes, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				return signingRetryLoopTestResult, 215, nil // an arbitrary end block
+			},
+			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
+				// Simulate that the done check phase determines the same
+				// end block as the executing signer.
+				return signingRetryLoopTestResult, 215, nil
+			},
+			expectedOutgoingDoneChecks: []*signingDoneMessage{
+				{
+					senderID:      1,
+					message:       signingRetryLoopMessage,
+					attemptNumber: 1,
+					signature:     signingRetryLoopTestResult.Signature,
+					endBlock:      215,
+				},
+			},
+			expectedErr: nil,
+			expectedResult: &signingRetryLoopResult{
+				result: signingRetryLoopTestResult,
+				activityReport: &signingActivityReport{
+					activeMembers:   signingRetryLoopMembersIndexes,
+					inactiveMembers: []group.MemberIndex{},
+				},
+				latestEndBlock:      215, // the end block resolved by the done check phase
+				attemptTimeoutBlock: 236, // start block of the first attempt + 30
+			},
+			// The signing random retry algorithm invoked with the test seed
+			// excludes 4 members (6 is the honest threshold) from the first
+			// attempt: 3, 7, 8 and 10.
+			expectedLastExecutedAttempt: &signingAttemptParams{
+				number:                 1,
+				startBlock:             206,
+				timeoutBlock:           236, // start block of the first attempt + 30
+				excludedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
+			},
+			outgoingAnnouncementsCount: 1,
+		},
+		"success on initial attempt with missing announcements and honest majority": {
+			signingGroupMemberIndex: 1,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 10*time.Second)
+			},
+			currentBlockFn: func() (uint64, error) {
+				return 200, nil // same as the initial start block
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				// Honest majority of members announced their readiness.
+				return []group.MemberIndex{1, 2, 3, 6, 7, 9}, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				return signingRetryLoopTestResult, 215, nil // an arbitrary end block
+			},
+			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
+				// Simulate that the done check phase determines the same
+				// end block as the executing signer.
+				return signingRetryLoopTestResult, 215, nil
+			},
+			expectedOutgoingDoneChecks: []*signingDoneMessage{
+				{
+					senderID:      1,
+					message:       signingRetryLoopMessage,
+					attemptNumber: 1,
+					signature:     signingRetryLoopTestResult.Signature,
+					endBlock:      215,
+				},
+			},
+			expectedErr: nil,
+			expectedResult: &signingRetryLoopResult{
+				result: signingRetryLoopTestResult,
+				activityReport: &signingActivityReport{
+					activeMembers:   []group.MemberIndex{1, 2, 3, 6, 7, 9},
+					inactiveMembers: []group.MemberIndex{4, 5, 8, 10},
+				},
+				latestEndBlock:      215, // the end block resolved by the done check phase
+				attemptTimeoutBlock: 236, // start block of the first attempt + 30
+			},
+			// As only 6 members (honest threshold) announced their readiness,
+			// we don't have any other option than select them for the attempt.
+			// Not ready members are excluded.
+			expectedLastExecutedAttempt: &signingAttemptParams{
+				number:                 1,
+				startBlock:             206,
+				timeoutBlock:           236, // start block of the first attempt + 30
+				excludedMembersIndexes: []group.MemberIndex{4, 5, 8, 10},
+			},
+			outgoingAnnouncementsCount: 1,
+		},
+	}
+
+	runSigningRetryLoopTests(t, tests)
+}
+
+func TestSigningRetryLoop_RetryOnAttemptFailure(t *testing.T) {
+	tests := map[string]signingRetryLoopTestCase{
+		"missing announcements without honest majority on initial attempt": {
+			signingGroupMemberIndex: 3,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 10*time.Second)
+			},
+			currentBlockFn: func() (uint64, error) {
+				return 200, nil // same as the initial start block
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				if sessionID == fmt.Sprintf("%v-%v", signingRetryLoopMessage, 1) {
+					// Minority of members announced their readiness.
+					return []group.MemberIndex{1, 2, 3, 6, 7}, nil
+				}
+
+				return signingRetryLoopMembersIndexes, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				return signingRetryLoopTestResult, 260, nil // an arbitrary end block
+			},
+			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
+				// Simulate that the done check phase determines the same
+				// end block as the executing signer.
+				return signingRetryLoopTestResult, 260, nil
+			},
+			expectedOutgoingDoneChecks: []*signingDoneMessage{
+				{
+					senderID:      3,
+					message:       signingRetryLoopMessage,
+					attemptNumber: 2,
+					signature:     signingRetryLoopTestResult.Signature,
+					endBlock:      260,
+				},
+			},
+			expectedErr: nil,
+			expectedResult: &signingRetryLoopResult{
+				result: signingRetryLoopTestResult,
+				activityReport: &signingActivityReport{
+					activeMembers:   signingRetryLoopMembersIndexes,
+					inactiveMembers: []group.MemberIndex{},
+				},
+				latestEndBlock:      260, // the end block resolved by the done check phase
+				attemptTimeoutBlock: 277, // start block of the second attempt + 30
+			},
+			// Member 3 is the executing one. The first attempt's announcement
+			// fails and the signing random retry algorithm invoked with the
+			// test seed excludes 3 members (6 is the honest threshold) from the
+			// second attempt: 1, 2 and 5. The additional exclusion round that
+			// trims the included members list to the honest threshold size
+			// adds member 9 to the final excluded members list.
+			expectedLastExecutedAttempt: &signingAttemptParams{
+				number:                 2,
+				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
+				timeoutBlock:           277, // start block of the second attempt + 30
+				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+			},
+			outgoingAnnouncementsCount: 2,
+		},
+		"announcement error on initial attempt": {
+			signingGroupMemberIndex: 4,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 10*time.Second)
+			},
+			currentBlockFn: func() (uint64, error) {
+				return 200, nil // same as the initial start block
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				if sessionID == fmt.Sprintf("%v-%v", signingRetryLoopMessage, 1) {
+					return nil, fmt.Errorf("unexpected error")
+				}
+
+				return signingRetryLoopMembersIndexes, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				return signingRetryLoopTestResult, 260, nil // an arbitrary end block
+			},
+			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
+				// Simulate that the done check phase determines the same
+				// end block as the executing signer.
+				return signingRetryLoopTestResult, 260, nil
+			},
+			expectedOutgoingDoneChecks: []*signingDoneMessage{
+				{
+					senderID:      4,
+					message:       signingRetryLoopMessage,
+					attemptNumber: 2,
+					signature:     signingRetryLoopTestResult.Signature,
+					endBlock:      260,
+				},
+			},
+			expectedErr: nil,
+			expectedResult: &signingRetryLoopResult{
+				result: signingRetryLoopTestResult,
+				activityReport: &signingActivityReport{
+					activeMembers:   signingRetryLoopMembersIndexes,
+					inactiveMembers: []group.MemberIndex{},
+				},
+				latestEndBlock:      260, // the end block resolved by the done check phase
+				attemptTimeoutBlock: 277, // start block of the second attempt + 30
+			},
+			// Member 4 is the executing one. The first attempt fails and
+			// the signing random retry algorithm invoked with the test seed
+			// excludes 3 members (6 is the honest threshold) from the second
+			// attempt: 1, 2 and 5. The additional exclusion round that trims
+			// the included members list to the honest threshold size adds
+			// member 9 to the final excluded members list.
+			expectedLastExecutedAttempt: &signingAttemptParams{
+				number:                 2,
+				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
+				timeoutBlock:           277, // start block of the second attempt + 30
+				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+			},
+			outgoingAnnouncementsCount: 2,
+		},
+		"signing error on initial attempt": {
+			signingGroupMemberIndex: 4,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 10*time.Second)
+			},
+			currentBlockFn: func() (uint64, error) {
+				return 200, nil // same as the initial start block
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				return signingRetryLoopMembersIndexes, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				if attempt.number <= 1 {
+					return nil, 0, fmt.Errorf("invalid data")
+				}
+
+				return signingRetryLoopTestResult, 260, nil // an arbitrary end block
+			},
+			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
+				// Simulate that the done check phase determines the same
+				// end block as the executing signer.
+				return signingRetryLoopTestResult, 260, nil
+			},
+			expectedOutgoingDoneChecks: []*signingDoneMessage{
+				{
+					senderID:      4,
+					message:       signingRetryLoopMessage,
+					attemptNumber: 2,
+					signature:     signingRetryLoopTestResult.Signature,
+					endBlock:      260,
+				},
+			},
+			expectedErr: nil,
+			expectedResult: &signingRetryLoopResult{
+				result: signingRetryLoopTestResult,
+				activityReport: &signingActivityReport{
+					activeMembers:   signingRetryLoopMembersIndexes,
+					inactiveMembers: []group.MemberIndex{},
+				},
+				latestEndBlock:      260, // the end block resolved by the done check phase
+				attemptTimeoutBlock: 277, // start block of the second attempt + 30
+			},
+			// Member 4 is the executing one. The first attempt fails and
+			// the signing random retry algorithm invoked with the test seed
+			// excludes 3 members (6 is the honest threshold) from the second
+			// attempt: 1, 2 and 5. The additional exclusion round that trims
+			// the included members list to the honest threshold size adds
+			// member 9 to the final excluded members list.
+			expectedLastExecutedAttempt: &signingAttemptParams{
+				number:                 2,
+				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
+				timeoutBlock:           277, // start block of the second attempt + 30
+				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+			},
+			outgoingAnnouncementsCount: 2,
+		},
+		"done checks wait error": {
+			signingGroupMemberIndex: 4,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 10*time.Second)
+			},
+			currentBlockFn: func() (uint64, error) {
+				return 200, nil // same as the initial start block
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				return signingRetryLoopMembersIndexes, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				if attempt.number == 1 {
+					return signingRetryLoopTestResult, 215, nil // an arbitrary end block
+				}
+
+				if attempt.number == 2 {
+					return signingRetryLoopTestResult, 260, nil // an arbitrary end block
+				}
+
+				panic("undefined behavior")
+			},
+			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
+				// Fail the done check for the first attempt.
+				if attemptNumber == 1 {
+					return nil, 0, fmt.Errorf("network error")
+				}
+
+				// Simulate that the done check phase determines the same
+				// end block as the executing signer.
+				return signingRetryLoopTestResult, 260, nil
+			},
+			expectedOutgoingDoneChecks: []*signingDoneMessage{
+				{
+					senderID:      4,
+					message:       signingRetryLoopMessage,
+					attemptNumber: 1,
+					signature:     signingRetryLoopTestResult.Signature,
+					endBlock:      215,
+				},
+				{
+					senderID:      4,
+					message:       signingRetryLoopMessage,
+					attemptNumber: 2,
+					signature:     signingRetryLoopTestResult.Signature,
+					endBlock:      260,
+				},
+			},
+			expectedErr: nil,
+			expectedResult: &signingRetryLoopResult{
+				result: signingRetryLoopTestResult,
+				activityReport: &signingActivityReport{
+					activeMembers:   signingRetryLoopMembersIndexes,
+					inactiveMembers: []group.MemberIndex{},
+				},
+				latestEndBlock:      260, // the end block resolved by the done check phase
+				attemptTimeoutBlock: 277, // start block of the second attempt + 30
+			},
+			// Member 4 is the executing one. The first attempt done check
+			// exchange fails and the signing random retry algorithm invoked
+			// with the test seed excludes 3 members (6 is the honest threshold)
+			// from the second attempt: 1, 2 and 5. The additional exclusion
+			// round that trims the included members list to the honest
+			// threshold size adds member 9 to the final excluded members list.
+			expectedLastExecutedAttempt: &signingAttemptParams{
+				number:                 2,
+				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
+				timeoutBlock:           277, // start block of the second attempt + 30
+				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+			},
+			outgoingAnnouncementsCount: 2,
+		},
+	}
+
+	runSigningRetryLoopTests(t, tests)
+}
+
+func TestSigningRetryLoop_ExecutingMemberExcluded(t *testing.T) {
+	tests := map[string]signingRetryLoopTestCase{
+		"executing member excluded": {
+			signingGroupMemberIndex: 2,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 10*time.Second)
+			},
+			currentBlockFn: func() (uint64, error) {
+				return 200, nil // same as the initial start block
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				return signingRetryLoopMembersIndexes, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				return nil, 0, fmt.Errorf("invalid data")
+			},
+			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
+				// Simulate the result and the end block have been determined
+				// by listening for signing done checks.
+				if attemptNumber == 2 {
+					return signingRetryLoopTestResult, 260, nil
+				}
+
+				panic("undefined behavior")
+			},
+			expectedOutgoingDoneChecks: nil,
+			expectedErr:                nil,
+			expectedResult: &signingRetryLoopResult{
+				result: signingRetryLoopTestResult,
+				activityReport: &signingActivityReport{
+					activeMembers:   signingRetryLoopMembersIndexes,
+					inactiveMembers: []group.MemberIndex{},
+				},
+				latestEndBlock:      260, // the end block resolved by the done check phase
+				attemptTimeoutBlock: 277, // start block of the second attempt + 30
+			},
+			// Member 2 is the executing one. The first attempt fails
+			// and is the last attempt executed by this member because member
+			// 2 is excluded from the second attempt that produced the signature.
+			expectedLastExecutedAttempt: &signingAttemptParams{
+				number:                 1,
+				startBlock:             206,
+				timeoutBlock:           236, // start block of the first attempt + 30
+				excludedMembersIndexes: []group.MemberIndex{3, 7, 8, 10},
+			},
+			// The second announcement is done at the beginning of the
+			// second attempt for which member 2 is eventually excluded.
+			outgoingAnnouncementsCount: 2,
+		},
+	}
+
+	runSigningRetryLoopTests(t, tests)
+}
+
+func TestSigningRetryLoop_PastBlockHandling(t *testing.T) {
+	tests := map[string]signingRetryLoopTestCase{
+		"signing in the past": {
+			signingGroupMemberIndex: 1,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 50*time.Millisecond)
+			},
+			currentBlockFn: func() (uint64, error) {
+				return math.MaxUint64, nil // all attempts should be skipped
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				return signingRetryLoopMembersIndexes, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				return nil, 0, fmt.Errorf("invalid data")
+			},
+			// The retry loop keeps skipping all attempts because they are all
+			// ending announcement phase in the past block. It keeps retrying
+			// until the context deadline is exceeded.
+			expectedErr:                 context.DeadlineExceeded,
+			expectedResult:              nil,
+			expectedLastExecutedAttempt: nil,
+		},
+		"first attempt in the past": {
+			signingGroupMemberIndex: 3,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 1*time.Second)
+			},
+			currentBlockFn: func() (uint64, error) {
+				// The initial start block is 200 and the announcement takes 6
+				// blocks; we are at the end of the announcement phase so the
+				// first attempt should be skipped.
+				return 206, nil
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				return signingRetryLoopMembersIndexes, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				return signingRetryLoopTestResult, 260, nil // an arbitrary end block
+			},
+			waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
+				// Simulate that the done check phase determines the same
+				// end block as the executing signer.
+				return signingRetryLoopTestResult, 260, nil
+			},
+			expectedOutgoingDoneChecks: []*signingDoneMessage{
+				{
+					senderID:      3,
+					message:       signingRetryLoopMessage,
+					attemptNumber: 2,
+					signature:     signingRetryLoopTestResult.Signature,
+					endBlock:      260,
+				},
+			},
+			expectedErr: nil,
+			expectedResult: &signingRetryLoopResult{
+				result: signingRetryLoopTestResult,
+				activityReport: &signingActivityReport{
+					activeMembers:   signingRetryLoopMembersIndexes,
+					inactiveMembers: []group.MemberIndex{},
+				},
+				latestEndBlock:      260, // the end block resolved by the done check phase
+				attemptTimeoutBlock: 277, // start block of the second attempt + 30
+			},
+			// Member 3 is the executing one. The first attempt's announcement
+			// is skipped and the signing random retry algorithm invoked with the
+			// test seed excludes 3 members (6 is the honest threshold) from the
+			// second attempt: 1, 2 and 5. The additional exclusion round that
+			// trims the included members list to the honest threshold size
+			// adds member 9 to the final excluded members list.
+			expectedLastExecutedAttempt: &signingAttemptParams{
+				number:                 2,
+				startBlock:             247, // 206 + 1 * (6 + 30 + 5)
+				timeoutBlock:           277, // start block of the second attempt + 30
+				excludedMembersIndexes: []group.MemberIndex{1, 2, 5, 9},
+			},
+			// just the second announcement, the first one was skipped
+			outgoingAnnouncementsCount: 1,
+		},
+	}
+
+	runSigningRetryLoopTests(t, tests)
+}
+
+func TestSigningRetryLoop_ContextDone(t *testing.T) {
+	tests := map[string]signingRetryLoopTestCase{
+		"loop context done": {
+			signingGroupMemberIndex: 1,
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				ctx, cancelCtx := context.WithCancel(context.Background())
+				// Cancel the context deliberately.
+				cancelCtx()
+				return ctx, cancelCtx
+			},
+			currentBlockFn: func() (uint64, error) {
+				return 200, nil // same as the initial start block
+			},
+			incomingAnnouncementsFn: func(
+				sessionID string,
+			) ([]group.MemberIndex, error) {
+				return signingRetryLoopMembersIndexes, nil
+			},
+			signingAttemptFn: func(
+				attempt *signingAttemptParams,
+			) (*signing.Result, uint64, error) {
+				return nil, 0, fmt.Errorf("invalid data")
+			},
+			expectedErr:                 context.Canceled,
+			expectedResult:              nil,
+			expectedLastExecutedAttempt: nil,
+		},
+	}
+
+	runSigningRetryLoopTests(t, tests)
 }
 
 func TestSigningRetryLoop_GetCurrentBlockErrorCausesRetry(t *testing.T) {

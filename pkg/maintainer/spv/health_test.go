@@ -61,14 +61,26 @@ func TestMaintainerHealthLifecycle(t *testing.T) {
 		metricsRecorder: recorder,
 	}
 	sm.startControlLoop(ctx)
-	if recorder.gauges[clientinfo.MetricSpvMaintainerActive] != 0 {
+	// Read with comma-ok: a gauge that was never exported reads back as zero,
+	// so asserting "== 0" alone passes just as happily when the maintainer
+	// stops publishing the metric altogether.
+	active, ok := recorder.gauges[clientinfo.MetricSpvMaintainerActive]
+	if !ok {
+		t.Fatal("active gauge was not exported at all")
+	}
+	if active != 0 {
 		t.Fatal("stopped maintainer remains active")
 	}
 	if recorder.gauges[clientinfo.MetricSpvMaintainerMaxBackoffSeconds] != 3600 {
 		t.Fatal("configured restart backoff was not exported")
 	}
-	if recorder.gauges[clientinfo.MetricSpvMaintainerLastSuccessTimestamp] != 0 {
-		t.Fatal("canceled cycle was reported as successful")
+	// A last-success timestamp is only exported from inside a completed cycle
+	// (setHealthGauge in spv.go). A canceled context never completes one, so
+	// the gauge must be absent, not merely zero - asserting "== 0" would pass
+	// just as happily if the timestamp were published outside the success
+	// branch and happened to be zero.
+	if _, ok := recorder.gauges[clientinfo.MetricSpvMaintainerLastSuccessTimestamp]; ok {
+		t.Fatal("canceled cycle exported a last-success timestamp")
 	}
 }
 

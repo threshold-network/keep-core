@@ -5,20 +5,23 @@ package electrum_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"golang.org/x/exp/slices"
-
 	"github.com/go-test/deep"
+
+	goelectrum "github.com/checksum0/go-electrum/electrum"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
+	"github.com/keep-network/keep-core/pkg/wrappers"
 
 	testData "github.com/keep-network/keep-core/internal/testdata/bitcoin"
 
@@ -158,19 +161,20 @@ func init() {
 	}
 }
 
-func TestConnect_Integration(t *testing.T) {
-	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		_, cancelCtx := newTestConnection(t, testConfig.clientConfig)
-		defer cancelCtx()
-	})
-}
-
 func TestGetTransaction_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
 		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
 		defer cancelCtx()
 
-		for txName, tx := range testData.Transactions[testConfig.network] {
+		transactions := testData.Transactions[testConfig.network]
+		if len(transactions) == 0 {
+			t.Skipf(
+				"no transaction test vectors in internal/testdata for %s",
+				testConfig.network,
+			)
+		}
+
+		for txName, tx := range transactions {
 			t.Run(txName, func(t *testing.T) {
 				result, err := electrum.GetTransaction(tx.TxHash)
 				if err != nil {
@@ -222,7 +226,15 @@ func TestGetTransactionConfirmations_Integration(t *testing.T) {
 		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
 		defer cancelCtx()
 
-		for txName, tx := range testData.Transactions[testConfig.network] {
+		transactions := testData.Transactions[testConfig.network]
+		if len(transactions) == 0 {
+			t.Skipf(
+				"no transaction test vectors in internal/testdata for %s",
+				testConfig.network,
+			)
+		}
+
+		for txName, tx := range transactions {
 			t.Run(txName, func(t *testing.T) {
 				latestBlockHeight, err := electrum.GetLatestBlockHeight()
 				if err != nil {
@@ -772,14 +784,22 @@ func toJson(val interface{}) string {
 	return string(b)
 }
 
+// shouldSkipElectrumIntegrationError reports whether err is one of the
+// transient external-service failures that integration tests should skip
+// rather than fail on, matched by typed sentinel rather than substring so a
+// reworded upstream message cannot silently widen or narrow the match:
+//   - goelectrum.ErrTimeout: the vendored go-electrum client's own request
+//     timed out talking to a public server.
+//   - wrappers.ErrRetryTimeout: the retry loop wrapping the request gave up
+//     after RequestRetryTimeout elapsed.
+//   - electrum.ErrFeeEstimateUnavailable: the queried server reported it
+//     does not have enough information to produce a fee estimate.
 func shouldSkipElectrumIntegrationError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	msg := err.Error()
-
-	return strings.Contains(msg, "request timeout") ||
-		strings.Contains(msg, "retry timeout") ||
-		strings.Contains(msg, "enough information")
+	return errors.Is(err, goelectrum.ErrTimeout) ||
+		errors.Is(err, wrappers.ErrRetryTimeout) ||
+		errors.Is(err, electrum.ErrFeeEstimateUnavailable)
 }

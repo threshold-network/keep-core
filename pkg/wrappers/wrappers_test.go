@@ -81,12 +81,61 @@ func TestDoWithRetryExceedTimeout(t *testing.T) {
 		)
 	}
 
+	// Callers must be able to classify retry exhaustion without matching on
+	// error text.
+	if !errors.Is(err, ErrRetryTimeout) {
+		t.Errorf("timeout error does not match ErrRetryTimeout: [%v]", err)
+	}
+
 	expectedFailCount := 4
 	if actualFailCount != expectedFailCount {
 		t.Errorf(
 			"unexpected fail count: actual [%v], expected [%v]",
 			actualFailCount,
 			expectedFailCount,
+		)
+	}
+}
+
+// TestDoWithRetryTimeoutBeforeFirstAttempt covers the path where the context
+// is already done when DoWithRetry starts, so doFn never runs and there is no
+// most-recent error to report.
+//
+// The nil cause renders as "<nil>" in the message: passing a nil error to a
+// %w verb would print the literal "%!w(<nil>)". The exact message is asserted
+// below, so any change to the rendering is a conscious decision.
+func TestDoWithRetryTimeoutBeforeFirstAttempt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	attempted := false
+	doFn := func(ctx context.Context) error {
+		attempted = true
+		return nil
+	}
+
+	err := DoWithRetry(ctx, 10*time.Millisecond, 100*time.Millisecond, time.Second, doFn)
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if attempted {
+		t.Error("doFn should not run when the context is already done")
+	}
+
+	if !errors.Is(err, ErrRetryTimeout) {
+		t.Errorf("timeout error does not match ErrRetryTimeout: [%v]", err)
+	}
+
+	if cause := errors.Unwrap(err); cause != nil {
+		t.Errorf("expected no wrapped cause, got [%v]", cause)
+	}
+
+	expectedError := "retry timeout [1s] exceeded; most recent error: [<nil>]"
+	if err.Error() != expectedError {
+		t.Errorf(
+			"unexpected error message\nactual:   [%v]\nexpected: [%v]",
+			err.Error(),
+			expectedError,
 		)
 	}
 }

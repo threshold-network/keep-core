@@ -357,20 +357,32 @@ func TestMetricsInitialization(t *testing.T) {
 	}
 }
 
-// TestContextCancelation tests that goroutines stop when context is cancelled.
+// TestContextCancelation tests that observeSystemMetrics terminates when its
+// context is cancelled, and that subsequent metric operations do not panic
+// after shutdown.
 func TestContextCancelation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry)
 
-	// Cancel context immediately
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pm.observeSystemMetrics(ctx)
+	}()
+
+	// Cancel context to signal the observation loop to stop.
 	cancel()
 
-	// Give goroutines time to stop
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-done:
+		// observeSystemMetrics observed context cancellation and returned.
+	case <-time.After(2 * time.Second):
+		t.Fatal("observeSystemMetrics did not return after context cancellation")
+	}
 
-	// This should not panic or cause issues
+	// Operations after shutdown must not panic or cause issues.
 	pm.IncrementCounter(MetricSigningOperationsTotal, 1)
 	pm.SetGauge(MetricIncomingMessageQueueSize, 5)
 	pm.RecordDuration("signing_duration_seconds", 100*time.Millisecond)

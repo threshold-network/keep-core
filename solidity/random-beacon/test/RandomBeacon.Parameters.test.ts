@@ -153,22 +153,6 @@ describe("RandomBeacon - Parameters", () => {
         )
       })
 
-      it("should update the authorization decrease delay", async () => {
-        const { authorizationDecreaseDelay } =
-          await randomBeacon.authorizationParameters()
-        expect(authorizationDecreaseDelay).to.be.equal(
-          authorizationDecreaseDelay,
-        )
-      })
-
-      it("should update the authorization decrease change period", async () => {
-        const { authorizationDecreaseChangePeriod } =
-          await randomBeacon.authorizationParameters()
-        expect(authorizationDecreaseChangePeriod).to.be.equal(
-          authorizationDecreaseChangePeriod,
-        )
-      })
-
       it("should emit the AuthorizationParametersUpdated event", async () => {
         await expect(tx)
           .to.emit(randomBeacon, "AuthorizationParametersUpdated")
@@ -226,12 +210,6 @@ describe("RandomBeacon - Parameters", () => {
 
       after(async () => {
         await restoreSnapshot()
-      })
-
-      it("should update the group creation frequency", async () => {
-        const { groupCreationFrequency } =
-          await randomBeacon.groupCreationParameters()
-        expect(groupCreationFrequency).to.be.equal(groupCreationFrequency)
       })
 
       it("should update the group lifetime", async () => {

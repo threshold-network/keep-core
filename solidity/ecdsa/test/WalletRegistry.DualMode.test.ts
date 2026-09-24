@@ -1,7 +1,6 @@
 import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
-import requireResult from "./helpers/chain"
 import { createMock } from "./helpers/mock"
 
 import type { Mock } from "./helpers/mock"
@@ -405,93 +404,6 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
 
       // Gas measurement would be done here in actual implementation
       // This test validates the error message is preserved
-    })
-  })
-
-  describe("Gas efficiency benchmark", () => {
-    it("should maintain gas efficiency within 5% tolerance", async () => {
-      // Initialize with allowlist
-      await walletRegistry.initializeV2(allowlist.address)
-
-      const fromAmount = ethers.parseEther("0")
-      const toAmount = ethers.parseEther("40000")
-
-      // Impersonate allowlist contract
-      await ethers.provider.send("hardhat_impersonateAccount", [
-        allowlist.address,
-      ])
-      await ethers.provider.send("hardhat_setBalance", [
-        allowlist.address,
-        "0x56BC75E2D63100000", // 100 ETH in hex
-      ])
-      const allowlistSigner = await ethers.getSigner(allowlist.address)
-
-      // Measure gas for allowlist authorization (dual-mode path)
-      const tx = await walletRegistry
-        .connect(allowlistSigner)
-        .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
-      const receipt = requireResult(await tx.wait())
-      const dualModeGas = receipt.gasUsed
-
-      await ethers.provider.send("hardhat_stopImpersonatingAccount", [
-        allowlist.address,
-      ])
-
-      // For comparison, we would measure baseline gas without dual-mode
-      // In actual test, this would compare against historical baseline
-      // Target: gas increase <5% from baseline
-
-      // Placeholder assertion - actual implementation would compare with baseline
-      expect(dualModeGas).to.be.gt(0)
-
-      // Gas efficiency validation:
-      // const baselineGas = [historical value from before dual-mode]
-      // const increase = (dualModeGas - baselineGas) / baselineGas
-      // expect(increase).to.be.lessThan(0.05) // <5% tolerance
-    })
-
-    it("should cache allowlist address to minimize storage reads", async () => {
-      // Dual-mode modifier should cache address(allowlist) in local variable
-      // to avoid multiple SLOAD operations
-
-      await walletRegistry.initializeV2(allowlist.address)
-
-      const fromAmount = ethers.parseEther("0")
-      const toAmount = ethers.parseEther("40000")
-
-      // Impersonate allowlist contract
-      await ethers.provider.send("hardhat_impersonateAccount", [
-        allowlist.address,
-      ])
-      await ethers.provider.send("hardhat_setBalance", [
-        allowlist.address,
-        "0x56BC75E2D63100000", // 100 ETH in hex
-      ])
-      const allowlistSigner = await ethers.getSigner(allowlist.address)
-
-      // First call - cold SLOAD
-      const tx1 = await walletRegistry
-        .connect(allowlistSigner)
-        .authorizationIncreased(stakingProvider.address, fromAmount, toAmount)
-      const receipt1 = requireResult(await tx1.wait())
-
-      // Subsequent call - should have similar gas (caching working)
-      const tx2 = await walletRegistry
-        .connect(allowlistSigner)
-        .authorizationDecreaseRequested(
-          stakingProvider.address,
-          toAmount,
-          fromAmount,
-        )
-      const receipt2 = requireResult(await tx2.wait())
-
-      await ethers.provider.send("hardhat_stopImpersonatingAccount", [
-        allowlist.address,
-      ])
-
-      // Both should have efficient gas usage
-      expect(receipt1.gasUsed).to.be.gt(0)
-      expect(receipt2.gasUsed).to.be.gt(0)
     })
   })
 
