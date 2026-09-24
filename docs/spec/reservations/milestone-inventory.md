@@ -749,7 +749,7 @@ same m1/m2/deferred verdict.
 | Item | Subject | m1 | m2 | Verdict |
 |---|---|---|---|---|
 | 1 | Wallet termination strands active reservations with no recovery path | **gate** | yes | **m1 gate.** Under B stranding is the only close path, so this is not a tail risk, it is the main path. Ties to D-9 and `roadmap.md` §0.8 |
-| 2 | Vault rotation blocked while any reservation is outstanding | yes | yes | Confirmed contract-enforced (C-5). Now a known permanent constraint, not a bug: it is why the vault ships complete |
+| 2 | Vault rotation blocked while any reservation is outstanding | yes | yes | Confirmed contract-enforced (C-5). In m1 vault ships minimal (`4d549e64`); m2 vault rotation achieved via depositor opt-in migration ceremony (Option B, decided 2026-09-24) |
 | 3 | No permissionless fallback if the SPV maintainer stalls | **gate** | yes | **m1 gate.** All proofs sit behind one `onlySpvMaintainer` (`ReservationRouter.sol:322`). Since re-anchor is B's sole unpin, a stalled maintainer freezes the only escape from §0.8's drain |
 | 4 | Live (non-snapshotted) governance parameters applied retroactively | yes | yes | Partly mitigated: `expiresAt` and `dissolutionEligibleAt` are snapshotted per position, the caps are not (§2.6) |
 | 5 | Unbounded re-anchor grinding | closed | - | Resolved directly in `#1088` (`d89a649a`) |

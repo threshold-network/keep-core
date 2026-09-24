@@ -24,13 +24,14 @@ replaceable; the same reasoning forbids minimising the vault (`roadmap.md`
 | Nature | Bridge code reached by `delegatecall` | Separate contract, plain `Ownable` |
 | Replacing it costs | A Bridge implementation upgrade, which m2 needs anyway | Deploying v2 and re-pointing `Bridge.reservationVault` |
 | Gate on replacement | Proxy-admin ceremony | `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1263-1274`) |
-| Reachable in B? | Yes | **No** — in B positions close only by stranding, so quiescence means every custodying wallet has been terminated |
-| m1 posture | **Minimise** | **Ship complete, behaviour disabled** |
+| Reachable in B? | Yes | **No in m1**; m2 reaches replacement via a depositor opt-in migration ceremony (Option B, decided 2026-09-24) or quiescence |
+| m1 posture | **Minimise** | **Minimise** (redemption/renewal deferred to m2 vault migration) |
 
-The asymmetry is the single most important implementation consequence of
-choosing B. A router entry point omitted in m1 costs nothing to add later. A
-vault entry point omitted in m1 **cannot be added** while the product is in
-use.
+The original plan required the vault to ship complete with paused initiation
+entry points for redemption and renewal (Section 3). On 2026-09-24 (Option B decision),
+the posture was simplified: m1 ships a minimal vault (`4d549e64`), and m2 will
+deliver in-kind redemption and renewal by deploying a new vault and conducting
+a depositor opt-in migration ceremony.
 
 ## 2. Minimal router surface
 
@@ -101,36 +102,29 @@ m2 must add ~4,641 production lines and ten-plus entry points, which is
 **larger than everything B removed**, so the router is needed back regardless.
 Deleting it in m1 buys ~736 lines and costs a re-architecture.
 
-## 3. Vault surface: ship it all, initiation disabled
+## 3. Vault surface: minimal in m1 (updated 2026-09-24)
 
-Every path m2 intends to reach must have its vault entry point present in m1
-behind a pause flag. The shipped vault already does this for renewal and not
-for redemption.
+Under the 2026-09-24 Option B decision, the vault ships minimal in m1 (matching
+commit `4d549e64`). Redemption and renewal entry points are deferred to m2,
+which will introduce them via a new vault deployment and depositor migration
+ceremony rather than an unpause flag on the m1 vault.
 
-**The rule that bounds this: a pause flag may gate initiation, never
-settlement or accounting.** A confirmed Bitcoin spend must always be able to
-settle, so any function on the settlement path must stay unconditionally
-callable. The vault states this itself for the in-kind fee: if the reserve
-cannot cover the amount, "the shortfall is recorded as `inKindFeeDebtSat` and
-the call still succeeds: a confirmed Bitcoin spend must never fail to settle
-because of the reserve level" (`ReservationVault.sol:524-528`). A flag over
-such a function would reintroduce exactly the revert the design removed.
+**The rule that bounds settlement remains active:** A confirmed Bitcoin spend
+must always be able to settle, so functions on the settlement path stay
+unconditionally callable. The vault states this itself for the in-kind fee: if
+the reserve cannot cover the amount, "the shortfall is recorded as
+`inKindFeeDebtSat` and the call still succeeds: a confirmed Bitcoin spend must
+never fail to settle because of the reserve level"
+(`ReservationVault.sol:524-528`).
 
 | Vault entry point | Line | m1 state | Rationale |
 |---|---|---|---|
 | `receiveBalanceIncrease` | `:234` | **Active** | The mint callback; `onlyBank` |
-| `financeInKindFee` | `:529` | **Active — must not be gated** | On the settlement path. Called by the re-anchor proof at `ReservationProofs.sol:874-875`, immediately before `action.state = Settled` (`:878`) — and re-anchor is B's only unpin, so this is reachable in m1 and load-bearing. Its other caller, `submitReservationDissolutionProof` (`:921`, financing at `:995-996`), is the one B cuts |
+| `financeInKindFee` | `:529` | **Active - must not be gated** | On the settlement path. Called by the re-anchor proof at `ReservationProofs.sol:874-875`, immediately before `action.state = Settled` (`:878`) - and re-anchor is B's only unpin, so this is reachable in m1 and load-bearing. |
 | `repayInKindFeeDebt` | `:568` | **Active** | Permissionless burn-down of an over-supply re-anchor can create. Gating it would remove a safety valve while leaving the debt |
-| `redeemReservation` | `:293` | Present, **new** `redemptionsPaused` flag | Initiation only |
-| `retryRedeemReservation` | `:469` | Present, same flag | Initiation only |
-| `extendCustody` | `:367` | Present, gated by `renewalsPaused`, constructor-`true` (`:222`) | Initiation only; already correct as shipped |
-
-Add `redemptionsPaused` by copying renewal's pattern within the same file:
-default `true` in the constructor, restrictive setter on
-`onlyGuardianOrOwner`, restorative `unpauseRedemptions` on `onlyOwner`
-(mirroring `:409`/`:415`). Scope it to the two initiation functions only.
-Then m2's redemption enablement is one owner transaction instead of an
-unreachable vault swap.
+| `redeemReservation` | `:293` | **Deferred to m2** | Removed in `4d549e64`; introduced in m2 via new vault |
+| `retryRedeemReservation` | `:469` | **Deferred to m2** | Removed in `4d549e64`; introduced in m2 via new vault |
+| `extendCustody` | `:367` | **Deferred to m2** | Removed in `4d549e64`; introduced in m2 via new vault |
 
 Note that this makes m1's fee machinery **live**, not dormant: re-anchor
 charges an in-kind miner fee, so the fee reserve, `inKindFeeDebtSat` and
@@ -169,10 +163,12 @@ parameter. Also relate it to the amount cap: nothing on-chain today prevents
 raising `reservationMaxTotalAmount` past slot capacity, so either add the
 relational check or emit both sides and make it a runbook gate.
 
-### 4.2 Vault ships complete behind flags
+### 4.2 Vault ships minimal (superseded 2026-09-24)
 
-§3. Failing this gate does not delay m2's redemption, it forecloses it.
-
+Superseded 2026-09-24 by Option B decision. The vault ships minimal in m1 (commit
+`4d549e64`). Rather than requiring redemption entry points behind flags in m1,
+m2 will introduce redemption and renewal through a new vault deployment and a
+depositor opt-in migration ceremony.
 ### 4.3 `reservationsByAnchorUtxo` reconciliation
 
 **Corrected 2026-08-21.** This previously read: "`#1091` writes the mapping
