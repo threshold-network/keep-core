@@ -1,6 +1,7 @@
 package spv
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -80,4 +81,13 @@ type Config struct {
 	// BIP94 minimum-difficulty runs) where the default 144 headers is
 	// insufficient.
 	MaxProofHeaders uint
+}
+
+// Validate checks whether the SPV configuration is valid.
+func (c Config) Validate() error {
+	if c.MaxProofHeaders == 0 {
+		return fmt.Errorf("spv.maxProofHeaders must be greater than 0")
+	}
+
+	return nil
 }

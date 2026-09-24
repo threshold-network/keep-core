@@ -3,6 +3,7 @@ package tbtcpg_test
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -50,7 +51,7 @@ func TestEstimateRedemptionFee(t *testing.T) {
 		"low estimate is raised to the minimum floor": {
 			estimateSatPerVByte: 1,
 			txMaxTotalFee:       100000,
-			expectedFee:         1250, // max(5, ceil(1*1.25)=2)=5 sat/vByte * 250 vByte
+			expectedFee:         1750, // max(5, 1) = 5 -> ceil(5*1.25)=7 sat/vByte * 250 vByte = 1750
 		},
 		"minimum floor above the cap returns an error": {
 			estimateSatPerVByte: 1,
@@ -255,6 +256,20 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 				// fee-share cap once aggregated over the 2 requests
 				// (2 * 2500 = 5000), which is the tighter of the two caps.
 				RedemptionTxFee: big.NewInt(5000),
+			},
+		},
+		"fee estimated, huge per-request cap does not wrap to zero": {
+			fee:           0, // trigger fee estimation
+			txMaxFee:      (math.MaxUint64 / 2) + 1,
+			txMaxTotalFee: 6000,
+			expectedProposal: &tbtc.RedemptionProposal{
+				RedeemersOutputScripts: redeemersOutputScripts,
+				// raw 4300 (172 vByte * 25 sat/vByte), buffered to
+				// ceil(25*1.25)=32 sat/vByte * 172 = 5504, below both caps.
+				// The per-request cap aggregate overflows uint64, which
+				// would wrap to 0 in unchecked arithmetic and reject the
+				// estimate; checked multiplication keeps txMaxTotalFee.
+				RedemptionTxFee: big.NewInt(5504),
 			},
 		},
 	}

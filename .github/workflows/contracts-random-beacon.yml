@@ -37,7 +37,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       path-filter: ${{ steps.filter.outputs.path-filter }}
-      bundled-beacon-export-filter: ${{ steps.filter.outputs.bundled-beacon-export-filter }}
     steps:
       - uses: actions/checkout@v3
         if: github.event_name == 'pull_request'
@@ -48,15 +47,10 @@ jobs:
           filters: |
             path-filter:
               - './solidity/random-beacon/**'
+              - './solidity/ecdsa/external/random-beacon-export/**'
               - './.github/workflows/contracts-random-beacon.yml'
               - './.github/actions/install-yarn-deps/**'
               - './.github/actions/docker-build-push/**'
-            bundled-beacon-export-filter:
-              - './solidity/random-beacon/deploy/**'
-              - './solidity/random-beacon/tasks/**'
-              - './solidity/random-beacon/utils/**'
-              - './solidity/ecdsa/external/random-beacon-export/**'
-              - './.github/workflows/contracts-random-beacon.yml'
 
   contracts-lint:
     needs: contracts-detect-changes
@@ -260,7 +254,7 @@ jobs:
   # fails here instead of shipping.
   bundled-beacon-export-freshness:
     needs: contracts-detect-changes
-    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.bundled-beacon-export-filter == 'true'
+    if: github.event_name != 'pull_request' || needs.contracts-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -439,7 +433,7 @@ jobs:
         run: |
           yarn up \
             @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }}
-      
+
       - name: Deploy contracts
         env:
           CHAIN_API_URL: ${{ secrets.SEPOLIA_ETH_HOSTNAME_HTTP }}

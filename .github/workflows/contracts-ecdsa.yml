@@ -32,9 +32,15 @@ on:
         required: false
         default: "main"
 
+permissions:
+  contents: read
+
 jobs:
   contracts-detect-changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       path-filter: ${{ steps.filter.outputs.path-filter }}
     steps:
@@ -415,7 +421,7 @@ jobs:
         run: |
           yarn up \
             @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }}
-      
+
       - name: Deploy contracts
         env:
           CHAIN_API_URL: ${{ secrets.SEPOLIA_ETH_HOSTNAME_HTTP }}

@@ -2,6 +2,7 @@ package tbtcpg
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
 	"time"
@@ -237,8 +238,11 @@ func (rt *RedemptionTask) ProposeRedemption(
 		txMaxTotalFee := redemptionParameters.TxMaxTotalFee
 
 		maxTotalFee := txMaxTotalFee
-		if perRequestMaxTotalFee := txMaxFee * uint64(len(redeemersOutputScripts)); perRequestMaxTotalFee < maxTotalFee {
-			maxTotalFee = perRequestMaxTotalFee
+		requestCount := uint64(len(redeemersOutputScripts))
+		if txMaxFee == 0 || requestCount <= math.MaxUint64/txMaxFee {
+			if perRequestMaxTotalFee := txMaxFee * requestCount; perRequestMaxTotalFee < maxTotalFee {
+				maxTotalFee = perRequestMaxTotalFee
+			}
 		}
 
 		estimatedFee, err := EstimateRedemptionFee(

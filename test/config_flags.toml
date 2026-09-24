@@ -27,3 +27,6 @@ StuckThreshold = "1h"
 CheckInterval = "45s"
 MaxTracked = 50
 MaxTrackingAge = "12h"
+
+[maintainer.spv]
+MaxProofHeaders = 144

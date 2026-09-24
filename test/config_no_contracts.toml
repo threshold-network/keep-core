@@ -12,3 +12,6 @@ Port = 27001
 
 [Storage]
 Dir = "/my/secure/location"
+
+[Maintainer.Spv]
+MaxProofHeaders = 144

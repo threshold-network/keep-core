@@ -48,7 +48,7 @@ func TestApplyWalletTxFeeFloor(t *testing.T) {
 			estimatedFee: vsize, // rate 1 sat/vByte
 			txVsize:      vsize,
 			maxTotalFee:  100000,
-			expectedFee:  1000, // max(5, ceil(1*1.25)=2)=5 sat/vByte * 200
+			expectedFee:  1400, // max(5, 1) = 5 -> ceil(5*1.25)=7 sat/vByte * 200
 		},
 		"buffered fee above the cap is bounded to the cap": {
 			estimatedFee: 4000, // rate 20 -> buffered 25 sat/vByte * 200 = 5000
@@ -63,15 +63,21 @@ func TestApplyWalletTxFeeFloor(t *testing.T) {
 			expectedFee:  5000,
 		},
 		"minimum floor exactly at the cap is allowed": {
-			estimatedFee: 100, // rate 0 -> floored to 5 sat/vByte
+			estimatedFee: 100, // rate 0 -> clamped to 5 -> buffered to 7 sat/vByte
 			txVsize:      vsize,
-			maxTotalFee:  1000, // exactly the 5 sat/vByte floor total (5*200)
-			expectedFee:  1000,
+			maxTotalFee:  1400, // exactly the 7 sat/vByte buffered floor total (7*200)
+			expectedFee:  1400,
+		},
+		"cap at bare floor is rejected as below the buffered floor": {
+			estimatedFee:        100,
+			txVsize:             vsize,
+			maxTotalFee:         1000, // 5 sat/vByte bare floor total (1000) < 7 sat/vByte buffered floor (1400)
+			expectErrorContains: "minimum safe transaction fee",
 		},
 		"minimum floor above the cap returns an error": {
 			estimatedFee:        100,
 			txVsize:             vsize,
-			maxTotalFee:         800, // below the 5 sat/vByte floor (1000)
+			maxTotalFee:         800, // below the 7 sat/vByte buffered floor (1400)
 			expectErrorContains: "minimum safe transaction fee",
 		},
 		"non-positive virtual size returns an error": {
@@ -208,13 +214,32 @@ func TestApplyWalletTxFeeFloor_OverflowGuard(t *testing.T) {
 	const vsize = 200
 	withWalletTxFeePolicy(t)
 
+	// Oversized buffer: buffer percent set to math.MaxInt64 so 100+Percent
+	// would overflow int64. The helper rejects this explicitly before addition.
+	tbtc.WalletTxFeeBufferPercent = math.MaxInt64
+
+	_, err := applyWalletTxFeeFloor(
+		4000,
+		vsize,
+		100000,
+	)
+	if err == nil {
+		t.Fatalf("expected overflow error for Percent=MaxInt64")
+	}
+	if !strings.Contains(err.Error(), "addition would overflow") {
+		t.Fatalf(
+			"expected error containing [addition would overflow]; got [%v]",
+			err,
+		)
+	}
+
 	// Buffer percent set so the derived numerator (100+Percent) is
 	// close to MaxInt64: rate * numerator overflows for any
 	// non-trivial rate. The helper rejects this rather than silently
 	// wrapping around into the buffer math.
 	tbtc.WalletTxFeeBufferPercent = math.MaxInt64 - 100
 
-	_, err := applyWalletTxFeeFloor(
+	_, err = applyWalletTxFeeFloor(
 		4000, // rate 20 sat/vByte
 		vsize,
 		100000,

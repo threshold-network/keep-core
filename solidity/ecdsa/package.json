@@ -26,7 +26,7 @@
     "lint:fix": "npm run lint:fix:ts && npm run lint:fix:sol && npm run lint:config:fix",
     "lint:ts": "eslint . && prettier --check '**/*.@(js|ts|mjs|cjs)' && npm run lint:eslint-policy",
     "lint:fix:ts": "eslint . --fix && prettier --write '**/*.@(js|ts|mjs|cjs)'",
-    "lint:eslint-policy": "node scripts/test-eslint-policy.mjs",
+    "lint:eslint-policy": "node scripts/test-eslint-policy.mjs && node --test scripts/test-eslint-policy.test.mjs",
     "lint:sol": "solhint 'contracts/**/*.sol' && prettier --check '**/*.sol'",
     "lint:fix:sol": "solhint 'contracts/**/*.sol' --fix && prettier --write '**/*.sol'",
     "lint:config": "prettier --check '**/*.@(json|yaml)'",
