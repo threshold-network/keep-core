@@ -67,6 +67,17 @@ jobs:
           push: false
           context: .
 
+      - name: Verify Linux release compatibility
+        run: |
+          release_dir=$(mktemp -d)
+          trap 'rm -rf "$release_dir"' EXIT
+          tar -xzf out/bin/*-linux-amd64.tar.gz -C "$release_dir"
+          for image in debian:bullseye-slim ubuntu:20.04; do
+            docker run --rm --platform linux/amd64 \
+              --mount "type=bind,src=$release_dir,dst=/release,readonly" \
+              "$image" sh -ec 'getconf GNU_LIBC_VERSION; /release/keep-client --version'
+          done
+
       - name: Generate release notes
         id: release_notes
         run: |
@@ -172,4 +183,4 @@ jobs:
       - name: Move Docker cache
         run: |
           rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-docker-new /tmp/.buildx-cache          
+          mv /tmp/.buildx-cache-docker-new /tmp/.buildx-cache
