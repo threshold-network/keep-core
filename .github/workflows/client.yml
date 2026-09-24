@@ -476,10 +476,21 @@ jobs:
 
   client-bench:
     needs: [client-build-test-publish]
-    if: github.event_name == 'workflow_dispatch'
+    if: |
+      github.event_name == 'workflow_dispatch'
+        || github.event_name == 'schedule'
+        || github.event_name == 'pull_request'
+        || github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      pull-requests: write
+    env:
+      # PRs and the nightly schedule compare against the target/current
+      # branch's own history; workflow_dispatch runs compare against prior
+      # workflow_dispatch runs on the selected ref.
+      BENCHMARK_BASELINE_BRANCH: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
+      BENCHMARK_BASELINE_EVENT: ${{ github.event_name == 'workflow_dispatch' && 'workflow_dispatch' || 'push' }}
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -500,16 +511,31 @@ jobs:
         run: |
           docker load --input /tmp/go-build-env-image.tar
 
+      # Baseline lookup: the most recent successful `go-bench` artifact from a
+      # `BENCHMARK_BASELINE_EVENT` run of client.yml. Branch refs use
+      # `BENCHMARK_BASELINE_BRANCH`; manually selected tags use their commit.
+      # `search_artifacts: true` is required because the newest matching run is
+      # not guaranteed to be the newest run overall, and it may not carry a
+      # `go-bench` artifact at all. A genuine absence of any matching artifact
+      # is reported (`if_no_artifact_found: warn`) rather than failing the job;
+      # any other download/API error surfaces as a normal step failure.
       - name: Download previous benchmark results
         id: download-prev
         uses: dawidd6/action-download-artifact@bf251b5aa9c2f7eeb574a96ee720e24f801b7c11 # v6
-        continue-on-error: true
         with:
           name: go-bench
           path: bench-prev
           workflow: client.yml
-          branch: main
+          branch: ${{ github.ref_type != 'tag' && env.BENCHMARK_BASELINE_BRANCH || '' }}
+          commit: ${{ github.ref_type == 'tag' && github.sha || '' }}
+          event: ${{ env.BENCHMARK_BASELINE_EVENT }}
+          search_artifacts: true
           if_no_artifact_found: warn
+
+      - name: Report missing benchmark baseline
+        if: steps.download-prev.outputs.found_artifact != 'true'
+        run: |
+          echo "::notice::No go-bench artifact found for a successful ${{ env.BENCHMARK_BASELINE_EVENT }} run of client.yml on ${{ env.BENCHMARK_BASELINE_BRANCH }}; comparison skipped. Pull requests require a successful push run on the target branch; other events require a successful matching ref/event run."
 
       - name: Run benchmarks
         run: |
@@ -523,17 +549,53 @@ jobs:
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260813145340-fd4a688df892
 
-      # Benchmark regression gate: >12% slower than main's last `go-bench`
-      # artifact. Baseline measured at PR #4256 (2026-08-19). This job only
-      # runs on manual `workflow_dispatch` - no automatic push/PR trigger.
-      # GAP: benchmarks added in this PR have no main-side baseline, so
-      # benchstat silently skips them on first run; they only become
-      # gated after shipping to main and someone manually dispatches this
-      # workflow again on main to record a baseline artifact.
-      # No automated baseline-record mechanism exists in this workflow.
+      # Benchmark regression gate: >12% slower than the baseline established
+      # by the most recent successful push run on the target/current branch
+      # (main/dev pushes seed their own branch's baseline as they land), or,
+      # for workflow_dispatch runs, the most recent successful
+      # workflow_dispatch run on the selected ref. A pull request's own
+      # `go-bench` artifact is never used as a baseline and never seeds its
+      # base branch. Benchmarks with no matching baseline yet are reported
+      # explicitly, both here and per-metric below, and begin gating once a
+      # qualifying run uploads a matching artifact.
       - name: Compare benchmarks
-        if: steps.download-prev.outcome == 'success' && hashFiles('bench-prev/**') != ''
+        if: steps.download-prev.outputs.found_artifact == 'true' && hashFiles('bench-prev/**') != ''
         run: |
+          python3 - <<'EOF'
+          import glob, re
+
+          def parse(path):
+              keys = set()
+              pkg = None
+              with open(path) as f:
+                  for line in f:
+                      line = line.rstrip("\n")
+                      if line.startswith("pkg: "):
+                          pkg = line[len("pkg: "):].strip()
+                          continue
+                      if not line.startswith("Benchmark"):
+                          continue
+                      tokens = line.split()
+                      if len(tokens) < 4:
+                          continue
+                      name = re.sub(r'-\d+$', '', tokens[0])  # strip Go's trailing GOMAXPROCS suffix
+                      values = tokens[2:]
+                      for i in range(0, len(values) - 1, 2):
+                          keys.add((pkg, name, values[i + 1]))
+              return keys
+
+          prev_keys = set()
+          for path in glob.glob('bench-prev/*.txt'):
+              prev_keys |= parse(path)
+          curr_keys = parse('bench.txt')
+
+          new_keys = sorted(curr_keys - prev_keys, key=lambda k: (k[0] or '', k[1], k[2]))
+          if new_keys:
+              print(f"::notice::{len(new_keys)} benchmark metric(s) have no baseline yet and are excluded from the regression check:")
+              for pkg, name, unit in new_keys:
+                  print(f"::notice::  {pkg or 'unknown package'}: {name} ({unit})")
+          EOF
+
           benchstat bench-prev/*.txt bench.txt | tee benchstat-results.txt
           python3 - <<'EOF'
           import sys, re
@@ -551,6 +613,50 @@ jobs:
                   print(' ', r)
               sys.exit(1)
           EOF
+
+      # Publish the same comparison that already gates the job into the PR
+      # conversation so reviewers see it without leaving the PR. The body is
+      # identified by an HTML marker; re-runs update the same comment instead
+      # of stacking one per push. `continue-on-error` defends against an org
+      # policy that strips comment-write permissions from GITHUB_TOKEN — the
+      # diff in the job log and the go-bench artifact remain authoritative.
+      - name: Post benchmark results to PR
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          HAS_BASELINE: ${{ steps.download-prev.outputs.found_artifact == 'true' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- client-bench -->';
+            const header = '### `client-bench` results';
+            const baselineNote = process.env.HAS_BASELINE === 'true'
+              ? 'Baseline: latest successful push on the target branch.'
+              : 'No baseline yet — the next push on the target branch will seed it.';
+            let benchSection;
+            try {
+              const benchstat = fs.readFileSync('benchstat-results.txt', 'utf-8').trim();
+              benchSection = `\n\n<details><summary>benchstat vs baseline</summary>\n\n\`\`\`\n${benchstat}\n\`\`\`\n</details>\n`;
+            } catch (err) {
+              benchSection = '';
+            }
+            const body = `${marker}\n${header}\n\n${baselineNote}${benchSection}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body,
+              });
+            }
 
       - name: Upload benchmark results
         if: always()
