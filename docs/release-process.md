@@ -25,11 +25,12 @@ landing everything via normal `feature → main` PRs:
   next release."
 
 Sub-PRs are still reviewed and CI'd independently — the aggregation
-PR is just the place to watch the cumulative state. When the cycle is
-ready to ship, fast-forward `dev` to the latest `main`, resolve any
-final conflicts, and merge the aggregation PR into `main` as a single
-merge commit. The version tag is then cut from `main` per "Creating
-a Release" below.
+PR is just the place to watch the cumulative state. Sub-PRs target `dev`
+as their base branch; maintainers merge them into `dev` after review.
+When the cycle is ready to ship, fast-forward `dev` to the latest `main`,
+resolve any final conflicts, and merge the aggregation PR into `main`
+as a single merge commit. The version tag is then cut from `main` per
+"Creating a Release" below.
 
 ## Creating a Release
 

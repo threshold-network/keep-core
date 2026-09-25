@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,9 +16,23 @@ import (
 
 var registry *Registry
 
-const port = 9799
+// port is an OS-reserved ephemeral port the package's live server listens on.
+// Reserving it in TestMain avoids the flakiness of a hardcoded port: another
+// process or a parallel test run could bind 9799 while this suite runs. The
+// brief gap between closing the listener and the server's ListenAndServe is
+// acceptable for a test server (same pattern as cmd/maintainer_test.go).
+var port int
 
 func TestMain(m *testing.M) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		panic(fmt.Sprintf("could not reserve a test port: [%v]", err))
+	}
+	port = listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		panic(fmt.Sprintf("could not release the reserved test port: [%v]", err))
+	}
+
 	registry = newRegistry(context.Background())
 	registry.EnableServer(port)
 

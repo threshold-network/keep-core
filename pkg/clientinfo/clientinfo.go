@@ -79,6 +79,14 @@ func Initialize(
 	cfg Config,
 ) (*Registry, bool) {
 	if cfg.Port == 0 {
+		if cfg.EnablePprof {
+			// Enabling pprof without a port would be silently ignored because
+			// no server is started; surface the misconfiguration instead.
+			logger.Warnf(
+				"EnablePprof is set but Port is 0; no server is started and " +
+					"profiling endpoints will not be exposed",
+			)
+		}
 		return nil, false
 	}
 

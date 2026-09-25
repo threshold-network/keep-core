@@ -15,14 +15,16 @@ import (
 //
 // The flag is registered with cobra's UintVar, which accepts 0 as a valid
 // unsigned value, so the 144 default only protects the case where the flag is
-// omitted entirely. Without validation a zero bound reaches the proof assembly
-// loop, where getProofInfo compares the header count against it at loop entry
-// and skips every transaction, disabling SPV proving. A test exercising only
-// the omitted-flag default would pass regardless and mask this.
+// omitted entirely. Without validation a zero bound reaches the proof
+// assembly loop, where getProofInfo skips every transaction, disabling SPV
+// proving. A test exercising only the omitted-flag default would pass
+// regardless and mask this.
 //
-// The test drives validateMaintainerConfig, the helper maintainers() calls
-// before connecting to any chain. It covers the validation logic, not the
-// call site: removing the call from maintainers() would not fail this test.
+// The test drives validateMaintainerConfig, which delegates to
+// maintainer.Config.Validate - the same rule the config-load pass applies.
+// A fresh flag-initialized config has neither maintainer enabled, so the
+// launch-all branch validates the SPV settings and reports the offending
+// field.
 func TestMaintainerConfig_RejectsExplicitZeroMaxProofHeaders(t *testing.T) {
 	command := &cobra.Command{Use: "maintainer-test"}
 	cfg := &config.Config{}
@@ -70,5 +72,37 @@ func TestMaintainerConfig_AcceptsDefaultMaxProofHeaders(t *testing.T) {
 			"expected the default configuration to be accepted, got error: [%v]",
 			err,
 		)
+	}
+}
+
+// TestMaintainerConfig_AcceptsCustomMaxProofHeaders asserts that explicitly
+// provided positive values flow through the flag -> config -> validation path,
+// not just the omitted-flag default. Without these cases a regression that
+// breaks non-default values (e.g. a type conversion or off-by-one in
+// validation) would only surface when an operator actually deviates from the
+// 144 default.
+func TestMaintainerConfig_AcceptsCustomMaxProofHeaders(t *testing.T) {
+	values := []string{"1", "288"}
+
+	for _, value := range values {
+		t.Run(value, func(t *testing.T) {
+			command := &cobra.Command{Use: "maintainer-test"}
+			cfg := &config.Config{}
+			initMaintainerFlags(command, cfg)
+
+			if err := command.Flags().Parse(
+				[]string{"--spv.maxProofHeaders", value},
+			); err != nil {
+				t.Fatalf("failed to parse flags: [%v]", err)
+			}
+
+			if err := validateMaintainerConfig(cfg); err != nil {
+				t.Errorf(
+					"expected --spv.maxProofHeaders %s to be accepted, got error: [%v]",
+					value,
+					err,
+				)
+			}
+		})
 	}
 }

@@ -5,38 +5,59 @@ import (
 	"testing"
 )
 
-// TestConfig_Validate guards against a zero proof-header bound reaching the
-// proof assembly loop.
-//
-// getProofInfo evaluates `headerCount >= maxProofHeaders` at loop entry with
-// headerCount starting at zero, so a zero bound returns
-// proofSkipExceededMaxHeaders on the first iteration for every transaction.
-// That silently disables all SPV proving while logging each transaction as
-// "may be permanently unprovable", which reads as a chain condition rather
-// than a misconfiguration. The flag default only covers omission, so the
-// zero value has to be rejected explicitly.
+// TestConfig_Validate guards against silently-degrading zero settings
+// reaching the maintainer's runtime. Each field is checked for the
+// misconfiguration that looks like a valid value but renders the maintainer
+// inert: a zero MaxProofHeaders makes getProofInfo skip every transaction on
+// the first loop iteration; a zero HistoryDepth anchors the event search at
+// the current chain tip; a non-positive TransactionLimit returns no
+// transactions to prove; zero backoff times remove the pauses between
+// control-loop iterations. The flag/file defaults only cover omission, so an
+// operator's explicit zero has to be rejected at startup.
 func TestConfig_Validate(t *testing.T) {
+	validConfig := Config{
+		HistoryDepth:       DefaultHistoryDepth,
+		TransactionLimit:   DefaultTransactionLimit,
+		RestartBackoffTime: DefaultRestartBackoffTime,
+		IdleBackoffTime:    DefaultIdleBackOffTime,
+		MaxProofHeaders:    DefaultMaxProofHeaders,
+	}
+
 	tests := map[string]struct {
 		config    Config
 		expectErr bool
 	}{
+		"valid config is accepted": {
+			config:    validConfig,
+			expectErr: false,
+		},
 		"zero maxProofHeaders is rejected": {
-			config: Config{
-				MaxProofHeaders: 0,
-			},
+			config:    withZeroField(validConfig, func(c *Config) { c.MaxProofHeaders = 0 }),
 			expectErr: true,
 		},
-		"default positive maxProofHeaders is accepted": {
-			config: Config{
-				MaxProofHeaders: DefaultMaxProofHeaders,
-			},
+		"custom positive maxProofHeaders is accepted": {
+			config:    withCustomMaxProofHeaders(validConfig, 288),
 			expectErr: false,
 		},
-		"custom positive maxProofHeaders is accepted": {
-			config: Config{
-				MaxProofHeaders: 288,
-			},
-			expectErr: false,
+		"zero historyDepth is rejected": {
+			config:    withZeroField(validConfig, func(c *Config) { c.HistoryDepth = 0 }),
+			expectErr: true,
+		},
+		"zero transactionLimit is rejected": {
+			config:    withZeroField(validConfig, func(c *Config) { c.TransactionLimit = 0 }),
+			expectErr: true,
+		},
+		"negative transactionLimit is rejected": {
+			config:    withZeroField(validConfig, func(c *Config) { c.TransactionLimit = -1 }),
+			expectErr: true,
+		},
+		"zero restartBackoffTime is rejected": {
+			config:    withZeroField(validConfig, func(c *Config) { c.RestartBackoffTime = 0 }),
+			expectErr: true,
+		},
+		"zero idleBackoffTime is rejected": {
+			config:    withZeroField(validConfig, func(c *Config) { c.IdleBackoffTime = 0 }),
+			expectErr: true,
 		},
 	}
 
@@ -57,6 +78,22 @@ func TestConfig_Validate(t *testing.T) {
 	}
 }
 
+// withZeroField returns a copy of base with one field mutated to its invalid
+// value; used to build single-field-invalid configs for the table test.
+func withZeroField(base Config, mutate func(*Config)) Config {
+	c := base
+	mutate(&c)
+	return c
+}
+
+func withCustomMaxProofHeaders(base Config, value uint) Config {
+	c := base
+	c.MaxProofHeaders = value
+	return c
+}
+
+// TestInitialize_InvalidConfig guards the public entry point: Initialize must
+// reject a misconfigured config before touching any chain interface.
 func TestInitialize_InvalidConfig(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

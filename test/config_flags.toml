@@ -30,3 +30,7 @@ MaxTrackingAge = "12h"
 
 [maintainer.spv]
 MaxProofHeaders = 144
+HistoryDepth = 25000
+TransactionLimit = 80
+RestartBackoffTime = "2h"
+IdleBackoffTime = "15m"

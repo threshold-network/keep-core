@@ -87,7 +87,9 @@ func TestNewServeMux_PprofEnabled(t *testing.T) {
 	for _, path := range []string{
 		"/debug/pprof/",
 		"/debug/pprof/cmdline",
+		"/debug/pprof/profile?seconds=1",
 		"/debug/pprof/symbol",
+		"/debug/pprof/trace?seconds=1",
 	} {
 		t.Run(path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()

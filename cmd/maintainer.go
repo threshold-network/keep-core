@@ -46,10 +46,14 @@ func init() {
 
 // validateMaintainerConfig checks the maintainer configuration before any
 // chain connection is attempted, so a misconfiguration fails fast and loudly
-// at startup instead of degrading into silent runtime behavior.
+// at startup instead of degrading into silent runtime behavior. It delegates
+// to maintainer.Config.Validate so the command-level check and the
+// config-load check (config.ReadConfig) share one rule: SPV settings are
+// validated only when the SPV maintainer will actually run (explicitly
+// enabled, or neither maintainer enabled).
 func validateMaintainerConfig(cfg *config.Config) error {
-	if err := cfg.Maintainer.Spv.Validate(); err != nil {
-		return fmt.Errorf("invalid SPV maintainer configuration: [%v]", err)
+	if err := cfg.Maintainer.Validate(); err != nil {
+		return fmt.Errorf("invalid maintainer configuration: [%v]", err)
 	}
 
 	return nil

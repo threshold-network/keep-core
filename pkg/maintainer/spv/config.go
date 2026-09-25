@@ -86,18 +86,47 @@ type Config struct {
 // Validate checks that the configuration is usable, returning an error
 // describing the first problem found.
 //
-// A zero MaxProofHeaders is rejected rather than normalized to the default.
-// getProofInfo compares the running header count against this bound at loop
-// entry, so zero causes every transaction to be skipped as
-// proofSkipExceededMaxHeaders on the first iteration, disabling SPV proving
-// entirely while the logs report each transaction as possibly permanently
-// unprovable. Silently substituting the default would hide an operator's
-// explicit, if mistaken, instruction; failing at startup surfaces it.
+// A zero or negative value is rejected rather than normalized to the
+// default: the default only protects against omission, and each of these
+// values silently degrades the maintainer at runtime when set to zero -
+// for example a zero MaxProofHeaders makes getProofInfo skip every
+// transaction on the first iteration. Silently substituting the default
+// would hide an operator's explicit, if mistaken, instruction; failing at
+// startup surfaces it.
 func (c Config) Validate() error {
 	if c.MaxProofHeaders == 0 {
 		return fmt.Errorf(
 			"spv.maxProofHeaders must be greater than 0; " +
 				"a zero bound skips every transaction and disables SPV proving",
+		)
+	}
+
+	if c.HistoryDepth == 0 {
+		return fmt.Errorf(
+			"spv.historyDepth must be greater than 0; " +
+				"a zero depth makes the event search start at the " +
+				"current tip, so no past transactions are ever found",
+		)
+	}
+
+	if c.TransactionLimit <= 0 {
+		return fmt.Errorf(
+			"spv.transactionLimit must be greater than 0; " +
+				"the maintainer would find no candidate transactions",
+		)
+	}
+
+	if c.RestartBackoffTime <= 0 {
+		return fmt.Errorf(
+			"spv.restartBackoffTime must be greater than 0; " +
+				"a non-positive backoff tight-loops the restart of the maintainer",
+		)
+	}
+
+	if c.IdleBackoffTime <= 0 {
+		return fmt.Errorf(
+			"spv.idleBackoffTime must be greater than 0; " +
+				"a non-positive backoff tight-loops the proof task rounds",
 		)
 	}
 
