@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
@@ -135,4 +136,76 @@ type testDiagnosticsInfo struct {
 type testDiagnosticsPeerInfo struct {
 	ChainAddress          string   `json:"chain_address"`
 	NetworkMultiAddresses []string `json:"multiaddrs"`
+}
+
+func TestPprofEndpoints(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("pprof disabled", func(t *testing.T) {
+		reg := newRegistry(ctx)
+		srv := reg.newServer(0, false)
+		ts := httptest.NewServer(srv.Handler)
+		defer ts.Close()
+
+		pprofPaths := []string{
+			"/debug/pprof/",
+			"/debug/pprof/cmdline",
+			"/debug/pprof/profile",
+			"/debug/pprof/symbol",
+			"/debug/pprof/trace",
+		}
+
+		for _, path := range pprofPaths {
+			resp, err := ts.Client().Get(ts.URL + path)
+			if err != nil {
+				t.Fatalf("failed to GET %s: %v", path, err)
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("expected 404 for path %s when pprof is disabled, got %d", path, resp.StatusCode)
+			}
+		}
+
+		for _, path := range []string{"/metrics", "/diagnostics"} {
+			resp, err := ts.Client().Get(ts.URL + path)
+			if err != nil {
+				t.Fatalf("failed to GET %s: %v", path, err)
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("expected 200 for path %s, got %d", path, resp.StatusCode)
+			}
+		}
+	})
+
+	t.Run("pprof enabled", func(t *testing.T) {
+		reg := newRegistry(ctx)
+		srv := reg.newServer(0, true)
+		ts := httptest.NewServer(srv.Handler)
+		defer ts.Close()
+
+		resp, err := ts.Client().Get(ts.URL + "/debug/pprof/")
+		if err != nil {
+			t.Fatalf("failed to GET /debug/pprof/: %v", err)
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected 200 for /debug/pprof/ when pprof is enabled, got %d", resp.StatusCode)
+		}
+
+		for _, path := range []string{"/metrics", "/diagnostics"} {
+			resp, err := ts.Client().Get(ts.URL + path)
+			if err != nil {
+				t.Fatalf("failed to GET %s: %v", path, err)
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("expected 200 for path %s, got %d", path, resp.StatusCode)
+			}
+		}
+	})
 }

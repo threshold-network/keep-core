@@ -19,19 +19,108 @@ import (
 	ethereumEcdsa "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen"
 	ethereumTbtc "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen"
 	ethereumThreshold "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen"
+	"github.com/keep-network/keep-core/pkg/maintainer"
+	"github.com/keep-network/keep-core/pkg/maintainer/btcdiff"
+	"github.com/keep-network/keep-core/pkg/maintainer/spv"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 func TestValidateConfig_TransactionMonitor(t *testing.T) {
-	cfg := &Config{Tbtc: tbtc.Config{TransactionMonitor: tbtc.TransactionMonitorConfig{
-		StuckThreshold: time.Hour,
-		MaxTrackingAge: 30 * time.Minute,
-	}}}
+	cfg := &Config{
+		Tbtc: tbtc.Config{TransactionMonitor: tbtc.TransactionMonitorConfig{
+			StuckThreshold: time.Hour,
+			MaxTrackingAge: 30 * time.Minute,
+		}},
+		Maintainer: maintainer.Config{
+			Spv: spv.Config{
+				MaxProofHeaders: spv.DefaultMaxProofHeaders,
+			},
+		},
+	}
 	if err := validateConfig(cfg, Tbtc); err == nil || !strings.Contains(err.Error(), "maxTrackingAge") {
 		t.Fatalf("expected invalid monitoring settings to fail configuration validation, got %v", err)
 	}
 	if err := validateConfig(cfg, Maintainer); err != nil {
 		t.Fatalf("a command that does not start tBTC should ignore its monitor settings: %v", err)
+	}
+}
+
+func TestValidateConfig_Maintainer(t *testing.T) {
+	tests := map[string]struct {
+		config    *Config
+		expectErr bool
+	}{
+		"launch-all with zero SPV maxProofHeaders fails": {
+			config: &Config{
+				Maintainer: maintainer.Config{
+					BitcoinDifficulty: btcdiff.Config{Enabled: false},
+					Spv:               spv.Config{Enabled: false, MaxProofHeaders: 0},
+				},
+			},
+			expectErr: true,
+		},
+		"enabled SPV with zero maxProofHeaders fails": {
+			config: &Config{
+				Maintainer: maintainer.Config{
+					BitcoinDifficulty: btcdiff.Config{Enabled: false},
+					Spv:               spv.Config{Enabled: true, MaxProofHeaders: 0},
+				},
+			},
+			expectErr: true,
+		},
+		"difficulty-only with zero SPV maxProofHeaders passes": {
+			config: &Config{
+				Maintainer: maintainer.Config{
+					BitcoinDifficulty: btcdiff.Config{Enabled: true},
+					Spv:               spv.Config{Enabled: false, MaxProofHeaders: 0},
+				},
+			},
+			expectErr: false,
+		},
+		"launch-all with positive SPV maxProofHeaders passes": {
+			config: &Config{
+				Maintainer: maintainer.Config{
+					BitcoinDifficulty: btcdiff.Config{Enabled: false},
+					Spv:               spv.Config{Enabled: false, MaxProofHeaders: spv.DefaultMaxProofHeaders},
+				},
+			},
+			expectErr: false,
+		},
+		"enabled SPV with positive maxProofHeaders passes": {
+			config: &Config{
+				Maintainer: maintainer.Config{
+					BitcoinDifficulty: btcdiff.Config{Enabled: false},
+					Spv:               spv.Config{Enabled: true, MaxProofHeaders: spv.DefaultMaxProofHeaders},
+				},
+			},
+			expectErr: false,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			err := validateConfig(test.config, Maintainer)
+
+			if test.expectErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("expected no error, got: %v", err)
+				}
+			}
+		})
+	}
+
+	// Commands not running the Maintainer category should ignore Maintainer settings.
+	cfgZeroLaunchAll := &Config{
+		Maintainer: maintainer.Config{
+			Spv: spv.Config{MaxProofHeaders: 0},
+		},
+	}
+	if err := validateConfig(cfgZeroLaunchAll, Tbtc); err != nil {
+		t.Fatalf("a command that does not start Maintainer should ignore its settings: %v", err)
 	}
 }
 
@@ -247,6 +336,10 @@ func TestReadConfigFromFile(t *testing.T) {
 		"Maintainer.Spv.IdleBackoffTime": {
 			readValueFunc: func(c *Config) interface{} { return c.Maintainer.Spv.IdleBackoffTime },
 			expectedValue: 15 * time.Minute,
+		},
+		"Maintainer.Spv.MaxProofHeaders": {
+			readValueFunc: func(c *Config) interface{} { return c.Maintainer.Spv.MaxProofHeaders },
+			expectedValue: uint(144),
 		},
 	}
 

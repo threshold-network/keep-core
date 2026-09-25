@@ -42,7 +42,7 @@ func TestWarnIfProposedWalletTxFeeBelowBufferedFloor(t *testing.T) {
 
 	expectedBufferedRate := new(big.Int).Mul(
 		big.NewInt(MinWalletTxSatPerVByteFee),
-		big.NewInt(100+WalletTxFeeBufferPercent),
+		new(big.Int).Add(big.NewInt(100), big.NewInt(WalletTxFeeBufferPercent)),
 	)
 	expectedBufferedRate.Add(
 		expectedBufferedRate,
@@ -165,6 +165,71 @@ func TestWarnIfProposedWalletTxFeeBelowBufferedFloor_OverflowBoundary(t *testing
 				"buffered threshold",
 		)
 	}
+
+	// Percent > math.MaxInt64 - 100: where 100 + WalletTxFeeBufferPercent
+	// would wrap to negative in naive int64 math. With big.Int operations,
+	// the numerator does not wrap, producing positive bufferedRate and minBufferedFee.
+	t.Run("buffer percent exceeding MaxInt64 minus 100 does not wrap", func(t *testing.T) {
+		WalletTxFeeBufferPercent = math.MaxInt64 - 50
+
+		bufferedRate, minBufferedFee := bufferedWalletTxFeeFloor(
+			MinWalletTxSatPerVByteFee,
+			vsize,
+		)
+		if bufferedRate == nil || minBufferedFee == nil {
+			t.Fatalf("expected non-nil buffered rate and fee")
+		}
+		if bufferedRate.Sign() <= 0 || minBufferedFee.Sign() <= 0 {
+			t.Fatalf(
+				"expected positive buffered rate and fee, got rate=[%v], fee=[%v]",
+				bufferedRate,
+				minBufferedFee,
+			)
+		}
+
+		testLogger := &capturingFeeCheckLogger{}
+		warnIfProposedWalletTxFeeBelowBufferedFloor(
+			testLogger,
+			MinWalletTxSatPerVByteFee,
+			vsize,
+			big.NewInt(1_000_000_000),
+			"test",
+		)
+		if len(testLogger.warnings) == 0 {
+			t.Errorf("expected warning for fee under huge buffered threshold")
+		}
+	})
+
+	t.Run("buffer percent at MaxInt64 does not wrap", func(t *testing.T) {
+		WalletTxFeeBufferPercent = math.MaxInt64
+
+		bufferedRate, minBufferedFee := bufferedWalletTxFeeFloor(
+			MinWalletTxSatPerVByteFee,
+			vsize,
+		)
+		if bufferedRate == nil || minBufferedFee == nil {
+			t.Fatalf("expected non-nil buffered rate and fee")
+		}
+		if bufferedRate.Sign() <= 0 || minBufferedFee.Sign() <= 0 {
+			t.Fatalf(
+				"expected positive buffered rate and fee, got rate=[%v], fee=[%v]",
+				bufferedRate,
+				minBufferedFee,
+			)
+		}
+
+		testLogger := &capturingFeeCheckLogger{}
+		warnIfProposedWalletTxFeeBelowBufferedFloor(
+			testLogger,
+			MinWalletTxSatPerVByteFee,
+			vsize,
+			big.NewInt(1_000_000_000),
+			"test",
+		)
+		if len(testLogger.warnings) == 0 {
+			t.Errorf("expected warning for fee under MaxInt64 buffered threshold")
+		}
+	})
 }
 
 // Compile-time check that capturingFeeCheckLogger satisfies the

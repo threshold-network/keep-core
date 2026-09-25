@@ -8,6 +8,15 @@
 // Following specifications were used as reference:
 // - https://prometheus.io/docs/instrumenting/writing_clientlibs/
 // - https://prometheus.io/docs/instrumenting/exposition_formats/
+//
+// pprof handlers are intentionally served from a private ServeMux built
+// per-Registry so the EnablePprof flag fully controls their reachability.
+// Importing net/http/pprof also registers those handlers on
+// http.DefaultServeMux at init time as a side effect; nothing in this
+// package serves DefaultServeMux, so the registration is currently
+// dormant. Do not add http.ListenAndServe(":port", nil) (or any other
+// nil-handler Listen call) to this package or its consumers: that would
+// expose pprof on the new listener regardless of the EnablePprof flag.
 package clientinfo
 
 import (
@@ -80,11 +89,9 @@ func Initialize(
 	return registry, true
 }
 
-// registerPprofHandlers registers the standard net/http/pprof handlers on the
-// supplied mux. Registering them on a caller-owned mux, rather than relying on
-// the handlers net/http/pprof installs on http.DefaultServeMux at init time,
-// is what makes Config.EnablePprof authoritative: the server below never
-// serves DefaultServeMux, so the init-time registrations are unreachable.
+// registerPprofHandlers registers the standard net/http/pprof handlers on
+// the provided ServeMux when EnablePprof is true. See the package doc for
+// the dormant DefaultServeMux side-effect warning.
 func registerPprofHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -93,7 +100,7 @@ func registerPprofHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }
 
-// serverHandler builds the HTTP handler served on the client info port.
+// newServeMux builds the HTTP handler served on the client info port.
 //
 // The mux is created per call and never shared with http.DefaultServeMux.
 // That isolation is load-bearing for two reasons: importing net/http/pprof
@@ -102,7 +109,7 @@ func registerPprofHandlers(mux *http.ServeMux) {
 // profiling endpoints even when disabled; and registering this registry's own
 // routes on a process-global mux makes a second registry panic on duplicate
 // patterns.
-func (r *Registry) serverHandler(enablePprof bool) http.Handler {
+func (r *Registry) newServeMux(enablePprof bool) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/metrics", func(response http.ResponseWriter, _ *http.Request) {
@@ -125,28 +132,37 @@ func (r *Registry) serverHandler(enablePprof bool) http.Handler {
 	return mux
 }
 
-// EnableServer enables the client info server on the given port. Data will
-// be exposed on `/metrics` and `/diagnostics` paths. Profiling endpoints are
-// never exposed through this entry point; use Config.EnablePprof with
-// Initialize to opt into them.
-func (r *Registry) EnableServer(port int) {
-	r.enableServer(port, false)
+func (r *Registry) newServer(port int, enablePprof bool) *http.Server {
+	return &http.Server{
+		Addr:              ":" + strconv.Itoa(port),
+		Handler:           r.newServeMux(enablePprof),
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
 }
 
 // enableServer starts the client info HTTP server, exposing the profiling
 // endpoints only when enablePprof is true.
 func (r *Registry) enableServer(port int, enablePprof bool) {
-	server := &http.Server{
-		Addr:              ":" + strconv.Itoa(port),
-		Handler:           r.serverHandler(enablePprof),
-		ReadHeaderTimeout: readHeaderTimeout,
-	}
+	server := r.newServer(port, enablePprof)
 
 	go func() {
 		if err := server.ListenAndServe(); err != http.ErrServerClosed {
 			logger.Errorf("client info server error: [%v]", err)
 		}
 	}()
+}
+
+// EnableServer enables the client info server on the given port. Data will
+// be exposed on `/metrics` and `/diagnostics` paths. pprof profiling
+// endpoints are NOT enabled by this method; prefer Initialize, which
+// threads the EnablePprof flag from the caller-supplied Config and never
+// exposes pprof unless explicitly requested.
+//
+// Deprecated: prefer Initialize; this method exists for backwards
+// compatibility but always disables pprof. The previous behavior of
+// implicitly exposing pprof via http.DefaultServeMux is no longer relied on.
+func (r *Registry) EnableServer(port int) {
+	r.enableServer(port, false)
 }
 
 func sortedKeys[V any](m map[string]V) []string {

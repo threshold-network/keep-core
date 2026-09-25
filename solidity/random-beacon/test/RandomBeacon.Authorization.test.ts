@@ -5,6 +5,10 @@ import { expect } from "chai"
 import { createMock } from "./helpers/mock"
 import { constants, params, randomBeaconDeployment } from "./fixtures"
 import { legacyTokenStakingAt } from "./utils/operators"
+import {
+  shouldOverwritePreviousRequest,
+  shouldRequireUpdatingPoolBeforeApproving,
+} from "./behaviors/authorization"
 
 import type { Mock } from "./helpers/mock"
 import type { BigNumberish, ContractTransactionResponse } from "ethers"
@@ -746,13 +750,11 @@ describe("RandomBeacon - Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await randomBeacon.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              randomBeacon,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
 
           context("when delay did not pass", () => {
@@ -775,13 +777,11 @@ describe("RandomBeacon - Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await randomBeacon.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              randomBeacon,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
         })
 
@@ -810,13 +810,11 @@ describe("RandomBeacon - Authorization", () => {
             await restoreSnapshot()
           })
 
-          it("should overwrite the previous request", async () => {
-            expect(
-              await randomBeacon.pendingAuthorizationDecrease(
-                stakingProvider.address,
-              ),
-            ).to.be.equal(deauthorizingSecond)
-          })
+          shouldOverwritePreviousRequest(() => ({
+            randomBeacon,
+            stakingProvider,
+            deauthorizingSecond,
+          }))
         })
 
         context("when change period is not equal delay and is non-zero", () => {
@@ -856,13 +854,11 @@ describe("RandomBeacon - Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await randomBeacon.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              randomBeacon,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
 
           context("when change period activated", () => {
@@ -885,13 +881,11 @@ describe("RandomBeacon - Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await randomBeacon.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              randomBeacon,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
 
           context("when change period did not activate", () => {
@@ -914,13 +908,11 @@ describe("RandomBeacon - Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await randomBeacon.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              randomBeacon,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
           })
         })
       })
@@ -986,13 +978,10 @@ describe("RandomBeacon - Authorization", () => {
           await restoreSnapshot()
         })
 
-        it("should require updating the pool before approving", async () => {
-          expect(
-            await randomBeacon.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address,
-            ),
-          ).to.equal(MAX_UINT64)
-        })
+        shouldRequireUpdatingPoolBeforeApproving(() => ({
+          randomBeacon,
+          stakingProvider,
+        }))
 
         it("should emit AuthorizationDecreaseRequested event", async () => {
           await expect(tx)
@@ -1038,13 +1027,10 @@ describe("RandomBeacon - Authorization", () => {
           await restoreSnapshot()
         })
 
-        it("should require updating the pool before approving", async () => {
-          expect(
-            await randomBeacon.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address,
-            ),
-          ).to.equal(MAX_UINT64)
-        })
+        shouldRequireUpdatingPoolBeforeApproving(() => ({
+          randomBeacon,
+          stakingProvider,
+        }))
 
         it("should emit AuthorizationDecreaseRequested event", async () => {
           await expect(tx)
@@ -1090,13 +1076,10 @@ describe("RandomBeacon - Authorization", () => {
           await restoreSnapshot()
         })
 
-        it("should require updating the pool before approving", async () => {
-          expect(
-            await randomBeacon.remainingAuthorizationDecreaseDelay(
-              stakingProvider.address,
-            ),
-          ).to.equal(MAX_UINT64)
-        })
+        shouldRequireUpdatingPoolBeforeApproving(() => ({
+          randomBeacon,
+          stakingProvider,
+        }))
 
         it("should emit AuthorizationDecreaseRequested event", async () => {
           await expect(tx)
@@ -1171,21 +1154,16 @@ describe("RandomBeacon - Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await randomBeacon.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              randomBeacon,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
 
-            it("should require updating the pool before approving", async () => {
-              expect(
-                await randomBeacon.remainingAuthorizationDecreaseDelay(
-                  stakingProvider.address,
-                ),
-              ).to.equal(MAX_UINT64)
-            })
+            shouldRequireUpdatingPoolBeforeApproving(() => ({
+              randomBeacon,
+              stakingProvider,
+            }))
           })
 
           context("when called after sortition pool was updated", () => {
@@ -1226,21 +1204,16 @@ describe("RandomBeacon - Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await randomBeacon.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                randomBeacon,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await randomBeacon.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                randomBeacon,
+                stakingProvider,
+              }))
             })
 
             context("when delay did not pass", () => {
@@ -1264,21 +1237,16 @@ describe("RandomBeacon - Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await randomBeacon.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                randomBeacon,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await randomBeacon.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                randomBeacon,
+                stakingProvider,
+              }))
             })
           })
         })
@@ -1317,21 +1285,16 @@ describe("RandomBeacon - Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await randomBeacon.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              randomBeacon,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
 
-            it("should require updating the pool before approving", async () => {
-              expect(
-                await randomBeacon.remainingAuthorizationDecreaseDelay(
-                  stakingProvider.address,
-                ),
-              ).to.equal(MAX_UINT64)
-            })
+            shouldRequireUpdatingPoolBeforeApproving(() => ({
+              randomBeacon,
+              stakingProvider,
+            }))
           })
 
           context("when called after sortition pool was updated", () => {
@@ -1381,21 +1344,16 @@ describe("RandomBeacon - Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await randomBeacon.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                randomBeacon,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await randomBeacon.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                randomBeacon,
+                stakingProvider,
+              }))
             })
           })
         })
@@ -1436,21 +1394,16 @@ describe("RandomBeacon - Authorization", () => {
               await restoreSnapshot()
             })
 
-            it("should overwrite the previous request", async () => {
-              expect(
-                await randomBeacon.pendingAuthorizationDecrease(
-                  stakingProvider.address,
-                ),
-              ).to.be.equal(deauthorizingSecond)
-            })
+            shouldOverwritePreviousRequest(() => ({
+              randomBeacon,
+              stakingProvider,
+              deauthorizingSecond,
+            }))
 
-            it("should require updating the pool before approving", async () => {
-              expect(
-                await randomBeacon.remainingAuthorizationDecreaseDelay(
-                  stakingProvider.address,
-                ),
-              ).to.equal(MAX_UINT64)
-            })
+            shouldRequireUpdatingPoolBeforeApproving(() => ({
+              randomBeacon,
+              stakingProvider,
+            }))
           })
 
           context("when called after sortition pool was updated", () => {
@@ -1511,21 +1464,16 @@ describe("RandomBeacon - Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await randomBeacon.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                randomBeacon,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await randomBeacon.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                randomBeacon,
+                stakingProvider,
+              }))
             })
 
             context("when delay passed", () => {
@@ -1548,21 +1496,16 @@ describe("RandomBeacon - Authorization", () => {
                 await restoreSnapshot()
               })
 
-              it("should overwrite the previous request", async () => {
-                expect(
-                  await randomBeacon.pendingAuthorizationDecrease(
-                    stakingProvider.address,
-                  ),
-                ).to.be.equal(deauthorizingSecond)
-              })
+              shouldOverwritePreviousRequest(() => ({
+                randomBeacon,
+                stakingProvider,
+                deauthorizingSecond,
+              }))
 
-              it("should require updating the pool before approving", async () => {
-                expect(
-                  await randomBeacon.remainingAuthorizationDecreaseDelay(
-                    stakingProvider.address,
-                  ),
-                ).to.equal(MAX_UINT64)
-              })
+              shouldRequireUpdatingPoolBeforeApproving(() => ({
+                randomBeacon,
+                stakingProvider,
+              }))
             })
           })
         })

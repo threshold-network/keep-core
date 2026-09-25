@@ -9,8 +9,10 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +30,18 @@ var (
 	supportedProtocolVersions = []string{"1.4"}
 	logger                    = log.Logger("keep-electrum")
 )
+
+// ErrFeeEstimateUnavailable is set as the last error of
+// EstimateSatPerVByteFee when a queried Electrum server daemon reports that it
+// does not have enough information to produce a fee estimate for a confirmation
+// target (blockchain.estimatefee returning -1, per the Electrum protocol docs).
+//
+// Callers may use errors.Is(err, ErrFeeEstimateUnavailable) to detect that the
+// daemon lacked fee estimation data, as opposed to a network failure, timeout,
+// or transport error. EstimateSatPerVByteFee wraps the error of the last
+// confirmation target tried, so on a mixed failure the sentinel matches only
+// when the last target failed with -1.
+var ErrFeeEstimateUnavailable = errors.New("daemon does not have enough information to make an estimate")
 
 // watchAbort arranges to call client.Abort if ctx becomes Done and the
 // protected operation has not finished on its own within a short grace
@@ -94,8 +108,137 @@ type Connection struct {
 	pendingTipSanityCheck bool
 }
 
+// sanitizeServerURL strips userinfo (username and password) from a server URL
+// so that credentials are never exposed in log messages or error strings.
+func sanitizeServerURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err == nil && u.Opaque == "" && strings.Contains(rawURL, "://") && u.Hostname() != "" {
+		u.User = nil
+		return u.String()
+	}
+	if atIdx := strings.LastIndex(rawURL, "@"); atIdx != -1 {
+		if schemeIdx := strings.Index(rawURL, "://"); schemeIdx != -1 && schemeIdx < atIdx {
+			return rawURL[:schemeIdx+3] + rawURL[atIdx+1:]
+		}
+		return rawURL[atIdx+1:]
+	}
+	return rawURL
+}
+
+// validateServerURL validates a single electrum server URL. Accepted schemes
+// are tcp, ssl, ws, and wss. The URL must have a non-empty host, and tcp/ssl
+// schemes require an explicit valid port (1-65535) consistent with the
+// scheme://hostname:port format.
+func validateServerURL(rawURL string) error {
+	if rawURL == "" {
+		return fmt.Errorf("empty electrum server URL")
+	}
+
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf(
+			"invalid electrum server URL [%s]",
+			sanitizeServerURL(rawURL),
+		)
+	}
+
+	if u.Opaque != "" {
+		return fmt.Errorf(
+			"missing protocol scheme in electrum server URL [%s]; expected tcp, ssl, ws, or wss",
+			sanitizeServerURL(rawURL),
+		)
+	}
+
+	switch u.Scheme {
+	case "tcp", "ssl", "ws", "wss":
+	case "":
+		return fmt.Errorf(
+			"missing protocol scheme in electrum server URL [%s]; expected tcp, ssl, ws, or wss",
+			sanitizeServerURL(rawURL),
+		)
+	default:
+		return fmt.Errorf(
+			"unsupported electrum server protocol scheme [%s] in URL [%s]; expected tcp, ssl, ws, or wss",
+			u.Scheme,
+			sanitizeServerURL(rawURL),
+		)
+	}
+
+	if u.Hostname() == "" {
+		return fmt.Errorf(
+			"missing host in electrum server URL [%s]",
+			sanitizeServerURL(rawURL),
+		)
+	}
+
+	if (u.Scheme == "ws" || u.Scheme == "wss") && u.User != nil {
+		return fmt.Errorf(
+			"userinfo is not supported in websocket URL [%s]",
+			sanitizeServerURL(rawURL),
+		)
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return fmt.Errorf(
+			"invalid port in electrum server URL [%s]",
+			sanitizeServerURL(rawURL),
+		)
+	}
+
+	port := u.Port()
+	if u.Scheme == "tcp" || u.Scheme == "ssl" {
+		if port == "" {
+			return fmt.Errorf(
+				"missing port in electrum server URL [%s]; tcp and ssl require scheme://hostname:port",
+				sanitizeServerURL(rawURL),
+			)
+		}
+	}
+
+	if port != "" {
+		portNum, err := strconv.Atoi(port)
+		if err != nil || portNum <= 0 || portNum > 65535 {
+			return fmt.Errorf(
+				"invalid port [%s] in electrum server URL [%s]",
+				port,
+				sanitizeServerURL(rawURL),
+			)
+		}
+	}
+
+	return nil
+}
+
+// validateConfigURLs validates every effective non-empty primary and fallback
+// electrum server URL in the provided configuration.
+func validateConfigURLs(config Config) error {
+	var serverURLs []string
+	if config.URL != "" {
+		serverURLs = append(serverURLs, config.URL)
+	}
+	for _, rawURL := range config.FallbackURLs {
+		if rawURL != "" && !slices.Contains(serverURLs, rawURL) {
+			serverURLs = append(serverURLs, rawURL)
+		}
+	}
+	if len(serverURLs) == 0 {
+		return fmt.Errorf("no electrum server URLs configured")
+	}
+
+	for _, serverURL := range serverURLs {
+		if err := validateServerURL(serverURL); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Connect initializes handle with provided Config.
 func Connect(parentCtx context.Context, config Config) (bitcoin.Chain, error) {
+	if err := validateConfigURLs(config); err != nil {
+		return nil, err
+	}
+
 	connection, err := connect(parentCtx, config, func(ctx context.Context, url string) (electrumClient, error) {
 		return electrum.NewClient(ctx, url, nil)
 	})
@@ -1089,7 +1232,6 @@ func (c *Connection) getScriptUtxos(
 					err,
 				)
 			}
-
 			filteredItems = append(
 				filteredItems, &scriptUtxoItem{
 					txHash:      txHash,
@@ -1211,6 +1353,21 @@ func (c *Connection) getFeeBtcPerKbOnce(budgetCtx context.Context, blocks uint32
 
 // EstimateSatPerVByteFee returns the estimated sat/vbyte fee for a
 // transaction to be confirmed within the given number of blocks.
+//
+// If the queried Electrum server daemon does not have enough information to
+// produce a fee estimate for the requested target or any of the fallback
+// targets (the daemon returns -1 / negative fee per Electrum protocol docs),
+// and a network-appropriate low-fee fallback cannot be applied (such as on
+// mainnet or unrecognized networks), EstimateSatPerVByteFee returns an error
+// wrapping the error of the last confirmation target tried. That error wraps
+// ErrFeeEstimateUnavailable only when the last failure was an oracle -1
+// response; when a non-oracle failure (transport, timeout) was tried last, the
+// wrapped error is that failure.
+//
+// Callers may use errors.Is(err, ErrFeeEstimateUnavailable) to detect that the
+// daemon lacked fee estimation data, distinguishing an oracle lack of data from
+// a network, timeout, or transport failure - keeping in mind that a mixed
+// failure reports whichever class was observed last.
 func (c *Connection) EstimateSatPerVByteFee(blocks uint32) (int64, error) {
 	targets := feeEstimateWithFallbackTargets(blocks)
 	var lastErr error
@@ -1243,9 +1400,7 @@ func (c *Connection) EstimateSatPerVByteFee(blocks uint32) (int64, error) {
 		// According to Electrum protocol docs, if the daemon does not have
 		// enough information to make an estimate, the integer -1 is returned.
 		if btcPerKbFee < 0 {
-			lastErr = fmt.Errorf(
-				"daemon does not have enough information to make an estimate",
-			)
+			lastErr = ErrFeeEstimateUnavailable
 			sawFeeOracleFailure = true
 			logger.Debugf("GetFee for [%d] blocks returned no estimate (fee < 0)", b)
 			continue
@@ -1326,7 +1481,7 @@ func feeFallbackResult(
 		return defaultFallbackSatPerVByteWhenEstimateFails, nil
 	}
 	if lastErr != nil {
-		return 0, fmt.Errorf("failed to get fee: [%v]", lastErr)
+		return 0, fmt.Errorf("failed to get fee: [%w]", lastErr)
 	}
 	return 0, fmt.Errorf(
 		"failed to get fee from Electrum after trying confirmation targets %v",
@@ -1451,7 +1606,7 @@ func verifyServer(
 	if !slices.Contains(supportedProtocolVersions, protocol) {
 		logger.Warnf(
 			"electrum server [%s] runs an unsupported protocol version: [%s]; expected one of: [%s]",
-			url,
+			sanitizeServerURL(url),
 			protocol,
 			strings.Join(supportedProtocolVersions, ","),
 		)
@@ -1466,7 +1621,7 @@ func verifyServer(
 		logger.Warnf(
 			"electrum server [%s] did not report a genesis hash; its chain "+
 				"identity could not be verified",
-			url,
+			sanitizeServerURL(url),
 		)
 		return expectedGenesisHash, nil
 	}
@@ -1476,7 +1631,7 @@ func verifyServer(
 			"adopting genesis hash [%s] reported by electrum server [%s] as "+
 				"this connection's chain reference",
 			features.GenesisHash,
-			url,
+			sanitizeServerURL(url),
 		)
 		return features.GenesisHash, nil
 	}
@@ -1486,7 +1641,7 @@ func verifyServer(
 			"electrum server [%s] reported genesis hash [%s], which does not "+
 				"match this connection's chain reference [%s]; the server "+
 				"appears to be on a different chain",
-			url,
+			sanitizeServerURL(url),
 			features.GenesisHash,
 			expectedGenesisHash,
 		)
@@ -1645,7 +1800,7 @@ func (c *Connection) healPrimary() {
 	c.closeClient = watchClientCancellation(c.parentCtx, client)
 	c.verifiedGenesisHash = genesisHash
 	c.pendingTipSanityCheck = true
-	logger.Infof("re-canonicalized primary electrum server [%s]", primaryURL)
+	logger.Infof("re-canonicalized primary electrum server [%s]", sanitizeServerURL(primaryURL))
 }
 
 func requestWithRetry[K any](

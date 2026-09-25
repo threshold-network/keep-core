@@ -77,12 +77,12 @@ func TestClientInfoServerServesMetricsWhenPprofDisabled(t *testing.T) {
 	}
 }
 
-// TestServerHandler_PprofEnabled asserts the flag remains functional in the
+// TestNewServeMux_PprofEnabled asserts the flag remains functional in the
 // other direction: opting into profiling must actually serve the endpoints.
 // Without this, the disabled-path test above could be satisfied by never
 // registering the handlers at all.
-func TestServerHandler_PprofEnabled(t *testing.T) {
-	handler := newRegistry(context.Background()).serverHandler(true)
+func TestNewServeMux_PprofEnabled(t *testing.T) {
+	handler := newRegistry(context.Background()).newServeMux(true)
 
 	for _, path := range []string{
 		"/debug/pprof/",
@@ -109,12 +109,12 @@ func TestServerHandler_PprofEnabled(t *testing.T) {
 	}
 }
 
-// TestServerHandler_PprofDisabledIsIsolatedFromDefaultServeMux asserts the
-// handler is isolated from http.DefaultServeMux, which is where importing
+// TestNewServeMux_PprofDisabledIsIsolatedFromDefaultServeMux asserts the
+// mux is isolated from http.DefaultServeMux, which is where importing
 // net/http/pprof installs its handlers. This is the root cause the live-server
-// test above observes, asserted directly against the constructed handler.
-func TestServerHandler_PprofDisabledIsIsolatedFromDefaultServeMux(t *testing.T) {
-	handler := newRegistry(context.Background()).serverHandler(false)
+// test above observes, asserted directly against the constructed mux.
+func TestNewServeMux_PprofDisabledIsIsolatedFromDefaultServeMux(t *testing.T) {
+	handler := newRegistry(context.Background()).newServeMux(false)
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(

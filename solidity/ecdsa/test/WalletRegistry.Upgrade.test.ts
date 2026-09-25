@@ -335,11 +335,7 @@ describe("WalletRegistry - Upgrade", async () => {
       })
     })
 
-    // Skipped: this scenario needs `walletRegistryFixture({ useAllowlist: false })` so
-    // production `initializeV2(allowlist)` is not called (reinitializer(2) must stay for
-    // `WalletRegistryV2.initializeV2`). The packaged TokenStaking no longer exposes
-    // `stake` / `increaseAuthorization`, so operator registration via TokenStaking reverts.
-    describe.skip("when a contract gets upgraded during DKG", () => {
+    describe("when a contract gets upgraded during DKG", () => {
       describe("when a wallet is already registered", () => {
         const expectedExistingWalletData = ecdsaData.group1
         const expectedNewWalletData = ecdsaData.group2

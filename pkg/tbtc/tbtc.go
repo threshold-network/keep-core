@@ -161,14 +161,29 @@ type Config struct {
 // applyWalletTxFeePolicy applies the operator-tunable wallet-tx fee-floor
 // policy from Config to the package-level policy vars. Zero-valued Config
 // fields are skipped so a direct Config{} in tests retains the
-// DefaultWalletTx* constants.
-func applyWalletTxFeePolicy(config Config) {
+// DefaultWalletTx* constants. Negative settings return an error.
+func applyWalletTxFeePolicy(config Config) error {
+	if config.WalletTxSatPerVByteFloor < 0 {
+		return fmt.Errorf(
+			"negative wallet tx sat/vByte floor: [%d]",
+			config.WalletTxSatPerVByteFloor,
+		)
+	}
+	if config.WalletTxFeeBufferPercent < 0 {
+		return fmt.Errorf(
+			"negative wallet tx fee buffer percent: [%d]",
+			config.WalletTxFeeBufferPercent,
+		)
+	}
+
 	if config.WalletTxSatPerVByteFloor > 0 {
 		MinWalletTxSatPerVByteFee = int64(config.WalletTxSatPerVByteFloor)
 	}
 	if config.WalletTxFeeBufferPercent > 0 {
 		WalletTxFeeBufferPercent = int64(config.WalletTxFeeBufferPercent)
 	}
+
+	return nil
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
@@ -188,7 +203,9 @@ func Initialize(
 	perfMetrics *clientinfo.PerformanceMetrics,
 	ethereumNetwork ethereum.Network,
 ) error {
-	applyWalletTxFeePolicy(config)
+	if err := applyWalletTxFeePolicy(config); err != nil {
+		return fmt.Errorf("cannot apply wallet tx fee policy: [%w]", err)
+	}
 
 	groupParameters := defaultGroupParameters(ethereumNetwork)
 

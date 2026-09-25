@@ -2,6 +2,7 @@ package clientinfo
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,9 +56,11 @@ func (m *mockProvider) CreateTransportIdentifier(
 }
 func (m *mockProvider) BroadcastChannelForwarderFor(string) {}
 
-// TestObserveConnectedWellknownPeersCount_Callable verifies that the renamed
-// function exists on the Registry type and can be called without panicking.
-func TestObserveConnectedWellknownPeersCount_Callable(t *testing.T) {
+// TestObserveConnectedWellknownPeersCount verifies that the
+// connected_wellknown_peers_count gauge reflects only the wellknown peers that
+// are actually connected. Asserting merely that the call does not panic left
+// the counting loop - the one piece of logic here - unverified.
+func TestObserveConnectedWellknownPeersCount(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -71,20 +74,39 @@ func TestObserveConnectedWellknownPeersCount_Callable(t *testing.T) {
 		},
 	}
 
-	// The function should execute without panic. We use a recovered call
-	// to detect if the method does not exist or panics.
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf(
-				"ObserveConnectedWellknownPeersCount panicked: %v",
-				r,
-			)
-		}
-	}()
-
 	registry.ObserveConnectedWellknownPeersCount(
 		provider,
-		[]string{"/ip4/127.0.0.1/tcp/3919"},
+		[]string{
+			"/ip4/127.0.0.1/tcp/3919", // connected
+			"/ip4/10.0.0.1/tcp/1",     // not connected
+		},
 		1*time.Minute,
 	)
+
+	registry.metricsMutex.RLock()
+	gauge, ok := registry.metrics[ConnectedWellknownPeersCountMetricName].(*Gauge)
+	registry.metricsMutex.RUnlock()
+	if !ok {
+		t.Fatal("connected_wellknown_peers_count gauge was not registered")
+	}
+
+	// Observe sets the gauge from the input source on a background goroutine
+	// as soon as it starts; poll briefly for that first tick.
+	deadline := time.Now().Add(time.Second)
+	for {
+		if strings.Contains(
+			gauge.expose(),
+			ConnectedWellknownPeersCountMetricName+" 1 ",
+		) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"expected exactly one of two wellknown peers to be counted, "+
+					"got: %s",
+				gauge.expose(),
+			)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }

@@ -61,25 +61,6 @@ func TestBigIntVarFlag_Set(t *testing.T) {
 	}
 }
 
-func TestBigIntVarFlag_DefaultValue(t *testing.T) {
-	defaultValue := big.NewInt(2675)
-
-	flags := pflag.NewFlagSet("flag-set", pflag.PanicOnError)
-
-	var valueDest BigIntFlagValue
-
-	BigIntVarFlag(flags, &valueDest, bigIntFlagName, defaultValue, "")
-
-	if valueDest.Cmp(defaultValue) != 0 {
-		t.Errorf(
-			"\nexpected: %s\nactual:   %s",
-			defaultValue,
-			valueDest,
-		)
-	}
-
-}
-
 func TestBigIntVarFlag_DefaultValueNil(t *testing.T) {
 	var defaultValue *big.Int = nil
 

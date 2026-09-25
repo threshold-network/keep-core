@@ -135,7 +135,10 @@ func bufferedWalletTxFeeFloor(
 	// implausible inputs; here the threshold simply ends up large enough
 	// that no realistic proposed fee trips the warning.
 	satPerVByte := big.NewInt(satPerVByteFloor)
-	numerator := big.NewInt(100 + WalletTxFeeBufferPercent)
+	numerator := new(big.Int).Add(
+		big.NewInt(100),
+		big.NewInt(WalletTxFeeBufferPercent),
+	)
 	denominator := big.NewInt(100)
 	delta := big.NewInt(99)
 

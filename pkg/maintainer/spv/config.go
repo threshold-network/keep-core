@@ -93,10 +93,10 @@ type Config struct {
 // entirely while the logs report each transaction as possibly permanently
 // unprovable. Silently substituting the default would hide an operator's
 // explicit, if mistaken, instruction; failing at startup surfaces it.
-func (c *Config) Validate() error {
+func (c Config) Validate() error {
 	if c.MaxProofHeaders == 0 {
 		return fmt.Errorf(
-			"maxProofHeaders must be greater than zero; " +
+			"spv.maxProofHeaders must be greater than 0; " +
 				"a zero bound skips every transaction and disables SPV proving",
 		)
 	}

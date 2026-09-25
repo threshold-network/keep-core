@@ -182,7 +182,6 @@ func TestWalletRegistry_getWalletByID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// walletPublicKeyHash := bitcoin.PublicKeyHash(signer.wallet.publicKey)
 	walletID, err := chain.CalculateWalletID(signer.wallet.publicKey)
 	if err != nil {
 		t.Fatal(err)

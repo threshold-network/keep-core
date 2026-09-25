@@ -231,6 +231,10 @@ func validateConfig(config *Config, categories ...Category) error {
 			if err := config.Tbtc.TransactionMonitor.Validate(); err != nil {
 				result = multierror.Append(result, err)
 			}
+		case Maintainer:
+			if err := config.Maintainer.Validate(); err != nil {
+				result = multierror.Append(result, err)
+			}
 		}
 	}
 

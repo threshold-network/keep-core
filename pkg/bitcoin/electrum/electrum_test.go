@@ -6,10 +6,14 @@ import (
 	"math"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/checksum0/go-electrum/electrum"
+	"github.com/ipfs/go-log"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -406,4 +410,319 @@ func TestGetScriptUtxosPreservesMempoolHeightSentinel(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSanitizeServerURL(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		input    string
+		expected string
+	}{
+		"clean URL unchanged": {
+			input:    "tcp://electrum.example.com:50001",
+			expected: "tcp://electrum.example.com:50001",
+		},
+		"userinfo stripped": {
+			input:    "wss://alice:secret123@electrum.example.com:443/path",
+			expected: "wss://electrum.example.com:443/path",
+		},
+		"preserve @ in credential-free path": {
+			input:    "wss://node.example/path@tenant",
+			expected: "wss://node.example/path@tenant",
+		},
+		"userinfo stripped and path @ preserved": {
+			input:    "wss://alice:secret123@node.example/path@tenant",
+			expected: "wss://node.example/path@tenant",
+		},
+		"unsupported scheme with userinfo": {
+			input:    "unsupported://user:pass@host:123",
+			expected: "unsupported://host:123",
+		},
+		"malformed URL with userinfo": {
+			input:    "tcp://user:secret@invalid%xx:50001",
+			expected: "tcp://invalid%xx:50001",
+		},
+		"opaque raw credentials without scheme": {
+			input:    "user:secret@host",
+			expected: "host",
+		},
+		"missing host with credentials": {
+			input:    "tcp:///user:secret@host",
+			expected: "tcp://host",
+		},
+	}
+	for name, tc := range tests {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			actual := sanitizeServerURL(tc.input)
+			if actual != tc.expected {
+				t.Fatalf("expected [%s], got [%s]", tc.expected, actual)
+			}
+		})
+	}
+}
+
+func TestValidateServerURL(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		input       string
+		wantErr     bool
+		errContains string
+	}{
+		"valid tcp": {
+			input:   "tcp://electrum.example.com:50001",
+			wantErr: false,
+		},
+		"valid ssl ipv6": {
+			input:   "ssl://[::1]:50002",
+			wantErr: false,
+		},
+		"valid ws default port": {
+			input:   "ws://127.0.0.1",
+			wantErr: false,
+		},
+		"valid wss with path and @": {
+			input:   "wss://node.example/path@tenant",
+			wantErr: false,
+		},
+		"websocket with userinfo rejected": {
+			input:       "ws://user:secretpass@127.0.0.1:8546",
+			wantErr:     true,
+			errContains: "userinfo is not supported in websocket URL [ws://127.0.0.1:8546]",
+		},
+		"ws with explicit empty port rejected": {
+			input:       "ws://127.0.0.1:",
+			wantErr:     true,
+			errContains: "invalid port",
+		},
+		"wss with explicit empty port rejected": {
+			input:       "wss://node.example:",
+			wantErr:     true,
+			errContains: "invalid port",
+		},
+		"missing scheme": {
+			input:       "localhost:50001",
+			wantErr:     true,
+			errContains: "missing protocol scheme",
+		},
+		"missing host": {
+			input:       "tcp://:50001",
+			wantErr:     true,
+			errContains: "missing host",
+		},
+		"missing port for tcp": {
+			input:       "tcp://electrum.example.com",
+			wantErr:     true,
+			errContains: "missing port in electrum server URL [tcp://electrum.example.com]",
+		},
+		"invalid port number": {
+			input:       "ssl://electrum.example.com:99999",
+			wantErr:     true,
+			errContains: "invalid port [99999]",
+		},
+		"unsupported scheme with redaction": {
+			input:       "http://user:secretpass@example.com:80",
+			wantErr:     true,
+			errContains: "unsupported electrum server protocol scheme [http] in URL [http://example.com:80]",
+		},
+		"malformed URL with secret redaction": {
+			input:       "tcp://user:mysecretpassword@invalid%xx:50001",
+			wantErr:     true,
+			errContains: "invalid electrum server URL [tcp://invalid%xx:50001]",
+		},
+		"opaque raw credentials without scheme": {
+			input:       "user:secret@host",
+			wantErr:     true,
+			errContains: "missing protocol scheme in electrum server URL [host]",
+		},
+		"missing host with credentials": {
+			input:       "tcp:///user:secret@host",
+			wantErr:     true,
+			errContains: "missing host in electrum server URL [tcp://host]",
+		},
+	}
+	for name, tc := range tests {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := validateServerURL(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for input [%s], got nil", tc.input)
+				}
+				if tc.errContains != "" && !strings.Contains(err.Error(), tc.errContains) {
+					t.Fatalf("expected error containing [%s], got [%v]", tc.errContains, err)
+				}
+				if strings.Contains(tc.input, "secret") && strings.Contains(err.Error(), "secret") {
+					t.Fatalf("credential leaked in validation error: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error for input [%s]: %v", tc.input, err)
+				}
+			}
+		})
+	}
+}
+
+func TestConnectURLValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty configuration fails before dial", func(t *testing.T) {
+		t.Parallel()
+		chain, err := Connect(context.Background(), Config{})
+		if err == nil || chain != nil {
+			t.Fatalf("expected error and nil chain, got: [%v], [%v]", err, chain)
+		}
+		if !strings.Contains(err.Error(), "no electrum server URLs configured") {
+			t.Fatalf("expected 'no electrum server URLs configured', got: [%v]", err)
+		}
+	})
+
+	t.Run("malformed fallback fails before primary is dialed", func(t *testing.T) {
+		t.Parallel()
+		config := Config{
+			URL:          "tcp://primary.example.com:50001",
+			FallbackURLs: []string{"http://bad.fallback:80"},
+		}
+		chain, err := Connect(context.Background(), config)
+		if err == nil || chain != nil {
+			t.Fatalf("expected error and nil chain, got: [%v], [%v]", err, chain)
+		}
+		if !strings.Contains(err.Error(), "unsupported electrum server protocol scheme [http]") {
+			t.Fatalf("expected unsupported scheme error for fallback, got: [%v]", err)
+		}
+	})
+}
+
+func TestVerifyServerURLSanitization(t *testing.T) {
+	t.Parallel()
+
+	client := &failoverTestClient{
+		serverFeatures: func(context.Context) (*electrum.ServerFeaturesResult, error) {
+			return &electrum.ServerFeaturesResult{
+				GenesisHash: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+			}, nil
+		},
+	}
+
+	rawURL := "wss://alice:secretpassword@electrum.example.com:443"
+	expectedReference := "1111111111111111111111111111111111111111111111111111111111111111"
+
+	_, err := verifyServer(context.Background(), client, rawURL, expectedReference)
+	if err == nil {
+		t.Fatal("expected error on genesis hash mismatch, got nil")
+	}
+
+	if strings.Contains(err.Error(), "secretpassword") || strings.Contains(err.Error(), "alice") {
+		t.Fatalf("credentials leaked in verifyServer error: [%v]", err)
+	}
+	if !strings.Contains(err.Error(), "wss://electrum.example.com:443") {
+		t.Fatalf("expected sanitized URL in verifyServer error, got: [%v]", err)
+	}
+}
+
+type unsupportedProtocolMockClient struct {
+	failoverTestClient
+}
+
+func (c *unsupportedProtocolMockClient) ServerVersion(ctx context.Context) (string, string, error) {
+	return "test", "9.9", nil
+}
+
+func TestURLRedactionInLogs(t *testing.T) {
+	core, recorded := observer.New(zap.DebugLevel)
+	origLogger := logger
+	logger = &log.ZapEventLogger{
+		SugaredLogger: *zap.New(core).Sugar(),
+	}
+	t.Cleanup(func() {
+		logger = origLogger
+	})
+
+	rawURL := "wss://alice:secretpassword@electrum.example.com:443"
+
+	assertNoCredentialsInLogs := func(t *testing.T, expectedLogSubstring string) {
+		t.Helper()
+		allEntries := recorded.All()
+		found := false
+		for _, entry := range allEntries {
+			msg := entry.Message
+			if strings.Contains(msg, "alice") || strings.Contains(msg, "secretpassword") {
+				t.Fatalf("credential leaked in log message: [%s]", msg)
+			}
+			if strings.Contains(msg, expectedLogSubstring) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected log containing [%s], found entries: %v", expectedLogSubstring, allEntries)
+		}
+	}
+
+	t.Run("verifyServer unsupported protocol warning", func(t *testing.T) {
+		recorded.TakeAll()
+		client := &unsupportedProtocolMockClient{}
+		_, _ = verifyServer(context.Background(), client, rawURL, "")
+		assertNoCredentialsInLogs(t, "electrum server [wss://electrum.example.com:443] runs an unsupported protocol version")
+	})
+
+	t.Run("verifyServer missing genesis hash warning", func(t *testing.T) {
+		recorded.TakeAll()
+		client := &failoverTestClient{
+			serverFeatures: func(context.Context) (*electrum.ServerFeaturesResult, error) {
+				return &electrum.ServerFeaturesResult{GenesisHash: ""}, nil
+			},
+		}
+		_, _ = verifyServer(context.Background(), client, rawURL, "")
+		assertNoCredentialsInLogs(t, "electrum server [wss://electrum.example.com:443] did not report a genesis hash")
+	})
+
+	t.Run("verifyServer genesis adoption warning", func(t *testing.T) {
+		recorded.TakeAll()
+		client := &failoverTestClient{
+			serverFeatures: func(context.Context) (*electrum.ServerFeaturesResult, error) {
+				return &electrum.ServerFeaturesResult{
+					GenesisHash: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+				}, nil
+			},
+		}
+		_, _ = verifyServer(context.Background(), client, rawURL, "")
+		assertNoCredentialsInLogs(t, "adopting genesis hash [000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f] reported by electrum server [wss://electrum.example.com:443]")
+	})
+
+	t.Run("healPrimary re-canonicalization info", func(t *testing.T) {
+		recorded.TakeAll()
+		ctx, cancel := context.WithCancel(context.Background())
+		primaryClient := &failoverTestClient{
+			serverFeatures: func(context.Context) (*electrum.ServerFeaturesResult, error) {
+				return &electrum.ServerFeaturesResult{
+					GenesisHash: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+				}, nil
+			},
+		}
+		conn := &Connection{
+			parentCtx:           ctx,
+			serverURLs:          []string{"wss://alice:secretpassword@primary.example:443", "wss://fallback.example:443"},
+			serverIndex:         1,
+			verifiedGenesisHash: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+			clientMutex:         &sync.Mutex{},
+			config:              Config{ConnectTimeout: time.Second, RequestTimeout: time.Second},
+			newClient: func(context.Context, string) (electrumClient, error) {
+				return primaryClient, nil
+			},
+		}
+		t.Cleanup(func() {
+			cancel()
+			if conn.closeClient != nil {
+				conn.closeClient()
+				conn.closeClient = nil
+			}
+		})
+		conn.healPrimary()
+		assertNoCredentialsInLogs(t, "re-canonicalized primary electrum server [wss://primary.example:443]")
+	})
 }

@@ -95,10 +95,12 @@ func TestFuzzSignature_MarshalingRoundtrip(t *testing.T) {
 			RecoveryID: recoveryID,
 		}
 
-		_ = pbutils.RoundTrip(signature, &Signature{})
+		if err := pbutils.RoundTrip(signature, &Signature{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzSignature_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&Signature{})
+	pbutils.AssertUnmarshalDoesNotPanic(&Signature{})
 }
