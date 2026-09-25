@@ -167,8 +167,8 @@ func TestInitializeMaintainerMetricsEnabledWhenPortSet(t *testing.T) {
 	defer func() { clientConfig.ClientInfo.Port = originalPort }()
 
 	// Reserve a genuinely free ephemeral port from the OS and release it
-	// immediately. clientinfo.Initialize binds this port on
-	// http.DefaultServeMux via an unowned ListenAndServe goroutine with no
+	// immediately. clientinfo.Initialize binds this port on a private
+	// per-registry ServeMux via an unowned ListenAndServe goroutine with no
 	// shutdown handle, so a hardcoded port risks colliding with another
 	// process or a parallel test run.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

@@ -33,7 +33,11 @@ func TestValidateConfig_TransactionMonitor(t *testing.T) {
 		}},
 		Maintainer: maintainer.Config{
 			Spv: spv.Config{
-				MaxProofHeaders: spv.DefaultMaxProofHeaders,
+				HistoryDepth:       spv.DefaultHistoryDepth,
+				TransactionLimit:   spv.DefaultTransactionLimit,
+				RestartBackoffTime: spv.DefaultRestartBackoffTime,
+				IdleBackoffTime:    spv.DefaultIdleBackOffTime,
+				MaxProofHeaders:    spv.DefaultMaxProofHeaders,
 			},
 		},
 	}
@@ -81,7 +85,14 @@ func TestValidateConfig_Maintainer(t *testing.T) {
 			config: &Config{
 				Maintainer: maintainer.Config{
 					BitcoinDifficulty: btcdiff.Config{Enabled: false},
-					Spv:               spv.Config{Enabled: false, MaxProofHeaders: spv.DefaultMaxProofHeaders},
+					Spv: spv.Config{
+						Enabled:            false,
+						HistoryDepth:       spv.DefaultHistoryDepth,
+						TransactionLimit:   spv.DefaultTransactionLimit,
+						RestartBackoffTime: spv.DefaultRestartBackoffTime,
+						IdleBackoffTime:    spv.DefaultIdleBackOffTime,
+						MaxProofHeaders:    spv.DefaultMaxProofHeaders,
+					},
 				},
 			},
 			expectErr: false,
@@ -90,10 +101,47 @@ func TestValidateConfig_Maintainer(t *testing.T) {
 			config: &Config{
 				Maintainer: maintainer.Config{
 					BitcoinDifficulty: btcdiff.Config{Enabled: false},
-					Spv:               spv.Config{Enabled: true, MaxProofHeaders: spv.DefaultMaxProofHeaders},
+					Spv: spv.Config{
+						Enabled:            true,
+						HistoryDepth:       spv.DefaultHistoryDepth,
+						TransactionLimit:   spv.DefaultTransactionLimit,
+						RestartBackoffTime: spv.DefaultRestartBackoffTime,
+						IdleBackoffTime:    spv.DefaultIdleBackOffTime,
+						MaxProofHeaders:    spv.DefaultMaxProofHeaders,
+					},
 				},
 			},
 			expectErr: false,
+		},
+		"enabled SPV with zero historyDepth fails": {
+			config: &Config{
+				Maintainer: maintainer.Config{
+					BitcoinDifficulty: btcdiff.Config{Enabled: false},
+					Spv: spv.Config{
+						Enabled:            true,
+						TransactionLimit:   spv.DefaultTransactionLimit,
+						RestartBackoffTime: spv.DefaultRestartBackoffTime,
+						IdleBackoffTime:    spv.DefaultIdleBackOffTime,
+						MaxProofHeaders:    spv.DefaultMaxProofHeaders,
+					},
+				},
+			},
+			expectErr: true,
+		},
+		"enabled SPV with zero transactionLimit fails": {
+			config: &Config{
+				Maintainer: maintainer.Config{
+					BitcoinDifficulty: btcdiff.Config{Enabled: false},
+					Spv: spv.Config{
+						Enabled:            true,
+						HistoryDepth:       spv.DefaultHistoryDepth,
+						RestartBackoffTime: spv.DefaultRestartBackoffTime,
+						IdleBackoffTime:    spv.DefaultIdleBackOffTime,
+						MaxProofHeaders:    spv.DefaultMaxProofHeaders,
+					},
+				},
+			},
+			expectErr: true,
 		},
 	}
 

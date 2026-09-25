@@ -79,6 +79,14 @@ func Initialize(
 	cfg Config,
 ) (*Registry, bool) {
 	if cfg.Port == 0 {
+		if cfg.EnablePprof {
+			// Enabling pprof without a port would be silently ignored because
+			// no server is started; surface the misconfiguration instead.
+			logger.Warnf(
+				"EnablePprof is set but Port is 0; no server is started and " +
+					"profiling endpoints will not be exposed",
+			)
+		}
 		return nil, false
 	}
 
@@ -100,6 +108,15 @@ func registerPprofHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }
 
+// newServeMux builds the HTTP handler served on the client info port.
+//
+// The mux is created per call and never shared with http.DefaultServeMux.
+// That isolation is load-bearing for two reasons: importing net/http/pprof
+// registers /debug/pprof/* on DefaultServeMux from that package's init
+// regardless of how it is imported, so serving DefaultServeMux would expose
+// profiling endpoints even when disabled; and registering this registry's own
+// routes on a process-global mux makes a second registry panic on duplicate
+// patterns.
 func (r *Registry) newServeMux(enablePprof bool) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -131,6 +148,8 @@ func (r *Registry) newServer(port int, enablePprof bool) *http.Server {
 	}
 }
 
+// enableServer starts the client info HTTP server, exposing the profiling
+// endpoints only when enablePprof is true.
 func (r *Registry) enableServer(port int, enablePprof bool) {
 	server := r.newServer(port, enablePprof)
 
