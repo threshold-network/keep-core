@@ -1,5 +1,12 @@
 # UTXO Reservations — Epic Branch, Review, and Merge Plan
 
+> **ENTIRE DOCUMENT SUPERSEDED — DO NOT EXECUTE.** Live delivery plan:
+> `pr-strategy.md`. Retained only for §0.1's verified eight-PR inventory and
+> §3's per-PR extraction guidance, which the m1 rewrite draws on. Every
+> procedural section below (§1 rationale, §2 branch-protection setup, the
+> review/merge/landing steps in §3-§5's action items) describes a plan that
+> was never executed and never will be.
+
 Status: REFERENCE — superseded as a delivery plan 2026-08-21 by the variant B
 decision (`roadmap.md` §1). Retained as the verified record of the eight-PR
 stack, because the m1 rewrite extracts from those PRs. The live delivery plan is

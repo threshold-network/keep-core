@@ -13,12 +13,16 @@ M1:
   to it; the owner keeps their tBTC as an ordinary claim.
 - A lifetime limit on how much re-anchor fees can shrink one position.
 
-M1 positions carry over to v2 with the dates recorded at acceptance.
+M1 positions carry over to v2: the term and dissolution dates are recorded at
+acceptance so v2 can honor them, but M1 does not enforce them as an expiry or
+renewal gate. The one on-chain exception already lives in M1: a position left
+on a Closing wallet can be stranded once its dissolution date has passed (see
+Custody, below).
 {% endhint %}
 
 In M1, a Verifiable Bitcoin Account (VBA) is a UTXO reservation in the tBTC v2 Bridge. When bitcoin is deposited to a tBTC threshold wallet and revealed to the Bridge with the reservation vault named as its vault, it is never combined with other deposits: it keeps its own UTXO (the "anchor"), held by the same wallet that custodies pooled tBTC. tBTC is minted against that anchor, one position at a time. The engineering name is a "reservation"; this page uses both.
 
-Every move of an anchor is a Bitcoin transaction with exactly one input and one output, proven to Ethereum with the Bridge's standard SPV checks. Custody security is the same as tBTC's: an honest majority of the threshold signers, with fraud challenges and stake slashing. The sections below show where each rule lives, how a position moves through its lifecycle, and how to verify any of it yourself.
+Every move of an anchor is a Bitcoin transaction with exactly one input and one output, proven to Ethereum with the Bridge's standard SPV (Simplified Payment Verification) checks. Custody security is the same as tBTC's: an honest majority of the threshold signers, with fraud challenges and stake slashing. The sections below show where each rule lives, how a position moves through its lifecycle, and how to verify any of it yourself.
 
 ***
 
@@ -41,7 +45,7 @@ Every move of an anchor is a Bitcoin transaction with exactly one input and one 
                                          +----------------+
                                          | anchor UTXO    |
                                          | (own output,   |
-                                         |  P2WPKH wallet)|
+                                         |   wallet's key)|
                                          +----------------+
   both sit under the same tBTC threshold wallet key;
   a reserved deposit is excluded from every sweep
@@ -113,7 +117,7 @@ What is different:
 
 | Rule | Where | How |
 |------|-------|-----|
-| Only the wallet's key can spend an anchor | Bitcoin | The anchor is a P2WPKH (native SegWit) output of the tBTC wallet; Bitcoin checks the wallet's signature and nothing else. A reserved deposit's refund locktime also protects the pre-acceptance path: an unaccepted deposit always becomes refundable on Bitcoin. |
+| Only the wallet's key can spend an anchor | Bitcoin | The anchor pays the custodying wallet's key as a P2PKH or P2WPKH output - the Bridge's proof check accepts either script type, though the signer software always builds P2WPKH (native SegWit). Bitcoin checks the wallet's signature and nothing else. A reserved deposit's refund locktime also protects the pre-acceptance path: an unaccepted deposit always becomes refundable on Bitcoin. |
 | Every move is authorized in advance | Bridge (Ethereum) | Each move starts as a pending authorization (Acceptance or Reanchor) with a deadline and snapshots of the parameters that matter. No transaction settles without its authorization. |
 | Caps hold | Bridge | Single-reservation, per-wallet count, per-wallet amount, global count and global amount caps are all checked when an action is requested, and capacity is reserved until settlement. |
 | Exact transaction shape | Bridge | At proof time the Bridge verifies the SPV proof and checks the Bitcoin transaction: exactly one input, exactly one output paying the wallet's key, fee within the snapshotted maximum, amount within the rules. |
@@ -199,7 +203,8 @@ Reserved deposits are not charged the Bridge's normal deposit treasury fee; the 
        sign a one-input/one-output anchor transaction that pays the
        wallet's key.
   3. SPV MAINTAINER, on Ethereum: proves the confirmed anchor transaction
-       to the Bridge (Merkle inclusion, coinbase proof, proof-of-work).
+       to the Bridge (Merkle inclusion, a coinbase proof that the block's
+       reward transaction - and so the block itself - is genuine, and proof-of-work).
   4. BRIDGE, on Ethereum: settles the action - writes the position (owner,
        custodying wallet, anchor outpoint, claim equal to anchor amount,
        state Active, expiry and dissolution dates recorded) and credits
@@ -253,7 +258,7 @@ Stranding is M1's only terminal state. Anyone may file it when the position is A
   ANCHOR TRANSACTION (acceptance)
   +-------------------------------------+
   | input 0:  the reserved deposit UTXO |
-  | output 0: P2WPKH, the wallet's key  |
+  | output 0: P2(W)PKH, the wallet's key|
   +-------------------------------------+
   value rules (proof-time):
     deposit - output <= max fee
@@ -262,7 +267,7 @@ Stranding is M1's only terminal state. Anyone may file it when the position is A
   RE-ANCHOR TRANSACTION
   +-------------------------------------+
   | input 0:  the current anchor        |
-  | output 0: P2WPKH, the target wallet |
+  | output 0: P2(W)PKH, target wallet   |
   +-------------------------------------+
   value rules (proof-time):
     anchor - output <= max fee
@@ -276,7 +281,7 @@ Stranding is M1's only terminal state. Anyone may file it when the position is A
   from the original deposit.
 ```
 
-Both shapes are enforced at proof time by the Bridge: exactly one input, exactly one output, the output paying the authorized wallet's key, fee within the snapshotted maximum, and the value floor for that transaction type; the minimum-plus-max-fee floor for re-anchors is checked when the re-anchor is requested. The signer software builds P2WPKH outputs. A Bitcoin node can check that the signature belongs to the wallet's key, but it cannot check anything more: the one-input/one-output shape and the value rules are Ethereum checks, applied to the proven transaction.
+Both shapes are enforced at proof time by the Bridge: exactly one input, exactly one output, the output paying the authorized wallet's key, fee within the snapshotted maximum, and the value floor for that transaction type; the minimum-plus-max-fee floor for re-anchors is checked when the re-anchor is requested. The Bridge accepts either a P2PKH or a P2WPKH output at proof time; the signer software always builds P2WPKH. A Bitcoin node can check that the signature belongs to the wallet's key, but it cannot check anything more: the one-input/one-output shape and the value rules are Ethereum checks, applied to the proven transaction.
 
 ***
 
@@ -406,7 +411,7 @@ Launch posture: M1 launches with a small total cap, limited to design partners, 
 | Component | What you rely on | Enforced by |
 |-----------|------------------|-------------|
 | Bitcoin custody of the anchor | An honest majority of the custodying wallet's signers (51 of 100 seats on mainnet), the same as pooled tBTC | Threshold ECDSA; fraud challenges and stake slashing |
-| Correct reservation records and minting | Bitcoin and Ethereum consensus only | The Bridge checks the SPV proof and the exact transaction shape before any state change |
+| Correct reservation records and minting | Bitcoin and Ethereum consensus, plus the deploy pipeline's vault-activation order | The Bridge checks the SPV proof and the exact transaction shape before any state change. The vault mints on any Bank-routed credit it receives when trusted, with no on-chain check tying a credit back to a proven anchor; the deploy scripts mark the vault trusted only after it is wired into the Bridge — that ordering is a deploy-process safeguard, not an on-chain invariant. Governance could in principle call the trust switch directly, out of order |
 | Segregation from pooled funds | Nothing extra | The Bridge rejects sweeps containing reserved deposits; signers refuse them too |
 | Deposit before acceptance | Nothing extra | The standard tBTC deposit refund path on Bitcoin after the refund locktime |
 | Proof delivery | Authorized SPV maintainers, and the Bridge's Bitcoin relay being kept up to date | Liveness only: maintainers cannot forge a proof |
@@ -440,5 +445,6 @@ Everything above is public state; no special tooling is required.
 1. Compute the reservation key: the standard tBTC deposit key - keccak256 of the funding transaction hash and output index, as the Bridge uses for every deposit.
 2. Read the Bridge address: `reservations(key)` gives owner, wallet, anchor, amounts, state and dates; `reservationActions(key, nonce)` for pending actions; `reservationParameters()` for operational parameters; `reservationCaps()` for the per-wallet amount, single-position, and max-open-positions caps; `activeReservationsCount()` for current open count; `walletReservationsCount(hash)` and `walletReservationsAmount(hash)` per wallet; `pendingReservedDeposits()` and `reservedDepositWallet(key)` pre-acceptance; `reservationByAnchorUtxo(txHash, 0)` finds a position from its bitcoin outpoint.
 3. Check the anchor output on any Bitcoin node or explorer: it must pay the custodying wallet's key at the recorded amount.
-4. Follow the events: `ReservationAcceptanceRequested`, `ReservationAccepted`, `ReservationReanchorRequested`, `ReservationReanchored`, `ReservationAcceptanceTimedOut`, `ReservationReanchorTimedOut`, `ReservationLateSettled`, `ReservationStranded`, `ReservedDepositMarkedStale`.
-5. Read the vault: `initiationFeeBps`, `feeReserveTarget`, and `inKindFeeDebtSat` (the outstanding public fee debt).
+4. Follow the Bridge's events: `ReservationAcceptanceRequested`, `ReservationAccepted`, `ReservationReanchorRequested`, `ReservationReanchored`, `ReservationAcceptanceTimedOut`, `ReservationReanchorTimedOut`, `ReservationLateSettled`, `ReservationStranded`, `ReservedDepositMarkedStale`.
+5. Follow the vault's events: `ReservationCreditProcessed` (owner, satoshi amount, initiation fee - the mint-and-credit record for each accepted anchor), `InKindFeeFinanced` and `InKindFeeDebtRepaid` (the re-anchor fee-debt trail), `FeesUpdated`, `FeeReserveTargetUpdated`, and `FeesSwept`.
+6. Read the vault: `initiationFeeBps`, `feeReserveTarget`, and `inKindFeeDebtSat` (the outstanding public fee debt).

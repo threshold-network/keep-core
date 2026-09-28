@@ -9,7 +9,50 @@ working scratchpad.
 **Source of truth for the PR decomposition and order:** `docs/spec/reservations/pr-strategy.md` §4.1 + §9.
 **Build order** (corrected 2026-08-24): **A → C → D → E → B → F → G** (then keep-core PR #H post-epic).
 
-## Current status — 2026-09-04
+## Current status — 2026-09-28
+
+Re-verified against `gh` today (2026-09-28). The A–G build below ("Previous
+status — 2026-09-04") is unchanged and still fully merged; this section
+records what changed since then. **M1 code is implemented on integration
+branches only — not merged to `dev`/`main`, not audited, not deployed.**
+
+**tbtc-v2 (`reservations-upgrade`):**
+
+| PR(s) | Status (verified 2026-09-28) | Notes |
+|---|---|---|
+| [#1106](https://github.com/threshold-network/tbtc-v2/pull/1106) (A), [#1107](https://github.com/threshold-network/tbtc-v2/pull/1107) (C), [#1108](https://github.com/threshold-network/tbtc-v2/pull/1108) (D), [#1109](https://github.com/threshold-network/tbtc-v2/pull/1109) (E), [#1110](https://github.com/threshold-network/tbtc-v2/pull/1110) (B), [#1111](https://github.com/threshold-network/tbtc-v2/pull/1111) (F), [#1112](https://github.com/threshold-network/tbtc-v2/pull/1112) (G) | **MERGED** | Unchanged since 2026-09-04 — see previous status below for dates/details. |
+| [#1120](https://github.com/threshold-network/tbtc-v2/pull/1120) | **MERGED** (2026-09-03) | Unchanged since 2026-09-04. |
+| [#1102](https://github.com/threshold-network/tbtc-v2/pull/1102) | **MERGED** (2026-08-21) | Unchanged, folded into #1088's branch. |
+| [#1121](https://github.com/threshold-network/tbtc-v2/pull/1121) | **MERGED** (2026-09-04), then reverted | M2-scope reserved-redemption/veto/renewal surface; see previous status below for the full finding. |
+| [#1122](https://github.com/threshold-network/tbtc-v2/pull/1122) | **MERGED** (2026-09-07) | Full revert of #1121. Milestone-1's "not enabled" behavior (`whenRedemptionsNotPaused`/`whenRenewalsNotPaused` reverts) restored. |
+| [#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) `reservations-upgrade` → `dev` | **OPEN**, draft (tracker) | Still not merged to `dev`. |
+| [#1088](https://github.com/threshold-network/tbtc-v2/pull/1088), [#1090](https://github.com/threshold-network/tbtc-v2/pull/1090)–[#1096](https://github.com/threshold-network/tbtc-v2/pull/1096) | **OPEN**, drafts | Superseded pre-M1 chain, unchanged — reference only (see "Superseded pre-M1 chain" table below). |
+
+**keep-core (`reservations-epic`, tip now `f66f11240`):**
+
+| PR(s) | Status (verified 2026-09-28) | Notes |
+|---|---|---|
+| [#4274](https://github.com/threshold-network/keep-core/pull/4274), [#4276](https://github.com/threshold-network/keep-core/pull/4276), [#4277](https://github.com/threshold-network/keep-core/pull/4277), [#4278](https://github.com/threshold-network/keep-core/pull/4278), [#4279](https://github.com/threshold-network/keep-core/pull/4279), [#4280](https://github.com/threshold-network/keep-core/pull/4280), [#4283](https://github.com/threshold-network/keep-core/pull/4283), [#4284](https://github.com/threshold-network/keep-core/pull/4284) | **MERGED** (2026-09-03) | Unchanged since 2026-09-04. |
+| [#4324](https://github.com/threshold-network/keep-core/pull/4324) `fix/reservations-review-findings` → `reservations-epic` | **MERGED** (2026-09-28) — **new since 2026-09-04** | `fix(reservations): review-round fixes for reservation ABI, watcher plumbing, and lookback bounds`. Review-fix PR on the reservation-content chain, not an unrelated PR (correcting a doc gap: this row previously did not exist anywhere in this document). Is now the epic tip, 28 commits ahead of the 2026-09-04 tip `356d35bae`. |
+| [#4238](https://github.com/threshold-network/keep-core/pull/4238) `feat/utxo-reservation-wallet-support` → `reservations-epic` | **OPEN**, draft | Self-titled "previous end-to-end attempt — see #4282 for M1" as of 2026-09-28 — superseded, not part of the active queue. |
+| [#4282](https://github.com/threshold-network/keep-core/pull/4282) `reservations-epic` → `dev` | **OPEN**, draft (tracker) | Still not merged to `dev`. |
+
+**Vault decision (2026-09-24, "Option B").** The M1 `ReservationVault` ships
+**minimal** (as in commit `4d549e64`); M2 delivers redemption and renewal via a
+**new vault deployment plus a depositor migration ceremony**, not via
+unpausing flags on the M1 vault — the M1 vault is `Ownable`, not
+proxy-upgradeable, so there is no in-place upgrade path. This supersedes every
+earlier statement in this plan and its linked docs that the M1 vault must ship
+the full entry-point surface behind pause flags (`roadmap.md` §0.7/§1.3/§2.2,
+`milestone-inventory.md` D-12/D-13/D-20/D-21, `pr-review-followups.md`'s
+#1111 section) — all correct when written, superseded now. Consequence to
+state honestly: the vault is not upgradeable, so M2 needs the migration
+ceremony the flag design was meant to avoid.
+
+## Previous status — 2026-09-04
+
+*(superseded by "Current status — 2026-09-28" above; kept for its full
+per-PR build detail, which is still accurate.)*
 
 **tbtc-v2 (`reservations-upgrade`, tip `398fcedf9`, 2026-09-04T12:51:23Z) — A–G build order fully merged:**
 

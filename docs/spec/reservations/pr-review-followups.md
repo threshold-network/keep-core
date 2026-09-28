@@ -42,6 +42,26 @@ its own. A "Minor" section after item 7 records the single P3 finding from
 #1102's review that was deliberately not implemented; everything else that
 review confirmed (30 findings) is fixed and pushed on #1102 itself.
 
+**Status vs M1 code (2026-09-28)** — tbtc-v2 `reservations-upgrade` @
+`9f8f5ef1`, keep-core `reservations-epic` @ `f66f11240`. Index, not a
+renumbering (item numbers below are unchanged; the three unnumbered
+sections between items 7 and 8 are listed here for navigability):
+
+| # | Item | Status at M1 code |
+|---|---|---|
+| 1 | Wallet termination strands active reservations | CLOSED — `notifyReservationStranded` reachable from all three termination paths, confirmed unchanged in substance |
+| 2 | Vault rotation blocked while any reservation outstanding | OPEN — accepted m1 liveness tradeoff, revisit at m2 |
+| 3 | No permissionless fallback if SPV maintainer stalls | OPEN — accepted m1 risk with operational (not code) mitigation |
+| 4 | Live governance parameters applied retroactively | CLOSED — `reservationTxMaxFee` confirmed snapshotted; `reservationGracePeriod` was renamed `reservationDissolutionDelay`, also snapshotted per action |
+| 5 | Unbounded re-anchor grinding | SUPERSEDED for m1 — `maxCumulativeReanchorFee` dropped; a request-time amount floor (Reservation.sol:805-808) bounds the grind instead, see Resolution section |
+| 6 | Redeemer output-script check bypassable via P2SH/P2WSH | MOOT for m1 — no reserved-redemption entry point exists yet (m1 has no redemption); pooled-path bug is real and unaffected |
+| 7 | `maxCumulativeReanchorFee` itself unbounded | RESOLVED for m1 — lever 4 (leave unbounded) plus the item-5 request-time floor, characterization-test-pinned; see Resolution section |
+| Minor | The one #1102 finding left unimplemented | Unaffected by m1 rewrite; not independently re-verified here |
+| Addendum | Two items outside the original review's scope | Unaffected by m1 rewrite; not independently re-verified here |
+| Resolution | Resolution of items 5 and 7 for milestone 1 | Reconciled below against the true M1 code (previously verified against an interim `#1093` tip) |
+| 8 | Aggregate in-kind fee debt unbounded and only voluntarily repayable | PARTIALLY RESOLVED — `sweepFees` no longer reverts in the high-debt regime (fixed via an early return, not the debt-capped-at-target design decided 2026-09-07); `financeInKindFee` is still uncapped, so the no-ceiling half stays open |
+| 9 | Permissionless re-anchor requests let an outsider dictate migration targets | NARROWED — a `reanchorCooldownUntil` cooldown (implemented, not "post-m1 work" as originally framed) now gates the immediate re-request the attacker relied on |
+
 ---
 
 ## 1. Wallet termination strands active reservations with no recovery path
@@ -73,7 +93,7 @@ doesn't distinguish which termination triggers it covers.
 tip `52bf2822`):** confirmed, unchanged. The three call sites are unchanged at
 `Wallets.sol:468, 502, 545` (`notifyWalletMovingFundsTimeout`,
 `notifyWalletMovedFundsSweepTimeout`, `notifyWalletFraudChallengeDefeatTimeout`)
-— all still call `terminateWallet` (`Wallets.sol:693-716`) with no
+— all still call `terminateWallet` (`Wallets.sol:687-709`) with no
 reservation-count guard. The graceful path (`finalizeWalletClosing`,
 `Wallets.sol:666-682`) still has the `walletReservationInfo[wallet].count ==
 0` require. `notifyReservationStranded`'s underlying `strandReservation` call
@@ -82,6 +102,10 @@ reservation-count guard. The graceful path (`finalizeWalletClosing`,
 the `Terminated` state — so the recovery path is confirmed reachable from all
 three, not only the graceful one. Item CLOSED: verified as claimed, no
 further action needed.
+
+**Status at M1 code (2026-09-28):** unchanged from the 2026-09-07
+re-verification above (only the `terminateWallet` line citation drifted,
+`Wallets.sol:687-709` at `9f8f5ef1`; corrected above). CLOSED.
 
 ## 2. Vault rotation is blocked while any reservation is outstanding
 **Severity: High.** `updateReservationParameters` refuses to change
@@ -105,9 +129,10 @@ migration is unsafe with live state" problem, and the catalog only
 confirms one is fixed.
 
 **Re-verified 2026-09-07 against live `reservations-upgrade` (tip
-`52bf2822`):** confirmed, unchanged in substance (line numbers moved to
-`Reservation.sol:1289-1296`). The guard now visibly also checks
-`self.pendingReservedDeposits == 0` in the same `if` block — so the M-04
+`52bf2822`):** confirmed, unchanged in substance (at `9f8f5ef1` the function
+starts at `Reservation.sol:1260`, with the guard at `:1308-1312`). The guard
+visibly also checks `self.pendingReservedDeposits == 0` in the same `if`
+block — so the M-04
 pending-deposit fix and this Active-reservation guard live side by side in
 one function, not stacked or superseding one another. Both are real,
 independent gates. The liveness cost stands exactly as described: a single
@@ -121,6 +146,10 @@ for m1; revisit once m2's dissolution executor exists. A governance-forced
 dissolution override cannot be built before dissolution itself, which is out
 of m1 scope — so no code fix is available before m2 regardless of the
 policy answer. Documented as an accepted m1 liveness tradeoff.
+
+**Status at M1 code (2026-09-28):** unchanged — still the same accepted
+m1 liveness tradeoff decided 2026-09-07, no new code since. OPEN
+(accepted).
 
 ## 3. No permissionless fallback if the SPV maintainer stalls
 **Severity: High.** In #1088, all four reservation lifecycle proofs
@@ -149,13 +178,18 @@ custodies. Enumerate the mainnet `isSpvMaintainer` set before launch;
 mainnet submitter wired at all as of #1091 — verify against #1094/#1095.
 
 **Re-verified 2026-09-07 against live `reservations-upgrade` (tip
-`52bf2822`):** confirmed, unchanged. `ReservationRouter.submitReservationProof`
-(`ReservationRouter.sol:250-257`) is the single external entry point for
-every reservation proof type (dispatched via `proofType`) and remains gated
-`onlySpvMaintainer` (`ReservationRouter.sol:194-198`) with no alternate or
-permissionless entry point found anywhere in `ReservationRouter.sol` or
-`ReservationProofs.sol`. Re-anchor proof submission
-(`submitReservationReanchorProof`, `ReservationProofs.sol:671`) goes through
+`52bf2822`):** confirmed, unchanged in substance, but the entry-point
+description above needs a correction the 2026-09-07 pass got wrong: there is
+no `ReservationRouter.submitReservationProof` dispatcher. Proof submission
+is instead two separate, independently `onlySpvMaintainer`-gated external
+entry points — `submitReservationAcceptanceProof`
+(`ReservationRouter.sol:252-267`) and `submitReservationReanchorProof`
+(`ReservationRouter.sol:278-293`), each decorated `external onlySpvMaintainer`
+directly — with no `proofType`-dispatch parameter exposed externally
+(`ReservationProofs.submitReservationProof` is an internal library helper
+each of the two callers invokes separately). The underlying conclusion is
+unaffected: no permissionless fallback exists at either entry point.
+Re-anchor proof submission goes through
 this same gate. Dissolution's proof path is not yet wired in m1 (dissolution
 itself is declared-only per `m1-b-implementation.md`), so the live-today risk
 is specifically re-anchor: a stalled SPV maintainer blocks re-anchor proof
@@ -170,6 +204,11 @@ caught before it compounds. `isSpvMaintainer` (`BridgeState.sol:302`) is
 pre-existing shared Bridge state, not reservations-specific infrastructure
 that needs building — governance already has the lever to set it.
 Documented as an accepted m1 risk with an operational (not code) mitigation.
+
+**Status at M1 code (2026-09-28):** unchanged in substance from the
+2026-09-07 pass above (with the entry-point-count correction folded in
+directly there). Still the same accepted m1 risk with an operational
+mitigation. OPEN (accepted).
 
 ## 4. Live (non-snapshotted) governance parameters applied retroactively
 **Severity: High.** `updateReservationParameters` in #1088 changes
@@ -189,7 +228,24 @@ fixes target exactly this class of bug. Low residual risk; spot-check that
 #1091's snapshot covers *both* fields this finding names
 (`reservationGracePeriod` and `reservationTxMaxFee`), not just one.
 
-## 5. Unbounded re-anchor grinding — RESOLVED directly in #1088
+**Re-verified 2026-09-28 against M1 code (`9f8f5ef1`) — this item never got
+a 2026-09-07-style pass; overdue.** `reservationGracePeriod` does not exist
+anywhere in the M1 contracts (0 matches in `solidity/contracts/`); it was
+renamed `reservationDissolutionDelay` (`BridgeState.sol:386`,
+`IReservationBridge.sol`, `ReservationRouter.sol`), and it is snapshotted
+per action exactly like `reservationTxMaxFee`:
+`action.dissolutionDelay = self.reservationDissolutionDelay`
+(`Reservation.sol:628`). `reservationTxMaxFee` is confirmed snapshotted onto
+`ReservationAction.txMaxFee` at both call sites
+(`Reservation.sol:623,846`). The open "spot-check" action from the original
+finding is closed: both fields this finding names are snapshotted, just
+one of them under a new name. Item CLOSED for the fields as they exist
+today; note for whoever tracks the catalog IDs that `reservationGracePeriod`
+in M-01/M-06/M-09 above should now read `reservationDissolutionDelay`.
+
+**Status at M1 code (2026-09-28):** CLOSED, see re-verification above.
+
+## 5. Unbounded re-anchor grinding — RESOLVED directly in #1088 for the stack; cap later dropped for m1, see "Resolution of items 5 and 7" below
 **Severity was High, self-limiting; now closed at the source, not just
 further up the stack.** `submitReservationReanchorProof` originally had no
 nonce, cooldown, or cumulative fee-budget cap; the code's own comment
@@ -211,6 +267,15 @@ same gap (one on #1088 itself, one claimed on #1093) is a good sign, not a
 conflict — **action: when #1093 is reviewed, confirm its backing model is
 compatible with (or supersedes) #1088's `maxCumulativeReanchorFee` cap
 rather than silently stacking two different caps.**
+
+**Status at M1 code (2026-09-28): SUPERSEDED, not simply resolved.**
+`maxCumulativeReanchorFee` does not exist in the M1 contracts at all —
+dropped as unused/dead (`BridgeState.sol:492-495`,
+`BridgeGovernanceParameters.sol:1620-1626`). What ships instead is a
+request-time amount floor, `anchorAmount > txMaxFee + minAmount`
+(`Reservation.sol:805-808`), which bounds the grind by a different
+mechanism than the one this item credits. See "Resolution of items 5 and 7
+for milestone 1" below — the record there is now corrected to match.
 
 ## 6. Redeemer output-script check is bypassable via P2SH/P2WSH — no catalog match, still open
 **Severity: Medium-High. Not found anywhere in the existing H-/M-/C-
@@ -239,6 +304,18 @@ recommendation: **track as a ticket against `Redemption.sol`/`OutboundTx`,
 independent of the reservation epic** — no PR in this stack (nor the
 source review) would fix it, since fixing it changes live mainnet pooled
 redemption behavior, not just reservation code.
+
+**Status at M1 code (2026-09-28): MOOT for m1, not verified against #1088.**
+Neither `requestReservedRedemption` nor
+`OutboundTx.validateRedeemerOutputScript` exists anywhere in the M1
+contracts snapshot (0 matches for both) — reserved redemption is entirely
+out of m1 B scope (no redemption at all, per the roadmap decision), so
+there is currently no reserved-redemption entry point for this bug to
+affect. The underlying P2SH/P2WSH bypass is real and unchanged, but lives
+only in the pooled path's `requestRedemption`-family function
+(`Redemption.sol:536-555`), inline, never extracted into a shared library
+in this snapshot — independent of the reservation epic either way. Re-check
+this item once m2 ships a reserved-redemption path.
 
 ## 7. `maxCumulativeReanchorFee` itself is unbounded — residual on item 5
 **Severity: Medium. Provenance: multi-agent review of #1102, not the
@@ -387,6 +464,13 @@ is now an explicitly accepted and test-pinned regression rather than an
 omission. The "monitor the metric" answer above was superseded by something
 stronger, a characterization test that fails if the ceiling is ever ported.
 
+**Status at M1 code (2026-09-28):** the 2026-08-23 "Resolution" this item
+points to is itself corrected below — the record there previously said
+lever 4 was implemented verbatim; the true M1 code (`9f8f5ef1`) instead layers lever
+4 with the item-5 request-time floor (`Reservation.sol:805-808`), which
+changes the bound but not the "still unbounded in ratio" conclusion. See
+the corrected Resolution section.
+
 ## Minor: the one #1102 finding left unimplemented
 **Severity: Low (P3). Below this file's usual bar** — it is neither a new
 mechanism nor a design decision, so by the scope rule at the top it would
@@ -515,6 +599,31 @@ than `reservationMinAmount`: a minimum-sized reservation must remain
 migratable". It therefore requires that migratability requirement to be
 re-litigated, not merely a constant changed. Tracked in `roadmap.md`.
 
+**Correction — status at M1 code (2026-09-28):** the "Decided" framing above
+(written 2026-08-23 against the `#1093` stack tip) does not match what
+actually landed in the M1 code (`reservations-upgrade` @ `9f8f5ef1`). Lever
+4 ("leave the absolute ceiling unbounded") was not the final word: a fifth
+mechanism this record didn't anticipate — a *request-time* amount floor,
+`anchorAmount > reservationTxMaxFee + reservationMinAmount`
+(`Reservation.sol:805-808`, from `d600a8bf`, a P3 review-remediation fix,
+not a roadmap decision) — now gates every re-anchor request before it is
+even authorized, firing well before the settlement-time dust floor `#1102`/
+`#1093` characterized. `Bridge.ReservationSettlement.test.ts`'s "bounds the
+grind at a request-time amount floor, not the settlement-time dust floor"
+confirms this directly: a real, substantial loss still occurs — well above
+`#1102`'s 100,000 sat fixture ceiling, and its ratio scales with
+`reservationMinAmount` relative to the claim rather than being a protocol
+constant — but it is bounded, not unbounded. In lever terms this lands
+closest to lever 1, keyed off `reservationMinAmount` instead of a
+dedicated cap, and arrived at through the general review-remediation pass
+rather than through this decision. The **"Post-m1 commitment"** paragraph
+below (moving the ratio question to lever 2 or 3, post-m1) is superseded in
+part: a structural bound already exists in m1. Whether it satisfies the
+original fractional-guarantee ask depends on governance's
+`reservationMinAmount` choice relative to typical claim sizes — that
+narrower question is the live successor to this commitment, not the
+original "unbounded vs. bounded" one.
+
 ## 8. Aggregate in-kind fee debt is unbounded and only voluntarily repayable
 **Severity: Medium. Provenance: step-3 review of `#1093`, 2026-08-23.** Not in
 the H-/M-/C- catalog. Separate from item 7 and not resolved by it: item 7
@@ -608,6 +717,25 @@ previously-reverting scenario now succeeding with partial repayment, and
 the no-excess scenario where repayment is correctly a no-op rather than a
 revert.
 
+**Status at M1 code (2026-09-28):** the "Decided ... fix `_burnFromReserve`'s
+call site... repay `min(debt, balance - feeReserveTarget)`" plan above did
+**not** get implemented as specified. What was implemented instead
+(`ReservationVault.sol:297-319`, `_burnFromReserve` at `:354-372`):
+`sweepFees` now repays `min(debt, full reserve)` unconditionally — not
+capped at `feeReserveTarget` as decided — and then simply `return`s without
+transferring anything if the post-repayment balance is at or below
+`feeReserveTarget`, instead of the old `require` that used to revert the
+whole call. This closes the "further correction" bug (`sweepFees` no
+longer reverts in the high-debt regime) by a different route than
+specified: it is *more* aggressive than "Decided" asked for (debt
+repayment can now drain the reserve below `feeReserveTarget`, where the
+decided design meant to protect that floor), not merely unstuck. The
+underlying finding's core claim is unaffected: `financeInKindFee`
+(`:215-234`) still accumulates debt unconditionally with no ceiling
+(confirmed unchanged at `9f8f5ef1`), so "aggregate debt is unbounded"
+stays OPEN even though "the repayment mechanism can get stuck" is now
+CLOSED, just not via the mechanism this record specified.
+
 ## 9. Permissionless re-anchor requests let an outsider dictate migration targets
 **Severity: Low, rising to Medium for any wallet operator whose signing policy
 forbids executing a transaction it did not itself propose. Provenance: step-3
@@ -617,13 +745,19 @@ review of `#1093`, 2026-08-23.** Not in the catalog, not raised by `#1102`.
 `MovingFunds` (`Reservation.sol:780-784`; router entrypoint
 `ReservationRouter.sol:277-286` has no modifier), and nothing checks that the
 caller owns the reservation. A request requires `state == Active` and moves the
-reservation to `ActionPending` (`:760-763`, `:819`), the re-anchor timeout
-returns it to `Active` with no slashing or penalty (`:1003-1009`), and
-`notifyReservationActionTimeout` is likewise permissionless. One contract can
-therefore combine the timeout and a fresh request in a single transaction once
-the 48h `reservationActionTimeout` has elapsed, so the reservation is never
-observably `Active` to a competing caller and no other party, governance
-included, can insert its own request.
+reservation to `ActionPending` (`:760-763`, `:819`), and the re-anchor timeout
+returns it to `Active` with no slashing or penalty (`:1003-1009`) — but,
+unlike when this item was written, a timed-out re-anchor now sets
+`reservation.reanchorCooldownUntil = now + (action.timeoutAt -
+action.requestedAt)` (~48h, `Reservation.sol:904-907`), and
+`requestReservationReanchor` enforces `block.timestamp >=
+reservation.reanchorCooldownUntil` for non-privileged callers
+(`:736-741`). So the original claim — that one contract can combine the
+timeout and a fresh request in a single transaction, making the
+reservation "never observably `Active` to a competing caller" — no longer
+holds: after a timeout, the same non-privileged attacker is gated by the
+same ~48h cooldown as anyone else before it can re-request. See the
+status note below.
 
 **This is not a liveness block.** The attacker's pending action is itself a
 fulfillable authorization: the operator can build the re-anchor transaction to
@@ -633,8 +767,9 @@ decrements the source wallet's reservation count
 `require(walletReservationsCount == 0, "Wallet still custodies reservations")`
 at `Wallets.sol:674-677`, `:706-709` and `:437-441`. The attacker cannot
 shorten that window, because `notifyReservationActionTimeout` requires
-`block.timestamp > action.timeoutAt` (`Reservation.sol:966-971`), so every
-cycle hands the operator a full 48h settleable window.
+`block.timestamp >= action.timeoutAt` (`Reservation.sol:884-885`; line
+drifted from the `:966-971` originally cited, and the operator is `>=` not
+`>`), so every cycle hands the operator a full 48h settleable window.
 
 What survives is narrower: the **target** of every executable migration is
 chosen by the attacker rather than the operator for as long as the attacker
@@ -647,12 +782,13 @@ create the precondition, as `MovingFunds` is a protocol-driven transition.
 
 **Action:** document the operational escape first, because the intuitive
 response to an unsolicited request is to refuse, and refusing is exactly what
-turns this from Low into Medium. Then evaluate bounding re-anchor generations
-per reservation, or a cooldown after a timed-out re-anchor, post-m1. Note that
-restricting the permissionless path itself would reverse a deliberate design
-decision asserted by `Bridge.Reservation.test.ts:3473` ("allows a
-permissionless migration re-anchor before dissolution is due"), so that route
-needs the design decision re-litigated first.
+turns this from Low into Medium. The cooldown-after-timeout lever below was
+evaluated and implemented; what remains open is bounding re-anchor
+generations per reservation. Note that restricting the permissionless path
+itself would reverse a deliberate design decision asserted by
+`Bridge.ReservationStrandingLibrary.test.ts:1179,1226` ("successfully
+requests reservation re-anchor from MovingFunds/Closing wallet (unprivileged
+happy path)"), so that route needs the design decision re-litigated first.
 
 **Documented 2026-09-07 (session decision, via `unblock-gaps`) — the
 operational escape:** if a wallet operator receives an unsolicited
@@ -663,10 +799,25 @@ authorization with no funds at risk (every target must be a registered
 not attacker-created) — refusing is what turns this finding from Low into
 Medium, since a refusal-driven stall is what actually blocks the operator's
 own retirement path. Evaluating a bound on re-anchor generations per
-reservation, or a cooldown after a timed-out re-anchor, remains post-m1
-work; restricting the permissionless path itself would reverse the
-deliberate design decision at `Bridge.Reservation.test.ts:3473` and needs
+reservation remains open; restricting the permissionless path itself would
+reverse the deliberate design decision now asserted by
+`Bridge.ReservationStrandingLibrary.test.ts:1179,1226` (the
+`Bridge.Reservation.test.ts:3473` citation this note originally used no
+longer exists — that file was split, see `testing-plan.md` §1) and needs
 that decision re-litigated first, independent of this note.
+
+**Status at M1 code (2026-09-28):** NARROWED, not closed. The cooldown
+lever this item's own "Action" paragraph proposed as post-m1 work
+(`reanchorCooldownUntil`, `Reservation.sol:904-907`/`:736-741`) is already
+implemented, confirmed by `Reservation.test.ts:1607-1612` ("Reanchor
+cooldown is set to block.timestamp + (action.timeoutAt -
+action.requestedAt)") and `Bridge.ReservationStrandingLibrary.test.ts:1608-1609`
+(asserts revert `"Reanchor cooldown in effect"`). The attacker can still
+eventually re-grab the target after the cooldown elapses — the finding's
+"target chosen by attacker for as long as it pays gas" conclusion survives
+in a throttled form — but the "atomic timeout-plus-re-request, reservation
+never observably Active" mechanism this item's severity was built on is
+gone. The remaining bound-on-generations question stays open.
 
 **Caveat:** "execute it" depends on the SPV maintainer actually submitting
 the re-anchor proof — the step item 3 above just accepted as a live stall

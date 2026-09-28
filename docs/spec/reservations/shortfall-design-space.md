@@ -1,18 +1,16 @@
 # Reservation Shortfall - Design Space
 
-Status: DRAFT analysis. Not scoped in any of the 9 reservation PRs. Companion to
+**Status: REJECTED ANALYSIS — retained for design history (2026-08-21).** Not scoped in any of the 9
+reservation PRs. Space C is viable only conditional on an unbuilt `anchorAmount`/`mintedAmount`
+decoupling, and milestone 1 is variant B, which builds none of it. Retained as the who-pays analysis
+that rules out Spaces A and B. The accepted loss-story build is `stranding-compensation-proposal.md`
+Tiers 0-1.
 
-**Not adopted and not scoped (2026-08-21).** Space C is viable only conditional
-on an unbuilt `anchorAmount`/`mintedAmount` decoupling, and milestone 1 is
-variant B, which builds none of it. Retained as the who-pays analysis that rules
-out Spaces A and B. The accepted loss-story build is
-`stranding-compensation-proposal.md` Tiers 0-1.
-`feature-spec.md` (what the PRs build),
-`stranding-compensation-proposal.md` (Space A, now rejected here), and
-`exit/proposal.md` (recovery under wallet failure, unaffected).
+Companion to `feature-spec.md` (what the PRs build), `stranding-compensation-proposal.md` (Space A, now
+rejected here), and `exit/proposal.md` (recovery under wallet failure, unaffected).
 
-Records two agent retractions, in §2 and §4.2. Both are noted where they land so the rejected
-reasoning does not get re-proposed.
+Notes two corrections to earlier drafts of this analysis, in §2 and §4.2. Each is noted where it lands
+so the rejected reasoning does not get re-proposed.
 
 ## 1. The question, and why it is forced
 
@@ -71,7 +69,7 @@ So Space A is rejected **on funding invariance, not on fee arithmetic**. The dis
 module remains useful as an accounting and payout *rail* (Tier 0 liability accounting and Tier 1
 fee restitution are both cheap and worth doing), but it cannot be the answer to solvency.
 
-**Retraction.** An earlier claim that reservations "sit on top of" a wallet's economic security
+**Correction.** An earlier claim that reservations "sit on top of" a wallet's economic security
 budget was wrong. No such budget exists. A 100 T penalty is not economic bonding, so the main UTXO
 is not stake-protected either; it rests on a 51-of-100 honest-majority assumption plus fraud
 detection. Anchors inherit exactly that. Reservations breach no ratio because no ratio exists.
@@ -95,7 +93,7 @@ becomes the buyer's. This is the same fungible-mint leak as B1 in §3, seen from
 rather than the enforcement side, and it is why an unborrowed fraction is the only thing that puts
 real skin in the game.
 
-What this is **not** is a new theft surface, and an earlier verbal claim by agent that operators
+What this is **not** is a new theft surface, and an earlier claim that operators
 could "reserve into their own wallet, stop signing, and keep the tBTC" was wrong on two counts.
 Without a signing coalition the attack is self-harming: the anchor freezes with the operator's own
 Bitcoin inside it, so they spend 50 BTC to destroy 50 BTC. With one, they can already take the
@@ -132,7 +130,7 @@ reserve specific UTXOs "while still being able to mint and use tBTC tokens." The
 needs both halves - never disposing of the specific coins, and usable liquidity. B2 keeps the
 first and destroys the second, so it removes the reason the feature exists.
 
-**Retraction.** Agent previously recommended B2. That recommendation is withdrawn on the product
+**Correction.** An earlier draft of this analysis recommended B2. That recommendation is withdrawn on
 grounds above. B2 was never designed by anyone; the fungible-mint leak has been in this feature
 since its first proposal.
 
@@ -162,7 +160,7 @@ part needs no governance action and no cooperation from anyone.
 
 The systemic hole shrinks proportionally, from `X` to `X * LTV`.
 
-### 4.2 What it does NOT achieve, and this was agent's error
+### 4.2 What it does NOT achieve — surplus is depositor equity, not protocol equity
 
 **A position's surplus dies with its own anchor.** The surplus was never held aside; it was the
 excess BTC *inside* that anchor. Ledger, healthy pool `P = S`, one position, LTV 0.7:
@@ -188,7 +186,7 @@ B always held a complete claim on B's own BTC, having borrowed only 25 against 5
 is honest behavior, not an attack, and it takes the buffer with it. **The first honest in-kind
 redemption after a stranding reopens the full `X * LTV` hole.**
 
-Presenting automatic full absorption as a property of Space C would have been a third retraction.
+Presenting automatic full absorption as a property of Space C would have been a third correction.
 The durable automatic effect is the proportional reduction in §4.1 and nothing more.
 
 ### 4.3 Full absorption requires an explicit seizure rule
@@ -213,7 +211,7 @@ below the boundary it closes with headroom.
 ### 4.4 Settlement denomination - Route 2 was wrong, not just weaker
 
 Two ways to implement the assessment were proposed. Route 2 does not survive checking against the
-spec it claimed to reuse, and this is agent's second wrong claim about this feature.
+spec it claimed to reuse — this is the second claim about this feature that an earlier draft got wrong.
 
 **Route 1, raise the tBTC repayment.** The depositor receives every one of their own satoshis and
 burns more tBTC to get them, which keeps 1-to-1 lineage perfectly intact and reads naturally in
@@ -324,8 +322,10 @@ back coins they always fully owned, and it drains the buffer to exactly `X * LTV
 
 Row 4 applies the rule: `8.00 / 9 = 0.89` tBTC added to each remaining holder's repayment, against
 a per-holder cap of 2.00, so 44% of the buffer is consumed and the books close at zero. Bob gives
-10 BTC, gets his same 10 BTC back, borrowed 8.00 and repays 8.89, netting **-0.89**. That 0.89 is
-the mutual-insurance premium of §4.7, and under Route 1 it is also the tBTC he must go and buy.
+10 BTC, gets his same 10 BTC back, borrowed 8.00 and repays 8.89, netting **0.89 less than he would
+have without the assessment** (a net gain of +1.11 rather than the un-assessed +2.00 — not an absolute
+loss). That 0.89 is the mutual-insurance premium of §4.7, and under Route 1 it is also the tBTC he
+must go and buy.
 
 ## 5. Parameter consequences
 

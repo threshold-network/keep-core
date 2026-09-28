@@ -54,6 +54,36 @@ for everything else.
 
 **PR attribution caveat.** Only two *Solidity* snapshots were read as working trees (the guards tip and the partial-redemption tip; keep-core `#4238` is the third, non-Solidity one) and `gh` is unavailable. All ten branch refs are fetched, so any is readable via `git show`, but per-PR attribution below was not re-derived per branch. The guards-to-partial delta (§8) is measured exactly and its `#1096` attributions are verified. Attributions to #1088/#1090-#1094 are derived from PR titles (`feature-spec.md:30-38`) plus explicit file-and-line attributions in `roadmap.md:886-894` and `m1-variant-comparison.md:486-501`; each such row carries `?`-qualified confidence in the Note where the evidence is title-level only.
 
+
+## Status vs M1 code (2026-09-28)
+
+This fragment (guards `#1094` @ `bcfed23f`, partial `#1096` @ `570fc418`) is
+pinned as stated in the table above, and its citations are correct at those
+pins. The actual M1 code (`reservations-upgrade` @ `9f8f5ef1`) diverges:
+
+- **The wallet-reservation-key enumeration machinery was cut entirely.**
+  `addWalletReservationKey`/`removeWalletReservationKey` and their backing
+  storage (`walletReservationKeys`/`walletReservationKeyIndex`) do not exist
+  in the M1 code — `BridgeState.sol` at M1 tip documents them dropped as
+  unused/dead during the milestone re-packing. Every row below citing these
+  helpers (§1c "Position creation", §2c re-anchor settlement, §4.1's C1/S1
+  bodies, §8's helper table) describes guards-tip-only behavior superseded
+  by the rewrite; there is no on-chain way to enumerate a wallet's
+  reservation keys in M1 at all.
+- `closeReservation` ships in M1 as dead code with zero callers (PD-3,
+  resolved below) — this narrows, but does not contradict, §4's "true
+  closing sites" analysis.
+- **§7/§9's pause-gating discussion assumes a fuller vault than M1 ships.**
+  Per the 2026-09-24 "Option B" decision, the M1 `ReservationVault` is
+  MINIMAL: 7 external functions, no `redeemReservation`,
+  `retryRedeemReservation`, `extendCustody`, or any pause/renewal/guardian
+  machinery, and no `renewalsPaused` flag at all. §7's
+  `ReservationVault.renewalsPaused` row and §9's framing of it as "the only
+  pause flag in the entire reservation surface" describe the
+  guards/renewal-tree design, not the M1 vault. M2 delivers redemption and
+  renewal via a new vault deployment plus a depositor migration ceremony,
+  not by unpausing flags on this vault.
+
 ---
 
 ## 0. What PR #1096 adds relative to guards
@@ -492,17 +522,33 @@ Rule 1 says storage-complete means written, not merely declared. `ReservationAct
 **DECISION NEEDED PD-3 — does `closeReservation` ship in m1?**
 Rule 5 says a helper shared between an m1 action and an m2 action is m1 work. `closeReservation` (`Reservation.sol:1490-1506`) is shared between two **m2** actions only (`ReservationProofs.sol:715` redemption, `:1142` dissolution). Rule 5 does not cover a helper shared exclusively between deferred actions. Shipping it in m1 leaves dead code that will trip a linter and an auditor; omitting it makes the m2 diff touch `Reservation.sol` again. **Ship the orphan, or defer it?** Same question for `Reservation.notifyReservedRedemptionVeto` and the `Vetoed` enum member.
 
+**Resolved in the M1 code (PD-3).** `closeReservation` is present in M1 as
+dead code with zero callers anywhere in `bridge/*.sol` (M1
+`Reservation.sol:1039`) — the "ship the orphan" option was taken.
+`notifyReservedRedemptionVeto` and the `Vetoed` enum member follow the same
+answer: no redemption surface exists in M1 at all (Decision 3, 2026-09-07).
+
 **DECISION NEEDED PD-4 — re-anchor cannot unpin a healthy Live wallet even after rule 4.**
 Rule 4 deletes the `block.timestamp < dissolutionEligibleAt` gate (`Reservation.sol:785-788`) so re-anchor is unbounded in time. It does **not** touch the wallet-state gate (`Reservation.sol:790-806`): a re-anchor still requires the source wallet to be `MovingFunds`, or `Live` with `privileged == true`, where `privileged` is `msg.sender == governance` (`ReservationRouter.sol:293`). And the target must be `Live` with a free slot (`Reservation.sol:820-827`). So in m1 a position on a healthy `Live` wallet is unpinnable **only by a governance transaction**, and only if some other Live wallet has a free slot. **Is governance-only rotation the intended m1 unpin path, or should rule 4 also relax the source-wallet gate?** If the former, the m1 spec should say so explicitly, because §4.2 shows there is no other exit.
 
 **DECISION NEEDED PD-5 — `walletPendingDissolution` write in m1.**
 Rule 1 would put the `walletPendingDissolution[wallet] = key` write (`Reservation.sol:921`) in m1, but the only writer is `requestReservationDissolution` (m2) and the only readers are m2 (`:918`, `:1033`, `ReservationProofs.sol:1127`, `:1286`, `:1156-1170`). It is a per-wallet action lock, not position state, so no m1-era position can carry one. **Does rule 1 reach per-wallet action locks?**
 
+**Resolved in the M1 code (PD-5).** `walletPendingDissolution` was
+dropped entirely — it is not declared in `BridgeState.Storage` at M1 tip,
+per the storage comment listing it among the fields removed as unused/dead.
+Rule 1 does not reach per-wallet action locks.
+
 **DECISION NEEDED PD-6 — `expiresAt` and `dissolutionEligibleAt` are written but unread in m1.**
 Both are written at acceptance (`ReservationProofs.sol:533`, `:537-539`), which rule 1 requires. In m1 their only readers are deleted: `expiresAt` is read by the redemption expiry gate (`Reservation.sol:666-670`) and by renewal (`:1165`), both m2; `dissolutionEligibleAt` is read by the re-anchor gate (`:786`, deleted by rule 4) and the dissolution gate (`:900`, m2). This is the rule working as intended, but it means an m1 position advertises an expiry that nothing enforces. **Should m1 emit `ReservationAccepted.expiresAt` (`ReservationProofs.sol:558`) unchanged, knowing off-chain consumers will read it as an enforced deadline that m1 does not enforce?**
 
 **DECISION NEEDED PD-7 — `ProofType` enum stability across the milestone boundary.**
 `enum ProofType { Acceptance, Redemption, Reanchor, Dissolution }` (`:117-122`) is ABI-encoded as `uint8` by the router (`ReservationRouter.sol:323`). m1 has no Redemption or Dissolution handler. **Does m1 keep the four-member enum with two arms reverting on `ProofType(1)`/`ProofType(3)`, or shrink to `{Acceptance, Reanchor}` and renumber?** Renumbering silently changes the meaning of `proofType == 1` for any client built against m1, and the dispatcher's `else` fallthrough (`:169`) means an out-of-range value would be routed rather than rejected.
+
+**Resolved in the M1 code (PD-7).** M1 keeps the four-member enum
+verbatim, in the same order (M1 `ReservationProofs.sol:113-118`:
+`Acceptance, Redemption, Reanchor, Dissolution`) — the "keep the four-member
+enum" option was taken, not a renumber.
 
 **DECISION NEEDED PD-8 — which `spentMainUTXOs` lineage does the m1 rewrite take?**
 `consumeAnchor` writes `spentMainUTXOs[anchorUtxoKey] = true` (`:1356`) on the settlement line. Separately, `feature-spec.md:1067-1069` records that #1102 "moved anchor consumption to `spentMainUTXOs`" on `feat/utxo-reservation-core`, and that a reverse index used by `strandReservation` "exists on `feat/utxo-reservation-guards` but was deleted from `feat/utxo-reservation-core` by the #1102 merge." Only the guards and partial trees are available locally, so **the exact shape of the #1102 core-line implementation is `UNVERIFIED`** and the two lineages have not been reconciled anywhere I can read. **Which lineage is the m1 rewrite's base?** The answer changes whether `strandReservation`'s `delete self.reservationsByAnchorUtxo[...]` (`Reservation.sol:1462-1472`) still has an index to delete from.

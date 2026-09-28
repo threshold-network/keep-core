@@ -11,6 +11,10 @@ is retained rather than deleted.
 This document is the buildable form of that decision: what the router contains,
 what the vault must contain, and the gates that must close before activation.
 
+`requirements.md` states the functional requirements (FR-n) this scope
+satisfies; `architecture.md` diagrams the flows and state machines it
+implements.
+
 ---
 
 ## 1. Two layers, opposite rules
@@ -23,9 +27,9 @@ replaceable; the same reasoning forbids minimising the vault (`roadmap.md`
 |---|---|---|
 | Nature | Bridge code reached by `delegatecall` | Separate contract, plain `Ownable` |
 | Replacing it costs | A Bridge implementation upgrade, which m2 needs anyway | Deploying v2 and re-pointing `Bridge.reservationVault` |
-| Gate on replacement | Proxy-admin ceremony | `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1263-1274`) |
+| Gate on replacement | Proxy-admin ceremony | `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1307-1314`) |
 | Reachable in B? | Yes | **No in m1**; m2 reaches replacement via a depositor opt-in migration ceremony (Option B, decided 2026-09-24) or quiescence |
-| m1 posture | **Minimise** | **Minimise** (redemption/renewal deferred to m2 vault migration) |
+| m1 posture | **Minimise** | **Minimise** (redemption and renewal ship only in a future, separately-deployed vault — not as paused entry points on this one; see §3) |
 
 The original plan required the vault to ship complete with paused initiation
 entry points for redemption and renewal (Section 3). On 2026-09-24 (Option B decision),
@@ -35,34 +39,43 @@ a depositor opt-in migration ceremony.
 
 ## 2. Minimal router surface
 
-The stacked router has 24 entry points. B removes 5 and adds 2, for **21**
-(9 state-changing, 12 views).
+The stacked router (`feat/utxo-reservation-guards`, pre-partial-redemption)
+has 24 entry points (12 state-changing, 12 views). B removes 6 outright
+(§2.3: 4 state-changing, 2 views), splits the single `submitReservationProof`
+dispatcher into two proof-submission functions (§2.1, net +1 state-changing),
+and adds 3 new entries (§2.4: 2 state-changing, 1 view) — for **22**
+(11 state-changing, 11 views), matching the M1 router (`ReservationRouter.sol`,
+9f8f5ef1).
 
 ### 2.1 Retained — state-changing
 
-| Entry point | Stacked line | Why B needs it |
+| Entry point | M1 line | Why B needs it |
 |---|---|---|
-| `requestReservationAcceptance` | `:242` | The product's entry gate |
-| `requestReservationReanchor` | `:286` | B's **only** unpin path; load-bearing, not optional |
-| `submitReservationProof` | `:322` | Proof dispatcher, simplified: acceptance and re-anchor only |
-| `notifyReservationActionTimeout` | `:351` | Required cleanup; also the slashing path |
-| `notifyStaleReservedDeposit` | `:450` | Releases un-accepted revealed deposits |
-| `notifyReservationStranded` | `:461` | B's only position-closing *entry point* (the second closing site is inside acceptance/re-anchor settlement) |
-| `updateReservationParameters` | `:421` | Governance; also the vault re-point |
-| `updateReservationCaps` | `:476` | Governance; the only safety valve at launch |
+| `requestReservationAcceptance` | `:211` | The product's entry gate |
+| `requestReservationReanchor` | `:232` | B's **only** unpin path; load-bearing, not optional |
+| `submitReservationAcceptanceProof` | `:252` | Settles a pending acceptance; `onlySpvMaintainer`. Replaces half of the stacked router's single `submitReservationProof` dispatcher (§2.3) |
+| `submitReservationReanchorProof` | `:278` | Settles a pending re-anchor; `onlySpvMaintainer`. Replaces the other half — there is no combined proof-submission entry point in M1 |
+| `notifyReservationActionTimeout` | `:304` | Required cleanup; also the slashing path |
+| `notifyStaleReservedDeposit` | `:385` | Releases un-accepted revealed deposits |
+| `notifyReservationStranded` | `:414` | B's only position-closing *entry point* (the second closing site is inside re-anchor settlement, §4.3) |
+| `updateReservationParameters` | `:356` | Governance; also the vault re-point |
+| `updateReservationCaps` | `:434` | Governance; the only safety valve at launch |
 
 ### 2.2 Retained — views
 
-`reservationCaps` (`:487`), `walletReservationsAmount` (`:503`),
-`walletReservationsCount` (`:514`), `walletReservations` (`:524`),
-`reservationByAnchorUtxo` (`:538`, subject to §4.3),
-`reservedDepositWallet` (`:555`), `pendingReservedDeposits` (`:565`),
-`reservations` (`:573`), `reservationActions` (`:585`),
-`reservationParameters` (`:609`), `reservationRouter` (`:640`).
+`reservationCaps` (`:449`), `walletReservationsAmount` (`:467`),
+`walletReservationsCount` (`:478`), `reservationByAnchorUtxo` (`:492`,
+subject to §4.3), `reservedDepositWallet` (`:509`), `pendingReservedDeposits`
+(`:519`), `reservations` (`:527`), `reservationActions` (`:539`),
+`reservationParameters` (`:551`), `reservationRouter` (`:595`).
 
 `walletReservationsCount` and `pendingReservedDeposits` are not optional
 conveniences: the first is the free-slot monitor's data source (§5), the second
 is read by the vault-swap gate.
+
+There is **no** `walletReservations` view (a per-wallet reservation-key array)
+in the M1 router. An earlier draft of this document listed it here as
+retained; it is not — see §2.3.
 
 ### 2.3 Removed
 
@@ -73,10 +86,12 @@ is read by the vault-swap gate.
 | `extendReservation` | `:382` | Renewal deferred to m2 |
 | `requestReservationDissolution` | `:302` | B's defining cut |
 | `walletPendingDissolution` | `:600` | Dissolution view |
+| `submitReservationProof` | `:322` | Split into `submitReservationAcceptanceProof` / `submitReservationReanchorProof` (§2.1) rather than kept as a single dispatcher |
+| `walletReservations` | `:524` | Per-wallet reservation-key enumeration; not carried into M1's router. If this enumeration is genuinely needed, that is a regression to flag, not a documented cut — see `requirements.md` §12 Open decisions |
 
 ### 2.4 Added
 
-`activeReservationsCount` — the global position counter §4.1 requires.
+`activeReservationsCount` (`ReservationRouter.sol:583`) — the global position counter §4.1 requires.
 `BridgeState.Storage` today has `liveWalletsCount` (`:253`),
 `reservationTotalAmount` (`:378`) and per-wallet counts, but **no global
 position count**, so both the storage field and its view are new.
@@ -91,6 +106,13 @@ router-level forwarder releases the reserved capacity and marks the action
 Legitimate scope addition, not a spec deviation
 (`m1-tbtc-v2-readiness/01-gap-analysis.md`).
 
+`forceStaleReservedDeposit` — a governance-only (`onlyGovernance`) escape
+valve absent from the stacked router: force-clears a pending reserved
+deposit before its refund deadline, without waiting on
+`notifyStaleReservedDeposit`'s permissionless path
+(`ReservationRouter.sol:399-404`). Folded into the state-changing count
+above (§2's header sentence).
+
 ### 2.5 Whether the router is needed at all
 
 Keep it. The question is decidable by compiler and was analysed in
@@ -102,29 +124,46 @@ m2 must add ~4,641 production lines and ten-plus entry points, which is
 **larger than everything B removed**, so the router is needed back regardless.
 Deleting it in m1 buys ~736 lines and costs a re-architecture.
 
-## 3. Vault surface: minimal in m1 (updated 2026-09-24)
+## 3. Vault surface: minimal in m1 (Option B decision, 2026-09-24)
 
-Under the 2026-09-24 Option B decision, the vault ships minimal in m1 (matching
-commit `4d549e64`). Redemption and renewal entry points are deferred to m2,
-which will introduce them via a new vault deployment and depositor migration
-ceremony rather than an unpause flag on the m1 vault.
+The M1 `ReservationVault` (373 lines) ships with exactly **7 external
+functions** plus its constructor — the table below is the complete surface,
+not a subset:
 
-**The rule that bounds settlement remains active:** A confirmed Bitcoin spend
+| Vault entry point | M1 line | Status | Rationale |
+|---|---|---|---|
+| `receiveBalanceIncrease` | `:161` | **Active** | The mint callback; `onlyBank` |
+| `financeInKindFee` | `:215` | **Active — must not be gated** | On the settlement path. Called from `submitReservationReanchorProof` (`ReservationProofs.sol:758-760`), deliberately *after* `action.state = Settled` is already committed (`:734`) — the external fee-financing call runs last, per the function's own checks-effects-interactions comment (`:753-757`). Re-anchor is B's only unpin, so this is reachable and load-bearing |
+| `repayInKindFeeDebt` | `:241` | **Active** | Permissionless burn-down of an over-supply re-anchor can create. Gating it would remove a safety valve while leaving the debt |
+| `updateFeeReserveTarget` | `:278` | **Active** | `onlyOwner`; sets the reserve balance below which `sweepFees` stops sweeping |
+| `sweepFees` | `:297` | **Active** | `onlyOwner`; repays outstanding `inKindFeeDebtSat` from the current balance first, then sweeps any excess above the reserve target |
+| `updateInitiationFee` | `:330` | **Active** | `onlyOwner`; single basis-points parameter |
+| `receiveBalanceApproval` | `:343` | **Active — always reverts** | Interface-compliance stub; the vault does not support the balance-approval flow (`"Balance approvals not supported"`) |
+
+**`redeemReservation`, `retryRedeemReservation` and `extendCustody` do not
+exist in the M1 vault at all.** They existed during interim development
+(`origin/feat/utxo-reservation-backing:solidity/contracts/vault/ReservationVault.sol`
+— `redeemReservation:293`, `extendCustody:367`, `retryRedeemReservation:469`)
+and were dropped before commit `4d549e64`, which is what M1 ships. Per the
+2026-09-24 Option B decision (§1), m2 does **not** add them to this vault
+behind a pause flag: it deploys a **new** vault and migrates depositors to
+it. This supersedes — and closes, rather than merely defers — the earlier
+plan that the m1 vault must ship the full entry-point surface (redemption,
+retry, renewal) paused and ready to unpause (`roadmap.md` §0.7/§1.3/§2.2,
+`milestone-inventory.md` D-12/D-13/D-20/D-21, an earlier
+`03-followup-pr-spec` `#1111` section, and an earlier `inventory/vault.md`).
+A finding proposing to reverse this and restore the paused-flag design is
+**rejected**: the vault is not proxy-upgradeable, so restoring that design
+after launch is not possible without the same migration ceremony Option B
+requires anyway.
+
+**The rule that bounds settlement remains active:** a confirmed Bitcoin spend
 must always be able to settle, so functions on the settlement path stay
 unconditionally callable. The vault states this itself for the in-kind fee: if
 the reserve cannot cover the amount, "the shortfall is recorded as
 `inKindFeeDebtSat` and the call still succeeds: a confirmed Bitcoin spend must
 never fail to settle because of the reserve level"
-(`ReservationVault.sol:524-528`).
-
-| Vault entry point | Line | m1 state | Rationale |
-|---|---|---|---|
-| `receiveBalanceIncrease` | `:234` | **Active** | The mint callback; `onlyBank` |
-| `financeInKindFee` | `:529` | **Active - must not be gated** | On the settlement path. Called by the re-anchor proof at `ReservationProofs.sol:874-875`, immediately before `action.state = Settled` (`:878`) - and re-anchor is B's only unpin, so this is reachable in m1 and load-bearing. |
-| `repayInKindFeeDebt` | `:568` | **Active** | Permissionless burn-down of an over-supply re-anchor can create. Gating it would remove a safety valve while leaving the debt |
-| `redeemReservation` | `:293` | **Deferred to m2** | Removed in `4d549e64`; introduced in m2 via new vault |
-| `retryRedeemReservation` | `:469` | **Deferred to m2** | Removed in `4d549e64`; introduced in m2 via new vault |
-| `extendCustody` | `:367` | **Deferred to m2** | Removed in `4d549e64`; introduced in m2 via new vault |
+(`ReservationVault.sol:209-212`).
 
 Note that this makes m1's fee machinery **live**, not dormant: re-anchor
 charges an in-kind miner fee, so the fee reserve, `inKindFeeDebtSat` and
@@ -135,7 +174,10 @@ the debt belongs in §5.
 
 These are the residual risks `m1-variant-comparison.md` §5.4 identified.
 Under the B decision they are **gates, not tradeoffs**: without them B fails by
-arithmetic rather than by an attacker (§5.3 of that document).
+arithmetic rather than by an attacker (§5.3 of that document). Four gates are
+live — §4.1, §4.3, §4.4, §4.5 — each marked Met or Not met below against the
+M1 code. §4.2 documents the Option B decision itself; it is a historical
+record, not a fifth live gate.
 
 **Failure-mode framing corrected 2026-08-21.** This previously said the failure
 mode is "honest operators slashed and depositors stranded". Slashing is only
@@ -144,32 +186,49 @@ prove it has its MovingFunds clock deleted (`Wallets.sol:434`) and cannot be
 timed out at all (`MovingFunds.sol:594-598`), so honest operators are **not**
 slashed. Under saturation that case is worse, not better: the position cannot
 close, cannot time out, and cannot be stranded, because stranding needs a
-`Terminated` wallet that never arrives. See `roadmap.md` §0.8.
+`Terminated` wallet that never arrives. See `roadmap.md` §0.8. (Citations in
+this paragraph are pinned to `feat/utxo-reservation-guards`, matching
+`m1-variant-comparison.md` §5.3's step-5 correction, and were not re-derived
+against the M1 snapshot in this pass — unlike §4.1, §4.3, §4.4 and §4.5
+below, which were.)
 
-### 4.1 Global active-position cap, enforced at acceptance
+### 4.1 Global active-position cap, enforced at acceptance — Met
 
-The one gate that converts a silent cliff into a revert. B never frees a
-wallet slot, so occupancy is monotonic toward
-`liveWalletsCount x maxReservationsPerWallet`; at saturation re-anchor has no
-target (`Reservation.sol:820-827`), an anchored wallet cannot retire because
-`beginWalletClosing` requires a zero reservation count
-(`Wallets.sol:674-677`, repeated `:707-709`), its MovingFunds clock expires,
-and `notifyWalletMovingFundsTimeout` seizes operator stake and terminates the
-wallet (`:493-523`).
+**Implemented and verified**, not outstanding work. B never frees a wallet slot,
+so occupancy is monotonic toward `liveWalletsCount x maxReservationsPerWallet`;
+without a cap this converts into a silent cliff: at saturation re-anchor has
+no target (`Reservation.sol:812-819`, the target-slot check), a wallet
+holding anchors cannot finish closing because
+`notifyWalletClosingPeriodElapsed` requires a zero reservation count
+(`Wallets.sol:381-384`, single site — not repeated elsewhere), its
+MovingFunds clock expires, and `notifyWalletMovingFundsTimeout` seizes
+operator stake and terminates the wallet (`Wallets.sol:468-491`).
 
-Add `activeReservationsCount` and a governance `maxActiveReservations` set
-below the slot floor, required at acceptance. Roughly 20 lines plus a
-parameter. Also relate it to the amount cap: nothing on-chain today prevents
-raising `reservationMaxTotalAmount` past slot capacity, so either add the
-relational check or emit both sides and make it a runbook gate.
+All three pieces this section originally called for are already in the M1
+code:
 
-### 4.2 Vault ships minimal (superseded 2026-09-24)
+- Acceptance enforces `activeReservationsCount < maxActiveReservations`
+  before reserving capacity (`Reservation.sol:925-930`).
+- `updateReservationCaps` requires `maxActiveReservations > 0`; the
+  function's own doc-comment calls this "the milestone 1 launch gate"
+  (`Reservation.sol:1359-1361`, enforced at `:1382-1385`).
+- The relational check between the amount cap and slot capacity —
+  `reservationMaxTotalAmount <= maxActiveReservations *
+  reservationMaxSingleAmount` — is `validateReservationCapsInvariant`
+  (`Reservation.sol:1217-1231`), wired into both `updateReservationParameters`
+  (`:1330-1334`) and `updateReservationCaps` (`:1392-1396`).
 
-Superseded 2026-09-24 by Option B decision. The vault ships minimal in m1 (commit
-`4d549e64`). Rather than requiring redemption entry points behind flags in m1,
-m2 will introduce redemption and renewal through a new vault deployment and a
-depositor opt-in migration ceremony.
-### 4.3 `reservationsByAnchorUtxo` reconciliation
+### 4.2 Vault ships minimal (Option B decision, 2026-09-24) — historical record, not a live gate
+
+This section documents the Option B decision itself (§3 has the current,
+buildable detail); it is not one of the four live gates (§4.1, §4.3, §4.4,
+§4.5). The vault ships minimal in m1 (commit `4d549e64`). What this decision
+superseded was the earlier plan that the vault ship the full
+redemption/renewal entry-point surface behind pause flags — that plan is
+retired, not this one. See §3 for the current vault surface and why the
+paused-flag alternative is rejected.
+
+### 4.3 `reservationsByAnchorUtxo` reconciliation — Met
 
 **Corrected 2026-08-21.** This previously read: "`#1091` writes the mapping
 (`ReservationProofs.sol:465`), `#1094` writes it again for stranding, and
@@ -178,107 +237,170 @@ write sites and one removal must be reconciled." The removal does not exist.
 
 `reservationsByAnchorUtxo` is **introduced by `#1091`** and is absent from
 `#1088`'s branch entirely (0 hits in `BridgeState.sol` on
-`feat/utxo-reservation-core`), so `#1102` - which merged into that branch -
+`feat/utxo-reservation-core`), so `#1102` — which merged into that branch —
 had nothing to remove. `spentMainUTXOs` is a **pre-existing Bridge registry**
-that reservations write into (`Reservation.sol:1454`, `:1510`, documented at
-`:66` as "the existing registry of honestly-spent" outpoints), not a competing
-index introduced by `#1102`.
+that the anchor-consumption path writes into, not a competing index
+introduced by `#1102` — in the M1 code that write is
+`ReservationProofs.sol:904` (`consumeAnchor`), documented at `:900-903` as
+"the existing registry of honestly spent wallet UTXOs".
 
-So there are **two write sites and no removal**: `#1091`'s and `#1094`'s
-stranding write. Both must be carried, because stranding is one of only two
-position-closing paths reachable in B, and the other one
-(`strandLateSettlementIfTargetWalletClosed`) also lands in `Stranded`. See
-`inventory/pr-map.md` §4 and `milestone-inventory.md` C-1.
+**Corrected again 2026-09-28, against the M1 code
+(`ReservationProofs.sol`/`Reservation.sol`, 9f8f5ef1).** The mapping has one
+write site, one rewrite site, and two delete sites — not "two write sites and
+no removal" as the previous correction concluded:
 
-### 4.4 Keep writing `dissolutionEligibleAt`
+- **Written** at acceptance settlement (`ReservationProofs.sol:572`).
+- **Rewritten** — pointed at the new anchor, not written a second time by an
+  unrelated feature — at each re-anchor settlement, inside
+  `settleReanchorAccounting` (`ReservationProofs.sol:799-801`).
+- **Deleted** when a reservation strands (`Reservation.sol:1001-1010`, inside
+  `strandReservation`) and when an anchor is consumed during proof
+  settlement (`ReservationProofs.sol:905`, `consumeAnchor` — the same
+  function that writes `spentMainUTXOs`, above).
+
+The earlier correction attributed the re-anchor rewrite site to stranding;
+stranding is a delete, not a write. The reconciliation this gate actually
+requires is keeping the write, the re-anchor rewrite, and the two deletes
+mutually consistent — which they are. **Gate met.**
+
+### 4.4 Keep writing `dissolutionEligibleAt` — Met
 
 Acceptance sets
 `dissolutionEligibleAt = expiresAt + reservationDissolutionDelay`
-(`ReservationProofs.sol:537-539`). B deletes its only reader — re-anchor's
-`< dissolutionEligibleAt` gate — so an essentials-only rewrite would naturally
-drop the write as dead code. Do not. Without it, m2's dissolution has no
-eligibility date for any m1-era position, and the snapshot semantics that keep
-governance changes non-retroactive (`:180-184`) cannot be reconstructed.
+(`ReservationProofs.sol:570`, inside `settleAcceptance`). B deletes its only
+reader — re-anchor's `< dissolutionEligibleAt` gate — so an essentials-only
+rewrite would naturally drop the write as dead code. **It was not dropped**:
+the field's own storage comment states the policy directly — "this field's
+only on-chain reader ... has been removed ... It must continue to be written
+anyway" (`Reservation.sol:198-213`). Without it, m2's dissolution would have
+no eligibility date for any m1-era position, and the snapshot semantics that
+keep governance changes non-retroactive ("later governance changes never
+move the eligibility time of a term already granted", `Reservation.sol:198-202`)
+could not be reconstructed.
 
 The general rule: **storage-complete means written, not merely declared.**
 
 **The deeper reason this matters: in m1 B the custody term has no on-chain
-consumer at all.** Every reader of `expiresAt` and `dissolutionEligibleAt` is
-cut or deleted — redemption's `< expiresAt` (`Reservation.sol:666-669`, strict), renewal,
-dissolution's `>= dissolutionEligibleAt`, and re-anchor's
-`< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the term
-is not enforced by anything in m1; it is a **commitment held in storage for m2
-to honour**. The storage *is* the promise, which makes dropping the write a
-silent repudiation of it rather than a code-size optimisation.
+consumer at all.** Every would-be reader of `expiresAt` and
+`dissolutionEligibleAt` belongs to functionality this milestone does not ship
+at all — redemption's `< expiresAt` check, renewal — or was deliberately
+deleted: dissolution's `>= dissolutionEligibleAt` check does not exist
+because dissolution itself is cut, and re-anchor's `< dissolutionEligibleAt`
+gate was removed to make re-anchor unbounded. So the term is not enforced by
+anything in m1; it is a **commitment held in storage for m2 to honour**. The
+storage *is* the promise, which makes dropping the write a silent
+repudiation of it rather than a code-size optimisation.
 
-### 4.5 Storage layout complete
+### 4.5 Storage layout — Met for `dissolutionEligibleAt`; the dropped fields were never M1-reachable, and M2 can recover equivalents from `__gap`
 
-`feature-spec.md` §11's rule is that no live `ReservationAction` may ever span a layout change,
-so every field m2 will read must exist at m1 — redemption settlements, veto
-delay, retry credit, renewal window, `dissolutionEligibleAt`,
-`walletPendingDissolution`. This is what makes m2 an upgrade rather than a
-migration.
+`feature-spec.md` §11's rule is that no live `ReservationAction` may ever span
+a layout change, so every field m2's *Bridge-side* logic will read must exist
+at m1. `dissolutionEligibleAt` is the field that rule protects today (§4.4,
+Met).
 
-**Implementation status (2026-09-04).** The fee ceiling is deferred to m2:
-`maxCumulativeReanchorFee` is declared in `BridgeState.Storage` (fold-lineage
-description as load-bearing) but has no governance setter and no enforcement
-check in m1 — re-anchor fee-grinding is bounded per position only by the action
-timeout/cooldown. As part of m2's redemption/dissolution work, this field will be
-wired into `requestReservationReanchor`/settlement with a governance setter.
+**The rule does not make the redemption/renewal-era fields an earlier plan
+assumed mandatory, and Option B is not the reason why.** `maxCumulativeReanchorFee`,
+`reservationDissolutionTxMaxFee`, `walletPendingDissolution` and
+`reservationRetryCreditActionNonce` were declared in `BridgeState.Storage`
+during interim development and then removed as dead/unused prior to the M1
+code snapshot verified here — not merely left unwired.
+`BridgeState.sol:492-496`'s own storage-gap comment says so directly: this
+milestone "dropped `maxCumulativeReanchorFee`, `reservationDissolutionTxMaxFee`,
+`walletPendingDissolution`, `reservationRetryCreditActionNonce`,
+`reservationMaxBackingFractionBps`, `walletReservationKeys`, and
+`walletReservationKeyIndex` as unused/dead"; `BridgeGovernanceParameters.sol:1614-1618`
+confirms the same for the two fee fields ("removed as dead/unused before
+this milestone shipped ... Reservation parameters accordingly do not include
+them"). Neither field was ever read or written by any M1-reachable
+`ReservationAction`, so §11's rule has nothing to protect for them today:
+dropping a field no in-flight action touches cannot split any action's
+layout across a version.
+
+**That is a fact about the Bridge side, and Option B does not change it —
+Bridge storage-completeness still matters for m2.** M2's redemption, renewal
+and dissolution logic is Bridge code (router and libraries) delivered via
+the same proxy-implementation upgrade the router already uses (§2.5): it
+reads and writes `BridgeState.Storage`, the struct m1 already uses, not a
+separate contract's storage. The 2026-09-24 Option B decision (§3, §4.2)
+changes only how m2 delivers *vault*-side redemption and renewal
+(`ReservationVault`'s own contract storage, via a new deployment and a
+depositor migration ceremony) — it says nothing about what the Bridge
+upgrade needs, and does not make the Bridge-side storage-completeness rule
+irrelevant. If m2's Bridge-side dissolution/redemption design turns out to
+need any of these four fields, they are recoverable there: `__gap` still
+has 39 slots after m1's reservation fields (`BridgeState.sol:502`) — shared
+budget for every future Bridge upgrade, not reserved specifically for
+reservations, but enough headroom that re-declaring a handful of fields at
+m2, in append-only order, is the normal case rather than a layout
+emergency.
+
+**Status: Met** for `dissolutionEligibleAt` (§4.4). The four dropped fields
+are **not needed at m1**: no M1-reachable `ReservationAction` ever read or
+wrote them, so §11's rule never required keeping them, and m2 can
+re-declare equivalents out of `__gap` in its own Bridge upgrade if its
+eventual dissolution/redemption design calls for them — independently of
+the Option B vault decision.
 
 ## 5. Operational duties
 
-B's duty list is longer than A+'s because nothing closes a position on its own.
+B's duty list is longer than A+'s because nothing closes a position on its
+own. Of the ten duties below, four are how a human finds out that a §4 gate
+is approaching its limit before it reverts (the free-slot and occupancy
+monitors watch §4.1's cap; the stranding watcher and stale-deposit cleanup
+operationalize the position-closing/cleanup paths §4.3 depends on); the rest
+— the re-anchor executor, the timeout watch, the below-dust report, the
+fee-debt watch, the cap-dial runbook and the position-age report — are
+independent operational needs with no single corresponding launch gate.
 
-| Duty | Why B specifically |
-|---|---|
-| Re-anchor executor on `WalletMovingFunds`, with alerting | The only unpin; failure ends in slashing, not delay |
-| Free-slot monitor (`walletReservationsCount < cap` across Live wallets) | Leading indicator of the §4.1 cliff |
-| Occupancy monitor (`activeReservationsCount` vs `liveWalletsCount x cap`) | Alert well before saturation |
-| Action-timeout watch | Pending acceptances and re-anchors approaching `reservationActionTimeout`, since expiry slashes |
-| Stranding watcher on `Terminated` wallets | Releases capacity; one of B's two close paths |
-| **Below-dust report after the last re-anchor** | `notifyMovingFundsBelowDust` (`MovingFunds.sol:627`) is permissionless and is the **only remaining** route to close a wallet that proved its funds moved while still holding anchors. Nothing triggers it: `notifyWalletFundsMoved`'s own closing attempt (`Wallets.sol:441`) runs once with the count still non-zero and cannot be retried, since `:435` deletes the commitment hash `:424-427` requires. See `roadmap.md` §0.8 |
-| Stale reserved-deposit cleanup | `notifyStaleReservedDeposit` |
-| In-kind fee reserve and `inKindFeeDebtSat` watch | Re-anchor charges an in-kind miner fee (§3), so the reserve depletes and can enter debt in m1. Non-zero debt means the system is over-supplied by exactly that amount, publicly visible and repayable by anyone |
-| Cap-dial runbook | Trigger, executor and accepted blast radius agreed **before** launch |
-| Position-age report | Nothing closes, so age is the only proxy for accumulating permanent liability |
+| Duty | Why B specifically | Automated in keep-core (`reservations-epic`, f66f11240)? |
+|---|---|---|
+| Re-anchor executor on `WalletMovingFunds`, with alerting | The only unpin; failure ends in slashing, not delay | **Partial** — `pkg/tbtcpg/reservation_reanchor.go` (`ReservationReanchorTask`) drains `MovingFunds` sources; the contract also accepts a `Closing` source (§2.1), but the task does not scan for or drain those (`~:139`) |
+| Free-slot monitor (`walletReservationsCount < cap` across Live wallets) | Leading indicator of the §4.1 cliff | **Partial** — gauge metric registered (`clientinfo.MetricReservationWalletReservationsCount`, gated on `reservationsEnabled`), but no production code path populates it from a chain read yet |
+| Occupancy monitor (`activeReservationsCount` vs `liveWalletsCount x cap`) | Alert well before saturation | **Partial** — same gap: `MetricReservationActiveReservationsCount` / `MetricReservationMaxActiveReservations` / `MetricReservationLiveWalletsCount` are registered, unpopulated in production |
+| Action-timeout watch | Pending acceptances and re-anchors approaching `reservationActionTimeout`, since expiry slashes | **Yes** — `pkg/maintainer/spv/reservation_action_timeout_watch.go` |
+| Stranding watcher on `Terminated`/`Closed` wallets | Releases capacity; one of B's two close paths | **Partial** — `pkg/maintainer/spv/reservation_stranding_watch.go` triggers only on `StateClosed`/`StateTerminated` (`reservation_wiring.go`'s `OnWalletClosed` subscription and startup scan both gate on those two states); `notifyReservationStranded`'s own precondition also allows stranding a `Closing` wallet's reservation once `now >= dissolutionEligibleAt` (`Reservation.sol:1102-1111`), but no client path triggers that branch — permissionless `notifyReservationStranded` is the backstop |
+| **Below-dust report after the last re-anchor** | `notifyMovingFundsBelowDust` (`MovingFunds.sol:603`) is the **only remaining** route to close a wallet that proved its funds moved while still holding anchors: the Bridge's own automatic closing attempt inside `notifyWalletFundsMoved` (`Wallets.sol:405-439`) runs once, while the reservation count is still non-zero, and cannot itself be retried | **Yes** — `pkg/tbtcpg/reservation_reanchor.go`'s `ReservationReanchorTask` calls `notifyMovingFundsBelowDustIfEligible` (`:664-730`) after re-anchoring a `MovingFunds` wallet's reservations to zero, invoking `NotifyMovingFundsBelowDust` (test: `TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust`). Still an operator duty if the reservation task is disabled via `tbtc.Config.ReservationsEnabled` |
+| Stale reserved-deposit cleanup | `notifyStaleReservedDeposit` | **Yes** — `pkg/maintainer/spv/reservation_stale_deposit_watch.go` |
+| In-kind fee reserve and `inKindFeeDebtSat` watch | Re-anchor charges an in-kind miner fee (§3), so the reserve depletes and can enter debt in m1. Non-zero debt means the system is over-supplied by exactly that amount, publicly visible and repayable by anyone | **No** — zero references to `InKindFeeDebt` or `FeeReserve` anywhere in keep-core's `pkg/`; no chain-read accessor or gauge exists |
+| Cap-dial runbook | Trigger, executor and accepted blast radius agreed **before** launch | Manual by nature — a runbook, not code |
+| Position-age report | Nothing closes, so age is the only proxy for accumulating permanent liability | **No** — not found in keep-core |
 
 Note what B does **not** need: a dissolution executor. That saving is the
 decision's operational upside, and it is real — but it is a saving of
 ~300-500 production Go lines against the duties above.
 
-**Implementation status (2026-09-03, PR #4282 review).** The free-slot and
-occupancy monitors above are deferred past m1's first PR, not built. Only
-per-action execution counters (acceptance/re-anchor attempts, successes,
-failures) exist in `pkg/clientinfo/performance.go` today. Wiring the two
-leading-indicator gauges (`active_reservations_count` /
-`max_active_reservations` and per-wallet `wallet_reservations_count` /
-`live_wallets_count`) requires threading a new chain-read dependency
-through `clientinfo.NewPerformanceMetrics` (a periodic-poll interface, or a
-push from the acceptance task's existing `ActiveReservationsCount`/wallet
-lookups) and updating every call site — the same shape of change was
-attempted directly in `pkg/clientinfo/performance.go` during PR #4282 review
-remediation and reverted after it broke the package build with an
-unresolved call-site signature mismatch. Given the P2 severity (this is an
-observability gap, not a correctness defect — §4.1's `maxActiveReservations`
-cap still enforces the safety property without the gauge) and the real risk
-of a half-wired chain dependency, the gauges are deferred to a follow-up PR
-that adds the chain interface deliberately, with its own tests, rather than
-bolted onto an unrelated review-fix pass. Tracked as an open item, not a
-silently-dropped one.
+**Implementation status (2026-09-03; updated 2026-09-28 against keep-core
+f66f11240).** The free-slot and occupancy gauges have progressed since the
+2026-09-03 review but are still not complete. `pkg/clientinfo/performance.go`
+now declares and registers the four leading-indicator gauge metrics
+(`MetricReservationActiveReservationsCount`,
+`MetricReservationMaxActiveReservations`, `MetricReservationLiveWalletsCount`,
+`MetricReservationWalletReservationsCount`), gated behind
+`Config.ReservationsEnabled` so a non-reservation deployment's metric surface
+is unchanged — but no production call site sets their values from a chain
+read; only the test suite exercises `SetGauge` for them directly. The chain
+interface the gauges would read from already exists
+(`ActiveReservationsCount() (count uint32, maxActive uint32, err error)` on
+`pkg/tbtcpg/chain.go:250`, already consumed by the acceptance task's own cap
+check at `pkg/tbtcpg/reservation_acceptance.go:386`), so the remaining work
+is periodic-poll wiring from that interface (or a per-wallet equivalent for
+the wallet-level pair) into `PerformanceMetrics`, not a new chain read.
+Tracked as an open item, not a silently-dropped one.
 
-**Implementation status (2026-09-07, PR #4282 round-2 review).** The
-in-kind fee reserve and `inKindFeeDebtSat` watch (duty row above) has no
-recorded deferral decision, unlike the free-slot/occupancy monitors noted
-above: a repo-wide search finds zero references to `InKindFeeDebt` or
-`FeeReserve` anywhere in `pkg/`. It was not built and, until now, was not
-explicitly deferred either — this note exists so the gap is a tracked
-decision rather than a silent one. Wiring it requires a chain-read for the
-reserve/debt balance (no such accessor exists on any Chain interface today)
-plus a gauge, mirroring the shape of the free-slot/occupancy gauges above;
-deferred to the same follow-up PR for the same reason - it should get its
-own chain interface and tests, not be bolted onto an unrelated review-fix
-pass.
+**Implementation status (2026-09-07; confirmed still open 2026-09-28).** The
+in-kind fee reserve and `inKindFeeDebtSat` watch has no recorded deferral
+decision, unlike the free-slot/occupancy monitors above: a repo-wide search
+still finds zero references to `InKindFeeDebt` or `FeeReserve` anywhere in
+`pkg/`. The 2026-09-07 policy question this duty exists to cover — whether
+fee revenue should repay `inKindFeeDebtSat` before sweeping — is now
+**resolved on-chain**: `sweepFees` repays outstanding debt from the vault's
+current balance before computing the sweepable excess
+(`ReservationVault.sol:297-319`; decision recorded in `timeline-estimate.md`
+§7 item 6). What remains unbuilt is the keep-core-side **observability** — a
+chain-read accessor for the reserve/debt balance and a gauge, mirroring the
+shape of the free-slot/occupancy gauges above — deferred to the same
+follow-up PR for the same reason: it should get its own chain interface and
+tests, not be bolted onto an unrelated review-fix pass.
 
 ## 6. What m2 must then build
 
@@ -296,7 +418,7 @@ Two inherited decisions m2 must make that A+ would not have created:
    means a position can be rotated indefinitely past its eligibility date.
 2. **Whether m1-era positions get the m2 semantics.** They will carry
    `dissolutionEligibleAt` values snapshotted under m1 parameters (§4.4), and
-   `:180-184` makes those non-retroactive by design.
+   `Reservation.sol:198-202` makes those non-retroactive by design.
 
 The milestone ratio is worth stating plainly: 5,261 : 4,641, or **1.13 : 1**.
 Against A+'s 1.65 : 1 and the stacked plan's 13.2 : 1, B's split produces two
@@ -319,6 +441,21 @@ eligibility gate (`:785-788`), acceptance's `dissolutionEligibleAt` write
 storage fields (`BridgeState.sol:253`, `:378`), once-only router setter
 (`:1018-1021`). Bytecode figures are `#1090`-era, quoted from `feature-spec.md`
 §2 and not re-measured.
+
+**Re-verified 2026-09-28 against the M1 code snapshot** (tbtc-v2
+`reservations-upgrade` @ `9f8f5ef1`; keep-core `reservations-epic` @
+`f66f11240`): the router surface (§2, 22 entries), vault surface (§3, 7
+functions), the vault re-point gate (§1, `Reservation.sol:1307-1314`), the
+re-anchor target-slot check (§4.1, `:812-819`), the wallet-closing
+precondition (§4.1, `Wallets.sol:381-384`), MovingFunds timeout slashing
+(§4.1, `Wallets.sol:468-491`), the `dissolutionEligibleAt` write (§4.4,
+`ReservationProofs.sol:570`), the `reservationsByAnchorUtxo`
+write/rewrite/delete sites (§4.3), the dropped storage fields (§4.5,
+`BridgeState.sol:492-496`), and keep-core's watcher/executor/gauge coverage
+(§5) were all re-derived directly against that snapshot; citations elsewhere
+in this document (§4's opening failure-mode paragraph, §2.5's byte-cost
+figures) remain pinned to `feat/utxo-reservation-guards` / `#1090`-era
+measurements and were not re-verified in this pass.
 
 **Baseline caveat (2026-08-21).** The subtraction assumes `#1090` moved out
 only the reservation surface. If it also refactored unrelated `Bridge` code, the

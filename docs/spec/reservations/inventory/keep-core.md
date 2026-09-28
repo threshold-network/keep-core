@@ -1,7 +1,21 @@
-# keep-core wallet-side inventory (PR #4238)
+# keep-core wallet-side inventory (PR #4238, superseded — see #4282 for M1)
 
-Source-verified on `origin/feat/utxo-reservation-wallet-support`.
-Diffstat against `origin/main`: 11 files, +1833 -9.
+Source-verified on `origin/feat/utxo-reservation-wallet-support`, PR #4238's own branch only.
+Diffstat against `origin/main`: 11 files, +1833 -9. This diffstat and the whole
+of this document is scoped to `#4238` in isolation; it excludes the ~15,600
+additional reservation-related lines that now exist on `reservations-epic`
+outside `#4238`'s own diff (`pkg/tbtcpg/reservation_{acceptance,reanchor}.go`,
+all of `pkg/maintainer/spv/reservation_*.go`) — see the status banner below.
+
+## Status vs M1 code (2026-09-28)
+
+**PR #4238's own branch (`feat/utxo-reservation-wallet-support`) is superseded.** GitHub (checked 2026-09-28): the PR's title now reads "draft: UTXO reservation wallet-side foundations (previous end-to-end attempt — see #4282 for M1)" — its author has explicitly framed it as historical, pointing to #4282 (head branch `reservations-epic`) for the current M1 work.
+
+**§3's central finding — that the executor is entirely absent — is now historical, not current.** At the M1 tip (`reservations-epic`@`f66f11240`, tracked by #4282, MERGED-in commit #4274 "wire reservation executors and watchers", 2026-09-03): the executor exists. `pkg/tbtcpg/reservation_acceptance.go` (1209 ln) and `pkg/tbtcpg/reservation_reanchor.go` (806 ln) are wired into `NewProposalGenerator` behind a `reservationsEnabled` flag (`pkg/tbtcpg/tbtcpg.go:90-127`). `pkg/chain/ethereum/tbtc.go` implements all the write methods §3 said were missing, as real on-chain calls: `RequestReservationAcceptance` (:822), `RequestReservationReanchor` (:851), `SubmitReservationAcceptanceProof` (:882), `SubmitReservationReanchorProof` (:937), `NotifyReservationActionTimeout` (:985), `NotifyReservationStranded` (:1035), `NotifyReservationAcceptanceTimedOut` (:1172). `pkg/maintainer/spv/reservation_*.go` (action-timeout watch, stale-deposit watch, stranding watch, proof loop, wiring, acceptance/reanchor proof submission — ~9,700 lines incl. tests) implement the surrounding watchers this document's §4 work-item table lists as "New". This work landed on `reservations-epic`, not on #4238's own branch — the executor was built *elsewhere*, which is why #4238 itself still looks, in isolation, exactly as this document describes it.
+
+**§4's work-item table is accordingly historical**, not a current gap list: every row marked "New" (proposal-generator task, chain-interface write methods, re-anchor executor, below-dust report, stranding watcher, stale-deposit cleanup, action-timeout watch) has been built, on `reservations-epic`. Only "Regenerated ABI bindings" and "Redemption and dissolution proposal generation and execution" (correctly, still "Not m1") remain open in the sense this table intended.
+
+**Open questions 1 and 2 below are resolved** — see the inline "M1 code:" notes at each.
 
 | File | Change |
 |---|---|
@@ -151,12 +165,29 @@ survives. **None of it covers an executor, because there is no executor.**
    `ReservedRedemptionProposal` and `ReservationDissolutionProposal` in m1 is
    safe if the enum constants remain. Recommend keeping them - they are already
    written and tested, and deleting then restoring them is churn.
+   **M1 code (2026-09-28):** decided the opposite of this recommendation. At
+   `reservations-epic`@`f66f11240`, `pkg/tbtc/reservation.go` no longer
+   declares `ReservedRedemptionProposal` or `ReservationDissolutionProposal`
+   at all (grep across non-test `pkg/tbtc/*.go` returns zero hits; only
+   `ReservationAnchorProposal` at `:259` and `ReservationReanchorProposal` at
+   `:288` remain). `pkg/tbtc/wallet.go:36-39` reduces
+   `ActionReservedRedemption`/`ActionReservationDissolution` to anonymous
+   blank (`_`) reserved wire slots with the comment "client-side scaffolding
+   removed, wire slot retained" - the enum *positions* were kept (as this
+   question required), but the proposal *structs* were deleted, not kept.
 2. **DECISION NEEDED: is `#4238` edited, superseded, or closed?** Given the
    executor is absent rather than wrong, most of `#4238` is directly reusable
    and the m1 client is largely additive. That argues for editing or building
    on it rather than closing it. This contradicts the framing in
    `pr-strategy.md` §8, which treats it as superseded design; the sizing there
    should be revisited against this finding.
+   **M1 code (2026-09-28):** resolved. `gh pr view 4238` (checked 2026-09-28)
+   shows the PR's own title now reads "draft: UTXO reservation wallet-side
+   foundations (previous end-to-end attempt — see #4282 for M1)" - its author
+   marked it superseded/historical rather than editing or building on it
+   further; the executor was built as new work on `reservations-epic` (#4282)
+   instead. `pr-strategy.md` §8's "superseded design" framing was the one the
+   actual history followed.
 3. **UNVERIFIED: the 1,400-1,900 production Go estimate** in
    `roadmap.md` §5.1. It was derived assuming rework of a single-phase client.
    Since the work is instead a new executor plus new write plumbing, the

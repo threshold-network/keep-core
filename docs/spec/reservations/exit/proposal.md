@@ -7,6 +7,17 @@ alternatives, revision history, the full mechanism comparison, and secondary edg
 live in `addendum.md` — this document keeps only the
 mechanism that actually works. Companion to `../feature-spec.md`.
 
+**Status vs M1 code (2026-09-28):** this document is retained design reference, not built; where
+it cites the M1 storage layout it is pinned to `#1094` (`feat/utxo-reservation-guards`), not the
+`reservations-upgrade` @ `9f8f5ef1` code that actually implements milestone 1. One divergence matters
+to a reader: `§6.2`'s "enumeration" accounting effect
+(`walletReservationKeys`/`walletReservationKeyIndex`) does not exist in the M1 code — that storage
+was identified as dead and removed in the milestone's essentials-only rewrite (`BridgeState.sol`
+~494-497 in `reservations-upgrade`). Everything else here is otherwise unaffected: Mechanism 1 was
+never built, so nothing in this document describes M1 behavior as implemented except by way of
+`notifyReservationStranded`'s pre-rewrite shape in `§6.2` — `stranded.md` is the authoritative
+source for that call's current mechanics.
+
 Alternative designs live in `alternatives.md`, along with a
 closure argument showing why a live party at exercise time is forced rather than chosen. Read it
 before proposing a fifth mechanism family: it records which directions are provably dead and why.
@@ -499,6 +510,13 @@ would block its wallet from ever completing closure, and would hold capacity aga
 per-wallet count cap and the global reserved cap indefinitely. That cost lands on the wallet
 operators and on every future depositor competing for capped capacity, not on the party who armed.
 
+**M1 code note:** the M1 storage layout has no separate per-wallet enumeration structure —
+`walletReservationKeys`/`walletReservationKeyIndex` were removed as dead storage in the milestone
+rewrite (`BridgeState.sol` ~494-497 in `reservations-upgrade`). The three effects above reduce, in
+the M1 code, to two: capacity (`walletReservationInfo`) and the anchor reverse index. This
+document keeps "enumeration" because it is accurate at its own `#1094` pin and the exemption
+design below still applies unchanged with it dropped.
+
 So the exemption must be scoped to the third effect only:
 
 - **Release wallet-side accounting as normal.** Capacity, reservation count, enumeration, and
@@ -580,11 +598,11 @@ sequenceDiagram
 
     D->>B: requestReservedRedemption
     Note over W: wallet never signs
-    B->>B: action times out (§4) - escrow refunded, back to Active
+    B->>B: action times out (spec §4) - escrow refunded, back to Active
     D->>B: requestReservedRedemption (retry)
     Note over W: still no response - repeats
     D->>B: armEmergencyExit(reservationKey)
-    B->>B: escrow mintedAmount (locked, not yet burned; reverts if insufficient) -> EmergencyExitArmed
+    B->>B: escrow mintedAmount (locked, not yet burned, reverts if insufficient) -> EmergencyExitArmed
     Note over D,C: mandatory dispute window elapses, uncontested
     C->>C: verify escrow still locked, live
     C->>BTC: co-sign emergency-path spend -> depositor refund address

@@ -1,5 +1,43 @@
 # ReservationVault Surface Inventory
 
+## Status vs M1 code (2026-09-28)
+
+This fragment was source-verified against `feat/utxo-reservation-guards` (the `#1094` tip) and describes the **pre-Option-B, pre-minimisation** `ReservationVault.sol` (662 lines): a full-featured vault with in-kind redemption, renewal, and guardian pause machinery. **M1 does not ship this vault.**
+
+The M1 code (`reservations-upgrade`@`9f8f5ef1`, commit `4d549e64`) ships a different, minimal 373-line vault: 7 external functions + constructor, no `redeemReservation`, no `extendCustody`, no pause/renewal/guardian machinery, no `redemptionsPaused`. This is the 2026-09-24 "Option B" decision (`../milestone-inventory.md` decision register: M1 ships the minimal vault as-is; M2 delivers redemption and renewal via a **new vault deployment plus a depositor migration ceremony**, not via unpausing flags on this vault - superseding the "ship every entry point behind a pause flag" rule this fragment's old §5 conclusion and §6 activation steps were written against).
+
+See "M1 vault surface" immediately below for the vault M1 actually ships. Everything from "Full storage and events inventory" downward, and the numbered §1-§6 above it, describe the earlier full-featured design and are kept as the design reference for M2's new vault deployment, not as a description of M1.
+
+## M1 vault surface (reservations-upgrade @ 9f8f5ef1)
+
+**Contract:** `contracts/vault/ReservationVault.sol`, 373 lines. Declaration (L46): `contract ReservationVault is IVault, IReservationFeeFinancer, Ownable` - same inheritance as the full vault below (still no dedicated `IReservationVault` interface; `IReservationFeeFinancer` supplies `financeInKindFee`, `IVault` supplies `receiveBalanceIncrease`/`receiveBalanceApproval`). Not proxy-upgradeable: plain `Ownable`, a real constructor, immutable `bank`/`tbtcVault`/`tbtcToken`/`bridge` (L58-61) - the upgradeability analysis in the old §5 below still holds for this vault.
+
+7 external functions + constructor:
+
+|Item|Line|Access|Classification|Note|
+|---|---|---|---|---|
+|`constructor`|L107-136|deploy-time only|-|Sets immutable `bank`/`tbtcVault`/`tbtcToken`/`bridge`; `initiationFeeBps = 40` (L135). No `renewalsPaused` default - the flag no longer exists.|
+|`receiveBalanceIncrease`|L161|`onlyBank` (L164, modifier L102-105)|initiation-path|Mints gross TBTC per depositor from the Bridge-proven anchor credit, charges `initiationFeeBps`, retains the fee in the vault as reserve (L194-196). No vault-internal pause flag gates it; the Bridge's vault-trust status (`setVaultStatus`) is the activation boundary (deploy script 97, step 3).|
+|`financeInKindFee`|L215|`require(msg.sender == address(bridge))` (L216)|settlement-path, must never revert|Burns TBTC from the vault's balance to fund a settled re-anchor's miner fee; uncovered shortfall is recorded as `inKindFeeDebtSat` (L222-230) rather than reverting.|
+|`repayInKindFeeDebt`|L241|permissionless|settlement-path adjunct|Anyone burns TBTC (capped at outstanding debt) to reduce `inKindFeeDebtSat` (L241-266).|
+|`updateFeeReserveTarget`|L278|`onlyOwner`|accounting-path|Governance sets `feeReserveTarget`, the TBTC balance retained before `sweepFees` may move the excess out (L278-284).|
+|`sweepFees`|L297|`onlyOwner`|accounting-path|Repays outstanding `inKindFeeDebtSat` first (L300-308), then sweeps the balance above `feeReserveTarget` to `recipient` (L310-318).|
+|`updateInitiationFee`|L330|`onlyOwner`|accounting-path|Single-parameter setter for `initiationFeeBps`, capped at `MAX_FEE_BASIS_POINTS` (500 bps, L331-334). Not the old 3-parameter `updateFees` - `extensionFeeBps`/`redemptionFeeBps` no longer exist to update.|
+|`receiveBalanceApproval`|L343|anyone, always reverts|accounting-path (stub)|`external pure override`; required by `IVault`/`IReceiveBalanceApproval`, reverts unconditionally (`"Balance approvals not supported"`).|
+
+**Not present in M1:** `redeemReservation`, `retryRedeemReservation`, `extendCustody`, `pauseRenewals`/`unpauseRenewals`, `blockRenewal`/`unblockRenewal`, `setRenewalGuardian`, `renewalsPaused`, `renewalBlocked`, `renewalGuardian`, the 3-parameter `updateFees`, `extensionFeeBps`, `redemptionFeeBps`. All were removed by the Option B minimisation (commit `4d549e64`); none are gated by a pause flag because none are deployed at all.
+
+**In-kind fee economy as implemented:**
+- `initiationFeeBps` (`uint16`, L66) - initiation fee on the gross anchored amount, default 40 bps (L135), settable via `updateInitiationFee`, capped at `MAX_FEE_BASIS_POINTS` (500 bps, L56). Charged and retained in `receiveBalanceIncrease`.
+- `feeReserveTarget` (`uint256`, L78) - TBTC (18-decimal) balance the vault retains as reserve before `sweepFees` will move anything out; governance-set via `updateFeeReserveTarget`.
+- `inKindFeeDebtSat` (`uint64`, L85) - outstanding satoshi debt from re-anchor miner fees the reserve couldn't cover at settlement time; accrued by `financeInKindFee`, reduced by `repayInKindFeeDebt` or automatically inside `sweepFees` before the sweep computation.
+- Internal `_burnFromReserve` (L354) is the shared burn primitive behind both `financeInKindFee` and `sweepFees`'s debt-first repayment; the interaction between the two is the subject of the "Finding 2026-09-07" note preserved in Open Questions item 7 below (`sweepFees` can become unconditionally uncallable once `inKindFeeDebtSat` exceeds `feeReserveTarget`; fix not yet implemented).
+- Dissolution fee financing does not exist in the M1 code at all (dissolution itself is not implemented in M1 - decision 3, 2026-09-07), so there is no dormant dissolution call path to track, unlike the old §4 below which described one as m2-only-but-present.
+
+---
+
+*Everything from here down (the numbered §1-§6, the storage/events appendix, and the open questions) is the pre-Option-B, pre-minimisation full vault, source-verified against `feat/utxo-reservation-guards` (#1094 tip). It does not describe what M1 ships; it is kept as the design reference for M2's new vault deployment.*
+
 **Contract:** `contracts/vault/ReservationVault.sol` (662 lines)
 
 *"Established fact N" refers to the numbered m1/m2 assignment rules in
@@ -239,7 +277,7 @@ if (reservationVault != self.reservationVault) {
 2. `self.reservationTotalAmount == 0` (zero active reservations) (L1264-1266).
 3. `self.pendingReservedDeposits == 0` (zero pending reserved deposits) (L1267-1270).
 
-**Implication for milestone 1:** In variant B, positions close only when their custodying wallet is terminated (**stranding**, not dissolution — `notifyReservationStranded` requires `WalletState.Terminated` at `Reservation.sol:1374-1378`, while `requestReservationDissolution` has no such gate), and stranding never drives `reservationTotalAmount` to zero in normal operation. Therefore `reservationTotalAmount` cannot reach zero through normal lifecycle during m1, which means the vault address cannot be re-pointed while the product is in use. This is the structural reason established fact 1 requires shipping every vault entry point in m1: an entry point omitted from the deployed bytecode cannot be added later without replacing the vault, and the vault cannot be replaced without total quiescence.
+**Implication for milestone 1:** In variant B, positions close only when their custodying wallet is terminated (**stranding**, not dissolution — `notifyReservationStranded` requires `WalletState.Terminated` at `Reservation.sol:1374-1378`, while `requestReservationDissolution` has no such gate), and stranding never drives `reservationTotalAmount` to zero in normal operation. Therefore `reservationTotalAmount` cannot reach zero through normal lifecycle during m1, which means the vault address cannot be re-pointed while the product is in use. **This is the gate condition the 2026-09-24 Option B decision weighs against shipping every entry point behind a pause flag**: since the vault can never be re-pointed while quiescence is unreachable, the alternative M1 actually took is to ship the minimal vault as-is and defer redemption/renewal to a *new* vault deployment plus depositor migration ceremony in M2, rather than pre-shipping their entry points now behind flags that could never be safely swapped out later either.
 
 ---
 
@@ -247,39 +285,44 @@ if (reservationVault != self.reservationVault) {
 
 ### What the deploy script does (`95_deploy_reservation_vault.ts`)
 
-1. **Fetches existing deployment addresses** for `Bank`, `TBTCVault`, and `Bridge` (L9-11).
-2. **Deploys `ReservationVault`** with constructor args `[Bank.address, TBTCVault.address, Bridge.address]` (L13-18). `waitConfirmations: 1`.
-3. **Transfers ownership** from deployer to governance via `helpers.ownable.transferOwnership("ReservationVault", governance, deployer)` (L25-29).
-4. **Verifies on Etherscan** if the network has the `etherscan` tag (L37-39).
-5. **Tags:** `["ReservationVault"]`. **Dependencies:** `["Bank", "TBTCVault"]` (L43-44). Note: Bridge is NOT a deploy dependency, only a constructor arg read from an existing deployment record.
+1. **Fetches existing deployment addresses** for `Bank`, `TBTCVault`, and `Bridge` (L8-10).
+2. **Deploys `ReservationVault`** with constructor args `[Bank.address, TBTCVault.address, Bridge.address]` (L12-17). `waitConfirmations: 1`.
+3. **Verifies on Etherscan** if the network has the `etherscan` tag (L26-28).
+4. **Tags:** `["ReservationVault"]`. **Dependencies:** `["Bank", "TBTCVault", "Bridge"]` (L34) — Bridge IS a listed deploy dependency (fixed by `48bc9f03 fix(deploy): declare Bridge as dependency of ReservationVault`; see `pr-map.md` §2).
 
-### What the deploy script deliberately does NOT do
+Ownership transfer is a separate script, not one of `95`'s own steps:
 
-The script comment (L31-36 in the deploy script) is explicit. It does NOT:
-1. Stage or finalize reservation parameters via `BridgeGovernance.beginReservationParametersUpdate` / `finalizeReservationParametersUpdate`.
-2. Stage or finalize reservation caps via `BridgeGovernance.beginReservationCapsUpdate` / `finalizeReservationCapsUpdate`.
-3. Set the in-kind fee reserve target via `ReservationVault.updateFeeReserveTarget`.
-4. Appoint a renewal guardian via `ReservationVault.setRenewalGuardian`.
-5. Unpause renewals via `ReservationVault.unpauseRenewals` (the vault deploys paused).
-6. Mark the vault as trusted in the Bridge via `BridgeGovernance.setVaultStatus(vault, true)`.
+### `96_transfer_reservation_vault_ownership.ts`
 
-The script comment also states (L35): "`unpauseRenewals` gates `extendCustody` only; it is not a global pause for reserved deposit reveals. Vault trust is the safe activation boundary."
+Transfers ownership from `deployer` to `governance` via `helpers.ownable.transferOwnership("ReservationVault", governance, deployer)` (L8-12). `func.dependencies = ["ReservationVault"]`, `func.runAtTheEnd = true`.
 
-### Governance steps required to activate
+### `97_set_reservation_parameters.ts`
 
-Per the deploy script comment (L31-36), in order:
-1. `BridgeGovernance.beginReservationParametersUpdate(...)` then `finalizeReservationParametersUpdate()` -- sets the reservation vault address, min amount, tx max fee, term, dissolution delay, max total amount, max reservations per wallet, action timeout, renewal window.
-2. `BridgeGovernance.beginReservationCapsUpdate(...)` then `finalizeReservationCapsUpdate()` -- sets per-wallet and single-amount caps.
-3. `ReservationVault.updateFeeReserveTarget(...)` -- sets the in-kind fee reserve target.
-4. Optionally `ReservationVault.setRenewalGuardian(...)` -- appoints a guardian.
-5. If renewals should start enabled, `ReservationVault.unpauseRenewals()` -- unpauses `extendCustody` only.
-6. As the FINAL step, `BridgeGovernance.setVaultStatus(vault, true)` -- marks the vault as trusted in the Bridge, which is the safe activation boundary.
+Wires the vault into the Bridge and marks it trusted. Its own docblock (L11-41) states the activation sequence explicitly, **caps before parameters**:
+1. `beginReservationCapsUpdate(...)` then `finalizeReservationCapsUpdate()` — **MUST run first**. The script's own comment explains why: `reservationMaxTotalAmount` defaults to `0`, so the relational check the parameters step depends on (in `Reservation.updateReservationParameters`) passes trivially against a still-zero cap; running parameters first would fail that relational check.
+2. `beginReservationParametersUpdate(...)` then `finalizeReservationParametersUpdate()` — wires the vault address into the Bridge (the `reservationVault` arg is the update's first parameter; there is no separate `setReservationVault` setter) and sets the rest of the reservation parameters.
+3. `setVaultStatus(vault, true)` via `BridgeGovernance`, as the **final** step — marks the vault as trusted. Until this runs, deposits cannot be revealed with the vault.
 
-**Constraint (deploy script L34-35):** steps 1-3 must be completed while the vault is untrusted. Steps 4-5 must also precede step 6.
+On local/test networks where the timelock is bypassed, begin/finalize may run in the same deploy invocation; on live non-mainnet networks only `begin*` runs here and `finalize*` follows separately after the governance delay elapses. The script is skipped entirely on mainnet (`func.skip`) pending timelock review; mainnet activation instead runs through `98_generate_reservation_mainnet_calldata.ts` plus a manual runbook.
 
-### Adjacent deploy script: `96_deploy_maintainer_proxy_v2.ts`
+### `98_generate_reservation_mainnet_calldata.ts`
 
-This script deploys `MaintainerProxyV2` (for SPV proof submission). Its closing comment (L96) states: "Activation intentionally remains a governance operation: authorize V2 in both Bridge and ReimbursementPool before trusting ReservationVault." This confirms that the maintainer proxy must be authorized before the reservation vault can be trusted, since SPV proofs (anchor, re-anchor, dissolution) are submitted through it.
+Generates the mainnet governance calldata for the same bootstrap actions (caps, then parameters, then `setVaultStatus`), validating the known Timelock/Council-Safe addresses on-chain before emitting anything. Gated by `DEPLOY_RESERVATION_BOOTSTRAP_CALDATA=true`; not run as part of the ordinary deploy pipeline.
+
+### `06a_deploy_reservation_router.ts` (upstream ordering dependency)
+
+Deploys `ReservationProofs`, `Reservation`, and `ReservationRouter`, then calls the Bridge's one-time `setReservationRouter`. Must run after `06_deploy_bridge.ts` and before `97_set_reservation_parameters.ts`: every reservation governance setter (`updateReservationCaps`, `updateReservationParameters`) is a router selector reached through `Bridge.fallback()`'s delegatecall, so with no router set, script 97 would fail on "Reservation router not set".
+
+### Governance steps required to activate, in order
+
+1. `BridgeGovernance.beginReservationCapsUpdate(...)` then `finalizeReservationCapsUpdate()` — sets per-wallet and single-amount caps. **Must run first** (see script 97 above; params-first fails the relational check against a still-zero cap).
+2. `BridgeGovernance.beginReservationParametersUpdate(...)` then `finalizeReservationParametersUpdate()` — sets the reservation vault address, min amount, tx max fee, term, dissolution delay, max total amount, max reservations per wallet, action timeout, renewal window.
+3. `ReservationVault.updateFeeReserveTarget(...)` — sets the in-kind fee reserve target.
+4. As the FINAL step, `BridgeGovernance.setVaultStatus(vault, true)` — marks the vault as trusted in the Bridge, which is the safe activation boundary.
+
+Steps 1-3 must be completed while the vault is untrusted.
+
+(The old full-vault design additionally staged a renewal guardian and an `unpauseRenewals` call between steps 3 and 4; the M1 vault has neither `setRenewalGuardian` nor `unpauseRenewals` — see "M1 vault surface" above.)
 
 ---
 

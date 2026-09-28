@@ -161,12 +161,16 @@ Redemption fees are not refundable, since a redemption that settled delivered it
 
 ## 6. Correlated stranding forces pro-rata, not first-come
 
-A design constraint that falls directly out of the caps and is easy to miss: **strandings are
-correlated by wallet.** One termination strands up to **5 positions** (the launch
-`reservationMinAmount`=10 BTC plus the 50 BTC per-wallet amount cap means the amount cap binds
-at 5 positions before the count cap of 10 can; the count cap only binds if the amount cap is
-disabled) and up to 50 BTC simultaneously. Stranding events are not independent arrivals, they
-are batches.
+A design constraint that falls directly out of the caps and is easy to miss, once the caps move past
+m1 launch values: **strandings are correlated by wallet.** At m1 launch `maxReservationsPerWallet = 1`
+(§3; confirmed against `roadmap.md` §1.4 and the mainnet-launch enforcement in
+`98_generate_reservation_mainnet_calldata.ts`), so a single termination strands exactly **one**
+position and the batching analysis below does not yet apply. At the steady-state parameter regime of
+§3 (`feature-spec.md` §10's provisional figures), one termination strands up to **5 positions** (the
+steady-state `reservationMinAmount`=10 BTC plus the 50 BTC per-wallet amount cap means the amount cap
+binds at 5 positions before the count cap of 10 can; the count cap only binds if the amount cap is
+disabled) and up to 50 BTC simultaneously. Stranding events are not independent arrivals, they are
+batches.
 
 So a shared pot with first-come-first-served claiming is both unfair and gameable via gas
 auctions among co-victims of the same wallet. The module needs:

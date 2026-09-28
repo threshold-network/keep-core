@@ -2,9 +2,14 @@
 
 Status: DRAFT — reverse-engineered from 9 open/draft PRs, none merged as of
 2026-08-19; **1 of 9 (#1102) merged 2026-08-21** (into `feat/utxo-reservation-core`,
-the #1088 branch — see §15). Parameter values below are provisional
-(owner-set 2026-08-09, "to be revisited before launch"); nothing is final
-until governance sign-off.
+the #1088 branch — see §15). As of 2026-09-28 that remains the only merge on
+this stack: #1090-#1096 are still OPEN/DRAFT on tbtc-v2, and #1088 is OPEN
+with its draft flag cleared (title still begins "draft:") (verified via
+`gh pr view`). Separately, a merged **m1 rewrite** (tbtc-v2 #1106-#1112,
+#1119-#1120, #1122 into `reservations-upgrade`) now exists and is *not*
+described by this document — see the banner below. Parameter values below
+are provisional (owner-set 2026-08-09, "to be revisited before launch");
+nothing is final until governance sign-off.
 
 **Scope: this spec describes the full feature, not milestone 1.** m1 is variant
 B (decided 2026-08-21): creation, custody and re-anchor only. Dissolution,
@@ -13,6 +18,56 @@ in-kind redemption (whole and partial), renewal and the watchtower veto are
 than deployed-and-gated. `roadmap.md` §1 is the authoritative scope statement,
 `m1-b-implementation.md` is the build scope, and `milestone-inventory.md` is the
 per-item m1/m2 assignment.
+
+**Status vs M1 code (2026-09-28).** This document reverse-engineers the
+**full feature** (the m2 target) from the tbtc-v2 PR stack cited above; it is
+not a description of the M1 code that actually exists today. M1 is described
+in `requirements.md` and `architecture.md` (both in this directory).
+Divergences that matter to a reader coming from this doc to the M1 code
+(`reservations-upgrade` @ `9f8f5ef1` tbtc-v2 / `reservations-epic` @
+`f66f11240` keep-core):
+- **Router surface**: this doc's stack router keeps growing (redemption,
+  renewal, guardian entry points, below); M1's `ReservationRouter` ships
+  **22** external entry points — 11 state-changing + 11 views — with no
+  `submitReservationProof` router entry (it is the internal
+  `ReservationProofs` dispatcher) and no `walletReservations` view.
+- **Vault**: this doc's stack vault carries redemption, renewal, guardian and
+  pause machinery (§10-§11); M1's `ReservationVault` ships **minimal** — 7
+  external functions + constructor, not proxy-upgradeable, no
+  `redeemReservation`/`retryRedeemReservation`/`extendCustody`/renewal-pause
+  machinery — per the 2026-09-24 "Option B" decision
+  (`m1-b-implementation.md` §4.2, "Vault ships minimal (superseded
+  2026-09-24)"), which supersedes the flag-gated staged-rollout idea this
+  doc's §15 still describes.
+- **Per-wallet bookkeeping**: this doc's stack keeps a swap-remove
+  `walletReservationKeys`/`walletReservationKeyIndex` list (§3.1, §7 L-01);
+  M1 packs count+amount into one `WalletReservationInfo` struct
+  (`walletReservationInfo` mapping) and drops the key list as dead code.
+- **Removed fields**: M1 drops `maxCumulativeReanchorFee`,
+  `reservationDissolutionTxMaxFee`, `walletPendingDissolution`,
+  `reservationRetryCreditActionNonce` and `reservationMaxBackingFractionBps`
+  entirely — this doc's §10/§15/§16 track the first two as "present on the
+  core line only" within the stack; M1 does not carry any of the five.
+- **Governance validation**: this doc's §10 provenance note says
+  `updateReservationCaps` "validates neither cap"; M1's governance setters
+  validate (`validateReservationCapsInvariant`, plus requires in
+  `updateReservationParameters`/`updateReservationCaps`).
+- **Re-anchor cooldown/floor**: this doc's stack gates re-anchor on
+  `dissolutionEligibleAt` (§4.3); M1 removed that gate (dissolution isn't
+  built) and instead uses a `reanchorCooldownUntil` cooldown after a
+  timed-out re-anchor plus a restored request-time amount floor
+  (`anchorAmount > txMaxFee + minAmount`).
+- **Strand preconditions**: this doc's §7 H-06 gates
+  `notifyReservationStranded` on wallet `Terminated` only; M1's precondition
+  is reservation `Active` **and** wallet `Terminated` **or** `Closed` **or**
+  (`Closing` **and** `now >= dissolutionEligibleAt`) (`Reservation.sol`
+  ~1073-1113).
+
+None of the above are errors in this document as evidence for the PR stack it
+cites — they are the gap between the full feature and what M1 actually
+ships. See `requirements.md` and `architecture.md` for the M1-accurate
+description, and `m1-keep-core-readiness/01-gap-analysis.md` for the
+keep-core-side gap.
 
 ## Sources
 
@@ -161,7 +216,8 @@ off-chain clients are unaffected. Result: `ReservationRouter` is 4,245 B;
    (`BridgeState.Storage self`). New reservation state is appended to
    `BridgeState.Storage` with matching `__gap` reduction. A storage-layout
    parity test compares canonicalized solc layouts of `Bridge`,
-   `BridgeStub`, and `ReservationRouter`.
+   `BridgeStub`, and `ReservationRouter` — a build-time CI check, not a
+   runtime mechanism (`BridgeStub` is a test-only contract, never deployed).
 2. **No selector shadowing.** A Bridge-declared selector never reaches the
    router (tested; `Governable` members shared by both are exempt).
 3. **No standalone authority.** Direct calls to the router execute on its
@@ -177,6 +233,9 @@ off-chain clients are unaffected. Result: `ReservationRouter` is 4,245 B;
 New files: `ReservationRouter.sol`, `IReservationBridge.sol`,
 `docs/rfc/rfc-13.adoc`. `BridgeState.Storage` gains `address
 reservationRouter`.
+
+For the M1 code's component view — router entry-point surface,
+minimal vault, deployment topology — see `architecture.md` §1-§2.
 
 ---
 
@@ -196,14 +255,13 @@ originating deposit / anchor UTXO). Key fields (accreted across #1088->#1096):
 - `uint32 dissolutionEligibleAt` — `expiresAt + dissolutionDelay` at the time
   of the last term grant (acceptance or renewal); later governance changes
   to the delay never move an already-granted term's eligibility
-- ~~`uint32 termSeconds`, `uint32 gracePeriod`~~ — **removed by #1092/#1093; corrected 2026-08-21.** Neither identifier exists in the guards or partial trees (zero grep hits), and `reservationGracePeriod` is not an `updateReservationParameters` argument — that signature takes nine, none of them these. This bullet previously described both as live fields snapshotted at acceptance and asked §10 to decide which model survives. The question is settled: the surviving term state is `expiresAt` plus `dissolutionEligibleAt`, and the expiry gate is strict (`block.timestamp < reservation.expiresAt`, `Reservation.sol:666-669`).
-- `bool retryCredit` — single-use, fee-free redemption-retry entitlement
-- `uint64 retryCreditSourceNonce` — generation that minted the outstanding
-  retry credit; binds a retry to the exact amount/shape (whole vs partial)
-  of that source generation
+- ~~`uint32 termSeconds`, `uint32 gracePeriod`~~ — **removed by #1092/#1093; corrected 2026-08-21.** Neither identifier exists in the guards or partial trees (zero grep hits), and `reservationGracePeriod` is not an `updateReservationParameters` argument — that signature takes nine, none of them these. This bullet previously described both as live fields snapshotted at acceptance and asked §10 to decide which model survives. The question is settled: the surviving term state is `expiresAt` plus `dissolutionEligibleAt`, and the expiry gate is strict (`block.timestamp < reservation.expiresAt`, `Reservation.sol:665-669` on `feat/utxo-reservation-guards`).
+- `bool retryCredit` — single-use, fee-free redemption-retry entitlement. **Corrected 2026-09-28**: the generation nonce that minted an outstanding credit (`retryCreditSourceNonce`) lives on the *action* record, not here — this bullet previously listed it as a `ReservationRequest` field; it binds to one specific past generation, not to the position as a whole, so it belongs on `ReservationAction` (§3.2).
 - `address owner`, anchor UTXO reference, per-wallet enumeration bookkeeping
   (count `walletReservationsCount` plus, on the #1094 line, a swap-remove
-  key list `walletReservationKeys`/`walletReservationKeyIndex`), reverse
+  key list `walletReservationKeys`/`walletReservationKeyIndex` — dropped as
+  dead code in M1, which keeps only the packed count+amount; see the
+  top-of-file "Status vs M1 code" banner), reverse
   anchor lookup `reservationsByAnchorUtxo` (UTXO key -> reservation key,
   **introduced by #1091** and used by `strandReservation` — **corrected
   2026-08-21:** this previously said "#1102 removed it from the merged base,
@@ -226,7 +284,11 @@ Every Bitcoin-side action against a position is an explicit, nonce-keyed
   TimedOut(3) | Vetoed(4) | Superseded(5)`
 - `bytes20 targetWalletPubKeyHash`, `uint32 requestedAt`, `uint32 timeoutAt`
 - `uint64 txMaxFee` — snapshotted miner-fee cap
-- `bool feePaid`, `bool usedRetryCredit`, `uint64 retryCreditSourceNonce`
+- `bool feePaid`, `bool usedRetryCredit`
+- `uint64 retryCreditSourceNonce` — generation that minted the outstanding
+  retry credit; binds a retry to the exact amount/shape (whole vs partial) of
+  that source generation. **Corrected 2026-09-28**: this field lives here, on
+  the action record, not on `ReservationRequest` (§3.1)
 - `address redeemer`, `uint64 amount` — full claim (whole redemption),
   redeemed portion (partial redemption), reserved deposit value
   (acceptance), or anchor value (otherwise)
@@ -251,25 +313,37 @@ Every Bitcoin-side action against a position is an explicit, nonce-keyed
 
 `BridgeState.Storage` is **append-only**: every new field decrements
 `__gap` by exactly the slots added; mappings append freely; nothing is
-reordered. Measured per branch (2026-08-21), `__gap` reaches 41 by **two
-independent routes that then collide**:
+reordered. Measured per branch (2026-09-28, re-verified directly against
+branch tips rather than a pre-rebase baseline), `__gap` **diverges to two
+different values** from a shared 42-slot baseline — it does not land on one
+colliding number:
 
 - **core branch**: 48 -> 42 (#1088) -> **41 (#1102, merged 2026-08-21)**.
 - **descendant chain** (each branch cut from the pre-#1102 core at 42, so
-  these are pre-rebase values): 42 -> **41 (#1090 router)** -> 39
+  these are pre-rebase values): 42 -> **40 (#1090 router)** -> 39
   (#1091 settlement, #1092 renewal) -> 37 (#1093 backing) -> 34
   (#1094 guards, #1095 release) -> 33 (#1096 partial-redemption).
 
-Both #1102 (on core) and #1090 (on its own branch) decrement 42 -> 41 by
-different additions. After #1090 (and the stack above it) rebases over the
-#1102 fold, the two decrements compete for the same slot budget — the
-append-only discipline must be re-verified against the combined diff, not
-each PR's own parity test (this is the concrete storage-layout item the
-#1090 rebase in §3 step 2 of `epic-merge-plan.md` must resolve, and part of
-the §5 audit's 'append-only end-to-end across all 8 PRs' check). The same
-discipline applies to the upgradeable `RedemptionWatchtower`
-(reservation-generation keys reuse existing veto mappings — no new storage
-prefix).
+*Corrected 2026-09-28: this previously read "41 (#1090 router)", claiming
+both routes reach the identical value 41. Measured directly on
+`feat/utxo-reservation-router:BridgeState.sol:467`, the router branch's own
+`__gap` is 40, not 41 — it consumes 2 slots off the 42 baseline (#1102's
+own addition to core consumes only 1). The downstream chain (39/37/34/33)
+was already measured correctly and is unaffected.*
+
+#1102 (on core) and #1090 (on its own branch) each independently decrement
+the shared 42-slot baseline — to 41 and to 40 respectively, by different
+field additions. After #1090 (and the stack above it) rebases over the
+#1102 fold, both sets of additions land in the same `BridgeState.Storage`,
+so the append-only discipline must be re-verified against the *combined*
+diff — not each PR's own single-baseline parity test — to confirm the
+merged layout still decrements `__gap` by exactly the total slots added,
+with no overlap between the two independently-chosen field placements (this
+is the concrete storage-layout item the #1090 rebase in §3 step 2 of
+`epic-merge-plan.md` must resolve, and part of the §5 audit's 'append-only
+end-to-end across all 8 PRs' check). The same discipline applies to the
+upgradeable `RedemptionWatchtower` (reservation-generation keys reuse
+existing veto mappings — no new storage prefix).
 
 ---
 
@@ -298,6 +372,41 @@ Every generation goes through the same lifecycle:
                                                         generation: anchor marked
                                                         spent, lineage closed,
                                                         no second refund
+```
+
+**Formal state diagram.** The reservation-level lifecycle (Active / Closed /
+Stranded) crossed with the per-generation action lifecycle just described;
+renewal (§5) is a direct, un-generationed transition, not a request/proof
+pair:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active : acceptance generation Settled (permissionless request, proof pays designated wallet)
+
+    state Active {
+        [*] --> Idle
+        Idle --> GenPending : request any action type - nonce incremented, capacity reserved, params snapshotted (permissionless)
+        GenPending --> GenSettled : proof matches snapshot - redemption gated on watchtower delay, acceptance/reanchor/dissolution authorized immediately (onlySpvMaintainer submits)
+        GenPending --> GenTimedOut : action-timeout notification (permissionless)
+        GenPending --> GenVetoed : watchtower objection outlasts delay - redemption generations only
+        GenTimedOut --> GenSettled : late proof against this record - outpoints marked spent, no second refund
+        GenTimedOut --> Idle : capacity released - fee-paid redemption timeout also mints a single-use retry credit
+        GenVetoed --> Idle : escrowed claim detained per watchtower policy, generation permanently unprovable
+        GenSettled --> Idle : re-anchor settles, or partial redemption settles - remainder re-anchored, position stays Active
+    }
+
+    Active --> Active : renewal - extendCustody calls bridge.extendReservation directly, no generation, reservation-owner only, inside the renewal window
+    Active --> Closed : whole-redemption generation Settled, or dissolution generation Settled while wallet not Terminated
+    Active --> Stranded : notifyReservationStranded (permissionless, wallet Terminated) or dissolution generation Settled while wallet Terminated
+    Closed --> [*]
+    Stranded --> [*]
+
+    note right of GenPending
+        Request - permissionless, any action type
+        Proof submission - onlySpvMaintainer only
+        Timeout notification - permissionless
+        Veto - watchtower guardians, redemption only
+    end note
 ```
 
 **Request.** Creates the generation and:
@@ -678,8 +787,8 @@ sign-off; mechanics are fixed, numbers are not.
 | `reservationVault` | Liability-side vault | deployed vault | Changeable only with zero active reservations **and** zero pending reserved deposits |
 | `reservationMinAmount` | Minimum anchor amount | 10 BTC (1,000,000,000 sat) | Must exceed `reservationTxMaxFee` |
 | `reservationTxMaxFee` | Per-tx Bitcoin miner-fee cap | 50,000 sat (0.0005 BTC) *(pending, fee-market)* | > 0; a partial's redeemed portion and remainder must each exceed it |
-| `reservationDissolutionTxMaxFee` | Dissolution-tx miner-fee cap (2-in-1-out shape) | *(pending — same fee-market basis as `reservationTxMaxFee`)* | Must be > 0 (`reservationTxMaxFee` covers acceptance/redemption/re-anchor 1-in-1-out and partial 1-in-2-out). **Present on the `#1102`/core line only** — absent from `#1091` upward, including the guards tip the m1 rewrite extracts from (verified on `origin/feat/utxo-reservation-core`). Storage at `BridgeState.sol:396` |
-| `maxCumulativeReanchorFee` | Cumulative re-anchor miner-fee cap, per reservation | *(pending — the fee-grinding bound)* | Must be > 0; per-reservation `cumulativeReanchorFee` (`Reservation.sol:142`) must stay under it, enforced at `:1111-1113` (see §15). **Present on the `#1102`/core line only** — absent from `#1091` upward, including the guards tip the m1 rewrite extracts from (verified on `origin/feat/utxo-reservation-core`). Storage at `BridgeState.sol:417` |
+| `reservationDissolutionTxMaxFee` | Dissolution-tx miner-fee cap (2-in-1-out shape) | *(pending — same fee-market basis as `reservationTxMaxFee`)* | Must be > 0 (`reservationTxMaxFee` covers acceptance/redemption/re-anchor 1-in-1-out and partial 1-in-2-out). **Present on the `#1102`/core and `#1090`/router lines only** — absent from `#1091` (settlement) upward, including the guards tip the m1 rewrite extracts from (verified on `origin/feat/utxo-reservation-core` and `origin/feat/utxo-reservation-router`). Storage at `BridgeState.sol:396` |
+| `maxCumulativeReanchorFee` | Cumulative re-anchor miner-fee cap, per reservation | *(pending — the fee-grinding bound)* | Must be > 0; per-reservation `cumulativeReanchorFee` (`Reservation.sol:142`) must stay under it, enforced at `:1111-1113` (see §15). **Present on the `#1102`/core and `#1090`/router lines only** — absent from `#1091` (settlement) upward, including the guards tip the m1 rewrite extracts from (verified on `origin/feat/utxo-reservation-core` and `origin/feat/utxo-reservation-router`). Storage at `BridgeState.sol:417` |
 | `reservationTermSeconds` | Custody term per acceptance/renewal | 365 days | Hard bounds 90-730 days (protocol constants) |
 | `reservationDissolutionDelay` | Post-expiry delay before dissolvable | 7 days | Snapshotted per granted term |
 | `reservationMaxTotalAmount` | Global reserved-anchor cap | 100 BTC (10,000,000,000 sat) | Deliberately conservative; below the 10% fraction target at plausible launch backing |
@@ -856,102 +965,76 @@ disambiguates by context. `L-01` appears once and is tbtc-v2-side, so the keep-c
 
 ---
 
-## 13. keep-core: wallet/signer-side status (#4238)
+## 13. keep-core: wallet/signer-side status
 
-Standalone draft PR (not stacked), base `main`. Gated on the tbtc-v2 Bridge
-ABI being published (needs #1088+ merged and the npm package regenerated) —
-Ethereum bindings and coordination-executor wiring are **deliberately
-deferred** to a follow-up.
+**Current status (2026-09-28).** `#4238` is no longer the live keep-core
+work — it is now self-titled "draft: UTXO reservation wallet-side
+foundations (previous end-to-end attempt — see #4282 for M1)"
+(`baseRefName: reservations-epic`, still OPEN/DRAFT). The real keep-core
+work landed separately: `#4274` "feat(tbtc): wire reservation executors and
+watchers" **MERGED 2026-09-03** into `reservations-epic`, followed by
+`#4276`, `#4277`, `#4278`, `#4279`, `#4280`, `#4284` (all merged 2026-09-03)
+and `#4324` (merged 2026-09-28). At `reservations-epic` @ `f66f11240`
+keep-core **has a real executor**: `pkg/tbtcpg/reservation_acceptance.go`
+and `reservation_reanchor.go` (coordination-proposal tasks with wallet-cap
+validation), `pkg/maintainer/spv/reservation_proof_loop.go` +
+`reservation_wiring.go` + `reservation_action_timeout_watch.go` +
+`reservation_stranding_watch.go` (real SPV proof submission and
+monitoring), real Ethereum bindings in `pkg/chain/ethereum/tbtc.go`
+(`GetReservation`/`GetReservationAction`/`ReservationParameters` call the
+`reservationRouter` abigen binding, not error stubs), and real protobuf
+messages (`ReservationAnchorProposal`, `ReservationReanchorProposal` in
+`pkg/tbtc/gen/pb/message.proto`). None of this existed when this section
+was last drafted (2026-08-21/2026-09-07). **`m1-keep-core-readiness/`
+`01-gap-analysis.md` and `02-user-stories.md` are the authoritative,
+current source for keep-core status and remaining gaps** — this section is
+now a historical record of `#4238`'s original (superseded) scope, kept for
+its PR-provenance detail.
 
-**What ships in #4238** (identifiers corrected 2026-08-21 against
-`feat/utxo-reservation-wallet-support`; every name below was previously wrong in
-a way that concealed the two-phase constructs — see `milestone-inventory.md` C-8):
+**Historical: what `#4238` originally contained** (identifiers corrected
+2026-08-21 against `feat/utxo-reservation-wallet-support`; every name below
+was previously wrong in a way that concealed the two-phase constructs —
+see `milestone-inventory.md` C-8). `#4238` was a standalone draft, gated on
+the tbtc-v2 Bridge ABI being published, with Ethereum bindings and
+coordination-executor wiring deliberately deferred to a follow-up:
 - `pkg/tbtc/reservation.go` (new, 729 lines): `Reservation` /
   `ReservationStatus` / `ReservationParameters` types; four
   `CoordinationProposal` implementations — `ReservationAnchorProposal`
   (`:181`), `ReservedRedemptionProposal` (`:233`),
   `ReservationReanchorProposal` (`:287`), `ReservationDissolutionProposal`
   (`:342`); four unsigned Bitcoin transaction assemblers (one per action
-  shape). **All four proposal structs carry `RequestNonce`**, with a non-zero
-  check in `Unmarshal` (`:222`) — these are two-phase constructs.
+  shape). All four proposal structs carry `RequestNonce`, with a non-zero
+  check in `Unmarshal` (`:222`) — these are two-phase constructs, not a
+  single-phase client.
 - `pkg/tbtc/wallet.go`: four new `WalletActionType` values appended after
   `ActionMovedFundsSweep` — `ActionReservationAnchor` (6),
   `ActionReservedRedemption` (7), `ActionReservationReanchor` (8),
   `ActionReservationDissolution` (9) — appended, not inserted, to preserve
   serialized compatibility (positional decoding at `:56-63`).
-- `pkg/tbtc/chain.go`: **seven** new `TbtcChain` interface methods, not six:
-  `GetReservation` (`:432`), **`GetReservationAction(reservationKey,
-  requestNonce)`** (`:437`), `ReservationParameters` (`:444`),
+- `pkg/tbtc/chain.go`: seven new `TbtcChain` interface methods —
+  `GetReservation` (`:432`), `GetReservationAction(reservationKey,
+  requestNonce)` (`:437`), `ReservationParameters` (`:444`),
   `ValidateReservationAnchorProposal` (`:449`),
   `ValidateReservedRedemptionProposal` (`:461`),
   `ValidateReservationReanchorProposal` (`:469`),
-  `ValidateReservationDissolutionProposal` (`:477`). `GetReservationAction`
-  reads action records **by generation**, which is the other two-phase
-  construct; earlier versions of this list omitted it, which hid the evidence
-  against the "single-phase client" reading below.
-- `pkg/chain/ethereum/tbtc.go`: all seven methods above **stubbed**, each
-  returning a descriptive error (`:2415-2499`) until the Bridge ABI is
-  regenerated. Present in the interface, absent in behaviour — m1 must
-  implement them.
-- `pkg/clientinfo/performance.go`, `pkg/tbtc/marshaling.go`: metric names
-  and the coordination-proposal unmarshal factory extended for the four
-  new action types.
-- Carries an unrelated one-line fix (separately labeled commit, cherry-
-  pickable to `main`) for a pre-existing break in
-  `pkg/tbtcpg/redemptions.go:225` (old 8-tuple vs. new struct return from
-  `GetRedemptionParameters()`).
+  `ValidateReservationDissolutionProposal` (`:477`), all seven then
+  **stubbed** in `pkg/chain/ethereum/tbtc.go`, each returning a descriptive
+  error (`:2415-2499`) — this is the state `#4274` replaced with real
+  bindings (above).
+- Modeled #1088-era transaction shapes only: whole redemption, no partial
+  1-in-2-out; no renewal (#1092), backing (#1093), guards (#1094) or
+  partial-redemption (#1096) awareness.
+- Carried an unrelated one-line fix (cherry-pickable to `main`) for a
+  pre-existing break in `pkg/tbtcpg/redemptions.go:225` (old 8-tuple vs. new
+  struct return from `GetRedemptionParameters()`).
 
-**What's explicitly deferred** (per #4238 and the runbook's keep-core
-follow-up section, gated on the two-phase ABI landing in #1091+):
-- Ethereum bindings (blocked on published npm typechain artifacts).
-- Coordination executor + `tbtcpg` proposal generation wiring.
-- **Two-phase awareness**: proposals must carry a request nonce; the
-  coordinator must call the on-chain request function first
-  (`requestReservationAcceptance` / vault redemption entry points /
-  `requestReservationReanchor` / `requestReservationDissolution`), read
-  back the generation, and only then schedule signing. Proofs submit with
-  `(reservationKey, requestNonce)`.
-- The executor must respect the on-chain watchtower-delay gate (never sign
-  a redemption generation before its delay elapses), prioritize valid
-  pre-expiry reserved redemptions, drive expired positions toward
-  dissolution after pending actions resolve, and never propose dissolution
-  before the snapshotted `dissolutionEligibleAt`.
-- **On `Live -> MovingFunds`, re-anchor every open reservation to a Live
-  target** (`requestReservationReanchor`, permitted for `MovingFunds`
-  source wallets, §4.3). A rotating wallet's un-re-anchored anchors are
-  stranded if `movingFundsTimeout` fires — re-anchor is the intended
-  migration path, and leaving its initiation unspecified turns every routine
-  wallet rotation into a stranding candidate. Target choice, capacity
-  reservation (reserved at request), and fee handling are the executor's
-  responsibility; it must initiate re-anchor promptly on
-  `WalletMovingFunds(walletPubKeyHash)`, not wait for an expiry signal.
-- **Watch for `Terminated` wallets still custodying un-stranded
-  reservations and call `notifyReservationStranded` for each**
-  (permissionless, §7 H-06). Releases the dead wallet's reserved capacity
-  and emits the recovery-evidence event; until it fires, a terminated
-  wallet's anchors still count against the global `reservationMaxTotalAmount`
-  cap. Termination is triggerable by any of three wallet-lifecycle paths
-  (moving-funds timeout, moved-funds sweep timeout, fraud-challenge defeat
-  timeout), of which the timeout paths are liveness failures requiring no
-  malice — see `exit/stranded.md` §3.4 for the operative
-  framing.
-- Monitoring must watch `pendingReservedDeposits`, `inKindFeeDebtSat`,
-  dissolution-eligible positions, per-wallet reserved amount/count, and
-  terminated wallets holding un-stranded reservations (the executor's
-  `notifyReservationStranded` duty above), via
-  the new getters.
-- Protobuf marshaling (proposals currently JSON; TODO markers present —
-  requires new message types in `pkg/tbtc/gen/pb/message.proto`).
-- Integration tests (unit tests only cover action parsing, proposal
-  marshaling roundtrips, assembler input validation).
-
-**Note on #4238's own transaction shapes** (*corrected 2026-08-21*): its four
-**proposal structs already carry `RequestNonce`** and its chain interface reads
-action records by generation, so it is **not** a single-phase client (`milestone-inventory.md` C-8). What
-it models at #1088-era shape are the *transaction* forms: whole redemption only,
-no partial-redemption 1-in-2-out. It has not incorporated the renewal (#1092),
-backing (#1093), guards (#1094) or partial-redemption (#1096) redesigns — this is the exact
-gap the runbook's keep-core follow-up section calls out.
+**What `#4274`+ added on top** (see `m1-keep-core-readiness/01-gap-analysis.md`
+for the exhaustive, current list): the coordination-executor wiring, SPV
+proof-submission loop, action-timeout and stranding watches, real Ethereum
+bindings, and protobuf messages that `#4238` deferred. Residual gaps as of
+2026-09-28 are narrower than "no executor at all" — see the gap-analysis
+doc's Blocker/Major/Minor tables (e.g. the SPV proof-loop signature not yet
+carrying `(reservationKey, requestNonce)` for re-anchor).
 
 ---
 
@@ -1023,32 +1106,45 @@ gap the runbook's keep-core follow-up section calls out.
   `pendingReservedDeposits == 0` (`Reservation.sol:1263-1274` on
   `feat/utxo-reservation-guards`), so a re-point cannot silently orphan
   positions or revealed deposits — it simply reverts. But
-  `ReservationVault` is a plain `Ownable` contract with four `immutable`
-  constructor args and no `Initializable`
+  `ReservationVault` is a plain `Ownable` contract with **three** constructor
+  arguments setting **four** `immutable` state variables — the fourth,
+  `tbtcToken`, is derived from `_tbtcVault.tbtcToken()` inside the
+  constructor body, not itself passed in — and no `Initializable`
   (`contracts/vault/ReservationVault.sol:57`, `:69-72`, `:183-223`; deployed by a bare
   `deployments.deploy`, `deploy/95_deploy_reservation_vault.ts:12-17`), so
   changing vault behaviour requires a **redeploy plus a re-point that is
   blocked until every position closes and every revealed deposit is
   accepted or marked stale**. Any staged rollout that plans to change vault
   behaviour later must instead ship the behaviour switchable inside the m1
-  vault — see `roadmap.md` §2.2.
+  vault — see `roadmap.md` §2.2. **Superseded 2026-09-24 by the Option B
+  decision** (`m1-b-implementation.md` §4.2, "Vault ships minimal
+  (superseded 2026-09-24)"): the m1 vault ships minimal (commit
+  `4d549e64`); redemption and renewal are introduced in m2 via a **new
+  vault deployment plus a depositor opt-in migration ceremony**, not a flag
+  inside the m1 vault. The liveness cost this bullet describes (a re-point
+  blocked while any position or pending deposit remains) is exactly why the
+  flag-in-place approach was judged not to close the gap — the vault
+  cannot be upgraded either way, so m2 needs the migration ceremony the
+  flag design was meant to avoid.
 - **Governance compensation module for `Stranded` positions** is stubbed
   only as an event (`ReservationStranded`), no storage/interface yet —
   designed in `stranding-compensation-proposal.md` (Tiers 0-1, the decided
   build) per the Decision in `exit/README.md`.
-- **keep-core is two redesign generations behind** the current tbtc-v2
-  design (§13) — landing keep-core support is explicitly gated on the
-  tbtc-v2 ABI publishing, itself gated on #1088-#1096 merging. The required
-  second keep-core PR is **still not open as of 2026-08-21** (verified in
-  the merge-plan inventory: `#4238` is the only keep-core PR targeting
-  `reservations-epic`), so keep-core support is a hard hold, not a pending
-  review. Verified
-  directly: `pkg/tbtc/gen/pb/` on the keep-core PR branch has no
-  reservation message types (JSON marshaling only, as the PR's own TODOs
-  say), and all **seven** new `TbtcChain` Ethereum-binding methods are stubs
-  that return errors, not implementations (`:2415-2499`).
-- **Re-anchor fee grinding: capped on the core line only, and unbounded as a
-  ratio even there.** The cap is absent from `#1091` upward, so the guards tip
+- **keep-core status: superseded by #4274+ (updated 2026-09-28; see §13).**
+  This bullet previously said keep-core support was "a hard hold" pending
+  "a second, currently-unwritten keep-core PR... still not open as of
+  2026-08-21," with all seven Ethereum-binding methods stubbed and no
+  protobuf marshaling. That PR was written and merged: `#4274` "wire
+  reservation executors and watchers" **MERGED 2026-09-03** into
+  `reservations-epic`, followed by `#4276`-`#4280`, `#4284` (2026-09-03) and
+  `#4324` (2026-09-28). keep-core now has a real coordination executor,
+  real SPV proof-submission/monitoring loops, real Ethereum bindings, and
+  real protobuf messages — see §13 for the current inventory. This item is
+  **decided/superseded**, not open; remaining keep-core gaps are tracked in
+  `m1-keep-core-readiness/01-gap-analysis.md`, not here.
+- **Re-anchor fee grinding: capped on the core and router lines only, and
+  unbounded as a ratio even there.** The cap is absent from `#1091`
+  (settlement) upward, so the guards tip
   the rewrite extracts from has **no cumulative bound at all** — each hop is
   limited only by the per-generation `action.txMaxFee` snapshot, with no running
   total. On the core line it is resolved as follows: `maxCumulativeReanchorFee`
@@ -1081,17 +1177,24 @@ gap the runbook's keep-core follow-up section calls out.
   produced `Terminated` — reachability confirmed on all three. Griefability
   of the release path itself was not re-examined this pass (followups item
   1).
-- **Re-anchor/dissolution proof-submission gating after the authorize/prove
-  split: CONFIRMED still maintainer-gated (re-verified 2026-09-07).**
+- **Re-anchor proof-submission gating after the authorize/prove split:
+  CONFIRMED still maintainer-gated (re-verified 2026-09-07).**
   `ReservationRouter.submitReservationProof` is the single external entry
   point for every proof type and remains `onlySpvMaintainer`-gated, with no
   permissionless fallback found. Re-anchor is live in m1 and exposed to
-  this; dissolution's proof path is not yet wired (dissolution itself is
-  declared-only in m1). A stalled SPV maintainer blocks re-anchor proof
-  submission today, with no in-protocol fallback (followups item 3).
+  this. **Corrected 2026-09-28**: dissolution has no request/proof path in
+  m1 at all — under variant B the router's `requestReservationDissolution`
+  entry point is removed and the vault has no dissolution entry point
+  either (§4.4/§7 of this doc describe the full-feature surface only; the
+  underlying `dissolutionEligibleAt`/`reservationDissolutionDelay`
+  bookkeeping persists in m1 solely to gate `notifyReservationStranded`'s
+  `Closing`-past-eligibility precondition). "Declared-only" previously
+  implied some dissolution surface exists in m1's router/vault; it does
+  not. A stalled SPV maintainer blocks re-anchor proof submission today,
+  with no in-protocol fallback (followups item 3).
 - **Vault rotation can be blocked by a single active owner (governance-
   liveness cost): CONFIRMED (re-verified 2026-09-07).** The guard is
-  `reservationTotalAmount == 0` (`Reservation.sol:1289-1296`), checked
+  `reservationTotalAmount == 0` (`Reservation.sol:1307-1314`), checked
   alongside an independent `pendingReservedDeposits == 0` check in the same
   block — M-04's pending-deposit fix and this Active-reservation guard are
   both present and neither supersedes the other. Any single active
@@ -1219,8 +1322,10 @@ gap the runbook's keep-core follow-up section calls out.
 ## 16. Completeness assessment (gap analysis, 2026-08-19; state refreshed 2026-08-21)
 
 **Verdict: not code-complete.** The design is thorough and the Solidity
-side is heavily implemented and tested, but three concrete blockers stand
-between this and a shippable feature:
+side is heavily implemented and tested. Two concrete blockers stand
+between this and a shippable feature; a third, keep-core readiness, has
+narrowed substantially since this assessment was last drafted (see item 3,
+updated 2026-09-28):
 
 1. **The tbtc-v2 stack hasn't merged.** 8 draft PRs, meaningful stack
    order, branches already drifting behind their bases (BEHIND merge
@@ -1233,18 +1338,23 @@ between this and a shippable feature:
    internal adversarial review-round findings (§12), not a third-party
    audit sign-off — and the findings doc the runbook cites as the source
    of truth for those doesn't exist in the tree.
-3. **keep-core cannot execute the shipped design.** Not because `#4238` is
-   single-phase — it carries the two-phase nonce constructs (`milestone-inventory.md` C-8) — but
-   because it contains **no executor at all**: `pkg/tbtcpg` has no reservation
-   task and the chain interface has no submission method, so the client cannot
-   participate in the protocol. Its transaction shapes also predate the
-   renewal/backing/partial-redemption redesigns. Ethereum bindings are stubbed
-   with errors, there is no protobuf marshaling (JSON placeholder only),
-   no coordination-executor wiring, and no integration tests. A **second,
-   currently-unwritten keep-core PR** (still not open as of 2026-08-21 and
-   gated on the tbtc-v2 ABI) is required before any wallet node
-   can act as custodian under this design — this isn't a follow-up detail,
-   it's the entire client-side implementation of the two-phase protocol.
+3. **keep-core status: superseded (updated 2026-09-28 — see §13).** This
+   item previously said keep-core "contains no executor at all" and
+   required "a second, currently-unwritten keep-core PR." That PR was
+   written and merged: `#4274` "wire reservation executors and watchers"
+   **MERGED 2026-09-03** into `reservations-epic`, adding a real
+   coordination executor (`pkg/tbtcpg/reservation_acceptance.go`,
+   `reservation_reanchor.go`), real SPV proof-submission/monitoring loops
+   (`pkg/maintainer/spv/reservation_*`), real Ethereum bindings
+   (`pkg/chain/ethereum/tbtc.go`), and real protobuf messages
+   (`pkg/tbtc/gen/pb/message.proto`) — none of it stubbed. Its transaction
+   shapes still predate the renewal/backing/partial-redemption redesigns
+   (this doc's full-feature scope), which remains a genuine gap. See §13
+   and `m1-keep-core-readiness/01-gap-analysis.md` for the current,
+   authoritative keep-core gap inventory — this is no longer a "third
+   blocker" against the *full feature* either, since keep-core's remaining
+   gaps there are the same renewal/backing/partial-redemption non-support
+   already tracked elsewhere in this doc, not a missing executor.
 
 **What is solid**, for balance: the two-phase state machine, snapshot-at-
 request discipline, storage-layout append-only policy, and claim-equals-
@@ -1253,14 +1363,15 @@ covered by thousands of lines of Solidity tests that currently pass in CI.
 The deployment runbook is detailed and its scripts (`95_deploy_reservation_vault.ts`,
 `96_deploy_maintainer_proxy_v2.ts`) exist on-branch, not just as prose.
 
-**Residual gaps even after the above three blockers clear:**
+**Residual gaps even after the above items clear** (items 1-2 are hard
+blockers; item 3 has narrowed to the residual gap described there):
 - Two governance parameters (`reservationTxMaxFee`, `feeReserveTarget`)
   have no proposed value yet, let alone sign-off.
 - No stranding-compensation mechanism beyond an event stub.
 - Reserved-fraction cap enforcement is permanently off-chain by design
   (accepted limitation, not a bug, but worth remembering when reasoning
   about worst-case exposure).
-- Re-anchor fee-grinding is capped **on the `#1102`/core line only** (#1088's `maxCumulativeReanchorFee`, absent from `#1091` upward including the extraction tip) and even there
+- Re-anchor fee-grinding is capped **on the `#1102`/core and `#1090`/router lines only** (#1088's `maxCumulativeReanchorFee`, absent from `#1091` (settlement) upward including the extraction tip) and even there
   the cap is unbounded as a fraction of claim value — backing left after
   maximal grinding is a constant (`reservationTxMaxFee + 1 -
   reservationDissolutionTxMaxFee`) regardless of claim size; the bound
@@ -1308,9 +1419,10 @@ spec:
   keep P2TR-rejecting; swap to the sibling `extractWalletPubKeyHash` (same signature,
   same return type). Not a design change, not urgent — no FROST wallet exists to
   re-anchor to yet — but must land before FROST activates, tracked in §15/§16.
-- **keep-core's future FROST-aware reservation transaction assembly** is new scope
-  layered onto the already-identified "second keep-core PR" for the two-phase
-  protocol (§13/§16) — not separate follow-up work.
+- **keep-core's future FROST-aware reservation transaction assembly** is new
+  scope layered onto keep-core's already-merged reservation executor (§13,
+  `#4274`+) — not separate follow-up work, and now buildable against real
+  code rather than a future, unwritten PR.
 - **Storage merge risk if both stacks are combined**: `BridgeState.sol`, `Bridge.sol`,
   `Wallets.sol` are modified by both PR stacks independently; each stack's own
   storage-layout parity test only covers its own append, not the combined result.

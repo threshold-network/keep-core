@@ -5,6 +5,37 @@ Source-verified on `solidity/contracts/bridge/Reservation.sol` at the
 (1507 lines, the `#1094` guards tip). See `pr-map.md` §3: this tip predates the
 `#1102` fold, which changed `Reservation.sol` by +342 -95.
 
+## Status vs M1 code (2026-09-28)
+
+This fragment is pinned to the `feat/utxo-reservation-guards` tip (`#1094`,
+`bcfed23f`) and its findings below (esp. §7's "no validation at all") are
+correct at that pin. The actual M1 code (`reservations-upgrade` @
+`9f8f5ef1`) diverges:
+
+- **Governance setters now validate.** `updateReservationParameters` (M1
+  `Reservation.sol:1260-1354`) requires `maxReservationsPerWallet > 0` and
+  calls a new `validateReservationCapsInvariant` helper requiring
+  `reservationMaxTotalAmount <= maxActiveReservations *
+  reservationMaxSingleAmount` (skipped only when either operand is
+  zero/disabled); `updateReservationCaps` (`:1376-1406`) requires
+  `maxActiveReservations > 0` and calls the same invariant helper. §7's "not
+  a single `require`" / "unconstrained by the contract" claims are resolved
+  in the M1 code — the only cap-shaped parameter still unconstrained by
+  any `require` at M1 tip is `maxReservationsAmountPerWallet` (the per-wallet
+  amount cap).
+- **Storage repacking and dropped fields.** M1's `BridgeState.Storage` packs
+  the per-wallet count/amount into a single `walletReservationInfo` struct
+  and drops `walletReservationKeys`, `walletReservationKeyIndex`,
+  `maxCumulativeReanchorFee`, `reservationDissolutionTxMaxFee`,
+  `walletPendingDissolution`, `reservationRetryCreditActionNonce`, and
+  `reservationMaxBackingFractionBps` as unused/dead (`__gap` shrinks to 9 of
+  48 reservation-eligible slots consumed, down from 15). None of this is
+  named in §4/§6/§7 below, which describe the guards-tip layout.
+- `ReservationRequest` and `ReservationAction` also gained fields not listed
+  in §4/§6's tables: `cumulativeReanchorFee`, `reanchorCooldownUntil`,
+  `retryCreditSourceNonce`, `isPartial`, `termSeconds`, and a dissolution-
+  delay snapshot field — see the notes after each table.
+
 ## 1. The storage-completeness rule needs a sharper edge
 
 `m1-b-implementation.md` §4.4/§4.5 states the rule as "storage-complete means
@@ -108,6 +139,10 @@ existing docs do not name.
 | `retryCredit` | `:180` | #1091 | storage | write via timeout | yes | See §2 |
 | `dissolutionEligibleAt` | `:187` | #1092 | storage | **write, no m1 reader** | yes | The named trap; see §2 and §5 |
 
+**Not exhaustive past this pin.** M1 code adds `cumulativeReanchorFee` and
+`reanchorCooldownUntil` to `ReservationRequest` (~`Reservation.sol:225-236`
+at M1 tip) — neither existed at the guards tip and neither is listed above.
+
 ## 5. Confirmed: in m1 the custody term has no on-chain reader at all
 
 Every reader of `expiresAt` and `dissolutionEligibleAt`, enumerated with its
@@ -147,6 +182,11 @@ honour**, enforced by nothing in m1.
 | `watchtowerLevelOneDelay` | `:245` | #1091 | storage | **declare only** | yes | Same, `:726` |
 | `watchtowerLevelTwoDelay` | `:248` | #1091 | storage | **declare only** | yes | Same, `:727` |
 
+**Not exhaustive past this pin.** M1 code adds `retryCreditSourceNonce`,
+`isPartial`, `termSeconds`, and a dissolution-delay snapshot field to
+`ReservationAction` (~`Reservation.sol:305-330` at M1 tip) — none existed at
+the guards tip and none are listed above.
+
 ## 7. Governance parameters and validation
 
 `updateReservationParameters` (`Reservation.sol:1227-1295`) validates:
@@ -181,6 +221,20 @@ all**, so all four cap-shaped parameters
 (`reservationMaxTotalAmount`, `maxReservationsPerWallet`,
 `maxReservationsAmountPerWallet`, `reservationMaxSingleAmount`) are unconstrained
 by the contract and mutually unrelated.
+
+**Historical at this pin; resolved in M1 code.** The guards tip genuinely has
+zero relational `require`s here. The M1 code (`reservations-upgrade`
+@ `9f8f5ef1`) closed this gap: `updateReservationParameters` now requires
+`maxReservationsPerWallet > 0` (M1 `Reservation.sol:1295-1298`) and
+cross-checks `reservationMaxTotalAmount` via a new
+`validateReservationCapsInvariant` helper (`:1330-1334`); `updateReservationCaps`
+now requires `maxActiveReservations > 0` (`:1382-1385`) and calls the same
+invariant (`:1392-1396`), which enforces `reservationMaxTotalAmount <=
+maxActiveReservations * reservationMaxSingleAmount` (skipped only when either
+operand is zero/disabled). This resolves Open Question #2 below. The two
+subsections above should be read as narrowed to the one cap-shaped parameter
+still unconstrained by any `require` at M1 tip:
+`maxReservationsAmountPerWallet` (the per-wallet amount cap) — not all four.
 
 ### Retroactivity
 
@@ -220,16 +274,18 @@ an m1 position closed, so it is load-bearing for the operational duties.
    `Reservation.sol:1009-1022` in the m1 timeout path? Fields stay either way;
    this is about code, which is replaceable. Recommend keeping for a smaller m2
    diff.
-2. **DECISION NEEDED: do the four unvalidated cap parameters get relational
-   validation in m1?** §4.1's gate needs `maxActiveReservations` checked against
-   slot capacity, and today no cap checks anything. Adding validation to
-   `updateReservationCaps` is cheap and is the natural place, but it changes a
-   reviewed function's semantics.
+2. **RESOLVED in the M1 code.** §7's `validateReservationCapsInvariant`
+   plus the two new `require`s in `updateReservationParameters` and
+   `updateReservationCaps` (M1 `Reservation.sol:1220-1232`, `:1295-1298`,
+   `:1382-1396`) add exactly the relational validation this question asked
+   for — see the §7 note.
 3. **Enum positions are a layout hazard nobody has written down.** Confirm the
    rewrite extracts all three enums verbatim including m2-only variants, rather
    than pruning them.
-4. **DECISION NEEDED: is `reservationRenewalWindowSeconds` still validated in
-   m1?** It has no m1 reader, but its relational check protects m2's semantics.
+4. **RESOLVED in the M1 code.** M1 keeps the relational check verbatim
+   (`0 < reservationRenewalWindowSeconds < reservationTermSeconds`, M1
+   `Reservation.sol:1286-1289`) even though the field still has no m1
+   reader — the "keep it" option was taken.
 5. **UNVERIFIED at the `#1102` fold.** All line numbers above are guards-tip.
    `#1102` changed `Reservation.sol` by +342 -95, so the parameter validation
    block in particular should be re-read post-fold before implementation.

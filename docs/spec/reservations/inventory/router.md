@@ -5,6 +5,40 @@ Source-verified on `solidity/` at the `feat/utxo-reservation-guards` tip
 caveat in `pr-map.md` §3: this tip does not contain the `#1102` fold, so
 `BridgeState.sol` line numbers here predate those fixes.
 
+## Status vs M1 code (2026-09-28)
+
+This fragment is pinned to the `feat/utxo-reservation-guards` tip (`#1094`,
+`bcfed23f`), and its counts and line numbers below are correct at that pin.
+The actual M1 code (`reservations-upgrade` @ `9f8f5ef1`) diverges from it:
+
+- **`ReservationRouter.sol` has 22 external entry points at M1 tip, not the
+  20 this fragment derives** — 11 state-changing + 11 views.
+  State-changing: `requestReservationAcceptance`, `requestReservationReanchor`,
+  `submitReservationAcceptanceProof`, `submitReservationReanchorProof`,
+  `notifyReservationActionTimeout`, `notifyReservationAcceptanceTimedOut`,
+  `updateReservationParameters`, `notifyStaleReservedDeposit`,
+  `forceStaleReservedDeposit`, `notifyReservationStranded`,
+  `updateReservationCaps`. Views: `reservationCaps`, `walletReservationsAmount`,
+  `walletReservationsCount`, `reservationByAnchorUtxo`, `reservedDepositWallet`,
+  `pendingReservedDeposits`, `reservations`, `reservationActions`,
+  `reservationParameters`, `activeReservationsCount`, `reservationRouter`.
+- The single `submitReservationProof` dispatcher (§1, `:322`) was split into
+  `submitReservationAcceptanceProof` and `submitReservationReanchorProof`.
+- `notifyReservationAcceptanceTimedOut` and `forceStaleReservedDeposit`
+  (`onlyGovernance`, new) were added; neither appears below.
+- `walletReservations` (listed under "Retained in m1 - views" below) was
+  dropped: its backing storage was removed as dead, so M1 has **no on-chain
+  way to enumerate a wallet's reservation keys at all**.
+- §3's storage table is stale for M1: `walletReservationsCount` and
+  `walletReservationsAmount` are repacked into a single
+  `walletReservationInfo` struct (`.count`/`.amount`, one slot per wallet);
+  `walletReservationKeys`/`walletReservationKeyIndex` are gone entirely;
+  `__gap` is `uint256[39]` (9 of the original 48 reservation-eligible slots
+  consumed, not 14).
+- The "24 -> 20" arithmetic in §1 is the guards-tip plan's own count and
+  remains correct at that pin; it is not the M1 router's count (22,
+  above).
+
 ## 1. Router entry points: 24, independently counted
 
 `ReservationRouter.sol` declares **24 functions, all `external`**. There are no
@@ -18,8 +52,8 @@ were enumerated mechanically from the file, and they match
 |---|---|---|---|---|---|---|
 | `requestReservationAcceptance` | `ReservationRouter.sol:242` | #1091 | entry-point | yes | yes | The product's entry gate |
 | `requestReservationReanchor` | `:286` | #1091 | entry-point | yes | yes | variant B's only unpin path; load-bearing |
-| `submitReservationProof` | `:322` | #1091 | entry-point | yes | yes | Only `onlySpvMaintainer` entry point; m1 dispatches acceptance and re-anchor only |
-| `notifyReservationActionTimeout` | `:351` | #1091 | entry-point | yes | yes | Required cleanup, and the slashing path |
+| `submitReservationProof` | `:322` | #1091 | entry-point | yes | yes | Only `onlySpvMaintainer` entry point; m1 dispatches acceptance and re-anchor only. M1 code: split into `submitReservationAcceptanceProof`/`submitReservationReanchorProof` — see banner |
+| `notifyReservationActionTimeout` | `:351` | #1091 | entry-point | yes | yes | Required cleanup; no slashing arm of its own — the m1-reachable Acceptance/Reanchor arms only release reserved capacity. The actual m1 slashing path is indirect: `Wallets.sol` moving-funds timeout, reached because reservations block wallet closing (see `proofs.md` §5) |
 | `notifyStaleReservedDeposit` | `:450` | #1094 | entry-point | yes | yes | Releases un-accepted revealed deposits |
 | `notifyReservationStranded` | `:461` | #1094 | entry-point | yes | yes | variant B's only position-closing *entry point* (the second closing site is inside acceptance/re-anchor settlement) |
 | `updateReservationParameters` | `:421` | #1088 | entry-point | yes | yes | `onlyGovernance`; also carries the vault re-point |
@@ -32,7 +66,7 @@ were enumerated mechanically from the file, and they match
 | `reservationCaps` | `:487` | view | yes | yes | Cap readback |
 | `walletReservationsAmount` | `:503` | view | yes | yes | Per-wallet exposure |
 | `walletReservationsCount` | `:514` | view | yes | yes | **Load-bearing**: the free-slot monitor's data source |
-| `walletReservations` | `:524` | view | yes | yes | Per-wallet key list |
+| `walletReservations` | `:524` | view | yes | yes | Per-wallet key list. M1 code: dropped — see banner |
 | `reservationByAnchorUtxo` | `:538` | view | yes | yes | Reverse index reader; see the two-write-site hazard |
 | `reservedDepositWallet` | `:555` | view | yes | yes | Reveal-time binding readback |
 | `pendingReservedDeposits` | `:565` | view | yes | yes | **Load-bearing**: read by the vault re-point gate |
@@ -57,7 +91,7 @@ were enumerated mechanically from the file, and they match
 |---|---|---|---|---|---|
 | `activeReservationsCount` | new | view | yes | yes | Global position counter; see §3 for why it is genuinely new |
 
-**Arithmetic: 24 - 5 + 1 = 20.** Confirmed independently.
+**Arithmetic: 24 - 5 + 1 = 20.** Confirmed independently. M1 code: superseded — the M1 router has 22 entry points (11 + 11), not 20; see banner.
 
 ## 2. The four delegatecall invariants - all genuinely test-asserted
 
@@ -94,17 +128,17 @@ re-doing from zero.
 | `maxReservationsPerWallet` | `:380` | storage | yes | yes | Per-wallet slot cap |
 | `reservations` | `:384` | storage | yes | yes | Position records |
 | `reservationsByAnchorUtxo` | `:388` | storage | yes | yes | Reverse index; two write sites |
-| `walletReservationsCount` | `:391` | storage | yes | yes | Per-wallet slot occupancy |
+| `walletReservationsCount` | `:391` | storage | yes | yes | Per-wallet slot occupancy. M1 code: repacked into `walletReservationInfo[wallet].count` — see banner |
 | `reservationRouter` | `:404` | storage | yes | yes | Router address, one-time settable |
 | `reservationActionTimeout` | `:409` | storage | yes | yes | param |
 | `reservationRenewalWindowSeconds` | `:415` | storage | yes | yes | param; **written but unread in m1** since renewal is deferred |
 | `reservationActions` | `:423` | storage | yes | yes | Action records |
-| `walletReservationsAmount` | `:435` | storage | yes | yes | Per-wallet amount |
+| `walletReservationsAmount` | `:435` | storage | yes | yes | Per-wallet amount. M1 code: repacked into `walletReservationInfo[wallet].amount` — see banner |
 | `maxReservationsAmountPerWallet` | `:438` | storage | yes | yes | Per-wallet amount cap |
 | `reservationMaxSingleAmount` | `:441` | storage | yes | yes | Single-position cap |
-| `walletReservationKeys` | `:446` | storage | yes | yes | Per-wallet key list |
-| `walletReservationKeyIndex` | `:449` | storage | yes | yes | Key list index |
-| `__gap` | `:463` | storage | yes | yes | `uint256[34]` at this tip; 14 slots consumed per the parity test |
+| `walletReservationKeys` | `:446` | storage | yes | yes | Per-wallet key list. M1 code: dropped as dead — see banner |
+| `walletReservationKeyIndex` | `:449` | storage | yes | yes | Key list index. M1 code: dropped as dead — see banner |
+| `__gap` | `:463` | storage | yes | yes | `uint256[34]` at this tip; 14 slots consumed per the parity test. M1 code: `uint256[39]`, 9 slots consumed — see banner |
 
 Adjacent pre-existing fields the feature depends on:
 `liveWalletsCount` (`:253`) and `spentMainUTXOs` (`:336`).

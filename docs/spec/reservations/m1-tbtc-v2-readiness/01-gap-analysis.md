@@ -2,34 +2,35 @@
 
 ## Summary
 
-Audit of the tbtc-v2 `reservations-upgrade` branch (landed tip `8c5a2f4d`,
-plus queued PR F `ReservationVault` and PR G `Bridge` activation wiring)
-against `feature-spec.md`, `m1-b-implementation.md`, and
-`milestone-inventory.md`. Scope: does the Solidity implementation match what
-the spec says variant B ships for milestone 1 (creation, custody, re-anchor;
+Audit of tbtc-v2's `reservations-upgrade` branch, originally against landed
+tip `8c5a2f4d` plus queued PR F (`ReservationVault`) and PR G (`Bridge`
+activation wiring); re-verified against `reservations-upgrade` @ `9f8f5ef1`
+(2026-09-28, PRs A-H all merged into `reservations-upgrade`, see
+`../m1-keep-core-readiness/04-implementation-plan.md` Milestone 0) against
+`feature-spec.md`, `m1-b-implementation.md`, and `milestone-inventory.md`.
+Scope: does the Solidity implementation match what the spec says variant B
+ships for milestone 1 (creation, custody, re-anchor;
 redemption/dissolution/renewal/veto out of scope)?
 
 Companion to `../m1-keep-core-readiness/01-gap-analysis.md` (Go client side).
 This doc covers the Solidity/Bridge side only.
 
-- **Blocker:** 1
-- **Major:** 1
-- **Doc-staleness (spec under/over-claims landed code):** 4
+- **Blocker:** 0 (1 found, superseded by the 2026-09-24 Option B decision — see resolved row below)
+- **Major:** 0 (1 found and resolved this session — see resolved row below)
+- **Doc-staleness (spec text under/over-claims landed code):** 4
 - **Confirmed matches:** see [Verified compliant](#verified-compliant)
 
-## Blocker
+## Blocker (resolved)
 
 | Gap | Severity | Evidence | Spec/PR ref |
 | :--- | :--- | :--- | :--- |
-| `ReservationVault.sol` (queued PR F) omits `redeemReservation` and `retryRedeemReservation` entirely | Blocker | `m1-b-implementation.md` §3 lists both as **Present** (initiation only, gated by the new `redemptionsPaused` flag) — this is D-13's explicit recommendation ("the flag gates the two initiation functions only"). The actual file (`/tmp/spec-audit-f/solidity/contracts/vault/ReservationVault.sol`) has exactly 10 functions: `receiveBalanceIncrease`, `financeInKindFee`, `repayInKindFeeDebt`, `updateFeeReserveTarget`, `sweepFees`, `updateFees`, `pauseRedemptions`, `unpauseRedemptions`, `receiveBalanceApproval`. Neither `redeemReservation` nor `retryRedeemReservation` exists anywhere in the file — confirmed by full-file grep. The pause machinery (`redemptionsPaused` flag, `pauseRedemptions`/`unpauseRedemptions`) is present and correctly gates nothing, because there is nothing to gate: `receiveBalanceApproval` is a stub that unconditionally reverts ("Balance approvals not supported"), and its own NatSpec says "reserved redemptions are initiated via `redeemReservation`" — a function that was never written. | `m1-b-implementation.md` §3, §1 ("Vault: ship complete, behaviour disabled"); D-13 |
+| `ReservationVault.sol` omitted `redeemReservation`/`retryRedeemReservation` while shipping a `redemptionsPaused` flag that gated nothing | Superseded (was Blocker) | This finding measured the vault against a requirement that no longer exists. The 2026-09-24 Option B decision (`m1-b-implementation.md` §3/§4.2, commit `661b06a04`) supersedes D-13's "ship both initiation functions behind `redemptionsPaused`" recommendation: the M1 `ReservationVault` ships deliberately minimal (per commit `4d549e64`), and M2 delivers redemption/renewal via a **new vault deployment plus a depositor migration ceremony**, not via unpausing flags on the M1 vault. Confirmed in code: the current `ReservationVault.sol` (`9f8f5ef1`) has exactly 7 external functions plus constructor — `receiveBalanceIncrease`, `financeInKindFee`, `repayInKindFeeDebt`, `updateFeeReserveTarget`, `sweepFees`, `updateInitiationFee`, `receiveBalanceApproval` (plus internal `_burnFromReserve`) — with no `redeemReservation`, `retryRedeemReservation`, `redemptionsPaused`, `pauseRedemptions`, or `unpauseRedemptions` at all; the vault is not proxy-upgradeable, which is exactly why the migration ceremony (not a flag flip) is required in M2. | 2026-09-24 Option B decision; `ReservationVault.sol` (`9f8f5ef1`) |
 
-**Why this is a blocker, not a minor omission:** `m1-b-implementation.md` §1's core architectural rule is "two layers, opposite rules" — Bridge code is replaceable (upgradeable, can add functions later), but the Vault is not: an m1 vault entry point that isn't shipped now cannot be added in m2 without a full vault swap. `roadmap.md` §0.7 states this precisely: a vault entry point m1 omits cannot be reached in m2 by a governance transaction alone, because re-pointing `reservationVault` to a new vault requires `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (total system quiescence) — a state that, once wallets hold live positions, is realistically unreachable without deliberately draining the system first. If PR F ships as-is, m2's redemption feature is not a vault upgrade; it is a full vault migration requiring the entire reservation book to be emptied first. This should be fixed before PR F merges, not deferred.
-
-## Major
+## Major (resolved)
 
 | Gap | Severity | Evidence | Spec/PR ref |
 | :--- | :--- | :--- | :--- |
-| Re-anchor's `dissolutionEligibleAt` timing gate was not deleted, contradicting variant B's own design | Major | `m1-b-implementation.md:190-192` states as fact (not a recommendation — a description of what variant B does): "B deletes its only reader — re-anchor's `< dissolutionEligibleAt` gate — so an essentials-only rewrite would naturally drop the [acceptance-time] write as dead code. Do not [drop the write]." The premise of that instruction is that the re-anchor gate is gone. It isn't: `Reservation.sol`'s `requestReservationReanchor` (landed, `-ru`) still has `require(block.timestamp < reservation.dissolutionEligibleAt, "Reservation is dissolution-eligible");`, unconditionally — it applies even to governance-privileged (`privileged == true`) re-anchors, unlike the separate cooldown check three lines above it which is skipped when `privileged`. Effect: once a reservation ages past its `dissolutionEligibleAt` timestamp, it can never be re-anchored again by anyone, including governance, while its wallet stays healthy. Since m1 has no dissolution or redemption path, an aged-out reservation on a `Live`/`MovingFunds` wallet that never terminates has no exit at all — it is stuck until the custodying wallet itself is terminated (which triggers stranding, the one path this gate doesn't block). **Confirmed never deleted, not a later reversal:** `git log -L 750,756:solidity/contracts/bridge/Reservation.sol` on `-ru` shows the gate was introduced at `8320906c` ("feat(bridge): implement reservation re-anchor", 2026-08-24, extracted from PR #1094) and survived untouched through two later commits that both diff this exact function — `d600a8bf` ("fix(bridge): close confirmed review findings in reservation core", 2026-09-01, 34-of-38-finding review round) and `a5630007` ("test(bridge): add coverage for reservation capacity/settlement paths", 2026-09-01). Neither touches the `require` itself; both diffs only shift its line position via unrelated edits immediately above it. This has been present since the first re-anchor extraction and was not caught by a 38-finding review pass of the same function. | `m1-b-implementation.md:190-192`; `Reservation.sol` `requestReservationReanchor`; git history `8320906c` → `d600a8bf` → `a5630007` |
+| Re-anchor's `dissolutionEligibleAt` timing gate was not deleted, contradicting variant B's own design | Resolved (was Major) | `m1-b-implementation.md:190-192` states as fact that "B deletes its only reader — re-anchor's `< dissolutionEligibleAt` gate." At the time this finding was raised, `Reservation.sol`'s `requestReservationReanchor` still had `require(block.timestamp < reservation.dissolutionEligibleAt, "Reservation is dissolution-eligible");`, unconditionally, contradicting the spec. Fixed: the current `requestReservationReanchor` (`9f8f5ef1`) has no `dissolutionEligibleAt` check at all — a code comment explicitly documents the removal ("Re-anchor is intentionally unbounded in time in milestone 1, with no dissolution path available yet"). The one test that asserted the old revert ("rejects when reservation is dissolution-eligible") was rewritten to assert the opposite. | Resolved via PR [#1120](https://github.com/threshold-network/tbtc-v2/pull/1120) (`m1/reanchor-dissolution-gate-fix`, merged 2026-09-03) — see `03-followup-pr-spec.md` PR I |
 
 ## Doc-staleness (spec text predates later review fixes; code is correct, doc needs updating)
 
@@ -44,14 +45,13 @@ these are still open.
 | D-2 cap-relational-validation gap | `milestone-inventory.md` §2.6 (lines 603-604, 610-611) says `reservationMaxTotalAmount`, `maxReservationsPerWallet`, `maxReservationsAmountPerWallet`, `reservationMaxSingleAmount` are all "assigned, NO require... no validation at all," and D-2 lists this as blocking with a recommendation to add validation. | Resolved. `Reservation.sol` has `validateReservationCapsInvariant(reservationMaxTotalAmount, reservationMaxSingleAmount, maxActiveReservations)`, called from both `updateReservationParameters` and `updateReservationCaps`, enforcing `reservationMaxTotalAmount <= maxActiveReservations * reservationMaxSingleAmount` (skipped only when an operand is the sentinel disabled-value 0). Commented `// Decision 1 (option 2)` — this is the same decision already recorded in `agent-docs/m1/STATUS.md` from an earlier session. | `Reservation.sol:1324` (`validateReservationCapsInvariant`), call sites in `updateReservationParameters`/`updateReservationCaps` |
 | `ReservationRequest` struct field table incomplete | `milestone-inventory.md` §2.1 lists 12 fields for `ReservationRequest`. | Struct has 14: the 12 listed, plus `cumulativeReanchorFee` and `reanchorCooldownUntil`, both explicitly comment-marked "Appended to the end of the struct" — the fee-grinding-cap fix (`pr-review-followups.md` item 7 / PR #1088 review fix) and its accompanying re-anchor cooldown. | `Reservation.sol:224-227` |
 | `ReservationAction` struct field table incomplete | `milestone-inventory.md` §2.1 lists 17 fields for `ReservationAction`. | Struct has 19: the 17 listed, plus `termSeconds` and `dissolutionDelay`, both snapshotted at acceptance request time and consumed by `ReservationProofs.loadSettleableAction` to compute `expiresAt`/`dissolutionEligibleAt` from the generation record instead of the live governance parameter — this is the fix for the late-acceptance-settlement-uses-live-parameter bug found and closed during PR review. | `Reservation.sol:311-321` |
-| Router surface table missing one retained entry point | `milestone-inventory.md` §2 (router surface) enumerates 8 state-changing entry points as retained in m1. | `ReservationRouter.sol` has 9: the 8 listed, plus `notifyReservationAcceptanceTimedOut(uint256 reservationKey)` — a router-level forwarder added during review to close a real gap (a pending acceptance whose designated wallet never signs would otherwise have no permissionless release path; only the redundant `notifyReservationActionTimeout` name existed before). Legitimate scope addition, not a spec deviation — the router-surface table should be updated to list 9 retained state-changing functions, not 8. | `ReservationRouter.sol:289` |
+| Router surface table under-counts the retained entry points | `milestone-inventory.md` §2 (router surface) enumerates 8 state-changing entry points as retained in m1. | `ReservationRouter.sol` has 11 state-changing entry points as of the current tip (`9f8f5ef1`), not 9 as an earlier revision of this row concluded: `requestReservationAcceptance`, `requestReservationReanchor`, `submitReservationAcceptanceProof`, `submitReservationReanchorProof` (the router exposes acceptance/re-anchor proof submission as two separate entry points, not a single `submitReservationProof` dispatcher — that name is only the internal `ReservationProofs` library function), `notifyReservationActionTimeout`, `notifyReservationAcceptanceTimedOut` (added during review to close a permissionless-release gap), `updateReservationParameters`, `notifyStaleReservedDeposit`, `forceStaleReservedDeposit` (governance-only, added later, paired with `notifyStaleReservedDeposit`), `notifyReservationStranded`, `updateReservationCaps`. Legitimate scope additions across multiple review rounds, not a spec deviation — the router-surface table should be updated to list 11 retained state-changing functions (plus 11 views), not 8 or 9. | `ReservationRouter.sol` (current tip `9f8f5ef1`) |
 
 ## Verified compliant
 
 Confirmed matching spec/design intent by direct read of the landed
-(`-ru`, tip `8c5a2f4d`) and queued (PR F `/tmp/spec-audit-f`, PR G
-`/tmp/spec-audit-g`) trees — listed so this isn't read as an all-gaps
-report:
+(`-ru`, current tip `9f8f5ef1`) tree — listed so this isn't read as an
+all-gaps report:
 
 - **Router surface removals** — all 5 functions the spec says variant B
   removes (`requestReservedRedemption`, `notifyReservedRedemptionVeto`,
@@ -97,8 +97,9 @@ report:
   write sites present and paired: acceptance-settlement write in
   `ReservationProofs.sol`, stranding delete in `Reservation.sol`.
 - **`dissolutionEligibleAt` write survives** in acceptance settlement
-  despite having no m1 reader other than the (incorrectly still-present,
-  see Major above) re-anchor gate.
+  despite having no m1 reader — the one reader it had (the re-anchor gate)
+  was removed by PR #1120 (see Major, resolved, above); the field is
+  retained purely for M2's dissolution feature to consume later.
 - **Storage layout parity** — `Bridge.StorageLayout.test.ts` exists and is
   an append-only layout-parity assertion suite, consistent with §4.5's
   launch gate.

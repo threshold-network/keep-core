@@ -5,6 +5,31 @@ Retained as the argument that was weighed plus the risk register B carries.
 §6.1's A+ recommendation is kept unchanged and is **not** a live dispute.
 Build scope: `m1-b-implementation.md`.
 
+**Status vs M1 code (2026-09-28).** This is the historical argument that was
+weighed, retained per the editing policy; it is not re-fact-checked
+wholesale against the M1 code. Divergences a reader should know before
+treating pre-decision citations below as current:
+
+1. The M1 router ships **22** entry points (11 state-changing, 11 views).
+   The `submitReservationProof` dispatcher this document discusses (§1 row
+   10, §5.2) was split into `submitReservationAcceptanceProof` /
+   `submitReservationReanchorProof`, and a new governance override,
+   `forceStaleReservedDeposit`, was added — see `m1-b-implementation.md` §2.
+2. §5.5 item 2's premise that "the m1 vault must ship its full entry-point
+   surface behind pause flags" was **superseded** by the 2026-09-24 Option B
+   decision: the M1 vault ships with only 7 functions and none of
+   redemption/renewal/retry; m2 adds them via a **new** vault deployment and
+   depositor migration, not by unpausing this one — see
+   `m1-b-implementation.md` §3.
+3. §5.4 item 1 (the global active-position cap) and the `dissolutionEligibleAt`
+   write item are both **implemented** in the M1 code, not outstanding — see
+   `m1-b-implementation.md` §4.1/§4.4.
+4. The storage-completeness item (§5.4 item 3 / §5.5 item 4) does not extend
+   to `maxCumulativeReanchorFee`, `reservationDissolutionTxMaxFee`,
+   `walletPendingDissolution` and `reservationRetryCreditActionNonce`, all
+   deliberately dropped from `BridgeState.Storage` before the M1 code snapshot,
+   consistent with (2) — see `m1-b-implementation.md` §4.5.
+
 Side-by-side comparison of the two candidate designs for a from-scratch,
 essentials-only m1. Both are rewrites rather than PR omissions, so neither
 deploys the 445 unreachable lines the stacked design carries (`roadmap.md`
@@ -51,6 +76,10 @@ dissolution absent and re-anchor still gated at `< dissolutionEligibleAt`, a
 position past its eligibility date would have no unpin path at all.
 
 ## 3. Lines of code
+
+*All figures below are additions-sums from PR diffs, not net line counts —
+net m1 content measures ~4,500 lines. See the unit warning after the table
+before citing any of these numbers.*
 
 | | A+ with router | A+ no router | B with router | B no router |
 |---|---|---|---|---|

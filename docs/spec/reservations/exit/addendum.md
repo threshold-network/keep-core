@@ -219,7 +219,7 @@ sequenceDiagram
     Note over B: still inside the dispute window - succeeds
     B->>B: refund escrowed mintedAmount -> Active
     Note over D,C: committee never had a chance to sign - nothing to revoke,<br/>no double-claim possible. Disarm reverts if attempted after the window elapses<br/>(main doc §3) - by then the committee's protocol may already have a valid<br/>co-signature, which no Ethereum-side refund could unwind.
-    Note over B: this immediate refund is what committee collusion targets (main doc §4);<br/>the proposed fix releases it only on SPV proof that the wallet re-anchored,<br/>which invalidates any early co-signature outright. A refund delay does not work -<br/>a signature has no expiry, so the attacker just waits it out.
+    Note over B: this immediate refund is what committee collusion targets (main doc §4) -<br/>the proposed fix releases it only on SPV proof that the wallet re-anchored,<br/>which invalidates any early co-signature outright. A refund delay does not work -<br/>a signature has no expiry, so the attacker just waits it out.
     D->>B: requestReservedRedemption (normal path, now that the wallet is back)
     W->>B: settles normally
 ```

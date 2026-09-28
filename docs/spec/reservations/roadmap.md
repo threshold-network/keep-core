@@ -1,7 +1,14 @@
 # UTXO Reservations — Milestone-Based Roadmap (create-only first release)
 
-Status: DRAFT — for review. Revised 2026-08-21 after a source re-verification
-that **reversed the earlier "cut #1092" decision** (§0.1).
+Status: DRAFT — for review. Last substantively revised 2026-09-24 (the Option
+B vault decision, §1.2/§2.2/§6/§7); earlier revisions: 2026-08-21 (reversed
+the earlier "cut #1092" decision, §0.1), 2026-08-23 (§5.1 line-count
+corrections), 2026-09-07 (§7 open-question resolutions).
+
+Goals, non-goals, functional requirements and user stories live in
+`requirements.md`; the M1 architecture, components and diagrams live in
+`architecture.md`. This document is the scope-decision history — read it for
+*why* the M1 surface is what it is, not as the requirement list itself.
 
 Objective: ship the smallest *reachable* surface, and make every later fix
 an upgrade rather than a migration. Agent-delegated rework is cheap, so a
@@ -58,8 +65,8 @@ Verified on both #1091 and #1093 branches:
 | Path | Gate | Reachable in m1? |
 |---|---|---|
 | Acceptance (`requestReservationAcceptance`) | permissionless (:401) | **Yes** — this is the product |
-| Redemption (`requestReservedRedemption`) | `msg.sender == self.reservationVault` (#1091 :584, #1093 :614) | Set by the vault, not by Bridge: the *shipped* vault calls it from `redeemReservation` (`ReservationVault.sol:293`) with **no pause**, so it is callable as-shipped. m1's vault must add the flag (§0.7) |
-| Renewal (`extendReservation`) | `msg.sender == self.reservationVault` (#1091 :1064, #1093 :1133) | **No** as shipped — `extendCustody` (`:367`) is gated by `renewalsPaused`, constructor-`true` (`:222`) |
+| Redemption (`requestReservedRedemption`) | `msg.sender == self.reservationVault` (#1091 :584, #1093 :614) | **No** — the M1 vault (commit `4d549e64`) has no `redeemReservation`/`retryRedeemReservation` at all. Under the 2026-09-24 Option B decision m2 ships them via a **new** vault deployment plus a depositor migration ceremony, not a flag flip on this one (§1.2, §2.2) |
+| Renewal (`extendReservation`) | `msg.sender == self.reservationVault` (#1091 :1064, #1093 :1133) | **No** — the M1 vault (commit `4d549e64`) has no `extendCustody` either, gated or otherwise. The reference stack (`feat/utxo-reservation-backing`) gated `extendCustody` (`:367`) by `renewalsPaused`, constructor-`true` (`:222`); Option B did not carry that pattern forward (§1.2, §2.2) |
 | Re-anchor (`requestReservationReanchor`) | permissionless while source is `MovingFunds`; `privileged` required while `Live` (:718-757) | **Yes** — and this is desirable (§1.5) |
 | Dissolution (`requestReservationDissolution`) | permissionless, post-eligibility only (:824, :880; router :302 has no modifier) | **Yes, on a timer** — deferred ~12 months by the term, then permanently open; must be wired (§0.6) |
 | Action timeout | permissionless (:911) | **Yes** — required cleanup |
@@ -83,36 +90,46 @@ writes them. Two knock-on effects worth stating outright:
   write must survive the rewrite (§0.7 item 3).
 
 Because redemption and renewal are **vault-gated**, the m1 control surface is
-the vault rather than Bridge code. There are two ways to use that and only one
-is reversible: **omitting** an entry point makes the path unreachable but
-closes it permanently (§0.7), whereas **shipping it behind a
-constructor-default pause flag** makes it unreachable now and reachable in m2
-by one owner transaction. Take the flag — and scope it to initiation only,
-never to settlement or accounting (`m1-b-implementation.md` §3). Note the
-shipped vault does this for renewal but not redemption, so redemption's flag
-is m1 work.
+the vault rather than Bridge code. §0.7 lays out two ways to use that: an
+omitted vault entry point cannot be reached later without a vault swap, while
+a flag-gated entry point can be unpaused by one governance transaction. **That
+choice is now settled the other way.** The 2026-09-24 Option B decision
+(`m1-b-implementation.md` §1/§3/§4.2) ships the m1 vault **without**
+redemption or renewal entry points at all — no `redeemReservation`,
+`retryRedeemReservation`, `extendCustody`, or pause flags for either path
+(verified against the M1 vault, commit `4d549e64`: 7 external functions,
+none of these) — and m2 restores both via a **new** vault deployment plus a
+depositor opt-in migration ceremony (§1.2, §2.2). The earlier claim that "the
+M1 vault does this for renewal but not redemption" no longer holds against
+that commit: it has no renewal pause flag either.
 
-**But "vault-side" is not automatically cheap, and the shipped vault already
-shows the cheap version.** `ReservationVault` is plain `Ownable`, not
+**"Vault-side" was never automatically cheap, and the reference-stack vault
+showed the cheap version for one path only — a design Option B did not
+carry forward.** `ReservationVault` is plain `Ownable`, not
 proxy-upgradeable (§2.2), and re-pointing `Bridge.reservationVault` requires
 `reservationTotalAmount == 0 && pendingReservedDeposits == 0`
-(`Reservation.sol:1263-1274`) — total quiescence. So an m1 vault that
-*omits* an entry point cannot gain it later while any position lives; that
-path is closed, not deferred.
+(`Reservation.sol:1263-1274`) — total quiescence. So a vault that *omits* an
+entry point cannot gain it later while any position lives; that path is
+closed, not deferred. This is the reasoning that originally recommended
+flag-gating m1's vault entry points (§2.2's now-superseded recommendation);
+Option B accepted the irreversibility instead (§0.7,
+`m1-b-implementation.md` §3/§4.2), so the table below describes the
+**reference-stack vault** (`feat/utxo-reservation-backing`, pre-Option-B),
+not what m1 ships.
 
-The shipped vault avoids this for renewal and not for redemption:
-
-| Path | Shipped vault | m2 cost |
+| Path | Reference-stack vault | Cost of adding this path later, given the guard above |
 |---|---|---|
-| Renewal | Entry point present (`ReservationVault.sol:367`), `renewalsPaused = true` set in the constructor (`:222`), `unpauseRenewals()` is `onlyOwner` (`:415-418`) | One owner transaction |
-| Redemption | `redeemReservation` present (`:293`) with **no pause flag** — `pauseRenewals`/`blockRenewal` (`:409`, `:424`) cover renewals only | Needs the flag added before launch, or a quiescence-gated vault swap |
+| Renewal | Entry point present (`ReservationVault.sol:367`), `renewalsPaused = true` set in the constructor (`:222`), `unpauseRenewals()` is `onlyOwner` (`:415-418`) | One owner transaction, on that stack |
+| Redemption | `redeemReservation` present (`:293`) with **no pause flag** — `pauseRenewals`/`blockRenewal` (`:409`, `:424`) cover renewals only | Needs the flag added before launch, or a quiescence-gated vault swap, on that stack |
 
-So the pattern §2.2 recommends for redemption is not new machinery: it is
-**copying renewal's constructor-paused flag one function over**, already
-written and audited in the same file. Any m1 that intends to reach a path in
-m2 must ship that path's entry point flag-gated — this applies with extra
-force to the A+/B rewrites, which cut renewal entirely
-(`m1-variant-comparison.md` §5.5).
+Neither function exists in the M1 vault at all (commit `4d549e64`; 7
+external functions, none of these — verified above). The pattern this table
+describes — copying renewal's constructor-paused flag onto redemption, "not
+new machinery" since it was already written and audited in the reference
+stack's file — was §2.2's original recommendation for m1's vault. Option B
+rejected it; see §2.2's "Current answer" for what m1 ships instead and the
+open question about why the migration cost was accepted over this
+alternative.
 
 ### 0.3 Minted tBTC is an ordinary fungible claim
 
@@ -197,7 +214,7 @@ turns on.
 | Layer | Replaceable by | Cost | Minimise in m1? |
 |---|---|---|---|
 | `ReservationRouter` (Bridge code via `delegatecall`) | Bridge implementation upgrade — `setReservationRouter` is once-only (`BridgeState.sol:1018-1021`), so replacing router code *is* a proxy-admin ceremony (invariant 4, §2) | The ceremony m2 needs anyway for its ~4,641 lines | **Yes — safe** |
-| `ReservationVault` (plain `Ownable`, immutables in bytecode, §2.2) | Deploying v2 and re-pointing `Bridge.reservationVault`, which `updateReservationParameters` gates on `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1263-1274`) | Total quiescence | **No — cannot be undone** |
+| `ReservationVault` (plain `Ownable`, immutables in bytecode, §2.2) | Deploying v2 and re-pointing `Bridge.reservationVault`, which `updateReservationParameters` gates on `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1263-1274`) | Total quiescence | **Yes, as of 2026-09-24** — Option B accepts the irreversibility below rather than flag-gating (see the note after item 3) |
 
 **In B the vault gate is unreachable while the product is in use.**
 `reservationTotalAmount` decrements only when a position closes, and B's close
@@ -223,17 +240,34 @@ Three consequences, and they point in opposite directions:
    eligibility date for any m1-era position, with the non-retroactive snapshot
    semantics (`:180-184`) unreconstructable.
 
-The shipped vault already demonstrates the pattern the gate requires, and
-applies it unevenly: `extendCustody` (`ReservationVault.sol:367`) is guarded by
-`renewalsPaused`, set `true` in the constructor (`:222`) with `unpauseRenewals`
-`onlyOwner` (`:415-418`), whereas `redeemReservation` (`:293`),
-`retryRedeemReservation` (`:469`) have **no pause at all** — that is the gap
-m1 must close. The in-kind fee pair (`:529`, `:568`) is also unpaused and
-**must stay that way**: both sit on the settlement/accounting path, which a
-pause flag may never reach (`m1-b-implementation.md` §3). m1 must add the redemption-side flag by copying
-renewal's pattern within the same file.
+**Superseded 2026-09-24 by the Option B vault decision**
+(`m1-b-implementation.md` §4.2). This paragraph originally instructed
+engineers to close the redemption gap by adding a pause flag, copying
+renewal's constructor-paused pattern. **Current answer:** Option B rejected
+that fix. The m1 vault ships minimal instead — no `redeemReservation`,
+`retryRedeemReservation`, `extendCustody`, or pause flags for either path
+(verified against the M1 vault, commit `4d549e64`: 7 external functions,
+none of these). The asymmetry above is exactly why that is expensive: m2 must
+reach redemption/renewal via a **new** vault deployment plus a depositor
+opt-in migration ceremony — the cost this section warned a flag would avoid
+(§1.2, §2.2). The in-kind fee pair (`financeInKindFee`, `repayInKindFeeDebt`)
+still ships unpaused, as this section always required — that part was never
+in question.
 
-### 0.8 A retiring wallet's last exit needs an explicit call that nothing makes
+### 0.8 A retiring wallet's last exit — automated by keep-core's re-anchor executor
+
+**Current answer:** the below-dust report is automated, not a manual duty.
+keep-core's `ReservationReanchorTask` (`pkg/tbtcpg/reservation_reanchor.go`,
+`reservations-epic` @ `f66f11240`) already calls
+`notifyMovingFundsBelowDustIfEligible` once a drained `MovingFunds` wallet's
+reservation count reaches zero, which submits `NotifyMovingFundsBelowDust`
+to the chain itself (:664-720; regression test
+`TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust`, :668). A
+genuine deadlock still exists only under wallet-slot saturation, where
+re-anchor itself has nowhere to drain to (§0.6/§4.1). The analysis below
+predates that automation (written 2026-08-21, before `#4274` wired the
+executor on 2026-09-03) and is kept as the reasoning trail for *why* the
+report must happen, not as a statement that it is still unclaimed.
 
 Added 2026-08-21 from a direct read of the wallet lifecycle, then **corrected
 the same day** - the first version of this section claimed a permanent deadlock
@@ -282,11 +316,14 @@ remaining route, and it is a call someone must choose to make.
 
 Two consequences:
 
-1. **The below-dust report is a mandatory keep-core duty, not optional
-   cleanup.** After the last re-anchor off a retiring wallet, an executor must
-   call `notifyMovingFundsBelowDust` or the wallet sits in `MovingFunds`
-   indefinitely - not blocked, just unattended. Add it to the duty list
-   alongside the re-anchor executor.
+1. **The below-dust report is a mandatory keep-core duty — and, as of
+   `#4274` (merged 2026-09-03), a built one.** After the last re-anchor off
+   a retiring wallet, something must call `notifyMovingFundsBelowDust` or
+   the wallet sits in `MovingFunds` indefinitely - not blocked, just
+   unattended. `ReservationReanchorTask.Run` now does this itself
+   (`pkg/tbtcpg/reservation_reanchor.go:664-720`) immediately after the
+   count-draining re-anchor that made it possible, so it needs no separate
+   duty-list entry (§5 item 5).
 2. **The genuine deadlock is saturation-specific.** If no free slot exists,
    re-anchor cannot drain the count, so all three exits are shut at once:
    closing is blocked on the count, the timeout is unreachable once funds are
@@ -312,7 +349,8 @@ an extraction order, and `timeline-estimate.md` §7 re-prices m1 from "review +
 merge + rework" to writing 5,261 Solidity lines fresh.
 
 What m1 implements: routing and permanent reveal-time classification ·
-a minimal `ReservationRouter` (§1.6) · two-phase acceptance with
+a minimal `ReservationRouter` (22 entry points: 11 state-changing + 11
+views; `m1-b-implementation.md` §2) · two-phase acceptance with
 designated-wallet binding · mint and the `mintedAmount == anchorAmount`
 backing invariant · **unbounded** re-anchor · action timeout and unwind ·
 stale-deposit cleanup · stranding · caps, governance parameters and the new
@@ -328,12 +366,22 @@ global position cap · the **complete** storage layout.
   deployed-and-dead as in the whole-PR plan. m2 writes it (~4,641 production
   lines, `m1-variant-comparison.md` §5.1).
 
-**Vault-side is the opposite and is a launch gate.** The two layers upgrade
-differently (§0.7): router code is replaceable by a Bridge implementation
-upgrade, but `ReservationVault` is effectively immutable once positions exist,
-and in B they never all close. So the m1 **vault must ship the full entry-point
-surface behind pause flags**, even though m1 calls none of it. Omitting a
-vault entry point in B does not defer that path — it closes it.
+**Vault-side used to be treated as the opposite of the router, and still is
+in one narrow sense.** The two layers upgrade differently (§0.7): router code
+is replaceable by a Bridge implementation upgrade, but `ReservationVault` is
+effectively immutable once positions exist, and in B they never all close.
+**Current answer (Option B, decided 2026-09-24):** the m1 vault ships minimal
+anyway, accepting that irreversibility rather than engineering around it — no
+redemption or renewal entry points, flag-gated or otherwise (verified against
+the M1 vault, commit `4d549e64`). m2 restores both through a **new**
+vault deployment plus a depositor opt-in migration ceremony
+(`m1-b-implementation.md` §3/§4.2). That migration is precisely the cost §2.2
+originally argued a flag-gated vault would avoid; §2.2 is corrected
+accordingly below. The superseded plan read: "the m1 vault must ship the full
+entry-point surface behind pause flags, even though m1 calls none of it —
+omitting a vault entry point in B does not defer that path, it closes it."
+The reasoning about irreversibility there is still correct; the conclusion it
+drove (flag everything) is not what m1 built.
 
 ### 1.3 Launch posture (decided)
 
@@ -344,7 +392,7 @@ exists until governance flips the switch.
 
 ### 1.4 Parameters (decided, restated in upper-stack vocabulary)
 
-`gracePeriod` does not exist on the shipped stack (§0.1), so the earlier
+`gracePeriod` does not exist in the M1 code (§0.1), so the earlier
 "12 months + generous grace" becomes:
 
 | Parameter | m1 value | Note |
@@ -421,6 +469,15 @@ redemption. Add a test asserting the fields are non-zero after acceptance.
 
 ### 2.2 m2 needs a Bridge upgrade under B, and the vault is NOT upgradeable
 
+**Current answer:** m2 needs a full Bridge implementation upgrade
+(redemption/renewal code is absent from m1's Bridge, not just gated);
+`ReservationVault` is plain `Ownable` and cannot be upgraded in place; and —
+per the 2026-09-24 Option B decision — m1 ships that vault minimal rather
+than flag-gating a redemption path, so m2 also deploys a **new** vault and
+runs a depositor migration ceremony. The paragraphs below trace how this
+answer was reached across three corrections, ending with the (now
+superseded) flag-gated recommendation this section originally made.
+
 **Premise corrected 2026-08-21.** This section previously read "m2 needs no
 Bridge upgrade" on the grounds that "redemption and renewal are vault-gated
 (§0.2) and their Bridge-side code ships in m1, enabling them is a
@@ -469,25 +526,42 @@ cannot happen until roughly a year after the *last* position was accepted —
 and each new acceptance pushes that date out. A vault swap is effectively
 unavailable for as long as the product is being used.
 
-**Recommended m1 vault design (avoids the swap entirely):** ship the m1
+**Superseded 2026-09-24 by the Option B vault decision.** This subsection
+used to recommend shipping the m1 vault with the redemption entry point
+present but disabled by an owner-settable flag, "avoiding the swap entirely."
+That recommendation was rejected. It is kept below, struck through, because
+it is the exact argument the 2026-09-24 decision weighed and declined — not
+because it was wrong about the swap's cost, which the rest of this section
+still documents accurately.
+
+~~**Recommended m1 vault design (avoids the swap entirely):** ship the m1
 vault **with** the redemption entry point present but disabled by an
 owner-settable flag, so enabling it later is a governance transaction rather
 than a swap the guard blocks indefinitely. This keeps create-only behaviour
 (unreachable while the flag is false). Costs: the vault's redemption plumbing
 is deployed and audited in m1, and the flag becomes a governance-safety item
 (accidental enable). Given the vault cannot be upgraded *and* the swap is
-gated on total quiescence, this is no longer a convenience — **without the
+gated on total quiescence, this is no longer a convenience — without the
 flag, m2's in-kind redemption promise has no reachable delivery path while
-positions keep being created.**
+positions keep being created.~~
 
-**Two claims here corrected 2026-08-21.** This previously said the flag makes
-m2 "a single governance transaction (`setRedemptionsEnabled(true)`)" and called
-it "the same principle already accepted for the Bridge-side redemption code
-(§0.2/§1.2)". Both assumed the whole-PR plan. Under B the Bridge-side
-redemption code is **not** deployed, so that principle was never accepted for
-it, and the flag flip is one step of a Bridge upgrade rather than the whole of
-m2. The flag's value is unchanged and is in fact higher: it is what keeps the
-path reachable at all (§3.1).
+**Current answer:** the m1 vault ships minimal instead
+(`m1-b-implementation.md` §3/§4.2, commit `4d549e64`) — no redemption entry
+point, flagged or otherwise. m2 reaches redemption/renewal through a **new**
+vault deployment plus a depositor opt-in migration ceremony, i.e. exactly the
+"swap the guard blocks indefinitely" this paragraph warned against. The
+source material available to this pass does not record why that cost was
+accepted over the flag; that rationale is an open gap, not a design decision
+still pending.
+
+**Two claims here corrected 2026-08-21, now both moot under Option B.** The
+struck-through paragraph previously said the flag makes m2 "a single
+governance transaction (`setRedemptionsEnabled(true)`)" and called it "the
+same principle already accepted for the Bridge-side redemption code
+(§0.2/§1.2)". Both assumed the whole-PR plan; under B the Bridge-side
+redemption code is **not** deployed either way, so neither claim describes
+current or superseded reality — both were about a plan that no longer exists
+in either form.
 
 ### 2.3 The Bitcoin side is the only true one-way door
 
@@ -501,25 +575,30 @@ Pre-launch scrutiny belongs here.
 m2 is a comparable project, not a follow-up:
 5,261 production Solidity lines in m1 against 4,641 in m2, a ratio of
 **1.13 : 1** (`m1-b-implementation.md` §6; derived from
-`m1-variant-comparison.md` §5.1's 3,731 plus dissolution's 910).
+`m1-variant-comparison.md` §5.1's 3,731 plus dissolution's 910). **This ratio
+predates the 2026-09-24 Option B vault decision and has not been
+re-derived** (§5.1): it counts a redemption pause flag inside m1's 5,261 and
+no new-vault-deployment cost inside m2's 4,641, both of which the decision
+changed (§1.2, §2.2).
 
 ### 3.1 What m2 restores
 
-| Capability | Approximate production Solidity | Entry point m1 must have shipped |
+| Capability | Approximate production Solidity | What m1 has for this path |
 |---|---|---|
-| In-kind whole redemption, veto integration, retry credit, late settlement | ~3,035 with renewal and storage | `redeemReservation` (`ReservationVault.sol:293`), `retryRedeemReservation` (`:469`) - **flag-gated, present** |
-| Renewal / term extension | included above | `extendCustody` (`:367`) - already flag-gated as shipped |
-| Partial redemption, 1-in-2-out (`#1096`) | ~696 | shares the redemption entry points |
+| In-kind whole redemption, veto integration, retry credit, late settlement | ~3,035 with renewal and storage | Nothing — no `redeemReservation`/`retryRedeemReservation` in the m1 vault (commit `4d549e64`); m2 deploys a **new** `ReservationVault` carrying them plus a depositor migration ceremony (§1.2, §2.2) |
+| Renewal / term extension | included above | Nothing — no `extendCustody` in the m1 vault either; same new-vault path as redemption |
+| Partial redemption, 1-in-2-out (`#1096`) | ~696 | Nothing; shares the new vault's redemption entry points once m2 ships them |
 | Dissolution restored | ~910 | none needed: dissolution is Bridge-side only |
 
-Redemption and renewal are **vault-gated**, so the flag flip is what makes
-their vault entry points reachable at all (§2.2). It is **necessary but not
-sufficient**: under B the Bridge-side code for those paths is absent, so m2
-must ship it first. The flag turns m2 from impossible into possible; it does
-not make it cheap. Dissolution is **not** vault-gated: it is permissionless
-(§0.6) and lives entirely in Bridge code, so it needs no vault action at all,
-only router and library code plus a keep-core executor. These two halves of m2
-have different risk profiles and need not ship together.
+Redemption and renewal are **vault-gated**, but under Option B (2026-09-24)
+m1 ships none of that gate — m2 must deploy a whole new vault and run the
+migration ceremony before those entry points exist at all (§2.2). This is not
+merely necessary-but-not-sufficient the way a flag flip would have been; it
+is the full cost, both the Bridge-side code (~3,035+696 lines, absent from
+m1) and the vault redeploy. Dissolution is **not** vault-gated: it is
+permissionless (§0.6) and lives entirely in Bridge code, so it needs no vault
+action at all, only router and library code plus a keep-core executor. These
+two halves of m2 have different risk profiles and need not ship together.
 
 ### 3.2 What m2 inherits from the B decision
 
@@ -542,13 +621,22 @@ chores, and none of them is forced by the code:
    positions' only exit remains the pool. The term converts a launch blocker
    into a scheduling commitment.
 
-### 3.3 What m2 must not have to do
+### 3.3 What m2 must not have to do — updated: the vault half no longer holds
 
-m2 must be an **upgrade, not a migration**. That requires m1 to have shipped:
-the complete storage layout (§2.1), every vault entry point (§0.7), and every
-field m2 reads, written where an m1 path writes it
-(`milestone-inventory.md`). Failing any of these turns a flag flip into a
-vault redeploy that active positions block.
+**Current answer:** m2's *Bridge*-side upgrade is still constrained this way
+— the complete storage layout (§2.1) and every field m2 reads must already be
+written by an m1 path (`milestone-inventory.md`), so Bridge code is an
+upgrade, not a migration. **The vault half of this goal was explicitly
+abandoned by the 2026-09-24 Option B decision** (§1.2, §2.2): m1 does not
+ship every vault entry point, so m2's vault side genuinely *is* a migration —
+a new `ReservationVault` deployment plus a depositor opt-in ceremony, not a
+flag flip. That is an accepted cost, not a failure to meet this goal.
+
+The original goal, still true for Bridge storage: m2 must be an **upgrade,
+not a migration**, on the layout side. That requires m1 to write the
+complete storage layout (§2.1) and every field m2 reads, written where an m1
+path writes it (`milestone-inventory.md`). Failing this turns a Bridge
+upgrade into a full layout migration — still true, and still a launch gate.
 
 ## 4. How m1 ships relative to the existing PRs
 
@@ -637,31 +725,44 @@ point to leave unwired and no slashing vector to arm (§0.6).
    all** - `pkg/tbtcpg` has no reservation task and the chain interface has no
    submission method - so this is new code rather than rework
    (`milestone-inventory.md` §2.9, C-8).
-2. **m1 `ReservationVault`** — exposes the acceptance/credit path, plus the
-   redemption entry point **disabled behind an owner-settable flag** per
-   §2.2's recommended design (the vault cannot be upgraded, and a swap is
-   blocked by the guard until every position closes, so the flag is what
-   gives m2 a reachable delivery path). Renewal keeps its entry point:
-   `extendCustody` (`ReservationVault.sol:367`) ships as-is, already gated by
-   `renewalsPaused` set `true` in the constructor (`:222`) — under §0.7's rule
-   an omitted vault entry point is closed, not deferred, so nothing is dropped
-   here.
+2. **m1 `ReservationVault`** ships minimal (Option B, 2026-09-24) — the
+   acceptance/credit path plus the settlement-path fee functions
+   (`financeInKindFee`, `repayInKindFeeDebt`) only. Redemption and renewal
+   entry points are entirely absent (no `redeemReservation`,
+   `retryRedeemReservation`, `extendCustody`, no pause flags), to be
+   introduced by m2 via a new vault deployment and depositor migration
+   ceremony (§1.2, §2.2). §0.7's irreversibility rule still explains why
+   that migration is costly — it does not mean m1 must avoid it, since
+   avoiding it is exactly what Option B declined to do.
 3. **Anchor-index reconciliation** across `#1091`/`#1094` (§4.3 item 3).
 4. **Parameter and activation wiring** — §1.4 values, the deploy-inert
    switch, and governance runbook steps.
-5. **Executor duty: re-anchor on rotation** — prompted by
-   `WalletMovingFunds`, since §1.5's unpinning depends on it being performed.
-   Without this the pinning risk returns in practice.
-6. **Monitoring** — anchored wallets (pinning watch), earliest
-   `dissolutionEligibleAt` (**both the promise clock and the date the §0.6
-   slashing vector arms**), pending dissolution actions approaching timeout,
-   pooled-liquidity exposure vs cap.
+5. **Executor duty: re-anchor on rotation — already implemented, not a
+   remaining gap.** `pkg/tbtcpg/reservation_reanchor.go`'s
+   `ReservationReanchorTask` (keep-core `reservations-epic` @ `f66f11240`,
+   wired by `#4274`, merged 2026-09-03) drains a `MovingFunds` wallet's
+   reservations via re-anchor proposals, prompted by the wallet entering
+   `MovingFunds`, and — once none remain — calls
+   `notifyMovingFundsBelowDustIfEligible` (:664-720) to close the §0.8 gap in
+   the same task. Regression test:
+   `TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust` (:668).
+   §1.5's unpinning guarantee depends on this task continuing to run; it is
+   no longer unbuilt.
+6. **Monitoring** — anchored wallets (pinning watch); earliest
+   `dissolutionEligibleAt` per position, tracked as **the promise clock
+   only** (the §0.6 slashing vector does not arm in B — there is no
+   `requestReservationDissolution` entry point to leave unwired, §0.6/§4.4);
+   pooled-liquidity exposure vs cap. "Pending dissolution actions
+   approaching timeout" is dropped from this list: no dissolution action
+   type exists in m1 to monitor.
 7. **Tests** — acceptance happy path; timeout and stale-deposit cleanup; cap
-   enforcement; a storage-completeness assertion (§2.1); a **reachability
-   test** proving redemption and renewal revert for every caller other than
-   the vault; and a **dissolution-timeout test** proving the wallet is
-   slashed when a permissionless dissolution goes unexecuted (§0.6) — the
-   test that justifies wiring it.
+   enforcement; a storage-completeness assertion (§2.1). Two items from an
+   earlier version of this list no longer apply and are removed: a
+   **reachability test** for redemption/renewal vault callers (there is no
+   `redeemReservation`/`extendCustody` entry point in the m1 vault to test
+   against — Option B, 2026-09-24, §1.2/§2.2) and a **dissolution-timeout
+   test** (there is no `requestReservationDissolution` entry point in m1 at
+   all, §0.6/§4.4). Both move to m2 once their respective code ships.
 
 ## 5.1 Code mass: m1 vs m2, measured (2026-08-21)
 
@@ -671,6 +772,15 @@ whole-PR plan: m1 = 7 PRs, 9,206 production lines, 445 deployed-but-unreachable,
 93% of the feature audited in m1, dissolution reachable. Under B none of that
 holds — m1 is a 5,261-line rewrite with no dead weight, and dissolution is not
 reachable at all. The live figures are §3 and `m1-variant-comparison.md` §3/§5.1.
+
+**Those "live" figures are themselves stale as of 2026-09-24.** The 5,261
+(m1) / 4,641 (m2) split (§3) was derived assuming the flag-gated-vault plan
+(pre-Option-B §0.7/§1.2/§2.2): it counts a redemption pause flag inside the
+5,261 and no new-vault-deployment cost inside the 4,641. Both totals move
+under Option B — down in m1 (no flag, no `financeInKindFee`/
+`repayInKindFeeDebt` pause wiring to add) and up in m2 (a second
+`ReservationVault` deployment plus migration code) — and have not been
+re-measured post-decision.
 
 Measured from the PR diffs (`gh api .../pulls/N/files`, additions only) and
 function-level classification of the four reservation contracts at the m1 tip
@@ -752,7 +862,7 @@ Nearly all of it is keep-core Go, not Solidity:
 | Item | Est. LoC | Basis |
 |---|---|---|
 | keep-core two-phase rework (acceptance + re-anchor + **dissolution**) | ~1,400-1,900 prod Go, ~1,000-1,500 test Go | `#4238`'s 919+914 largely rewritten; 3 of 4 action types, nonce-carrying, 6 stubbed `TbtcChain` methods implemented |
-| Redemption pause flag on the vault | ~30 prod, ~80 test | Mirrors the shipped `renewalsPaused`/`pauseRenewals` pattern (`ReservationVault.sol:381,409`) |
+| ~~Redemption pause flag on the vault~~ (superseded 2026-09-24) | 0 — not built | Option B ships the vault without redemption/renewal entry points at all (§1.2, §2.2); the deferred cost moves to m2's new-vault-deployment line below |
 | Anchor-index reconciliation (`#1091` :465 vs `#1094`) | ~20-60 prod, ~100 test | §4.3 item 3 |
 | m1-specific tests (reachability, storage-completeness, dissolution-timeout slashing) | ~200-400 test | §5 item 7 |
 | Params, deploy and activation wiring | ~100-200 | §1.3/§1.4 |
@@ -764,7 +874,7 @@ Nearly all of it is keep-core Go, not Solidity:
 | Item | LoC | Note |
 |---|---|---|
 | `#1096` partial redemption | 3,259 | **Already written** — an open PR, not new work |
-| Enable redemption | ~1 tx | `unpauseRedemptions()` under the recommended design; otherwise a blocked vault swap (§2.2) |
+| Enable redemption | not applicable | Superseded 2026-09-24: the "recommended design"'s owner-settable flag was not built; m2 must deploy a **new** `ReservationVault` with `redeemReservation`/`retryRedeemReservation` and run the depositor migration ceremony (§2.2). That vault-deployment-plus-migration cost is not captured in this table's LoC estimates and has not been re-derived post-decision (§5.1). |
 | keep-core redemption proposal + partial assembler | ~300-600 prod Go, ~300-500 test Go | The one genuinely new build |
 | **New code to write** | **~600-1,100** | Everything else exists |
 
@@ -1004,12 +1114,20 @@ are kept with their reversal marked, per this set's convention.
    `m1-b-implementation.md` is the build scope.
 2. **Create-only m1** — users create only. *Restated under B:* redemption and
    renewal do not "exist on-chain but unreachable" as in the stacked plan;
-   their **Bridge code is absent** and m2 writes it. Only their *vault* entry
-   points ship, behind pause flags (§0.7).
-3. **The vault ships its full entry-point surface behind flags** (§0.7,
-   `m1-b-implementation.md` §3) — because re-pointing the vault needs
-   quiescence B cannot reach, an omitted vault path is closed, not deferred.
-   Flags gate **initiation only**, never settlement or accounting.
+   their **Bridge code is absent** and m2 writes it. Their *vault* entry
+   points are absent too (Option B, 2026-09-24) — m2 restores both via a new
+   vault deployment and depositor migration ceremony, not a flag flip (§1.2,
+   §2.2).
+3. **The vault ships minimal, not behind flags** (Option B, decided
+   2026-09-24, superseding the item below) — `ReservationVault` (commit
+   `4d549e64`) has no `redeemReservation`, `retryRedeemReservation`,
+   `extendCustody`, or pause flags of any kind. Re-pointing the vault still
+   needs quiescence B cannot reach while in use (§0.7), so this is an
+   accepted migration cost for m2, not a gap m1 engineers around. The
+   superseded version of this item read: "the vault ships its full
+   entry-point surface behind flags... flags gate initiation only, never
+   settlement or accounting" — kept below under "Reversed by the B decision"
+   for the history.
 4. **A global active-position cap is a launch gate**, not an option
    (`m1-b-implementation.md` §4.1) — without it B's saturation ends in seized
    operator stake and stranded depositors.
@@ -1042,6 +1160,13 @@ are kept with their reversal marked, per this set's convention.
   keep-core m1 needs **acceptance and re-anchor only** — B's one genuine
   saving, ~300-500 production Go.
 
+- ~~**The vault ships its full entry-point surface behind flags.**~~
+  Reversed 2026-09-24 by the Option B vault decision (item 3 above): the
+  vault ships minimal instead, with no redemption/renewal entry points or
+  pause flags of any kind (commit `4d549e64`). Re-pointing it still needs
+  total quiescence (§0.7), so the migration cost this reversed item tried to
+  avoid is now an accepted m2 cost (`m1-b-implementation.md` §3/§4.2).
+
 ## 7. Open questions for review
 
 Pruned 2026-08-21: items 2, 5, 6 and 7 were settled by the variant B decision
@@ -1053,14 +1178,20 @@ and are recorded as resolved rather than deleted.
    of design partners, given the promise rests on an m2 governance action?
    B sharpens this: there is no dissolution either, so a position has **no
    owner-side exit at any age** in m1 (§6, reversed item 2). **RESOLVED
-   2026-09-07:** accept as-is, ship under the existing pause-flag +
-   active-position-cap mitigations (`m1-b-implementation.md` §4.1, §5);
-   disclose the no-exit-until-m2 risk explicitly as part of design-partner
-   activation. No new code.
+   2026-09-07:** accept as-is, ship under the active-position-cap mitigation
+   (`m1-b-implementation.md` §4.1, §5); disclose the no-exit-until-m2 risk
+   explicitly as part of design-partner activation. No new code.
+   **Note (2026-09-24):** the "pause-flag" half of this mitigation no longer
+   applies — the Option B vault decision ships the vault without a
+   redemption pause flag at all (§1.2, §2.2), so the accepted mitigation is
+   the active-position cap alone; the risk disclosure gets, if anything,
+   sharper (no exit until m2 ships a new vault and migration, not until a
+   governance unpause).
 2. Concrete cap values — `reservationMaxTotalAmount`, and now also
    `maxActiveReservations` (`m1-b-implementation.md` §4.1), which must sit
    below `liveWalletsCount x maxReservationsPerWallet` with margin.
-   **RESOLVED 2026-09-07:** add the on-chain relational check
+   **Decision RESOLVED 2026-09-07 (implementation pending — see below):**
+   add the on-chain relational check
    (`activeReservationsCount < maxActiveReservations <=
    liveWalletsCount x maxReservationsPerWallet`), **enforced at acceptance
    time** (alongside the existing `activeReservationsCount <
@@ -1126,14 +1257,18 @@ and are recorded as resolved rather than deleted.
 
 ### Settled by the B decision
 
-- **Flag-gated vault design — approved and now mandatory,** not merely
+- ~~**Flag-gated vault design — approved and now mandatory,** not merely
   recommended (§0.7, §6 item 3). Under B the redeploy alternative is not a
   hazard to weigh but an unreachable path, since draining
   `reservationTotalAmount` to zero requires terminating every custodying
   wallet. Scope correction from the original wording: the flag covers
   `redeemReservation` and `retryRedeemReservation` only — never
-  `financeInKindFee` or `repayInKindFeeDebt`, which sit on the settlement path
-  (`m1-b-implementation.md` §3).
+  `financeInKindFee` or `repayInKindFeeDebt`, which sit on the settlement
+  path (`m1-b-implementation.md` §3).~~ **Reversed 2026-09-24 by the Option
+  B vault decision** (§1.2, §2.2, §6 item 3): the "unreachable path"
+  reasoning above was correct, but the decision accepted that cost rather
+  than building the flag. The vault ships minimal — the redeploy/migration
+  this bullet called a hazard to avoid is now the plan.
 - **Does deploying unreachable-but-audited redemption code count against the
   surface objective?** Moot. B does not deploy it at all; the Bridge-side code
   is absent, so there is no unreachable mass to justify.

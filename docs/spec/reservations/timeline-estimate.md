@@ -1,10 +1,11 @@
 # UTXO Reservations — Timeline Estimate (with testing hardening folded in)
 
 Status: `[INFERENCE]` throughout — reasoned estimate, not a number the team
-has published or committed to. Baseline assumes one engineer with heavy
-agent leverage (see `feature-spec.md` §16 and the original
-completion-estimate discussion for the pre-testing baseline). Testing scope
-is `testing-plan.md`.
+has published or committed to (every week/day figure below inherits this
+marker; none is a published or committed number). Baseline assumes one
+engineer with heavy agent leverage (see `feature-spec.md` §16 and the
+original completion-estimate discussion for the pre-testing baseline). Testing
+scope is `testing-plan.md`.
 
 ## 1. Baseline (before folding in testing recommendations)
 
@@ -38,7 +39,7 @@ its setup + first runs, and sheds its tail into the audit window.
 | Fork-based e2e lifecycle test (reserve->accept->settle->renew->partial-redeem->dissolve against a mainnet fork + Bitcoin regtest) | 4-6 days | ~3-4 days | Partially overlaps with the runbook's already-budgeted "fork dry-run of activation sequence" (2-3 days), but is larger in scope than that dry-run alone. |
 | Multi-signer simulated integration test in keep-core (scale existing single-node harness to N=`GroupSize` signers, full lifecycle through real coordination rounds) | 5-7 days | ~4-5 days | Needs the coordination wiring done first, so it's mostly sequential after that lands; some overlap possible with fork e2e work above (different repo, different engineer-agent workstream). |
 | TLA+ protocol model of the two-phase state machine | 3-5 days | ~1-2 days | Best done early/in parallel with implementation (it's meant to inform the design, not just check it after the fact) — largely absorbs into the existing engineering window if started on day one instead of at the end. |
-| **Subtotal, pre-audit testing work** | **20-31 days raw** | **~14-19 days net** | |
+| **Subtotal, pre-audit testing work** | **19-31 days raw** | **~14-19 days net** | |
 
 ### During-audit (parallel, ~0 added critical-path time)
 
@@ -196,6 +197,11 @@ frequency data later justifies reopening the exit decision.
 
 ## 6. Effect of the create-only milestone split (2026-08-21)
 
+**Superseded by §7.** The create-only-split reasoning below still assumes
+the stacked-PR delivery path described in §1; read alongside §7 for the
+current picture (the two "Reversed by the B decision" notes inline below
+point at the parts §7 corrects).
+
 `roadmap.md` splits delivery into a create-only m1 and a later m2. The
 numbers above are **unchanged** by that split, for reasons worth stating
 because the intuitive expectation is a reduction:
@@ -230,6 +236,10 @@ because the intuitive expectation is a reduction:
 redemption must exist, not how much must be built and audited before launch.
 
 ## 7. Effect of the variant B decision (2026-08-21)
+
+**Current, live as of 2026-09-28.** Variant B is still the milestone-1
+decision (`roadmap.md` §1; unreversed since 2026-08-21) — this section, not
+§5-§6, is the up-to-date read of the timeline effect.
 
 The milestone 1 plan was officially changed on 2026-08-21 from the stacked whole-PR path (eight PRs merged sequentially) to variant B: an essentials-only rewrite of m1. This document's baseline (§1) and prior revisions (§5-§6) still describe the stacked plan; this section records the delta introduced by the B decision, following the doc's convention of retaining superseded analysis and marking it as such.
 

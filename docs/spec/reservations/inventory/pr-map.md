@@ -1,5 +1,7 @@
 # PR attribution map (measured 2026-08-21)
 
+**Status vs M1 code (2026-09-28):** the branch-drift counts in §2 and the `#1102`-ancestry table in §3 were independently re-measured against the live fetched branches in `tbtc-v2-frqjv7` on 2026-09-28 (`git rev-list --left-right --count` for the #1088/#1090/#1091/#1092 base...head pairs, `git merge-base --is-ancestor 3566e059` for the four branches in §3): every figure still matches exactly (2/25, 0/10, 13/37, 5/12; fold present on core/router, absent on guards/partial-redemption). §6's `keep-core #4238` row is stale - see the inline note there. Everything else in this document holds at its stated 2026-08-21 measurement date.
+
 All figures from `git` against a `tbtc-v2` clone
 with every branch ref fetched. Diffs are `origin/<base>...origin/<head>`, so each
 row is that PR's own contribution relative to its immediate predecessor.
@@ -171,7 +173,7 @@ Ranked by how expensive it is to get wrong.
 | #1095 | Docs and one test line | **Reference only** - no production code |
 | #1096 | Partial reserved redemption (1-in-2-out) | **Skip** - redemption is m2 in whole and in part |
 | #1102 | 30 review fixes on `#1088` | **Extract, mandatory** - and note it is absent above `#1091` |
-| keep-core #4238 | Wallet-side two-phase type layer, no executor (C-8) | **Build on it** (D-25) - the type layer is reusable; m1 supplies the executor it lacks. Corrected 2026-08-21: this cell previously said "Rewrite - written against the superseded single-phase design", which C-8 refutes and which contradicted this row's own description cell |
+| keep-core #4238 | Wallet-side two-phase type layer, no executor (C-8) | **Build on it** (D-25) - the type layer is reusable; m1 supplies the executor it lacks. Corrected 2026-08-21: this cell previously said "Rewrite - written against the superseded single-phase design", which C-8 refutes and which contradicted this row's own description cell. **M1 code (2026-09-28):** the executor `#4238` lacked has since been built, but on the `reservations-epic` branch (tracked by PR #4282, via merged PR #4274 "wire reservation executors and watchers"), not on `#4238`'s own branch. GitHub (checked 2026-09-28): `#4238`'s title now reads "...(previous end-to-end attempt — see #4282 for M1)" - `#4238` itself is now explicitly framed by its own author as a superseded prior attempt, not built on further |
 
 ## Open questions
 

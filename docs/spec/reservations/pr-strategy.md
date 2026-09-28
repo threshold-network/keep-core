@@ -17,7 +17,7 @@ Measured facts from `inventory/pr-map.md`:
 - One standalone keep-core PR #4238 provides a reusable two-phase type layer but no executor (`milestone-inventory.md` C-8).
 - Milestone 1 is a rewrite (variant B with minimal router), so the stacked PRs are reference material only, not a delivery vehicle.
 
-Constraint: Milestone 1 must ship creation, custody and re-anchoring, omitting dissolution, redemption and renewal. The reservation vault is not upgradeable (plain `Ownable`), so its entry points must ship in Milestone 1 with initiation disabled behind a pause flag (per `roadmap.md` §0.7 and established fact 1).
+Constraint: Milestone 1 must ship creation, custody and re-anchoring, omitting dissolution, redemption and renewal. The reservation vault is not upgradeable (plain `Ownable`); this section originally required its entry points to ship in Milestone 1 with initiation disabled behind a pause flag (per `roadmap.md` §0.7 and established fact 1) — **superseded 2026-09-24 by the Option B vault decision** (`m1-b-implementation.md` §3, commit `661b06a04`): the M1 vault instead ships deliberately minimal, with redemption and renewal delivered in m2 via a new vault deployment and depositor migration ceremony, not a pause-flag flip on this vault. See §4.3's "F `m1/vault-pause-flags`, superseded 2026-09-24" note below for what was actually implemented.
 
 ## 2. Assessment of Five Delivery Options
 
@@ -136,7 +136,7 @@ Milestone 1 must ship the complete storage layout atomically (no live reservatio
 |---------------------------------|------------|--------------|----------------------------|------------------------|
 | `m1/storage-layout` | #1088, #1090, #1091, #1092, #1093, #1094, **#1096**, **#1102** | Full storage layout declaration (all fields, enums, structs) and governance parameters. Must be written exactly as in m2 (no omissions). **#1096 is required** for three declare-only fields that exist only on the partial branch — `ReservationAction.isPartial`, `retryCreditSourceNonce`, `BridgeState.Storage.reservationRetryCreditActionNonce` (`milestone-inventory.md` §4). **Also required, ported from `#1102`** (not extracted from `#1090`'s fold branch — §7): `ReservationRequest.cumulativeReanchorFee`, `maxCumulativeReanchorFee`, `reservationDissolutionTxMaxFee`, and a re-derived `BridgeState.Storage.__gap` (do not copy `#1102`'s own `__gap` number — it was computed against a different field set). All three ship **declare-only**: no m1 path writes or reads them, because the 2026-08-23 lever-4 decision rejected the flat ceiling. They are declared anyway per Rule 5 and `m1-b-implementation.md` §4.5 — a field a later milestone reads cannot be added while reservations are live — which `milestone-inventory.md` §1.3 calls "the load-bearing one" for `cumulativeReanchorFee` specifically, since re-anchor settlement writes the claim down each hop and the cumulative total is unrecoverable from surviving state. **History: an edit on 2026-08-24 struck these three fields from this row, reading the lever-4 decision's cost sentence ("adds a `ReservationRequest` storage field ... plus a parameter validated only `> 0`") as rejecting the declarations too. That edit was wrong and is reverted. Row 140 below already drew the line correctly on 2026-08-23 — lever 4 drops the *check*, not the declaration — and the 2026-08-24 edit was made without reading it.**  **Also required, and missed until 2026-08-24: `activeReservationsCount` and `maxActiveReservations`.** `milestone-inventory.md` §2.1 lists both as m1 fields that m1 **writes and reads**, with no extraction source, and §4.1 of `m1-b-implementation.md` makes them a launch gate — they convert variant B's saturation cliff into a revert. Declared as `uint32`s, which pack into the free tail of the fee-parameter slot, so `__gap` stays 32. PR #A declares them only; the acceptance-time cap check, the counter's increment and decrement sites, and the paired router view are new work owned by PR #B. Assert the layout field-for-field against §2.1 and §4 — `m1-b-implementation.md` §4.5 is a launch gate. | +538 -1 measured | First: foundation. No behavior depends on it yet, but all later PRs require these declarations. |
 | `m1/router-minimal` | #1090 (post-#1102) through **#1094** — verified 2026-08-21: only `submitReservationProof` and `updateReservationParameters` exist at #1090; `requestReservationAcceptance`/`requestReservationReanchor`/`notifyReservationActionTimeout` first appear at #1091, `updateReservationCaps` at #1093, `notifyStaleReservedDeposit`/`notifyReservationStranded` at #1094 (#1102 does not touch `ReservationRouter.sol`, so no fold gap here) | Minimal router: 8 retained entry points (acceptance, re-anchor, submitProof, timeout, stale deposit, stranding, update parameters, update caps), 11 views, 1 new view (`activeReservationsCount` — genuinely new, not present at any source tip), 4 delegatecall invariants, EIP-170 workaround. | +600 -200 | Second: depends on storage layout. Enables entry-point stubs. |
-| `m1/acceptance-core` | #1091 (acceptance half) + **#1093** | Two-phase acceptance: request side (vault set, deposit revealed, wallet Live, nonce increment), proof side (SPV, consumeAcceptedDeposit, emit events), settlement path (writes `expiresAt`, `dissolutionEligibleAt`, `mintedAmount`, `anchorAmount`, `state=Active`, external mint). **Extract `#1093` unmerged (§7, corrected 2026-08-22)**: `#1091`-`#1096` is the canonical design (every spec doc in this set is written against it), not one side of a conflict with `#1090`+`#1102` to reconcile — attempting that merge fails 56/121 tests and overflows EIP-170 (`agent-docs/m1/step-01-execution-report.md`). `#1093` already reworks the backing-accounting model #1091 established (H-04, `inventory/pr-map.md` §5.3); it needs no fold content beyond §9 step 3's ported items. | +1800 -400 | Third: uses router and storage. First reachable path. |
+| `m1/acceptance-core` | #1091 (acceptance half) + **#1093** | Two-phase acceptance: request side (vault set, deposit revealed, wallet Live, nonce increment), proof side (SPV, consumeAcceptedDeposit, emit events), settlement path (writes `expiresAt`, `dissolutionEligibleAt`, `mintedAmount`, `anchorAmount`, `state=Active`, external mint). **Extract `#1093` unmerged (§7, corrected 2026-08-22)**: `#1091`-`#1096` is the canonical design (every spec doc in this set is written against it), not one side of a conflict with `#1090`+`#1102` to reconcile — attempting that merge fails 56/121 tests and overflows EIP-170 (`agent-docs/m1/step-01-execution-report.md`). `#1093` already reworks the backing-accounting model #1091 established (H-04, `inventory/pr-map.md` §5, item 3);…
 | `m1/reanchor-core` | #1091 (re-anchor half) + **#1093** | Re-anchor request and proof (unbounded, no dissolution gate), settlement path (wallet amount/count transfers, `walletPubKeyHash` update, `anchorAmount` rewrite, external in-kind fee call). **Extract `#1093` unmerged (§7, corrected 2026-08-22)**. **Corrected 2026-08-23: do not port enforcement, only the field declarations move (and those belong to PR #A, not here).** Verified 2026-08-21 that raw `#1093` has the H-04 `mintedAmount = newAnchorAmount` rewrite but zero occurrences of `cumulativeReanchorFee` anywhere in `Reservation.sol`/`ReservationProofs.sol` — it lacks `#1102`'s `maxCumulativeReanchorFee` grinding-cap *check* inside `submitReservationReanchorProof` entirely. Step 3 investigated porting that check; the 2026-08-23 decision accepted the resulting unbounded-ratio exposure for m1 instead (`pr-review-followups.md` items 5/7, lever 4) and deferred a structural bound to post-m1 work (`roadmap.md` §7 item 5). `ReservationRequest.cumulativeReanchorFee` and `BridgeState.Storage.maxCumulativeReanchorFee` still ship as **declare-only** fields per storage completeness (`milestone-inventory.md` §1.3, "the load-bearing one" — a position field m2 will read cannot be added later without the live-state migration §4.5 forbids); that declaration is PR #A's job (§4.1 row above), not this PR's. This PR only drops the *check*. The acceptance is pinned by a characterization test, now live at tbtc-v2 `#1104` (staged directly on `#1093`, not the epic branch — carry it forward verbatim per §6's extraction-provenance convention when this PR is opened). | +1000 -300 | Fourth: builds on acceptance-core; shares settlement helpers. |
 | `m1/timeout-and-stranding` | ~~#1091 (timeout)~~ **#1093 (timeout, corrected 2026-08-24)**, #1094 (stale deposit cleanup + stranding) | Timeout slashing path (`notifyReservationActionTimeout`), stranding group from #1094 — stale deposit cleanup (`notifyStaleReservedDeposit`) and stranding (`notifyReservationStranded`, `strandReservation`, `strandLateSettlementIfTargetWalletClosed`); `notifyStaleReservedDeposit` does not exist at #1091, only from #1094 on. **Do not extract the timeout path from `#1091`.** `#1091` predates a field rename: it calls the storage field `reservationGracePeriod` (4 occurrences in its `Reservation.sol`, plus `BridgeState.sol`, `IReservationBridge.sol`, `ReservationProofs.sol`, `ReservationRouter.sol`), which `#1093` renamed to `reservationDissolutionDelay`. It is the only `#1091` storage name absent from `#1096`, and PR #A declares only the new name, so `#1091`'s text will not compile. `#1093` carries the same `notifyReservationActionTimeout` (91 lines) post-rename — extract from there. | +800 -150 | Fourth in the corrected build order; see the "Build order" note below this table. |
 | `m1/vault-pause-flags` | tbtc-v2 #1088 (base vault) + **#1093** (in-kind fee financing) | ReservationVault with pause flags on initiation-only entry points (`redemptionsPaused` constructor-default `true` for redemptions, `renewalsPaused` constructor-default `true` for renewals), The fee-financing surface (`financeInKindFee` `:529`, `repayInKindFeeDebt` `:568`, `inKindFeeDebtSat`, `updateFeeReserveTarget` `:599`) must be **present and ungated** — re-anchor is B's only unpin and calls it on the settlement path (`m1-b-implementation.md` §3). Note `pauseRenewals`/`unpauseRenewals` already ship (`:409`, `:415`); what is new is the `redemptionsPaused` trio. Plus restrictive `pauseRenewals` and `unpauseRenewals` functions. | +662 −1 | Sixth: isolates vault changes; depends on storage layout for state reads. |
@@ -270,7 +270,75 @@ Content matches spec (three watchers, both executors, all required chain-interfa
 methods, config-gated wiring); the code is not wrong, the estimate was — this is
 the third figure for this PR's size and the largest miss (~2x the second estimate).
 
+**Staleness note, 2026-09-28.** As of today, `reservations-epic`'s tip is
+`f66f11240` (28 commits past the `48985451d` tip cited above, most
+recently [#4324](https://github.com/threshold-network/keep-core/pull/4324),
+merged 2026-09-28). The `#4238` row's content above remains accurate — it
+describes what #4238 itself carries, not the epic tip — but the tip citation
+is now stale by 28 commits; see `docs/plans/m1-delivery.md`'s "Current
+status — 2026-09-28" section for the current PR/tip state.
+
 **Cross-repo ordering constraint**: keep-core binds against the tbtc-v2 ABI, so the Solidity entry-point surface must be stable before the Go client is finalised.
+
+### 4.3 As delivered (verified 2026-09-28)
+
+§4.1/§4.2 and §9 describe the PRs as **planned**. This subsection maps that
+plan to what was actually opened and merged, checked against `gh` and the
+live tbtc-v2/keep-core branch lists.
+
+**Epic branch — corrected 2026-09-28.** §9 step 2 planned a fresh
+`milestone/utxo-reservation-m1` branch cut from `main` for tbtc-v2. That
+branch exists on the remote but was **never used**: every m1 PR below
+targets the pre-existing `reservations-upgrade` branch instead —
+`milestone/utxo-reservation-m1` is a stray, unused branch, not the real
+integration point. keep-core followed the plan's stated fallback (§9 step 2's
+parenthetical) and reused `reservations-epic`, which matches.
+
+**tbtc-v2 (`reservations-upgrade`):**
+
+| Planned PR (§4.1/§9) | Delivered as | `m1/*` branch status |
+|---|---|---|
+| A `m1/storage-layout` | [#1106](https://github.com/threshold-network/tbtc-v2/pull/1106) **MERGED** | deleted post-merge |
+| C `m1/acceptance-core` | [#1107](https://github.com/threshold-network/tbtc-v2/pull/1107) **MERGED** | deleted post-merge |
+| D `m1/reanchor-core` | [#1108](https://github.com/threshold-network/tbtc-v2/pull/1108) **MERGED** | deleted post-merge |
+| E `m1/timeout-and-stranding` | [#1109](https://github.com/threshold-network/tbtc-v2/pull/1109) **MERGED** | deleted post-merge |
+| B `m1/router-minimal` | [#1110](https://github.com/threshold-network/tbtc-v2/pull/1110) **MERGED** | deleted post-merge |
+| F `m1/vault-pause-flags` | [#1111](https://github.com/threshold-network/tbtc-v2/pull/1111) **MERGED**, titled "add ReservationVault with `redemptionsPaused` safety flag" | deleted post-merge — **superseded 2026-09-24, see below** |
+| G `m1/bridge-integration-seams` | [#1112](https://github.com/threshold-network/tbtc-v2/pull/1112) **MERGED** | deleted post-merge |
+| (follow-up, already itemized at §4.1's `m1/reanchor-dissolution-gate-fix` row) | [#1120](https://github.com/threshold-network/tbtc-v2/pull/1120) **MERGED** | deleted post-merge |
+| (unplanned, not in §4.1/§9) | [#1121](https://github.com/threshold-network/tbtc-v2/pull/1121) **MERGED** then reverted by [#1122](https://github.com/threshold-network/tbtc-v2/pull/1122) **MERGED** | — |
+
+**Router entry-point count as delivered.** §4.1's `m1/router-minimal` row and
+§9 step 5 both describe an 8-entry-point router. The delivered
+`ReservationRouter.sol` has **11** state-changing entry points (verified
+against the M1 code, `reservations-upgrade` @ `9f8f5ef1`): the original 8,
+plus `notifyReservationAcceptanceTimedOut` and `forceStaleReservedDeposit`
+(governance-only, new), both added during post-merge review-fix rounds with
+no corresponding line item in this document. The delivered count is
+therefore 11, not the "8" (or "9") the planning sections describe — see
+`architecture.md` §2 for the authoritative, current list.
+
+**F `m1/vault-pause-flags`, superseded 2026-09-24.** #1111 built the vault
+with a `redemptionsPaused` flag exactly as planned; the 2026-09-24 "Option B"
+vault decision (`docs/plans/m1-delivery.md`) minimised the vault instead
+(commit `4d549e64`) — the pause-flag design F was built around no longer
+describes the M1 vault as built. The current M1 `ReservationVault.sol` has no
+`redemptionsPaused`/`renewalsPaused`/pause machinery at all.
+
+**keep-core (`reservations-epic`):**
+
+| Planned PR (§4.2/§9) | Delivered as | Branch status |
+|---|---|---|
+| H `m1/keep-core-client` | [#4274](https://github.com/threshold-network/keep-core/pull/4274) **MERGED** "wire reservation executors and watchers" | still exists remotely (not auto-deleted) |
+| (unplanned, not in §4.2/§9) | [#4276](https://github.com/threshold-network/keep-core/pull/4276), [#4277](https://github.com/threshold-network/keep-core/pull/4277), [#4278](https://github.com/threshold-network/keep-core/pull/4278), [#4279](https://github.com/threshold-network/keep-core/pull/4279), [#4280](https://github.com/threshold-network/keep-core/pull/4280), [#4283](https://github.com/threshold-network/keep-core/pull/4283) — all **MERGED** 2026-09-03; [#4284](https://github.com/threshold-network/keep-core/pull/4284) **MERGED** 2026-09-03 (incidental flaky-test fix on the epic's working tip, not reservation content); [#4324](https://github.com/threshold-network/keep-core/pull/4324) **MERGED** 2026-09-28 (review-round fixes, current epic tip) | deleted post-merge |
+
+§4.2 only planned one keep-core PR (H). Eight more keep-core PRs landed
+on `reservations-epic` afterward (readiness, protobuf-marshaling,
+coordination-checklist, multisigner integration test, test-coverage
+backfill, a 37-finding review-fix pass, one incidental flaky-test fix, and
+a further review-round fixes pass — see the table above for which is
+which) — full per-PR detail in `docs/plans/m1-delivery.md`'s "Previous
+status — 2026-09-04" section.
 
 ## 5. Why the flat set, not a stack
 

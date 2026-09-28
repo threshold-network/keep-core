@@ -13,6 +13,16 @@ re-anchoring only. Lifecycle references below (renew, partial-redeem, dissolve)
 describe the full feature, i.e. the m2 target. Re-anchor, the migration path
 this analysis turns on, *is* in m1, so the conclusions are unaffected.
 
+**Re-verification note (2026-09-28):** Solidity/keep-core code citations below were originally taken
+against the reservations feature's full PR stack (`tbtc-v2#1088`->...->`#1096`,
+`feat/utxo-reservation-partial-redemption` tip) rather than the M1 code that actually ships
+(`reservations-upgrade` @ `9f8f5ef1` + `reservations-epic` @ `f66f11240`). Where a stack-branch
+citation and its M1-code equivalent are the same function at different line numbers because unrelated
+code earlier in the file differs between the two refs, both are now given explicitly. The FROST-side
+citations (§1, §2.1, §2.2) are against a FROST branch snapshot not available for re-verification in
+this pass and are left as originally written. §5's FROST roadmap facts are dated to the FROST corpus
+as of 2026-08-12 and have not been re-checked against a newer FROST snapshot.
+
 ## 0. Direct answer
 
 **Reservations do not need to expire, and do not need to preemptively migrate on a deadline.**
@@ -27,9 +37,17 @@ that wallet stays `Live`.
 governance-set backstop date once FROST's drain starts, or by that specific wallet's own heartbeat
 failing and arming its 365-day `MovingFunds` clock), the reservation is **not stranded by default and
 does not have to dissolve**. The reservations contract already has a first-class, already-implemented
-mechanism for exactly this — `requestReservationReanchor` (`Reservation.sol:899-1014`), whose own doc
-comment states it is *"used during wallet migration so reservations never pin retiring wallets."* It
-moves a live reservation's anchor from a `MovingFunds` source wallet to any other `Live` wallet,
+mechanism for exactly this — `requestReservationReanchor`. Its own Solidity doc comment (word-wrapped
+across two comment lines, so a single-line grep for the full sentence finds nothing) states it is
+*"used during wallet migration so reservations never pin retiring wallets, and for governance-approved
+rotations."* That sentence is present unchanged both in the M1 code that ships
+(`Reservation.sol:696-697`, function at `:722-858`, `reservations-upgrade` @ `9f8f5ef1`) and on the
+full-feature stack this document otherwise analyzes (`Reservation.sol:897-1014`,
+`feat/utxo-reservation-partial-redemption` tip) — the line numbers differ only because unrelated code
+earlier in the file differs between the two refs. The identical intent is also documented client-side,
+in keep-core's `pkg/tbtc/reservation.go:372-373` (`AssembleReservationReanchorTransaction`: "Used
+during wallet migration so reservations never pin retiring wallets."). Either way, the mechanism moves
+a live reservation's anchor from a `MovingFunds` source wallet to any other `Live` wallet,
 permissionlessly. The remaining question is whether "any other `Live` wallet" can be a FROST wallet as
 things stand today — answered in §2.
 
@@ -53,64 +71,81 @@ own analysis, which never covers this):
 
 ### 2.1 Does a FROST wallet even appear in the registry reservations checks against?
 
-**Yes — and this required directly overriding a subagent's finding that got it wrong.** A dispatched
-scout initially reported that FROST uses "a separate, non-interoperable wallet registry" and that
-`Wallets.sol` "does not exist" on the FROST branch — both false, verified by direct read:
-`/tmp/tbtc-v2-frost/solidity/contracts/bridge/Wallets.sol` exists (594 diff lines against main) and
-`requestReservationReanchor`'s check (`self.registeredWallets[targetWalletPubKeyHash].state ==
-Wallets.WalletState.Live`) **would in fact recognize a FROST wallet as valid**, because FROST wallets
-are deliberately unified into that exact mapping via a synthetic **compatibility PKH**:
-`HASH160(0x02 || xOnlyKey)`, a real 20-byte hash that slots into the same `bytes20`-keyed
-`registeredWallets` map ECDSA wallets use. This is proven functionally, not just by reading the
-registration code, by a real integration test on the FROST branch —
+**Yes.** FROST wallets are unified into the same `registeredWallets` mapping ECDSA wallets use, via a
+synthetic **compatibility PKH**: `HASH160(0x02 || xOnlyKey)`, a real 20-byte hash that slots into the
+same `bytes20`-keyed map. `requestReservationReanchor`'s check
+(`self.registeredWallets[targetWalletPubKeyHash].state == Wallets.WalletState.Live`) would in fact
+recognize a FROST wallet as valid. This is proven functionally, not just by reading the registration
+code, by a real integration test on the FROST branch —
 `solidity/test/integration/EcdsaToFrostMovingFunds.test.ts` — which asserts directly:
 `(await bridge.wallets(frostWalletPubKeyHash)).state == walletState.Live` after registering a FROST
 wallet, and separately proves a real ECDSA wallet's `MovingFunds` settlement can pay a genuine P2TR
 output that resolves through this same mapping to a `MovedFundsSweepRequest` **for the FROST wallet**.
-The `bytes20` reservation identifier type is consequently **not a structural blocker** — a second
-subagent's claim that "a 32-byte P2TR key cannot fit into `bytes20`, blocking P2TR anchoring
-entirely" is also wrong; it missed the compat-PKH mechanism this section just verified.
+The `bytes20` reservation identifier type is consequently **not a structural blocker** to P2TR
+anchoring: a 32-byte P2TR key never needs to fit into `bytes20` directly, since the compat-PKH
+mechanism above resolves it.
+
+*(An earlier internal analysis pass on this document incorrectly concluded that FROST uses a separate,
+non-interoperable wallet registry, that `Wallets.sol` does not exist on the FROST branch, and that a
+32-byte P2TR key cannot fit into `bytes20` at all. All three are corrected above.)*
 
 ### 2.2 Does the reservation settlement's own output-verification accept a P2TR output?
 
 **Not yet, as literally written today — but the fix is small and precisely identified.**
-`ReservationProofs.sol` verifies every anchor/re-anchor/dissolution settlement output via
-`self.extractPubKeyHash(output)` (4 call sites: `:437`, `:924`, `:987`, `:1214`). This exact function,
-on the FROST branch (`BitcoinTx.sol:383-398`), was **deliberately left in place unchanged in behavior
-except one addition: it now explicitly `revert("P2TR wallet outputs are not enabled")` if given a P2TR
-script.** FROST did not extend this function — it added two new, differently-named siblings instead:
-`extractWalletID` and `extractWalletPubKeyHash` (`BitcoinTx.sol:403-433`), the latter of which resolves
-a P2TR output through the compat-PKH mapping exactly as `EcdsaToFrostMovingFunds.test.ts` exercises.
-Confirmed by checking every remaining caller of the two functions on the FROST branch: `DepositSweep.sol`,
-`MovingFunds.sol`, and `P2TRPreSigning.sol` all call the new `extractWalletPubKeyHash`; the old
-`extractPubKeyHash` has **zero production callers left** on the FROST branch (only a test-harness
-wrapper). This is a strong signal about intent: `extractPubKeyHash` is being kept as a deliberate
-P2TR-rejection point for call sites that haven't been upgraded yet — and reservations, which doesn't
-exist on the FROST branch, is exactly such an unmigrated call site.
+On the full-feature stack this document analyzes (`feat/utxo-reservation-partial-redemption` tip),
+`ReservationProofs.sol` verifies every anchor/partial-redemption/re-anchor/dissolution settlement
+output via `self.extractPubKeyHash(output)` (4 call sites: `:437` in `validateAnchorOutput`, `:924` in
+`validatePartialOutputs`, `:987` in `submitReservationReanchorProof`, `:1214` in
+`validateDissolutionOutput`). In the M1 code that ships (`reservations-upgrade` @ `9f8f5ef1`), which per
+the scope note above has no partial-redemption and no dissolution, the same function has exactly **2**
+call sites — `ReservationProofs.sol:449` (`settleAcceptance`) and `:677` (the reanchor settlement path,
+`settleReanchorAccounting`) — the other two disappear with the features that used them, not because the
+check itself was removed.
+
+This exact function, on the FROST branch (`BitcoinTx.sol:383-398`), was **deliberately left in place
+unchanged in behavior except one addition: it now explicitly `revert("P2TR wallet outputs are not
+enabled")` if given a P2TR script.** FROST did not extend this function — it added two new,
+differently-named siblings instead: `extractWalletID` and `extractWalletPubKeyHash`
+(`BitcoinTx.sol:403-433`), the latter of which resolves a P2TR output through the compat-PKH mapping
+exactly as `EcdsaToFrostMovingFunds.test.ts` exercises. Confirmed by checking every remaining caller of
+the two functions on the FROST branch: `DepositSweep.sol`, `MovingFunds.sol`, and `P2TRPreSigning.sol`
+all call the new `extractWalletPubKeyHash`; the old `extractPubKeyHash` has **zero production callers
+left** on the FROST branch (only a test-harness wrapper). This is a strong signal about intent:
+`extractPubKeyHash` is being kept as a deliberate P2TR-rejection point for call sites that haven't been
+upgraded yet — and reservations, which doesn't exist on the FROST branch, is exactly such an unmigrated
+call site.
 
 **The reservations branch does not touch `BitcoinTx.sol` at all** (verified: `git diff origin/main --
 solidity/contracts/bridge/BitcoinTx.sol` on the reservations branch returns zero lines). This means
 there is no merge conflict on this file — FROST's extension applies cleanly regardless of merge order.
 **The concrete, scoped fix once both features are combined:** swap `self.extractPubKeyHash(output)` for
-`self.extractWalletPubKeyHash(output)` at `ReservationProofs.sol`'s 4 call sites. Same return type
-(`bytes20`), same calling convention, no other reservation-side logic changes — this is a small, precise
-patch, not a data-model redesign.
+`self.extractWalletPubKeyHash(output)` at every remaining call site — **2 sites in the M1 code as it
+ships today** (`:449`, `:677`), growing back to 4 if partial-redemption and dissolution land first. Same
+return type (`bytes20`), same calling convention, no other reservation-side logic changes — this is a
+small, precise patch, not a data-model redesign.
 
 ### 2.3 Does keep-core's reservation wallet-action code need FROST-specific work?
 
-**Yes, real work — this is the one place a subagent's finding holds up.** Reservation transaction
-assembly in `keep-core` (`pkg/tbtc/reservation.go`, exercised by
+**Yes, real work.** Reservation transaction assembly in `keep-core` (`pkg/tbtc/reservation.go`,
+exercised by
 `TestAssembleReservedRedemptionTransaction`/`TestAssembleReservationDissolutionTransaction`) calls
 `pkg/bitcoin`'s `TransactionBuilder.AddPublicKeyHashInput` (P2WPKH-specific) and an ECDSA-specific
 `AddSignatures` path. The FROST branch's `TransactionBuilder` adds a sibling method,
 `AddTaprootKeyPathInput`, plus Schnorr signing, in the same file — meaning the extension point already
 exists structurally (FROST proved the builder pattern is extensible), but reservation's own action code
 would need a scheme-aware branch calling the Taproot path for a FROST-targeted re-anchor/dissolution,
-which is genuine, non-trivial new work, not a two-line change. Given keep-core's reservation PR
-(`#4238`) is already a generation behind the two-phase Solidity design (per
-`feature-spec.md` §16) and has zero coordination-executor wiring, this FROST-awareness work
-naturally lands as part of — not before — the already-identified "second, currently-unwritten keep-core
-PR" that implements the two-phase protocol client-side.
+which is genuine, non-trivial new work, not a two-line change.
+
+**Status as of the current keep-core tip (2026-09-28, `reservations-epic` @ `f66f11240`):**
+coordination-executor wiring for reservation anchor/re-anchor actions now exists —
+`pkg/tbtc/coordination.go:713-716` appends `ActionReservationAnchor`/`ActionReservationReanchor` to the
+coordination checklist gated on `ReservationsActivationBlock`, and `pkg/tbtc/node_coordination.go:312-325`
+dispatches both proposal types to their handlers. The remaining FROST-specific gap is narrower than the
+whole coordination layer: only the Taproot-signing branch in the transaction assembly described above is
+still missing. `#4238` (the "generation behind" PR referenced below) is itself now superseded — its own
+title reads "previous end-to-end attempt — see `#4282` for M1" — and `#4282` (`reservations-epic` ->
+`dev` tracking) is the current M1 tracking PR. This FROST-awareness work naturally lands as part of the
+Taproot-signing branch itself, not a separate client-side rewrite.
 
 ## 3. Storage and merge-conflict risk between the two PR stacks
 
@@ -193,11 +228,19 @@ gantt
     Phase 2 (ABI window, one-shot)     :fa2, after fa1, 21d
     Phase 3-4 (code, gameday)          :fa3, after fa2, 56d
     Phase 5 (external audit, parallel) :fa4, after fa2, 63d
-    Phase 6 (activation)               :milestone, after fa3, 0d
+    Phase 6 (activation)               :milestone, after fa3 fa4, 0d
     section FROST Program B
-    Organic decay drain (no fixed duration) :fb1, after fa3, 180d
-    Backstop drain (governance-dated, open) :fb2, after fb1, 90d
+    Organic decay drain (placeholder length, not a committed duration) :fb1, after fa3, 180d
+    Backstop drain (placeholder length, not a committed duration)      :fb2, after fb1, 90d
 ```
+
+**Diagram note (2026-09-28):** the day-counts above are a schematic relative ordering only, not a
+competing estimate — Program A's own critical path as drawn (`fa1`+`fa2`+`fa3`, ~119 days) is far
+shorter than the 5-22 month bracket that is the only quantified estimate in the corpus (prose above);
+do not read the diagram as revising that bracket. The activation milestone now waits on both `fa3` and
+`fa4` so it does not precede its own parallel audit, which the original chart allowed. Program B's
+`fb1`/`fb2` bar lengths are placeholders used only to keep the chart's visual ordering correct, since
+neither phase carries a committed duration.
 
 ## 6. Recommended operational steps to add to the reservations plan
 
@@ -207,14 +250,16 @@ follow-up items to track once FROST Program A activates:
 1. **Track FROST Program A's activation milestone**, not its whole timeline — that's the point at which
    a `Live` FROST wallet first exists to re-anchor into, and the point after which `2.1`/`2.2`'s findings
    become actionable rather than theoretical.
-2. **Once FROST activates, patch `ReservationProofs.sol`'s 4 `extractPubKeyHash` call sites to
-   `extractWalletPubKeyHash`** (§2.2) — small, precisely scoped, no data-model change. This is a
-   prerequisite for `requestReservationReanchor` settlements to a FROST target to ever complete
-   on-chain (the request-side check already works per §2.1; only the settlement-side output check needs
-   this).
-3. **Scope the keep-core FROST-aware reservation transaction assembly** (§2.3 — `AddTaprootKeyPathInput`
-   + Schnorr signing branch) as part of the already-planned "second keep-core PR" for the two-phase
-   protocol, not as separate scope creep.
+2. **Once FROST activates, patch `ReservationProofs.sol`'s `extractPubKeyHash` call sites to
+   `extractWalletPubKeyHash`** (§2.2) — 2 sites in the M1 code as it ships today (`:449`, `:677`),
+   growing to 4 if partial-redemption/dissolution land first — small, precisely scoped, no data-model
+   change. This is a prerequisite for `requestReservationReanchor` settlements to a FROST target to
+   ever complete on-chain (the request-side check already works per §2.1; only the settlement-side
+   output check needs this).
+3. **Scope the keep-core FROST-aware reservation transaction assembly** (§2.3 —
+   `AddTaprootKeyPathInput` + Schnorr signing branch) as an extension of the existing reservation
+   action-assembly code, not a separate client-side rewrite — coordination-executor wiring for
+   reservation actions is already in place (`coordination.go:713-716`).
 4. **Add a combined storage-layout parity test** covering both branches' final merged state (§3) —
    extend `testing-plan.md`'s Tier 1 Foundry recommendation to explicitly include this once
    both features are close to landing together.
