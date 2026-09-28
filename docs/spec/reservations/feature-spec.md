@@ -210,6 +210,14 @@ Bank authority. The ABI observable at the Bridge address is unchanged;
 off-chain clients are unaffected. Result: `ReservationRouter` is 4,245 B;
 `Bridge` drops to 22,403 B (runs=100), ~2.1 kB margin.
 
+**M1 code (measured 2026-09-28):** on a clean build of the M1 code
+(`reservations-upgrade` @ `9f8f5ef1`, Hardhat 2.29.0, solc 0.8.17),
+`Bridge` is 22,914 B (1,662 B headroom out of 24,576 B, compiled at
+`runs=200` via `bridgeCompilerConfig` in `hardhat.config.ts`; at the
+default `runs=1000` it would be 24,835 B, over the cap) and
+`ReservationRouter` is 7,075 B. The figures above are the `#1090`-era
+record for that build only.
+
 **Invariants:**
 1. **Storage parity.** The router inherits the same storage-bearing bases as
    the Bridge in the same order, declaring exactly one storage variable

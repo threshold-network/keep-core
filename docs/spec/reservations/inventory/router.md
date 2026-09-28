@@ -165,6 +165,20 @@ compiler run, which is out of scope for an inventory pass. Treat them as
 `UNVERIFIED` at the current tip. Every PR since `#1090` added surface, so the
 margin is smaller now than those numbers suggest.
 
+**M1 code (measured 2026-09-28).** Clean build of tbtc-v2 `reservations-upgrade`
+@ `9f8f5ef1` (`yarn install --frozen-lockfile`, `hardhat compile`,
+Hardhat 2.29.0, solc 0.8.17; sizes from build artifacts, confirmed by
+`hardhat size-contracts`): `Bridge` is **22,914 B — 1,662 B headroom**
+out of 24,576 B. That is the M1 code's figure, not the `#1090`-era
+number above: the M1 build compiles `Bridge` at `runs=200` via
+`bridgeCompilerConfig` in `hardhat.config.ts` (at `runs=1000` the Bridge
+would be 24,835 B, over the limit). The historical figures quoted above
+are retained for record only and are not comparable apples-to-apples,
+since they were measured at `runs=100`. Other contracts compiled at
+`runs=1000`: `WalletProposalValidator` 22,176 B, `BridgeGovernance` 21,465 B,
+`ReservationProofs` (library) 18,586 B, `Reservation` (library) 13,591 B,
+`ReservationRouter` 7,075 B, `ReservationVault` 7,009 B.
+
 ## 5. Reservation test inventory (extraction value)
 
 | File | Lines | Covers |
@@ -192,6 +206,8 @@ implementation does.
    It is a stored parameter with no m1 reader, but `updateReservationParameters`
    validates it relationally against the term. Keep the validation (cheap, and
    it protects m2's semantics) or drop it as dead code?
-3. **UNVERIFIED: the EIP-170 margin at the current tip.** Needs one compiler run
-   at `runs=100`. This is the only genuinely open question about whether a
-   minimal router is even necessary.
+3. **Resolved (2026-09-28): EIP-170 margin on the M1 tip.** `Bridge` measured
+   at 22,914 B out of 24,576 B (1,662 B headroom) on a clean build of
+   `reservations-upgrade` @ `9f8f5ef1` — see §4's 'M1 code' note. `runs=100`
+   is no longer the relevant setting: M1's `Bridge` compiles at `runs=200` via
+   `bridgeCompilerConfig` (at `runs=1000` it would be 24,835 B, over the cap).

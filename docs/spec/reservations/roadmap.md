@@ -127,9 +127,9 @@ external functions, none of these — verified above). The pattern this table
 describes — copying renewal's constructor-paused flag onto redemption, "not
 new machinery" since it was already written and audited in the reference
 stack's file — was §2.2's original recommendation for m1's vault. Option B
-rejected it; see §2.2's "Current answer" for what m1 ships instead and the
-open question about why the migration cost was accepted over this
-alternative.
+rejected it; see §2.2's "Current answer" for what m1 ships instead, and for
+the M2 requirement this choice imposes — the 2026-09-28 owner confirmation
+and the Bridge-side vault-binding change m2's upgrade must make.
 
 ### 0.3 Minted tBTC is an ordinary fungible claim
 
@@ -546,13 +546,22 @@ flag, m2's in-kind redemption promise has no reachable delivery path while
 positions keep being created.~~
 
 **Current answer:** the m1 vault ships minimal instead
-(`m1-b-implementation.md` §3/§4.2, commit `4d549e64`) — no redemption entry
+(commit `4d549e64`; `m1-b-implementation.md` §3/§4.2) — no redemption entry
 point, flagged or otherwise. m2 reaches redemption/renewal through a **new**
 vault deployment plus a depositor opt-in migration ceremony, i.e. exactly the
-"swap the guard blocks indefinitely" this paragraph warned against. The
-source material available to this pass does not record why that cost was
-accepted over the flag; that rationale is an open gap, not a design decision
-still pending.
+"swap the guard blocks indefinitely" this paragraph warned against. That
+cost was accepted deliberately: the project owner confirmed on 2026-09-28
+that m2 will perform the new-vault migration. The choice imposes one M2
+design requirement (verified in the M1 code): the m1 re-point guard —
+`updateReservationParameters` only allows changing `Bridge.reservationVault`
+while `reservationTotalAmount == 0 && pendingReservedDeposits == 0`
+(`Reservation.sol` ~:1300-1317) — is under variant B reachable only once
+every position has been stranded or released, so the migration requires m2's
+Bridge upgrade to change the vault-binding rule (the mechanism, e.g.
+per-position vault binding or a governed migration path, is an m2 design
+choice; the guard is Bridge-side library code, replaceable by that upgrade),
+and the m1 vault must keep serving existing positions' settlement paths
+(e.g. `financeInKindFee` on re-anchor) until they migrate.
 
 **Two claims here corrected 2026-08-21, now both moot under Option B.** The
 struck-through paragraph previously said the flag makes m2 "a single
@@ -629,8 +638,10 @@ written by an m1 path (`milestone-inventory.md`), so Bridge code is an
 upgrade, not a migration. **The vault half of this goal was explicitly
 abandoned by the 2026-09-24 Option B decision** (§1.2, §2.2): m1 does not
 ship every vault entry point, so m2's vault side genuinely *is* a migration —
-a new `ReservationVault` deployment plus a depositor opt-in ceremony, not a
-flag flip. That is an accepted cost, not a failure to meet this goal.
+flag flip. That cost was accepted deliberately — confirmed by the project
+owner on 2026-09-28 — and imposes one m2 design requirement: m2's Bridge
+upgrade must change the vault-binding rule, because m1's re-point guard is
+unreachable under B (§2.2 "Current answer").
 
 The original goal, still true for Bridge storage: m2 must be an **upgrade,
 not a migration**, on the layout side. That requires m1 to write the

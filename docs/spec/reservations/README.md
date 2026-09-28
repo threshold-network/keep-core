@@ -20,7 +20,7 @@ table wins.
 | 2026-08-21 | The existing `Stranded` fallback is the accepted outcome for a terminated wallet's reservations; the emergency-exit mechanism is **not built**, retained only as design reference. | `exit/README.md` |
 | 2026-08-21 | Milestone 1 is **variant B with a minimal router** — create, custody and re-anchor only, no dissolution, built as an essentials-only rewrite rather than by merging the eight-PR stack. | `roadmap.md` §1 |
 | 2026-09-07 | `#1122` reverted `#1121`: no reserved-redemption / veto / renewal surface in the M1 Bridge. | `docs/plans/m1-delivery.md` |
-| 2026-09-24 | **Option B.** The M1 `ReservationVault` ships minimal (as landed in `4d549e64`); redemption and renewal are delivered in m2 via a **new vault deployment and depositor migration ceremony**, not via unpause flags on the M1 vault. | `m1-b-implementation.md` §3 |
+| 2026-09-24 | **Option B.** The M1 `ReservationVault` ships minimal (as landed in `4d549e64`); redemption and renewal are delivered in m2 via a **new vault deployment and depositor migration ceremony**, not via unpause flags on the M1 vault. **Confirmed by the project owner 2026-09-28.** | `m1-b-implementation.md` §3 |
 
 **M1 code** means the two integration-branch refs above — tbtc-v2
 `reservations-upgrade` and keep-core `reservations-epic` — which are

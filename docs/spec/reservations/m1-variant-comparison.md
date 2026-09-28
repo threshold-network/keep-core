@@ -277,6 +277,10 @@ there is none. Note the limit of this argument: the router buys **space, not
 ceremony** — invariant 4 means replacing router code is a `Bridge`
 implementation upgrade either way.
 
+**Measured headroom (2026-09-28):** against the M1 code (`reservations-upgrade`
+@ `9f8f5ef1`, clean build), `Bridge` is 22,914 B out of 24,576 B, **1,662 B
+headroom** — the concern about no headroom is grounded in a real number.
+
 A fifth, softer point: the router question is compiler-decidable and
 reversible, while B is a protocol decision. Bundling them means a compiler
 surprise re-opens the launch shape.

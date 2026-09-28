@@ -79,10 +79,10 @@ Bridge-side cuts (no dissolution, no redemption, no renewal) trace to the
 2026-08-21 variant B scope decision (README Decision 2) and the
 2026-09-07 `#1122` revert of `#1121` that removed the reserved-redemption/
 veto/renewal surface (README Decision 3). The vault-side cuts (no
-upgradeability, no unpause path to M2 features) trace to the 2026-09-24
-Option B decision (README Decision 4, `m1-b-implementation.md` §3), which
-superseded the earlier plan to ship a full vault entry-point surface behind
-pause flags.
+upgradeability, no unpause path to M2 features) trace to the Option B
+decision of 2026-09-24, confirmed by the project owner on 2026-09-28
+(README Decision 4, `m1-b-implementation.md` §3), which superseded the
+earlier plan to ship a full vault entry-point surface behind pause flags.
 
 - **No in-kind redemption, whole or partial.** `requestReservedRedemption`
   and the partial-redemption split are M2. `ReservationVault` has no
@@ -115,7 +115,8 @@ pause flags.
   terminating every custodying wallet (`docs/RESERVATION_CAPS_DEPLOYMENT.md`
   "Irreversible Vault Activation Warning"). M2's redemption/renewal ship via
   a **new vault deployment and a depositor opt-in migration ceremony**, not
-  an unpause flag on this vault (Decision 4).
+  an unpause flag on this vault (Decision 4, confirmed by the project owner
+  on 2026-09-28).
 - **No watchtower veto.** `notifyReservedRedemptionVeto` is absent; the
   `watchtowerDefaultDelay`/`LevelOneDelay`/`LevelTwoDelay` action fields are
   declared but only ever written by the M2 redemption request path. Vacuous
@@ -146,6 +147,7 @@ pause flags.
 | In-kind fee financing, debt, sweep | Built (financing applies from the first re-anchor onward) | — |
 | In-kind whole/partial redemption | Absent | Built, new vault + migration |
 | Renewal | Absent | Built |
+| M2 delivery mechanism | — | New `ReservationVault` deployment + depositor migration (confirmed by the project owner 2026-09-28; §12) |
 | Dissolution | Absent | Built, restores or redesigns re-anchor's eligibility gate |
 | Watchtower veto | Absent | Built |
 | Reservation-eligible wallet allowlist | Absent (open decision) | Candidate for M1 backport or M2 |
@@ -572,15 +574,18 @@ that snapshot or states `no test found`.
 
 - **NFR-GAS-1.** `Bridge`'s deployed bytecode MUST stay under the EIP-170
   24,576-byte limit with the reservation surface routed through the
-  delegatecall extension. Measured figure, source and date: `Bridge` at
-  22,403 B (runs=100) with `ReservationRouter` at 4,245 B, per
-  `feature-spec.md` §2 (measurement recorded 2026-08-21, prior to the
-  #1102 fold and the B rewrite — `docs/RESERVATION_CAPS_DEPLOYMENT.md`
-  "Tracked Follow-up" section records a later live figure of "~22,870B /
-  24,576B" with no re-measurement date given; neither figure has been
-  re-verified against the current `9f8f5ef1` snapshot in this pass —
-  re-measuring `Bridge`'s deployed bytecode size against the current
-  build is listed as an open item in §12).
+  delegatecall extension. Measured at the M1 code (tbtc-v2
+  `reservations-upgrade` @ `9f8f5ef1`, 2026-09-28): `Bridge` at 22,914 B —
+  1,662 B of headroom — with `WalletProposalValidator` at 22,176 B and
+  `BridgeGovernance` at 21,465 B. Method: clean build (`yarn install
+  --frozen-lockfile`, `hardhat compile`, Hardhat 2.29.0, solc 0.8.17);
+  `Bridge.sol` compiles under the optimizer override `runs=200` from
+  `bridgeCompilerConfig` in `hardhat.config.ts` (default is `runs=1000`,
+  which yields 24,835 B for `Bridge` and exceeds the limit — hence the
+  override). The historical `#1090`-era figures quoted in `feature-spec.md`
+  §2 (22,403 B for `Bridge` at `runs=100`, 4,245 B router) are superseded
+  by this measurement; `docs/RESERVATION_CAPS_DEPLOYMENT.md`'s live
+  follow-up figure of "~22,870B" is likewise superseded.
 - **NFR-GAS-2.** `updateReservationCaps` and `updateReservationParameters`
   MUST be called in that order during initial bootstrap so the Decision-1
   relational check evaluates against real (non-zero) operands rather than
@@ -743,12 +748,11 @@ full D-1..D-27 register and prior resolution history):
   or gauge exists (NFR-OBS-3); tracked as a real operational gap, not a
   silently dropped one, per the original `m1-b-implementation.md` §5
   2026-09-07 status note, still true against the current tree.
-- **Bridge deployed-bytecode re-measurement.** NFR-GAS-1's two historical
-  figures (22,403 B and "~22,870B") were measured before the #1102 fold
-  and the B rewrite respectively; neither has been re-verified against
-  the current `9f8f5ef1` build in this pass. A fresh `hardhat compile`
-  size report against the current snapshot is needed before citing an
-  exact margin number in an audit-facing document.
+- **Bridge deployed-bytecode re-measurement — resolved 2026-09-28.** The
+  EIP-170 margin at the M1 code is now measured (NFR-GAS-1): `Bridge` 22,914
+  B, 1,662 B headroom, clean build of `reservations-upgrade` @ `9f8f5ef1`.
+  The only remaining open note: any M2 Bridge addition shrinks that
+  1,662-B headroom.
 - **External-router bytecode-delta spike.** Tracked as non-blocking M2
   debt in `docs/RESERVATION_CAPS_DEPLOYMENT.md` ("Tracked Follow-up") —
   quantify the rejected external-router-with-callbacks alternative
@@ -758,6 +762,22 @@ full D-1..D-27 register and prior resolution history):
   (`roadmap.md` §7 item 1, 2026-09-07: "accept as-is, disclose the
   no-exit-until-m2 risk"), not a code change — listed here because it is
   a live commitment a design-partner activation runbook must still act on.
+- **M2 migration requirement (design input, not an open M1 item).**
+  Confirmed by the project owner on 2026-09-28: M2 will deliver
+  redemption/renewal via a new `ReservationVault` deployment plus a
+  depositor migration (Option B stands; no pause-flag vault). Verified
+  in M1 code: the re-point path
+  `updateReservationParameters` only allows changing
+  `Bridge.reservationVault` when `reservationTotalAmount == 0 &&
+  pendingReservedDeposits == 0` (`Reservation.sol:1300-1317` at
+  `9f8f5ef1`), which under variant B is reachable only once every
+  position has been stranded/released. That check is Bridge-side library
+  code, replaceable by the M2 Bridge upgrade, so the migration requires
+  M2's Bridge upgrade to change the vault-binding rule (for example
+  per-position vault binding or a governed migration path); the M1 vault
+  must keep serving existing positions' settlement paths (e.g.
+  `financeInKindFee` on re-anchor) until they migrate. The mechanism is
+  an M2 design choice; the requirement is stated here.
 
 ## 13. Traceability
 
@@ -809,7 +829,7 @@ full D-1..D-27 register and prior resolution history):
 | `inKindFeeDebtSat` | Public, repayable debt recorded when the fee reserve cannot cover a financed fee | `ReservationVault.sol:80-85` |
 | Occupancy / active positions | `activeReservationsCount` against the `maxActiveReservations` launch-gate cap | `Reservation.sol:916-930`; NFR-OBS-1/2 |
 | Variant A+ / Variant B | The two M1 design options compared in `m1-variant-comparison.md`; B (minimal router, no dissolution) was decided 2026-08-21 | `README.md`; `m1-variant-comparison.md` |
-| Option B (vault decision) | The 2026-09-24 decision that the M1 vault ships minimal and M2 delivers redemption/renewal via a new vault deployment and migration ceremony, not pause flags | `README.md` Decision 4 |
+| Option B (vault decision) | The 2026-09-24 decision, confirmed by the project owner on 2026-09-28, that the M1 vault ships minimal and M2 delivers redemption/renewal via a new vault deployment and migration ceremony, not pause flags | `README.md` Decision 4 |
 | M1 / M2 | Milestone 1 (this document's scope: create, custody, re-anchor) / Milestone 2 (redemption, renewal, dissolution, veto) | §3, §4 |
 | SPV proof | Simplified Payment Verification proof (Merkle inclusion + coinbase + proof-of-work) submitted to settle a Bitcoin-side action | `ReservationProofs.sol:137-471` |
 | Router (delegatecall) | `ReservationRouter`, reached via the Bridge's fallback `delegatecall`, executing on Bridge storage with Bridge authority | `ReservationRouter.sol:27-95`; FR-18 |

@@ -28,14 +28,15 @@ replaceable; the same reasoning forbids minimising the vault (`roadmap.md`
 | Nature | Bridge code reached by `delegatecall` | Separate contract, plain `Ownable` |
 | Replacing it costs | A Bridge implementation upgrade, which m2 needs anyway | Deploying v2 and re-pointing `Bridge.reservationVault` |
 | Gate on replacement | Proxy-admin ceremony | `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1307-1314`) |
-| Reachable in B? | Yes | **No in m1**; m2 reaches replacement via a depositor opt-in migration ceremony (Option B, decided 2026-09-24) or quiescence |
+| Reachable in B? | Yes | **No in m1**; m2 reaches replacement via the depositor opt-in migration ceremony the project owner confirmed on 2026-09-28 — which the re-point guard above makes reachable only after every position is stranded or released, so the ceremony also needs m2's Bridge upgrade to change the vault-binding rule (§3, §6) |
 | m1 posture | **Minimise** | **Minimise** (redemption and renewal ship only in a future, separately-deployed vault — not as paused entry points on this one; see §3) |
 
 The original plan required the vault to ship complete with paused initiation
 entry points for redemption and renewal (Section 3). On 2026-09-24 (Option B decision),
 the posture was simplified: m1 ships a minimal vault (`4d549e64`), and m2 will
 deliver in-kind redemption and renewal by deploying a new vault and conducting
-a depositor opt-in migration ceremony.
+a depositor opt-in migration ceremony. The project owner confirmed this migration on 2026-09-28; see
+§6 for the bridge-side requirement it imposes.
 
 ## 2. Minimal router surface
 
@@ -147,7 +148,16 @@ exist in the M1 vault at all.** They existed during interim development
 and were dropped before commit `4d549e64`, which is what M1 ships. Per the
 2026-09-24 Option B decision (§1), m2 does **not** add them to this vault
 behind a pause flag: it deploys a **new** vault and migrates depositors to
-it. This supersedes — and closes, rather than merely defers — the earlier
+it — confirmed by the project owner on 2026-09-28. One consequence the
+Bridge side of m2 must absorb (verified in the M1 code): `updateReservationParameters`
+only re-points `Bridge.reservationVault` while `reservationTotalAmount == 0
+&& pendingReservedDeposits == 0` (`Reservation.sol` ~:1300-1317), which under
+B is reachable only once every position has been stranded or released — so
+m2's Bridge upgrade must change the vault-binding rule (mechanism is an m2
+design choice, e.g. per-position vault binding or a governed migration
+path); until then the m1 vault keeps serving existing positions' settlement
+paths (e.g. `financeInKindFee` on re-anchor). This supersedes — and closes,
+rather than merely defers — the earlier
 plan that the m1 vault must ship the full entry-point surface (redemption,
 retry, renewal) paused and ready to unpause (`roadmap.md` §0.7/§1.3/§2.2,
 `milestone-inventory.md` D-12/D-13/D-20/D-21, an earlier
@@ -407,9 +417,10 @@ tests, not be bolted onto an unrelated review-fix pass.
 ~4,641 production Solidity lines: whole redemption, renewal, veto integration
 and their storage (~3,035), `#1096`'s partial redemption (~696), and
 dissolution restored (~910). keep-core gains **two** action types, Redemption
-and Dissolution, where A+ would have needed only Redemption.
+and Dissolution, where A+ would have needed only Redemption. The project owner confirmed on 2026-09-28 that m2 will deliver the new-vault migration; no pause-flag vault is in scope.
 
-Two inherited decisions m2 must make that A+ would not have created:
+Two inherited decisions m2 must make that A+ would not have created, plus one
+hard requirement the new-vault migration imposes (§3, confirmed 2026-09-28):
 
 1. **Whether to restore re-anchor's eligibility gate.** B deletes
    `< dissolutionEligibleAt` (`Reservation.sol:785-788`) to make re-anchor
@@ -419,6 +430,15 @@ Two inherited decisions m2 must make that A+ would not have created:
 2. **Whether m1-era positions get the m2 semantics.** They will carry
    `dissolutionEligibleAt` values snapshotted under m1 parameters (§4.4), and
    `Reservation.sol:198-202` makes those non-retroactive by design.
+3. **The vault-binding rule on the Bridge.** `updateReservationParameters`
+   only re-points `Bridge.reservationVault` while `reservationTotalAmount == 0
+   && pendingReservedDeposits == 0` (`Reservation.sol` ~:1300-1317), which under
+   B is reachable only once every position has been stranded or released — so
+   m2's Bridge upgrade must change the vault-binding rule to make the
+   migration ceremony actually reachable (mechanism is an m2 design choice,
+   e.g. per-position vault binding or a governed migration path). Until m2
+   ships, the m1 vault keeps serving existing positions' settlement paths
+   (e.g. `financeInKindFee` on re-anchor).
 
 The milestone ratio is worth stating plainly: 5,261 : 4,641, or **1.13 : 1**.
 Against A+'s 1.65 : 1 and the stacked plan's 13.2 : 1, B's split produces two

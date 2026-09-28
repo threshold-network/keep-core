@@ -598,8 +598,16 @@ would otherwise let a depositor unwind their own position are deferred to milest
 direct consequence of the 2026-09-24 "Option B" decision: milestone 1 ships a deliberately minimal
 vault (matching commit `4d549e64`, with no `redeemReservation`, `retryRedeemReservation`, or
 `extendCustody`), and milestone 2 delivers in-kind redemption and renewal by deploying a *new*
-vault and running a depositor opt-in migration ceremony — not by unpausing flags on the milestone-1
-vault, because the milestone-1 vault has no such flags to unpause and is not upgradeable in place.
+vault and running a depositor opt-in migration ceremony — not by unpausing
+flags on the milestone-1 vault, because the milestone-1 vault has no such
+flags to unpause and is not upgradeable in place. The project owner
+confirmed this migration on 2026-09-28. It has one requirement that lands
+on milestone 2: the quiescence guard above is Bridge-side library code in
+`Reservation.sol`, replaceable by milestone 2's Bridge upgrade, so that
+upgrade must change the vault-binding rule (mechanism left to the m2 design,
+e.g. per-position vault binding or a governed migration path) — and the
+milestone-1 vault must keep serving existing positions' settlement paths
+(e.g. `financeInKindFee` on re-anchor) until they migrate.
 `docs/RESERVATION_CAPS_DEPLOYMENT.md` states the operational consequence plainly: once any
 reservation is accepted, the vault is locked in for the entire lifetime of every reservation open
 against it, and explicit governance/deployer sign-off acknowledging that irreversibility is
@@ -664,10 +672,19 @@ on-chain activation block (§3.5).
 Milestone 1 ships "rails, not product": creation, custody, and re-anchor. Milestone 2 is expected
 to add, per the 2026-09-24 Option B decision and the full design in `feature-spec.md`:
 
-- **A new `ReservationVault` deployment and a depositor opt-in migration ceremony**, not an
-  unpause flag on the milestone-1 vault — the milestone-1 vault is deliberately minimal and not
-  upgradeable in place (§7), so redemption and renewal cannot be added to it after the fact while
-  any reservation is open.
+- **A new `ReservationVault` deployment and a depositor opt-in migration
+  ceremony** — confirmed by the project owner on 2026-09-28 — not an
+  unpause flag on the milestone-1 vault: the milestone-1 vault is
+  deliberately minimal and not upgradeable in place (§7), so redemption and
+  renewal cannot be added to it after the fact while any reservation is
+  open. The migration also depends on the milestone-2 Bridge upgrade:
+  milestone 1's re-point guard (`updateReservationParameters` only re-points
+  `Bridge.reservationVault` while `reservationTotalAmount == 0 &&
+  pendingReservedDeposits == 0`, `Reservation.sol:1300-1317`) is Bridge-side
+  library code, and under Option B it is reachable only after every
+  position has been stranded or released — so that upgrade must change the
+  vault-binding rule, and the milestone-1 vault keeps serving existing
+  positions' settlement paths until they migrate.
 - **In-kind redemption** (`requestReservedRedemption`, `notifyReservedRedemptionVeto`, and their
   settlement path), activating the already-declared-but-unreachable `ActionType.Redemption` and
   `ActionState.Vetoed` values (§6.2) and the `retryCredit`/`retryCreditSourceNonce` fields on

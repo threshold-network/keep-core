@@ -1210,4 +1210,4 @@ source-wallet count decrement and is reachable in m1. Corrected at
 `m1-variant-comparison.md:251-259` on 2026-08-21; the section's conclusion was
 unaffected, only its evidence.
 
-`UNVERIFIED` markers carried forward: the `#1102` core-line `spentMainUTXOs` implementation shape (D-15, C-6); the EIP-170 margin at the current tip (router.md section 4); all vault.md PR attributions (marked `?`).
+`UNVERIFIED` markers carried forward: the `#1102` core-line `spentMainUTXOs` implementation shape (D-15, C-6); all vault.md PR attributions (marked `?`). EIP-170 margin — **resolved 2026-09-28**: `Bridge` 22,914 B out of 24,576 B (1,662 B headroom) on a clean build of `reservations-upgrade` @ `9f8f5ef1` (router.md §4).
